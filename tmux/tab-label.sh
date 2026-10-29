@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # Prints the label for the window <target> whose pane is at <path>: the name
-# set with M-p's "Rename the tab", else the Linear ticket and its title, else the name
+# set with M-p's "Rename the tab", else the ticket and its title, else the name
 # accent-color.sh gives the directory. path-facts.sh works out the last two.
 #
 # Usage: tab-label.sh <target> <path> [<label>]

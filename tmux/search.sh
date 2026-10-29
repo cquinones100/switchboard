@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Search everything (M-S-f): asks for a query, then lists what your notes,
-# Linear, GitHub and Slack hold for it (lib/search.js), each source's results
+# your ticket tracker, GitHub and Slack hold for it (lib/search.js), each source's results
 # arriving as it answers, Slack's last. fzf narrows them as you type; Enter
 # reads one beside the pane, in the link view (tmux/link-view.sh), a note as
 # its Markdown; Ctrl-O opens a link in the browser instead.
@@ -17,7 +17,7 @@ repo=${SWITCHBOARD_DIR:-$HOME/switchboard}
 [ -n "$pane" ] || exit 0
 
 printf '\n'
-read -r -e -p '  Search notes, Linear, GitHub and Slack: ' query || exit 0
+read -r -e -p '  Search notes, tickets, GitHub and Slack: ' query || exit 0
 [ -n "${query// /}" ] || exit 0
 
 choice=$(zsh -i -c 'node "$1" "$2"' _ "$repo/lib/search.js" "$query" 2>/dev/null |

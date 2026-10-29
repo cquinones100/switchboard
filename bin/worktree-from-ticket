@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 
-// worktree-from-ticket [path] <linear-ticket-id-or-url>
+// worktree-from-ticket [path] <ticket-id-or-url>
 //
-// Creates a git worktree on a new branch named after a Linear ticket and opens
-// claude in it. <path> defaults to .claude/worktrees, resolved against the main
-// repo root so this works from inside an existing worktree.
+// Creates a git worktree on a new branch named after a ticket, in Linear or
+// Jira as the tracker setting says, and opens claude in it. <path> defaults to
+// .claude/worktrees, resolved against the main repo root so this works from
+// inside an existing worktree.
 //
-// Needs a Linear personal API key (https://linear.app/settings/api), from
-// LINEAR_API_KEY, the Keychain (service linear-api-key), or ~/.config/switchboard/linear.json.
+// Needs the tracker's key: for Linear a personal API key
+// (https://linear.app/settings/api), from LINEAR_API_KEY, the Keychain
+// (service linear-api-key), or ~/.config/switchboard/linear.json; for
+// Jira an API token, email and site, as lib/tracker/jira.js says.
 //
 //   worktree-from-ticket ABC-123          creates the worktree, opens claude
 //   worktree-from-ticket init zsh         prints the `wt` shell function
@@ -19,20 +22,14 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { tracker, idFrom } = require("../lib/tracker");
 
-const LINEAR_API = "https://api.linear.app/graphql";
 const DEFAULT_WORKTREE_DIR = ".claude/worktrees";
 const SELF = fs.realpathSync(process.argv[1]);
 
-const CONFIG_PATH = path.join(
-  path.join(os.homedir(), ".config"),
-  "switchboard",
-  "linear.json",
-);
-
 const usage = () => {
   console.error(
-    "Usage: worktree-from-ticket [path] <linear-ticket-id-or-url> [--prompt <text>]\n" +
+    "Usage: worktree-from-ticket [path] <ticket-id-or-url> [--prompt <text>]\n" +
       "       worktree-from-ticket init <zsh|bash>\n\n" +
       "Examples:\n" +
       "  worktree-from-ticket ABC-123\n" +
@@ -100,20 +97,6 @@ const shellFunction = () => `wt() {
   claude "$prompt"
 }`;
 
-const parseIdentifier = (input) => {
-  const fromUrl = input.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/);
-  const raw = fromUrl ? fromUrl[1] : input;
-  const match = raw.match(/^([A-Za-z][A-Za-z0-9]*)-(\d+)$/);
-  if (!match) {
-    fail(`could not parse a Linear ticket identifier from "${input}"`);
-  }
-  return { key: match[1].toUpperCase(), number: Number(match[2]) };
-};
-
-const looksLikeTicket = (input) =>
-  /\/issue\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
-  /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(input);
-
 const slugify = (text) =>
   text
     .trim()
@@ -122,39 +105,6 @@ const slugify = (text) =>
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-
-const readApiKey = () => {
-  if (process.env.LINEAR_API_KEY) return process.env.LINEAR_API_KEY;
-  // The macOS Keychain, where the key belongs, then the config file.
-  try {
-    const fromKeychain = require("node:child_process")
-      .execFileSync("security", ["find-generic-password", "-s", "linear-api-key", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-      .trim();
-    if (fromKeychain) return fromKeychain;
-  } catch {}
-
-  const fromConfig = (() => {
-    try {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")).linearApiKey;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (fromConfig) return fromConfig;
-
-  fail(
-    "no Linear API key found. Create a personal key at\n" +
-      "  https://linear.app/settings/api\n" +
-      "then store it in the Keychain (it asks for the key):\n" +
-      '  security add-generic-password -U -a "$USER" -s linear-api-key -w\n' +
-      "or export it:\n" +
-      '  export LINEAR_API_KEY="lin_api_..."\n' +
-      `or save it to ${CONFIG_PATH}:\n` +
-      `  mkdir -p ${path.dirname(CONFIG_PATH)}\n` +
-      `  printf '{"linearApiKey":"lin_api_..."}' > ${CONFIG_PATH}\n` +
-      `  chmod 600 ${CONFIG_PATH}`,
-  );
-};
 
 // Two helpers because execFileSync returns null when stdout isn't piped, so a
 // single trim()-ing wrapper would throw on the inherit-stdio calls.
@@ -174,36 +124,12 @@ const repoRoot = () => {
   }
 };
 
-const fetchIssue = async ({ key, number }) => {
-  const query = `
-    query IssueByIdentifier($number: Float!, $key: String!) {
-      issues(filter: { number: { eq: $number }, team: { key: { eq: $key } } }) {
-        nodes { identifier title branchName state { name type } }
-      }
-    }`;
-
-  const response = await fetch(LINEAR_API, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: readApiKey(),
-    },
-    body: JSON.stringify({ query, variables: { number, key } }),
-  });
-
-  if (!response.ok) {
-    fail(`Linear API request failed: ${response.status} ${response.statusText}`);
-  }
-
-  const payload = await response.json();
-  if (payload.errors) {
-    fail(`Linear API error: ${payload.errors.map((e) => e.message).join("; ")}`);
-  }
-
-  const issue = payload.data?.issues?.nodes?.[0];
-  if (!issue) {
-    fail(`no Linear issue found for ${key}-${number}`);
-  }
+// The ticket from the tracker the tracker setting names, or a reason to stop.
+const fetchIssue = async (id) => {
+  const provider = tracker();
+  if (!provider) fail("the tracker setting is off, so there is no ticket tracker to ask");
+  const issue = await provider.issue(id);
+  if (!issue) fail(`no ${provider.name} issue found for ${id}`);
   return issue;
 };
 
@@ -395,9 +321,10 @@ const main = async () => {
     positional.length === 1
       ? [DEFAULT_WORKTREE_DIR, positional[0]]
       : [positional[0], positional[1]];
-  if (!ticket || !looksLikeTicket(ticket)) usage();
+  const id = ticket && idFrom(ticket);
+  if (!id) usage();
 
-  const issue = await fetchIssue(parseIdentifier(ticket));
+  const issue = await fetchIssue(id);
   const branch =
     issue.branchName ?? `${issue.identifier.toLowerCase()}-${slugify(issue.title)}`;
   const root = repoRoot();
@@ -413,8 +340,9 @@ const main = async () => {
 
   // Keyed on the state type, not its name: a workspace can call its completed
   // state anything it likes ("Shipped", say, so nothing is literally named
-  // Done), while the type is one of Linear's fixed set. The
-  // three closed ones are completed, canceled, and duplicate. The state goes in
+  // Done), while the type is one of Linear's fixed set, which
+  // lib/tracker/jira.js maps Jira's status categories onto. The three closed
+  // ones are completed, canceled, and duplicate. The state goes in
   // the prompt as a fact rather than something the session has to go look up,
   // and the clause is dropped entirely if Linear ever returns no state.
   const stateClause = issue.state

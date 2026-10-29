@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // For tmux/pr-view.sh and tmux/ticket-view.sh: turns a PR (gh's JSON) or a
-// Linear ticket (its GraphQL answer) into the Markdown glow draws, with each
-// Mermaid diagram drawn as text by mermaid-ascii, and puts the drawings back
-// into glow's output untouched.
+// ticket (Linear's GraphQL answer, or Jira's in its shape, from lib/tracker)
+// into the Markdown glow draws, with each Mermaid diagram drawn as text by
+// mermaid-ascii, and puts the drawings back into glow's output untouched.
 //
 //   pr-view.js prepare <pr.json> <dir> <columns>       writes <dir>/pr.md
 //   pr-view.js ticket <ticket.json> <dir> <columns>    writes <dir>/pr.md
@@ -74,13 +74,16 @@ const webPage = (mdFile, dir, columns) => {
   fs.writeFileSync(path.join(dir, "pr.md"), linkify(diagrams(fs.readFileSync(mdFile, "utf8"), dir, columns, "the page in the browser"), dir));
 };
 
-// A Linear ticket as its page lays it out: title, the facts in its side panel,
+// A ticket as Linear's page lays it out: title, the facts in its side panel,
 // the description, sub-issues and related tickets, then the comments, oldest
 // first, each reply under the comment it answers.
 const day = (iso) => (iso ?? "").slice(0, 10);
-// A bare Linear ticket URL as a link named by its ID, which then reads as
-// the ID, clickable.
-const tidy = (text) => (text ?? "").replace(/(^|[^(<])<?(https:\/\/linear\.app\/[^/\s]+\/issue\/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)");
+// A bare Linear or Jira ticket URL as a link named by its ID, which then
+// reads as the ID, clickable.
+const tidy = (text) =>
+  (text ?? "")
+    .replace(/(^|[^(<])<?(https:\/\/linear\.app\/[^/\s]+\/issue\/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)")
+    .replace(/(^|[^(<])<?(https:\/\/[\w-]+\.atlassian\.net\/browse\/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)");
 const ticket = (ticketFile, dir, columns) => {
   const issue = JSON.parse(fs.readFileSync(ticketFile, "utf8")).data.issue;
   const facts = [
@@ -92,7 +95,7 @@ const ticket = (ticketFile, dir, columns) => {
     issue.estimate != null && `estimate ${issue.estimate}`,
     issue.labels.nodes.length > 0 && issue.labels.nodes.map((l) => l.name).join(", "),
   ].filter(Boolean);
-  const where = "M-l in Linear";
+  const where = `M-l in ${issue.tracker ?? "Linear"}`;
   const list = (title, rows) => (rows.length ? `\n\n## ${title}\n\n${rows.join("\n")}` : "");
   const link = (i) => `**${i.identifier}** ${i.title}${i.state ? ` _(${i.state.name})_` : ""}`;
   const relation = { blocks: "Blocks", duplicate: "Duplicates", related: "Related to", similar: "Similar to" };

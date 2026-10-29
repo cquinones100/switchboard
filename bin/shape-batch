@@ -49,7 +49,7 @@ const fail = (message) => {
   process.exit(1);
 };
 
-const TICKET = /^(?:[A-Za-z][A-Za-z0-9]*-\d+|https?:\/\/\S*\/issue\/[A-Za-z][A-Za-z0-9]*-\d+\S*)$/;
+const TICKET = /^(?:[A-Za-z][A-Za-z0-9]*-\d+|https?:\/\/\S*\/(?:issue|browse)\/[A-Za-z][A-Za-z0-9]*-\d+\S*)$/;
 
 // "ABC-1, ABC-2" or "ABC-1 https://linear.app/x/issue/ABC-2/title" becomes one
 // item per ticket. Anything with a single non-ticket word in it is an idea and

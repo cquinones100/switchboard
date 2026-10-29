@@ -1,12 +1,14 @@
 // M-v's and M-i's views draw the copy last read at once and read it again in
 // the background, drawing it again when it changed. Run in a throwaway tmux
-// server with stand-ins for gh and curl, and a temporary cache.
+// server with stand-ins for gh and Linear's API, and a temporary cache and
+// settings.
 
 const { test, after } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const http = require("node:http");
 const { execFileSync } = require("node:child_process");
 
 // Under /tmp: a Unix socket's path can't be over 104 bytes on macOS.
@@ -26,13 +28,20 @@ fs.writeFileSync(
   `#!/bin/sh\nsleep 1\nprintf '{"number":7,"title":"T","url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false,"author":{"login":"a"},"baseRefName":"main","headRefName":"x","body":"%s"}' "$(cat '${body}')"\n`,
   { mode: 0o755 },
 );
-fs.writeFileSync(
-  path.join(bin, "curl"),
-  `#!/bin/sh\ncat >/dev/null\nsleep 1\nprintf '{"data":{"issue":{"identifier":"AB-1","title":"T","url":"https://linear.app/x/issue/AB-1","description":"%s","createdAt":"2026-10-01T00:00:00Z","updatedAt":"2026-10-01T00:00:00Z","state":{"name":"Todo"},"labels":{"nodes":[]},"children":{"nodes":[]},"relations":{"nodes":[]},"attachments":{"nodes":[]},"comments":{"nodes":[]}}}}' "$(cat '${body}')"\n`,
-  { mode: 0o755 },
-);
+// Linear, as lib/tracker asks it through tmux/tracker.sh.
+const linear = http.createServer((req, res) => {
+  req.resume();
+  req.on("end", () =>
+    setTimeout(() => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: { issue: { identifier: "AB-1", title: "T", url: "https://linear.app/x/issue/AB-1", description: fs.readFileSync(body, "utf8"), createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z", state: { name: "Todo" }, labels: { nodes: [] }, children: { nodes: [] }, relations: { nodes: [] }, attachments: { nodes: [] }, comments: { nodes: [] } } } }));
+    }, 1_000),
+  );
+});
+const listening = new Promise((resolve) => linear.listen(0, "127.0.0.1", resolve));
 
 after(() => {
+  linear.close();
   try {
     tmux("kill-server");
   } catch {}
@@ -46,9 +55,11 @@ const views = [
 
 views.forEach((view) => {
   test(`${view.name} draws the last copy at once, then the new one`, async () => {
+    await listening;
     const cache = path.join(tmp, `cache-${view.cache}`);
+    const linearEnv = `LINEAR_API_KEY=k LINEAR_API_URL=http://127.0.0.1:${linear.address().port} SWITCHBOARD_DIR=${path.join(__dirname, "..")} SWITCHBOARD_SETTINGS=${path.join(tmp, "settings.json")}`;
     const open = () =>
-      tmux("new-session", "-d", "-s", view.cache, "-x", "100", "-y", "30", "-c", repo, `env PATH=${bin}:${process.env.PATH} LINEAR_API_KEY=k XDG_CACHE_HOME=${cache} ${view.command}`);
+      tmux("new-session", "-d", "-s", view.cache, "-x", "100", "-y", "30", "-c", repo, `env PATH=${bin}:${process.env.PATH} ${linearEnv} XDG_CACHE_HOME=${cache} ${view.command}`);
     const shows = async (text) => {
       const until = Date.now() + 10_000;
       while (Date.now() < until) {

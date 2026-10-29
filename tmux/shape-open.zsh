@@ -1,7 +1,7 @@
 #!/bin/zsh
 
-# Popup for the M-p palette's "Continue shaping Linear tickets": asks for
-# Linear tickets and carries on shaping each in its own new tab, as
+# Popup for the M-p palette's "Continue shaping tickets": asks for
+# tickets and carries on shaping each in its own new tab, as
 # `shape-batch --continue` does from a shell, without /shape first asking
 # whether to run a review loop instead. Takes one ticket or a list, as
 # wt-open.zsh does, and starts in the focused pane's directory (the binding's
@@ -15,7 +15,7 @@
 # than typed, as shape-batch does; it is left at a shell when Claude exits.
 # The new tabs go at the end, in order, and the first is selected.
 #
-# The field starts with the clipboard when it holds ticket IDs or Linear issue
+# The field starts with the clipboard when it holds ticket IDs or issue
 # URLs. zsh for vared, which edits a prefilled line.
 
 dim=$'\e[38;5;244m' red=$'\e[31m' reset=$'\e[0m'
@@ -33,12 +33,12 @@ fail() {
 }
 
 ticket_id='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
-issue_url='/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+)'
+issue_url='/(issue|browse)/([A-Za-z][A-Za-z0-9]*-[0-9]+)'
 
-# One ticket, as an ID or a Linear issue URL, becomes ABC-123 in $ticket.
+# One ticket, as an ID or a Linear or Jira issue URL, becomes ABC-123 in $ticket.
 parse_ticket() {
   local token=$1
-  [[ $token =~ $issue_url ]] && token=$match[1]
+  [[ $token =~ $issue_url ]] && token=$match[2]
   [[ $token =~ $ticket_id ]] || return 1
   ticket=${(U)token}
 }
@@ -56,7 +56,7 @@ if [[ -n ${clipboard//[[:space:],]/} ]]; then
 fi
 
 print
-print "  ${dim}Linear ticket IDs or URLs, separated by commas or spaces.${reset}"
+print "  ${dim}Ticket IDs or URLs, separated by commas or spaces.${reset}"
 print "  ${dim}Enter carries on shaping each in a new tab. Esc cancels.${reset}"
 print
 vared -p '  Tickets: ' input || exit 0
@@ -64,7 +64,7 @@ vared -p '  Tickets: ' input || exit 0
 # Every ticket is checked before any tab opens, and one given twice opens once.
 tickets=()
 for token in $(tokens_of "$input"); do
-  parse_ticket "$token" || fail "Not a ticket ID or Linear issue URL: $token"
+  parse_ticket "$token" || fail "Not a ticket ID or ticket URL: $token"
   (( ${tickets[(Ie)$ticket]} )) || tickets+=($ticket)
 done
 (( ${#tickets} )) || exit 0

@@ -2,7 +2,7 @@
 
 // wt-jump <ticket-or-pr-or-branch>
 //
-// Selects the tmux window whose worktree matches a Linear ticket, a GitHub pull
+// Selects the tmux window whose worktree matches a ticket, a GitHub pull
 // request, or part of a branch name. The way back to a window you already have
 // open, when cycling through them with M-[ and M-] stops scaling.
 //
@@ -135,7 +135,7 @@ const looksLikePr = (input) =>
   /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(input) || /^#?\d+$/.test(input);
 
 const looksLikeTicket = (input) =>
-  /\/issue\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
+  /\/(?:issue|browse)\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
   /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(input);
 
 // Bounded on both sides so ABC-12 does not match abc-123. The same rule
@@ -211,7 +211,7 @@ const matchesFor = (target, panes) => {
 
   if (looksLikeTicket(target)) {
     const token = (
-      target.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ?? target
+      target.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ?? target
     ).toLowerCase();
     const matched = described.filter(
       (pane) => mentions(pane.dir, token) || mentions(pane.branch, token),

@@ -29,8 +29,13 @@ SCHEMA="$REPO/tmux/settings.json"
 FILE="${SWITCHBOARD_SETTINGS:-$HOME/.config/switchboard/settings.json}"
 script_dir="$(dirname "$0")"
 
-# What you set, or {} when the file is missing or isn't a JSON object.
-mine() { jq -c 'if type == "object" then . else {} end' "$FILE" 2>/dev/null || echo '{}'; }
+# What you set, or {} when the file is missing or isn't a JSON object. Linear
+# turned off, from before the tracker setting, is the tracker turned off, as
+# lib/settings.js reads it.
+mine() {
+  jq -c 'if type == "object" then . else {} end
+    | if .tracker == null and .linear == false then .tracker = "off" else . end | del(.linear)' "$FILE" 2>/dev/null || echo '{}'
+}
 
 # key<TAB>value for every option, the default standing in for a value that
 # isn't one of its own; on/off for the on/off ones.
@@ -91,12 +96,14 @@ apply() {
   [[ $list == *" theme "* ]] && apply_theme
   # A service turned back on gets its keys back from tmux.conf, which runs
   # this again (with --load) for whatever is still off.
-  if [[ ( $list == *" github "* && $(value_of github) == on ) || ( $list == *" linear "* && $(value_of linear) == on ) ]]; then
+  if [[ ( $list == *" github "* && $(value_of github) == on ) || ( $list == *" tracker "* && $(value_of tracker) != off ) ]]; then
     tmux source-file ~/.config/tmux/tmux.conf
   fi
-  if [[ $list == *" accent_colors "* || $list == *" tab_lookups "* || $list == *" github "* || $list == *" linear "* ]]; then
-    # Tab colors and names are cached per directory (path-facts.sh).
+  if [[ $list == *" accent_colors "* || $list == *" tab_lookups "* || $list == *" github "* || $list == *" tracker "* ]]; then
+    # Tab colors and names are cached per directory (path-facts.sh), and
+    # ticket titles per ID, whichever tracker they came from (ticket-title.sh).
     rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/tmux-path-facts"
+    [[ $list == *" tracker "* ]] && rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/tmux-ticket-title"
     tmux list-sessions -F '#{session_name}' 2>/dev/null | while read -r session; do
       "$script_dir/window-names.sh" "$session"
     done
@@ -105,14 +112,14 @@ apply() {
   return 0
 }
 
-# With the github or linear setting off, every key whose description carries
-# that service's tag (#github, #linear) is bound again to do nothing, in the
+# With the github or tracker setting off, every key whose description carries
+# that service's tag (#github, #tracker) is bound again to do nothing, in the
 # root, prefix and palette tables, so pressing it neither asks the service nor
 # reaches the pane, but says why the first time (tip.sh). Bound without a
 # note, it also drops out of the palette.
 disable_services() {
   local service table key
-  for service in github linear; do
+  for service in github tracker; do
     [ "$(value_of "$service")" = off ] || continue
     for table in root prefix palette; do
       tmux list-keys -N -T "$table" -P '' 2>/dev/null | grep -E " #$service( |$)" | awk '{ print $1 }' |

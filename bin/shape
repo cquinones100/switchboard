@@ -54,7 +54,7 @@ const tryGit = (args, cwd) => {
 };
 
 const ticketIn = (text) =>
-  text.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
+  text.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
   text.match(/^([A-Za-z][A-Za-z0-9]*-\d+)$/)?.[1];
 
 // The main checkout is the parent of the shared .git directory, which is the

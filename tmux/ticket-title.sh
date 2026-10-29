@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
-# Prints the Linear title for ticket <ID>, or nothing when it is not known yet
-# or Linear has no such ticket.
+# Prints the title of ticket <ID>, from Linear or Jira as the tracker setting
+# says, or nothing when it is not known yet or there is no such ticket.
 #
 # Usage: ticket-title.sh <ID>
 #
 # Same rule as window-pr.sh: answer from a cache, never wait on the network,
-# refresh in the background when the answer has gone stale. The API key is the
-# one worktree-from-ticket uses, from $LINEAR_API_KEY, the Keychain or its config file.
+# refresh in the background when the answer has gone stale. The key is the one
+# worktree-from-ticket uses (lib/tracker).
 
 set -u
 # What it keeps names your branches, tickets and prompts: yours alone.
@@ -49,29 +49,16 @@ mkdir "$lock" 2>/dev/null || exit 0
 (
   trap 'rmdir "$lock" 2>/dev/null' EXIT
 
-  config="$HOME/.config/switchboard/linear.json"
-  # The macOS Keychain (service linear-api-key), else the config file's linearApiKey.
-  key="${LINEAR_API_KEY:-$(security find-generic-password -s linear-api-key -w 2>/dev/null || jq -r '.linearApiKey // empty' "$config" 2>/dev/null)}"
-  [ -n "$key" ] || exit 0
-
-  body=$(jq -nc --arg id "$id" \
-    '{query: "query($id: String!) { issue(id: $id) { title } }", variables: {id: $id}}')
-  # The key goes to curl on stdin (-H @-) rather than as an argument, where any
-  # process on the machine could read it from `ps`. printf is a shell builtin,
-  # so the key is never on a command line here either.
-  response=$(printf 'Authorization: %s\n' "$key" |
-    curl -s --max-time 10 https://api.linear.app/graphql \
-      -H 'Content-Type: application/json' -H @- -d "$body") || exit 0
-
-  # Only a definite answer is cached. A network or auth failure leaves the old
-  # answer in place, so a blip never blanks a title that was already known.
-  if title=$(printf '%s' "$response" | jq -er '.data.issue.title' 2>/dev/null); then
-    :
-  elif printf '%s' "$response" | jq -e '.errors[]? | select(.extensions.code == "INPUT_ERROR")' >/dev/null 2>&1; then
-    title=""
-  else
-    exit 0
-  fi
+  # Asked of the tracker the tracker setting names (tracker.sh). Only a
+  # definite answer is cached: a title, or 3 for no such ticket. A network or
+  # auth failure leaves the old answer in place, so a blip never blanks a
+  # title that was already known.
+  title=$("$script_dir/tracker.sh" title "$id")
+  case $? in
+    0) ;;
+    3) title="" ;;
+    *) exit 0 ;;
+  esac
 
   printf '%s' "$title" > "$cache.$$" && mv "$cache.$$" "$cache"
 
