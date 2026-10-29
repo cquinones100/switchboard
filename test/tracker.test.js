@@ -157,10 +157,27 @@ test("settings.sh reads Linear's old off as the tracker off, as lib/settings.js 
   }
 });
 
+test("a refused Jira token cut off at 128 characters, as the Keychain's hidden prompt stores one, says so", async () => {
+  routes = { "GET /rest/api/3/issue/AB-2": () => [401, {}] };
+  process.env.JIRA_API_TOKEN = `ATATT3x${"a".repeat(121)}`;
+  try {
+    await assert.rejects(jira.issue("AB-2"), /cut off at 128 characters/);
+  } finally {
+    process.env.JIRA_API_TOKEN = "token";
+  }
+});
+
+test("a Jira that answers not found because it refused the token says so, rather than that there is no such issue", async () => {
+  routes = { "GET /rest/api/3/myself": () => [401, {}] };
+  await assert.rejects(jira.issue("AB-2"), /may have expired/);
+});
+
 test("Jira's issue comes back in Linear's shape: its status category as the state's type, its epic as the project", async () => {
   routes = {
+    "GET /rest/api/3/myself": () => [200, { displayName: "Me" }],
     "GET /rest/api/3/issue/AB-2": () => [200, issue("AB-2")],
     "GET /rest/api/3/issue/AB-3": () => [200, issue("AB-3", { status: status("Won't Do", "done"), resolution: { name: "Won't Do" }, parent: undefined })],
+    "GET /rest/api/3/issue/AB-4": () => [200, issue("AB-4", { status: status("CANCELLED", "done"), parent: undefined })],
   };
   requests.length = 0;
   assert.deepEqual(await jira.issue("AB-2"), {
@@ -177,6 +194,7 @@ test("Jira's issue comes back in Linear's shape: its status category as the stat
   });
   assert.equal(requests[0].auth, `Basic ${Buffer.from("me@example.com:token").toString("base64")}`);
   assert.deepEqual((await jira.issue("AB-3")).state, { name: "Won't Do", type: "canceled" });
+  assert.deepEqual((await jira.issue("AB-4")).state, { name: "CANCELLED", type: "canceled" }, "by its name, with no resolution");
   assert.equal(await jira.issue("AB-404"), null, "no such issue is null, not an error");
 });
 
@@ -215,6 +233,16 @@ test("Jira's ticket detail is the ticket view's shape, its description and comme
   assert.deepEqual(found.comments.nodes, [{ id: "10", body: "Looks good", createdAt: "2026-10-01T11:00:00.000+0000", parent: null, user: { name: "Ada" }, botActor: null }]);
   assert.equal(found.parent, null, "an epic is the project, not the parent");
   assert.equal(await jira.detail("AB-404"), null);
+});
+
+test("an epic's sub-issues in the ticket view are the issues under it", async () => {
+  routes = {
+    "GET /rest/api/3/issue/AB-1": () => [200, { key: "AB-1", fields: { summary: "The epic", status: status("Backlog", "new"), issuetype: { name: "Epic", hierarchyLevel: 1 } } }],
+    "GET /rest/api/3/issue/AB-1/comment": () => [200, { comments: [] }],
+    "GET /rest/api/3/issue/AB-1/remotelink": () => [200, []],
+    "POST /rest/api/3/search/jql": (req) => [200, { issues: req.body.jql.startsWith("parent = AB-1") ? [issue("AB-2"), issue("AB-3")] : [], isLast: true }],
+  };
+  assert.deepEqual((await jira.detail("AB-1")).children.nodes.map((c) => c.identifier), ["AB-2", "AB-3"]);
 });
 
 test("Jira's searches go through JQL, every page, and its text search keeps only words", async () => {
@@ -269,6 +297,7 @@ test("closing a Jira ticket takes the first transition into Done", async () => {
 test("the shell scripts' CLI answers from Jira, with exit codes for no such ticket and no epic", async () => {
   fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "jira" }));
   routes = {
+    "GET /rest/api/3/myself": () => [200, { displayName: "Me" }],
     "GET /rest/api/3/issue/AB-2": () => [200, issue("AB-2")],
     "GET /rest/api/3/issue/AB-3": () => [200, issue("AB-3", { parent: undefined })],
   };

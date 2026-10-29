@@ -1167,7 +1167,7 @@ tracker=$(jq -r 'if .tracker then .tracker elif .linear == false then "off" else
 case $tracker in
   jira)
     if ! security find-generic-password -s jira-api-token >/dev/null 2>&1; then
-      optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, then security add-generic-password -a \"\$USER\" -s jira-api-token -w"
+      optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, copied, then printf 'add-generic-password -U -a \"%s\" -s jira-api-token -w \"%s\"\\n' \"\$USER\" \"\$(pbpaste)\" | security -i"
     elif ! jq -e '.jiraSite and .jiraEmail' "$tracker_config" >/dev/null 2>&1; then
       optional "Jira's site and your email: add \"jiraSite\": \"https://<yours>.atlassian.net\" and \"jiraEmail\" to $tracker_config"
     else
