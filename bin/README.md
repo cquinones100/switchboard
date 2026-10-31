@@ -205,8 +205,14 @@ Where Jira differs:
   workflow offers into Done.
 - Branches are named `abc-123-the-title`, since Jira suggests none.
 - There's no Inbox view: Jira has no inbox to read.
-- The `/shape`, `/queue-and-clean` and `/note-tickets` skills still use
-  Claude's Linear connector.
+- The skills that read or write tickets (`/shape`, `/note-tickets`,
+  `/queue-and-clean`, `/deploy-test`, `/project-status`) use Claude's
+  Atlassian connector, which has to be
+  connected in Claude (`/mcp`). They read with it, and write (create a ticket,
+  link one, move one to Done) through its `executeWrite`, which Claude asks
+  you about each time while the connector's write tools need approval.
+  `/project-status` reads an epic's tickets and comments, since Jira has no
+  project updates.
 
 ### Why step 3 exists
 
@@ -249,7 +255,8 @@ stays one stable line that never needs re-editing when the tool changes.
 
 ## shape
 
-The step before `wt`: shapes a Linear ticket with Claude, from a rough idea or
+The step before `wt`: shapes a ticket with Claude, in Linear or Jira as the
+`tracker` setting says, from a rough idea or
 an existing ticket that needs work.
 
 ```
@@ -260,14 +267,14 @@ shape ABC-123 split out the API part
 
 Anything after a ticket is your direction for the shaping, kept in mind
 throughout; `/shape ABC-123 split out the API part` does the same. M-p's
-**Shape a new Linear ticket from what you type** (`note-shape.sh prompt`) asks
+**Shape a new ticket from what you type** (`note-shape.sh prompt`) asks
 for the idea in a popup, then the repo, and opens a tab shaping it.
 
 It starts Claude with the `/shape` skill, which holds the instructions, so
 `/shape` works the same inside a session you already have. Claude reads the
-code before asking anything, checks Linear for tickets that already cover the
-idea, drafts the ticket in the layout the team's recent tickets use, and writes
-it to Linear only once you approve the draft. It does not touch the code.
+code before asking anything, checks the tracker for tickets that already cover
+the idea, drafts the ticket in the layout the team's recent tickets use, and
+writes it to the tracker only once you approve the draft. It does not touch the code.
 Given an existing ticket, it reads it first and asks whether to run the
 repository's `/review-loop` on it in ticket mode (Codex checks the ticket
 against the code), or keep shaping it; a review's findings can then be folded
@@ -289,7 +296,8 @@ from idea to PR.
   like every other ticket tab.
 - The team to create tickets in comes from `linearTeam` in
   `~/.config/switchboard/linear.json`, next to the API key, with
-  optional default labels in `linearLabels`. Without `linearTeam`, Claude asks.
+  optional default labels in `linearLabels`; with Jira, the project from
+  `jiraProject` in `jira.json`, with `jiraLabels`. Without one, Claude asks.
   Keeping them there keeps the team out of this repository.
 
 ```sh
@@ -1556,14 +1564,14 @@ usually write it: `<u>` for underline, `==…==` for highlight. Attachments,
 locked notes, sharing and Notes' own database are left out on purpose; the
 notes are plain files instead.
 
-The M-p action **Shape a note's checklist items as tickets** (Linear only for now)
+The M-p action **Shape a note's checklist items as tickets**
 (`tmux/note-shape.sh`) picks a note, the one open in the app first, then its
 unticked checklist items, all selected to start with, and the repo they are
 for, and opens a tab per item running `/shape` through `shape-batch`.
 Everything indented under an item is part of its ticket; unticked checklist
 items under it are its sub-items, each a ticket of its own, and `/shape`
-asks first whether the item should become a Linear project with them as its
-issues, or a ticket with them as sub-issues. It checks Linear before reading
+asks first whether the item should become a project (a Jira epic) with them as
+its issues, or a ticket with them as sub-issues. It checks the tracker before reading
 any code, and when a ticket already covers an item, it shows you that ticket
 and asks whether to resume shaping it instead. Ticked items, and what is under
 them, are left out.

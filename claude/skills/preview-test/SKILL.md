@@ -32,7 +32,7 @@ Read the PR and the repo: `gh pr view <number> --json number,url,state,title,bod
    - the repository's `CLAUDE.md`, `AGENTS.md` and README, for how previews are made and named.
 
    When one answer is plain, use it and say in a line which; otherwise ask, with **No preview to wait for** (give the URL to test, or test nothing) and **Skip the test** as options.
-2. **The test**: as `/deploy-test`'s "Settling" says, from the PR's description, its Linear ticket's acceptance criteria and its diff (`gh pr diff <number>`).
+2. **The test**: as `/deploy-test`'s "Settling" says, from the PR's description, its ticket's acceptance criteria and its diff (`gh pr diff <number>`).
 
 ## Waiting for the preview
 

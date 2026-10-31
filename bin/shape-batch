@@ -6,7 +6,7 @@
 // Opens one tmux window per idea or ticket and runs `shape` in each, the way
 // wt-batch does for `wt`. Each argument is one thing to shape, since an idea is
 // free text full of spaces and commas. An argument that is nothing but ticket
-// identifiers or Linear URLs is split like wt-batch splits them. With no
+// identifiers or Linear or Jira URLs is split like wt-batch splits them. With no
 // arguments, ideas are read from stdin, one per line.
 //
 //   shape-batch "phase label is unclear" "results load slowly" ABC-123
