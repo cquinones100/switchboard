@@ -67,7 +67,7 @@ Your own settings go in `~/.config/switchboard/`, which is never in this reposit
 | `claude.json` | where your CLAUDE.md's rules come from, a file or a git repository |
 | `browser.json` | the Chrome profile each site's links open in, `awsapps.com` for the AWS login |
 | `linear.json` | your Linear workspace, the team and labels `/shape` files tickets with |
-| `jira.json` | your Jira site and the email your API token belongs to, with Jira as the tracker |
+| `jira.json` | your Jira site, the email your API token belongs to, and the project and labels `/shape` files tickets with, with Jira as the tracker |
 | `slack-updates.json` | the channels the Slack view shows in full |
 | `slack-relay.json` | your Slack member ID, the one person the relay listens to |
 | `oncall.json`, `oncall-rules.md` | the channels `/oncall` watches and your team's rules |

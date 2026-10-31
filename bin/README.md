@@ -183,6 +183,10 @@ and add your site and the email of the account the token belongs to to
 { "jiraSite": "https://your-company.atlassian.net", "jiraEmail": "you@your-company.com" }
 ```
 
+For the skills that file tickets (`/shape`, `/note-tickets`), add the project
+they file in as `"jiraProject": "ABC"`, and labels for a new ticket as
+`"jiraLabels": [...]`, if you want any.
+
 `JIRA_API_TOKEN`, `JIRA_EMAIL` and `JIRA_SITE` in the environment take
 precedence, and a `jiraApiToken` in the file is read after the Keychain.
 Atlassian's tokens expire after a year at most; when Jira refuses one, the
