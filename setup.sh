@@ -1162,14 +1162,13 @@ fi
 
 # The ticket tracker the tracker setting names (Linear unless set; Linear
 # turned off before the setting existed is off), as lib/settings.js reads it.
-tracker_config=~/.config/switchboard/linear.json
 tracker=$(jq -r 'if .tracker then .tracker elif .linear == false then "off" else "linear" end' ~/.config/switchboard/settings.json 2>/dev/null || echo linear)
 case $tracker in
   jira)
     if ! security find-generic-password -s jira-api-token >/dev/null 2>&1; then
       optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, copied, then printf 'add-generic-password -U -a \"%s\" -s jira-api-token -w \"%s\"\\n' \"\$USER\" \"\$(pbpaste)\" | security -i"
-    elif ! jq -e '.jiraSite and .jiraEmail' "$tracker_config" >/dev/null 2>&1; then
-      optional "Jira's site and your email: add \"jiraSite\": \"https://<yours>.atlassian.net\" and \"jiraEmail\" to $tracker_config"
+    elif ! jq -e '.jiraSite and .jiraEmail' ~/.config/switchboard/jira.json >/dev/null 2>&1; then
+      optional "Jira's site and your email: add \"jiraSite\": \"https://<yours>.atlassian.net\" and \"jiraEmail\" to ~/.config/switchboard/jira.json"
     else
       ok "Jira (M-i, M-l and ticket titles in tab names)"
     fi
@@ -1182,10 +1181,10 @@ case $tracker in
       optional "Linear, for M-i, M-l and ticket titles in tab names: a personal API key from Linear's settings, then security add-generic-password -a \"\$USER\" -s linear-api-key -w; or Jira instead, in Settings (M-p)"
     fi
     # /shape files tickets in the team named here.
-    if [[ -n $(jq -r '.linearTeam // empty' "$tracker_config" 2>/dev/null) ]]; then
+    if [[ -n $(jq -r '.linearTeam // empty' ~/.config/switchboard/linear.json 2>/dev/null) ]]; then
       ok "the Linear team for /shape"
     else
-      optional "the Linear team /shape files tickets in: add \"linearTeam\": \"<team key>\" to $tracker_config"
+      optional "the Linear team /shape files tickets in: add \"linearTeam\": \"<team key>\" to ~/.config/switchboard/linear.json"
     fi
     ;;
 esac

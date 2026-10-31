@@ -177,7 +177,7 @@ for Linear's key: its hidden prompt keeps only the first 128 characters, and
 Atlassian's tokens are longer, so Jira would refuse what it stored.
 
 and add your site and the email of the account the token belongs to to
-`~/.config/worktree-from-ticket/config.json`:
+`~/.config/switchboard/jira.json` (or in Settings, under Jira):
 
 ```json
 { "jiraSite": "https://your-company.atlassian.net", "jiraEmail": "you@your-company.com" }

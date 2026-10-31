@@ -18,7 +18,6 @@ const { promisify } = require("node:util");
 const tmp = fs.realpathSync(fs.mkdtempSync("/tmp/tracker-"));
 const settingsFile = path.join(tmp, "settings.json");
 process.env.HOME = tmp;
-process.env.XDG_CONFIG_HOME = path.join(tmp, ".config");
 process.env.SWITCHBOARD_SETTINGS = settingsFile;
 process.env.JIRA_EMAIL = "me@example.com";
 process.env.JIRA_API_TOKEN = "token";
@@ -313,6 +312,18 @@ test("the shell scripts' CLI answers from Jira, with exit codes for no such tick
     assert.deepEqual(await cli("url", "https://x.atlassian.net/browse/AB-2"), { code: 0, out: `${process.env.JIRA_SITE}/browse/AB-2` });
     assert.deepEqual(await cli("project", "AB-2"), { code: 0, out: `${process.env.JIRA_SITE}/browse/AB-1` });
     assert.equal((await cli("project", "AB-3")).code, 4);
+    // The site from ~/.config/switchboard/jira.json, without JIRA_SITE.
+    const own = path.join(tmp, ".config/switchboard");
+    fs.mkdirSync(own, { recursive: true });
+    fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "acme.atlassian.net" }));
+    const site = process.env.JIRA_SITE;
+    delete process.env.JIRA_SITE;
+    try {
+      assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+    } finally {
+      process.env.JIRA_SITE = site;
+      fs.rmSync(path.join(own, "jira.json"));
+    }
     fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "off" }));
     assert.equal((await cli("title", "AB-2")).code, 2);
   } finally {

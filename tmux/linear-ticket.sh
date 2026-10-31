@@ -5,7 +5,7 @@
 #
 # The URL comes from tracker.sh, from Linear's workspace ($LINEAR_WORKSPACE or
 # linearWorkspace) or Jira's site ($JIRA_SITE or jiraSite) in
-# ~/.config/worktree-from-ticket/config.json — the same config worktree-from-ticket
+# ~/.config/switchboard/linear.json or jira.json — the same config worktree-from-ticket
 # reads. Keeping it there means no workspace, site or team identifier lives in this repo.
 
 cd "$1" 2>/dev/null || exit 0

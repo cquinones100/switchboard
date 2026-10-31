@@ -13,7 +13,7 @@
 # that is usually where it came from.
 #
 # The URL comes from tracker.sh, from Linear's workspace or Jira's site in
-# ~/.config/worktree-from-ticket/config.json, as linear-ticket.sh finds it, so
+# ~/.config/switchboard (linear.json, jira.json), as linear-ticket.sh finds it, so
 # no workspace, site or team name lives in this repository.
 #
 # zsh for vared, which edits a prefilled line.
