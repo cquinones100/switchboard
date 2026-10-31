@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Shapes a note's to-dos as Linear tickets, for the M-p action: pick a note,
+# Shapes a note's to-dos as tickets, in Linear or Jira, for the M-p action: pick a note,
 # the checklist items to shape (every unticked one, to start with), and the
 # repo they belong to, and each item gets its own tab running /shape, through
 # shape-batch. /shape looks for a ticket that already covers an item first,
@@ -17,8 +17,8 @@
 # anything indented under them as their details. A ticked item, and all that
 # is under it, is done and left out, and so is one struck through (~~...~~). /shape gets the item on one line, with
 # the note's title, its details and its sub-items labelled, and asks first
-# whether an item with sub-items should become a Linear project with them as
-# its issues.
+# whether an item with sub-items should become a project (a Jira epic) with
+# them as its issues.
 
 set -u
 export LC_ALL=en_US.UTF-8

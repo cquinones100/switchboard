@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-# Popup for the M-W binding: asks for Linear tickets and starts work on each in
+# Popup for the M-W binding: asks for tickets and starts work on each in
 # its own new tab, the way /wt does from inside a Claude session and wt-batch
 # does from a shell. Takes one ticket or a list, as wt-batch does.
 #
@@ -14,7 +14,7 @@
 # after Claude exits. That is also why this is zsh and not a call to wt-batch:
 # popups run with the tmux server's environment, which has no node.
 #
-# The field starts with the clipboard when it holds ticket IDs or Linear issue
+# The field starts with the clipboard when it holds ticket IDs or issue
 # URLs. zsh for vared, which edits a prefilled line.
 
 dim=$'\e[38;5;244m' red=$'\e[31m' reset=$'\e[0m'
@@ -32,14 +32,14 @@ fail() {
 }
 
 ticket_id='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
-issue_url='/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+)'
+issue_url='/(issue|browse)/([A-Za-z][A-Za-z0-9]*-[0-9]+)'
 
-# One ticket, as an ID or a Linear issue URL, becomes ABC-123 in $ticket.
+# One ticket, as an ID or a Linear or Jira issue URL, becomes ABC-123 in $ticket.
 # Fails on anything else: the ID is typed into a shell below, so nothing but an
 # ID may get through.
 parse_ticket() {
   local token=$1
-  [[ $token =~ $issue_url ]] && token=$match[1]
+  [[ $token =~ $issue_url ]] && token=$match[2]
   [[ $token =~ $ticket_id ]] || return 1
   ticket=${(U)token}
 }
@@ -59,7 +59,7 @@ if [[ -n ${clipboard//[[:space:],]/} ]]; then
 fi
 
 print
-print "  ${dim}Linear ticket IDs or URLs, separated by commas or spaces.${reset}"
+print "  ${dim}Ticket IDs or URLs, separated by commas or spaces.${reset}"
 print "  ${dim}Enter starts wt for each in a new tab. Esc cancels.${reset}"
 print
 vared -p '  Tickets: ' input || exit 0
@@ -68,7 +68,7 @@ vared -p '  Tickets: ' input || exit 0
 # half-started, and a ticket given twice opens once.
 tickets=()
 for token in $(tokens_of "$input"); do
-  parse_ticket "$token" || fail "Not a ticket ID or Linear issue URL: $token"
+  parse_ticket "$token" || fail "Not a ticket ID or ticket URL: $token"
   (( ${tickets[(Ie)$ticket]} )) || tickets+=($ticket)
 done
 (( ${#tickets} )) || exit 0

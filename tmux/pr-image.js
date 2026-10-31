@@ -6,12 +6,11 @@
 // palette, with passthrough on for that pane alone.
 //
 //   pr-image.js [<dir>]          the PR of <dir>'s branch (default: the current directory)
-//   pr-image.js --ticket <ID>    Linear ticket <ID> (M-p, in place of the pane, as the PR)
+//   pr-image.js --ticket <ID>    ticket <ID> (M-p, in place of the pane, as the PR)
 //
-// A ticket comes from Linear's API, with the key the ticket scripts use
-// (LINEAR_API_KEY, else the Keychain's linear-api-key, else
-// worktree-from-ticket's linearApiKey): its title and the facts from its side
-// panel, its description, sub-issues and comments, the Markdown drawn in the
+// A ticket comes from Linear or Jira, as the tracker setting says, with the
+// key the ticket scripts use (lib/tracker): its title and the facts from its
+// side panel, its description, sub-issues and comments, the Markdown drawn in the
 // page by marked and cleaned by DOMPurify, since unlike GitHub's HTML nothing
 // has made it safe, then laid out and paged as a PR is.
 //
@@ -191,43 +190,19 @@ const cellSize = () =>
     process.stdout.write("\x1b[16t");
   });
 
-// The Linear API key, as the ticket scripts find it.
-const linearKey = () => {
-  if (process.env.LINEAR_API_KEY) return process.env.LINEAR_API_KEY;
-  try {
-    return execFileSync("security", ["find-generic-password", "-s", "linear-api-key", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-  } catch {}
-  try {
-    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config/switchboard/linear.json"), "utf8")).linearApiKey;
-  } catch {
-    return undefined;
-  }
-};
-
-const TICKET_QUERY = `query($id: String!) { issue(id: $id) {
-  identifier title description priorityLabel
-  state { name } assignee { name } project { name } labels { nodes { name } }
-  children { nodes { identifier title state { name } } }
-  comments(first: 100) { nodes { body createdAt user { name } botActor { name } } }
-} }`;
-
-// A ticket as the page's parts, or a reason it can't be.
+// A ticket as the page's parts, or a reason it can't be: from Linear or Jira,
+// as the tracker setting says, through lib/tracker, found from this file's
+// real place, since tmux runs it through its link in ~/.config/tmux.
 const ticketPage = async (id) => {
-  const key = linearKey();
-  if (!key) return { error: "No Linear API key: set LINEAR_API_KEY, or store it in the Keychain as linear-api-key." };
+  const { tracker } = require(path.join(path.dirname(fs.realpathSync(__filename)), "../lib/tracker"));
+  const provider = tracker();
+  if (!provider) return { error: "The ticket tracker is off in Settings." };
   let issue;
   try {
-    const res = await fetch("https://api.linear.app/graphql", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: key },
-      body: JSON.stringify({ query: TICKET_QUERY, variables: { id } }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const body = await res.json();
-    issue = body.data?.issue;
-    if (!issue) return { error: `Linear has no ticket ${id} (${body.errors?.[0]?.message ?? "no answer"}).` };
-  } catch {
-    return { error: "Could not reach Linear." };
+    issue = await provider.detail(id);
+    if (!issue) return { error: `${provider.name} has no ticket ${id}.` };
+  } catch (err) {
+    return { error: String(err.message).split("\n")[0] };
   }
   const markdown = [issue.description || "_No description._"];
   const facts = [issue.state?.name, issue.assignee?.name ?? "Unassigned", issue.priorityLabel, issue.project?.name, ...issue.labels.nodes.map((l) => l.name)].filter(Boolean);
@@ -274,7 +249,7 @@ const main = async () => {
   // Taken first, before anything else reads the keyboard. A guess at a
   // 13-point font when the terminal doesn't say.
   let cell = (await cellSize()) ?? { w: 16, h: 34 };
-  if (ticket && !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(ticket)) return fail("That isn't a Linear ticket ID.");
+  if (ticket && !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(ticket)) return fail("That isn't a ticket ID.");
   // The PR or ticket as last read is drawn at once, and read again while it
   // shows: when that has changed, the page is drawn again where it was.
   const gitDir = () => {

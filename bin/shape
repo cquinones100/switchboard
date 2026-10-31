@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 // shape <what the ticket is about>
-// shape <linear-ticket-id-or-url> [what to do with it]
+// shape <ticket-id-or-url> [what to do with it]
 //
-// Starts a Claude session that shapes a Linear ticket with you: it reads the
-// code, checks Linear for tickets that already cover it, drafts the ticket,
-// and creates or updates it once you approve. The instructions live in the
+// Starts a Claude session that shapes a ticket with you, in Linear or Jira as
+// the tracker setting says: it reads the code, checks the tracker for tickets
+// that already cover it, drafts the ticket, and creates or updates it once you
+// approve. The instructions live in the
 // /shape skill, so the same thing works inside a session you already have;
 // this only gets the session started in the right place.
 //
@@ -33,7 +34,7 @@ const fail = (message) => {
 const usage = () => {
   console.error(
     "Usage: shape <what the ticket is about>\n" +
-      "       shape [--continue] <linear-ticket-id-or-url> [what to do with it]\n\n" +
+      "       shape [--continue] <ticket-id-or-url> [what to do with it]\n\n" +
       "Examples:\n" +
       '  shape "people can\'t tell which phase is active"\n' +
       "  shape ABC-123\n" +
@@ -54,7 +55,7 @@ const tryGit = (args, cwd) => {
 };
 
 const ticketIn = (text) =>
-  text.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
+  text.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
   text.match(/^([A-Za-z][A-Za-z0-9]*-\d+)$/)?.[1];
 
 // The main checkout is the parent of the shared .git directory, which is the

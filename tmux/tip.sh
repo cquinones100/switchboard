@@ -39,7 +39,7 @@ text_of() {
     loop) printf '%s\n' "A tab is looping." "" "It runs again on its own. Mission" "control (M-Space) shows when, under Loops." ;;
     updates) printf '%s\n' "Updates." "" "A git pull links what it adds too," "and the update check is in Settings." ;;
     github_off) printf '%s\n' "GitHub is off in Settings." "" "Its keys do nothing until it is on" "again: M-p, then Settings." ;;
-    linear_off) printf '%s\n' "Linear is off in Settings." "" "Its keys do nothing until it is on" "again: M-p, then Settings." ;;
+    tracker_off) printf '%s\n' "The ticket tracker is off in Settings." "" "Its keys do nothing until it is on" "again: M-p, then Settings." ;;
     option-alt) printf '%s\n' "Option isn't acting as Alt here," "so the M- keys type letters instead." "" "~/switchboard/setup.sh terminal  fixes it" "(then restart the terminal)" ;;
     key-*) printf '%s\n' "Next time, press ${TIP_KEY:-its key}" "" "for what you just picked from M-p." ;;
     *) return 1 ;;

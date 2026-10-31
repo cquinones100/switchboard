@@ -1157,17 +1157,34 @@ else
   optional "GitHub, for M-v, M-d and PR numbers in tab names: gh auth login"
 fi
 
-if security find-generic-password -s linear-api-key >/dev/null 2>&1; then
-  ok "Linear (M-i, M-l and ticket titles in tab names)"
-else
-  optional "Linear, for M-i, M-l and ticket titles in tab names: a personal API key from Linear's settings, then security add-generic-password -a \"\$USER\" -s linear-api-key -w"
-fi
-# /shape files tickets in the team named here.
-if [[ -n $(jq -r '.linearTeam // empty' ~/.config/switchboard/linear.json 2>/dev/null) ]]; then
-  ok "the Linear team for /shape"
-else
-  optional "the Linear team /shape files tickets in: add \"linearTeam\": \"<team key>\" to ~/.config/switchboard/linear.json"
-fi
+# The ticket tracker the tracker setting names (Linear unless set; Linear
+# turned off before the setting existed is off), as lib/settings.js reads it.
+tracker=$(jq -r 'if .tracker then .tracker elif .linear == false then "off" else "linear" end' ~/.config/switchboard/settings.json 2>/dev/null || echo linear)
+case $tracker in
+  jira)
+    if ! security find-generic-password -s jira-api-token >/dev/null 2>&1; then
+      optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, copied, then printf 'add-generic-password -U -a \"%s\" -s jira-api-token -w \"%s\"\\n' \"\$USER\" \"\$(pbpaste)\" | security -i"
+    elif ! jq -e '.jiraSite and .jiraEmail' ~/.config/switchboard/jira.json >/dev/null 2>&1; then
+      optional "Jira's site and your email: add \"jiraSite\": \"https://<yours>.atlassian.net\" and \"jiraEmail\" to ~/.config/switchboard/jira.json"
+    else
+      ok "Jira (M-i, M-l and ticket titles in tab names)"
+    fi
+    ;;
+  off) ;;
+  *)
+    if security find-generic-password -s linear-api-key >/dev/null 2>&1; then
+      ok "Linear (M-i, M-l and ticket titles in tab names)"
+    else
+      optional "Linear, for M-i, M-l and ticket titles in tab names: a personal API key from Linear's settings, then security add-generic-password -a \"\$USER\" -s linear-api-key -w; or Jira instead, in Settings (M-p)"
+    fi
+    # /shape files tickets in the team named here.
+    if [[ -n $(jq -r '.linearTeam // empty' ~/.config/switchboard/linear.json 2>/dev/null) ]]; then
+      ok "the Linear team for /shape"
+    else
+      optional "the Linear team /shape files tickets in: add \"linearTeam\": \"<team key>\" to ~/.config/switchboard/linear.json"
+    fi
+    ;;
+esac
 
 # Without these hooks every tab shows idle, and M-a has nothing to walk. Only
 # Switchboard's part of the settings is merged into your own (see

@@ -20,7 +20,8 @@ have none), the skills that ship with Switchboard (`./setup.sh skills`:
 linked on later runs), this repo's whole Claude Code setup in place of yours (`./setup.sh
 claude`, its owner's settings and telemetry included), and this clone's git
 hooks (`./setup.sh git`, for committing to it). It also lists GitHub, the
-Linear key and slack-relay, with the keys each one is for. `./setup.sh
+ticket tracker's key (Linear's or Jira's) and slack-relay, with the keys each
+one is for. `./setup.sh
 --check` only reports.
 
 It ends by listing again whatever is left to do. Once `./setup.sh git` has
@@ -32,15 +33,15 @@ To turn parts of the workspace on or off (banners, the sidebar, the second
 status line, PR and ticket lookups, project colors, the theme, saving pane
 contents, the update check and more), open Settings from `M-p`: mission
 control's Settings view lists every option by category, Enter or Space
-changes one, and `/` searches them. Turning GitHub or Linear off under
+changes one, and `/` searches them. Turning GitHub or the ticket tracker off under
 Integrations takes its commands out of `M-p`, makes their keys (`M-v`, `M-m`, `M-r` for
-GitHub; `M-i`, `M-l`, `M-W` for Linear) do nothing, and takes its parts out of
+GitHub; `M-i`, `M-l`, `M-W` for the tracker) do nothing, and takes its parts out of
 mission control and the tab names, so nothing asks that service. Your
 CLAUDE.md, under Claude Code, says where your own Claude rules come from, and
 Enter changes it: the local file, another file, or a git repository, typed in;
 it writes `~/.config/switchboard/claude.json` and runs setup's `claude_md`
 step at once. Below it, each setting kept in a file of your own in
-`~/.config/switchboard` (your Linear team, the Chrome profile for each site,
+`~/.config/switchboard` (your Linear team or Jira site, the Chrome profile for each site,
 the Slack channels, the relay's owner, the on-call config, the sidebar's
 sizes, your overrides) is listed under the file's name: Enter types a value
 in, starting from what it is (empty unsets it), or opens the whole file in
@@ -67,9 +68,9 @@ commits of its own is left for you to update by hand.
 
 ## worktree-from-ticket
 
-Creates a git worktree on a branch named after a Linear ticket, then opens
-claude in it with a prompt that carries the ticket's Linear state: if that state
-is a closed one (completed, cancelled, or duplicate, whatever the workspace
+Creates a git worktree on a branch named after a ticket, in Linear or Jira as
+the tracker setting says (see "Linear or Jira" below), then opens claude in it
+with a prompt that carries the ticket's state: if that state is a closed one (completed, cancelled, or duplicate, whatever the workspace
 calls them) the prompt asks whether to reopen the ticket before anything else
 happens. Then it checks the ticket against the current codebase (is it still
 relevant and necessary, is the approach sound, how could it be improved). A
@@ -113,8 +114,8 @@ agents, watches, loops) and asks whether to stop it or wait.
    no other scripts, no editor or shell config. Make sure `~/.local/bin` is on
    your `PATH`. The clone can live anywhere.
 
-2. **Add your Linear API key.** Create a personal key at
-   <https://linear.app/settings/api>, then:
+2. **Add your tracker's key.** For Linear, the default, create a personal key
+   at <https://linear.app/settings/api>, then:
 
    ```sh
    security add-generic-password -U -a "$USER" -s linear-api-key -w   # asks for the key
@@ -133,6 +134,8 @@ agents, watches, loops) and asks whether to stop it or wait.
    ticket, so no workspace or team name has to be committed to this repo.
    `LINEAR_WORKSPACE` overrides it.
 
+   For Jira, see "Linear or Jira" below.
+
 3. **Add one line to your shell config** (optional — see below):
 
    ```sh
@@ -140,6 +143,67 @@ agents, watches, loops) and asks whether to stop it or wait.
    ```
 
    Use `bash` instead of `zsh` for bash. This defines the `wt` function.
+
+### Linear or Jira
+
+Everything that reads tickets — `wt`, `worktree-done`, the tab names, `M-i`,
+`M-l`, mission control's Tickets view, search and the standup note — asks one
+tracker, the one the **Ticket tracker** setting names (`M-p`, Settings):
+Linear, the default, Jira, or off. One per machine. The code is in
+`lib/tracker/`: `linear.js` and `jira.js` answer the same questions in the
+same shape, and the shell scripts in `tmux/` reach them through
+`tmux/tracker.sh`.
+
+For Jira Cloud, make an API token at
+<https://id.atlassian.com/manage-profile/security/api-tokens> (the plain
+one, not "with scopes"), copy it, then:
+
+```sh
+printf 'add-generic-password -U -a "%s" -s jira-api-token -w "%s"\n' "$USER" "$(pbpaste)" | security -i
+```
+
+That hands the token to `security` on its stdin, so it is never on a command
+line. Not `security add-generic-password ... -w` with nothing after it, as
+for Linear's key: its hidden prompt keeps only the first 128 characters, and
+Atlassian's tokens are longer, so Jira would refuse what it stored.
+
+and add your site and the email of the account the token belongs to to
+`~/.config/switchboard/jira.json` (or in Settings, under Jira):
+
+```json
+{ "jiraSite": "https://your-company.atlassian.net", "jiraEmail": "you@your-company.com" }
+```
+
+For the skills that file tickets (`/shape`, `/note-tickets`), add the project
+they file in as `"jiraProject": "ABC"`, and labels for a new ticket as
+`"jiraLabels": [...]`, if you want any.
+
+`JIRA_API_TOKEN`, `JIRA_EMAIL` and `JIRA_SITE` in the environment take
+precedence, and a `jiraApiToken` in the file is read after the Keychain.
+Atlassian's tokens expire after a year at most; when Jira refuses one, the
+error says to make a new one. Then pick Jira in Settings.
+
+Where Jira differs:
+
+- A ticket's state comes from its status category (To Do, In Progress,
+  Done), and a Done one whose resolution says Won't Do, Duplicate or
+  Declined counts as canceled.
+- Linear's projects are Jira's epics: `M-p`'s "Open the branch's Linear
+  project or Jira epic" opens the epic, and the Tickets view shows it.
+- Descriptions and comments are Jira's rich text, shown as Markdown in `M-i`
+  and the ticket image; an attachment shows as its name.
+- Closing a ticket from mission control takes the first transition its
+  workflow offers into Done.
+- Branches are named `abc-123-the-title`, since Jira suggests none.
+- There's no Inbox view: Jira has no inbox to read.
+- The skills that read or write tickets (`/shape`, `/note-tickets`,
+  `/queue-and-clean`, `/deploy-test`, `/project-status`) use Claude's
+  Atlassian connector, which has to be
+  connected in Claude (`/mcp`). They read with it, and write (create a ticket,
+  link one, move one to Done) through its `executeWrite`, which Claude asks
+  you about each time while the connector's write tools need approval.
+  `/project-status` reads an epic's tickets and comments, since Jira has no
+  project updates.
 
 ### Why step 3 exists
 
@@ -172,8 +236,8 @@ stays one stable line that never needs re-editing when the tool changes.
   through the files Claude Code keeps in `~/.claude/sessions`, ignoring any
   whose process has ended.
 - Pass a different parent directory as a first argument:
-  `worktree-from-ticket .worktrees ABC-123`. A full Linear issue URL works in
-  place of the identifier.
+  `worktree-from-ticket .worktrees ABC-123`. A full Linear or Jira issue URL
+  works in place of the identifier.
 - `worktree-done` removes the worktrees whose tickets are finished, and
   mission control's "Close every Merged tab" (Enter on a merged tab) the merged
   tabs' worktrees.
@@ -182,7 +246,8 @@ stays one stable line that never needs re-editing when the tool changes.
 
 ## shape
 
-The step before `wt`: shapes a Linear ticket with Claude, from a rough idea or
+The step before `wt`: shapes a ticket with Claude, in Linear or Jira as the
+`tracker` setting says, from a rough idea or
 an existing ticket that needs work.
 
 ```
@@ -193,14 +258,14 @@ shape ABC-123 split out the API part
 
 Anything after a ticket is your direction for the shaping, kept in mind
 throughout; `/shape ABC-123 split out the API part` does the same. M-p's
-**Shape a new Linear ticket from what you type** (`note-shape.sh prompt`) asks
+**Shape a new ticket from what you type** (`note-shape.sh prompt`) asks
 for the idea in a popup, then the repo, and opens a tab shaping it.
 
 It starts Claude with the `/shape` skill, which holds the instructions, so
 `/shape` works the same inside a session you already have. Claude reads the
-code before asking anything, checks Linear for tickets that already cover the
-idea, drafts the ticket in the layout the team's recent tickets use, and writes
-it to Linear only once you approve the draft. It does not touch the code.
+code before asking anything, checks the tracker for tickets that already cover
+the idea, drafts the ticket in the layout the team's recent tickets use, and
+writes it to the tracker only once you approve the draft. It does not touch the code.
 Given an existing ticket, it reads it first and asks whether to run the
 repository's `/review-loop` on it in ticket mode (Codex checks the ticket
 against the code), or keep shaping it; a review's findings can then be folded
@@ -220,7 +285,8 @@ from idea to PR.
   like every other ticket tab.
 - The team to create tickets in comes from `linearTeam` in
   `~/.config/switchboard/linear.json`, next to the API key, with
-  optional default labels in `linearLabels`. Without `linearTeam`, Claude asks.
+  optional default labels in `linearLabels`; with Jira, the project from
+  `jiraProject` in `jira.json`, with `jiraLabels`. Without one, Claude asks.
   Keeping them there keeps the team out of this repository.
 
 ```sh
@@ -241,7 +307,7 @@ shape-batch < ideas.txt
 
 `--continue` carries straight on shaping each ticket, without `/shape` first
 asking whether to run a review loop on it; `shape --continue ABC-123` does the
-same for one. The M-p palette's "Continue shaping Linear tickets"
+same for one. The M-p palette's "Continue shaping tickets"
 (`tmux/shape-open.zsh`) asks for a list of ticket IDs or URLs, the clipboard
 filled in when it holds them, and does the same.
 
@@ -267,8 +333,8 @@ needs `shape` installed.
 ## wt-batch
 
 Runs `wt` for several tickets at once, each in its own tmux window. Tickets are
-separated by commas, spaces, or both, and a full Linear issue URL works in
-place of an identifier.
+separated by commas, spaces, or both, and a full Linear or Jira issue URL works
+in place of an identifier.
 
 ```
 wt-batch ABC-123 ABC-124
@@ -290,8 +356,8 @@ before any window opens, so a typo in one leaves none of them half-started.
    ```
 
 2. **Have `wt` working**, meaning `worktree-from-ticket` installed with its
-   Linear key and the `eval "$(worktree-from-ticket init zsh)"` line in your
-   shell config. `wt-batch` does no Linear work of its own; it only opens the
+   tracker's key and the `eval "$(worktree-from-ticket init zsh)"` line in your
+   shell config. `wt-batch` asks no tracker anything of its own; it only opens the
    windows and types `wt <ticket>` into each.
 
 ### Notes
@@ -676,7 +742,7 @@ the tab badges meant.
 
 Mission control's views, which `Tab` and `]` go through, are its tabs, then the built-in views, then the plugins'. In a built-in view, Enter on an item opens a menu of what can be done with it, its usual action first so Enter twice does what Enter alone used to, `j`/`k` moving to an action and Enter taking it (a menu takes no letters), the action named at once as it starts: the Work map's go to the tab or open one there, diff, lazygit, remove a merged worktree and copy its directory; Closed's reopen, remove and copy; Slack's open, dismiss and dismiss all; the Calendar's join the call and open the event; and the boards' own. `v` and part of a view's name ("cal") lights that view in the bar as you type, and Enter goes there. `M-p` has a "Mission control: <view>" command for each built-in view, which opens mission control on it.
 
-`M-S-f` searches everything at once (`tmux/search.sh`, `lib/search.js`): it asks for a search, then lists what your notes (every word, in any note but the deleted ones, read on the Mac and sent nowhere), Linear (its issue search), GitHub (issues and pull requests in the repositories your tabs are in) and Slack (its own search, through Claude's connector, a headless Haiku allowed that one call, a few seconds after the rest) hold for it, each source's results as it answers; typing narrows them, Enter reads one beside the pane in the link view, a note as its Markdown, and Ctrl-O opens a link in the browser. GitHub and Linear are left out while their settings are off; `search_slack` leaves out Slack, and `search_everything` (both under Integrations) turns the key off. A link can be read in a pane beside the one you are in rather than in the browser (`tmux/link-view.sh`): `M-p`'s "Read a link from this pane" lists the links the pane shows, newest first, or, in the notes pane, the links of the note it shows, top to bottom, since Notes hides a link's address behind its text, a link written into text (a terminal hyperlink, as Claude Code and glow print them) with its text before it so it is easy to find, and Enter reads one beside it (Ctrl-O opens it in the browser instead), and "Open a link from this pane in the browser" lists the same links with Enter opening one in the browser (Ctrl-O reads it beside instead), "Copy a link from this pane" lists them with Enter copying one to the clipboard (Ctrl-O opens it), and mission control's menus offer "Read it here" for a pull request, a ticket or a meeting's links. A GitHub pull request is laid out as `M-v` lays out the branch's, a Linear ticket as `M-i` does, a Notion page or a Google Doc or Slides deck as Claude's connector gives it (a headless Haiku allowed that one call and nothing else, its answer taken from the call itself, in about 15 seconds; the `link_view_docs` setting, under Integrations, turns it off), and any other page as its main text in Markdown (`lib/link-view.js`, with turndown); a Slack message only offers to open, since nothing but Claude's connector reads Slack. `q` closes it, and `M-p`'s "Open the link being read in the browser" opens it there. Every link Switchboard opens goes through `tmux/open-url.sh`, in the Chrome profile `~/.config/switchboard/browser.json` gives its host (`{"hosts": {"linear.app": "Profile 2", "slack.com": "Profile 2"}}`, the profile's directory as `chrome://version` shows it), else the default browser, as GitHub's links do; `M-A`'s AWS login (`tmux/aws-login.sh`) opens in the profile it gives `awsapps.com`, AWS's access portal; the file is yours and never in this repository. A view that is on stays in mission control even before what it reads from is set up, and says what is missing and how to set it up: the Calendar its iCal address or a Calendar tab, Tickets and Inbox a Linear API key, PRs and CI GitHub's CLI signed in (or a tab in a GitHub repository), Slack its connector in Claude. Each built-in view but Settings can be turned off under Mission control in Settings; the Work map stays for `M-j` and `M-o`, which open it. The **Work map** is every piece of work in the repositories your tabs are in, a row each: each worktree, and a main checkout a tab is in, with its ticket (from the branch), the tab it is open in or "no tab", its PR and where that stands (open, failing checks, in the merge queue, merged), and its directory, the ones needing you first and those no tab is in last, so work in flight is never forgotten. Worktrees with no tab come from `wt-revive` too, so they cover every repository a Claude session used in the last two weeks, most recently used first, each with when it was last used and the last prompt given there. Enter goes to its tab, or opens one in a worktree that has none and resumes its Claude with `claude-here`. `/` filters it, as it does any list but the PR board, by title and detail. `M-j` opens it showing only open tabs and `M-o` only worktrees with no tab, a filter already typing: the arrows move, Enter goes, Esc closes. Its worktrees are read with git, and a worktree's PR looked up by its branch, in the same minute's query as the tabs'. Its rows line up in columns, the chosen row adding its directory and last prompt. Every open tab has a row, one in no repository too. Merged work no tab is in sits last under "Merged, can be removed", closed until Enter on it; Enter's menu on one removes its worktree after asking, and keeps one with changes, saying why. **Closed** is the tabs closed most recently, newest first, one per Claude conversation, so several closed in the same repository are each there, leaving out a conversation a tab has open again (a tab with no Claude, one per directory no tab is open in); Enter's menu removes one, which comes back only if that conversation is closed again: Enter reopens one there with its Claude session resumed (`claude --resume`), or a shell if it had none. Each refresh compares the tabs with how they were, and a tab gone since is recorded with its directory and session in `closed.jsonl` in the state directory, the newest 200 kept, so a restart doesn't lose them. **PRs** is a board of your pull requests in the repositories your tabs are in, in columns by where they stand: Draft, In review, Approved, In merge queue, and Merged in the last 7 days, each with its checks and review, failing checks or changes asked for marked as needing you. `h`/`l` move between columns, and Enter asks what to do with the PR: go to the tab it is open in, work on it in a new tab (`wtpr`), open it in the browser, or copy its link, each with `j`/`k` and Enter. It is fetched every two minutes through `gh`, the merged PRs only every ten, since they rarely change; only those repositories, so old pull requests elsewhere stay off it. **CI** is your open pull requests whose checks are failing, in the repositories your tabs are in, each with the checks that failed and the line of the first failing job's log that says why. Enter offers: start a CI loop on it (`/ci-loop` in the tab already on it when its Claude is idle, else in a new tab on its worktree through `wtpr`; Switchboard's `/ci-loop` follows the repository's own when it has one), go to its tab, read the failing log in a popup, open the failing check or the PR in the browser, or copy its link. It is asked of GitHub every two minutes and when you go to the view, while the `github` and `view_ci` settings are on. `M-m` asks for the PRs, CI and Work map views to look again as it checks a PR, so they agree with what it says. While you're away (no tmux client attached, or the Mac idle 10 minutes) the PR, CI, Inbox, Tickets and Calendar lookups pause, and all ask again when you're back; the `pause_when_away` setting (Mission control) keeps them going. **Inbox** is your unread Linear notifications that need you, newest first: a mention of you in a ticket or a comment, a new comment on a ticket of yours, a ticket newly assigned to you; status changes and the rest of Linear's inbox are left out. Enter offers what the Tickets board does with its ticket (go to its tab, `wt`, `shape`, open, copy) and to mark it read in Linear. Its count shows in the sidebar's notifications too, and a click there opens it. It is asked of Linear every two minutes and when you go to the view, while the `linear` and `view_inbox` settings are on. **Tickets** is a board of the Linear issues assigned to you, in columns by where they stand: Todo (urgent first), In progress, In review (a started state whose name says review), and Done in the last 7 days, each with its state, priority, project and the tab working on it, an urgent one marked as needing you. `h`/`l` move between columns, and Enter asks what to do with the ticket: go to the tab it is open in, start work on it (`wt`) or shape it (`shape`) in a new tab, close it (moving it to its team's first completed state, after asking), open it in the browser, or copy its ID. A new tab starts in a directory of the ticket's repository, one a tab with a ticket of the same team is in. It is fetched every two minutes from Linear with the key the ticket scripts use, and is gone while the `linear` or `ticket_board` setting is off. **Calendar** is today as Google Calendar's Day view shows it: all-day events across the top, then the hours, each event a colored block from its start to its end, side by side where they overlap, a red line at the time now, events already over faded and those you haven't said yes to in outline. `j`/`k` choose an event, `h`/`l` move between events side by side at the same time, and Enter offers to join its call, answer an invitation yes, maybe or no (through Claude's Google Calendar connector, as Google's own buttons do, so the organizer is told; from the feed only, and the `calendar_rsvp` setting turns it off), open it in Google Calendar, or open the tickets and pull requests its description links to. From five minutes before a meeting until ten minutes after it starts, the sidebar's notifications show it ("Standup in 3m", "Standup now") with the tickets and pull requests it names, and Enter or a click there joins its call, or opens the Calendar view when it has none; the `next_meeting` setting (Sidebar) turns that off. The tickets and pull requests come from the calendar feed, which `/today`'s saved day doesn't keep. With your calendar's secret iCal address in the Keychain, mission control reads the calendar itself every five minutes, and when you go to the view: in Google Calendar, Settings, your calendar, Integrate calendar, copy "Secret address in iCal format", then run `security add-generic-password -U -s google-calendar-ical -a "$USER" -w` and paste it at the prompt. Without it, it draws the day `/today` last saved; the Calendar tab (`M-p`, "Open a Calendar tab") runs `/today` every 30 minutes. A day saved before today, or over 45 minutes ago, is marked out of date, and when no tab is keeping the calendar, mission control opens a Calendar tab in the background to catch up. It appears once `/today` has saved a day. **Slack** is what is new for you on Slack in the last day, newest first: direct messages and mentions marked as needing you, then replies in threads you started and everything in the channels listed in `~/.config/switchboard/slack-updates.json` (`{"channels": ["C…"]}`). Enter shows a message whole, above what can be done with it, and opens it in the browser, in the Chrome profile `~/.config/switchboard/browser.json` gives Slack (see the link view). Slack's connector can't say what you have read, so the view counts as read anything before a message of your own in the same DM or thread (you answered it in Slack), and remembers what you have seen in it: leaving the view, or mission control, marks what was on screen as seen, picking anything from a message's menu (in the view or the Notifications view) marks that message seen, and seen messages sit below the new ones, faded. Enter shows the message whole above its menu, drawn as Slack draws it (its lines, bullets, numbered items, quotes, code blocks, bold, italic, strikethrough and code, links and mentions as their text), as the Notifications view does; the menu opens a tab for its thread with Claude (through `M-t`'s popup, so you pick its directory; Claude starts on a prompt with the thread's link and the message, to read the thread through the Slack connector and say what it asks of you, drafting no reply unless you ask), and the menu dismisses the chosen message, or every one shown: gone until something newer comes in its thread, a reply to it or to the thread it is in. New messages, ones not yet seen in the view nor dismissed, also show at the bottom of every sidebar, under a double yellow rule and a Notifications heading, so they read as no tab: "3 new on Slack" and the newest one's sender; moving onto them with `j` past the last tab, or a click, brings a Notifications view to the front as moving onto a tab does: every notification with its whole message (each new Slack message, each Linear inbox item, the next meeting, each note written for you: a meeting's from Fathom or the standup, until Notes shows it, its menu opening it in Notes or dismissing it, the `new_notes` setting), in a window of its own that is no tab and stays out of the tab bar, the sidebar's cursor still on the notification; `j`/`k` in the sidebar or the view move between them, Enter in the sidebar goes into the view, Enter in the view opens the chosen one's actions over it, as its mission control view offers them, with Dismiss it last, and whatever is picked dismisses it from the notifications (a Linear inbox item or a meeting only here, Linear not told), and Esc there goes back to the tab you came from; the `notice_list` setting (Sidebar, "Notifications view") keeps them single lines that open their view in mission control instead; the `sidebar_notifications` setting (Sidebar, Notifications) hides the block. The first look goes back an hour. Mission control gathers it itself every minute while you're at the Mac, through Claude's Slack connector, one search at a time in a headless Haiku that keeps no session, reading only, never the relay's own messages or DM; the `slack_background` setting (Mission control) turns that off, and then the `/slack-updates` skill does it in a Slack tab (`M-p`, "Open a Slack tab") every 5 minutes, and going to the view asks that tab to look again at once when its last look is over a minute old. Over 15 minutes old, it says so, and mission control opens a Slack tab in the background when none keeps it. It is there before the first look too, saying so, and going to it then opens a Slack tab. **Sessions** lists each Claude tab's session with how full its context is, its model, how long it has run and how long since it last did anything, fullest first, a session at 80% or more marked as needing you: the ones to compact or close. The context and model are what Claude Code gives the statusline, which writes them to `~/.local/state/tmux-sidebar/context/<session>`. **Usage** (`M-p`, "Mission control: Usage") is what Claude has cost today, at API prices as Claude Code estimates it, across the interactive sessions that ran today (a headless `claude -p` has no statusline, so it isn't counted), and how much of each rate limit your subscription has used (the 5-hour and weekly ones, or a gateway's spend limit) with when it resets, one at 80% or more marked as needing you; the statusline writes these to `~/.local/state/tmux-sidebar/usage/`, the limits as the last session to draw saw them. The `usage` setting (Mission control) turns the view off.
+`M-S-f` searches everything at once (`tmux/search.sh`, `lib/search.js`): it asks for a search, then lists what your notes (every word, in any note but the deleted ones, read on the Mac and sent nowhere), your ticket tracker (Linear's or Jira's issue search), GitHub (issues and pull requests in the repositories your tabs are in) and Slack (its own search, through Claude's connector, a headless Haiku allowed that one call, a few seconds after the rest) hold for it, each source's results as it answers; typing narrows them, Enter reads one beside the pane in the link view, a note as its Markdown, and Ctrl-O opens a link in the browser. GitHub and the ticket tracker are left out while their settings are off; `search_slack` leaves out Slack, and `search_everything` (both under Integrations) turns the key off. A link can be read in a pane beside the one you are in rather than in the browser (`tmux/link-view.sh`): `M-p`'s "Read a link from this pane" lists the links the pane shows, newest first, or, in the notes pane, the links of the note it shows, top to bottom, since Notes hides a link's address behind its text, a link written into text (a terminal hyperlink, as Claude Code and glow print them) with its text before it so it is easy to find, and Enter reads one beside it (Ctrl-O opens it in the browser instead), and "Open a link from this pane in the browser" lists the same links with Enter opening one in the browser (Ctrl-O reads it beside instead), "Copy a link from this pane" lists them with Enter copying one to the clipboard (Ctrl-O opens it), and mission control's menus offer "Read it here" for a pull request, a ticket or a meeting's links. A GitHub pull request is laid out as `M-v` lays out the branch's, a Linear ticket as `M-i` does, a Notion page or a Google Doc or Slides deck as Claude's connector gives it (a headless Haiku allowed that one call and nothing else, its answer taken from the call itself, in about 15 seconds; the `link_view_docs` setting, under Integrations, turns it off), and any other page as its main text in Markdown (`lib/link-view.js`, with turndown); a Slack message only offers to open, since nothing but Claude's connector reads Slack. `q` closes it, and `M-p`'s "Open the link being read in the browser" opens it there. Every link Switchboard opens goes through `tmux/open-url.sh`, in the Chrome profile `~/.config/switchboard/browser.json` gives its host (`{"hosts": {"linear.app": "Profile 2", "slack.com": "Profile 2"}}`, the profile's directory as `chrome://version` shows it), else the default browser, as GitHub's links do; `M-A`'s AWS login (`tmux/aws-login.sh`) opens in the profile it gives `awsapps.com`, AWS's access portal; the file is yours and never in this repository. A view that is on stays in mission control even before what it reads from is set up, and says what is missing and how to set it up: the Calendar its iCal address or a Calendar tab, Tickets and Inbox a Linear API key, PRs and CI GitHub's CLI signed in (or a tab in a GitHub repository), Slack its connector in Claude. Each built-in view but Settings can be turned off under Mission control in Settings; the Work map stays for `M-j` and `M-o`, which open it. The **Work map** is every piece of work in the repositories your tabs are in, a row each: each worktree, and a main checkout a tab is in, with its ticket (from the branch), the tab it is open in or "no tab", its PR and where that stands (open, failing checks, in the merge queue, merged), and its directory, the ones needing you first and those no tab is in last, so work in flight is never forgotten. Worktrees with no tab come from `wt-revive` too, so they cover every repository a Claude session used in the last two weeks, most recently used first, each with when it was last used and the last prompt given there. Enter goes to its tab, or opens one in a worktree that has none and resumes its Claude with `claude-here`. `/` filters it, as it does any list but the PR board, by title and detail. `M-j` opens it showing only open tabs and `M-o` only worktrees with no tab, a filter already typing: the arrows move, Enter goes, Esc closes. Its worktrees are read with git, and a worktree's PR looked up by its branch, in the same minute's query as the tabs'. Its rows line up in columns, the chosen row adding its directory and last prompt. Every open tab has a row, one in no repository too. Merged work no tab is in sits last under "Merged, can be removed", closed until Enter on it; Enter's menu on one removes its worktree after asking, and keeps one with changes, saying why. **Closed** is the tabs closed most recently, newest first, one per Claude conversation, so several closed in the same repository are each there, leaving out a conversation a tab has open again (a tab with no Claude, one per directory no tab is open in); Enter's menu removes one, which comes back only if that conversation is closed again: Enter reopens one there with its Claude session resumed (`claude --resume`), or a shell if it had none. Each refresh compares the tabs with how they were, and a tab gone since is recorded with its directory and session in `closed.jsonl` in the state directory, the newest 200 kept, so a restart doesn't lose them. **PRs** is a board of your pull requests in the repositories your tabs are in, in columns by where they stand: Draft, In review, Approved, In merge queue, and Merged in the last 7 days, each with its checks and review, failing checks or changes asked for marked as needing you. `h`/`l` move between columns, and Enter asks what to do with the PR: go to the tab it is open in, work on it in a new tab (`wtpr`), open it in the browser, or copy its link, each with `j`/`k` and Enter. It is fetched every two minutes through `gh`, the merged PRs only every ten, since they rarely change; only those repositories, so old pull requests elsewhere stay off it. **CI** is your open pull requests whose checks are failing, in the repositories your tabs are in, each with the checks that failed and the line of the first failing job's log that says why. Enter offers: start a CI loop on it (`/ci-loop` in the tab already on it when its Claude is idle, else in a new tab on its worktree through `wtpr`; Switchboard's `/ci-loop` follows the repository's own when it has one), go to its tab, read the failing log in a popup, open the failing check or the PR in the browser, or copy its link. It is asked of GitHub every two minutes and when you go to the view, while the `github` and `view_ci` settings are on. `M-m` asks for the PRs, CI and Work map views to look again as it checks a PR, so they agree with what it says. While you're away (no tmux client attached, or the Mac idle 10 minutes) the PR, CI, Inbox, Tickets and Calendar lookups pause, and all ask again when you're back; the `pause_when_away` setting (Mission control) keeps them going. **Inbox** is your unread Linear notifications that need you, newest first: a mention of you in a ticket or a comment, a new comment on a ticket of yours, a ticket newly assigned to you; status changes and the rest of Linear's inbox are left out. Enter offers what the Tickets board does with its ticket (go to its tab, `wt`, `shape`, open, copy) and to mark it read in Linear. Its count shows in the sidebar's notifications too, and a click there opens it. It is asked of Linear every two minutes and when you go to the view, while the `linear` and `view_inbox` settings are on. **Tickets** is a board of the Linear issues assigned to you, in columns by where they stand: Todo (urgent first), In progress, In review (a started state whose name says review), and Done in the last 7 days, each with its state, priority, project and the tab working on it, an urgent one marked as needing you. `h`/`l` move between columns, and Enter asks what to do with the ticket: go to the tab it is open in, start work on it (`wt`) or shape it (`shape`) in a new tab, close it (moving it to its team's first completed state, after asking), open it in the browser, or copy its ID. A new tab starts in a directory of the ticket's repository, one a tab with a ticket of the same team is in. It is fetched every two minutes from Linear with the key the ticket scripts use, and is gone while the `linear` or `ticket_board` setting is off. **Calendar** is today as Google Calendar's Day view shows it: all-day events across the top, then the hours, each event a colored block from its start to its end, side by side where they overlap, a red line at the time now, events already over faded and those you haven't said yes to in outline. `j`/`k` choose an event, `h`/`l` move between events side by side at the same time, and Enter offers to join its call, answer an invitation yes, maybe or no (through Claude's Google Calendar connector, as Google's own buttons do, so the organizer is told; from the feed only, and the `calendar_rsvp` setting turns it off), open it in Google Calendar, or open the tickets and pull requests its description links to. From five minutes before a meeting until ten minutes after it starts, the sidebar's notifications show it ("Standup in 3m", "Standup now") with the tickets and pull requests it names, and Enter or a click there joins its call, or opens the Calendar view when it has none; the `next_meeting` setting (Sidebar) turns that off. The tickets and pull requests come from the calendar feed, which `/today`'s saved day doesn't keep. With your calendar's secret iCal address in the Keychain, mission control reads the calendar itself every five minutes, and when you go to the view: in Google Calendar, Settings, your calendar, Integrate calendar, copy "Secret address in iCal format", then run `security add-generic-password -U -s google-calendar-ical -a "$USER" -w` and paste it at the prompt. Without it, it draws the day `/today` last saved; the Calendar tab (`M-p`, "Open a Calendar tab") runs `/today` every 30 minutes. A day saved before today, or over 45 minutes ago, is marked out of date, and when no tab is keeping the calendar, mission control opens a Calendar tab in the background to catch up. It appears once `/today` has saved a day. **Slack** is what is new for you on Slack in the last day, newest first: direct messages and mentions marked as needing you, then replies in threads you started and everything in the channels listed in `~/.config/switchboard/slack-updates.json` (`{"channels": ["C…"]}`). Enter shows a message whole, above what can be done with it, and opens it in the browser, in the Chrome profile `~/.config/switchboard/browser.json` gives Slack (see the link view). Slack's connector can't say what you have read, so the view counts as read anything before a message of your own in the same DM or thread (you answered it in Slack), and remembers what you have seen in it: leaving the view, or mission control, marks what was on screen as seen, picking anything from a message's menu (in the view or the Notifications view) marks that message seen, and seen messages sit below the new ones, faded. Enter shows the message whole above its menu, drawn as Slack draws it (its lines, bullets, numbered items, quotes, code blocks, bold, italic, strikethrough and code, links and mentions as their text), as the Notifications view does; the menu opens a tab for its thread with Claude (through `M-t`'s popup, so you pick its directory; Claude starts on a prompt with the thread's link and the message, to read the thread through the Slack connector and say what it asks of you, drafting no reply unless you ask), and the menu dismisses the chosen message, or every one shown: gone until something newer comes in its thread, a reply to it or to the thread it is in. New messages, ones not yet seen in the view nor dismissed, also show at the bottom of every sidebar, under a double yellow rule and a Notifications heading, so they read as no tab: "3 new on Slack" and the newest one's sender; moving onto them with `j` past the last tab, or a click, brings a Notifications view to the front as moving onto a tab does: every notification with its whole message (each new Slack message, each Linear inbox item, the next meeting, each note written for you: a meeting's from Fathom or the standup, until Notes shows it, its menu opening it in Notes or dismissing it, the `new_notes` setting), in a window of its own that is no tab and stays out of the tab bar, the sidebar's cursor still on the notification; `j`/`k` in the sidebar or the view move between them, Enter in the sidebar goes into the view, Enter in the view opens the chosen one's actions over it, as its mission control view offers them, with Dismiss it last, and whatever is picked dismisses it from the notifications (a Linear inbox item or a meeting only here, Linear not told), and Esc there goes back to the tab you came from; the `notice_list` setting (Sidebar, "Notifications view") keeps them single lines that open their view in mission control instead; the `sidebar_notifications` setting (Sidebar, Notifications) hides the block. The first look goes back an hour. Mission control gathers it itself every minute while you're at the Mac, through Claude's Slack connector, one search at a time in a headless Haiku that keeps no session, reading only, never the relay's own messages or DM; the `slack_background` setting (Mission control) turns that off, and then the `/slack-updates` skill does it in a Slack tab (`M-p`, "Open a Slack tab") every 5 minutes, and going to the view asks that tab to look again at once when its last look is over a minute old. Over 15 minutes old, it says so, and mission control opens a Slack tab in the background when none keeps it. It is there before the first look too, saying so, and going to it then opens a Slack tab. **Sessions** lists each Claude tab's session with how full its context is, its model, how long it has run and how long since it last did anything, fullest first, a session at 80% or more marked as needing you: the ones to compact or close. The context and model are what Claude Code gives the statusline, which writes them to `~/.local/state/tmux-sidebar/context/<session>`. **Usage** (`M-p`, "Mission control: Usage") is what Claude has cost today, at API prices as Claude Code estimates it, across the interactive sessions that ran today (a headless `claude -p` has no statusline, so it isn't counted), and how much of each rate limit your subscription has used (the 5-hour and weekly ones, or a gateway's spend limit) with when it resets, one at 80% or more marked as needing you; the statusline writes these to `~/.local/state/tmux-sidebar/usage/`, the limits as the last session to draw saw them. The `usage` setting (Mission control) turns the view off.
 
 | Key | In the sidebar | In mission control |
 | --- | --- | --- |
@@ -810,8 +876,8 @@ you can add to it before sending. The action has no hotkey.
 
 ## worktree-done
 
-Reads every worktree in the repo, asks Linear what state each one's ticket is
-in, and offers up the ones that are finished — completed, merged, deployed,
+Reads every worktree in the repo, asks the ticket tracker (Linear or Jira)
+what state each one's ticket is in, and offers up the ones that are finished — completed, merged, deployed,
 canceled, whatever your workflow calls them — in an fzf multi-select that
 removes what you pick. The answer to "which of these forty directories can I
 delete", and the deleting.
@@ -847,17 +913,16 @@ is still open, are removed by hand with `git worktree remove <path>`.
 2. **Install fzf.** `brew install fzf`. Without it the command prints the list
    and says so, rather than removing nothing in silence.
 
-3. **Add your Linear API key**, if you have not already. It reads the same
-   `LINEAR_API_KEY` or `~/.config/switchboard/linear.json` that
+3. **Add your tracker's key**, if you have not already. It reads the same key
    `worktree-from-ticket` reads, so if `wt` works this does too.
 
 No shell function, so nothing to add to your shell config.
 
 ### Notes
 
-- Finished means Linear's own `completed` or `canceled` state type, so a custom
-  state like "Shipped" or "Duplicate" counts without any
-  configuration. The state's real name is what gets printed.
+- Finished means Linear's own `completed` or `canceled` state type (in Jira,
+  the Done status category), so a custom state like "Shipped" or "Duplicate"
+  counts without any configuration. The state's real name is what gets printed.
 - The ticket is read from the branch first and the directory name second. Those
   usually agree, but when they don't the branch is the truth — a worktree named
   for one ticket sitting on another ticket's branch is worth seeing.
@@ -1303,12 +1368,12 @@ completion and the undo file are off in a note.
 Each weekday from 6am, the sidebar daemon writes a standup draft into the
 Standups folder, `Standup <date>.md` (`lib/sidebar/standup.js`): the last
 working day (Friday's on a Monday), with the pull requests you merged, opened,
-worked on and reviewed, the Linear tickets assigned to or made by you that
+worked on and reviewed, the tickets assigned to or made by you that
 changed state, from where each started to where it ended, and your commits in
 the repositories your tabs are in, a squash merge left to its PR; then Today,
 your tickets in progress and the reviews asked of you in the last two weeks;
-and an empty Blockers list. It reads GitHub through `gh` and Linear with the
-ticket scripts' key, while their settings are on, and tries again every 15
+and an empty Blockers list. It reads GitHub through `gh` and the ticket
+tracker with the ticket scripts' key, while their settings are on, and tries again every 15
 minutes while one can't be read. A note already there is never written over,
 so edit it as you like. The `standup_note` setting (Integrations) turns it off.
 
@@ -1445,14 +1510,14 @@ usually write it: `<u>` for underline, `==…==` for highlight. Attachments,
 locked notes, sharing and Notes' own database are left out on purpose; the
 notes are plain files instead.
 
-The M-p action **Shape a note's checklist items as Linear tickets**
+The M-p action **Shape a note's checklist items as tickets**
 (`tmux/note-shape.sh`) picks a note, the one open in the app first, then its
 unticked checklist items, all selected to start with, and the repo they are
 for, and opens a tab per item running `/shape` through `shape-batch`.
 Everything indented under an item is part of its ticket; unticked checklist
 items under it are its sub-items, each a ticket of its own, and `/shape`
-asks first whether the item should become a Linear project with them as its
-issues, or a ticket with them as sub-issues. It checks Linear before reading
+asks first whether the item should become a project (a Jira epic) with them as
+its issues, or a ticket with them as sub-issues. It checks the tracker before reading
 any code, and when a ticket already covers an item, it shows you that ticket
 and asks whether to resume shaping it instead. Ticked items, and what is under
 them, are left out.

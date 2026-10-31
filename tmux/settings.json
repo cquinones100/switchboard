@@ -7,11 +7,25 @@
     "default": true
   },
   {
-    "key": "linear",
+    "key": "tracker",
     "category": "Integrations",
-    "label": "Linear",
-    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in the Work map; off, nothing asks Linear",
-    "default": true
+    "label": "Ticket tracker",
+    "description": "Where tickets live, for ticket commands in M-p, ticket titles in tab names, tickets in the Work map and the Tickets view: Linear or Jira; off, nothing asks either",
+    "choices": [
+      {
+        "value": "linear",
+        "label": "Linear"
+      },
+      {
+        "value": "jira",
+        "label": "Jira"
+      },
+      {
+        "value": "off",
+        "label": "off"
+      }
+    ],
+    "default": "linear"
   },
   {
     "key": "notifications",
@@ -48,7 +62,7 @@
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",
-    "description": "The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox, which a click opens in mission control",
+    "description": "The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox (Linear only), which a click opens in mission control",
     "default": true
   },
   {
@@ -97,7 +111,7 @@
     "key": "search_everything",
     "category": "Integrations",
     "label": "Search everything",
-    "description": "M-S-f asks for a search and lists what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter",
+    "description": "M-S-f asks for a search and lists what your notes, your ticket tracker, GitHub and Slack hold for it, each read beside the pane with Enter",
     "default": true
   },
   {
@@ -195,14 +209,14 @@
     "key": "ticket_board",
     "category": "Mission control",
     "label": "Ticket board",
-    "description": "Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes",
+    "description": "Mission control's Tickets view, which asks your ticket tracker about the issues assigned to you every two minutes",
     "default": true
   },
   {
     "key": "view_inbox",
     "category": "Mission control",
     "label": "Inbox",
-    "description": "Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear",
+    "description": "Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes; Jira has no inbox to read",
     "default": true
   },
   {
@@ -223,7 +237,7 @@
     "key": "tab_lookups",
     "category": "Tabs and status bar",
     "label": "PRs and tickets in tab names",
-    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background",
+    "description": "Look up each tab's PR number on GitHub and its ticket's title on your ticket tracker, in the background",
     "default": true
   },
   {

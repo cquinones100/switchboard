@@ -43,7 +43,7 @@ tool_command() {
         ticket=$(tmux display -p -t "$pane" '#{@tab_name}' | grep -oE '[A-Z][A-Z0-9]*-[0-9]+' | head -1)
       # It goes into a command line, so only a ticket ID's characters.
       if ! [[ $ticket =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
-        tmux display-message -c "$client" "No Linear ticket in this branch or tab name"
+        tmux display-message -c "$client" "No ticket in this branch or tab name"
         return
       fi
       echo "zsh -i -c 'node ~/.config/tmux/pr-image.js --ticket $ticket'"

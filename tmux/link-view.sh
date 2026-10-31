@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # A link read in a pane to the right, as the PR (M-v) and ticket (M-i) views
 # show theirs, rather than in the browser: a GitHub pull request as the PR
-# view lays it out, a Linear ticket as the ticket view does, a Notion page or
-# Google Doc as Claude's connector gives it (lib/link-view.js doc), and any
-# other web page as its main text in Markdown (lib/link-view.js), drawn by glow and paged
-# with less. A Slack message can't be read without Claude's connector, so its
+# view lays it out, a Linear or Jira ticket as the ticket view does, a Notion
+# page or Google Doc as Claude's connector gives it (lib/link-view.js doc),
+# and any other web page as its main text in Markdown (lib/link-view.js),
+# drawn by glow and paged with less. A Slack message can't be read without Claude's connector, so its
 # pane only offers to open it. M-p's "Open the link being read in the
 # browser" opens it, in the Chrome profile its host is given
 # (tmux/open-url.sh); q closes the pane.
@@ -152,8 +152,12 @@ case "${1:-}" in
     }
     [[ $url =~ $safe ]] || wait_key "${red}That isn't a link that can be read here.${reset}"
     command -v glow >/dev/null || wait_key "${red}glow isn't installed.${reset} Install it with: brew install glow"
-    # A Linear ticket: the ticket view.
-    if [[ $url =~ ^https://linear\.app/[^/]+/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]]; then
+    # A Linear or Jira ticket: the ticket view, which asks the tracker the
+    # tracker setting names, so a Jira link is read this way only with Jira
+    # as the tracker, and a Linear one with Linear.
+    tracker=$(tmux show -gqv @setting_tracker 2>/dev/null)
+    if [[ ${tracker:-linear} == linear && $url =~ ^https://linear\.app/[^/]+/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]] ||
+      [[ $tracker == jira && $url =~ ^https://[A-Za-z0-9-]+\.atlassian\.net/browse/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]]; then
       exec "$here/ticket-view.sh" show "$(printf '%s' "${BASH_REMATCH[1]}" | tr 'a-z' 'A-Z')"
     fi
     # Slack: only Claude's connector reads it.

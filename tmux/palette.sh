@@ -150,14 +150,14 @@ text_width=$(( width - tags_width - key_width - 2 ))
 (( text_width < 30 )) && text_width=30
 rows=$(mktemp)
 trap 'rm -f "$rows"' EXIT
-# Commands tagged #github or #linear are left out while that setting is off
+# Commands tagged #github or #tracker are left out while that setting is off
 # (tmux/settings.sh), so the palette offers nothing that would ask it.
-IFS='|' read -r github linear learn < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_palette_learn}')
+IFS='|' read -r github tracker learn < <(tmux display -p '#{@setting_github}|#{@setting_tracker}|#{@setting_palette_learn}')
 [ "$learn" = off ] && learned_from="" || learned_from=$queries_file
-bindings | awk -F'\t' -v github="$github" -v linear="$linear" '
+bindings | awk -F'	' -v github="$github" -v tracker="$tracker" '
     $1 == "M-p" { next }
     github == "off" && $2 ~ / #github( |$)/ { next }
-    linear == "off" && $2 ~ / #linear( |$)/ { next }
+    tracker == "off" && $2 ~ / #tracker( |$)/ { next }
     { print }' | sort -t$'\t' -k2,2 |
   awk -F'\t' -v recent_file="$recent_file" '
     BEGIN { while ((getline key < recent_file) > 0) if (!(key in rank)) rank[key] = ++n }

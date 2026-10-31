@@ -2,19 +2,19 @@
 
 // worktree-done [--list] [--all] [--paths]
 //
-// Reads every worktree in the repo, pulls the Linear ticket each one is named
-// after, and offers up the ones whose ticket is finished — completed, merged,
-// deployed, canceled, whatever the team's workflow calls it — in an fzf
-// multi-select that removes what you pick. The answer to "which of these forty
-// directories can I delete", and the deleting.
+// Reads every worktree in the repo, pulls the ticket each one is named after,
+// from Linear or Jira as the tracker setting says, and offers up the ones
+// whose ticket is finished — completed, merged, deployed, canceled, whatever
+// the team's workflow calls it — in an fzf multi-select that removes what you
+// pick. The answer to "which of these forty directories can I delete", and
+// the deleting.
 //
 // Removal is `git worktree remove` without --force, so a
 // worktree holding uncommitted work refuses to go rather than losing it. The
 // branch always survives; only the checkout is removed.
 //
-// Needs fzf, and a Linear personal API key (https://linear.app/settings/api)
-// from LINEAR_API_KEY, the Keychain (service linear-api-key), or ~/.config/switchboard/linear.json —
-// the same key worktree-from-ticket already uses.
+// Needs fzf, and the tracker's key, the same one worktree-from-ticket already
+// uses (lib/tracker).
 //
 //   worktree-done            pick finished worktrees to remove
 //   worktree-done --list     print them instead, removing nothing
@@ -31,24 +31,13 @@
 
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
+const { tracker } = require("../lib/tracker");
 
-const LINEAR_API = "https://api.linear.app/graphql";
-
-// Linear's own vocabulary for "this issue is over". Every other type
-// (triage, backlog, unstarted, started) means the work is still live.
+// Linear's own vocabulary for "this issue is over", which lib/tracker gives
+// Jira's issues too. Every other type (triage, backlog, unstarted, started)
+// means the work is still live.
 const DONE_TYPES = new Set(["completed", "canceled"]);
-
-// Comfortably under Linear's 250 page cap, so one query per chunk always
-// returns every match rather than silently paginating.
-const CHUNK_SIZE = 100;
-
-const CONFIG_PATH = path.join(
-  path.join(os.homedir(), ".config"),
-  "switchboard",
-  "linear.json",
-);
 
 const usage = () => {
   console.error(
@@ -73,39 +62,6 @@ const fail = (message) => {
 };
 
 const status = (message) => console.error(message);
-
-const readApiKey = () => {
-  if (process.env.LINEAR_API_KEY) return process.env.LINEAR_API_KEY;
-  // The macOS Keychain, where the key belongs, then the config file.
-  try {
-    const fromKeychain = require("node:child_process")
-      .execFileSync("security", ["find-generic-password", "-s", "linear-api-key", "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
-      .trim();
-    if (fromKeychain) return fromKeychain;
-  } catch {}
-
-  const fromConfig = (() => {
-    try {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")).linearApiKey;
-    } catch {
-      return undefined;
-    }
-  })();
-  if (fromConfig) return fromConfig;
-
-  fail(
-    "no Linear API key found. Create a personal key at\n" +
-      "  https://linear.app/settings/api\n" +
-      "then store it in the Keychain (it asks for the key):\n" +
-      '  security add-generic-password -U -a "$USER" -s linear-api-key -w\n' +
-      "or export it:\n" +
-      '  export LINEAR_API_KEY="lin_api_..."\n' +
-      `or save it to ${CONFIG_PATH}:\n` +
-      `  mkdir -p ${path.dirname(CONFIG_PATH)}\n` +
-      `  printf '{"linearApiKey":"lin_api_..."}' > ${CONFIG_PATH}\n` +
-      `  chmod 600 ${CONFIG_PATH}`,
-  );
-};
 
 const gitOutput = (args, options = {}) =>
   execFileSync("git", args, { encoding: "utf8", ...options }).trim();
@@ -161,61 +117,17 @@ const findIdentifier = (text) => {
 const identifierFor = (worktree) =>
   findIdentifier(worktree.branch) ?? findIdentifier(path.basename(worktree.path));
 
-const chunk = (items, size) =>
-  items.reduce(
-    (chunks, item, index) =>
-      index % size === 0
-        ? [...chunks, [item]]
-        : [...chunks.slice(0, -1), [...chunks.at(-1), item]],
-    [],
-  );
-
-// One request per chunk rather than one per ticket: forty worktrees is forty
-// round trips otherwise, and this is a command you run while deciding whether
-// to keep waiting.
-const fetchIssues = async (identifiers, apiKey) => {
-  const query = `
-    query Issues($filters: [IssueFilter!]) {
-      issues(filter: { or: $filters }, first: ${CHUNK_SIZE + 50}) {
-        nodes { identifier title url state { name type } }
-      }
-    }`;
-
-  const pages = await Promise.all(
-    chunk(identifiers, CHUNK_SIZE).map(async (batch) => {
-      const filters = batch.map(({ key, number }) => ({
-        and: [{ number: { eq: number } }, { team: { key: { eq: key } } }],
-      }));
-
-      const response = await fetch(LINEAR_API, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: apiKey,
-        },
-        body: JSON.stringify({ query, variables: { filters } }),
-      });
-
-      if (!response.ok) {
-        fail(
-          `Linear API request failed: ${response.status} ${response.statusText}`,
-        );
-      }
-
-      const payload = await response.json();
-      if (payload.errors) {
-        fail(
-          `Linear API error: ${payload.errors.map((e) => e.message).join("; ")}`,
-        );
-      }
-      return payload.data?.issues?.nodes ?? [];
-    }),
-  );
-
-  // Keyed by identifier because the filter is an unordered `or` — results come
-  // back in whatever order Linear likes, and issues that no longer exist (or
-  // that this key cannot see) simply do not come back at all.
-  return new Map(pages.flat().map((issue) => [issue.identifier, issue]));
+// One request per hundred tickets rather than one per ticket: forty
+// worktrees is forty round trips otherwise, and this is a command you run
+// while deciding whether to keep waiting. Keyed by identifier, since issues
+// that no longer exist (or that this key cannot see) simply do not come back.
+const fetchIssues = async (identifiers, provider) => {
+  try {
+    const found = await provider.issues(identifiers.map(({ key, number }) => `${key}-${number}`));
+    return new Map(found.map((issue) => [issue.identifier, issue]));
+  } catch (err) {
+    fail(`${provider.name}: ${err.message}`);
+  }
 };
 
 const truncate = (text, width) =>
@@ -423,9 +335,12 @@ const main = async () => {
   }));
   const identified = tagged.filter((entry) => entry.identifier);
 
+  const provider = tracker();
+  if (!provider) fail("the tracker setting is off, so there is no ticket tracker to ask");
+
   status(
     `Checking ${identified.length} of ${worktrees.length} worktree${worktrees.length === 1 ? "" : "s"} ` +
-      `against Linear`,
+      `against ${provider.name}`,
   );
 
   // Deduplicated: two worktrees on the same ticket — the ticket's own and the
@@ -440,7 +355,7 @@ const main = async () => {
   ];
 
   const issues = identified.length
-    ? await fetchIssues(unique, readApiKey())
+    ? await fetchIssues(unique, provider)
     : new Map();
 
   const entries = tagged.map(({ worktree, identifier }) => ({

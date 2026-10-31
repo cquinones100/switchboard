@@ -24,7 +24,7 @@ git clone https://github.com/cquinones100/switchboard.git ~/switchboard
 ~/switchboard/setup.sh
 ```
 
-`setup.sh` checks what the workspace needs and asks before it installs anything or changes `~/.zshrc`: Homebrew's `tmux jq fzf gh glow lazygit neovim git-delta ripgrep`, Node through nvm, the MesloLGS NF font, the links for the tmux, Neovim and lazygit configs and the scripts in `bin/`, the worktree shell functions, Ghostty's config, and Neovim's plugins. Then it asks about the optional parts (Claude Code's hooks for tab states, the skills that ship with Switchboard such as `/wt`, `/shape` and `/review-loop`, this repo's whole Claude Code setup, the git hooks) and lists what GitHub, Linear, the Slack relay, the PR image view (mermaid-cli), `/deploy-test` (ffmpeg) and `/review-loop` (Codex, else Claude reviews) need. It ends with a list of anything left to do; run it again until it says Ready. Running it again any time changes only what isn't in place, and `./setup.sh --check` only reports.
+`setup.sh` checks what the workspace needs and asks before it installs anything or changes `~/.zshrc`: Homebrew's `tmux jq fzf gh glow lazygit neovim git-delta ripgrep`, Node through nvm, the MesloLGS NF font, the links for the tmux, Neovim and lazygit configs and the scripts in `bin/`, the worktree shell functions, Ghostty's config, and Neovim's plugins. Then it asks about the optional parts (Claude Code's hooks for tab states, the skills that ship with Switchboard such as `/wt`, `/shape` and `/review-loop`, this repo's whole Claude Code setup, the git hooks) and lists what GitHub, Linear or Jira, the Slack relay, the PR image view (mermaid-cli), `/deploy-test` (ffmpeg) and `/review-loop` (Codex, else Claude reviews) need. It ends with a list of anything left to do; run it again until it says Ready. Running it again any time changes only what isn't in place, and `./setup.sh --check` only reports.
 
 Then start tmux:
 
@@ -39,7 +39,7 @@ tmux new-session -A -s main
 | `M-p` | Find any command by what it does, Settings included; what you picked after typing the same words comes first |
 | `M-a` | Go to the next tab that needs you, one waiting on you before one that finished |
 | `M-j` | Find a tab by typing its name |
-| `M-S-f` | Search your notes, Linear, GitHub and Slack at once |
+| `M-S-f` | Search your notes, tickets, GitHub and Slack at once |
 | `M-Space` | Mission control: every tab, the Work map, PRs, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
 | `M-s` | Into the sidebar and back out |
@@ -67,6 +67,7 @@ Your own settings go in `~/.config/switchboard/`, which is never in this reposit
 | `claude.json` | where your CLAUDE.md's rules come from, a file or a git repository |
 | `browser.json` | the Chrome profile each site's links open in, `awsapps.com` for the AWS login |
 | `linear.json` | your Linear workspace, the team and labels `/shape` files tickets with |
+| `jira.json` | your Jira site, the email your API token belongs to, and the project and labels `/shape` files tickets with, with Jira as the tracker |
 | `slack-updates.json` | the channels the Slack view shows in full |
 | `slack-relay.json` | your Slack member ID, the one person the relay listens to |
 | `oncall.json`, `oncall-rules.md` | the channels `/oncall` watches and your team's rules |

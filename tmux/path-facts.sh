@@ -2,7 +2,7 @@
 
 # Prints, tab-separated, what tmux shows for the directory <path> that only
 # changes with its branch: the accent color, the label it would have with no
-# name set (the Linear ticket and its title, else accent-color.sh --name), and
+# name set (the ticket and its title, else accent-color.sh --name), and
 # the PR number, if any.
 #
 # Usage: path-facts.sh <path>
@@ -46,16 +46,16 @@ fi
 
 hex=$("$script_dir/accent-color.sh" "$path")
 
-# Matches any team key, the same way linear-ticket.sh does. A branch that only
-# looks like a ticket is harmless: Linear has no such ticket, ticket-title.sh
-# prints nothing, and the directory name is used as usual.
+# Matches any team or project key, the same way linear-ticket.sh does. A
+# branch that only looks like a ticket is harmless: the tracker has no such
+# ticket, ticket-title.sh prints nothing, and the directory name is used as usual.
 label=""
-# With the tab_lookups setting off (tmux/settings.sh), neither Linear nor
-# GitHub is asked: the tab takes its directory's name and no PR. The linear
-# and github settings turn off each one's half.
-IFS='|' read -r lookups linear github < <(tmux display -p '#{@setting_tab_lookups}|#{@setting_linear}|#{@setting_github}' 2>/dev/null)
+# With the tab_lookups setting off (tmux/settings.sh), neither the ticket
+# tracker nor GitHub is asked: the tab takes its directory's name and no PR.
+# The tracker and github settings turn off each one's half.
+IFS='|' read -r lookups tracker github < <(tmux display -p '#{@setting_tab_lookups}|#{@setting_tracker}|#{@setting_github}' 2>/dev/null)
 ticket=$(printf '%s' "$branch" | grep -ioE '[a-z][a-z0-9]*-[0-9]+' | head -1 | tr 'a-z' 'A-Z')
-if [ -n "$ticket" ] && [ "${lookups:-}" != off ] && [ "${linear:-}" != off ]; then
+if [ -n "$ticket" ] && [ "${lookups:-}" != off ] && [ "${tracker:-}" != off ]; then
   title=$("$script_dir/ticket-title.sh" "$ticket")
   [ -n "$title" ] && label="$ticket: $title"
 fi

@@ -60,11 +60,11 @@ test("settings.sh sets every option from its default or your file, and set write
   assert.deepEqual(Object.fromEntries(read).notifications, true);
 });
 
-test("with the github setting off, keys tagged #github only say why, once, and leave the palette, and #linear ones are kept", () => {
+test("with the github setting off, keys tagged #github only say why, once, and leave the palette, and #tracker ones are kept", () => {
   const tmux = (...args) => execFileSync("tmux", ["-S", socket, ...args], { encoding: "utf8" }).trim();
   fs.writeFileSync(file, "{}");
   tmux("bind", "-N", "View the PR #github #pr", "-n", "M-v", "display-message", "pr");
-  tmux("bind", "-N", "View the ticket #linear #ticket", "-n", "M-i", "display-message", "ticket");
+  tmux("bind", "-N", "View the ticket #tracker #ticket", "-n", "M-i", "display-message", "ticket");
   tmux("bind", "-T", "palette", "-N", "Copy the PR number #github #copy", "p", "display-message", "copied");
   execFileSync("bash", [path.join(repo, "tmux/settings.sh"), "apply", "--load"], { env });
   assert.match(tmux("list-keys", "-T", "root"), /M-v +display-message pr/);

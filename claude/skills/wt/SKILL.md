@@ -7,21 +7,21 @@ disable-model-invocation: true
 
 # wt
 
-Hand this tab over to `wt` for a Linear ticket. This session ends, and in its place `wt` creates the ticket's worktree, moves the pane's shell into it, and starts a new Claude session there with the usual ticket prompt. Because the pane itself now runs from the worktree, tmux sees that directory: splits, new tabs, the tab name, and the status line all follow it, which a `cd` from inside this session could never do.
+Hand this tab over to `wt` for a ticket, from Linear or Jira, whichever Switchboard's tracker setting names. This session ends, and in its place `wt` creates the ticket's worktree, moves the pane's shell into it, and starts a new Claude session there with the usual ticket prompt. Because the pane itself now runs from the worktree, tmux sees that directory: splits, new tabs, the tab name, and the status line all follow it, which a `cd` from inside this session could never do.
 
 The conversation does not carry over. The ticket is the hand-off, and the new session starts by reading it.
 
-Usually run with no argument: the ticket comes from this session. A Linear ticket ID or URL may be passed instead, and then it wins. Any other text in the arguments is added to the new session's prompt, as something to keep in mind or do first: `/wt ABC-123 start with the migration`, or just `/wt start with the migration` for this session's ticket.
+Usually run with no argument: the ticket comes from this session. A ticket ID or URL may be passed instead, and then it wins. Any other text in the arguments is added to the new session's prompt, as something to keep in mind or do first: `/wt ABC-123 start with the migration`, or just `/wt start with the migration` for this session's ticket.
 
 ## Steps
 
-1. Split the arguments. When the first word is a ticket ID (`ABC-123`) or a Linear URL, it is the ticket; everything after it is the text to add. Otherwise all of it is the text to add, and the ticket is found as with no argument.
+1. Split the arguments. When the first word is a ticket ID (`ABC-123`) or a Linear or Jira URL, it is the ticket; everything after it is the text to add. Otherwise all of it is the text to add, and the ticket is found as with no argument.
 
    Work out the ticket ID.
 
-   - **Passed as an argument:** use it. Accept a Linear URL and take the ID from its `/issue/<ID>/` part.
+   - **Passed as an argument:** use it. Accept a Linear URL and take the ID from its `/issue/<ID>/` part, or a Jira one and take it from its `/browse/<ID>` part.
    - **No argument:** take the first of these that gives an answer, and do not ask for an ID:
-     1. A ticket this session created or saved through Linear. If it saved more than one, the most recent.
+     1. A ticket this session created or saved in the tracker. If it saved more than one, the most recent.
      2. The one ticket ID (`ABC-123`) the conversation centered on.
      3. The current branch, from the first line of `git status --porcelain --branch` (`## <branch>`, then `...<upstream>` if it has one; a detached HEAD has no branch), when it starts with a ticket ID such as `abc-123-…`; uppercase it.
 

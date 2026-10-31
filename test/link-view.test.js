@@ -103,7 +103,7 @@ test("search everything finds the notes holding every word, newest first, as lin
   fs.writeFileSync(path.join(notes, ".trash", "Gone.md"), "# Gone\n\ndeploy freeze\n");
   fs.utimesSync(path.join(notes, "Old plan.md"), new Date(2020, 0, 1), new Date(2020, 0, 1));
   execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "search", "sleep 60"], { env });
-  ["github", "linear", "search_slack"].forEach((key) => execFileSync("tmux", ["-S", socket, "set", "-g", `@setting_${key}`, "off"], { env }));
+  ["github", "tracker", "search_slack"].forEach((key) => execFileSync("tmux", ["-S", socket, "set", "-g", `@setting_${key}`, "off"], { env }));
 
   const out = execFileSync("node", [path.join(__dirname, "../lib/search.js"), "deploy", "FREEZE"], {
     env: { ...env, TMUX: `${socket},0,0`, NOTES_DIR: notes },

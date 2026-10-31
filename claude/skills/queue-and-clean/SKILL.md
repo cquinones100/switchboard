@@ -1,6 +1,6 @@
 ---
 name: queue-and-clean
-description: Queue the current branch's PR for merge if it is not queued already, watch it in the background, fix what stops it merging (failing checks, conflicts, being dropped from the merge queue), and once it merges wait for it to deploy, test the feature in a real browser and record a video of the test, and once you approve the test make sure its Linear ticket is done and its item in your notes ticked, then remove this worktree and its local branch.
+description: Queue the current branch's PR for merge if it is not queued already, watch it in the background, fix what stops it merging (failing checks, conflicts, being dropped from the merge queue), and once it merges wait for it to deploy, test the feature in a real browser and record a video of the test, and once you approve the test make sure its ticket (Linear or Jira) is done and its item in your notes ticked, then remove this worktree and its local branch.
 argument-hint: "[PR number]"
 disable-model-invocation: true
 ---
@@ -39,7 +39,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
    If the PR is already `MERGED`, skip the queue and the watch and go straight to "Deploy and test".
 
 4. Settle the ticket and the note now, so finishing up later asks nothing:
-   - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
+   - **The ticket**: the ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
    - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.claude/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. Remember the answer; read the note only at "Closing out".
    - **The deploy and the test**: settle both as "Settling" in `~/switchboard/claude/skills/deploy-test/SKILL.md` says, so nothing after the merge has to ask.
 
@@ -198,7 +198,7 @@ The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own bra
 
 After the cleanup, with the ticket and note settled before watching:
 
-1. **The ticket.** Read it with the Linear connector. In a completed state (its state's type is `completed`), there is nothing to do. Otherwise move it to the team's completed state, the one its other merged tickets use ("Done", "Deployed"…), unless the team's workflow moves it there on its own once the PR merges and it hasn't caught up yet: then leave it. Say which, in the final line's note (below).
+1. **The ticket.** It is in Linear or Jira, whichever the tracker setting names: settle which, and how to read and move a ticket in it, as `~/switchboard/claude/skills/shape/tracker.md` says (with the setting off, there is no ticket to close out). Read it (`~/.config/tmux/tracker.sh show <ID>` will do; when it fails other than with exit 2 (the setting off), such as no key stored or a 3 (no such ticket, which Jira also answers for one the token's account can't see), through the tracker's connector, and only when that can't find it either is there no ticket to close out, as tracker.md's "Reading" says). In a completed state (its state's type is `completed`, a Jira status in the Done category), there is nothing to do. Otherwise move it to the team's completed state, the one its other merged tickets use ("Done", "Deployed"…; in Jira, the transition tracker.md's "Done" picks), unless the team's workflow moves it there on its own once the PR merges and it hasn't caught up yet: then leave it. Say which, in the final line's note (below).
 2. **The note.** Read only the note settled before watching. Find the checklist item for this work: one naming the ticket's ID or link, or the PR's number or link, else one whose words plainly match the ticket's or PR's title. Tick it (`- [x]`) and move it under the unticked items in its list, with anything indented under it, as the user's CLAUDE.md says for notes, changing those lines and nothing else. When no item matches, or more than one might, tick nothing and say so.
 
 Neither step fails the run: the PR merged and the cleanup finished. Add what they did to the success line, `queue-and-clean: success (ticket ABC-123 done; note: ticked "…")`, or what they couldn't (`note: no item for ABC-123`).

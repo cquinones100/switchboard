@@ -1854,7 +1854,7 @@ test("Settings' Your CLAUDE.md says where your rules come from, and picking a fi
   }
 });
 
-test("with the github and linear settings off, mission control has no PRs or Tickets view and the Work map no PR or ticket", () => {
+test("with the github and tracker settings off (Linear off, from before), mission control has no PRs or Tickets view and the Work map no PR or ticket", () => {
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   const tab = { id: "@90", index: 9, name: "Some work", path: path.join(tmp, "nowhere"), pr: "12", state: "idle" };
   try {
@@ -1871,6 +1871,29 @@ test("with the github and linear settings off, mission control has no PRs or Tic
     assert.ok(!sidebar.builtInViews({ tabs: [] }).some((v) => v.title === "Tickets"));
     assert.equal(sidebar.workMap([tab]).find((r) => r.tab === tab).cells[3], "");
     assert.deepEqual(sidebar.mergeOf({ path: tab.path, branch: "feat" }), {});
+  } finally {
+    fs.rmSync(settingsFile, { force: true });
+    sidebar.reloadSettings();
+  }
+});
+
+test("with Jira as the tracker, mission control keeps the Tickets view and drops Linear's Inbox", () => {
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  const titles = () => sidebar.builtInViews({ tabs: [] }).map((v) => v.title);
+  try {
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.rmSync(settingsFile, { force: true });
+    sidebar.reloadSettings();
+    assert.ok(titles().includes("Tickets") && titles().includes("Inbox"), "Linear, the default, has both");
+
+    fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "jira" }));
+    sidebar.reloadSettings();
+    assert.ok(titles().includes("Tickets"));
+    assert.ok(!titles().includes("Inbox"), "Jira has no inbox to read");
+
+    fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "off" }));
+    sidebar.reloadSettings();
+    assert.ok(!titles().includes("Tickets") && !titles().includes("Inbox"));
   } finally {
     fs.rmSync(settingsFile, { force: true });
     sidebar.reloadSettings();
@@ -2707,7 +2730,7 @@ test("the standup note lists the last working day's PRs, reviews, ticket moves a
       ] },
       waiting: { nodes: [{ number: 7, title: "Asked of me", url: "https://github.com/o/repo/pull/7", repository }] },
     },
-    linear: {
+    tickets: {
       changed: { nodes: [
         { identifier: "AB-1", title: "Moved", url: "https://linear.app/x/issue/AB-1", history: { nodes: [
           { createdAt: friday(16), fromState: { name: "In Review" }, toState: { name: "Done" } },
