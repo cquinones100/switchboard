@@ -315,17 +315,28 @@ test("the shell scripts' CLI answers from Jira, with exit codes for no such tick
     // The site from ~/.config/switchboard/jira.json, without JIRA_SITE.
     const own = path.join(tmp, ".config/switchboard");
     fs.mkdirSync(own, { recursive: true });
-    fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "acme.atlassian.net" }));
+    fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "acme.atlassian.net", jiraEmail: "me@acme.com", jiraApiToken: "secret", jiraProject: "AB", jiraLabels: ["web"] }));
     const site = process.env.JIRA_SITE;
     delete process.env.JIRA_SITE;
     try {
       assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+      // Where tickets are filed, and nothing secret.
+      assert.deepEqual(JSON.parse((await cli("config")).out), { tracker: "Jira", site: "https://acme.atlassian.net", team: "AB", labels: ["web"] });
     } finally {
       process.env.JIRA_SITE = site;
       fs.rmSync(path.join(own, "jira.json"));
     }
+    // Linear's, from linear.json, without its key.
+    fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "linear" }));
+    fs.writeFileSync(path.join(own, "linear.json"), JSON.stringify({ linearWorkspace: "acme", linearTeam: "AB", linearApiKey: "secret" }));
+    try {
+      assert.deepEqual(JSON.parse((await cli("config")).out), { tracker: "Linear", site: "https://linear.app/acme", team: "AB", labels: [] });
+    } finally {
+      fs.rmSync(path.join(own, "linear.json"));
+    }
     fs.writeFileSync(settingsFile, JSON.stringify({ tracker: "off" }));
     assert.equal((await cli("title", "AB-2")).code, 2);
+    assert.equal((await cli("config")).code, 2);
   } finally {
     fs.rmSync(settingsFile, { force: true });
   }

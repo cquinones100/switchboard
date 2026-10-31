@@ -35,6 +35,8 @@
       "mcp__claude_ai_Slack__slack_search_users",
       "mcp__claude_ai_Slack__slack_read_user_profile",
       "mcp__claude_ai_Google_Calendar__list_events",
+      "Bash(~/.config/tmux/tracker.sh *)",
+      "Bash(node ~/switchboard/lib/tracker/cli.js *)",
       "mcp__claude_ai_Linear__get_issue",
       "mcp__claude_ai_Linear__list_issues",
       "mcp__claude_ai_Linear__list_comments",
