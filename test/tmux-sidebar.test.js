@@ -1020,6 +1020,28 @@ test("an option taken from a menu shows a box with a spinner until it is done, t
   assert.doesNotMatch(plain(sent.at(-1)), /One moment/);
 });
 
+test("a Claude started in a tab already running one moves to a tab of its own", async (t) => {
+  // Node in the foreground with a session file, as claude-pane.sh tells
+  // Claude started by claude-here.
+  const claude = `${process.execPath} -e "setTimeout(() => {}, 60000)"`;
+  fs.mkdirSync(path.join(home, ".claude/sessions"), { recursive: true });
+  const window = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}", claude);
+  const first = tmux("display", "-p", "-t", window, "#{pane_id}");
+  const second = tmux("split-window", "-d", "-t", first, "-P", "-F", "#{pane_id}", claude);
+  t.after(() => [window, tmux("display", "-p", "-t", second, "#{window_id}")].forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} }));
+  await wait(300);
+  [first, second].forEach((pane) => {
+    const pid = tmux("display", "-p", "-t", pane, "#{pane_pid}");
+    fs.writeFileSync(path.join(home, ".claude/sessions", `${pid}.json`), JSON.stringify({ pid: Number(pid), sessionId: pane }));
+  });
+  const script = path.join(__dirname, "../tmux/one-claude.sh");
+  execFileSync("bash", [script, second]);
+  assert.notEqual(tmux("display", "-p", "-t", second, "#{window_id}"), window, "the second one has a tab of its own");
+  assert.equal(tmux("display", "-p", "-t", first, "#{window_id}"), window, "the first stays");
+  execFileSync("bash", [script, first]);
+  assert.equal(tmux("display", "-p", "-t", first, "#{window_id}"), window, "alone in its tab, it stays");
+});
+
 test("asked for a tab's note, the notes about its ticket come first, then those titled like the tab, the last one shown there, and its repository's", (t) => {
   const notesDir = fs.mkdtempSync(path.join(tmp, "pick-notes-"));
   const repo = path.join(tmp, "widgets");

@@ -152,7 +152,7 @@ in its session file too. `agent-state.sh` ignores its hooks, and the sidebar
 reads the tab's own interactive session for the pane, so a tab running a loop
 shows the loop's background work rather than the helper's turns.
 
-Whether a pane runs Claude is decided in `tmux/claude-pane.sh`, which
+A tab holds one Claude: the sidebar, mission control, the Slack relay, `M-c` and `M-m` each take a tab's Claude to be one pane, so a session starting in a tab that already runs one is moved to a tab of its own as it starts (`tmux/one-claude.sh`, run in the background by `agent-state.sh` on `SessionStart`, saying so in a box; `one_claude_per_tab` setting). Whether a pane runs Claude is decided in `tmux/claude-pane.sh`, which
 `agent-state.sh` and `tab-status.sh` source, and again in
 `lib/slack-relay/tabs.js`, so a change to one belongs in the other. tmux names
 a pane after its foreground program: Claude Code's executable is named after

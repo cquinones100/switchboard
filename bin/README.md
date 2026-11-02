@@ -72,6 +72,8 @@ by hand.
 
 What a key has to tell you (nothing needs you, a link copied, no ticket in this branch) shows in a small box in the middle of the screen, which any key closes and which goes by itself after a few seconds, rather than on the status line for a moment (`tmux/say.sh`; Settings' "Messages in a box", `message_boxes`).
 
+A tab holds one Claude session: one started in a tab that already runs one moves to a tab of its own as it starts, a box saying so, since the sidebar, the Slack relay, `M-c` and `M-m` each take a tab's Claude to be one pane (Settings' "One Claude to a tab", `one_claude_per_tab`).
+
 ## worktree-from-ticket
 
 Creates a git worktree on a branch named after a Linear ticket, then opens

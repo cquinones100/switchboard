@@ -273,6 +273,9 @@ case "${1:-}" in
     # (tip.sh), with GitHub on.
     if [ "${event:-}" = SessionStart ]; then
       tmux if -F -t "$TMUX_PANE" '#{&&:#{&&:#{!:#{@tip_seen_worktree}},#{!=:#{@setting_github},off}},#{m:*/.claude/worktrees/*,#{pane_current_path}}}' "run-shell -b '~/.config/tmux/tip.sh show worktree'" 2>/dev/null
+      # One Claude to a tab: one starting beside another moves to a tab of its
+      # own (one-claude.sh), in the background, with the setting on.
+      tmux if -F -t "$TMUX_PANE" '#{!=:#{@setting_one_claude_per_tab},off}' "run-shell -b '~/.config/tmux/one-claude.sh #{q:pane_id}'" 2>/dev/null
     fi
     ;;
 

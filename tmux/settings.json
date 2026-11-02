@@ -157,6 +157,13 @@
     "default": true
   },
   {
+    "key": "one_claude_per_tab",
+    "category": "Tabs and status bar",
+    "label": "One Claude to a tab",
+    "description": "A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane",
+    "default": true
+  },
+  {
     "key": "message_boxes",
     "category": "Tabs and status bar",
     "label": "Messages in a box",
