@@ -662,6 +662,34 @@ test("a tab whose turn ended with background tasks still running reads as workin
   ], "not one that needs you");
 });
 
+test("a turn an API error cut short is found in the transcript until the conversation goes on", () => {
+  const file = path.join(home, ".claude/projects/-work/api-error.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const now = Date.now();
+  const at = (ms) => new Date(now - ms).toISOString();
+  const entries = [
+    { type: "user", timestamp: at(9_000), message: { content: "fix the flaky test" } },
+    { type: "assistant", timestamp: at(8_000), message: { content: [{ type: "text", text: "Looking." }] } },
+    { type: "assistant", timestamp: at(7_000), isApiErrorMessage: true, error: "server_error", message: { content: [{ type: "text", text: "API Error: Connection lost mid-response. The response above may be incomplete." }] } },
+  ];
+  fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).apiError, "API Error: Connection lost mid-response. The response above may be incomplete.");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).apiErrorAt, Date.parse(at(7_000)), "and when it came");
+  assert.equal(sidebar.backgroundWork(file, now - 1_000).apiError, undefined, "not one from before the session");
+  fs.appendFileSync(file, JSON.stringify({ type: "progress", timestamp: at(3_000), data: { type: "agent_progress", message: { type: "assistant" } } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "assistant", isSidechain: true, timestamp: at(2_000), message: { content: [{ type: "text", text: "a subagent" }] } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: at(2_600), message: { content: "<command-message>cost</command-message><command-name>/cost</command-name>" } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: at(2_500), message: { content: "<local-command-stdout>Total cost: $1</local-command-stdout>" } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", isMeta: true, timestamp: at(2_400), message: { content: "Caveat" } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", origin: { kind: "task-notification" }, timestamp: at(2_300), message: { content: "<task-notification>done</task-notification>" } }) + "\n");
+  assert.ok(sidebar.backgroundWork(file, now - 60_000).apiError, "a subagent's lines, progress, a command's output, a note of Claude Code's or a task's report don't clear it");
+  const nested = path.join(home, ".claude/projects/-work/nested-error.jsonl");
+  fs.writeFileSync(nested, JSON.stringify({ type: "progress", timestamp: at(2_000), data: { type: "agent_progress", message: { type: "assistant", isApiErrorMessage: true } } }) + "\n");
+  assert.equal(sidebar.backgroundWork(nested, now - 60_000).apiError, undefined, "nor does a subagent's error set one");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: at(1_000), message: { content: "try again" } }) + "\n");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).apiError, undefined, "said something after it, it is gone");
+});
+
 test("a background command stays running though Claude Code copies its request, untimed, into the transcript after it", () => {
   const file = path.join(home, ".claude/projects/-work/blob.jsonl");
   const now = Date.now();

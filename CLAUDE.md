@@ -135,7 +135,7 @@ moment `/review-loop`, `/ci-loop`, `/queue-and-clean`, `/deploy-test` or `/previ
 or through the Skill tool, until a new prompt or session. The sidebar shows
 all three. One `jq` reads them, as the relay's event already does. No hook
 fires when a background task ends, so the sidebar still counts running tasks
-from the transcript. Every
+from the transcript. Nor does one when an API error cuts a turn short ("API Error: Connection lost mid-response"), which Claude Code records as a message of its own (`isApiErrorMessage`), so the sidebar reads that from the transcript too (`backgroundWork`'s `apiError`) and shows the tab waiting on the error until the conversation goes on. Every
 window-status format in `tmux.conf`, `theme.sh`, `update-colors.sh`, and
 `window-names.sh` expands that marker, so a new one has to as well.
 
