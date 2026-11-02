@@ -24,7 +24,9 @@
 // and waits for you to close it; tests after that run headless with that
 // session. The profile is never in a repository.
 //
-// Writes <dir>/test.mp4 (or test.webm without ffmpeg), <dir>/end.png and
+// Writes <dir>/<tab>.mp4 (or .webm without ffmpeg), named after the tmux tab
+// it runs in (the tab's name, as the tab bar shows it), so the video says
+// which work it is when it opens; outside tmux, test.mp4. Also <dir>/end.png and
 // <dir>/log.txt (each step, console errors, and responses of 500 and up), and
 // prints { passed, video, screenshot, log, error } as JSON. A step that
 // throws still keeps the video up to that point.
@@ -68,6 +70,21 @@ const signIn = async () => {
   await page.goto(url);
   await new Promise((resolve) => context.on("close", resolve));
   console.log(JSON.stringify({ profile }));
+};
+
+// The tmux tab this runs in, as the tab bar names it (@tab_label), made a
+// file name the Slack relay finds in a message (files.js's MEDIA_PATH takes
+// ASCII letters, digits, . _ - and no spaces): anything else dropped, each
+// run of spaces a dash, and cut to 80 characters; "test" outside tmux or for a tab with no name.
+const videoName = () => {
+  if (!process.env.TMUX_PANE) return "test";
+  try {
+    const label = execFileSync("tmux", ["display-message", "-p", "-t", process.env.TMUX_PANE, "#{@tab_label}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const name = label.replace(/[^A-Za-z0-9 ._-]/g, "").trim().replace(/\s+/g, "-").replace(/-{2,}/g, "-").slice(0, 80).replace(/^[.-]+|[.-]+$/g, "");
+    return name || "test";
+  } catch {
+    return "test";
+  }
 };
 
 const record = async () => {
@@ -124,13 +141,14 @@ const record = async () => {
   const recording = page.video();
   await context.close();
 
-  const webm = path.join(out, "test.webm");
+  const name = videoName();
+  const webm = path.join(out, `${name}.webm`);
   fs.renameSync(await recording.path(), webm);
   fs.rmSync(raw, { recursive: true, force: true });
   // QuickTime and Slack play mp4, not webm.
   let video = webm;
   try {
-    const mp4 = path.join(out, "test.mp4");
+    const mp4 = path.join(out, `${name}.mp4`);
     execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", webm, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
     fs.rmSync(webm);
     video = mp4;
