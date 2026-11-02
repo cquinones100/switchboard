@@ -11,7 +11,7 @@ Queue this worktree's PR for merge, in the merge queue or with auto-merge, unles
 
 When the work is done, the final message is either `queue-and-clean: success` or `queue-and-clean: fail: <reason>` and nothing else: no summary of what was checked or what was removed. `success` means the PR merged, the user approved the test (or chose to clean up without one) and the cleanup finished; if you fixed anything on the way, say what in a few words after it, as `queue-and-clean: success (fixed: <what>)`, for example `queue-and-clean: success (fixed: lint error in api.ts; reran a flaky e2e job)`. What "Deploy and test" and "Closing out" did goes in the same brackets, after anything fixed: `queue-and-clean: success (tested: <video>; ticket ABC-123 done)`. `fail` means the PR could not be queued, closed without merging, failed to deploy, had its test turned down, stopped for something "Fixing" leaves alone or still failed after its last round, or a cleanup command errored, and the reason is one line saying which, with the error message when a command failed (for example `queue-and-clean: fail: git worktree remove: '<path>' contains modified or untracked files`), and what you tried when you tried fixing it. The questions in "Before watching", the merge method question in "Queuing", the questions in "Fixing", the questions and the approval in "Deploy and test", and the questions in clean-worktree's step 2 are still asked, because they pause the work rather than end it.
 
-Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
+Arguments: a PR number, if one was given. Otherwise use the current branch's PR; when the branch has none, follow "No PR" instead.
 
 ## Before watching
 
@@ -42,6 +42,19 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR.
    - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
    - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.claude/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. Remember the answer; read the note only at "Closing out".
    - **The deploy and the test**: settle both as "Settling" in `~/switchboard/claude/skills/deploy-test/SKILL.md` says, so nothing after the merge has to ask.
+
+## No PR
+
+When no argument was given and `gh pr view` finds no PR for the branch (nor a closed or merged one), the work may have reached the default branch some other way (merged by hand, cherry-picked, squashed in with other work), or not at all. Record the paths as step 2 of "Before watching" says, then:
+
+1. **Is it all in the default branch?** Find it and fetch it: its name is what GitHub calls it now for origin's repository, `gh repo view "$(git -C <main-clone> remote get-url origin)" --json defaultBranchRef --jq .defaultBranchRef.name` (origin's, not whichever repository gh would pick, a fork's upstream say), since a clone's own `origin/HEAD` can be out of date (when gh can't say, ask), and `git -C <main-clone> fetch origin "+refs/heads/<name>:refs/remotes/origin/<name>"` must succeed, a clone that fetches only some branches included; `<default>` below is `origin/<name>`, then:
+   - `git -C <worktree> status --porcelain` prints nothing: uncommitted work is in no branch, so ask about it as clean-worktree's step 2 would.
+   - Merging the branch into the default branch changes nothing: `git -C <worktree> merge-tree --write-tree <default> HEAD` succeeds and prints the same tree as `git -C <worktree> rev-parse <default>^{tree}`. That settles it whichever way the work got there, a squash included. When it doesn't (a conflict, or a different tree), the work may still be there, squashed in with changes beside it: read what the branch changed (`git -C <worktree> diff <merge-base> HEAD`, the merge base from `git merge-base <default> HEAD`) against the default branch's version of those files, and count it as in when every change is there; when you can't tell, ask, showing what looks missing.
+2. **When it is**, there is nothing to queue, watch or test: settle the ticket and the note as step 4 of "Before watching" says (no deploy, no test), then follow "Cleanup" with this one change, that clean-worktree's step 2 counts the work as on GitHub because the default branch holds it, its own check of the branch's commits on a remote skipped. Then "Closing out" and "Back to the repository" as after a merge, the success line saying so: `queue-and-clean: success (no PR: already in <default>; …)`.
+3. **When it isn't**, say what the default branch lacks (`git -C <worktree> log --oneline <default>..HEAD`, and the files of `git -C <worktree> diff --stat <default>...HEAD`), and ask with `AskUserQuestion`:
+   - **Open a PR** (first, as recommended): push the branch, its first push, and open the PR with `gh pr create` as the repository's own PR conventions say, then carry on from "Before watching" with it.
+   - **I'll merge it myself**: reply `queue-and-clean: fail: no PR, and <default> lacks <n> commits`, changing nothing; merging into the default branch is the user's to do.
+   - **Leave it**: the same reply, changing nothing.
 
 ## Queuing
 
@@ -187,12 +200,12 @@ After the PR merges, and before anything is removed, follow `~/switchboard/claud
 
 ## Cleanup
 
-Only after GitHub reports the PR `MERGED` and the user has approved in "Approval". Follow `~/switchboard/claude/skills/clean-worktree/SKILL.md` from step 2, with the paths recorded before watching and the PR's number (it is `disable-model-invocation`, so read it rather than invoking it).
+Only after GitHub reports the PR `MERGED` and the user has approved in "Approval", or, with no PR, once "No PR" has found the default branch holding the work. Follow `~/switchboard/claude/skills/clean-worktree/SKILL.md` from step 2, with the paths recorded before watching and the PR's number (with no PR, none, and step 2's check of the commits on GitHub counted as done by "No PR") (it is `disable-model-invocation`, so read it rather than invoking it).
 
 - `clean-worktree: success`: close out the ticket and the note, as "Closing out" says, then move the tab to the main clone, as "Back to the repository" says. From here on every command needs `git -C <main-clone>` or an absolute path, since the shell's working directory no longer exists.
 - `clean-worktree: fail: <reason>`: reply `queue-and-clean: fail: <reason>`, closing out nothing.
 
-The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own branch, and never a force-push.
+The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own branch, and a branch's first push when the user chooses **Open a PR** in "No PR", and never a force-push.
 
 ## Closing out
 
