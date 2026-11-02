@@ -247,7 +247,7 @@ replies. Both draw with `tmux/glow-style.json`, glow's dark style without the #s
 description as an image" (`tmux/pr-image.js`), draws the
 description as GitHub does (its `body_html`, read with a GET, GitHub's
 stylesheet, Mermaid in mermaid-cli's headless Chrome) and shows it a page at a
-time as images, through tmux's passthrough for that pane alone. It opens in
+time as images, each of several marked "Page 2 of 3" ("↓ more" while more follow) in its top-right corner, through tmux's passthrough for that pane alone. It opens in
 place of the pane, as `M-d`'s diff does (`pane-in-place.sh`'s `pr-image`), and
 `q` or asking for it again puts the pane back. M-p's "View the branch's Linear ticket as an image" is the same script with `--ticket <ID>` (`pane-in-place.sh`'s `ticket-image`, the ID from the branch or the tab's name as `M-i` finds it): the ticket from Linear's API, its facts, description, sub-issues and comments, the Markdown drawn in the page by marked and cleaned by DOMPurify, both pinned by version, since nothing has made Linear's Markdown safe the way GitHub's `body_html` is.
 

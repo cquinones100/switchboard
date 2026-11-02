@@ -24,7 +24,8 @@
 // size the terminal reports), breaking between blocks, a diagram taller than
 // a page drawn smaller to fit one, and each page shown through the
 // kitty graphics protocol, which Ghostty speaks, passed through tmux (the
-// pane's allow-passthrough). j, k, the arrows, Space and b page; g and G go
+// pane's allow-passthrough), each of several marked "Page 2 of 3" in its
+// top-right corner, "↓ more" while more follow. j, k, the arrows, Space and b page; g and G go
 // to the ends; q closes it.
 //
 // Images in tmux are its weak point: tmux doesn't know they are there, so a
@@ -342,6 +343,8 @@ const main = async () => {
   // diagram taller than a page is drawn smaller, to fit one, so it is never
   // cut in two. Each layout's files get names of their own, so the terminal
   // never reads one the next layout is writing.
+  // The page marker's strip, when there are several pages (see below).
+  const BAND = 30;
   let layouts = 0;
   const layOut = async () => {
     const { width, pageHeight, rows } = view;
@@ -352,7 +355,9 @@ const main = async () => {
       document.querySelectorAll("style").forEach((el) => {
         if (el.dataset.fit) el.textContent = `pre.mermaid svg { max-height: ${h - 40}px; max-width: 100%; height: auto; }`;
       });
-    }, width, pageHeight);
+    // A diagram fits what a page holds below the marker's strip, so it stays
+    // whole however many pages there turn out to be.
+    }, width, pageHeight - BAND);
     // Where each block of the description starts and ends, to break pages
     // between them.
     const { height, blocks } = await page.evaluate(() => {
@@ -363,25 +368,51 @@ const main = async () => {
         blocks: [...body.children].map((el) => ({ top: el.getBoundingClientRect().top - top, bottom: el.getBoundingClientRect().bottom - top })),
       };
     });
-    const cuts = [0];
-    while (cuts.at(-1) + pageHeight < height) {
-      const start = cuts.at(-1);
-      const fits = blocks.filter((b) => b.top > start && b.top <= start + pageHeight).map((b) => b.top);
-      cuts.push(fits.length ? Math.max(...fits) : start + pageHeight);
-    }
-    cuts.push(height);
+    const cutAt = (room) => {
+      const cuts = [0];
+      while (cuts.at(-1) + room < height) {
+        const start = cuts.at(-1);
+        const fits = blocks.filter((b) => b.top > start && b.top <= start + room).map((b) => b.top);
+        cuts.push(fits.length ? Math.max(...fits) : start + room);
+      }
+      return [...cuts, height];
+    };
+    // With more than one page, each says which it is, and that more follows,
+    // in a strip of its own above its text (BAND pixels, so the pages are cut
+    // that much shorter), drawn into the image itself, since the footer below
+    // it is easy to miss. The strip is put together with the page's picture
+    // in a second page of the same browser, so nothing in the description,
+    // a table or code block cut across pages included, is ever under it.
+    let cuts = cutAt(pageHeight);
+    if (cuts.length > 2) cuts = cutAt(pageHeight - BAND);
     const shots = [];
-    for (let i = 0; i < cuts.length - 1; i++) {
-      const h = cuts[i + 1] - cuts[i];
+    const total = cuts.length - 1;
+    const composer = total > 1 ? await browser.newPage() : null;
+    for (let i = 0; i < total; i++) {
+      let h = cuts[i + 1] - cuts[i];
       // A Buffer: puppeteer returns a plain Uint8Array, whose toString ignores
       // "base64" and lists its bytes instead.
-      const png = Buffer.from(await page.screenshot({ clip: { x: 0, y: cuts[i], width, height: h }, type: "png" }));
+      let png = Buffer.from(await page.screenshot({ clip: { x: 0, y: cuts[i], width, height: h }, type: "png" }));
+      if (composer) {
+        // Whole pixels: the viewport takes no fraction, and a block's edge often is one.
+        await composer.setViewport({ width: Math.ceil(width), height: Math.ceil(h + BAND), deviceScaleFactor: DPR });
+        await composer.setContent(
+          `<body style="margin:0;background:#0d1117"><div style="height:${BAND}px;display:flex;justify-content:flex-end;align-items:center;padding:0 12px;box-sizing:border-box">` +
+            `<span style="padding:3px 10px;border-radius:12px;font:600 12px -apple-system,system-ui,sans-serif;color:#fff;background:rgba(31,111,235,0.92)">` +
+            `Page ${i + 1} of ${total}${i + 1 < total ? "&nbsp;&nbsp;↓ more" : ""}</span></div>` +
+            `<img style="display:block;width:${width}px;height:${h}px" src="data:image/png;base64,${png.toString("base64")}"></body>`,
+          { waitUntil: "load" },
+        );
+        png = Buffer.from(await composer.screenshot({ clip: { x: 0, y: 0, width, height: h + BAND }, type: "png" }));
+        h += BAND;
+      }
       const file = path.join(work, `page-${n}-${i + 1}.png`);
       fs.writeFileSync(file, png);
       // Where the page starts, as a share of the whole, to find it again in
       // the next layout.
       shots.push({ png, file, rows: Math.max(1, Math.round((h / pageHeight) * rows)), from: cuts[i] / height });
     }
+    if (composer) await composer.close();
     fs.readdirSync(work).filter((f) => f.startsWith("page-") && !f.startsWith(`page-${n}-`)).forEach((f) => fs.rmSync(path.join(work, f), { force: true }));
     return shots;
   };
