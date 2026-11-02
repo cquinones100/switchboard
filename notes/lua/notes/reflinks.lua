@@ -72,7 +72,8 @@ function M.convert(buf, skip)
         if not s then break end
         -- An address with a ( in it ends at a ) of its own the pattern
         -- can't tell from the link's: such a link is left as written.
-        if not url:find("%(") and masked:sub(e + 1, e + 1) ~= ")" then table.insert(found, { s = s, e = e, text = text, url = url }) end
+        -- One ending in \\ stopped at an escaped ), and is left as written too.
+        if not url:find("%(") and not url:find("\\$") then table.insert(found, { s = s, e = e, text = text, url = url }) end
         init = e + 1
       end
       -- Numbered left to right, so they read in order top to bottom, then

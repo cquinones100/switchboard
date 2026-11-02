@@ -841,6 +841,7 @@ test("a note's links become reference links as it saves, its addresses at the en
       "- [ ] See [the tab](https://example.com/a/very/long/path?x=1) and [docs](https://example.com/docs)",
       "Keep \`[raw](https://example.com/raw)\` as it is",
       "Typing [here](https://example.com/typing)",
+      "Said so (in [the PR](https://example.com/pr)) and [wiki](https://example.com/Foo_(bar))",
     }, "\\n") .. "\\n")
     f:close()
     -- Its buffer as the app loads it, the line being typed in (row 4) left alone.
@@ -858,9 +859,11 @@ test("a note's links become reference links as it saves, its addresses at the en
     "- [ ] See [the tab][1] and [docs][2]",
     "Keep `[raw](https://example.com/raw)` as it is",
     "Typing [here](https://example.com/typing)",
+    "Said so (in [the PR][3]) and [wiki](https://example.com/Foo_(bar))",
     "",
     "[1]: https://example.com/a/very/long/path?x=1",
     "[2]: https://example.com/docs",
+    "[3]: https://example.com/pr",
   ]);
   assert.equal(result.url, "https://example.com/a/very/long/path?x=1", "the link still goes where it went");
   assert.deepEqual(result.copied, ["- [ ] See [the tab](https://example.com/a/very/long/path?x=1) and [docs](https://example.com/docs)"], "copied out, its links go whole");
