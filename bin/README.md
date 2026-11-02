@@ -213,7 +213,9 @@ it to Linear only once you approve the draft. It does not touch the code.
 Given an existing ticket, it reads it first and asks whether to run the
 repository's `/review-loop` on it in ticket mode (Codex checks the ticket
 against the code), or keep shaping it; a review's findings can then be folded
-into the ticket, again only once you approve. Afterwards `/wt <ID>` hands the same tab to `wt`, so one tab carries a ticket
+into the ticket, again only once you approve. Once it writes a ticket to Linear,
+created or refined, it runs the repository's `/review-loop` on it in ticket mode
+without asking, and asks again before saving that loop's edits. Afterwards `/wt <ID>` hands the same tab to `wt`, so one tab carries a ticket
 from idea to PR.
 
 - Runs in the repository's main checkout, even when called from a worktree,
