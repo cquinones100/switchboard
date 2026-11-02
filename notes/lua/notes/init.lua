@@ -440,6 +440,14 @@ function M.open(path, opts)
   tables.align_all(buf)
   render.draw(buf)
   sidebar.draw()
+  -- Once what opened it is done: a note opened in place of one deleted,
+  -- restored or squashed is found after the list has dropped that one.
+  -- Only for the note still open then: one opened on the way (forget
+  -- opening the next while several go) is passed over.
+  vim.schedule(function()
+    local now = M.current_path()
+    if now and vim.fs.normalize(now) == vim.fs.normalize(path) then sidebar.reveal(path) end
+  end)
   if not opts.stay then vim.api.nvim_set_current_win(M.note_win) end
   if opts.insert_title then
     vim.api.nvim_win_set_cursor(M.note_win, { 1, #vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] })
@@ -457,7 +465,10 @@ end
 function M.show_sidebar(show)
   local win = sidebar.window()
   if show then
-    if not win then M.layout() end
+    if not win then
+      M.layout()
+      sidebar.reveal(M.current_path())
+    end
   elseif win and #vim.api.nvim_tabpage_list_wins(0) > 1 then
     vim.api.nvim_win_close(win, true)
     M.focus_note()

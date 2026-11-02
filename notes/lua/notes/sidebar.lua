@@ -166,6 +166,26 @@ function M.draw()
   end
 end
 
+-- Puts the sidebar's cursor on a note's row, so the note open is the one the
+-- cursor line marks, not the one the cursor was on before (M-e opening a
+-- tab's note from outside). A note the view doesn't list brings All Notes.
+function M.reveal(path)
+  local win = M.window()
+  if not win or not path then return end
+  path = vim.fs.normalize(path)
+  local function row()
+    for r, item in pairs(M.state.items) do
+      if item.note == path then return r end
+    end
+  end
+  if not row() then
+    M.state.folder, M.state.tag, M.state.query = nil, nil, nil
+    M.draw()
+  end
+  local found = row()
+  if found then vim.api.nvim_win_set_cursor(win, { found, 0 }) end
+end
+
 -- Shows a folder, a tag or a search: { folder = … } | { tag = … } | { query = … }.
 function M.show(view)
   M.state.folder, M.state.tag, M.state.query = view.folder, view.tag, view.query

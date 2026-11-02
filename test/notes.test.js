@@ -597,6 +597,35 @@ test("the note window numbers its lines relative to the cursor, and the sidebar 
   assert.deepEqual(result.off, { number: false, relative: false });
 });
 
+test("a note opened from outside, as M-e opens a tab's, puts the sidebar's cursor on it, its folder's view left for All Notes when that doesn't list it", () => {
+  const { result } = lua(`
+    local s = require("notes.store")
+    s.create("", "Loose")
+    s.create_folder("Work")
+    local work = s.create("Work", "Plan")
+    vim.cmd("Notes")
+    local n = require("notes")
+    local sb = require("notes.sidebar")
+    sb.show({ folder = "" })
+    local before = vim.api.nvim_win_get_cursor(sb.window())[1]
+    n.open(work, { stay = true })
+    vim.wait(50)
+    local at = vim.api.nvim_win_get_cursor(sb.window())[1]
+    local seen = { moved = at ~= before, on = sb.state.items[at] and sb.state.items[at].note == vim.fs.normalize(work), all = sb.state.folder == nil }
+    -- The open note deleted from the sidebar: the cursor on the note opened in its place.
+    n.open(s.absolute("Loose.md"), { stay = true })
+    vim.wait(50)
+    vim.api.nvim_set_current_win(sb.window())
+    sb.delete()
+    seen.replaced = vim.fs.normalize(n.current_path()) ~= vim.fs.normalize(s.absolute("Loose.md"))
+    vim.wait(50)
+    local row = vim.api.nvim_win_get_cursor(sb.window())[1]
+    seen.after_delete = sb.state.items[row] and sb.state.items[row].note == vim.fs.normalize(n.current_path())
+    io.write(vim.json.encode(seen))
+  `);
+  assert.deepEqual(result, { moved: true, on: true, all: true, replaced: true, after_delete: true });
+});
+
 test("the sidebar is put away and shown again on asking, and NOTES_SIDEBAR=off starts the app without it", () => {
   const code = (start) => `
     local s = require("notes.store")
