@@ -42,9 +42,88 @@ gh pr checks --required --json bucket 2>/dev/null |
   jq -r 'group_by(.bucket) | map("\(length) \(.[0].bucket)") | join(", ") | if . == "" then "none" else . end' >"$required_file" &
 required_pid=$!
 
+# What the answer offers to do about it, in the popup (--wait): see the
+# failing checks, or have the tab's Claude resolve the conflicts. Filled in
+# below as the answer finds them.
+actions=()
+
+# The failing checks, each with its link, and for a GitHub Actions job the
+# end of its failed log, in less.
+failing() {
+  gh pr checks --json name,bucket,link,description 2>/dev/null |
+    jq -r '.[] | select(.bucket == "fail") | [.name, .link, (.description // "")] | @tsv' |
+    # The description last, since it may be empty and read takes runs of tabs as one.
+    while IFS=$'\t' read -r name link description; do
+      printf '%s%s%s\n' "$bold$red" "$name" "$reset"
+      [ -n "$description" ] && printf '  %s\n' "$description"
+      printf '  %s%s%s\n' "$dim" "$link" "$reset"
+      job=$(sed -nE 's#.*/actions/runs/[0-9]+/job/([0-9]+).*#\1#p' <<<"$link")
+      if [ -n "$job" ]; then
+        printf '\n'
+        gh run view --job "$job" --log-failed 2>/dev/null | tail -n 25 | cut -f3- | sed 's/^/    /'
+      fi
+      printf '\n'
+    done
+}
+
+# /resolve-conflicts typed into the tab's Claude, the pane claude-focus.sh
+# would go to, and the cursor put there, for you to press Enter: whatever is
+# typed in Claude's prompt already can't be seen from here, and Enter sent
+# blind would submit it with the command. With no Claude in the tab, it says so.
+resolve_in_tab() {
+  local window pane sidebar command tty
+  window=$(tmux display -p '#{window_id}')
+  . "${0%/*}/claude-pane.sh"
+  while IFS=$'\t' read -r pane sidebar command tty; do
+    [ "$sidebar" = 1 ] && continue
+    if claude_pid "$command" "$tty" >/dev/null; then
+      tmux send-keys -t "$pane" -l '/resolve-conflicts' && tmux select-pane -t "$pane"
+      return 0
+    fi
+  done < <(LC_ALL=en_US.UTF-8 tmux list-panes -t "$window" -F $'#{pane_id}\t#{?@sidebar,1,0}\t#{pane_current_command}\t#{pane_tty}')
+  printf '\n  %sNo Claude in this tab to resolve them.%s\n' "$yellow" "$reset"
+  read -rsn 1
+}
+
+# The answer's last word: what can be done about it, moved through with j and
+# k and taken with Enter (Close last; Esc or q closes too), or, with nothing
+# to do, any key closes.
+finish() {
+  if [ ${#actions[@]} -eq 0 ]; then
+    printf "\n  Press any key to close."
+    read -rsn 1
+    return
+  fi
+  local options=("${actions[@]}" "Close") cursor=0 key rest i
+  printf '\n'
+  while :; do
+    for i in "${!options[@]}"; do
+      if [ "$i" = "$cursor" ]; then printf '\r\033[2K  %s› %s%s\n' "$bold" "${options[$i]}" "$reset"; else printf '\r\033[2K    %s\n' "${options[$i]}"; fi
+    done
+    IFS= read -rsn 1 key || return
+    if [ "$key" = $'\x1b' ]; then
+      IFS= read -rsn 2 -t 1 rest || rest=
+      case $rest in '[A') key=k ;; '[B') key=j ;; *) return ;; esac
+    fi
+    case $key in
+      j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
+      k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
+      q) return ;;
+      '')
+        case ${options[$cursor]} in
+          "See the failing checks") failing | less -R ;;
+          "Type /resolve-conflicts into this tab's Claude") resolve_in_tab; return ;;
+          *) return ;;
+        esac
+        ;;
+    esac
+    printf '\033[%dA' "${#options[@]}"
+  done
+}
+
 # Every exit below goes through this, so the popup never closes before the
 # answer has been read, and the background count stops with it.
-trap 'kill "$required_pid" 2>/dev/null; rm -f "$required_file"; $wait && { printf "\n  Press any key to close."; read -rsn 1; }' EXIT
+trap 'kill "$required_pid" 2>/dev/null; rm -f "$required_file"; $wait && finish' EXIT
 
 green=$'\033[32m' red=$'\033[31m' yellow=$'\033[33m' dim=$'\033[2m' bold=$'\033[1m' reset=$'\033[0m'
 
@@ -169,6 +248,11 @@ esac
 
 if [ "$(field .isDraft)" = true ]; then draft="${yellow}yes${reset}"; else draft="no"; fi
 if [ "$(field .autoMergeRequest)" != null ]; then auto_merge="${green}on${reset}"; else auto_merge="off"; fi
+
+# What the popup offers, from what was found: failing checks to look at, and
+# conflicts for the tab's Claude to resolve.
+[[ $all == *fail* ]] && actions+=("See the failing checks")
+{ [ "$(field .mergeable)" = CONFLICTING ] || [ "$(field .mergeStateStatus)" = DIRTY ]; } && actions+=("Type /resolve-conflicts into this tab's Claude")
 
 printf '  %-17s %s\n' \
   "Required checks" "$required" \
