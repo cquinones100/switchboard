@@ -202,7 +202,9 @@ end
 -- last when they sit beside the code: documentation first (CLAUDE.md, other
 -- Markdown, docs/), then the database's changes (migrations, SQL, schema
 -- files, DB), which the code that follows is written against, then the
--- implementation, then tests, then generated files (a migration tool's
+-- server's side of a web app (`SERVER`: Next.js server actions in `_actions/`
+-- or an `actions.ts`, API routes, `*.server.ts` and `server/`), which the
+-- pages and components call, then the rest of the implementation, then tests, then generated files (a migration tool's
 -- snapshots among them). Within the implementation, Haiku orders them from the most abstract
 -- to the most concrete, asked in the background once the list is known, from
 -- the paths and their changed line counts; until it answers, and if it
@@ -214,6 +216,10 @@ local DATABASE = {
   "%.sql$", "%.prisma$", "/migrations?/", "/migrate/", "/db/", "/database/", "/drizzle/",
   "/schema%.rb$", "/structure%.sql$", "/schema%.[jt]s$", "%.schema%.[jt]s$",
 }
+local SERVER = {
+  "/_actions/", "/actions/", "/actions%.[jt]sx?$", "/app/api/", "/pages/api/", "/route%.[jt]s$",
+  "%.server%.[jt]sx?$", "/server/",
+}
 local TESTS = {
   "/tests?/", "/spec/", "/__tests__/", "/e2e/", "/__mocks__/", "/fixtures/",
   "%.test%.[^/]+$", "%.spec%.[^/]+$", "_test%.[^/]+$", "_spec%.[^/]+$", "/test_[^/]+%.py$",
@@ -224,12 +230,13 @@ local function matches(path, patterns)
   end
   return false
 end
-local IMPLEMENTATION = 3
+local SERVER_SIDE, IMPLEMENTATION = 3, 4
 local function kind(path)
-  if generated(path) then return 5 end
-  if matches(path, TESTS) then return 4 end
+  if generated(path) then return 6 end
+  if matches(path, TESTS) then return 5 end
   if matches(path, DOCS) then return 1 end
   if matches(path, DATABASE) then return 2 end
+  if matches(path, SERVER) then return SERVER_SIDE end
   return IMPLEMENTATION
 end
 
@@ -286,7 +293,9 @@ local asked = {}
 local function ask_order(view)
   local entries = {}
   for _, entry in view.files:iter() do
-    if kind(entry.path) == IMPLEMENTATION then table.insert(entries, entry) end
+    -- The server's side too: Haiku's order holds within each group.
+    local k = kind(entry.path)
+    if k == SERVER_SIDE or k == IMPLEMENTATION then table.insert(entries, entry) end
   end
   if #entries < 2 then return end
   local paths = vim.tbl_map(function(e) return e.path end, entries)
