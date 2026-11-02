@@ -79,6 +79,14 @@ show_for() {
   local quoted=${want//\'/\'\'}
   nvim --server "$notes_socket" --remote-expr "luaeval('require(\"notes\").open(require(\"notes.store\").absolute(_A))', '$quoted')" >/dev/null 2>&1
 }
+# The app's sidebar is put away while Notes sits beside another tab's pane,
+# where the note wants the room, and shown again in Notes' own tab; with the
+# notes_hide_sidebar setting off, it is shown everywhere.
+sidebar_shown() {
+  local show=$1
+  [ "$(tmux show -gqv @setting_notes_hide_sidebar)" = off ] && show=true
+  nvim --server "$notes_socket" --remote-expr "luaeval('require(\"notes\").show_sidebar(_A)', v:$show)" >/dev/null 2>&1
+}
 open_with() {
   local window=$1 want meta
   want=$(note_for "$window") || return 0
@@ -104,17 +112,42 @@ placeholder() {
 }
 
 # Back in the Notes tab it left, in the place of what stood in for it there,
-# or in a new Notes tab.
+# or in a new Notes tab. Alone in its tab already, it stays, unless told it
+# was left there (orphan, below).
 put_away() {
-  local pane=$1 window stand_in
-  [ "$(tmux list-panes -t "$pane" -F '#{?@sidebar,,x}' | grep -c x)" -gt 1 ] || return 1
+  local pane=$1 left=${2:-} window stand_in
+  [ -n "$left" ] || [ "$(tmux list-panes -t "$pane" -F '#{?@sidebar,,x}' | grep -c x)" -gt 1 ] || return 1
   stand_in=$(placeholder)
-  if [ -n "$stand_in" ]; then
-    tmux join-pane -d -s "$pane" -t "$stand_in" && tmux kill-pane -t "$stand_in"
+  if [ -n "$stand_in" ] && tmux join-pane -d -s "$pane" -t "$stand_in"; then
+    tmux kill-pane -t "$stand_in"
+  elif [ -n "$stand_in" ] && [ -z "$left" ]; then
+    # A join that fails (a stand-in too small to split) leaves Notes, and its
+    # sidebar, where they were; left alone, it takes a new tab instead.
     return 0
+  else
+    window=$(tmux break-pane -d -s "$pane" -P -F '#{window_id}') && own_tab "$window" || return 1
+    [ -n "$stand_in" ] && tmux kill-pane -t "$stand_in"
   fi
-  window=$(tmux break-pane -d -s "$pane" -P -F '#{window_id}') && own_tab "$window"
+  sidebar_shown true
+  return 0
 }
+
+# A pane closed (the pane-exited and after-kill-pane hooks): Notes left alone
+# in a tab that isn't its own, its work there gone, goes back to its own tab,
+# so it never holds a tab but Notes'. The tab, now only a sidebar, closes.
+# Only a tab M-e brought it beside (@notes_beside) counts: a Notes tab that
+# lost its marks to tmux-resurrect looks the same otherwise, and stays.
+if [ "${1:-}" = orphan ]; then
+  pane=$(notes_pane)
+  [ -n "$pane" ] || exit 0
+  window=$(tmux display -p -t "$pane" '#{window_id}')
+  [ "$(tmux show -wqv -t "$window" @notes)" = 1 ] && exit 0
+  [ "$(tmux show -wqv -t "$window" @notes_beside)" = 1 ] || exit 0
+  [ "$(tmux list-panes -t "$pane" -F '#{?@sidebar,,x}' | grep -c x)" -eq 1 ] || exit 0
+  remember "$window"
+  put_away "$pane" left
+  exit 0
+fi
 
 # A tab's note just chosen (note-pick.sh): shown, if Notes is beside it.
 if [ "${1:-}" = show ]; then
@@ -153,7 +186,10 @@ if [ "${1:-}" = side ]; then
   if [ -z "$existing" ]; then
     ask_note "$here_window" "$client"
     open_with "$here_window"
-    pane=$(tmux split-window -h -l 40% -t "$here" -c "$HOME" -P -F '#{pane_id}' "$notes_command") || exit 0
+    sidebar=on
+    [ "$(tmux show -gqv @setting_notes_hide_sidebar)" = off ] || sidebar=off
+    pane=$(tmux split-window -h -l 40% -t "$here" -c "$HOME" -e "NOTES_SIDEBAR=$sidebar" -P -F '#{pane_id}' "$notes_command") || exit 0
+    tmux set-option -w -t "$here_window" @notes_beside 1
     tmux set-option -p -t "$pane" @notes_pane 1
     exit 0
   fi
@@ -176,11 +212,21 @@ if [ "${1:-}" = side ]; then
     [ -n "$stand_in" ] && tmux set-option -p -t "$stand_in" @notes_placeholder 1 && own_tab "$old"
   fi
   ask_note "$here_window" "$client"
-  tmux join-pane -h -l 40% -s "$existing" -t "$here"
+  # A move that fails (a pane too narrow to split) leaves Notes where it was,
+  # its sidebar as it was, and takes back the stand-in just left for it.
+  if ! tmux join-pane -h -l 40% -s "$existing" -t "$here"; then
+    stand_in=$(placeholder)
+    [ -n "$stand_in" ] && [ "$(tmux display -p -t "$stand_in" '#{window_id}')" = "$old" ] && tmux kill-pane -t "$stand_in"
+    exit 0
+  fi
   # Brought into the Notes tab itself, it takes the stand-in's place there.
   stand_in=$(placeholder)
   if [ -n "$stand_in" ] && [ "$(tmux display -p -t "$stand_in" '#{window_id}')" = "$(tmux display -p -t "$here" '#{window_id}')" ]; then
     tmux kill-pane -t "$stand_in"
+    sidebar_shown true
+  else
+    tmux set-option -w -t "$here_window" @notes_beside 1
+    sidebar_shown false
   fi
   show_for "$here_window"
   exit 0

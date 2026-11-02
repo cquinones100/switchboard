@@ -169,6 +169,8 @@ end
 -- Shows a folder, a tag or a search: { folder = … } | { tag = … } | { query = … }.
 function M.show(view)
   M.state.folder, M.state.tag, M.state.query = view.folder, view.tag, view.query
+  -- Put away beside a tab (show_sidebar), it comes back to show what was asked for.
+  if not M.window() then require("notes").layout() end
   M.draw()
   local win = M.window()
   if win then

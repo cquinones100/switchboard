@@ -1341,7 +1341,7 @@ as you type would write over each other. It runs `tmux/notes-open.sh`, which
 `./setup.sh tmux` links, so the binding needs both that and `./setup.sh notes`. `M-e` puts the same
 Notes in a pane to the right of the one you are in, moving it from wherever it
 is, or starting it there; pressed again in that tab, or `M-w` on it, it goes back to a
-tab of its own. While it is beside a tab's pane, that tab says "✎ Notes here" in the
+tab of its own. Beside another tab's pane its sidebar is put away, so the note has the room (Ctrl-F still finds a note), and it comes back in Notes' own tab (Settings' "Hide the sidebar beside a tab", `notes_hide_sidebar`). When the tab's last pane of its own closes, Notes goes back to its own tab rather than stay there alone. While it is beside a tab's pane, that tab says "✎ Notes here" in the
 sidebar and on its mission control card. Its own Notes tab stays, in the sidebar's Other, showing which tab
 has Notes (Enter goes there, `M-e` brings it back), and Notes goes back into
 it when put away. Beside a tab, Notes shows that tab's own note: the one its Claude works

@@ -451,6 +451,19 @@ function M.focus_note()
   if M.note_win and vim.api.nvim_win_is_valid(M.note_win) then vim.api.nvim_set_current_win(M.note_win) end
 end
 
+-- The sidebar shown or put away: tmux/notes-open.sh puts it away while Notes
+-- sits beside another tab's pane (M-e), where the note wants the room, and
+-- shows it again in Notes' own tab. NOTES_SIDEBAR=off starts the app without it.
+function M.show_sidebar(show)
+  local win = sidebar.window()
+  if show then
+    if not win then M.layout() end
+  elseif win and #vim.api.nvim_tabpage_list_wins(0) > 1 then
+    vim.api.nvim_win_close(win, true)
+    M.focus_note()
+  end
+end
+
 function M.quit()
   M.save_all()
   vim.cmd("qa")
@@ -581,6 +594,7 @@ function M.start()
   end
   -- The note you had open last, or the newest.
   M.open(store.last() or notes[1].path)
+  if vim.env.NOTES_SIDEBAR == "off" then M.show_sidebar(false) end
   vim.api.nvim_create_autocmd("VimLeavePre", { callback = M.save_all })
   vim.api.nvim_create_autocmd("VimResized", { callback = M.fit_sidebar })
 end

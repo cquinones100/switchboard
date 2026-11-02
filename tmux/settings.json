@@ -157,6 +157,13 @@
     "default": true
   },
   {
+    "key": "notes_hide_sidebar",
+    "category": "Notes",
+    "label": "Hide the sidebar beside a tab",
+    "description": "When M-e brings Notes beside another tab's pane, put the notes app's sidebar away so the note has the room, and show it again in Notes' own tab",
+    "default": true
+  },
+  {
     "key": "ask_tab_note",
     "category": "Notes",
     "label": "Ask for a tab's note",

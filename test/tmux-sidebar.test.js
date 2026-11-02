@@ -943,6 +943,62 @@ test("M-e shows each tab its own note: the one its Claude works from, else the l
   assert.equal(opened(), "C.md", "the note its Claude works from comes first");
 });
 
+test("M-e puts the notes app's sidebar away beside another tab's pane and shows it again in Notes' own tab, unless Settings keeps it", async (t) => {
+  const script = path.join(__dirname, "../tmux/notes-open.sh");
+  // A headless Neovim on the socket stands in for the notes app, noting each time it is told to show or put away its sidebar.
+  const socket = path.join(tmp, "sidebar-notes.sock");
+  const app = require("node:child_process").spawn("nvim", ["--headless", "-u", "NONE", "--listen", socket, "--cmd", "lua vim.g.shown = {}; package.loaded.notes = { show_sidebar = function(s) vim.g.shown = vim.list_extend(vim.g.shown, { s }) end }"], { stdio: "ignore" });
+  t.after(() => app.kill());
+  assert.ok(await until(() => fs.existsSync(socket)), "the stand-in listens");
+  const shown = () => JSON.parse(execFileSync("nvim", ["--server", socket, "--remote-expr", "json_encode(g:shown)"], { encoding: "utf8" }).trim());
+  const env = { ...process.env, NOTES_OPEN_COMMAND: "cat", NOTES_DIR: tmp, NOTES_SOCKET: socket };
+  const here = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  const pane = tmux("display", "-p", "-t", here, "#{pane_id}");
+  const own = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}", "cat");
+  const notes = tmux("display", "-p", "-t", own, "#{pane_id}");
+  tmux("set", "-p", "-t", notes, "@notes_pane", "1");
+  tmux("set", "-w", "-t", own, "@notes", "1");
+  t.after(() => {
+    tmux("set", "-gu", "@setting_notes_hide_sidebar");
+    [here, own, tmux("display", "-p", "-t", notes, "#{window_id}")].forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} });
+  });
+
+  execFileSync("bash", [script, "side", "none", pane], { env });
+  assert.deepEqual(shown(), [false], "beside another tab's pane, the sidebar goes");
+  execFileSync("bash", [script, "away", "none", notes], { env });
+  assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), own, "back in its own tab");
+  assert.deepEqual(shown(), [false, true], "where it comes back");
+
+  tmux("set", "-g", "@setting_notes_hide_sidebar", "off");
+  execFileSync("bash", [script, "side", "none", pane], { env });
+  assert.deepEqual(shown(), [false, true, true], "with the setting off, it stays");
+});
+
+test("Notes left alone beside a tab whose last pane closed goes back to its own tab, and its own tab keeps it", (t) => {
+  const script = path.join(__dirname, "../tmux/notes-open.sh");
+  const env = { ...process.env, NOTES_OPEN_COMMAND: "cat", NOTES_SOCKET: path.join(tmp, "no-notes.sock") };
+  const here = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  const work = tmux("display", "-p", "-t", here, "#{pane_id}");
+  // The tab's sidebar, which the daemon closes the tab with once it is all that is left.
+  tmux("set", "-p", "-t", tmux("split-window", "-d", "-t", work, "-P", "-F", "#{pane_id}", "cat"), "@sidebar", "1");
+  execFileSync("bash", [script, "side", "none", work], { env });
+  const notes = tmux("list-panes", "-t", here, "-F", "#{pane_id} #{@notes_pane}").split("\n").find((l) => l.endsWith(" 1")).split(" ")[0];
+  t.after(() => [here, tmux("display", "-p", "-t", notes, "#{window_id}")].forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} }));
+
+  execFileSync("bash", [script, "orphan"], { env });
+  assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), here, "with its work there still open, it stays");
+  tmux("kill-pane", "-t", work);
+  execFileSync("bash", [script, "orphan"], { env });
+  const own = tmux("display", "-p", "-t", notes, "#{window_id}");
+  assert.notEqual(own, here, "its work gone, it leaves the tab");
+  assert.equal(tmux("display", "-p", "-t", own, "#{@notes}"), "1", "for a Notes tab of its own");
+  execFileSync("bash", [script, "orphan"], { env });
+  assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), own, "where it stays");
+  tmux("set", "-wu", "-t", own, "@notes");
+  execFileSync("bash", [script, "orphan"], { env });
+  assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), own, "even with its mark lost, as tmux-resurrect loses it");
+});
+
 test("asked for a tab's note, the notes about its ticket come first, then those titled like the tab, the last one shown there, and its repository's", (t) => {
   const notesDir = fs.mkdtempSync(path.join(tmp, "pick-notes-"));
   const repo = path.join(tmp, "widgets");

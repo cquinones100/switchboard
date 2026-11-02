@@ -597,6 +597,34 @@ test("the note window numbers its lines relative to the cursor, and the sidebar 
   assert.deepEqual(result.off, { number: false, relative: false });
 });
 
+test("the sidebar is put away and shown again on asking, and NOTES_SIDEBAR=off starts the app without it", () => {
+  const code = (start) => `
+    local s = require("notes.store")
+    local first = s.create("", "First")
+    local file = assert(io.open(first, "w"))
+    file:write("# First\\n#todo\\n")
+    file:close()
+    ${start}
+    vim.cmd("Notes")
+    local n = require("notes")
+    local sb = require("notes.sidebar")
+    local seen = { started = sb.window() ~= nil }
+    n.show_sidebar(false)
+    seen.hidden = sb.window() == nil
+    seen.in_note = vim.api.nvim_get_current_win() == n.note_win
+    n.show_sidebar(false)
+    seen.windows = #vim.api.nvim_tabpage_list_wins(0)
+    n.show_sidebar(true)
+    seen.back = sb.window() ~= nil
+    n.show_sidebar(false)
+    require("notes.links").follow(vim.api.nvim_win_get_buf(n.note_win), 2, 1)
+    seen.tag = sb.window() ~= nil and sb.state.tag == "todo"
+    io.write(vim.json.encode(seen))
+  `;
+  assert.deepEqual(lua(code("")).result, { started: true, hidden: true, in_note: true, windows: 1, back: true, tag: true }, "and a #tag followed brings it back with the tag's notes");
+  assert.equal(lua(code('vim.env.NOTES_SIDEBAR = "off"')).result.started, false, "started beside a tab, without it");
+});
+
 test("completion and Copilot are off in every note, opened at the start or from the sidebar, before its type is set", () => {
   const { result } = lua(`
     -- nvim-cmp isn't loaded in the notes app at all, so its Ctrl-P never
