@@ -10,9 +10,10 @@
 #                                      session starts (tmux.conf), so it asks
 #                                      whenever there is something new.
 #   repo-update.sh periodic           the same, at most every CHECK_EVERY
-#                                      seconds, and offering each new tip only
-#                                      once, so a "no" isn't asked again until
-#                                      more commits land. Started by health.sh.
+#                                      seconds, asking again about a tip until
+#                                      it is answered, so "Not now" isn't
+#                                      asked again until more commits land.
+#                                      Started by health.sh.
 #   repo-update.sh now <client>       M-p's "Update Switchboard": the same as
 #                                      check, whatever the update_check setting
 #                                      and however recently it looked; with
@@ -20,7 +21,7 @@
 #                                      says so on <client> and runs the guided
 #                                      setup all the same, for a clone pulled
 #                                      by hand
-#   repo-update.sh prompt             the popup itself.
+#   repo-update.sh prompt [<client>]  the popup itself, on <client>.
 #   repo-update.sh setup <client>     M-p's "Run Switchboard's setup": the guided
 #                                      ./setup.sh in a popup, whenever you like,
 #                                      to set up anything not in place yet or
@@ -98,37 +99,135 @@ case "${1:-}" in
     fi
     client="${2:-$(tmux list-clients -F '#{client_activity} #{client_name}' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)}"
     [ -n "$client" ] || exit 0
-    echo "$tip" > "$STATE/update-offered"
-    tmux display-popup -c "$client" -E -w 90 -h 85% -T ' Switchboard ' "$0 prompt"
-    # How updates also arrive, once (tip.sh).
-    [ -x ~/.config/tmux/tip.sh ] && ~/.config/tmux/tip.sh show updates "$client"
+    # A prompt still open from before (shown while you were away, say; its pid
+    # still running this script, not one reused since): left
+    # as it is when it offers this same tip on this client, else closed for
+    # this one, so coming back you see what is new now. Only an answer
+    # (update-offered, written by the prompt) keeps the hourly look from
+    # asking again about a tip.
+    if read -r open_pid open_tip open_client 2>/dev/null < "$STATE/update-prompt" && ps -o command= -p "$open_pid" 2>/dev/null | grep -q 'repo-update.sh prompt'; then
+      [ "$open_tip" = "$tip" ] && [ "$open_client" = "$client" ] && exit 0
+      tmux display-popup -C -c "$open_client" 2>/dev/null
+      for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$open_pid" 2>/dev/null || break; sleep 0.1; done
+    fi
+    # The look is done: its lock goes before the popup, which waits on you,
+    # so a look from another client meanwhile can replace it.
+    rmdir "$lock" 2>/dev/null
+    trap - EXIT
+    tmux display-popup -c "$client" -E -w 90 -h 85% -T ' Switchboard ' "$0 prompt $(printf %q "$client")"
+    # How updates also arrive, once (tip.sh), after a prompt answered: one
+    # closed for a newer prompt leaves the client to that one.
+    read -r answered_tip 2>/dev/null < "$STATE/update-offered"
+    [ "${answered_tip:-}" = "$tip" ] && [ -x ~/.config/tmux/tip.sh ] && ~/.config/tmux/tip.sh show updates "$client"
     ;;
 
   prompt)
+    # The new commits, newest first, each its subject wrapped to the popup
+    # with its hash and age under it, as many as fit the popup (eight at most;
+    # "See all" pages through every one), then a menu
+    # moved through with j and k (or the arrows) and taken with Enter, "Update
+    # now" first, so Enter alone still updates. Esc or q is "Not now"; a
+    # closed input answers nothing.
+    tip=$(git_ rev-parse origin/main)
+    mkdir -p "$STATE"
+    echo "$$ $tip ${2:-}" > "$STATE/update-prompt"
+    trap 'read -r pid _ < "$STATE/update-prompt" 2>/dev/null; [ "${pid:-}" = $$ ] && rm -f "$STATE/update-prompt"' EXIT
+    answered() { echo "$tip" > "$STATE/update-offered"; }
     behind=$(git_ rev-list --count main..origin/main)
     ahead=$(git_ rev-list --count origin/main..main)
-    printf '\n  %s new commit%s on GitHub:\n\n' "$behind" "$([ "$behind" = 1 ] || echo s)"
-    git_ log --format='  %s' main..origin/main | head -20
-    [ "$behind" -gt 20 ] && printf '  …and %s more\n' $((behind - 20))
-    printf '\n'
+    cols=$(stty size 2>/dev/null </dev/tty | cut -d' ' -f2)
+    [ "${cols:-0}" -gt 20 ] 2>/dev/null || cols=88
+    height=$(stty size 2>/dev/null </dev/tty | cut -d' ' -f1)
+    [ "${height:-0}" -gt 5 ] 2>/dev/null || height=24
+    # Room for the commits: the heading, the "more" line, the menu and its
+    # keys take eleven rows; each commit its wrapped subject and two more.
+    # A subject too long for the room alone is cut to it (CAP lines), the
+    # whole of it behind "See all".
+    room=$((height - 11)) SHOWN=0 used=0 CAP=$((height - 13)) cut_short=
+    [ $CAP -ge 1 ] || CAP=1
+    while IFS= read -r subject; do
+      need=$(($(printf '%s\n' "$subject" | fold -s -w $((cols - 8)) | wc -l) + 2))
+      [ $SHOWN -gt 0 ] && [ $((used + need)) -gt $room ] && break
+      [ $((need - 2)) -gt $CAP ] && cut_short=1 need=$((CAP + 2))
+      used=$((used + need)) SHOWN=$((SHOWN + 1))
+      [ $SHOWN -ge 8 ] && break
+    done < <(git_ log --format=%s main..origin/main)
+    # One commit: a dot, its subject wrapped, then its hash and age, dimmed.
+    commits() {
+      git_ log --format='%h%x09%cr%x09%s' "$@" main..origin/main | while IFS=$'\t' read -r hash age subject; do
+        printf '%s\n' "$subject" | fold -s -w $((cols - 8)) | head -n "${CAP:-1000000}" | sed '1s/^/  ● /; 2,$s/^/    /'
+        printf '    \033[38;5;244m%s · %s\033[0m\n\n' "$hash" "$age"
+      done
+    }
+    heading() { printf '\n  \033[1m%s new commit%s on GitHub\033[0m, newest first:\n\n' "$behind" "$([ "$behind" = 1 ] || echo s)"; }
     done_() {
       printf '\n  \033[38;5;244mPress any key to close.\033[0m'
       read -rsn 1
       exit "${1:-0}"
     }
-    if [ "$ahead" -gt 0 ]; then
-      printf '  You have %s commit%s of your own not on GitHub, so main can'\''t\n  simply move forward. Update it by hand.\n' "$ahead" "$([ "$ahead" = 1 ] || echo s)"
-      done_
-    fi
-    if [ "$(git_ branch --show-current)" != main ]; then
-      printf '  %s has %s checked out, not main. Update it by hand.\n' "$REPO" "$(git_ branch --show-current)"
-      done_
-    fi
-    # Enter is yes, as in every yes/no question here; a closed input is no.
-    read -rsn 1 -p "  Update now? [Y/n] " answer || exit 0
-    printf '\n\n'
-    [[ -z $answer || $answer == [yY] ]] || exit 0
-    printf '  \033[2mUpdating…\033[0m\n'
+    # A notice that it can't update here comes before every commit, whole, in
+    # less when there is a terminal; seen (less closed, or a key, not a closed
+    # input), it is an answer: asked again only when more commits land.
+    noticed() {
+      if [ -t 1 ]; then
+        { printf '\n  %s\n' "$1"; heading; CAP= commits; } | less -R
+        answered
+      else
+        printf '\n  %s\n' "$1"
+        heading
+        CAP= commits
+        printf '\n  \033[38;5;244mPress any key to close.\033[0m'
+        read -rsn 1 && answered
+      fi
+      exit 0
+    }
+    [ "$ahead" -gt 0 ] && noticed "You have $ahead commit$([ "$ahead" = 1 ] || echo s) of your own not on GitHub, so main can't simply move forward. Update it by hand."
+    [ "$(git_ branch --show-current)" = main ] || noticed "$REPO has $(git_ branch --show-current) checked out, not main. Update it by hand."
+    options=("Update now" "Not now")
+    { [ "$behind" -gt "$SHOWN" ] || [ -n "$cut_short" ]; } && options+=("See all $behind commit$([ "$behind" = 1 ] || echo s)")
+    cursor=0
+    while :; do
+      printf '\033[H\033[2J'
+      heading
+      commits -n "$SHOWN"
+      [ "$behind" -gt "$SHOWN" ] && printf '  \033[38;5;244m…and %s more\033[0m\n\n' $((behind - SHOWN))
+      for i in "${!options[@]}"; do
+        if [ "$i" = "$cursor" ]; then
+          printf '  \033[38;5;220;1m› %s\033[0m\n' "${options[$i]}"
+        else
+          printf '    %s\n' "${options[$i]}"
+        fi
+      done
+      printf '\n  \033[38;5;244mj/k move  ↵ choose  esc not now\033[0m'
+      # A closed input answers nothing: the prompt goes, and asks again later.
+      IFS= read -rsn 1 key || exit 0
+      if [ "$key" = $'\x1b' ]; then
+        # An arrow sends ESC [ A or B; Esc alone sends nothing after it.
+        IFS= read -rsn 2 -t 1 rest || rest=
+        case $rest in
+          '[A') key=k ;;
+          '[B') key=j ;;
+          *) answered; exit 0 ;;
+        esac
+      fi
+      case $key in
+        j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
+        k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
+        q) answered; exit 0 ;;
+        '')
+          case ${options[$cursor]} in
+            "Update now") break ;;
+            "Not now") answered; exit 0 ;;
+            *) { heading; CAP= commits; } | less -R ;;
+          esac
+          ;;
+      esac
+    done
+    answered
+    # Answered, it is no longer a prompt a newer look may close: the update
+    # and its setup run on undisturbed.
+    rm -f "$STATE/update-prompt"
+    printf '\033[H\033[2J\n  \033[2mUpdating…\033[0m\n'
     old=$(git_ rev-parse HEAD)
     if ! out=$(git_ merge --ff-only --quiet origin/main 2>&1); then
       printf '  It could not update:\n\n%s\n' "$(sed 's/^/  /' <<<"$out")"

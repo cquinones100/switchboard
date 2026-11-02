@@ -61,9 +61,14 @@ the tips again" in `M-p` brings them back.
 
 Once set up, tmux keeps the clone up to date: each time it opens, and once an
 hour after that, `tmux/repo-update.sh` checks GitHub, and when `main` there
-has new commits it lists them in a popup and asks whether to update. Yes
-moves `main` forward, runs `./setup.sh` and reloads tmux; a clone with
-commits of its own is left for you to update by hand.
+has new commits it lists them in a popup, newest first, each with its hash
+and age (eight at most, "See all" showing the rest), over a menu moved
+through with `j`/`k` and taken with Enter: "Update now" moves `main`
+forward, runs `./setup.sh` and reloads tmux; "Not now" (or Esc) waits for
+more commits before asking again. One you leave unanswered is asked about
+again the next hour, and a newer one takes its place, so you come back to
+what is new now. A clone with commits of its own is left for you to update
+by hand.
 
 ## worktree-from-ticket
 
