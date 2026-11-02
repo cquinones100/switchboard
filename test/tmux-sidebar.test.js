@@ -662,6 +662,29 @@ test("a tab whose turn ended with background tasks still running reads as workin
   ], "not one that needs you");
 });
 
+test("what changed on today's calendar since it was last seen: added, moved, renamed and gone, by Google ID when there is one", () => {
+  const at = (h) => `2026-11-02T${String(h).padStart(2, "0")}:00:00.000Z`;
+  const seen = { date: "2026-11-02", events: {
+    a1: { title: "Standup", start: at(14), end: at(15), allDay: false },
+    b2: { title: "Planning", start: at(16), end: at(17), allDay: false },
+    c3: { title: "Retro", start: at(18), end: at(19), allDay: false },
+    "Lunch@2026-11-02T12:00:00.000Z": { title: "Lunch", start: at(12), end: at(13), allDay: false },
+  } };
+  const day = { date: "2026-11-02", events: [
+    { id: "a1", title: "Standup", start: at(15), end: at(16) },
+    { id: "b2", title: "Sprint planning", start: at(16), end: at(17) },
+    { id: "d4", title: "1:1", start: at(20), end: at(21) },
+    { title: "Lunch", start: at(12), end: at(13) },
+  ] };
+  const said = sidebar.changesFrom(seen, day).map((c) => c.text.replace(/, .*| to .*/, ""));
+  assert.deepEqual(said, ["Standup moved", "Planning renamed Sprint planning", "1:1 added", "Retro gone from the calendar"]);
+  const series = { date: "2026-11-02", events: { "rec_20261102T140000Z": { title: "Sync", start: at(14), end: at(15), allDay: false } } };
+  assert.deepEqual(sidebar.changesFrom(series, { date: "2026-11-02", events: [{ id: "rec_20261102T150000Z", title: "Sync", start: at(15), end: at(16) }] }).map((c) => c.text.replace(/ to .*/, "")), ["Sync moved"], "a repeating event moved to another time, as one");
+  const oneOffs = { date: "2026-11-02", events: { "event_123@example.com": { title: "A", start: at(9), end: at(10), allDay: false } } };
+  assert.deepEqual(sidebar.changesFrom(oneOffs, { date: "2026-11-02", events: [{ key: "event_456@example.com", title: "B", start: at(15), end: at(16) }] }).map((c) => c.text.replace(/, .*/, "")), ["B added", "A gone from the calendar"], "two one-off events stay two");
+  assert.deepEqual(sidebar.changesFrom(seen, { date: day.date, events: Object.entries(seen.events).map(([key, e]) => ({ ...(key.includes("@") ? {} : { id: key }), ...e })) }), [], "the same day, nothing");
+});
+
 test("a turn an API error cut short is found in the transcript until the conversation goes on", () => {
   const file = path.join(home, ".claude/projects/-work/api-error.jsonl");
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1841,7 +1864,7 @@ test("mission control's Settings view lists the options by category, / narrows t
     // / then "notif": the Notifications header and its two options, and no other category.
     for (const key of ["/", "n", "o", "t", "i", "f", "Enter"]) await sidebar.missionKey(client, { key });
     const items = sidebar.viewsFor(client)[client.view.view - 1].items;
-    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "Notifications view", "New notes", "Next meeting"], "the Notifications category, and the Sidebar's options that mention notifications");
+    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes"], "the Notifications category, and the Sidebar's options that mention notifications");
     assert.doesNotMatch(plain(sent.at(-1)), /Theme/);
 
     // Enter on an on/off option turns it off, and only what differs from the default is written.

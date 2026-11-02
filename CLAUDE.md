@@ -269,6 +269,8 @@ Mission control's Calendar view (`lib/sidebar/calendar.js`) reads your Google Ca
 
 A view that is on is always in mission control: before its integration is set up it says what is missing and how to set it up, in words from `lib/sidebar/setup-help.js` (the Calendar, Linear, GitHub) or `lib/connector.js` (a connector), drawn whole rather than cut to a line; a new view that reads from something needing setup does the same.
 
+What changed on today's calendar since you last looked (an event added, moved, renamed or gone) goes in the sidebar's notifications (`lib/sidebar/calendar-changes.js`, `notice:calendar`, `calendar_changes` setting): today as last seen is kept in `calendar-seen.json` in the state directory, taken again when you press a key with the Calendar view in front and whole (Esc to close it included), since a terminal can sit behind another app while it draws, or dismiss one, and an event is known by its Google ID from the feed, else its title and start.
+
 ## The standup note
 
 `lib/sidebar/standup.js` writes `Standups/Standup <date>.md` into the notes directory each weekday morning, from the daemon (`standup`, checked every minute, `standup_note` setting): the last working day's PRs and reviews (one `gh api graphql` search), Linear tickets assigned to or made by you that changed state (a ticket closed by a merge often has no assignee), and your commits in the tabs' repositories, then today's work. It writes a new file only (`wx`), never one that is there, since the note is yours to edit once written; it and the meeting notes are the only things outside the notes app that create a note, and the app's directory watch takes them in. `standupFrom` builds the Markdown from the fetched data alone, so its test needs no network.

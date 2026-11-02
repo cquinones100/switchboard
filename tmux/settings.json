@@ -171,6 +171,13 @@
     "default": true
   },
   {
+    "key": "calendar_changes",
+    "category": "Sidebar",
+    "label": "Calendar changes",
+    "description": "In the sidebar's notifications, what changed on today's calendar since you last looked at it: an event added, moved, renamed or gone; looking at the Calendar view clears them",
+    "default": true
+  },
+  {
     "key": "notes_hide_sidebar",
     "category": "Notes",
     "label": "Hide the sidebar beside a tab",
