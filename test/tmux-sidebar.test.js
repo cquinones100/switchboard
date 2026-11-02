@@ -999,6 +999,25 @@ test("Notes left alone beside a tab whose last pane closed goes back to its own 
   assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), own, "even with its mark lost, as tmux-resurrect loses it");
 });
 
+test("an option taken from a menu shows a box with a spinner until it is done, then what it said", async () => {
+  const sent = [];
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 100, rows: 30, tmuxClient: "none" };
+  let finish;
+  client.choose = { title: "A message", choices: [{ key: "o", label: "Open it in Slack", act: () => new Promise((resolve) => { finish = resolve; }) }], cursor: 0 };
+  const taken = sidebar.missionKey(client, { key: "Enter" });
+  assert.deepEqual(client.busy, { text: "Open it in Slack…" });
+  assert.match(plain(sent.at(-1)), /╭─ One moment .*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Open it in Slack….*it closes itself when done/s);
+  client.view.view = 0;
+  await sidebar.missionKey(client, { key: "]" });
+  await sidebar.missionKey(client, { mouse: { button: 0, x: 1, y: 1, press: true } });
+  assert.equal(client.view.view, 0, "keys and clicks wait while it works");
+  finish("Opened.");
+  await taken;
+  assert.equal(client.busy, undefined, "gone once done");
+  assert.equal(client.note, "Opened.");
+  assert.doesNotMatch(plain(sent.at(-1)), /One moment/);
+});
+
 test("asked for a tab's note, the notes about its ticket come first, then those titled like the tab, the last one shown there, and its repository's", (t) => {
   const notesDir = fs.mkdtempSync(path.join(tmp, "pick-notes-"));
   const repo = path.join(tmp, "widgets");
