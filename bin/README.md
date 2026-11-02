@@ -320,7 +320,7 @@ update-main <dir>    the repository <dir> is in
 ```
 
 The M-p palette's "Update local main to origin's" (`tmux/update-main.sh`) runs
-it in a popup for the pane's repository.
+it in a popup for the pane's repository, a spinner showing until it answers.
 
 ## worktree-from-pr
 
