@@ -2,7 +2,8 @@
 -- become one, merged by a headless Claude, after you say yes, since it sends
 -- their text to Claude. Sonnet merges: careful enough not to drop an item,
 -- which Haiku would risk, at a fraction of Opus's cost (the squash_model
--- option). The new note goes in the first one's folder, the originals go to
+-- option). Where two notes clash and nothing says which is right, the one
+-- changed last wins. The new note goes in the first one's folder, the originals go to
 -- Recently Deleted, so nothing is lost, and every tmux tab linked to one of
 -- them (tmux/notes-open.sh's @tab_note and @tab_note_last) links to the new
 -- one.
@@ -18,6 +19,7 @@ local PROMPT = table.concat({
   "Its first line is '# ' and a title that covers them all.",
   "Keep every item, every checklist box as it is ([ ] or [x]), every link and every detail, and group what belongs together under headings;",
   "drop only what is said twice, keeping the fuller one. Leave the ticked items of a checklist under its unticked ones, a blank line between.",
+  "Each note says when it was last changed. Where two of them disagree (an item ticked in one and not the other, a different date, number or decision) and nothing in them says which is right, keep the version from the note changed most recently.",
   "Write nothing but the note: no preamble, no code fence around it.",
 }, " ")
 
@@ -42,7 +44,11 @@ function M.run(paths, done)
   for i, path in ipairs(paths) do
     local f = io.open(path, "r")
     if not f then return done(nil, "couldn't read " .. store.relative(path)) end
-    table.insert(parts, ("<note %d>\n%s\n</note %d>"):format(i, f:read("*a"), i))
+    -- When it was last changed, for the prompt's rule on clashes, in UTC so
+    -- no clock change puts two out of order.
+    local stat = vim.uv.fs_stat(path)
+    local changed = stat and os.date("!%Y-%m-%dT%H:%M:%SZ", stat.mtime.sec) or "unknown"
+    table.insert(parts, ("<note %d changed=\"%s\">\n%s\n</note %d>"):format(i, changed, f:read("*a"), i))
     f:close()
   end
   local ok, job = pcall(vim.system, { "claude", "-p", "--model", M.options.model, "--tools", "", "--no-session-persistence", PROMPT }, { text = true, stdin = table.concat(parts, "\n\n") }, function(out)

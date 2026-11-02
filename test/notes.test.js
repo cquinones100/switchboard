@@ -830,6 +830,22 @@ test("picking a style from the Format menu goes on to the note's own a, to type 
   assert.deepEqual(result.ticked.fed, [], "ticking a box is done, not written in");
 });
 
+test("an open note moved to another folder keeps its time, which says when its text last changed", () => {
+  const { result } = lua(`
+    local s = require("notes.store")
+    s.create_folder("Work")
+    local plan = s.create("", "Plan")
+    vim.uv.fs_utime(plan, 1767225600, 1767225600)
+    vim.cmd("Notes")
+    local n = require("notes")
+    n.open(plan, { stay = true })
+    local to = s.move(plan, "Work")
+    n.moved(plan, to)
+    io.write(vim.json.encode({ at = vim.uv.fs_stat(to).mtime.sec, open = vim.fs.normalize(n.current_path()) == vim.fs.normalize(to) }))
+  `);
+  assert.deepEqual(result, { at: 1767225600, open: true });
+});
+
 test("squashing notes merges them with Claude into a new note, in the first one's folder, the originals to Recently Deleted", (t) => {
   const bin = fs.mkdtempSync(path.join(tmp, "claude-bin-"));
   const asked = path.join(bin, "asked");
@@ -845,6 +861,7 @@ test("squashing notes merges them with Claude into a new note, in the first one'
     local f = io.open(a, "w"); f:write("# Groceries\\n\\n- [ ] milk\\n"); f:close()
     local b = s.create("", "Errands")
     local g = io.open(b, "w"); g:write("# Errands\\n\\n- [ ] post office\\n"); g:close()
+    vim.uv.fs_utime(a, 1767225600, 1767225600)
     local made
     require("notes.squash").run({ a, b }, function(path, why) made = { path = path and s.relative(path), why = why } end)
     vim.wait(5000, function() return made ~= nil end, 20)
@@ -858,7 +875,8 @@ test("squashing notes merges them with Claude into a new note, in the first one'
   assert.ok(fs.existsSync(path.join(dir, ".trash", "Groceries.md")) && fs.existsSync(path.join(dir, ".trash", "Errands.md")), "to Recently Deleted");
   const given = fs.readFileSync(asked, "utf8");
   assert.match(given, /^-p\n--model\nsonnet\n--tools\n\n--no-session-persistence\n/);
-  assert.match(given, /<note 1>\n# Groceries[\s\S]*<note 2>\n# Errands/);
+  assert.match(given, /<note 1 changed="2026-01-01T00:00:00Z">\n# Groceries[\s\S]*<note 2 changed="\d{4}-[^"]+">\n# Errands/, "each note with when it was last changed");
+  assert.match(given, /keep the version from the note changed most recently/);
 });
 
 test("tabs linked to squashed notes link to the new note", (t) => {

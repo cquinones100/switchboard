@@ -85,8 +85,12 @@ end
 -- under the old name.
 local function rename_buffer(buf, to)
   local from = vim.api.nvim_buf_get_name(buf)
+  -- A note moved with nothing changed in it keeps its time, which says when
+  -- its text last changed (the squash goes by it).
+  local unchanged = not vim.bo[buf].modified and vim.uv.fs_stat(to)
   vim.api.nvim_buf_set_name(buf, to)
   vim.api.nvim_buf_call(buf, function() vim.cmd("silent! keepalt write!") end)
+  if unchanged then vim.uv.fs_utime(to, unchanged.atime.sec, unchanged.mtime.sec) end
   sync.written(buf)
   for _, other in ipairs(vim.api.nvim_list_bufs()) do
     if other ~= buf and vim.api.nvim_buf_get_name(other) == from and not vim.api.nvim_buf_is_loaded(other) then

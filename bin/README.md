@@ -1391,7 +1391,7 @@ again any time, and the `ask_tab_note` setting turns the question off.
 | `r` | restore, in Recently Deleted |
 | `p` | pin or unpin |
 | `t` | the note's tab: the one linked to it (`M-e`, `/note-watch`), or, with none, a question: one of the open tabs, linked to the note then, or a new one through `M-t`'s popup, so you pick its directory, linked to the note and named after it; `M-p`'s "Open the tab for the note in Notes" does the same for the note Notes shows (`tmux/note-tab.sh`) |
-| `s` `S` | mark notes (a ✓), then squash the marked ones into one: after you say yes, a headless Claude (Sonnet, the `squash_model` option) merges them, keeping every item, box and link, a box over the notes showing it at work with the seconds so far (Esc in it cancels, leaving the notes as they were); the new note goes in the first one's folder, the originals to Recently Deleted, and every tab linked to one of them (`M-e`) links to the new one |
+| `s` `S` | mark notes (a ✓), then squash the marked ones into one: after you say yes, a headless Claude (Sonnet, the `squash_model` option) merges them, keeping every item, box and link, the note changed last winning where two disagree and nothing says which is right, a box over the notes showing it at work with the seconds so far (Esc in it cancels, leaving the notes as they were); the new note goes in the first one's folder, the originals to Recently Deleted, and every tab linked to one of them (`M-e`) links to the new one |
 | `m` | move to a folder |
 | `R` | rename a folder |
 | `/` | search every note, by every word you type |
