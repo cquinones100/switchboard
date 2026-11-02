@@ -242,7 +242,7 @@ const pullRequest = () => {
 
 // "owner/repo" for a GitHub URL in any of the forms git and gh print, or null.
 const githubSlug = (url) => {
-  const match = url && url.match(/github\.com(?::\d+)?[:/]([^/]+\/[^/\s]+?)(?:\.git)?(?:\/|$)/i);
+  const match = url && url.match(/(?:^|[@/])(?:ssh\.)?github\.com(?::\d+)?[:/]([^/]+\/[^/\s]+?)(?:\.git)?(?:\/|$)/i);
   return match ? match[1].toLowerCase() : null;
 };
 

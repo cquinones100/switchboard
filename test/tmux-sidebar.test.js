@@ -560,6 +560,8 @@ test("a repository is found from its origin in every form git takes, SSH over po
     "ssh://git@ssh.github.com:443/acme/widgets.git": "acme/widgets",
     "git@github.com:1234/widgets.git": "1234/widgets",
     "git@gitlab.com:acme/widgets.git": null,
+    // A gist (a CLAUDE.md kept in one) is no repository GitHub's API knows.
+    "https://gist.github.com/acme/0123abcd.git": null,
   };
   Object.entries(remotes).forEach(([url, want], i) => {
     const repo = path.join(tmp, `origin-form-${i}`);

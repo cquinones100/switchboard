@@ -135,7 +135,7 @@ const remoteRepo = (root) => {
     if (!remote) return undefined;
     // As configured, before any insteadOf rewrite: the name it stands for.
     const url = gitOutput(["config", "--get", `remote.${remote}.url`], { cwd: root, stdio: ["ignore", "pipe", "ignore"] });
-    const m = url.match(/github\.com(?::\d+)?[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+    const m = url.match(/(?:^|[@/])(?:ssh\.)?github\.com(?::\d+)?[:/]([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
     return m ? `${m[1]}/${m[2]}` : undefined;
   } catch {
     return undefined;
@@ -233,7 +233,7 @@ const forkRemote = (pr, base, root) => {
   const repo = `${owner}/${pr.headRepository.name}`;
   const urlOf = (remote) => gitOutput(["config", "--get", `remote.${remote}.url`], { cwd: root });
   const remotes = gitOutput(["remote"], { cwd: root }).split("\n").filter(Boolean);
-  const existing = remotes.find((remote) => urlOf(remote).match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/)?.[1].toLowerCase() === repo.toLowerCase());
+  const existing = remotes.find((remote) => urlOf(remote).match(/(?:^|[@/])(?:ssh\.)?github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/)?.[1].toLowerCase() === repo.toLowerCase());
   if (existing) return existing;
   const name = remotes.includes(owner) ? `${owner}-${pr.headRepository.name}` : owner;
   const url = /^(git@|ssh:)/.test(urlOf(base)) ? `git@github.com:${repo}.git` : `https://github.com/${repo}.git`;
