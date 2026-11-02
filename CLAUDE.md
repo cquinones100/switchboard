@@ -352,7 +352,7 @@ A skill whose scripts need npm packages keeps them in its own `scripts/package.j
 typing, scoped to open tabs or to the worktrees no tab has open. The second
 comes from `bin/wt-revive --json`, which the sidebar daemon runs in the
 background (`refreshRevived` in `lib/sidebar/views.js`), so a change to the
-rows it prints belongs there too. Enter on one reopens it with `claude-here`,
+rows it prints belongs there too. Enter on one reopens it with `claude-here` (`bin/claude-here`, `test/claude-here.test.js`),
 the same handoff `wtr` makes, so a change to how `claude-here` resumes a
 directory reaches both. Neither `wt-revive` nor `wt-jump` has a picker of its
 own any more: `wt-revive` prints the rows, and `wt-jump` takes a ticket, PR or

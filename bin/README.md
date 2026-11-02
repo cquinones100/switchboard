@@ -460,6 +460,26 @@ dashes, so `feature/login` lands in `feature-login` rather than nesting.
 - A branch checked out in your main clone stops the run, as with `wtpr`.
 - `wtr <branch>` resumes it later, matching the branch name exactly.
 
+## claude-here
+
+Resumes the Claude Code session of the worktree you are in (the git
+repository's top level, or the current directory outside one), from its own
+recorded directory, so one started in a subfolder resumes there. With one
+session it resumes at once; with several it lists them, newest first, each
+with how long ago it was active and the last thing you typed, to pick with
+`j`/`k` or the arrows and Enter (Esc cancels), or by number when its input
+is a pipe. A worktree nested under the repository
+(`.claude/worktrees/<name>`) keeps its sessions to itself.
+
+```
+claude-here            # resume, or pick one
+claude-here --print    # list them: id, last active, transcript
+```
+
+Anything else is passed to `claude`. `wtr`, `wt-revive` and mission
+control's "open a tab there" all reopen a worktree through it, and
+`./setup.sh bin` links it with the other scripts.
+
 ## worktree-resume
 
 The way back in. Takes the same ticket, PR or branch the other three take, finds the

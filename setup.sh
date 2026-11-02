@@ -1295,6 +1295,13 @@ if command -v ffmpeg >/dev/null; then
 else
   optional "ffmpeg, for /deploy-test's videos: brew install ffmpeg"
 fi
+if [[ $OS == macos ]]; then
+  if [[ -d "/Applications/Google Chrome.app" || -d "$HOME/Applications/Google Chrome.app" ]]; then
+    ok "Google Chrome (/deploy-test's recordings, and browser.json's profiles)"
+  else
+    optional "Google Chrome, for /deploy-test's recordings and the Chrome profiles in ~/.config/switchboard/browser.json: brew install --cask google-chrome"
+  fi
+fi
 if in_zsh 'command -v codex' >/dev/null; then
   ok "Codex (/review-loop's reviewer)"
 else

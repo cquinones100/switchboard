@@ -1,0 +1,400 @@
+#!/usr/bin/env node
+
+// Resumes a Claude Code session from the current git worktree (or current
+// directory when not in a git repo). With one matching session it resumes
+// immediately; with several it shows a picker — each session identified by
+// last activity and the last user message. On a TTY the picker is navigated
+// with arrows or j/k and Enter selects (Esc/q cancels); with piped stdin it
+// falls back to a numbered prompt (Enter = most recent).
+//
+// Usage: claude-here [--print] [extra args passed through to claude]
+//   --print  print all matching sessions instead of resuming
+
+const fs = require("node:fs");
+const fsp = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
+const readline = require("node:readline");
+const { spawnSync, spawn } = require("node:child_process");
+// Cut by the columns a terminal draws, wide characters as two, as the
+// sidebar does.
+const { cut } = require(path.join(__dirname, "../lib/sidebar/text"));
+
+const SESSION_FILE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/;
+
+// Status goes to stderr so --print output stays pipeable on stdout.
+// A path is printed with its control characters shown as ?, since a folder's
+// name may hold a terminal escape.
+const printable = (text) => String(text).replace(/[\x00-\x1f\x7f-\x9f]/g, "?");
+const status = (message) => console.error(message);
+
+const resolveTargetDir = () => {
+  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  // Only git's newline taken off: a folder's name may end in a space.
+  return git.status === 0 ? git.stdout.replace(/\r?\n$/, "") : process.cwd();
+};
+
+// Project dir names encode the session cwd with every non-alphanumeric
+// character replaced by "-", so the mapping is lossy: "-foo" matches both
+// "/foo" and ".foo". Candidates are narrowed by prefix and confirmed
+// against the cwd recorded inside each session file.
+const encodePrefix = (dir) => dir.replace(/[^a-zA-Z0-9]/g, "-");
+
+// A transcript that can't be read (permissions, a link to nothing, a
+// folder by that name) reads as having nothing, so it is left out rather
+// than stopping the search.
+const readSessionCwd = async (filePath) => {
+  const stream = fs.createReadStream(filePath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line.includes('"cwd":')) continue;
+      try {
+        const cwd = JSON.parse(line).cwd;
+        if (typeof cwd === "string" && cwd) return cwd;
+      } catch {
+        // skip unparseable lines
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+// The last user-authored text in a session — usually the best reminder of
+// where it left off. Skips meta entries, tool results, and the synthetic
+// <command-*>/<system-reminder> messages Claude Code records.
+const readLastUserMessage = async (filePath) => {
+  const stream = fs.createReadStream(filePath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let lastMessage = null;
+  try {
+    for await (const line of lines) {
+      if (!line.includes('"user"')) continue;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (entry.type !== "user" || entry.isMeta) continue;
+      const content = entry.message?.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+            ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(" ")
+            : "";
+      // Terminal escapes and other control characters a pasted prompt may
+      // hold are dropped, so the picker draws text, never commands.
+      const cleaned = text
+        .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.)/g, "")
+        .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (cleaned && !cleaned.startsWith("<") && !cleaned.startsWith("[Request interrupted")) {
+        lastMessage = cleaned;
+      }
+    }
+    return lastMessage;
+  } catch {
+    // Read as far as it could be: what was found, or nothing.
+    return lastMessage;
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+};
+
+const formatRelativeTime = (mtimeMs, nowMs) => {
+  const minutes = Math.floor((nowMs - mtimeMs) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 2) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return new Date(mtimeMs).toLocaleDateString();
+};
+
+// Only the sessions that ran here: one moved into a worktree after it started
+// in the main checkout stays under the main checkout's, which isn't read,
+// since that would mean reading every worktree's transcripts.
+const findSessions = async (targetDir, projectsDir) => {
+  const encodedPrefix = encodePrefix(targetDir);
+  // The worktrees nested under it (the main checkout's .claude/worktrees) are
+  // separate checkouts with sessions of their own, left unread.
+  const encodedNested = encodePrefix(path.join(targetDir, ".claude", "worktrees"));
+  const projectDirs = (await fsp.readdir(projectsDir).catch(() => []))
+    .filter((name) => name === encodedPrefix || name.startsWith(`${encodedPrefix}-`))
+    .filter((name) => name !== encodedNested && !name.startsWith(`${encodedNested}-`))
+    .map((name) => path.join(projectsDir, name));
+
+  const sessions = (
+    await Promise.all(
+      projectDirs.map(async (dir) => {
+        const files = await fsp.readdir(dir).catch(() => []);
+        return Promise.all(
+          files
+            .filter((file) => SESSION_FILE.test(file))
+            .map(async (file) => {
+              const filePath = path.join(dir, file);
+              const stat = await fsp.stat(filePath).catch(() => null);
+              return stat?.isFile() ? { id: file.replace(/\.jsonl$/, ""), filePath, mtimeMs: stat.mtimeMs } : null;
+            })
+        );
+      })
+    )
+  )
+    .flat()
+    .filter(Boolean)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  status(
+    `found ${sessions.length} session file${sessions.length === 1 ? "" : "s"} across ` +
+      `${projectDirs.length} candidate project director${projectDirs.length === 1 ? "y" : "ies"}`
+  );
+
+  if (sessions.length === 0) return [];
+
+  // Worktrees nested under the target (the main checkout's .claude/worktrees)
+  // are separate checkouts with their own sessions — don't match them here.
+  const nestedWorktrees = path.join(targetDir, ".claude", "worktrees") + path.sep;
+  status("verifying session working directories");
+  const cwds = await Promise.all(sessions.map((session) => readSessionCwd(session.filePath)));
+  return sessions
+    .map((session, i) => ({ ...session, cwd: cwds[i] }))
+    .filter(({ cwd }) => {
+      if (!cwd || cwd.startsWith(nestedWorktrees)) return false;
+      if (cwd !== targetDir && !cwd.startsWith(`${targetDir}${path.sep}`)) return false;
+      // One whose folder is gone, or can no longer be read, can't be resumed
+      // there, so isn't offered.
+      try {
+        fs.accessSync(cwd, fs.constants.R_OK | fs.constants.X_OK);
+        return fs.statSync(cwd).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+};
+
+const buildSessionLines = async (sessions) => {
+  const nowMs = Date.now();
+  const messages = await Promise.all(
+    sessions.map((session) => readLastUserMessage(session.filePath))
+  );
+  const timeWidth = Math.max(
+    ...sessions.map((session) => formatRelativeTime(session.mtimeMs, nowMs).length)
+  );
+  return sessions.map((session, i) => {
+    const time = formatRelativeTime(session.mtimeMs, nowMs).padEnd(timeWidth);
+    // By character, so a cut never splits an emoji or other wide one.
+    const message = [...(messages[i] ?? "(no user messages)")].slice(0, 80).join("");
+    return `${time}   ${message}`;
+  });
+};
+
+// Raw-mode picker drawn on stderr. Lines are truncated to the terminal width
+// so each entry stays on one row, and only as many as fit the terminal's
+// height are drawn, scrolling with the selection: the redraw moves the cursor
+// up by line count, which breaks if a line wraps or scrolls off the top. A
+// resize lays it out again for the new size, from a cleared screen, since
+// the terminal may have rewrapped what was drawn.
+const chooseSessionInteractive = (sessions, lines) => {
+  const out = process.stderr;
+  let rows;
+  let shown;
+  let hintRow;
+  const layout = () => {
+    const columns = out.columns ?? 80;
+    // The "❯ " before each takes two columns, and one is kept spare.
+    rows = lines.map((line) => cut(line, Math.max(columns - 3, 1)));
+    // The rows, the hint and the line the cursor ends on must fit; in a
+    // terminal too short for the hint, it goes.
+    const height = out.rows ?? 24;
+    const withHint = height >= 3;
+    shown = Math.max(1, Math.min(rows.length, height - (withHint ? 2 : 1)));
+    // Cut to the width too, since a hint that wraps throws the redraw off a row.
+    const hint = `↑/↓ or j/k to move, Enter to select, Esc to cancel${shown < rows.length ? ` (${rows.length} sessions)` : ""}`;
+    hintRow = withHint ? cut(hint, Math.max(columns - 1, 1)) : null;
+  };
+  layout();
+  let selected = 0;
+  let top = 0;
+
+  const render = () => {
+    // Kept so the selection is in view and no row past the last is asked
+    // for, which a terminal grown taller would otherwise leave.
+    top = Math.max(0, Math.min(Math.max(top, selected - shown + 1), selected, rows.length - shown));
+    rows.slice(top, top + shown).forEach((row, j) => {
+      const i = top + j;
+      const line = i === selected ? `\x1b[36m❯ \x1b[1m${row}\x1b[0m` : `  ${row}`;
+      out.write(`\x1b[2K${line}\n`);
+    });
+    if (hintRow) out.write(`\x1b[2K\x1b[2m${hintRow}\x1b[0m\n`);
+  };
+
+  readline.emitKeypressEvents(process.stdin);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  out.write("\x1b[?25l");
+  // The cursor and the terminal's mode come back however the picker ends: an
+  // error, or a signal, which ends Node without its exit event.
+  const restore = () => {
+    out.write("\x1b[?25h");
+    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  };
+  process.once("exit", restore);
+  // Only while the picker is up: Claude, once started, gets the signals.
+  const signals = [["SIGINT", 130], ["SIGTERM", 143], ["SIGHUP", 129]].map(([signal, code]) => {
+    const onSignal = () => {
+      restore();
+      process.exit(code);
+    };
+    process.once(signal, onSignal);
+    return [signal, onSignal];
+  });
+  render();
+
+  return new Promise((resolve) => {
+    const onResize = () => {
+      layout();
+      out.write("\x1b[2J\x1b[H");
+      render();
+    };
+    out.on("resize", onResize);
+    const finish = (session) => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stdin.removeListener("keypress", onKeypress);
+      out.removeListener("resize", onResize);
+      process.removeListener("exit", restore);
+      signals.forEach(([signal, onSignal]) => process.removeListener(signal, onSignal));
+      out.write("\x1b[?25h");
+      resolve(session);
+    };
+    const onKeypress = (_char, key) => {
+      if (!key) return;
+      if (key.name === "return") return finish(sessions[selected]);
+      if (key.name === "escape" || key.name === "q" || (key.ctrl && key.name === "c")) {
+        return finish(null);
+      }
+      if (key.name === "up" || key.name === "k") {
+        selected = (selected + rows.length - 1) % rows.length;
+      } else if (key.name === "down" || key.name === "j") {
+        selected = (selected + 1) % rows.length;
+      } else {
+        return;
+      }
+      out.write(`\x1b[${shown + (hintRow ? 1 : 0)}A`);
+      render();
+    };
+    process.stdin.on("keypress", onKeypress);
+  });
+};
+
+// Piped stdin can't enter raw mode, so fall back to a numbered prompt. Async
+// iteration (rather than question()) so lines from piped stdin aren't dropped
+// between prompts. EOF falls through to the most recent.
+const chooseSessionFromPipe = async (sessions, lines) => {
+  const numberWidth = String(sessions.length).length;
+  lines.forEach((line, i) => status(`  ${String(i + 1).padStart(numberWidth)}. ${line}`));
+
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stderr });
+  prompt.setPrompt("Select session [1]: ");
+  try {
+    prompt.prompt();
+    for await (const answer of prompt) {
+      const trimmed = answer.trim();
+      if (trimmed === "") return sessions[0];
+      const index = Number(trimmed);
+      if (Number.isInteger(index) && index >= 1 && index <= sessions.length) {
+        return sessions[index - 1];
+      }
+      status(`enter a number between 1 and ${sessions.length}`);
+      prompt.prompt();
+    }
+    return sessions[0];
+  } finally {
+    prompt.close();
+  }
+};
+
+const chooseSession = async (sessions) => {
+  const lines = await buildSessionLines(sessions);
+  return process.stdin.isTTY
+    ? chooseSessionInteractive(sessions, lines)
+    : chooseSessionFromPipe(sessions, lines);
+};
+
+const main = async () => {
+  const targetDir = resolveTargetDir();
+  status(`searching for claude sessions in ${printable(targetDir)}`);
+
+  const projectsDir = path.join(os.homedir(), ".claude", "projects");
+  const sessions = await findSessions(targetDir, projectsDir);
+
+  if (sessions.length === 0) {
+    console.error(`No Claude sessions found for ${printable(targetDir)}`);
+    process.exit(1);
+  }
+
+  const args = process.argv.slice(2);
+  if (args.includes("--print")) {
+    sessions.forEach((session) => {
+      console.log(`${session.id}\t${new Date(session.mtimeMs).toISOString()}\t${session.filePath}`);
+    });
+    return;
+  }
+
+  const match = sessions.length === 1 ? sessions[0] : await chooseSession(sessions);
+  if (!match) {
+    status("cancelled");
+    process.exit(130);
+  }
+
+  status(
+    `session found: ${match.id} (last active ${new Date(match.mtimeMs).toLocaleString()})`
+  );
+
+  // Resume from the session's own recorded cwd, not targetDir: `claude
+  // --resume` resolves the conversation within the project directory encoded
+  // from its cwd, so a session started in a subdirectory of the worktree is
+  // only found when claude runs there.
+  status(`opening${match.cwd === targetDir ? "" : ` in ${printable(match.cwd)}`}`);
+  const child = spawn("claude", ["--resume", match.id, ...args], {
+    cwd: match.cwd,
+    stdio: "inherit",
+  });
+  child.on("error", (error) => {
+    console.error(`Couldn't start claude in ${printable(match.cwd)}: ${printable(error.message)}`);
+    process.exit(1);
+  });
+  child.on("exit", (code, signal) => process.exit(signal ? 1 : code ?? 0));
+  // SIGTERM or SIGHUP sent to this process alone is passed on to Claude, and
+  // this waits for it to end. SIGINT is not passed on: Ctrl-C reaches Claude
+  // from the terminal itself, and Node can't tell that from one sent to this
+  // process, so here it is only kept from ending this process first.
+  process.on("SIGINT", () => {});
+  ["SIGTERM", "SIGHUP"].forEach((signal) => process.on(signal, () => child.kill(signal)));
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  encodePrefix,
+  readSessionCwd,
+  readLastUserMessage,
+  formatRelativeTime,
+  findSessions,
+};
