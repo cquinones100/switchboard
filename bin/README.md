@@ -1513,6 +1513,8 @@ changed the same line, both versions are kept, yours first, and the app says
 so. A note deleted or moved outside the app while open isn't written back
 under its old name.
 
+A link is kept as `[text][1]`, its address gathered at the end of the note as `[1]: https://…`, dimmed: a link written or pasted as `[text](https://…)` is turned into one as the note saves (the line you are typing in waits for the next save), since Neovim wraps a line by its text as written, a hidden address included, and a long one broke the line early. Text copied out of a note (a yank or a delete) carries its links whole, `[text](https://…)`, so pasted into another note they still go where they went. An address already listed keeps its number, and `code` is left as it is (Settings' "Links as references", `notes_reference_links`).
+
 ## codex-review
 
 Runs Codex as a skeptical, read-only static reviewer of the current branch and

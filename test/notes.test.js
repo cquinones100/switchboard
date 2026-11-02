@@ -830,6 +830,42 @@ test("picking a style from the Format menu goes on to the note's own a, to type 
   assert.deepEqual(result.ticked.fed, [], "ticking a box is done, not written in");
 });
 
+test("a note's links become reference links as it saves, its addresses at the end, leaving code and the line being typed alone", () => {
+  const { result } = lua(`
+    local s = require("notes.store")
+    local path = s.create("", "Links")
+    local f = io.open(path, "w")
+    f:write(table.concat({
+      "# Links",
+      "- [ ] Populate the [test monitoring tab](https://example.com/a/very/long/path?x=1) once it runs",
+      "- [ ] See [the tab](https://example.com/a/very/long/path?x=1) and [docs](https://example.com/docs)",
+      "Keep \`[raw](https://example.com/raw)\` as it is",
+      "Typing [here](https://example.com/typing)",
+    }, "\\n") .. "\\n")
+    f:close()
+    -- Its buffer as the app loads it, the line being typed in (row 4) left alone.
+    local buf = vim.fn.bufadd(path)
+    vim.fn.bufload(buf)
+    require("notes.reflinks").convert(buf, 4)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local span = require("notes.render").span_at(buf, 1, 24)
+    local copied = require("notes.reflinks").expand({ lines[3] }, require("notes.reflinks").defs(lines))
+    io.write(vim.json.encode({ lines = lines, url = span and span.url, copied = copied }))
+  `);
+  assert.deepEqual(result.lines, [
+    "# Links",
+    "- [ ] Populate the [test monitoring tab][1] once it runs",
+    "- [ ] See [the tab][1] and [docs][2]",
+    "Keep `[raw](https://example.com/raw)` as it is",
+    "Typing [here](https://example.com/typing)",
+    "",
+    "[1]: https://example.com/a/very/long/path?x=1",
+    "[2]: https://example.com/docs",
+  ]);
+  assert.equal(result.url, "https://example.com/a/very/long/path?x=1", "the link still goes where it went");
+  assert.deepEqual(result.copied, ["- [ ] See [the tab](https://example.com/a/very/long/path?x=1) and [docs](https://example.com/docs)"], "copied out, its links go whole");
+});
+
 test("an open note moved to another folder keeps its time, which says when its text last changed", () => {
   const { result } = lua(`
     local s = require("notes.store")

@@ -50,6 +50,7 @@ function M.highlights()
   local ok, cursorline = pcall(vim.api.nvim_get_hl, 0, { name = "CursorLine", link = false })
   set("NotesMonoBlock", { bg = ok and cursorline.bg or nil })
   set("NotesFence", { link = "Comment" })
+  set("NotesLinkDef", { link = "Comment" })
   set("NotesQuote", from("Comment", { italic = true }))
   set("NotesQuoteBar", from("Special", {}))
   set("NotesBullet", from("Special", { bold = true }))
@@ -102,7 +103,9 @@ end
 -- with 0-based byte columns, e exclusive. Each construct found blanks its
 -- markers in `masked`, so a later one can't match them: `code` first (its
 -- insides are never styled), then links, then the styles, which may nest.
-function M.inline(line, from_col)
+-- `defs`, the note's link definitions (reflinks.defs: number -> address),
+-- gives a reference link [text][1] its address.
+function M.inline(line, from_col, defs)
   from_col = from_col or 0
   local spans = {}
   local masked = line
@@ -128,6 +131,15 @@ function M.inline(line, from_col)
   each("%[%[([^%]]+)%]%]", function(s, e, title)
     table.insert(spans, { s = s + 1, e = e - 2, hl = "NotesNoteLink", note = title, conceal = { { s - 1, s + 1 }, { e - 2, e } } })
     blank(s, e)
+  end)
+  -- [text][1], a reference link (reflinks.lua), its address at the note's end
+  each("%[([^%]]+)%]%[(%d+)%]", function(s, e, text, n)
+    local url = defs and defs[tonumber(n)]
+    if not url then return false end
+    local close = s + #text + 1 -- the first ]
+    table.insert(spans, { s = s, e = close - 1, hl = "NotesLink", url = url, conceal = { { s - 1, s }, { close - 1, e } } })
+    blank(s, s)
+    blank(close, e)
   end)
   -- [text](url)
   each("%[([^%]]+)%]%(([^%)%s]+)%)", function(s, e, text, url)
@@ -210,6 +222,7 @@ function M.draw(buf)
   vim.api.nvim_buf_clear_namespace(buf, M.ns, 0, -1)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local kinds = M.kinds(lines)
+  local defs = require("notes.reflinks").defs(lines)
   -- A ticked item's indent while the lines under it (its details, sub-items,
   -- anything indented further) are drawn struck through with it.
   local ticked
@@ -220,7 +233,10 @@ function M.draw(buf)
     if ticked and (line:match("%S") == nil or own <= ticked) then ticked = nil end
     if ticked and M.options.strike_checked then hl(buf, row, own, #line, "NotesCheckedStrike", 120) end
     if k.kind == "check" and k.done and not ticked then ticked = k.indent end
-    if k.kind == "fence" then
+    -- A reference link's address, at the note's end (reflinks.lua): dimmed.
+    if line:match(require("notes.reflinks").DEF) then
+      hl(buf, row, 0, #line, "NotesLinkDef")
+    elseif k.kind == "fence" then
       hl(buf, row, 0, #line, "NotesFence")
     elseif k.kind == "code" then
       mark(buf, row, 0, { line_hl_group = "NotesMonoBlock", priority = 100 })
@@ -254,7 +270,7 @@ function M.draw(buf)
       require("notes.table").draw(buf, row, line, kinds[i - 1] == nil or kinds[i - 1].kind ~= "table", mark)
     end
     if k.kind ~= "code" and k.kind ~= "fence" then
-      for _, span in ipairs(M.inline(line, text_from)) do
+      for _, span in ipairs(M.inline(line, text_from, defs)) do
         local group = span.hl
         if span.note and not store.find_by_title(span.note) then group = "NotesNoteLinkMissing" end
         hl(buf, row, span.s, span.e, group, 160)
@@ -268,7 +284,8 @@ end
 -- covering it, if any.
 function M.span_at(buf, row, col)
   local line = vim.api.nvim_buf_get_lines(buf, row, row + 1, false)[1] or ""
-  for _, span in ipairs(M.inline(line)) do
+  local defs = require("notes.reflinks").defs(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  for _, span in ipairs(M.inline(line, nil, defs)) do
     local from = span.conceal[1] and span.conceal[1][1] or span.s
     local to = span.conceal[#span.conceal] and span.conceal[#span.conceal][2] or span.e
     if col >= math.min(from, span.s) and col < math.max(to, span.e) then return span end

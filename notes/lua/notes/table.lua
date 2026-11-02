@@ -51,10 +51,12 @@ function M.cells(line)
   return cells
 end
 
--- How wide a cell shows: its width less the markup concealed in it.
+-- How wide a cell shows: its width less the markup concealed in it, a
+-- reference link's [1] included (any number counts as defined here).
+local ANY = setmetatable({}, { __index = function() return "" end })
 local function shown_width(cell)
   local hidden = 0
-  for _, span in ipairs(require("notes.render").inline(cell)) do
+  for _, span in ipairs(require("notes.render").inline(cell, nil, ANY)) do
     for _, c in ipairs(span.conceal) do hidden = hidden + (c[2] - c[1]) end
   end
   return vim.fn.strdisplaywidth(cell) - hidden

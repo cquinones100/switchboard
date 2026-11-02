@@ -118,6 +118,14 @@ function M.save(buf)
   if not is_note(buf) then return end
   if not sync.check(buf, redraw) then return end
   local path = vim.api.nvim_buf_get_name(buf)
+  -- Inline links become reference links (reflinks.lua), but not on the line
+  -- being typed in, which waits for a save after: every save looks, the
+  -- note changed since or not, so one left while typing is caught.
+  local reflinks = require("notes.reflinks")
+  if reflinks.enabled() then
+    local typing = vim.api.nvim_get_mode().mode:sub(1, 1) == "i" and M.note_win and vim.api.nvim_win_is_valid(M.note_win) and vim.api.nvim_win_get_buf(M.note_win) == buf
+    reflinks.convert(buf, typing and vim.api.nvim_win_get_cursor(M.note_win)[1] - 1 or nil)
+  end
   if vim.bo[buf].modified then
     vim.api.nvim_buf_call(buf, function() vim.cmd("silent! keepalt write!") end)
     sync.written(buf)
@@ -308,6 +316,8 @@ local function setup_buffer(buf)
   vim.b[buf].notes = true
   vim.b[buf].notes_ready = true
   sync.track(buf)
+  -- What is copied out of a note carries its links whole (reflinks.lua).
+  vim.api.nvim_create_autocmd("TextYankPost", { buffer = buf, callback = function() require("notes.reflinks").on_yank(buf) end })
   vim.bo[buf].filetype = "notes"
   vim.bo[buf].swapfile = false
   -- No undo history on disk either, so a deleted note's text doesn't stay

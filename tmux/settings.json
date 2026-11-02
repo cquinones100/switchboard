@@ -185,6 +185,13 @@
     "default": true
   },
   {
+    "key": "notes_reference_links",
+    "category": "Notes",
+    "label": "Links as references",
+    "description": "Notes writes a link as [text][1] with its address at the end of the note, so a long address hidden in a line no longer makes it wrap early",
+    "default": true
+  },
+  {
     "key": "ask_tab_note",
     "category": "Notes",
     "label": "Ask for a tab's note",
