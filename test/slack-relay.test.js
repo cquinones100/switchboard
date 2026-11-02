@@ -2585,12 +2585,21 @@ test("a message sent mid-turn is answered with that turn, not the screen", async
     { type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Write", input: { file_path: "/tmp/x.html" } }] } },
     { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } },
     { type: "attachment", attachment: { type: "queued_command", prompt: "Don’t forget to cover security", commandMode: "prompt" } },
+    { type: "attachment", attachment: { type: "queued_command", prompt: "<agent-message from=\"a1\">\n[Subagent hand-back] The report follows:\n  No findings.\n</agent-message>", commandMode: "prompt", origin: { kind: "peer", from: "a1" } } },
+    { type: "attachment", attachment: { type: "queued_command", prompt: "<task-notification>\n<task-id>a1</task-id>\n<summary>Agent finished</summary>\n</task-notification>", commandMode: "task-notification", origin: { kind: "task-notification" } } },
     { type: "assistant", message: { content: [{ type: "text", text: "Published, with a security section." }] } },
   ].map((entry) => JSON.stringify(entry)).join("\n"));
 
   const turn = relay.turnFrom(transcript, "Don’t forget to cover security");
   assert.ok(turn, "the queued message belongs to this turn");
   assert.match(turn, /> Put together an explainer\n> Don’t forget to cover security\n\nPublished, with a security section\./);
+  assert.doesNotMatch(turn, /agent-message|task-notification|Subagent/, "a subagent's report and a task's notice are not quoted as yours");
+  const reported = path.join(home, ".claude/projects/-work/reported.jsonl");
+  fs.writeFileSync(reported, [
+    { type: "user", origin: { kind: "peer", handbackReportText: "No findings." }, message: { content: "Another Claude session sent a message:\n<agent-message from=\"a1\">\n[Subagent hand-back] The report follows:\n  No findings.\n</agent-message>" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "Clean, pushing." }] } },
+  ].map((entry) => JSON.stringify(entry)).join("\n"));
+  assert.match(relay.turnFrom(reported), /> An agent reported back: No findings\.\n\nClean, pushing\./, "a turn a subagent's report started reads as that report");
   assert.equal(relay.turnFrom(transcript, "something never sent"), undefined);
 
   // The relay typed the queued message; its answer is the turn, not the screen.
