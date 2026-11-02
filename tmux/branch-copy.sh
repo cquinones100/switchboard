@@ -14,8 +14,7 @@
 what=$1
 cd "$2" 2>/dev/null || exit 0
 
-# display-message reads its text as a format, so every # is doubled.
-say() { tmux display-message "${1//\#/##}"; }
+say() { "${0%/*}/say.sh" "$1"; }
 
 case "$what" in
   ticket | ticket-url)

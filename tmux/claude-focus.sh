@@ -22,4 +22,4 @@ while IFS=$'\t' read -r pane sidebar command tty; do
     exit 0
   fi
 done < <(tmux list-panes -t "$window" -F $'#{pane_id}\t#{?@sidebar,1,0}\t#{pane_current_command}\t#{pane_tty}')
-tmux display-message "No Claude in this tab"
+"${0%/*}/say.sh" "No Claude in this tab"

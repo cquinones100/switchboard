@@ -28,6 +28,7 @@ client="${2:-}"
 # A popup on the client the key was pressed in. The text goes in through the
 # environment rather than the command, so nothing in it is read by a shell.
 explain() {
+  "${0%/*}/say.sh" close "$client"
   tmux display-popup -c "$client" -E -w 72 -h 9 -T ' Linear project ' \
     -e "LINEAR_PROJECT_MESSAGE=$1" "$(printf %q "$0") --show"
 }
@@ -44,7 +45,7 @@ config="$HOME/.config/switchboard/linear.json"
 key="${LINEAR_API_KEY:-$(security find-generic-password -s linear-api-key -w 2>/dev/null || jq -r '.linearApiKey // empty' "$config" 2>/dev/null)}"
 [ -n "$key" ] || { explain "There's no Linear API key: set LINEAR_API_KEY, or store it in the Keychain as linear-api-key."; exit 0; }
 
-tmux display-message -c "$client" "Looking up the Linear project for $ticket..."
+"${0%/*}/say.sh" -c "$client" "Looking up the Linear project for $ticket..."
 
 body=$(jq -nc --arg id "$ticket" \
   '{query: "query($id: String!) { issue(id: $id) { project { name url } } }", variables: {id: $id}}')

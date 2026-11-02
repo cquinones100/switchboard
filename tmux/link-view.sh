@@ -94,7 +94,7 @@ case "${1:-}" in
   pick)
     pane=${2:-} first=${3:-read}
     [ -n "$pane" ] || exit 0
-    links=$(links_of "$pane" 2>"${TMPDIR:-/tmp}/link-view.$$") || { tmux display-message "$(cat "${TMPDIR:-/tmp}/link-view.$$")"; rm -f "${TMPDIR:-/tmp}/link-view.$$"; exit 0; }
+    links=$(links_of "$pane" 2>"${TMPDIR:-/tmp}/link-view.$$") || { "${0%/*}/say.sh" -a "$(cat "${TMPDIR:-/tmp}/link-view.$$")"; rm -f "${TMPDIR:-/tmp}/link-view.$$"; exit 0; }
     rm -f "${TMPDIR:-/tmp}/link-view.$$"
     # The same list either way; Enter does what was asked for, Ctrl-O the other.
     if [ "$first" = browser ]; then
@@ -114,16 +114,16 @@ case "${1:-}" in
       # said as copied only when it took the link; with none of them, tmux's
       # paste buffer, which tmux passes on to the terminal's clipboard only
       # where it can (OSC 52), so it says just that.
-      # tmux reads # in a message as a format: doubled, the link shows as it is.
-      shown=${url//#/##}
+      # Said once the Links popup has closed (-a).
+      shown=$url
       if command -v pbcopy >/dev/null; then printf '%s' "$url" | pbcopy
       elif command -v wl-copy >/dev/null; then printf '%s' "$url" | wl-copy
       elif command -v xclip >/dev/null; then printf '%s' "$url" | xclip -selection clipboard
       else
-        tmux set-buffer -w -- "$url" && tmux display-message "Put $shown in tmux's paste buffer, and the terminal's clipboard if it allows" || tmux display-message "Couldn't copy $shown"
+        tmux set-buffer -w -- "$url" && "${0%/*}/say.sh" -a "Put $shown in tmux's paste buffer, and the terminal's clipboard if it allows" || "${0%/*}/say.sh" -a "Couldn't copy $shown"
         exit 0
       fi
-      if [ $? = 0 ]; then tmux display-message "Copied $shown"; else tmux display-message "Couldn't copy $shown"; fi
+      if [ $? = 0 ]; then "${0%/*}/say.sh" -a "Copied $shown"; else "${0%/*}/say.sh" -a "Couldn't copy $shown"; fi
       exit 0
     fi
     if { [ "$first" = browser ] && [ "$key" != ctrl-o ]; } || { [ "$first" != browser ] && [ "$key" = ctrl-o ]; }; then exec "$here/open-url.sh" "$url"; fi
@@ -132,7 +132,7 @@ case "${1:-}" in
 
   open)
     pane=${2:-} url=${3:-}
-    [[ -n $pane && $url =~ $safe ]] || { tmux display-message "That isn't a link that can be read here"; exit 0; }
+    [[ -n $pane && $url =~ $safe ]] || { "${0%/*}/say.sh" -a "That isn't a link that can be read here"; exit 0; }
     # The window's link view, if it has one, gives way to this one.
     old=$(tmux list-panes -t "$pane" -F '#{pane_id} #{@link_view}' | awk '$2 == "1" { print $1; exit }')
     [ -n "$old" ] && tmux kill-pane -t "$old"
@@ -204,7 +204,7 @@ case "${1:-}" in
   browser)
     pane=${2:-}
     url=$(tmux list-panes -t "$pane" -F '#{@link_view} #{@link_url}' | awk '$1 == "1" { print $2; exit }')
-    [ -n "$url" ] || { tmux display-message "No link is being read in this tab"; exit 0; }
+    [ -n "$url" ] || { "${0%/*}/say.sh" "No link is being read in this tab"; exit 0; }
     exec "$here/open-url.sh" "$url"
     ;;
 

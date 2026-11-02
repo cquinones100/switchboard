@@ -98,7 +98,7 @@ case "${1:-}" in
       [ -n "$pane" ] && { tmux select-pane -t "$pane"; exit 0; }
       sleep 0.1
     done
-    tmux display-message "The sidebar isn't running; see $state_dir/daemon.log."
+    "${0%/*}/say.sh" "The sidebar isn't running; see $state_dir/daemon.log."
     ;;
   notices)
     # M-p's "Go to the notifications": asked of the daemon for the client,
@@ -111,7 +111,7 @@ case "${1:-}" in
       printf 'go-notices %s\n' "${2:-}" | nc -U "$state_dir/sock" >/dev/null 2>&1 && exit 0
       sleep 0.1
     done
-    tmux display-message ${2:+-c "$2"} "The sidebar isn't running; see $state_dir/daemon.log."
+    "${0%/*}/say.sh" ${2:+-c "$2"} "The sidebar isn't running; see $state_dir/daemon.log."
     ;;
   refocus)
     # Unlike focus, never turns the sidebar on, and says nothing when there is

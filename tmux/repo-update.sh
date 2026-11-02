@@ -49,12 +49,13 @@ case "${1:-}" in
       check:off | periodic:off | periodic:open) exit 0 ;;
     esac
     # What happened, said on the client that asked; nothing for the others.
-    say() { [ "$1" = now ] && tmux display-message -c "${2:-}" "$3"; return 0; }
+    say() { [ "$1" = now ] && "${0%/*}/say.sh" -c "${2:-}" "$3"; return 0; }
     # Asked for with nothing new to take, or GitHub out of reach, the setup
     # still runs, saying why first, so a clone pulled by hand (or changed some
     # other way) gets whatever its setup has to do.
     setup_anyway() {
       [ "$1" = now ] || return 0
+      "${0%/*}/say.sh" close "${2:-}"
       tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T ' Switchboard setup ' "SETUP_WHY=$(printf %q "$3") $0 run-setup"
     }
     mkdir -p "$STATE"
@@ -88,10 +89,10 @@ case "${1:-}" in
     if [ -n "$(jq -r '.repo // empty' ~/.config/switchboard/claude.json 2>/dev/null)" ] && [ -x "$REPO/setup.sh" ]; then
       GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=false SSH_ASKPASS_REQUIRE=never SWITCHBOARD_PULL_ONLY=true nohup bash "$REPO/setup.sh" claude_md >/dev/null 2>&1 </dev/null &
     fi
-    [ "$1" = now ] && tmux display-message -c "${2:-}" "Looking for Switchboard updates…"
-    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" git_ fetch --quiet origin main 2>/dev/null || { say "$1" "${2:-}" "Couldn't reach GitHub to look for Switchboard updates."; setup_anyway "$1" "${2:-}" "Couldn't reach GitHub to look for updates; running the setup with what you have."; exit 0; }
+    [ "$1" = now ] && "${0%/*}/say.sh" -c "${2:-}" "Looking for Switchboard updates…"
+    GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" git_ fetch --quiet origin main 2>/dev/null || { setup_anyway "$1" "${2:-}" "Couldn't reach GitHub to look for updates; running the setup with what you have."; exit 0; }
     behind=$(git_ rev-list --count main..origin/main 2>/dev/null) || exit 0
-    [ "${behind:-0}" -gt 0 ] || { say "$1" "${2:-}" "Switchboard is up to date ($(git_ log -1 --format=%h main))."; setup_anyway "$1" "${2:-}" "Switchboard is up to date ($(git_ log -1 --format=%h main)); running its setup for anything not in place yet."; exit 0; }
+    [ "${behind:-0}" -gt 0 ] || { setup_anyway "$1" "${2:-}" "Switchboard is up to date ($(git_ log -1 --format=%h main)); running its setup for anything not in place yet."; exit 0; }
     tip=$(git_ rev-parse origin/main)
     if [ "$1" = periodic ]; then
       read -r offered 2>/dev/null < "$STATE/update-offered"
@@ -114,6 +115,7 @@ case "${1:-}" in
     # so a look from another client meanwhile can replace it.
     rmdir "$lock" 2>/dev/null
     trap - EXIT
+    "${0%/*}/say.sh" close "$client"
     tmux display-popup -c "$client" -E -w 90 -h 85% -T ' Switchboard ' "$0 prompt $(printf %q "$client")"
     # How updates also arrive, once (tip.sh), after a prompt answered: one
     # closed for a newer prompt leaves the client to that one.

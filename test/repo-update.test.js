@@ -102,7 +102,7 @@ test("an update prompt left open is replaced by one for newer commits, and only 
     fs.mkdirSync(state, { recursive: true });
     const tip = git(repo, "rev-parse", "origin/main");
     // Named as the prompt runs, since a pid reused by something else isn't one.
-    const sleeper = require("node:child_process").spawn("bash", ["-c", "sleep 30; :", "repo-update.sh prompt"]);
+    const sleeper = require("node:child_process").spawn("bash", ["-c", "sleep 30; :", "repo-update.sh prompt"], { stdio: "ignore", detached: true });
     fs.writeFileSync(path.join(state, "update-prompt"), `${sleeper.pid} ${tip} client-1\n`);
     try {
       assert.doesNotMatch(hourly(), /display-popup/, "one open for the same commits stays");
@@ -111,7 +111,7 @@ test("an update prompt left open is replaced by one for newer commits, and only 
       const said = hourly();
       assert.match(said, /display-popup -C -c client-1[\s\S]*display-popup -c client-1 .* prompt client-1/, "newer commits close it and open a new one");
     } finally {
-      sleeper.kill();
+      process.kill(-sleeper.pid);
     }
 
     fs.writeFileSync(path.join(state, "update-offered"), git(repo, "rev-parse", "origin/main"));
@@ -140,7 +140,8 @@ test("Update Switchboard with nothing new still runs the guided setup, saying wh
 
     spawnSync("bash", [script, "now", "client-1"], { env, encoding: "utf8" });
     const said = fs.readFileSync(calls, "utf8");
-    assert.match(said, /display-message -c client-1 Switchboard is up to date/);
+    assert.match(said, /display-popup -c client-1 .*-e SAY_TEXT=Looking for Switchboard updates… .*say\.sh box/, "it says it is looking, in a box");
+    assert.doesNotMatch(said, /display-message/);
     assert.match(said, /display-popup -c client-1 .*Switchboard setup .*SETUP_WHY=.*up\\? to\\? date.* run-setup/s);
 
     // The hourly check says nothing and runs nothing when there is nothing new.

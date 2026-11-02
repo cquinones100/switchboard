@@ -35,7 +35,7 @@ case "${1:-}" in
       ticket=$(tmux display -p -t "$here" '#{@tab_name}' | grep -oE '[A-Z][A-Z0-9]*-[0-9]+' | head -1)
     # It goes into a command line, so only a ticket ID's characters.
     if ! [[ $ticket =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
-      tmux display-message "No Linear ticket in this branch or tab name"
+      "${0%/*}/say.sh" "No Linear ticket in this branch or tab name"
       exit 0
     fi
     pane=$(tmux split-window -h -l 45% -t "$here" -c "${dir//\#/##}" -P -F '#{pane_id}' "zsh -i -c '~/.config/tmux/ticket-view.sh show $ticket'") || exit 0

@@ -40,7 +40,7 @@ note=${1:-$(jq -r '.last // empty' "$notes_dir/.notes.json" 2>/dev/null)}
 client=${2:-$(tmux display -p ${TMUX_PANE:+-t "$TMUX_PANE"} '#{client_name}' 2>/dev/null)}
 
 if [ -z "$note" ] || [[ $note == *..* ]] || [ ! -f "$notes_dir/$note" ]; then
-  tmux display-message ${client:+-c "$client"} "No note to open a tab for"
+  "${0%/*}/say.sh" ${client:+-c "$client"} "No note to open a tab for"
   exit 0
 fi
 

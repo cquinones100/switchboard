@@ -29,10 +29,10 @@ fi
 
 action=${1:-start}
 
-# A binding has nowhere to show output, so it goes to the status line: errors
+# A binding has nowhere to show output, so it goes in a box (say.sh): errors
 # always, and for stop the confirmation too.
 if ! output=$(~/.local/bin/slack-relay "$action" 2>&1); then
-  tmux display-message "slack-relay: ${output:-could not $action}"
+  "${0%/*}/say.sh" "slack-relay: ${output:-could not $action}"
 elif [ "$action" = stop ]; then
-  tmux display-message "slack-relay: ${output:-stopping}"
+  "${0%/*}/say.sh" "slack-relay: ${output:-stopping}"
 fi

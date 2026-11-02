@@ -43,7 +43,7 @@ tool_command() {
         ticket=$(tmux display -p -t "$pane" '#{@tab_name}' | grep -oE '[A-Z][A-Z0-9]*-[0-9]+' | head -1)
       # It goes into a command line, so only a ticket ID's characters.
       if ! [[ $ticket =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]]; then
-        tmux display-message -c "$client" "No Linear ticket in this branch or tab name"
+        "${0%/*}/say.sh" -c "$client" "No Linear ticket in this branch or tab name"
         return
       fi
       echo "zsh -i -c 'node ~/.config/tmux/pr-image.js --ticket $ticket'"
@@ -62,7 +62,7 @@ tool_command() {
     # worktree, that commit and the base it was compared with.
     diffview)
       if ! facts=$(git -C "$dir" rev-parse --absolute-git-dir HEAD 2>/dev/null); then
-        tmux display-message "Not in a git repository: ${dir//\#/##}"
+        "${0%/*}/say.sh" "Not in a git repository: $dir"
         exit 0
       fi
       head=${facts##*$'\n'}
@@ -84,7 +84,7 @@ tool_command() {
       fetched=1
       git -C "$dir" fetch --quiet origin "$base" 2>/dev/null || fetched=
       tmux display-popup -C -c "$client"
-      [ -n "$fetched" ] || tmux display-message -c "$client" "Could not fetch origin/$base; comparing with it as last fetched."
+      [ -n "$fetched" ] || "${0%/*}/say.sh" -c "$client" "Could not fetch origin/$base; comparing with it as last fetched."
       # A repository with no origin compares with its own branch.
       ref=origin/$base
       git -C "$dir" rev-parse --verify --quiet "$ref" >/dev/null || ref=$base
@@ -116,6 +116,9 @@ case "${1:-}" in
     tool=$2 dir=$3 client=$4
     command=$(tool_command "$tool" "$dir" "$client")
     [ -n "$command" ] || exit 0
+    # A box said on the way (a fetch that failed) is read first: a key, or
+    # its few seconds, and then the tool.
+    "${0%/*}/say.sh" wait "$client"
     tmux display-popup -c "$client" -E -w 95% -h 90% -d "$dir" -T " $tool " "$command"
     ;;
   back)

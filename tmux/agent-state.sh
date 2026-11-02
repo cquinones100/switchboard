@@ -339,7 +339,7 @@ case "${1:-}" in
       done <"$needs_file"
       n=${#windows[@]}
       if [ "$n" -eq 0 ]; then
-        tmux display-message "Nothing needs you."
+        "${0%/*}/say.sh" "Nothing needs you."
         exit 0
       fi
       at=-1
@@ -380,7 +380,7 @@ case "${1:-}" in
         to=$after
       elif [ "$at" -ge 0 ]; then
         if [ "$n" -eq 1 ]; then
-          tmux display-message "This is the only tab that needs you."
+          "${0%/*}/say.sh" "This is the only tab that needs you."
           exit 0
         fi
         to=$(( (at + 1) % n ))
@@ -422,7 +422,7 @@ case "${1:-}" in
         print ($1 == "waiting" ? 0 : 1) "\t" $2 "\t" $3 "\t" $4 "\t" $5 }' |
       sort -t$'\t' -k1,1n -k2,2n)
     if [ -z "$list" ]; then
-      tmux display-message "No Claude session is waiting on you."
+      "${0%/*}/say.sh" "No Claude session is waiting on you."
       exit 0
     fi
     # Where the walk got to is kept as the last stop's place in the order, not
@@ -448,7 +448,7 @@ case "${1:-}" in
         print line[1]
       }' <<<"$list")
     if [ "$(cut -f3 <<<"$target")" = "$here" ]; then
-      tmux display-message "This is the only Claude session waiting on you."
+      "${0%/*}/say.sh" "This is the only Claude session waiting on you."
       exit 0
     fi
     tmux set -g @agent_walk_window "$(cut -f3 <<<"$target")"

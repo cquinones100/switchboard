@@ -70,6 +70,8 @@ again the next hour, and a newer one takes its place, so you come back to
 what is new now. A clone with commits of its own is left for you to update
 by hand.
 
+What a key has to tell you (nothing needs you, a link copied, no ticket in this branch) shows in a small box in the middle of the screen, which any key closes and which goes by itself after a few seconds, rather than on the status line for a moment (`tmux/say.sh`; Settings' "Messages in a box", `message_boxes`).
+
 ## worktree-from-ticket
 
 Creates a git worktree on a branch named after a Linear ticket, then opens

@@ -1778,7 +1778,7 @@ test("mission control's Settings view lists the options by category, / narrows t
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   fs.rmSync(settingsFile, { force: true });
   const sent = [];
-  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 60, tmuxClient: "none" };
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 80, tmuxClient: "none" };
   try {
     await sidebar.refresh();
     client.view.view = sidebar.viewsFor(client).findIndex((s) => s.title === "Settings") + 1;
