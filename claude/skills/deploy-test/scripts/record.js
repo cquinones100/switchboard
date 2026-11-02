@@ -4,6 +4,9 @@
 //
 //   node record.js <steps.js> --url <url> --out <dir>   record the test
 //   node record.js --login --url <url>                   sign in, by hand, once
+//   --profile <name>   with either: the profile named so, in place of the URL's
+//                      host, for sites whose host changes, such as a PR's
+//                      preview (preview-test names one per repository)
 //
 // <steps.js> exports one async function, given { page, step, expect }:
 //
@@ -45,7 +48,14 @@ if (!url || (!login && (!stepsFile || !out))) {
 }
 
 const size = { width: 1280, height: 800 };
-const profile = path.join(os.homedir(), ".cache/deploy-test/profiles", new URL(url).host);
+// A name of letters, digits, dots, dashes and underscores only, so it stays
+// a folder in the profiles directory.
+const named = arg("profile");
+if (named !== undefined && (!/^[\w.-]+$/.test(named) || /^\.+$/.test(named))) {
+  console.error("--profile takes letters, digits, dots, dashes and underscores");
+  process.exit(2);
+}
+const profile = path.join(os.homedir(), ".cache/deploy-test/profiles", named ?? new URL(url).host);
 // Playwright runs Chrome with a stand-in keychain, so its cookies are as good
 // as unencrypted: signed-in sessions, readable by no one else.
 fs.mkdirSync(profile, { recursive: true, mode: 0o700 });

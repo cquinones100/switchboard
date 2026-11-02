@@ -216,7 +216,7 @@ DETAILS='
       ( if .hook_event_name == "PermissionRequest" then "permission: " + $tool + (if $in.command then " " + ($in.command | split("\n")[0]) else "" end) | short(80)
         elif $tool == "AskUserQuestion" then "asks: " + ((($in.questions // [])[0].question) // "") | short(80)
         else "" end),
-      ( {"review-loop": "review", "ci-loop": "ci", "queue-and-clean": "queue", "deploy-test": "deploy"}[
+      ( {"review-loop": "review", "ci-loop": "ci", "queue-and-clean": "queue", "deploy-test": "deploy", "preview-test": "deploy"}[
           if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | capture("^\\s*/(?<s>[a-z-]+)")?.s // "")
           elif $tool == "Skill" then ($in.skill // "")
           else "" end ] // "") ]

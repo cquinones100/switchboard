@@ -6,10 +6,12 @@
 //   timeout                nothing settled within --timeout minutes
 //
 //   node wait-deploy.js --repo <owner/name> --sha <merge commit>
-//     (--environment <name> | --workflow <name> --branch <base>) [--timeout 45]
+//     (--environment <name> [--ref <branch>] | --workflow <name> --branch <base>) [--timeout 45]
 //
 // --environment watches GitHub deployments to that environment (what Vercel,
-// Netlify, Render and most deploy actions report); --workflow watches runs of
+// Netlify, Render and most deploy actions report), only those of one branch
+// with --ref (a PR's preview, where every PR shares the environment), or of
+// the commit itself; --workflow watches runs of
 // a deploy workflow on the base branch. A deploy counts when its commit is the
 // merge commit or comes after it, since a merge queue or a quick second merge
 // often deploys a later commit that includes this one. A failed request is
@@ -25,9 +27,10 @@ const sha = arg("sha");
 const environment = arg("environment");
 const workflow = arg("workflow");
 const branch = arg("branch");
+const ref = arg("ref");
 const timeout = Number(arg("timeout") ?? 45) * 60 * 1000;
 if (!repo || !sha || !(environment || (workflow && branch))) {
-  console.error("usage: node wait-deploy.js --repo <owner/name> --sha <sha> (--environment <name> | --workflow <name> --branch <base>) [--timeout 45]");
+  console.error("usage: node wait-deploy.js --repo <owner/name> --sha <sha> (--environment <name> [--ref <branch>] | --workflow <name> --branch <base>) [--timeout 45]");
   process.exit(2);
 }
 
@@ -43,8 +46,14 @@ const includes = (deployed) => {
   return included.get(deployed);
 };
 
+// With --ref, a deployment recorded under the branch's name or under the
+// commit itself, as some deploy actions record it, newest first.
 const fromDeployments = () => {
-  const deployments = gh("api", `repos/${repo}/deployments?environment=${encodeURIComponent(environment)}&per_page=15`)
+  const list = (forRef) => gh("api", `repos/${repo}/deployments?environment=${encodeURIComponent(environment)}${forRef ? `&ref=${encodeURIComponent(forRef)}` : ""}&per_page=15`);
+  const found = ref ? [...list(ref), ...list(sha)] : list();
+  const deployments = found
+    .filter((deployment, i) => found.findIndex((other) => other.id === deployment.id) === i)
+    .sort((a, b) => b.id - a.id)
     .filter((deployment) => includes(deployment.sha))
     .map((deployment) => ({ deployment, status: gh("api", `repos/${repo}/deployments/${deployment.id}/statuses?per_page=1`)[0] }));
   const done = deployments.find(({ status }) => status?.state === "success");
