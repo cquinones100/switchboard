@@ -93,6 +93,53 @@ test("in the notes pane, the picker lists the open note's links, top to bottom, 
   ]);
 });
 
+test("the media picker lists the images and videos a pane shows, newest first, files only where they are, and opens the chosen one", () => {
+  const work = path.join(tmp, "media-wörk");
+  fs.mkdirSync(path.join(work, "shots"), { recursive: true });
+  fs.writeFileSync(path.join(work, "shots", "a.png"), "");
+  fs.writeFileSync(path.join(work, "shots", "b.png"), "");
+  fs.writeFileSync(path.join(work, "shots", "café.png"), "");
+  fs.writeFileSync(path.join(work, "shots", "bob's.png"), "");
+  fs.writeFileSync(path.join(tmp, "clip.mp4"), "");
+  const shown = path.join(tmp, "media-screen.txt");
+  fs.writeFileSync(
+    shown,
+    [
+      "saved ./shots/a.png and image=~/clip.mp4 and ~/clip.mp4, gone.png is not there, nor shots/b.png.bak or shots/b.png_backup or shots/b.png.~1~ or #shots/b.png# or shots/b.png$x or c.png$shots/b.png or sam's/b.png, but shots/bob's.png and shots/café.png, while '~/clip.mp4' is",
+      "see https://example.com/x/pic.jpg?raw=1 and (shots/a.png), not https://example.com/assets.png/page nor https://studio.mov",
+      "\x1b]8;;https://example.com/clip.mov#t=30\x1b\\the recording\x1b]8;;\x1b\\",
+      "",
+    ].join("\n"),
+  );
+  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "media", "-x", "200", "-y", "20", "-c", work, `cat ${shown}; sleep 60`], { env });
+  spawnSync("sleep", ["0.5"]);
+  const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "-t", "media", "#{pane_id}"], { env, encoding: "utf8" }).trim();
+  const run = (args, extra = {}) => spawnSync("bash", [path.join(__dirname, "../tmux/link-view.sh"), ...args, pane], {
+    env: { ...env, TMUX: `${socket},0,0`, LC_ALL: "en_US.UTF-8", ...extra },
+    encoding: "utf8",
+  });
+  const listed = run(["media-list"]);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.deepEqual(listed.stdout.trim().split("\n").map((row) => row.split("\t")[1]), [
+    path.join(work, "shots", "a.png"),
+    path.join(tmp, "clip.mp4"),
+    path.join(work, "shots", "café.png"),
+    path.join(work, "shots", "bob's.png"),
+    "https://example.com/clip.mov#t=30",
+    "https://example.com/x/pic.jpg?raw=1",
+  ], "files newest first, one named twice once, a missing one left out; then the links to media, whole, a hyperlink's too, and not a page under a .png directory");
+
+  // fzf picks the video; open (a stand-in) is given it.
+  const bin = path.join(tmp, "bin-media");
+  fs.mkdirSync(bin, { recursive: true });
+  const opened = path.join(tmp, "opened");
+  fs.writeFileSync(path.join(bin, "fzf"), `#!/bin/sh\ngrep clip.mp4 | sed '1s/^/\\n/'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "open"), `#!/bin/sh\necho "$@" > ${opened}\n`, { mode: 0o755 });
+  const picked = run(["media"], { PATH: `${bin}:${process.env.PATH}` });
+  assert.equal(picked.status, 0, picked.stderr);
+  assert.equal(fs.readFileSync(opened, "utf8").trim(), path.join(tmp, "clip.mp4"));
+});
+
 test("search everything finds the notes holding every word, newest first, as links the link view reads, and nothing in .trash", () => {
   const notes = path.join(tmp, "Notes");
   fs.mkdirSync(path.join(notes, "Work"), { recursive: true });

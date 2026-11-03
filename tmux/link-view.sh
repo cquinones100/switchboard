@@ -18,6 +18,12 @@
 #                                    pane in the browser"); with copy, Enter
 #                                    copies it (M-p's "Copy a link from this
 #                                    pane"), Ctrl-O opens it
+#   link-view.sh media <pane>        M-p: choose an image or video <pane> shows (a
+#                                    file, from where the pane is, or a link), with
+#                                    fzf; Enter opens it in its app (Preview,
+#                                    QuickTime) or a link in the browser, Ctrl-O
+#                                    shows a file in Finder
+#   link-view.sh media-list <pane>   what media lists for <pane>, a line each
 #   link-view.sh links <pane>        the links pick lists for <pane>, a line each
 #   link-view.sh open <pane> <url>   read <url> in a pane beside <pane>
 #   link-view.sh show [<url>]        in that pane: read it, else LINK_VIEW_URL
@@ -96,7 +102,73 @@ links_of() {
   printf '%s\n' "$links"
 }
 
+# The images and videos <pane> shows and has scrolled past, a "<shown>\t<path
+# or URL>" line each: the files, newest first (a path absolute, ~/, or from
+# the pane's directory, only when the file is there), then the links to them
+# among the pane's links as the link picker finds them (links_of, a
+# hyperlink's target and text included), kept whole, known by the extension
+# of their path.
+MEDIA='png|jpe?g|gif|webp|heic|svg|bmp|tiff?|mp4|mov|webm|mkv|m4v|avi'
+media_of() {
+  local pane=$1 dir found
+  dir=$(tmux display -p -t "$pane" '#{pane_current_path}')
+  found=$(tmux capture-pane -p -J -S -3000 -t "$pane" | MEDIA_DIR=$dir MEDIA=$MEDIA perl -CSD -ne '
+    # Text is read as characters (-CSD), so the paths from the environment are
+    # too, and a path is checked as the bytes it is on disk.
+    use Encode qw(decode_utf8 encode_utf8);
+    our ($home, $dir) = map { decode_utf8($_ // "") } @ENV{qw(HOME MEDIA_DIR)};
+    my $ext = $ENV{MEDIA};
+    while (m{(?:(?<![^\s(\[\{<=])|(?<=[\s(\[\{<=][\x22\x27`])|(?<=^[\x22\x27`]))(?!\x27)((?:~|\.{1,2})?/?[\w.~\@+%/\x27-]*[\w-]\.(?:$ext))(?=\n|\z|[\s,;:!?)\]\}\x22\x27`>]|\.(?:\s|\z))}gi) {
+      my $path = $1;
+      $path =~ s{^~(?=/)}{$home};
+      $path =~ s{^\./}{};
+      $path = "$dir/$path" unless $path =~ m{^/};
+      push @found, $path if -f encode_utf8($path);
+    }
+    END {
+      my %seen;
+      for (reverse @found) {
+        next if $seen{$_}++;
+        (my $shown = $_) =~ s{^\Q$home\E/}{~/};
+        print "$shown\t$_\n";
+      }
+    }')
+  links=$(links_of "$pane" 2>/dev/null | MEDIA=$MEDIA perl -CSD -ne '
+    my ($shown, $url) = /^(.*)\t(.*)$/ or next;
+    (my $path = $url) =~ s{[?#].*$}{}; $path =~ s{^[a-z]+://[^/]*}{}i;
+    print if $path =~ m{\.(?:$ENV{MEDIA})$}i;')
+  found=$(printf '%s\n%s\n' "$found" "$links" | grep -v '^$')
+  [ -n "$found" ] || { echo "No image or video in this pane" >&2; return 1; }
+  printf '%s\n' "$found"
+}
+
 case "${1:-}" in
+  media-list)
+    media_of "${2:?pane}"
+    ;;
+
+  media)
+    pane=${2:-}
+    [ -n "$pane" ] || exit 0
+    err="${TMPDIR:-/tmp}/link-view-media.$$"
+    found=$(media_of "$pane" 2>"$err") || { "$here/say.sh" -a "$(cat "$err")"; rm -f "$err"; exit 0; }
+    rm -f "$err"
+    choice=$(printf '%s\n' "$found" | fzf --ansi --delimiter '\t' --with-nth 1 --prompt 'Open: ' --header 'Enter opens it · Ctrl-O shows a file in Finder' --expect ctrl-o --layout reverse) || exit 0
+    key=$(printf '%s' "$choice" | sed -n 1p)
+    target=$(printf '%s' "$choice" | sed -n 2p | cut -f2)
+    [ -n "$target" ] || exit 0
+    if [[ $target =~ ^https?:// ]]; then
+      [[ $target =~ $safe ]] && exec "$here/open-url.sh" "$target"
+      exit 0
+    fi
+    [ -f "$target" ] || { "$here/say.sh" -a "$target is gone"; exit 0; }
+    if command -v open >/dev/null; then
+      if [ "$key" = ctrl-o ]; then open -R "$target"; else open "$target"; fi
+    elif command -v xdg-open >/dev/null; then
+      xdg-open "$([ "$key" = ctrl-o ] && dirname "$target" || printf '%s' "$target")" >/dev/null 2>&1 &
+    fi
+    ;;
+
   links)
     links_of "${2:?pane}"
     ;;
