@@ -42,8 +42,11 @@ SRC="$HOME/switchboard"
 # Node comes from nvm, which only an interactive zsh sets up, and the update
 # popup and M-p's setup run this from tmux, whose PATH lacks it: take it from
 # there, so the steps that run node and npm find them.
-if ! command -v node >/dev/null && command -v zsh >/dev/null; then
-  node_bin=$(zsh -i -c 'command -v node' 2>/dev/null </dev/null | tail -1)
+# Not for --parts, which only lists them: M-p pipes that into fzf, and an
+# interactive zsh takes the popup's terminal from it. +m keeps it from doing
+# so anywhere else (no job control, so it leaves the terminal's foreground alone).
+if ! $LIST_PARTS && ! command -v node >/dev/null && command -v zsh >/dev/null; then
+  node_bin=$(zsh -i +m -c 'command -v node' 2>/dev/null </dev/null | tail -1)
   [[ $node_bin == /* && -x $node_bin ]] && PATH="${node_bin%/*}:$PATH"
 fi
 

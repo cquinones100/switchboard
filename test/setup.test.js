@@ -346,8 +346,16 @@ test("setup.sh skills links Switchboard's skills, keeping one of your own by the
   }
 });
 
-test("setup.sh --parts lists every part with what it does", () => {
-  const listed = spawnSync("bash", [script, "--parts"], { encoding: "utf8" });
+test("setup.sh --parts lists every part with what it does, starting no interactive zsh", () => {
+  // tmux's PATH has no node, which has setup.sh ask an interactive zsh for
+  // it; M-p pipes --parts into fzf, and that zsh took the popup's terminal
+  // from it. A stand-in zsh records being started.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "setup-parts-"));
+  const started = path.join(bin, "started");
+  fs.writeFileSync(path.join(bin, "zsh"), `#!/bin/sh\necho "$@" >> '${started}'\n`, { mode: 0o755 });
+  const listed = spawnSync("bash", [script, "--parts"], { encoding: "utf8", env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` } });
+  assert.equal(fs.existsSync(started), false, "no zsh started");
+  fs.rmSync(bin, { recursive: true, force: true });
   assert.equal(listed.status, 0);
   const rows = listed.stdout.trim().split("\n").map((line) => line.split("\t"));
   const parts = fs.readFileSync(script, "utf8").match(/^  PARTS=\((.*)\)$/m)[1].split(" ");
