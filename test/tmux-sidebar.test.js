@@ -262,6 +262,7 @@ const plain = (text) => text.replace(/\x1b\][^\x07]*\x07|\x1b\[[0-9;?]*[A-Za-z]/
 const sidebarPane = (target) => panes(target).find((p) => p.sidebar)?.id;
 
 test("an idle tab says how long since its pane last printed anything", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 500));
   const tty = tmux("display", "-p", "-t", "test:", "#{pane_tty}");
   const then = new Date(Date.now() - 5 * 60_000);
   fs.utimesSync(tty, then, then);
@@ -362,6 +363,49 @@ test("a turn that ends with its pane no longer where the tab's name came from na
 
   assert.ok(await until(() => tmux("display", "-p", "-t", window, "#{@tab_path}") === work), "named again from where the pane is");
   assert.equal(tmux("display", "-p", "-t", window, "#{window_name}"), "renamed-work");
+});
+
+test("compaction shows the tab working, keeps its state and loop through the session it restarts, and a /compact you typed ends idle", async (t) => {
+  // A pane running node, as Claude started by claude-here reads (claude-pane.sh).
+  const window = tmux("new-window", "-d", "-t", "test", "-P", "-F", "#{window_id}", "node -e 'setTimeout(() => {}, 300000)'");
+  t.after(() => tmux("kill-window", "-t", window));
+  const pane = tmux("display", "-p", "-t", window, "#{pane_id}");
+  // And a session file for its process, as Claude Code writes one.
+  const tty = tmux("display", "-p", "-t", pane, "#{pane_tty}");
+  const pid = execFileSync("ps", ["-t", tty.replace("/dev/", ""), "-o", "pid=,comm="], { encoding: "utf8" }).split("\n").find((l) => /node/.test(l)).trim().split(/\s+/)[0];
+  fs.mkdirSync(path.join(home, ".claude/sessions"), { recursive: true });
+  const sessionFile = path.join(home, ".claude/sessions", `${pid}.json`);
+  fs.writeFileSync(sessionFile, JSON.stringify({ pid: Number(pid), sessionId: "compact-test" }));
+  t.after(() => fs.rmSync(sessionFile, { force: true }));
+  const hook = (state, payload) => execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "set", state], { env: { ...process.env, TMUX_PANE: pane }, input: JSON.stringify({ session_id: "compact-test", ...payload }) });
+  const opt = (name) => tmux("display", "-p", "-t", pane, `#{${name}}`);
+
+  // Compacting in the middle of a review loop's turn.
+  hook("working", { hook_event_name: "UserPromptSubmit", prompt: "/review-loop" });
+  assert.equal(opt("@agent_loop"), "review");
+  hook("working", { hook_event_name: "PreCompact", trigger: "auto" });
+  assert.equal(opt("@agent_state"), "working");
+  assert.equal(opt("@agent_activity"), "compacting context");
+  hook("clear", { hook_event_name: "SessionStart", source: "compact" });
+  assert.equal(opt("@agent_state"), "working", "the session compaction restarts keeps the tab working");
+  assert.equal(opt("@agent_loop"), "review", "and its loop");
+  hook("working", { hook_event_name: "PostCompact", trigger: "auto" });
+  assert.equal(opt("@agent_state"), "working", "the turn goes on");
+  assert.equal(opt("@agent_activity"), "", "no longer compacting");
+
+  // A /compact you typed, on a tab with nothing going on.
+  hook("clear", { hook_event_name: "SessionEnd" });
+  assert.equal(opt("@agent_state"), "");
+  hook("working", { hook_event_name: "PreCompact", trigger: "manual" });
+  assert.equal(opt("@agent_state"), "working", "working while it compacts");
+  hook("working", { hook_event_name: "PostCompact", trigger: "manual" });
+  hook("clear", { hook_event_name: "SessionStart", source: "compact" });
+  assert.equal(opt("@agent_state"), "", "idle once it is done");
+
+  // A new session still starts clear.
+  hook("working", { hook_event_name: "UserPromptSubmit", prompt: "hi" });
+  hook("clear", { hook_event_name: "SessionStart", source: "startup" });
+  assert.equal(opt("@agent_state"), "");
 });
 
 test("the status line is about the tab's own pane, not its sidebar, while the sidebar has focus", (t) => {

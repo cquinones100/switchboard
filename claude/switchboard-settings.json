@@ -128,6 +128,26 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/tmux/agent-state.sh set working"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.config/tmux/agent-state.sh set working"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

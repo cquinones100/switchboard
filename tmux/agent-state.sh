@@ -219,7 +219,10 @@ DETAILS='
       ( {"review-loop": "review", "ci-loop": "ci", "queue-and-clean": "queue", "deploy-test": "deploy", "preview-test": "deploy"}[
           if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | capture("^\\s*/(?<s>[a-z-]+)")?.s // "")
           elif $tool == "Skill" then ($in.skill // "")
-          else "" end ] // "") ]
+          else "" end ] // ""),
+      # What started a session (startup, resume, clear, compact) or a
+      # compaction (manual, auto).
+      (.source // .trigger // "") ]
   | map(gsub("[\t\n\u001f]"; " ")) | join("\u001f")'
 
 # Keeps a pane's @agent_activity and @agent_wait in step with its state: a
@@ -240,8 +243,10 @@ details() {
       ;;
     working)
       tmux set -pu -t "$pane" @agent_wait 2>/dev/null
-      if [ "$event" = UserPromptSubmit ]; then
+      if [ "$event" = UserPromptSubmit ] || [ "$event" = PostCompact ]; then
         tmux set -pu -t "$pane" @agent_activity 2>/dev/null
+      elif [ "$event" = PreCompact ]; then
+        tmux set -p -t "$pane" @agent_activity "compacting context"
       elif [ "$event" = PreToolUse ] && [ -n "$activity" ]; then
         tmux set -p -t "$pane" @agent_activity "$activity"
       fi
@@ -255,8 +260,19 @@ details() {
 case "${1:-}" in
   set)
     [ -n "${TMUX_PANE:-}" ] || exit 0
-    IFS=$'\x1f' read -r event tool activity wait loop < <(jq -r "$DETAILS" <<<"${payload:-{\}}" 2>/dev/null)
+    IFS=$'\x1f' read -r event tool activity wait loop source < <(jq -r "$DETAILS" <<<"${payload:-{\}}" 2>/dev/null)
     state=${2:-clear}
+    # Compaction: Claude is at work on it, whatever the tab showed, and a
+    # session it restarts (SessionStart from compact) is the same one going
+    # on, so it keeps its state and loop. After a /compact you typed, nothing
+    # follows, so the tab is idle again; after one in the middle of a turn,
+    # the turn goes on.
+    case "${event:-}:${source:-}" in
+      SessionStart:compact) exit 0 ;;
+      PreCompact:*) state=working ;;
+      PostCompact:manual) state=clear ;;
+      PostCompact:*) state=working ;;
+    esac
     # A question to you is a wait from the moment it is asked.
     [ "${event:-}:${tool:-}" = PreToolUse:AskUserQuestion ] && state=waiting
     set_state "$TMUX_PANE" "$state"

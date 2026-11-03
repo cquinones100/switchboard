@@ -122,7 +122,7 @@ from there.
 Claude Code's hooks in `claude/settings.json`: `UserPromptSubmit`,
 `PostToolUse`, and `PostToolUseFailure` mark the pane working,
 `PermissionRequest` and the question kinds of `Notification` mark it waiting,
-`Stop` marks it done, and `SessionStart` and `SessionEnd` clear it. The
+`Stop` marks it done, and `SessionStart` and `SessionEnd` clear it. `PreCompact` marks it working ("compacting context"), and the `SessionStart` a compaction restarts the session with (`source` `compact`) leaves the state and loop alone, since it is the same session going on; `PostCompact` leaves it working after a compaction in the middle of a turn and clears it after a `/compact` you typed, which nothing follows. The
 `Notification` hook also sends the macOS banner, titled with the tmux window.
 The state lives on the pane (`@agent_state`, `@agent_since`) and is rolled up
 into the window's `@agent`, most urgent first (waiting, done, working), which
