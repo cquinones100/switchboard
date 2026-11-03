@@ -304,7 +304,7 @@ test("a tab is named after its work, not the notes pane moved beside it, which n
   assert.equal(tmux("display", "-p", "-t", alone, "#{@tab_label}"), "notes-home");
 });
 
-test("a note's tab is the one linked to it: note-tab.sh goes there rather than opening another", (t) => {
+test("a note's tab is the one linked to it: note-tab.sh goes there rather than opening another", async (t) => {
   const notesDir = fs.mkdtempSync(path.join(tmp, "note-tab-"));
   fs.writeFileSync(path.join(notesDir, "Plan.md"), "# Plan\n");
   const linked = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
@@ -312,8 +312,34 @@ test("a note's tab is the one linked to it: note-tab.sh goes there rather than o
   tmux("setw", "-t", linked, "@tab_note", "Plan.md");
   const before = tmux("display", "-p", "-t", "test", "#{window_id}");
   assert.notEqual(before, linked);
-  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "Plan.md"], { env: { ...process.env, NOTES_DIR: notesDir } });
+  // A shell first, then Claude (node with a session file, as claude-pane.sh tells it).
+  const claude = tmux("split-window", "-h", "-d", "-t", linked, "-P", "-F", "#{pane_id}", "node -e 'setTimeout(() => {}, 300000)'");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const claudeTty = tmux("display", "-p", "-t", claude, "#{pane_tty}");
+  const claudePid = execFileSync("ps", ["-t", claudeTty.replace("/dev/", ""), "-o", "pid=,comm="], { encoding: "utf8" }).split("\n").find((l) => /node/.test(l)).trim().split(/\s+/)[0];
+  fs.mkdirSync(path.join(home, ".claude/sessions"), { recursive: true });
+  const sessionFile = path.join(home, ".claude/sessions", `${claudePid}.json`);
+  fs.writeFileSync(sessionFile, JSON.stringify({ pid: Number(claudePid), sessionId: "note-tab-test" }));
+  t.after(() => fs.rmSync(sessionFile, { force: true }));
+  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "Plan.md"], { env: { ...process.env, NOTES_DIR: notesDir, NOTES_OPEN_COMMAND: "cat" } });
   assert.equal(tmux("display", "-p", "-t", "test", "#{window_id}"), linked, "brought to the front");
+  // Notes beside it (a stand-in, cat), the cursor left in the tab's own pane.
+  const beside = tmux("list-panes", "-t", linked, "-F", "#{pane_id} #{?@notes_pane,1,0}").split("\n").find((l) => l.endsWith(" 1"))?.split(" ")[0];
+  assert.ok(beside, "Notes beside it");
+  t.after(() => { try { tmux("kill-pane", "-t", beside); } catch {} });
+  assert.equal(tmux("display", "-p", "-t", linked, "#{pane_id}"), claude, "the cursor in Claude's pane");
+  assert.equal(tmux("display", "-p", "-t", beside, "#{pane_at_left}"), "0", "beside Claude, not the shell before it");
+  // Going there again from Notes leaves Notes where it is, the cursor back in Claude.
+  tmux("select-pane", "-t", beside);
+  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "Plan.md"], { env: { ...process.env, NOTES_DIR: notesDir, NOTES_OPEN_COMMAND: "cat" } });
+  assert.equal(tmux("display", "-p", "-t", beside, "#{window_id}"), linked, "still beside it");
+  assert.equal(tmux("display", "-p", "-t", linked, "#{pane_id}"), claude, "the cursor back in Claude");
+  // With note_tab_beside off, only the tab.
+  tmux("kill-pane", "-t", beside);
+  tmux("set", "-g", "@setting_note_tab_beside", "off");
+  t.after(() => tmux("set", "-gu", "@setting_note_tab_beside"));
+  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "Plan.md"], { env: { ...process.env, NOTES_DIR: notesDir, NOTES_OPEN_COMMAND: "cat" } });
+  assert.equal(tmux("list-panes", "-t", linked).split("\n").length, 2, "no Notes beside it");
   // A note that isn't there opens nothing.
   const windows = tmux("list-windows", "-t", "test").split("\n").length;
   execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "Gone.md"], { env: { ...process.env, NOTES_DIR: notesDir } });
@@ -332,7 +358,7 @@ test("with no tab of its own, a note asks which of the open tabs is its, or a ne
   const given = path.join(bin, "given");
   // A stand-in fzf: keeps the list, picks the tab named pick-me.
   fs.writeFileSync(path.join(bin, "fzf"), `#!/bin/sh\ntee '${given}' | grep 'pick-me'\n`, { mode: 0o755 });
-  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "choose", "Plan.md", ""], { env: { ...process.env, NOTES_DIR: notesDir, PATH: `${bin}:${process.env.PATH}` } });
+  execFileSync("bash", [path.join(__dirname, "../tmux/note-tab.sh"), "choose", "Plan.md", ""], { env: { ...process.env, NOTES_DIR: notesDir, NOTES_OPEN_COMMAND: "cat", PATH: `${bin}:${process.env.PATH}` } });
   const offered = fs.readFileSync(given, "utf8").split("\n").filter(Boolean).map((line) => line.split("\t")[1]);
   assert.equal(offered[0], "+ New tab, in a directory you pick");
   assert.ok(offered.some((name) => /pick-me$/.test(name)), "the open tabs");

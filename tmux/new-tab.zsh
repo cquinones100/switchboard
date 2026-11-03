@@ -7,7 +7,8 @@
 #
 # For a note (note-tab.sh sets NEW_TAB_NOTE, a path in the notes directory, and
 # NEW_TAB_NAME, its title): the tab is linked to the note (@tab_note) and named
-# after it, rather than asked for a name. NEW_TAB_NAME alone names it, and
+# after it, rather than asked for a name, and Notes moves beside its Claude
+# showing the note (note-tab.sh beside, NEW_TAB_CLIENT the client). NEW_TAB_NAME alone names it, and
 # NEW_TAB_PROMPT is Claude's first prompt (mission control's "Open a tab for
 # this thread with Claude" on a Slack message), passed in the tab's
 # environment, so nothing in it is read by a shell.
@@ -36,6 +37,8 @@ if [[ -n ${NEW_TAB_NOTE:-} || -n ${NEW_TAB_NAME:-} ]]; then
   [[ -n ${NEW_TAB_NOTE:-} ]] && tmux set-option -w -t "$window" @tab_note "$NEW_TAB_NOTE"
   tmux set-option -w -t "$window" @tab_name "${NEW_TAB_NAME:-${NEW_TAB_NOTE:r}}"
   "$script_dir/window-names.sh" "$(tmux display -p -t "$window" '#{session_name}')"
+  # A note's tab opens with Notes beside its Claude, showing the note.
+  [[ -n ${NEW_TAB_NOTE:-} ]] && "$script_dir/note-tab.sh" beside "$window" "${NEW_TAB_CLIENT:-}"
   exit 0
 fi
 cd "$dir" && exec "$script_dir/tab-name.zsh" optional

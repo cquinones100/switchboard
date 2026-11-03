@@ -235,6 +235,13 @@
     "default": true
   },
   {
+    "key": "note_tab_beside",
+    "category": "Notes",
+    "label": "Notes beside a note's tab",
+    "description": "Opening a note's tab from Notes (t, or M-p's Open the tab for the note) moves Notes beside the tab's Claude showing the note, as M-e does; off, it only goes to the tab",
+    "default": true
+  },
+  {
     "key": "notes_reference_links",
     "category": "Notes",
     "label": "Links as references",

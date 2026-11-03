@@ -8,6 +8,7 @@
 #        notes-open.sh side <client_name> <pane> M-e: to the right of <pane>
 #        notes-open.sh away <client_name> <pane> M-w on Notes: back to its own tab
 #        notes-open.sh show <window>           Notes beside <window> shows its note
+#        notes-open.sh pane                    prints the notes pane, if any
 #        notes-open.sh note <client_name> <note>  shows <note> (a path in the
 #                                              notes directory), then as M-N
 #
@@ -175,6 +176,13 @@ if [ "${1:-}" = away ]; then
   remember "$(tmux display -p -t "$pane" '#{window_id}')"
   put_away "$pane" && exit 0
   tmux display-popup -c "$client" -E -w 60 -h 6 "~/.config/tmux/confirm.sh 'Close pane?'"
+  exit 0
+fi
+
+# The notes pane, as found above, for note-tab.sh to tell whether Notes is in
+# a tab already (even one started by hand, with no mark).
+if [ "${1:-}" = pane ]; then
+  notes_pane
   exit 0
 fi
 

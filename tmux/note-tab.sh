@@ -7,14 +7,51 @@
 # under the cursor, and M-p's "Open the tab for the note in Notes" for the one
 # Notes shows.
 #
+# Whichever tab it goes to, Notes moves beside the tab's Claude showing the
+# note, as M-e puts it there (notes-open.sh side), the cursor left in Claude's
+# pane; the note_tab_beside setting turns that off.
+#
 # Usage: note-tab.sh [<note>] [<client>]
 #        note-tab.sh choose <note> <client>   the question, in its popup
+#        note-tab.sh beside <window> <client> Notes beside <window>'s pane
 #   <note>    a path in the notes directory; default, the one Notes shows
 #             (.notes.json's last)
 #   <client>  the tmux client to use; default, the one in front of this pane
 
 set -u
 notes_dir=${NOTES_DIR:-$HOME/Notes}
+
+# Notes beside the tab's Claude, showing the tab's note; already there, it is
+# only shown it. Either way the cursor goes to Claude's pane.
+if [ "${1:-}" = beside ]; then
+  window=${2:-} client=${3:-}
+  [ -n "$window" ] && [ "$(tmux show -gqv @setting_note_tab_beside)" != off ] || exit 0
+  export LC_ALL=en_US.UTF-8
+  . "${0%/*}/claude-pane.sh"
+  # Claude's pane (claude-pane.sh), else the first that is neither the
+  # sidebar nor Notes, as in a tab just opened, whose Claude is still starting.
+  # Notes found first, as notes-open.sh finds it, a pane started by hand too,
+  # so it is never taken for the tab's pane and the toggle in its side never
+  # puts away Notes already in this tab.
+  notes=$("${0%/*}/notes-open.sh" pane)
+  [ -n "$notes" ] && [ "$(tmux display -p -t "$notes" '#{window_id}' 2>/dev/null)" = "$window" ] || notes=""
+  pane="" first=""
+  while IFS=$'\t' read -r id sidebar is_notes command tty; do
+    { [ "$is_notes" = 1 ] || [ "$id" = "$notes" ]; } && continue
+    [ "$sidebar" = 1 ] && continue
+    [ -z "$first" ] && first=$id
+    [ -z "$pane" ] && claude_pid "$command" "$tty" >/dev/null && pane=$id
+  done < <(tmux list-panes -t "$window" -F $'#{pane_id}\t#{?@sidebar,1,0}\t#{?@notes_pane,1,0}\t#{pane_current_command}\t#{pane_tty}' 2>/dev/null)
+  pane=${pane:-$first}
+  [ -n "$pane" ] || exit 0
+  if [ -n "$notes" ]; then
+    "${0%/*}/notes-open.sh" show "$window"
+  else
+    "${0%/*}/notes-open.sh" side "$client" "$pane"
+  fi
+  tmux select-pane -t "$pane"
+  exit 0
+fi
 
 if [ "${1:-}" = choose ]; then
   note=$2 client=${3:-}
@@ -29,11 +66,12 @@ if [ "${1:-}" = choose ]; then
     fzf --delimiter '\t' --with-nth 2 --layout reverse --prompt 'Tab: ' --header "Which tab is ${title}'s? Enter links it and goes there") || exit 0
   window=${choice%%$'\t'*}
   if [ "$window" = new ]; then
-    export NEW_TAB_NOTE=$note NEW_TAB_NAME=$title
+    export NEW_TAB_NOTE=$note NEW_TAB_NAME=$title NEW_TAB_CLIENT=$client
     exec ~/.config/tmux/new-tab.zsh
   fi
   tmux set-option -w -t "$window" @tab_note "$note"
   if [ -n "$client" ]; then tmux switch-client -c "$client" -t "$window"; else tmux select-window -t "$window"; fi
+  "$0" beside "$window" "$client"
   exit 0
 fi
 note=${1:-$(jq -r '.last // empty' "$notes_dir/.notes.json" 2>/dev/null)}
@@ -52,6 +90,7 @@ if [ -n "$window" ]; then
   else
     tmux select-window -t "$window"
   fi
+  "$0" beside "$window" "$client"
   exit 0
 fi
 
