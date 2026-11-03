@@ -2157,9 +2157,11 @@ test("the Calendar view draws the day /today saved, and says when it is out of d
   const env = { ...process.env, TMUX_SIDEBAR_STATE_DIR: stateDir };
   const now = new Date();
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const lateNight = new Date(now.getTime() + 7_200_000).getDate() !== now.getDate();
   const day = { date, events: [
     { title: "Planning", start: new Date(now.getTime() - 3 * 3_600_000).toISOString(), end: new Date(now.getTime() - 2 * 3_600_000).toISOString(), you: "going", link: "https://calendar.example/1" },
-    { title: "Review", start: new Date(now.getTime() + 3_600_000).toISOString(), end: new Date(now.getTime() + 7_200_000).toISOString(), you: "maybe", join: "https://zoom.example/j/2" },
+    // In an hour, or, late at night when that is tomorrow, going on now.
+    { title: "Review", start: new Date(now.getTime() + (lateNight ? -1_800_000 : 3_600_000)).toISOString(), end: new Date(now.getTime() + (lateNight ? 600_000 : 7_200_000)).toISOString(), you: "maybe", join: "https://zoom.example/j/2" },
     { title: "Bad link", start: now.toISOString(), end: now.toISOString(), you: "going", join: "javascript:alert(1)" },
   ] };
   execFileSync("node", [path.join(__dirname, "../claude/skills/today/scripts/save.js")], { input: JSON.stringify(day), env });
@@ -2168,11 +2170,11 @@ test("the Calendar view draws the day /today saved, and says when it is out of d
   const script = `
     const { calendarView, calendarLines, calendarStale, calendarLooping } = require(${JSON.stringify(path.join(__dirname, "../lib/sidebar/calendar"))});
     const view = calendarView([]);
-    const plain = calendarLines(view, 120, 40, 1).map((l) => l.replace(/\\x1b\\[[0-9;]*m/g, ""));
+    const plain = calendarLines(view, 120, 40, view.items.findIndex((i) => i.title === "Bad link")).map((l) => l.replace(/\\x1b\\[[0-9;]*m/g, ""));
     console.log(JSON.stringify({ items: view.items.map((i) => [i.title, i.url]), plain, stale: view.stale, looping: calendarLooping([{ name: "Calendar", claude: {} }]), loopingNone: calendarLooping([{ name: "Calendar" }]) }));`;
   const out = JSON.parse(execFileSync("node", ["-e", script], { env, encoding: "utf8" }));
-  assert.deepEqual(out.items.map((i) => i[0]), ["Planning", "Bad link", "Review"]);
-  assert.equal(out.items[2][1], "https://zoom.example/j/2", "Enter joins the call");
+  assert.deepEqual(out.items.map((i) => i[0]), lateNight ? ["Planning", "Review", "Bad link"] : ["Planning", "Bad link", "Review"]);
+  assert.equal(out.items.find((i) => i[0] === "Review")[1], "https://zoom.example/j/2", "Enter joins the call");
   assert.equal(out.stale, false);
   assert.ok(out.plain.some((l) => l.includes("Planning")) && out.plain.some((l) => l.includes("▎Review")), "an unanswered event is outlined");
   assert.ok(out.plain.some((l) => l.includes("●") && l.includes("─")), "a line at now");
@@ -2182,6 +2184,26 @@ test("the Calendar view draws the day /today saved, and says when it is out of d
   const old = JSON.parse(execFileSync("node", ["-e", script], { env, encoding: "utf8" }));
   assert.equal(old.stale, true);
   assert.match(old.plain.join("\n"), /No calendar for today yet \(last saved 2020-01-01\): opening a Calendar tab to fetch it/);
+
+  // With the feed set up: no Calendar tab while it reads. Once its looks have
+  // failed one after another for a quarter of an hour, it is lost: /today
+  // keeps the day, a tab opened for it until it has saved one, and its day
+  // shown once newer than the feed's. `looks` are the failed looks, minutes
+  // ago, oldest first.
+  const lost = (looks, savedAt) => `
+    const f = require(${JSON.stringify(path.join(__dirname, "../lib/sidebar/calendar-feed"))});
+    const { calendarStale, readDay } = require(${JSON.stringify(path.join(__dirname, "../lib/sidebar/calendar"))});
+    Object.assign(f.feed, { configured: true, day: { date: ${JSON.stringify(date)}, updated: Date.now() - 3_600_000, source: "ical", events: [] } });
+    ${JSON.stringify(looks)}.forEach((ago) => f.failed("Couldn't read the calendar feed: offline", Date.now() - ago * 60_000));
+    require("node:fs").writeFileSync(${JSON.stringify(path.join(stateDir, "calendar.json"))}, JSON.stringify({ date: ${JSON.stringify(date)}, updated: Date.now() - ${savedAt}, events: [] }));
+    console.log(JSON.stringify({ stale: calendarStale(readDay()), source: readDay().source ?? "saved" }));`;
+  const feedRun = (looks, savedAt) => JSON.parse(execFileSync("node", ["-e", lost(looks, savedAt)], { env, encoding: "utf8" }));
+  assert.deepEqual(feedRun([], 86_400_000), { stale: false, source: "ical" }, "a feed reading needs no tab");
+  assert.deepEqual(feedRun([1], 86_400_000), { stale: false, source: "ical" }, "one failed look is not a lost feed");
+  assert.deepEqual(feedRun([20, 15, 10, 5, 0], 86_400_000), { stale: true, source: "ical" }, "a lost feed with nothing newer saved opens a Calendar tab");
+  assert.deepEqual(feedRun([75, 70, 0], 86_400_000), { stale: false, source: "ical" }, "time away between failed looks starts the count over");
+  assert.deepEqual(feedRun([20, 15, 10, 5, 0], 60_000), { stale: false, source: "saved" }, "and then shows the day /today saved");
+  assert.deepEqual(feedRun([20, 15, 10, 5, 0], 3_660_000), { stale: true, source: "ical" }, "a saved day older than the feed's last keeps nothing");
 });
 
 test("Enter on a board's PR or ticket offers what to do with it, and each item says what it is", () => {
