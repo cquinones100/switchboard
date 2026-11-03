@@ -491,7 +491,10 @@ test("tabs whose open PR has a failing check are a Build failing group of their 
   assert.equal(sidebar.staged([{ ...tabs[2], loopSkill: "ci" }])[0].title, "Build failing", "a CI loop that has stopped leaves it Build failing");
   const { lines } = sidebar.sidebarLines({ tabs, sections: [], cols: 40, rows: 40, view: { focused: false, cursor: "@1", frame: 0, here: "@1" } });
   const text = lines.map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")).join("\n");
-  assert.match(text, /BUILD FAILING 3/);
+  assert.match(text, /✗ BUILD FAILING 3/, "its heading carries the failing mark");
+  assert.match(text.split("\n")[0], /✗ 4/, "the counts at the top count the failing builds");
+  const red = lines.find((line) => line.includes("✗1 failing") && line.includes("red working") === false && /\x1b\[38;5;160m\x1b\[1m✗\d failing/.test(line));
+  assert.ok(red, "a failing count is in bold red even under a working tab");
   assert.match(text, / ✗ +2 red idle/, "an idle failing tab wears the failing badge");
   assert.match(text, /✗1 failing/);
   assert.doesNotMatch(text, / ✗ +3 red working/, "a working one keeps its spinner");

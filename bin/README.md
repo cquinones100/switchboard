@@ -686,8 +686,9 @@ tmux-sidebar status   whether it is running
 The sidebar lists the session's tabs in groups: **Needs you** (a Claude
 session waiting on an answer, the longest-waiting first, then one that finished
 while you were elsewhere, the oldest first), **Build failing** (a tab whose
-open PR has a check that failed, even while Claude works in it; an idle one
-wears a red `✗`), **Working**, **Monitoring** (a
+open PR has a check that failed, even while Claude works in it; its heading
+and the count of failing builds, first of the counts at the top, are in bold red, as is
+each tab's "✗1 failing" whatever else it says, and an idle one wears a red `✗`), **Working**, **Monitoring** (a
 Claude whose only background work is `Monitor` watches, waiting for one to
 report, each named, "monitoring · CI on #12"), **In merge queue**
 (in queue order, each with its position), **Merged**, **Idle**, Claude sessions with nothing to do, by number, and
