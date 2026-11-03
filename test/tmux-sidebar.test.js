@@ -1224,6 +1224,39 @@ test("M-w on a tool in a pane's place closes the tool and brings the pane back, 
   }
 });
 
+test("a tool in a pane's place shows that pane beside it on the left, and alone again, from either pane", () => {
+  const window = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  const own = tmux("display", "-p", "-t", window, "#{pane_id}");
+  // As pane-in-place.sh open leaves it.
+  const tool = tmux("new-window", "-d", "-t", "test", "-P", "-F", "#{pane_id}", "cat");
+  tmux("set", "-w", "-t", tool, "@pane_parked", "1");
+  tmux("set", "-p", "-t", tool, "@parked_pane", own);
+  tmux("set", "-p", "-t", tool, "@in_place", "lazygit");
+  tmux("swap-pane", "-d", "-s", tool, "-t", own);
+  const script = path.join(__dirname, "../tmux/pane-in-place.sh");
+  const layout = () => tmux("list-panes", "-t", window, "-F", "#{pane_id} #{pane_left} #{pane_width}").split("\n").map((l) => l.split(" "));
+  try {
+    execFileSync("bash", [script, "side", tool]);
+    let panes = layout();
+    assert.deepEqual(panes.map(([id]) => id), [own, tool], "your pane joins the tool's tab, on its left");
+    assert.ok(Math.abs(Number(panes[0][2]) - Number(panes[1][2])) <= 2, "half the width each");
+    execFileSync("bash", [script, "side", tool]);
+    assert.equal(layout().length, 2, "asked again, nothing changes");
+
+    execFileSync("bash", [script, "full", own]);
+    assert.deepEqual(layout().map(([id]) => id), [tool], "from your pane too, the tool is alone again");
+    assert.equal(tmux("display", "-p", "-t", own, "#{@pane_parked}"), "1", "your pane waits out of the tabs once more");
+
+    // Side by side, quitting the tool brings your pane back whole.
+    execFileSync("bash", [script, "side", tool]);
+    execFileSync("bash", [script, "back", own], { env: { ...process.env, TMUX_PANE: tool } });
+    tmux("kill-pane", "-t", tool);
+    assert.deepEqual(layout().map(([id]) => id), [own]);
+  } finally {
+    tmux("kill-window", "-t", window);
+  }
+});
+
 test("a window holding a pane parked behind lazygit is not a tab, and gets no sidebar", async () => {
   const window = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
   try {

@@ -12,6 +12,9 @@
 #   pane-in-place.sh back <pane>                            from the tool's pane as it exits: swap <pane> back
 #   pane-in-place.sh popup <lazygit|diffview|pr-image|ticket-image> <dir> <client> the tool in <dir> in a popup on <client>, for a
 #                                                           worktree no tab is in (the sidebar's d and L)
+#   pane-in-place.sh side <pane> <client>                   the pane the tool stands in for, back beside it on its left
+#   pane-in-place.sh full <pane> <client>                   the tool alone again, that pane parked once more
+#     <pane> is either one: the tool's, or the pane beside it
 #
 # The tool starts in a window of its own, and swap-pane trades places: the
 # tool goes where the pane was, and the pane waits in that window, marked
@@ -121,6 +124,35 @@ case "${1:-}" in
     "${0%/*}/say.sh" wait "$client"
     tmux display-popup -c "$client" -E -w 95% -h 90% -d "$dir" -T " $tool " "$command"
     ;;
+  # Side by side: the parked pane (a Claude session, say) joins the tool's
+  # window on its left, half the width, and goes back to waiting in a window
+  # of its own on full. Quitting the tool either way brings the pane back
+  # whole, as before (back's swap-pane works within one window too).
+  side | full)
+    current=$2 client=${3:-}
+    # The tool's pane: this one, or the one in this window standing in for it.
+    if [ -n "$(tmux show -pqv -t "$current" @in_place)" ]; then
+      tool_pane=$current
+    else
+      tool_pane=$(LC_ALL=en_US.UTF-8 tmux list-panes -t "$current" -F $'#{pane_id}\t#{@parked_pane}' | awk -F'\t' -v p="$current" '$2 == p { print $1; exit }')
+    fi
+    parked=${tool_pane:+$(tmux show -pqv -t "$tool_pane" @parked_pane)}
+    if [ -z "$parked" ] || ! tmux display -p -t "$parked" '' 2>/dev/null; then
+      "${0%/*}/say.sh" ${client:+-c "$client"} "No tool here standing in for another pane (lazygit, the diff, a PR or ticket image)"
+      exit 0
+    fi
+    together=$([ "$(tmux display -p -t "$parked" '#{window_id}')" = "$(tmux display -p -t "$tool_pane" '#{window_id}')" ] && echo 1)
+    if [ "$1" = side ]; then
+      [ -n "$together" ] && exit 0
+      tmux join-pane -d -h -b -l 50% -s "$parked" -t "$tool_pane"
+    else
+      [ -n "$together" ] || exit 0
+      tmux break-pane -d -s "$parked"
+      tmux set -w -t "$parked" @pane_parked 1
+      tmux select-pane -t "$tool_pane"
+    fi
+    ;;
+
   back)
     pane=$2
     # The pane may have been closed meanwhile; then there is nothing to bring back.

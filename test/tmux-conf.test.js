@@ -84,6 +84,13 @@ test("tmux.conf loads without an error, and every binding keeps all its commands
       return { table, key: w[0], commands: w.slice(1).filter((x) => x === "\\;" || x === ";").length + 1, line };
     });
   assert.ok(binds.length > 30, "the binds were read");
+  // A key bound twice in one table keeps only its last binding, silently.
+  const seen = new Map();
+  binds.forEach((bind) => {
+    const id = `${bind.table} ${bind.key}`;
+    assert.ok(!seen.has(id), `${id} is bound twice:\n${seen.get(id)}\n${bind.line}`);
+    seen.set(id, bind.line);
+  });
 
   const listed = tmux("list-keys").stdout.split("\n").filter(Boolean).map((line) => {
     const w = words(line).slice(1);
