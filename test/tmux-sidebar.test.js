@@ -464,6 +464,39 @@ test("tabs whose PR is in the merge queue or merged get sections of their own, a
   assert.match(text, / ◆ +4 landed/);
 });
 
+test("tabs whose open PR has a failing check are a Build failing group of their own, an idle one wearing a red ✗", () => {
+  const base = { session: "$1", sessionName: "test", panes: [], sidebars: [], since: undefined, command: "zsh", claude: { sessionId: "s" } };
+  const tabs = [
+    { ...base, id: "@1", index: 1, name: "green", state: "idle", pr: "11", prState: "OPEN", checks: { pass: 4, fail: 0, pending: 0 } },
+    { ...base, id: "@7", index: 7, name: "red closed", state: "idle", pr: "17", prState: "CLOSED", checks: { pass: 0, fail: 1, pending: 0 } },
+    { ...base, id: "@2", index: 2, name: "red idle", state: "idle", pr: "12", prState: "OPEN", checks: { pass: 3, fail: 1, pending: 0 } },
+    { ...base, id: "@3", index: 3, name: "red working", state: "working", pr: "13", prState: "OPEN", checks: { pass: 1, fail: 2, pending: 1 } },
+    { ...base, id: "@4", index: 4, name: "red asking", state: "waiting", pr: "14", prState: "OPEN", checks: { pass: 0, fail: 1, pending: 0 } },
+    { ...base, id: "@5", index: 5, name: "red queued", state: "idle", pr: "15", prState: "OPEN", merge: "queued", position: 1, checks: { pass: 0, fail: 1, pending: 0 } },
+    { ...base, id: "@6", index: 6, name: "red ci loop", state: "background", pr: "16", prState: "OPEN", background: 1, loop: { kind: "ci", round: 2 }, checks: { pass: 0, fail: 1, pending: 0 } },
+  ];
+  assert.deepEqual(sidebar.grouped(tabs).map((g) => [g.title, g.tabs.map((x) => x.name)]), [
+    ["Needs you", ["red asking"]],
+    ["Build failing", ["red working", "red ci loop", "red idle"]],
+    ["In merge queue", ["red queued"]],
+    ["Idle", ["green", "red closed"]],
+  ], "waiting stays in Needs you and a queued PR in the queue; a failing build is its own group even while Claude works");
+  assert.deepEqual(sidebar.staged(tabs).map((g) => [g.title, g.tabs.map((x) => x.name)]), [
+    ["Needs you", ["red asking"]],
+    ["Build failing", ["red working", "red idle"]],
+    ["CI loop", ["red ci loop"]],
+    ["In merge queue", ["red queued"]],
+    ["Idle", ["green", "red closed"]],
+  ], "in mission control a CI loop at work on it keeps its own stage");
+  assert.equal(sidebar.staged([{ ...tabs[2], loopSkill: "ci" }])[0].title, "Build failing", "a CI loop that has stopped leaves it Build failing");
+  const { lines } = sidebar.sidebarLines({ tabs, sections: [], cols: 40, rows: 40, view: { focused: false, cursor: "@1", frame: 0, here: "@1" } });
+  const text = lines.map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")).join("\n");
+  assert.match(text, /BUILD FAILING 3/);
+  assert.match(text, / ✗ +2 red idle/, "an idle failing tab wears the failing badge");
+  assert.match(text, /✗1 failing/);
+  assert.doesNotMatch(text, / ✗ +3 red working/, "a working one keeps its spinner");
+});
+
 test("the PR board searches for merged PRs only every ten minutes, keeping the last answer between", async (t) => {
   const repo = path.join(tmp, "board-repo");
   fs.mkdirSync(repo, { recursive: true });
@@ -530,15 +563,15 @@ test("the tabs' PRs are asked about in one query, a gone worktree's by its branc
   assert.match(query, /r0: repository\(owner: "acme", name: "widgets"\) \{ a0: pullRequest\(number: 12\).* a2: pullRequest\(number: 14\).* a3: pullRequests\(headRefName: "feat-x"/);
   assert.equal((query.match(/number: 13\)/g) || []).length, 1, "each PR asked about once");
   assert.equal(changed, 1);
-  assert.deepEqual(sidebar.mergeOf(tabs[0]), { merge: "queued", position: 2 });
-  assert.deepEqual(sidebar.mergeOf(tabs[1]), { merge: "merged" });
+  assert.deepEqual(sidebar.mergeOf(tabs[0]), { prState: "OPEN", merge: "queued", position: 2 });
+  assert.deepEqual(sidebar.mergeOf(tabs[1]), { prState: "MERGED", merge: "merged" });
   // Its checks counted by outcome, its review and its size, for the cards.
   const facts = sidebar.mergeOf(tabs[2]);
-  assert.deepEqual(facts, { checks: { pass: 12, fail: 1, pending: 3 }, review: "APPROVED", size: { additions: 340, deletions: 80 } });
+  assert.deepEqual(facts, { prState: "OPEN", checks: { pass: 12, fail: 1, pending: 3 }, review: "APPROVED", size: { additions: 340, deletions: 80 } });
   assert.deepEqual(sidebar.prFacts(facts), ["✓12 ✗1 ⏳3", "approved", "+340 −80"]);
-  assert.deepEqual(sidebar.mergeOf(gone), { merge: "merged", pr: "15" }, "found by its branch, PR and all");
+  assert.deepEqual(sidebar.mergeOf(gone), { prState: "MERGED", merge: "merged", pr: "15" }, "found by its branch, PR and all");
   // Shown with that PR, the tab is still found by its branch next time.
-  assert.deepEqual(sidebar.mergeOf({ ...gone, pr: "15" }), { merge: "merged", pr: "15" });
+  assert.deepEqual(sidebar.mergeOf({ ...gone, pr: "15" }), { prState: "MERGED", merge: "merged", pr: "15" });
   // The same answers again change nothing.
   await sidebar.fetchMerges(tabs, () => changed++);
   assert.equal(changed, 1);

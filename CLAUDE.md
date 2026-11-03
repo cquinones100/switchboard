@@ -220,6 +220,8 @@ it lays windows out.
 
 Its lookups of GitHub, Linear and the calendar feed pause while you're away (no tmux client, or the Mac idle `AWAY_MS` or locked, checked once a minute) and all run on return (`pause_when_away` setting); the standup and meeting notes don't. Anything that has just asked GitHub about a PR appends to `github` in the state directory, as `M-m`'s `pr-ready.sh` does, and the daemon asks again for the PRs, CI and Work map views, at most every 15 seconds. The PR board asks for merged PRs only every `MERGED_EVERY_MS`.
 
+A tab whose open PR has a failing check, from `prs.js`'s per-minute query of every tab's PR (`tab.checks`), is a kind of tab of its own: `buildFailing` in `model.js` puts it in the Build failing group and stage, after Needs you and before everything else but the merge queue, Merged and Testing Deploy (in mission control a tab in `/ci-loop` keeps that stage), and an idle one wears the `failing` badge (`build_failing` setting).
+
 Plugins load only when named in `~/.config/switchboard/sidebar.json`, from
 `~/.config/switchboard/sidebar-plugins/` (yours) or `lib/sidebar/plugins/`. Its tests,
 `test/tmux-sidebar.test.js`, run against a throwaway tmux server and a

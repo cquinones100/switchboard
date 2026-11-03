@@ -45,6 +45,13 @@
     "default": true
   },
   {
+    "key": "build_failing",
+    "category": "Sidebar",
+    "label": "Build failing",
+    "description": "A Build failing group in the sidebar and mission control for the tabs whose open PR has a failing check, asked of GitHub every minute, an idle one wearing a red ✗; off, they stay in Working or Idle with the failing count in their words #github",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",
