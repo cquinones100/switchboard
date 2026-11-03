@@ -59,6 +59,13 @@
     "default": true
   },
   {
+    "key": "needs_notices",
+    "category": "Sidebar",
+    "label": "M-a goes to notifications",
+    "description": "M-a's walk of what needs you ends at the notifications while there are any, after the tabs, opening them as the sidebar's n does",
+    "default": true
+  },
+  {
     "key": "notice_list",
     "category": "Sidebar",
     "label": "Notifications view",

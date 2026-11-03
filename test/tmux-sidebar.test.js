@@ -1977,7 +1977,7 @@ test("mission control's Settings view lists the options by category, / narrows t
     // / then "notif": the Notifications header and its two options, and no other category.
     for (const key of ["/", "n", "o", "t", "i", "f", "Enter"]) await sidebar.missionKey(client, { key });
     const items = sidebar.viewsFor(client)[client.view.view - 1].items;
-    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes"], "the Notifications category, and the Sidebar's options that mention notifications");
+    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "M-a goes to notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes"], "the Notifications category, and the Sidebar's options that mention notifications");
     assert.doesNotMatch(plain(sent.at(-1)), /Theme/);
 
     // Enter on an on/off option turns it off, and only what differs from the default is written.
@@ -2864,6 +2864,57 @@ test("M-a goes from a finished tab to one waiting on you before the next finishe
   fs.writeFileSync(needs, [[waiting, pane(waiting), session, "waiting"], [doneA, pane(doneA), session, "done"], [doneC, pane(doneC), session, "done"]].map((r) => r.join("\t")).join("\n") + "\n");
   assert.equal(press(doneB), waiting, "doneB seen and gone: the waiting one first");
   assert.equal(press(waiting), doneC, "then on from where the walk was, not back to doneA");
+
+  // The notifications, last on the list: the walk goes there after the
+  // finished tabs, through sidebar.sh notices (a stand-in here), and a waiting
+  // tab still comes before them.
+  const opened = path.join(tmp, "notices-opened");
+  const standIn = path.join(tmp, "notices-stand-in");
+  fs.writeFileSync(standIn, `#!/bin/sh\necho "$@" >> '${opened}'\n`, { mode: 0o755 });
+  fs.writeFileSync(needs, [[doneA, pane(doneA), session, "done"], ["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  tmux("select-window", "-t", doneA);
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "next"], { env: { ...process.env, TMUX_PANE: pane(doneA), NOTICES_COMMAND: standIn } });
+  // One line, the client's name, which the tests' server has none of.
+  assert.equal(fs.readFileSync(opened, "utf8"), "\n", "from the last finished tab, on to the notifications");
+  fs.writeFileSync(needs, [[waiting, pane(waiting), session, "waiting"], ["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  assert.equal(press(doneB), waiting, "a waiting tab before the notifications");
+
+  // Notifications that opened in the same window's sidebar (notice_list off):
+  // the next press from there goes on round the list, not to them again.
+  fs.writeFileSync(needs, [[doneA, pane(doneA), session, "done"], [doneB, pane(doneB), session, "done"], ["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  fs.rmSync(opened, { force: true });
+  tmux("select-window", "-t", doneB);
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "next"], { env: { ...process.env, TMUX_PANE: pane(doneB), NOTICES_COMMAND: standIn } });
+  assert.ok(fs.existsSync(opened), "from the last finished tab, the notifications");
+  assert.equal(press(doneB), doneA, "then round to the first tab, from the window they opened in");
+  // From the notifications in a tab's own sidebar (a stand-in: its pane marked
+  // as one), M-a back to that same tab puts the cursor in its pane.
+  fs.writeFileSync(needs, [[doneB, pane(doneB), session, "done"], ["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  const mainB = pane(doneB);
+  const side = tmux("split-window", "-d", "-t", doneB, "-P", "-F", "#{pane_id}", "cat");
+  tmux("set-option", "-p", "-t", side, "@sidebar", "1");
+  tmux("set-option", "-g", "@agent_walk_window", "notices");
+  tmux("set-option", "-g", "@agent_notices_from", doneB);
+  tmux("select-window", "-t", doneB);
+  tmux("select-pane", "-t", side);
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "next"], { env: { ...process.env, TMUX_PANE: side, NOTICES_COMMAND: standIn } });
+  assert.equal(tmux("display", "-p", "-t", doneB, "#{pane_id}"), mainB, "the tab's pane, not its sidebar");
+  // A pinned tab with no Claude pane ("-"): its pane that isn't the sidebar.
+  fs.writeFileSync(needs, [[doneB, "-", session, "pinned"], ["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  tmux("set-option", "-g", "@agent_walk_window", "notices");
+  tmux("select-pane", "-t", side);
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "next"], { env: { ...process.env, TMUX_PANE: side, NOTICES_COMMAND: standIn } });
+  assert.equal(tmux("display", "-p", "-t", doneB, "#{pane_id}"), mainB, "a pinned shell tab's own pane too");
+  tmux("kill-pane", "-t", side);
+  // The notifications all that needs you: M-a opens them every time, from
+  // the window they last opened in too.
+  fs.writeFileSync(needs, [["notices", "-", "-", "notices"]].map((r) => r.join("\t")).join("\n") + "\n");
+  [1, 2].forEach(() => {
+    fs.rmSync(opened, { force: true });
+    tmux("select-window", "-t", doneB);
+    execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "next"], { env: { ...process.env, TMUX_PANE: pane(doneB), NOTICES_COMMAND: standIn } });
+    assert.ok(fs.existsSync(opened), "the notifications, again");
+  });
 });
 
 test("M-c puts the cursor in the pane running Claude in the tab, and says so when there is none", async (t) => {

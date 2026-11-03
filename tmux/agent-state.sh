@@ -336,6 +336,14 @@ case "${1:-}" in
     daemon=$(cat ~/.local/state/tmux-sidebar/daemon.pid 2>/dev/null)
     if [ -n "$daemon" ] && kill -0 "$daemon" 2>/dev/null && [ -f "$needs_file" ]; then
       here=$(tmux display -p '#{window_id}')
+      # The Notifications window is the list's "notices" entry, last on it; so
+      # is the window the walk last went to the notifications from, when they
+      # opened in its sidebar rather than a window of their own (notice_list off):
+      # the walk moves on from there. When they are all that needs you, M-a
+      # always opens them (below).
+      window_here=$here
+      [ "$(tmux display -p '#{@notices_window}')" = 1 ] && here=notices
+      [ "$(tmux show -gqv @agent_walk_window)" = notices ] && [ "$(tmux show -gqv @agent_notices_from)" = "$window_here" ] && here=notices
       windows=() panes=() sessions=() whys=()
       while IFS=$'\t' read -r w p s why; do
         [ -n "$w" ] && windows+=("$w") && panes+=("$p") && sessions+=("$s") && whys+=("${why:-done}")
@@ -350,7 +358,7 @@ case "${1:-}" in
       # The first tab pinned or waiting on you, other than this one.
       urgent=-1
       for i in "${!windows[@]}"; do
-        [ "$i" != "$at" ] && [ "$urgent" -lt 0 ] && [ "${whys[$i]}" != done ] && urgent=$i
+        [ "$i" != "$at" ] && [ "$urgent" -lt 0 ] && [ "${whys[$i]}" != done ] && [ "${whys[$i]}" != notices ] && urgent=$i
       done
       # Where the finished ones were left when the walk went to an urgent one,
       # kept whether or not that one is still listed (answered, it leaves).
@@ -368,7 +376,7 @@ case "${1:-}" in
           for i in "${!windows[@]}"; do [ "$rest" -lt 0 ] && [ "${windows[$i]}" = "$id" ] && rest=$i; done
         done
       fi
-      if [ "$urgent" -ge 0 ] && { [ "$at" -lt 0 ] || [ "${whys[$at]}" = done ]; }; then
+      if [ "$urgent" -ge 0 ] && { [ "$at" -lt 0 ] || [ "${whys[$at]}" = done ] || [ "${whys[$at]}" = notices ]; }; then
         to=$urgent
         # From a listed finished tab, the one after it; from one no longer
         # listed, the place already kept.
@@ -382,7 +390,8 @@ case "${1:-}" in
       elif [ "$after" -ge 0 ]; then
         to=$after
       elif [ "$at" -ge 0 ]; then
-        if [ "$n" -eq 1 ]; then
+        # The notifications alone open again whatever was last done with them.
+        if [ "$n" -eq 1 ] && [ "${windows[0]}" != notices ]; then
           "${0%/*}/say.sh" "This is the only tab that needs you."
           exit 0
         fi
@@ -402,11 +411,24 @@ case "${1:-}" in
       fi
       tmux set -g @agent_walk_window "${windows[$to]}"
       tmux set -g @agent_walk_rest "${windows[*]:$((to + 1))}"
+      if [ "${windows[$to]}" = notices ]; then
+        tmux set -g @agent_notices_from "$window_here"
+        # NOTICES_COMMAND: the tests' stand-in for sidebar.sh notices.
+        ${NOTICES_COMMAND:-"${0%/*}/sidebar.sh" notices} "$(tmux display -p '#{client_name}')"
+        exit 0
+      fi
       tmux select-window -t "${windows[$to]}"
-      if [ "$from_sidebar" = 1 ]; then
+      # Back from the notifications shown in this same window's sidebar, its
+      # cursor is still on them, so the tab's pane takes the focus instead.
+      back_here=$([ "$here" = notices ] && [ "${windows[$to]}" = "$window_here" ] && echo 1)
+      if [ "$from_sidebar" = 1 ] && [ -z "$back_here" ]; then
         "${0%/*}/sidebar.sh" refocus "${windows[$to]}" &
       elif [ "${panes[$to]}" != - ]; then
         tmux select-pane -t "${panes[$to]}"
+      elif [ -n "$back_here" ]; then
+        # A tab with no Claude pane (pinned by hand): its first pane that isn't the sidebar.
+        other=$(tmux list-panes -t "${windows[$to]}" -F '#{pane_id} #{@sidebar}' | awk '$2 != 1 { print $1; exit }')
+        [ -n "$other" ] && tmux select-pane -t "$other"
       fi
       [ "${sessions[$to]}" != "$(tmux display -p '#{session_id}')" ] && tmux switch-client -t "${sessions[$to]}"
       exit 0

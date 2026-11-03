@@ -166,7 +166,7 @@ sidebar's cursor does, leaves it, and a session that finishes in the tab you
 are looking at never gets it. A pane that
 is no longer running Claude loses its state on the next focus, so a session
 that died without `SessionEnd` leaves nothing behind. Pressed from a sidebar, `M-a` and `M-1`…`M-9` leave the cursor in the new tab's sidebar (`sidebar.sh refocus`), as the sidebar's own number keys do. `M-a` walks the sidebar's
-Needs you in its order (pinned, then waiting, then done), from a finished tab
+Needs you in its order (pinned, then waiting, then done, then the notifications while there are any, opened as `sidebar.sh notices` opens them, `needs_notices` setting), from a finished tab
 going to a pinned or waiting one first, from the list the
 sidebar daemon writes to `~/.local/state/tmux-sidebar/needs` (each tab's window, Claude pane, session and why it needs you) whenever it
 changes, since only the daemon knows a tab that looks done is still looping
