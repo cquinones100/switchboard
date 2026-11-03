@@ -83,12 +83,19 @@ end
 
 -- Points a buffer at a note's new path, dropping the buffer Neovim keeps
 -- under the old name.
+-- A note marked for squashing stays marked under its new name: each marked
+-- path `follow` gives a new one for.
+local function remark(follow)
+  sidebar.state.marked = vim.tbl_map(function(p) return follow(vim.fs.normalize(p)) or p end, sidebar.state.marked)
+end
+
 local function rename_buffer(buf, to)
   local from = vim.api.nvim_buf_get_name(buf)
   -- A note moved with nothing changed in it keeps its time, which says when
   -- its text last changed (the squash goes by it).
   local unchanged = not vim.bo[buf].modified and vim.uv.fs_stat(to)
   vim.api.nvim_buf_set_name(buf, to)
+  remark(function(p) return p == vim.fs.normalize(from) and to or nil end)
   vim.api.nvim_buf_call(buf, function() vim.cmd("silent! keepalt write!") end)
   if unchanged then vim.uv.fs_utime(to, unchanged.atime.sec, unchanged.mtime.sec) end
   sync.written(buf)
@@ -133,6 +140,15 @@ function M.save(buf)
   if store.in_trash(path) then return end
   local renamed = store.rename_to_title(path)
   if renamed ~= path then rename_buffer(buf, renamed) end
+  -- A new title renames the tabs linked to the note and named after it, its
+  -- file renamed or not (a title differing only in what a file name can't
+  -- hold keeps its file).
+  -- Its title as last saved here (setup_buffer reads it first), so a title
+  -- changed from outside, already on disk, counts as a change too.
+  local was = vim.b[buf].notes_title
+  local now = store.title_of(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+  vim.b[buf].notes_title = now
+  if was and now ~= was then store.relink(function() return nil end, { path = store.relative(renamed), from = was, to = now }) end
   if sidebar.window() then sidebar.draw() end
 end
 
@@ -164,12 +180,14 @@ function M.forget(path)
 end
 
 function M.moved(from, to)
+  remark(function(p) return p == vim.fs.normalize(from) and to or nil end)
   local buf = buffer_for(from)
   if buf then rename_buffer(buf, to) end
 end
 
 function M.folder_renamed(from, to)
   local root_from, root_to = store.absolute(from) .. "/", store.absolute(to) .. "/"
+  remark(function(p) return p:sub(1, #root_from) == root_from and root_to .. p:sub(#root_from + 1) or nil end)
   for _, buf in ipairs(note_buffers()) do
     local name = vim.api.nvim_buf_get_name(buf)
     if name:sub(1, #root_from) == root_from then rename_buffer(buf, root_to .. name:sub(#root_from + 1)) end
@@ -315,6 +333,7 @@ local function setup_buffer(buf)
   if vim.b[buf].notes_ready then return end
   vim.b[buf].notes = true
   vim.b[buf].notes_ready = true
+  vim.b[buf].notes_title = store.title_of(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
   sync.track(buf)
   -- What is copied out of a note carries its links whole (reflinks.lua).
   vim.api.nvim_create_autocmd("TextYankPost", { buffer = buf, callback = function() require("notes.reflinks").on_yank(buf) end })
@@ -432,6 +451,36 @@ local function setup_buffer(buf)
   })
   vim.api.nvim_create_autocmd("TextChangedI", { buffer = buf, callback = links.complete })
   vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, callback = function() timer:close() end })
+end
+
+-- Gives a note a new title, as typing it on its first line would: the line
+-- the title is read from is rewritten, keeping its # marks, and the save
+-- renames the file and carries its tabs' links along (store.move_file).
+-- Returns its new path.
+function M.retitle(path, title)
+  local buf = buffer_for(path)
+  if not buf then
+    buf = vim.fn.bufadd(path)
+    vim.b[buf].copilot_enabled = false
+    vim.fn.bufload(buf)
+    setup_buffer(buf)
+  end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local row
+  for i, line in ipairs(lines) do
+    if vim.trim((line:gsub("^%s*#+%s*", ""))) ~= "" then
+      row = i - 1
+      break
+    end
+  end
+  if row then
+    local marks = lines[row + 1]:match("^%s*#+%s*") or "# "
+    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { marks .. title })
+  else
+    vim.api.nvim_buf_set_lines(buf, 0, 0, false, { "# " .. title })
+  end
+  M.save(buf)
+  return vim.api.nvim_buf_get_name(buf)
 end
 
 -- Opens a note in the note window. With insert_title, the cursor goes to the

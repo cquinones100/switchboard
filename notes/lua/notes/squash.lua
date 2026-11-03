@@ -23,20 +23,6 @@ local PROMPT = table.concat({
   "Write nothing but the note: no preamble, no code fence around it.",
 }, " ")
 
--- The tabs linked to one of `from` (paths in the notes directory) link to `to`.
-local function relink(from, to)
-  if (vim.env.TMUX or "") == "" then return end
-  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{@tab_note}\t#{@tab_note_last}" }, { text = true }):wait()
-  if listed.code ~= 0 then return end
-  local old = {}
-  for _, rel in ipairs(from) do old[rel] = true end
-  for line in (listed.stdout or ""):gmatch("[^\n]+") do
-    local window, note, last = line:match("^([^\t]*)\t([^\t]*)\t(.*)$")
-    if window and old[note] then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note", to }):wait() end
-    if window and old[last] then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note_last", to }):wait() end
-  end
-end
-
 -- Squashes `paths` (absolute, two or more), calling done(new path) or
 -- done(nil, why) when it is over. The merge runs in the background.
 function M.run(paths, done)
@@ -63,13 +49,22 @@ function M.run(paths, done)
       if not f then return done(nil, "couldn't write the new note") end
       f:write(text .. "\n")
       f:close()
-      local rels = {}
+      local rels, titles = {}, {}
       for _, old in ipairs(paths) do
         table.insert(rels, store.relative(old))
+        local file = io.open(old, "r")
+        table.insert(titles, store.title_of(file and file:read("*a") or ""))
+        if file then file:close() end
         require("notes").forget(old)
         store.delete(old)
       end
-      relink(rels, store.relative(path))
+      -- The tabs linked to one of them link to the new note, and a tab named
+      -- after one of them takes the new note's title.
+      local old = {}
+      for _, rel in ipairs(rels) do old[rel] = true end
+      local to, title = store.relative(path), store.title_of(text)
+      store.relink(function(rel) return old[rel] and to or nil end, { path = to, from = titles[1], to = title })
+      for i = 2, #titles do store.relink(function() return nil end, { path = to, from = titles[i], to = title }) end
       done(path)
     end)
   end)

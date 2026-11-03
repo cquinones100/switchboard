@@ -175,10 +175,14 @@ end
 -- A file name from a title: what a file name can hold, cut to a sensible
 -- length, and never one already taken in that folder (another note's, or
 -- `except`, the note's own when it is being renamed).
-function M.file_for(folder, title, except)
+local function base_for(title)
   local base = title:gsub("[/\\:%c]", "-"):gsub("^%.+", ""):gsub("%s+", " ")
   base = vim.trim(base):sub(1, 80)
-  if base == "" then base = "New Note" end
+  return base == "" and "New Note" or base
+end
+
+function M.file_for(folder, title, except)
+  local base = base_for(title)
   local dir = folder == "" and M.root() or M.absolute(folder)
   local candidate, n = dir .. "/" .. base .. ".md", 2
   while uv.fs_stat(candidate) and candidate ~= except do
@@ -287,6 +291,10 @@ function M.rename_folder(from, name)
   data.pinned = vim.tbl_map(moved, data.pinned)
   data.last = moved(data.last)
   M.save_meta(data)
+  M.relink(function(rel)
+    local to_rel = moved(rel)
+    return to_rel ~= rel and to_rel or nil
+  end)
   return to
 end
 
@@ -297,12 +305,50 @@ function M.create_folder(rel)
   return rel
 end
 
--- Moves a note's file, keeping its pin, and returns its new path.
+-- The tabs linked to a note (@tab_note, as /note-watch, M-e's question and
+-- Notes' t set it, and @tab_note_last, the one Notes last showed beside a
+-- tab: paths in the notes directory) follow it when it is renamed, moved or
+-- squashed into another. `follow` gives a linked path's new one, or nil to
+-- leave it. With `title` ({ from, to }, a note's title before and after),
+-- a tab linked to that note and named after it, as a tab opened for a note
+-- is, takes the new title as its name (its @tab_name, which the tab bar
+-- then shows). One tmux call to look, and none
+-- outside tmux.
+function M.relink(follow, title)
+  if (vim.env.TMUX or "") == "" then return end
+  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_name}" }, { text = true }):wait()
+  if listed.code ~= 0 then return end
+  local renamed = {}
+  for line in (listed.stdout or ""):gmatch("[^\n]+") do
+    local window, session, note, last, name = unpack(vim.split(line, "\t", { plain = true }))
+    local to_note = note ~= "" and follow(note) or nil
+    local to_last = last ~= "" and follow(last) or nil
+    if to_note then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note", to_note }):wait() end
+    if to_last then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note_last", to_last }):wait() end
+    local linked = to_note or to_last or (title and (note == title.path or last == title.path))
+    local named_for_it = title and linked and name and vim.trim(name) == vim.trim(title.from)
+    if named_for_it and name ~= title.to then
+      vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_name", title.to }):wait()
+      renamed[session] = true
+    end
+  end
+  for session in pairs(renamed) do
+    pcall(vim.system, { vim.fn.expand("~/.config/tmux/window-names.sh"), session }, { detach = true })
+  end
+end
+
+-- Moves a note's file, keeping its pin and the tabs linked to it, and returns
+-- its new path. A note going to or coming back from Recently Deleted leaves
+-- its tabs alone: a deleted note is no tab's note.
 local function move_file(path, to)
   if path == to then return path end
   vim.fn.mkdir(vim.fs.dirname(to), "p")
   assert(uv.fs_rename(path, to))
-  repin(M.relative(path), M.relative(to))
+  local from_rel, to_rel = M.relative(path), M.relative(to)
+  repin(from_rel, to_rel)
+  if not M.in_trash(path) and not M.in_trash(to) then
+    M.relink(function(rel) return rel == from_rel and to_rel or nil end)
+  end
   return to
 end
 

@@ -18,6 +18,9 @@ const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "notes-test-")
 const home = path.join(tmp, "home");
 fs.mkdirSync(home);
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+// Renaming or moving a note reaches the tmux server it runs in, to carry
+// tabs' links along: never yours. A test that wants it starts one of its own.
+delete process.env.TMUX;
 
 let dirs = 0;
 // Runs `code` in a headless Neovim with the plugin, in a fresh notes
@@ -893,7 +896,7 @@ test("squashing notes merges them with Claude into a new note, in the first one'
   const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX };
   process.env.PATH = `${bin}:${saved.PATH}`;
   delete process.env.TMUX;
-  t.after(() => Object.assign(process.env, saved));
+  t.after(() => { process.env.PATH = saved.PATH; });
   const { result, dir } = lua(`
     local s = require("notes.store")
     local a = s.create("", "Groceries")
@@ -928,11 +931,13 @@ test("tabs linked to squashed notes link to the new note", (t) => {
   const other = execFileSync("tmux", ["-S", socket, "new-window", "-d", "-P", "-F", "#{window_id}", "sleep 60"], { encoding: "utf8" }).trim();
   execFileSync("tmux", ["-S", socket, "set", "-w", "-t", window, "@tab_note", "One.md"]);
   execFileSync("tmux", ["-S", socket, "set", "-w", "-t", other, "@tab_note_last", "Two.md"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", other, "@tab_name", "Two"]);
   const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX };
   process.env.PATH = `${bin}:${saved.PATH}`;
   process.env.TMUX = `${socket},${pid},0`;
   t.after(() => {
-    Object.assign(process.env, saved);
+    process.env.PATH = saved.PATH;
+    delete process.env.TMUX;
     execFileSync("tmux", ["-S", socket, "kill-server"]);
   });
   lua(`
@@ -947,6 +952,50 @@ test("tabs linked to squashed notes link to the new note", (t) => {
   const show = (w, option) => execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", w, option], { encoding: "utf8" }).trim();
   assert.equal(show(window, "@tab_note"), "Both.md");
   assert.equal(show(other, "@tab_note_last"), "Both.md");
+  assert.equal(show(other, "@tab_name"), "Both", "a tab named after a squashed note takes the new one's title");
+});
+
+test("a note renamed from the sidebar takes its tabs' links along, and a tab named for it its new title", (t) => {
+  const socket = path.join(fs.mkdtempSync("/tmp/rn-"), "tmux.sock");
+  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "sleep 60"]);
+  const pid = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pid}"], { encoding: "utf8" }).trim();
+  const named = execFileSync("tmux", ["-S", socket, "display", "-p", "#{window_id}"], { encoding: "utf8" }).trim();
+  const own = execFileSync("tmux", ["-S", socket, "new-window", "-d", "-P", "-F", "#{window_id}", "sleep 60"], { encoding: "utf8" }).trim();
+  const beside = execFileSync("tmux", ["-S", socket, "new-window", "-d", "-P", "-F", "#{window_id}", "sleep 60"], { encoding: "utf8" }).trim();
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", named, "@tab_note", "Plans.md"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", named, "@tab_name", "Plans"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", own, "@tab_note", "Plans.md"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", own, "@tab_name", "Release work"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", beside, "@tab_note_last", "Work/Ideas.md"]);
+  process.env.TMUX = `${socket},${pid},0`;
+  t.after(() => {
+    delete process.env.TMUX;
+    execFileSync("tmux", ["-S", socket, "kill-server"]);
+  });
+  const { result } = lua(`
+    local s = require("notes.store")
+    local plans = s.create("", "Plans")
+    local f = io.open(plans, "a") f:write("- [ ] ship it\\n") f:close()
+    vim.fn.mkdir(s.absolute("Work"), "p")
+    s.create("Work", "Ideas")
+    local to = require("notes").retitle(plans, "Weekend plans")
+    local text = io.open(to):read("*a")
+    local folder = s.rename_folder("Work", "Home")
+    -- A title ending in a number, and one whose file keeps its name (a : and
+    -- a - make the same file name), still rename the tab named for it.
+    local numbered = require("notes").retitle(to, "Plans 2")
+    local same_file = require("notes").retitle(numbered, "Plans: 2")
+    io.write(vim.json.encode({ to = s.relative(to), folder = folder, text = text, same_file = s.relative(same_file) }))
+  `);
+  const show = (w, option) => execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", w, option], { encoding: "utf8" }).trim();
+  assert.equal(result.to, "Weekend plans.md", "the file is named for the new title");
+  assert.equal(result.text, "# Weekend plans\n\n- [ ] ship it\n", "only the title changed");
+  assert.equal(result.same_file, "Plans- 2.md");
+  assert.equal(show(named, "@tab_note"), "Plans- 2.md");
+  assert.equal(show(named, "@tab_name"), "Plans: 2", "a tab named for the note takes each new title");
+  assert.equal(show(own, "@tab_note"), "Plans- 2.md");
+  assert.equal(show(own, "@tab_name"), "Release work", "a tab with a name of its own keeps it");
+  assert.equal(show(beside, "@tab_note_last"), "Home/Ideas.md", "a renamed folder takes its notes' links along");
 });
 
 test("a squash shows a box while Claude works, with the notes and the time so far, and Esc in it cancels, leaving the notes as they were", (t) => {
@@ -956,7 +1005,7 @@ test("a squash shows a box while Claude works, with the notes and the time so fa
   const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX };
   process.env.PATH = `${bin}:${saved.PATH}`;
   delete process.env.TMUX;
-  t.after(() => Object.assign(process.env, saved));
+  t.after(() => { process.env.PATH = saved.PATH; });
   const { result, dir } = lua(`
     local s = require("notes.store")
     local sidebar = require("notes.sidebar")

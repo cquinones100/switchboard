@@ -6,7 +6,7 @@
 --   n  new note here          N  new folder        dd  delete (to Recently Deleted)
 --   p  pin or unpin           m  move to a folder  r   restore, in Recently Deleted
 --   /  search all notes       x  clear the search or tag   Ctrl-F  find a note (fzf)
---   R  rename a folder        q  quit              ?   these keys
+--   R  rename a note or folder  q  quit            ?   these keys
 
 local M = {}
 
@@ -348,6 +348,26 @@ function M.move()
   end)
 end
 
+-- R: a note gets a new title, and with it a new file name (init.retitle);
+-- a folder a new name.
+function M.rename()
+  local item = item_at()
+  if item and item.note then
+    if store.in_trash(item.note) then return end
+    local file = io.open(item.note, "r")
+    local current = store.title_of(file and file:read("*a") or "")
+    if file then file:close() end
+    vim.ui.input({ prompt = "Rename note: ", default = current }, function(name)
+      if not name or vim.trim(name) == "" or vim.trim(name) == current then return end
+      local to = require("notes").retitle(item.note, vim.trim(name))
+      M.draw()
+      M.reveal(to)
+    end)
+    return
+  end
+  M.rename_folder()
+end
+
 function M.rename_folder()
   local item = item_at()
   if not item or not item.folder or item.folder == "" or item.folder == store.TRASH then return end
@@ -382,7 +402,7 @@ function M.help()
     "  t                its tab: go there, or open one",
     "  s  S             mark notes, squash them into one",
     "  m                move to a folder",
-    "  R                rename a folder",
+    "  R                rename a note or folder",
     "  /                search every note",
     "  Ctrl-F           find a note with fzf",
     "  x                clear the search or tag",
@@ -415,7 +435,7 @@ function M.keys(buf)
   map("r", M.restore)
   map("p", M.pin)
   map("m", M.move)
-  map("R", M.rename_folder)
+  map("R", M.rename)
   map("/", M.search)
   map("<C-f>", function() require("notes.finder").open() end)
   map("x", function() M.show({ folder = M.state.folder }) end)
