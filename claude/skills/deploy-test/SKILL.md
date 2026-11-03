@@ -46,24 +46,16 @@ It counts a deploy of the merge commit or of any later commit that includes it, 
 
 ## Testing in a browser
 
-Skip this when there is nothing a browser can show, or the test was skipped, and go to "Approval". Otherwise the scripts need their packages: if `~/.claude/skills/deploy-test/scripts/node_modules` is missing, run `npm ci --prefix ~/.claude/skills/deploy-test/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.claude/skills/deploy-test/scripts/node_modules/playwright/cli.js install ffmpeg`.
+Skip this when there is nothing a browser can show, or the test was skipped, and go to "Approval". Otherwise record the test with `/walkthrough`'s recorder: read `~/.claude/skills/walkthrough/SKILL.md` and follow its "Recording" section, with these changes:
 
-1. **Write the test** in the session's scratchpad, `<scratchpad>/deploy-test-<number>/steps.js`, exporting one async function given `{ page, step, expect }` (`record.js` has an example). Walk through the change as a person would: go where the feature is, do what the acceptance criteria describe, and `expect` what should be on screen. Start each part with `step("<what this shows>")`, which captions the video, so the user can follow it without the code. Prefer roles and visible text to CSS selectors. Keep it under a minute.
-2. **Change nothing real.** This is the deployed site, often production, with real people's data. Look, navigate, open and fill in what you need to, but don't submit what saves, sends, deletes, pays for or emails anything, unless the environment is plainly a test one (staging, a preview) or the user says so when asked. When the feature can only be seen by changing data, ask first, saying what the test would change. A feature behind a flag that is off is something to report, not to turn on.
-3. **Record it:**
-
-   ```
-   node ~/.claude/skills/deploy-test/scripts/record.js <scratchpad>/deploy-test-<number>/steps.js \
-     --url <url> --out <scratchpad>/deploy-test-<number>
-   ```
-
-   It runs the test headless in the system Chrome and prints `{ passed, video, screenshot, log, error }`. Look at the screenshot and the log (each step, console errors, and responses of 500 and up) as well as `passed`.
-4. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the test lands on a sign-in page, ask the user to sign in, then run `node ~/.claude/skills/deploy-test/scripts/record.js --login --url <url>` in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
-5. **When it fails**, decide whether the test or the feature is wrong. Fix a test that was wrong (a selector, a timing, a step in the wrong place) and record again, at most three times. A feature that doesn't do what it should is the answer, not something to fix here: take that video to "Approval".
+1. **The steps** go in the session's scratchpad, `<scratchpad>/deploy-test-<number>/steps.js`. Walk through the change as a person would, from the site's home page (`--url` its root) through its own navigation to the feature, then do what the acceptance criteria describe, and `expect` what should be on screen. Keep it under a minute.
+2. **Change nothing real.** This is the deployed site, often production, with real people's data. Look, navigate, open and fill in what you need to, but don't submit what saves, sends, deletes, pays for or emails anything, unless the environment is plainly a test one (staging, a preview) or the user says so when asked. When the feature can only be seen by changing data, ask first, saying what the test would change. A feature behind a flag that is off is something to report, not to turn on. `/walkthrough`'s "Data" doesn't apply: seed nothing.
+3. **Record** at the default `--pace test`, which stops at the first failed `expect`, with `--out <scratchpad>/deploy-test-<number>`. Look at the contact sheet, the screenshot and the log as well as `passed`, as `/walkthrough`'s "Reviewing the video" says.
+4. **When it fails**, decide whether the test or the feature is wrong. Fix a test that was wrong (a selector, a timing, a step in the wrong place) and record again, at most three times. A feature that doesn't do what it should is the answer, not something to fix here: take that video to "Approval".
 
 ## Approval
 
-Open the video with `open <video>`, so it plays in QuickTime, and ask with `AskUserQuestion`. Say in the question what the test showed, in a line, whether it passed, anything the log caught, and the video's full path; or, when there was no test, why not. The options:
+Look the video over as `/walkthrough`'s "Reviewing the video" says, then open it with `open <video>`, so it plays in QuickTime, and ask with `AskUserQuestion`. Say in the question what the test showed, in a line, whether it passed, anything the log caught, and the video's full path; or, when there was no test, why not. The options:
 
 - **Approve**: reply `deploy-test: approved (tested: <video>)`, or `deploy-test: approved (not tested: <why>)`.
 - **Record again**: with what the user says to change (their notes on the option), change the test and go back to recording.

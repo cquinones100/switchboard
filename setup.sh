@@ -1294,15 +1294,15 @@ else
   optional "mermaid-cli, for M-p's PR description as an image: npm install -g @mermaid-js/mermaid-cli"
 fi
 if command -v ffmpeg >/dev/null; then
-  ok "ffmpeg (/deploy-test's videos)"
+  ok "ffmpeg (/walkthrough's and /deploy-test's videos)"
 else
-  optional "ffmpeg, for /deploy-test's videos: brew install ffmpeg"
+  optional "ffmpeg, for /walkthrough's and /deploy-test's videos: brew install ffmpeg"
 fi
 if [[ $OS == macos ]]; then
   if [[ -d "/Applications/Google Chrome.app" || -d "$HOME/Applications/Google Chrome.app" ]]; then
-    ok "Google Chrome (/deploy-test's recordings, and browser.json's profiles)"
+    ok "Google Chrome (/walkthrough's and /deploy-test's recordings, and browser.json's profiles)"
   else
-    optional "Google Chrome, for /deploy-test's recordings and the Chrome profiles in ~/.config/switchboard/browser.json: brew install --cask google-chrome"
+    optional "Google Chrome, for /walkthrough's and /deploy-test's recordings and the Chrome profiles in ~/.config/switchboard/browser.json: brew install --cask google-chrome"
   fi
 fi
 if in_zsh 'command -v codex' >/dev/null; then

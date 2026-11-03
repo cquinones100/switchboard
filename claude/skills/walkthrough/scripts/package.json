@@ -1,0 +1,8 @@
+{
+  "name": "walkthrough-scripts",
+  "private": true,
+  "description": "The browser recorder for the walkthrough skill, which deploy-test and preview-test record with",
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

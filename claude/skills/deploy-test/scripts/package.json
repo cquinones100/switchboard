@@ -1,8 +1,0 @@
-{
-  "name": "queue-and-clean-scripts",
-  "private": true,
-  "description": "Browser test recording for the queue-and-clean skill",
-  "dependencies": {
-    "playwright": "1.63.0"
-  }
-}
