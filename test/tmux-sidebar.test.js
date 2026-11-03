@@ -526,6 +526,50 @@ test("the PR board searches for merged PRs only every ten minutes, keeping the l
   assert.match(fs.readFileSync(asked, "utf8"), /is:merged/, "ten minutes on, merged again");
 });
 
+test("the Merge queues view lists each repository's queue in order, marking a tab's PR, and says when there is none", async (t) => {
+  const repo = path.join(tmp, "queue-repo");
+  fs.mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-q", repo]);
+  execFileSync("git", ["-C", repo, "remote", "add", "origin", "git@github.com:acme/queued.git"]);
+  const other = path.join(tmp, "queue-other");
+  fs.mkdirSync(other, { recursive: true });
+  execFileSync("git", ["init", "-q", other]);
+  execFileSync("git", ["-C", other, "remote", "add", "origin", "git@github.com:acme/noqueue.git"]);
+  // A stand-in gh: acme/noqueue has no merge queue, acme/queued two PRs in it, 41 second.
+  const bin = path.join(tmp, "queue-gh");
+  fs.mkdirSync(bin, { recursive: true });
+  const answer = { data: { r0: { mergeQueue: null }, r1: { mergeQueue: { url: "https://github.com/acme/queued/queue/main", entries: { nodes: [
+    { position: 2, state: "UNMERGEABLE", enqueuedAt: "2026-11-03T10:00:00Z", estimatedTimeToMerge: 600, pullRequest: { number: 41, title: "Mine", url: "https://github.com/acme/queued/pull/41", author: { login: "me" } } },
+    { position: 1, state: "AWAITING_CHECKS", enqueuedAt: "2026-11-03T09:00:00Z", estimatedTimeToMerge: 120, pullRequest: { number: 40, title: "Theirs", url: "https://github.com/acme/queued/pull/40", author: { login: "someone" } } },
+  ] } } } } };
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify(answer)}'\n`, { mode: 0o755 });
+  const path0 = process.env.PATH;
+  process.env.PATH = `${bin}:${path0}`;
+  t.after(() => (process.env.PATH = path0));
+  const tabs = [{ id: "@3", index: 3, path: repo, pr: "41" }, { id: "@4", index: 4, path: other }];
+  await sidebar.fetchQueues(tabs, () => {});
+  const view = sidebar.queuesView(tabs);
+  assert.deepEqual(view.items.map((i) => [i.title, i.detail, i.state]), [
+    ["1. #40 Theirs", "queued · awaiting checks · merges in ~2m · someone", "idle"],
+    ["2. #41 Mine", "queued · can't merge · merges in ~10m · me · tab 3", "attention"],
+  ]);
+  assert.equal(view.items[1].queue.queueUrl, "https://github.com/acme/queued/queue/main");
+  assert.deepEqual(sidebar.queuesView([]).items.map((i) => i.queue.tab), [undefined, undefined], "the tab is matched as it is drawn");
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: null }, errors: [{ path: ["r1"], message: "Something went wrong" }] })}'\nexit 1\n`, { mode: 0o755 });
+  await sidebar.fetchQueues(tabs, () => {});
+  assert.equal(sidebar.queuesView(tabs).items.length, 2, "a repository GitHub failed to answer for keeps its last answer");
+  assert.equal(sidebar.queuesView(tabs).error, undefined);
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: { mergeQueue: { url: "u", entries: { nodes: [] } } } } })}'\n`, { mode: 0o755 });
+  await sidebar.fetchQueues(tabs, () => {});
+  assert.equal(sidebar.queuesView(tabs).empty, "Nothing in the merge queue of acme/queued.");
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: { mergeQueue: null } } })}'\n`, { mode: 0o755 });
+  await sidebar.fetchQueues(tabs, () => {});
+  assert.match(sidebar.queuesView(tabs).empty, /None of the repositories your tabs are in uses a merge queue/);
+  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: null }, errors: [{ path: ["r1"], message: "Something went wrong" }] })}'\nexit 1\n`, { mode: 0o755 });
+  await sidebar.fetchQueues(tabs, () => {});
+  assert.equal(sidebar.queuesView(tabs).error, "GitHub couldn't say what is in the merge queue of acme/queued.", "with nothing from before, it says so");
+});
+
 test("the tabs' PRs are asked about in one query, a gone worktree's by its branch, and only real names reach it", async (t) => {
   const repo = path.join(tmp, "prs-repo");
   fs.mkdirSync(repo, { recursive: true });
@@ -2277,13 +2321,13 @@ test("each mission control view but Settings can be turned off in Settings, the 
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false }));
+    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_merge_queues: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false }));
     sidebar.reloadSettings();
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title), ["Settings"]);
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }, { workMap: true }).map((v) => v.title), ["Work map", "Settings"]);
     fs.rmSync(settingsFile);
     sidebar.reloadSettings();
-    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Tickets", "Inbox", "Sessions", "Usage", "Settings"]);
+    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Merge queues", "Tickets", "Inbox", "Sessions", "Usage", "Settings"]);
   } finally {
     fs.rmSync(settingsFile, { force: true });
     sidebar.reloadSettings();

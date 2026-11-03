@@ -255,6 +255,13 @@
     "default": true
   },
   {
+    "key": "view_merge_queues",
+    "category": "Mission control",
+    "label": "Merge queues",
+    "description": "Mission control's Merge queues view: every pull request in the merge queue of each repository your tabs are in, in queue order, with the tab that has it open, asked of GitHub every minute #github",
+    "default": true
+  },
+  {
     "key": "second_status",
     "category": "Tabs and status bar",
     "label": "Second status line",
