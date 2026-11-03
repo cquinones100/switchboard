@@ -1345,6 +1345,24 @@ ticket scripts' key, while their settings are on, and tries again every 15
 minutes while one can't be read. A note already there is never written over,
 so edit it as you like. The `standup_note` setting (Integrations) turns it off.
 
+With the `todo_note` setting (Integrations, off until you turn it on, since
+it sends your notes' unticked items to Claude) on, each weekday from 9am (the
+`todo_note_time` setting, 7 to 11am, or once you are at the Mac after it, when
+mission control has looked at everything again) the sidebar daemon has Claude write your
+to-do list for the day into the Todos folder, `Today's Todo <date>.md`
+(`lib/sidebar/todo.js`): Sonnet, with no tools and no session kept, given the
+unticked checklist items of your notes (each note's top-level ones, leaving
+out deleted notes, the standups, earlier todo notes and any section named for
+parked work, such as Later or Someday), today's calendar, and what mission
+control last read of GitHub (your open pull requests, their failing checks,
+and the reviews asked of you, asked for then), Linear (your tickets not done,
+your inbox) and Slack (the messages that need you), each only while its
+setting is on. It lays them out as Meetings, First and Also, every item a
+checkbox. It shows in the sidebar's notifications until Notes shows it, tries
+again every 15 minutes while Claude can't write it or GitHub can't say
+which reviews are asked of you, and never writes over a
+note already there.
+
 Each meeting of yours that Fathom recorded becomes a note in the Meetings
 folder, `<title> <date>.md` (`lib/sidebar/meetings.js`): its action items,
 yours first, each linking to its moment in the recording, Fathom's summary,

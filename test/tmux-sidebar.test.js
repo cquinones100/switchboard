@@ -2970,6 +2970,46 @@ test("a meeting's description gives the tickets and pull requests it names, link
   ]);
 });
 
+test("today's todo note is written once a weekday past its hour, from the notes' open items and the views, by Claude", async (t) => {
+  const notes = path.join(tmp, "todo-notes");
+  fs.mkdirSync(path.join(notes, "Work"), { recursive: true });
+  fs.mkdirSync(path.join(notes, ".trash"), { recursive: true });
+  fs.mkdirSync(path.join(notes, "Standups"), { recursive: true });
+  fs.writeFileSync(path.join(notes, "Work", "Plan.md"), "# Plan\n\n- [ ] Ship the export\n* [ ] Star item\n\n```\n- [ ] in code\n```\n  - [ ] a sub-item\n- [x] Done already\n\n## Later\n\n- [ ] Someday thing\n\n### Sub of later\n\n- [ ] Still parked\n\n## Next\n\n- [ ] Write the [docs][1]\n\n# Someday\n\n- [ ] Big parked one\n\n[1]: https://example.com/docs\n\n```\n[1]: https://wrong.example\n```\n");
+  fs.writeFileSync(path.join(notes, ".trash", "Old.md"), "# Old\n\n- [ ] Deleted item\n");
+  fs.writeFileSync(path.join(notes, "Standups", "Standup 2026-11-02.md"), "# Standup\n\n- [ ] Standup item\n");
+  fs.writeFileSync(path.join(tmp, "outside.md"), "# Outside\n\n- [ ] Not a note\n");
+  fs.symlinkSync(path.join(tmp, "outside.md"), path.join(notes, "Linked.md"));
+  fs.writeFileSync(path.join(notes, ".hidden.md"), "# Hidden\n\n- [ ] Hidden item\n");
+  const saved = process.env.NOTES_DIR;
+  process.env.NOTES_DIR = notes;
+  t.after(() => (saved === undefined ? delete process.env.NOTES_DIR : (process.env.NOTES_DIR = saved)));
+
+  assert.deepEqual(sidebar.openItems(), [{ note: "Plan", items: ["Ship the export", "Star item", "Write the [docs](https://example.com/docs)"] }], "top-level unticked items, parked sections, deleted notes and made notes left out");
+
+  const tuesday = new Date(2026, 10, 3, 9, 30);
+  assert.equal(sidebar.todoDue(tuesday, 9), true);
+  assert.equal(sidebar.todoDue(new Date(2026, 10, 3, 8, 59), 9), false, "not before its hour");
+  assert.equal(sidebar.todoDue(new Date(2026, 10, 7, 10), 9), false, "not on a Saturday");
+  assert.equal(sidebar.todoDue(tuesday, 9, tuesday.getTime() - 60_000), false, "not again within the retry wait");
+
+  const prompts = [];
+  const ask = async (prompt) => {
+    prompts.push(prompt);
+    return "## First\n\n- [ ] Ship the export";
+  };
+  await sidebar.writeTodo([], { github: false, calendar: ["9:30 AM Standup"], tickets: ["ABC-1 Fix it · Todo"], slack: [], missing: ["Slack"] }, tuesday, () => {}, ask);
+  const file = path.join(notes, "Todos", "Today's Todo 2026-11-03.md");
+  assert.equal(fs.readFileSync(file, "utf8"), "# Today's Todo 2026-11-03\n\n## First\n\n- [ ] Ship the export\n\n_Left out, since it couldn't be read: Slack._\n");
+  assert.match(prompts[0], /Plan:\n  - Ship the export\n  - Star item\n  - Write the \[docs\]\(https:\/\/example\.com\/docs\)/);
+  assert.match(prompts[0], /## Today's calendar\n```\n9:30 AM Standup/);
+  assert.match(prompts[0], /## Linear tickets assigned to me/);
+  assert.doesNotMatch(prompts[0], /Slack messages|Reviews asked|Someday thing|Still parked|in code|Big parked one/, "an empty source is left out");
+  assert.equal(sidebar.todoDue(tuesday, 9), false, "written today");
+  await sidebar.writeTodo([], {}, tuesday, () => {}, ask);
+  assert.equal(prompts.length, 1, "a note already there is never written over, nor asked for again");
+});
+
 test("the standup note lists the last working day's PRs, reviews, ticket moves and commits, then today's work", () => {
   const monday = new Date(2026, 9, 26, 7);
   const friday = (hour) => new Date(2026, 9, 23, hour).toISOString();
