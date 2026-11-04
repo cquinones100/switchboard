@@ -51,20 +51,10 @@ links_of() {
   notes_dir=${NOTES_DIR:-$HOME/Notes}
   note=$(jq -r '.last // empty' "$notes_dir/.notes.json" 2>/dev/null)
   if [ "$(tmux display -p -t "$pane" '#{@notes_pane}')" = 1 ] && [ -n "$note" ] && [[ $note != *..* ]] && [ -f "$notes_dir/$note" ]; then
-    # A reference link ([text][1], as Notes keeps them) takes its address from
-    # its definition at the note's end, and the definitions themselves are
-    # not links of their own, so each link is listed where it is used.
-    links=$(perl -CSD -0777 -ne '
-      my %def;
-      # Definitions outside code blocks only, as the note itself reads them.
-      (my $plain = $_) =~ s{^\s*```.*?^\s*```[^\n]*$}{}msg;
-      $def{$1} = $2 while $plain =~ m{^\[(\d+)\]:[ \t]*(\S+)}mg;
-      s{^\[\d+\]:.*$}{}mg;
-      while (m{\[([^\]\n]*)\]\((https?://[^)\s]+)\)|\[([^\]\n]*)\]\[(\d+)\]|(?<![(\[])(https?://[A-Za-z0-9._~:/?#\@!\$&*+,;=%-]+)}g) {
-        my ($text, $url);
-        if (defined $2) { ($text, $url) = ($1, $2) }
-        elsif (defined $4) { next unless $def{$4}; ($text, $url) = ($3, $def{$4}) }
-        else { ($text, $url) = ("", $5); $url =~ s/[.,;:!?]+$//; }
+    links=$(perl -CSD -ne '
+      while (m{\[([^\]\n]*)\]\((https?://[^)\s]+)\)|(?<![(\[])(https?://[A-Za-z0-9._~:/?#\@!\$&*+,;=%-]+)}g) {
+        my ($text, $url) = defined $2 ? ($1, $2) : ("", $3);
+        $url =~ s/[.,;:!?]+$// unless defined $2;
         next if $seen{$url}++;
         $text =~ s/\s+/ /g; $text =~ s/^ | $//g;
         $text = substr($text, 0, 57) . "..." if length $text > 60;
