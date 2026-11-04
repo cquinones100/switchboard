@@ -464,6 +464,12 @@ local function minimal_highlights()
   vim.api.nvim_set_hl(0, "DiffviewMinimalDelete", { bg = blend(REMOVED, normal, 0.14) })
   vim.api.nvim_set_hl(0, "DiffviewMinimalDeleteText", { bg = blend(REMOVED, normal, 0.55) })
   vim.api.nvim_set_hl(0, "DiffviewMinimalFiller", { fg = normal, bg = normal })
+  -- The file list quiet but for the names: the repository's path, its heading
+  -- ("Changes (3)", which diffview draws whatever its options) and each
+  -- file's +12 −3 faint.
+  for _, name in ipairs({ "DiffviewFilePanelRootPath", "DiffviewFilePanelTitle", "DiffviewFilePanelCounter", "DiffviewFilePanelInsertions", "DiffviewFilePanelDeletions" }) do
+    vim.api.nvim_set_hl(0, name, { link = "Comment" })
+  end
 end
 
 -- Per side: Vim calls a line only one side has an addition on that side, and
@@ -488,7 +494,11 @@ return {
   "sindrets/diffview.nvim",
   cmd = { "DiffviewOpen", "DiffviewClose", "DiffviewFileHistory" },
   opts = {
-    file_panel = { win_config = { width = 40 } },
+    -- No "Help: g?" line and no file-type icons in the list, which lists the
+    -- files in reading order, each side's bar saying where one is.
+    show_help_hints = false,
+    use_icons = false,
+    file_panel = { win_config = { width = 30 } },
     hooks = {
       view_opened = function(view)
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
@@ -512,14 +522,25 @@ return {
         local view = require("diffview.lib").get_current_view()
         local win = view and view.cur_layout and vim.tbl_filter(function(w) return w.id == winid end, view.cur_layout.windows)[1]
         local file = win and win.file and win.file.path
-        if file then
+        -- The right side's alone when there are two, the left's only for a
+        -- file renamed, which names where it was.
+        local pair = view and view.cur_layout and #view.cur_layout.windows > 1
+        local other = pair and vim.tbl_filter(function(w) return w.id ~= winid end, view.cur_layout.windows)[1]
+        local renamed = other and other.file and other.file.path ~= file
+        if file and pair and ctx and ctx.symbol == "a" and not renamed then
+          -- A bar with nothing in it, so both sides start on the same row.
+          vim.wo[winid].winbar = " "
+        elseif file then
           local dir, name = file:match("^(.*/)([^/]*)$")
           local escape = function(text) return (text:gsub("%%", "%%%%")) end
           vim.wo[winid].winbar = " " .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file)
         end
         -- No ╱ where the other side has no lines, and no ~ past the end of a
         -- short file: blank, as the space after a file in an editor is.
-        vim.wo[winid].fillchars = "diff: ,eob: "
+        -- Added to the global value, the blank lines between windows included
+        -- (diff.lua), since a value set here replaces it whole; not to the
+        -- window's own, which a window reused for the next file already has.
+        vim.wo[winid].fillchars = vim.go.fillchars .. (vim.go.fillchars ~= "" and "," or "") .. "diff: ,eob: "
         vim.wo[winid].cursorline = false
       end,
     },

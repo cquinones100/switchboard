@@ -25,8 +25,9 @@ vim.o.laststatus = 0
 vim.o.showtabline = 0
 vim.o.showmode = false
 -- Nothing past the end of a buffer: the file list and a short file stop
--- there, with no column of ~ below them.
-vim.opt.fillchars:append({ eob = " " })
+-- there, with no column of ~ below them; and no lines drawn between windows,
+-- the list and each side set apart by their own text.
+vim.opt.fillchars:append({ eob = " ", vert = " ", horiz = " ", horizup = " ", horizdown = " ", vertleft = " ", vertright = " ", verthoriz = " " })
 vim.o.swapfile = false
 vim.o.shadafile = "NONE"
 vim.o.clipboard = "unnamedplus"
