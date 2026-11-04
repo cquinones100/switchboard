@@ -379,6 +379,35 @@ end
 -- asked for: each view that opens the same diff gets it, and it is asked
 -- for once.
 local stories, waiting = {}, {}
+-- While Haiku reads the change, a spinner and a few words on a line of their
+-- own under the list's first (a virtual line, since the path on the first
+-- fills the list's width), so the list in the kinds' order isn't taken for
+-- the story; gone once the story is known or can't be.
+local loading = vim.api.nvim_create_namespace("diff_story_loading")
+local SPINNER = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+local function stop_loading(view)
+  if view.loading then
+    view.loading:stop()
+    view.loading:close()
+    view.loading = nil
+  end
+  local buf = view.panel and view.panel.bufid
+  if buf and vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, loading, 0, -1) end
+end
+local function start_loading(view)
+  if view.loading then return end
+  local frame = 0
+  view.loading = vim.uv.new_timer()
+  view.loading:start(0, 100, vim.schedule_wrap(function()
+    local buf = view.panel and view.panel.bufid
+    if not (view.loading and buf and vim.api.nvim_buf_is_valid(buf)) then return end
+    frame = frame % #SPINNER + 1
+    vim.api.nvim_buf_clear_namespace(buf, loading, 0, -1)
+    pcall(vim.api.nvim_buf_set_extmark, buf, loading, 0, 0, {
+      virt_lines = { { { " " .. SPINNER[frame] .. " telling the story", "Comment" } } },
+    })
+  end))
+end
 local function ask_story(view)
   local ds = require("diffstory")
   local entries, paths, untracked = {}, {}, {}
@@ -389,6 +418,7 @@ local function ask_story(view)
     table.insert(entries, { path = entry.path, additions = stats.additions, deletions = stats.deletions })
   end
   local function give(target, made)
+    stop_loading(target)
     target.story = made
     if require("diffview.lib").get_current_view() == target then
       active_story = made
@@ -410,6 +440,7 @@ local function ask_story(view)
   local written = vim.tbl_filter(function(path) return not generated(path) end, paths)
   if #paths < 2 or #written == 0 then
     view.want = nil
+    stop_loading(view)
     return forget(view)
   end
   table.sort(paths)
@@ -463,6 +494,7 @@ local function ask_story(view)
         end
       end
       if diff.code ~= 0 then
+        stop_loading(view)
         forget(view)
         return ask_order(view)
       end
@@ -473,7 +505,10 @@ local function ask_story(view)
       view.want = key
       if stories[key] then return give(view, stories[key]) end
       -- Haiku couldn't tell this one: not asked again in this Neovim.
-      if stories[key] == false then return ask_order(view) end
+      if stories[key] == false then
+        stop_loading(view)
+        return ask_order(view)
+      end
       local dir = vim.fn.stdpath("cache") .. "/diff-story"
       local file = dir .. "/" .. key .. ".txt"
       local ok, cached = pcall(vim.fn.readfile, file)
@@ -482,6 +517,7 @@ local function ask_story(view)
         stories[key] = made
         return give(view, made)
       end
+      start_loading(view)
       if waiting[key] then return table.insert(waiting[key], view) end
       waiting[key] = { view }
       vim.fn.mkdir(dir, "p")
@@ -498,9 +534,11 @@ local function ask_story(view)
           if told then
             vim.fn.writefile(vim.split(result.stdout, "\n"), file)
           end
-          -- Only to the views still showing this diff.
+          -- Only to the views still showing this diff; a view asking about
+          -- a newer one keeps its spinner until that answer comes.
           for _, each in ipairs(views) do
             if each.want == key then
+              stop_loading(each)
               if told then give(each, told) else ask_order(each) end
             end
           end
@@ -782,6 +820,8 @@ return {
         end
       end,
       view_leave = function() active_story = nil end,
+      -- A view closed while its story is being told stops its spinner.
+      view_closed = function(view) stop_loading(view) end,
       view_opened = function(view)
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
         if view.emitter then

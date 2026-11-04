@@ -92,11 +92,21 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
   // A stand-in claude that answers with a story, and keeps what it was given.
   const given = path.join(tmp, "given.txt");
   const answer = JSON.stringify({ chapters: [{ title: "Change the model", why: "The data changes shape.", files: ["src/model.js", "test/model.test.js"] }, { title: "Show it", why: "The page shows it.", files: ["src/ui.js"] }] });
-  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > '${given}'\nprintf '%s\\n' '${answer}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > '${given}'\nsleep 2\nprintf '%s\\n' '${answer}'\n`, { mode: 0o755 });
   // A headless Neovim run with -c writes io.write to stderr, so both are read.
   const run = spawnSync(
     "nvim",
-    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1", "-c", "sleep 4000m", "-c", `lua
+    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1", "-c", "sleep 1000m", "-c", `lua
+      local panel = require("diffview.lib").get_current_view().panel
+      -- Drawn again every tenth of a second, as the list's own redraws may clear it.
+      vim.wait(500, function()
+        vim.g.telling = {}
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(panel.bufid, -1, 0, -1, { details = true })) do
+          local text = m[4].virt_lines and m[4].virt_lines[1][1] and m[4].virt_lines[1][1][1] or ""
+          if text:find("telling the story", 1, true) then vim.g.telling = vim.list_extend(vim.g.telling, { text }) end
+        end
+        return #vim.g.telling > 0
+      end, 20)`, "-c", "sleep 4000m", "-c", `lua
       local view = require("diffview.lib").get_current_view()
       local panel = view.panel
       local marks = {}
@@ -108,7 +118,12 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
       vim.api.nvim_set_current_win(panel.winid)
       vim.api.nvim_win_set_cursor(0, { 3, 0 })
       vim.api.nvim_feedkeys(vim.keycode("]c"), "x", false)
-      io.write(vim.json.encode({ order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = vim.api.nvim_get_current_line() }))`, "-c", "qa"],
+      local spinning = 0
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(panel.bufid, -1, 0, -1, { details = true })) do
+        local text = m[4].virt_lines and m[4].virt_lines[1][1] and m[4].virt_lines[1][1][1] or ""
+        if text:find("telling the story", 1, true) then spinning = spinning + 1 end
+      end
+      io.write(vim.json.encode({ telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = vim.api.nvim_get_current_line() }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -116,6 +131,9 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
   assert.deepEqual(result.marks.map((m) => [m.line.split(" ")[1], m.title]), [["model.js", "1/2 Change the model"], ["ui.js", "2/2 Show it"]], "each chapter headed over its first file");
   assert.ok(result.bars.some((bar) => bar.includes("1/2 Change the model · ")), "the chapter in the bar");
   assert.match(result.jumped, /ui\.js/, "]c goes to the next chapter");
+  assert.equal(result.telling.length, 1, "while Haiku reads the change, the list says so");
+  assert.match(result.telling[0], /telling the story/);
+  assert.equal(result.spinning, 0, "and stops saying so once the story is known");
   assert.match(fs.readFileSync(given, "utf8"), /<diff>[\s\S]*### src\/model\.js \(\+1 -1\)[\s\S]*\+A/, "Haiku read the diff itself");
 });
 
