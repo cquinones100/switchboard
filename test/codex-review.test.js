@@ -99,6 +99,7 @@ test("codex-review gives the reviewer the repository's rules as the base has the
     const run = spawnSync(script, ["--dry-run", "--reviewer", "claude"], { cwd: work, env, encoding: "utf8" });
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /## Rules/);
+    assert.match(run.stdout, /Where the repository's rules and the reviewer's own disagree, the repository's win/, "the repository's rules take precedence over yours");
     assert.match(run.stdout, /<rules source="the reviewer's own">[\s\S]*My rule: write American English\.[\s\S]*Imported rule: no bullets[\s\S]*Shared rule as the base has it\.[\s\S]*Linked rule at the base\.[\s\S]*Dir rule at the base\.[\s\S]*Spaced rule\./, "your own, with what they import, a file in the repository read at the base");
     assert.match(run.stdout, /<rules source="the repository's CLAUDE.md">\n@~\/secret\.txt\nRule from the base: no emojis in commits\.\nCoding rule the repository imports\.\n+@\/[^\n]*mine\.md\n/, "a file outside the repository its rules import left as written");
     assert.doesNotMatch(run.stdout.split("<rules source=\"the repository")[1], /Imported rule: no bullets/);
