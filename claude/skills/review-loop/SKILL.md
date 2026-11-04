@@ -22,7 +22,7 @@ The loop changes, commits and pushes only the repository it reviews: the one `gi
 
 Before editing a file, check that this repository owns it: the repository of its real path, links followed, is the one under review, `git -C "$(dirname "$(realpath <file>)")" rev-parse --show-toplevel` printing that same top level. A path under the top level isn't enough, since a submodule or a clone nested inside it is a repository of its own. When it isn't, make no change there: dispute the finding in the notes file as outside this repository, naming the file and the repository it is in, and list it in the final report under **Outside this repository** for the user to take up there. Run git only on this repository (`git -C <top level>` when in doubt), never `git -C` another.
 
-Arguments: `all` means also ask about low-severity findings from the first round on. Anything else is ignored.
+Arguments: `all` means also ask about low-severity findings from the first round on. `norules` means review without the rules (`--no-rules` on every round), so neither your CLAUDE.md nor the repository's goes to the reviewer. Anything else is ignored.
 
 ## Before the first round
 
@@ -45,7 +45,7 @@ Arguments: `all` means also ask about low-severity findings from the first round
    codex-review --notes <notes-file>
    ```
 
-   Add `--include-low` when `all` was given, and always on a confirmation round (see step 2). Pass `--base <ref>` only when the PR's base is not what Codex should diff against. Expect the command to take a minute or more; that is normal.
+   Add `--include-low` when `all` was given, and always on a confirmation round (see step 2). Add `--no-rules` when `norules` was given. Pass `--base <ref>` only when the PR's base is not what Codex should diff against. Expect the command to take a minute or more; that is normal.
 
 2. Apply the stop rule. One empty `findings` array is one sample from a sampled reviewer, not a verdict.
    - If findings is empty and the previous round was **not** clean, this is the first clean round. Run the next round as a confirmation round with `--include-low`, so it also sweeps the long tail.
@@ -58,6 +58,8 @@ Arguments: `all` means also ask about low-severity findings from the first round
    - **Dispute it** when the finding is wrong, describes behavior the branch intends, or is out of scope for this PR. Add a `Disputed` line to the notes file. Never "fix" a finding you believe is wrong just to make the loop end.
 
    Fix `critical` and `high` findings you agree with without asking. Ask before acting on a `medium` one, or a `low` one (from a confirmation round, or with `all`): one `AskUserQuestion` for the round, a question per finding (up to four; more go in a second), each saying in a sentence or two what the finding is and the real impact of leaving it: who it would hit, how likely that is, and what happens then, so the user can weigh it against another round. The options: **Fix it**, or **Leave it**, which goes in the notes file as a `Known gap` with the user's reason (or "the user chose to leave it" and the impact you gave), so later rounds don't raise it again. Outside a confirmation round, and without `all`, `low` findings aren't asked about; they go in the final report.
+
+   A `rules` finding is a change that breaks one of the rules the reviewer was given (your CLAUDE.md and what it imports, and the repository's CLAUDE.md and AGENTS.md as the base has them). Triage it like any other: fix it, or dispute it when the rule doesn't apply to this change.
 
 4. Check for siblings before you commit a fix. When a finding points at one of several parallel paths, such as one call site of a shared helper, one handler among several that follow the same shape, or one of a pair like `query` and `cross_query`, grep for the others. Fix each sibling in the same round, or dispute each sibling by name in the notes file. A fix that lands on one path and leaves the others untouched is a new known gap, and the next round will report it as a broken commit claim.
 

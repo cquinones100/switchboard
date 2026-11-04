@@ -375,6 +375,13 @@
     "default": true
   },
   {
+    "key": "review_rules",
+    "category": "Safety",
+    "label": "Rules in reviews",
+    "description": "codex-review gives the reviewer the repository's CLAUDE.md and AGENTS.md as the base has them and your own ~/.claude/CLAUDE.md with what it imports, and reports a change that breaks one; off, it reviews without them, and your rules aren't sent to the reviewer",
+    "default": true
+  },
+  {
     "key": "review_before_push",
     "category": "Safety",
     "label": "Review before pushing",

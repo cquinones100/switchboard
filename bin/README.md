@@ -1550,6 +1550,8 @@ empty. Before its first round the skill also runs Claude Code's
 the rounds' are (the `review_security` setting, under Safety, turns it off).
 It is also fine to run by hand for a second opinion.
 
+The reviewer is given the rules you work under, and reports a change that breaks one (category `rules`), quoting it: your own `~/.claude/CLAUDE.md`, with the files it imports (a line that is only `@<path>`), and the repository's `CLAUDE.md` and `AGENTS.md`. The repository's are read as the base has them, never as the branch has them, and so is a file of the repository that your rules import, since the branch is the contributor's to change. They are trusted, unlike the commit messages and PR description, which stay marked as data. Rules about how an assistant behaves in a conversation are left out of what it checks. `--no-rules`, or the `review_rules` setting (Safety) turned off, leaves them out, so your rules aren't sent to the reviewer.
+
 Working straight on `main`, with no branch or PR, it reviews the commits not
 yet on `origin/main`, fetched first: what you are about to push. With every
 commit pushed it says there is nothing to review; `--base <commit>` reviews
@@ -1560,6 +1562,7 @@ codex-review                       review the branch against its PR's base (on m
 codex-review --base upstream/main  diff against a different base, used as given when the ref exists
 codex-review --notes notes.md      disputed findings and accepted known gaps, each with a reason
 codex-review --include-low         report low-severity findings too
+codex-review --no-rules            leave your rules and the repository's out of the prompt
 codex-review --reviewer claude     have Claude review even with Codex there
 codex-review --dry-run             print the prompt and the reviewer's command, run nothing
 codex-review --model gpt-5.5       pick the reviewer's model; no other option passes through
