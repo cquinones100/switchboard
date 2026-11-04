@@ -3281,6 +3281,9 @@ test("meeting notes write each of your Fathom meetings once, its action items yo
     "  Action items:",
     "    • [ ] Send the deck — assigned to Bo Park (https://fathom.video/calls/111?timestamp=65.9)",
     "    • [ ] Fix the bug — assigned to Me Myself (he/him) (https://fathom.video/calls/111?timestamp=600.2)",
+    "    • [ ] Book the room — assigned to Me Myselfson (https://fathom.video/calls/111?timestamp=30)",
+    "    • [ ] Call the vendor — assigned to Ann Me Myself (https://fathom.video/calls/111?timestamp=50)",
+    "    • [ ] Order lunch — assigned to Someone Else (me@example.com) (https://fathom.video/calls/111?timestamp=40)",
     "- Not mine | 2026-10-27 | id: 12 | url: https://fathom.video/calls/112 | recorded by Ann Lee | Bo Park",
     "- Just ended | 2026-10-28 | id: 13 | url: https://fathom.video/calls/113 | recorded by me@example.com",
   ].join("\n");
@@ -3311,7 +3314,10 @@ test("meeting notes write each of your Fathom meetings once, its action items yo
 ## Action items
 
 - [ ] Fix the bug (Me Myself) [10:00](https://fathom.video/calls/111?timestamp=600.2)
-- [ ] Send the deck (Bo Park) [1:05](https://fathom.video/calls/111?timestamp=65.9)
+- [ ] Order lunch (Someone Else) [0:40](https://fathom.video/calls/111?timestamp=40)
+- Send the deck (Bo Park) [1:05](https://fathom.video/calls/111?timestamp=65.9)
+- Book the room (Me Myselfson) [0:30](https://fathom.video/calls/111?timestamp=30)
+- Call the vendor (Ann Me Myself) [0:50](https://fathom.video/calls/111?timestamp=50)
 
 ## Summary
 

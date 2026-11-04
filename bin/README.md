@@ -1375,7 +1375,7 @@ note already there.
 
 Each meeting of yours that Fathom recorded becomes a note in the Meetings
 folder, `<title> <date>.md` (`lib/sidebar/meetings.js`): its action items,
-yours first, each linking to its moment in the recording, Fathom's summary,
+yours first as checkboxes, everyone else's as a plain list, each linking to its moment in the recording, Fathom's summary,
 and the whole transcript, each line's timestamp a link back. A meeting is
 yours when you recorded it or were invited, by your Fathom email or your git
 name. The sidebar daemon asks Fathom through Claude's connector (a headless
