@@ -11,7 +11,10 @@
 # showing the note (note-tab.sh beside, NEW_TAB_CLIENT the client). NEW_TAB_NAME alone names it, and
 # NEW_TAB_PROMPT is Claude's first prompt (mission control's "Open a tab for
 # this thread with Claude" on a Slack message), passed in the tab's
-# environment, so nothing in it is read by a shell.
+# environment, so nothing in it is read by a shell. A note's tab also starts
+# Claude knowing which note it is for (--append-system-prompt, so no turn is
+# spent on it): its title and file, the note itself read only when asked
+# (note_tab_prompt setting).
 #
 # The directory comes from pick-dir.zsh, which shape-open.zsh asks with too.
 
@@ -27,12 +30,15 @@ fail() {
 
 dir=$("$script_dir/pick-dir.zsh" "A new tab running Claude: Enter opens it there") || exit 0
 
-# tmux expands formats in -c, so a # in the path is doubled.
-if [[ -n ${NEW_TAB_PROMPT:-} ]]; then
-  window=$(tmux new-window -P -F '#{window_id}' -c "${dir//\#/##}" -e "NEW_TAB_PROMPT=$NEW_TAB_PROMPT" "zsh -i -c 'claude \"\$NEW_TAB_PROMPT\"; exec zsh -i'") || fail "tmux could not open a tab."
-else
-  window=$(tmux new-window -P -F '#{window_id}' -c "${dir//\#/##}" "zsh -i -c 'claude; exec zsh -i'") || fail "tmux could not open a tab."
+context=
+if [[ -n ${NEW_TAB_NOTE:-} && $(tmux show -gqv @setting_note_tab_prompt) != off ]]; then
+  notes_dir=${NOTES_DIR:-$HOME/Notes}
+  context="This tab is for the note \"${NEW_TAB_NAME:-${NEW_TAB_NOTE:t:r}}\" in the user's notes app, the file ${${notes_dir/#$HOME/~}%/}/$NEW_TAB_NOTE, which Notes shows beside you. It is the user's own and private: read it only when they ask you to. Renamed or moved since, its file is the one the tab's @tab_note option names now, relative to the notes directory (tmux show -wqv -t \$TMUX_PANE @tab_note)."
 fi
+# tmux expands formats in -c, so a # in the path is doubled. The prompt and
+# the note's context reach Claude through the tab's environment.
+window=$(tmux new-window -P -F '#{window_id}' -c "${dir//\#/##}" -e "NEW_TAB_PROMPT=${NEW_TAB_PROMPT:-}" -e "NEW_TAB_CONTEXT=$context" \
+  "zsh -i -c 'claude \${NEW_TAB_CONTEXT:+--append-system-prompt} \${NEW_TAB_CONTEXT:+\"\$NEW_TAB_CONTEXT\"} \${NEW_TAB_PROMPT:+\"\$NEW_TAB_PROMPT\"}; exec zsh -i'") || fail "tmux could not open a tab."
 if [[ -n ${NEW_TAB_NOTE:-} || -n ${NEW_TAB_NAME:-} ]]; then
   [[ -n ${NEW_TAB_NOTE:-} ]] && tmux set-option -w -t "$window" @tab_note "$NEW_TAB_NOTE"
   tmux set-option -w -t "$window" @tab_name "${NEW_TAB_NAME:-${NEW_TAB_NOTE:r}}"
