@@ -45,7 +45,7 @@ tmux new-session -A -s main
 | `M-s` | Into the sidebar and back out |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-f` | Pin the tab to the top of Needs you |
-| `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them |
+| `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, its files grouped into chapters that tell the change as a story (`]c` / `[c` between them) |
 
 `M` is Option. Tips in the top-right corner teach the rest the first time each would help.
 

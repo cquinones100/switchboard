@@ -172,6 +172,13 @@
     "default": true
   },
   {
+    "key": "diff_story",
+    "category": "Diff",
+    "label": "Diff told as a story",
+    "description": "M-d's file list grouped into a few chapters Haiku names from the diff itself, each with a heading and a line on why, read from the change's core to its edges ([c and ]c move between them); off, the files keep the reading order by kind. Sends the diff's text, not only its paths, to Claude",
+    "default": true
+  },
+  {
     "key": "view_work_map",
     "category": "Mission control",
     "label": "Work map",

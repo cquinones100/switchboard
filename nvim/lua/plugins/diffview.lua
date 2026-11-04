@@ -210,7 +210,8 @@ end
 -- the paths and their changed line counts; until it answers, and if it
 -- can't, they stay A to Z. Its answer is kept per repository, commits and
 -- paths in Neovim's cache, so the same diff opens in its order at once. The
--- diff_order setting (M-p, Settings) turns it off, back to the tree.
+-- diff_order setting (M-p, Settings) turns it off, back to the tree. With the
+-- diff_story setting on, the list is told as a story instead (ask_story).
 local DOCS = { "%.md$", "%.mdx$", "%.rst$", "%.adoc$", "/docs?/", "/README[^/]*$", "/CHANGELOG[^/]*$" }
 local DATABASE = {
   "%.sql$", "%.prisma$", "/migrations?/", "/migrate/", "/db/", "/database/", "/drizzle/",
@@ -242,7 +243,23 @@ end
 
 -- Haiku's order: path -> place.
 local smart = {}
+-- The diff told as a story (lua/diffstory.lua, the diff_story setting), when
+-- Haiku has told it: its chapters replace the kinds above, generated files
+-- last.
+-- Each view's own (view.story), so two diffs open in one Neovim keep theirs;
+-- the one in front's is active_story, set as a view is entered, since the
+-- sort that reads it runs where Neovim can't be asked which view that is.
+local active_story
+local function current_story() return active_story end
+-- The bars over the diff's sides, defined below with the hook that draws them.
+local path_bar, redraw_bars
 local function reading_order(a, b)
+  local story = current_story()
+  if story then
+    local pa, pb = story.place[a.path], story.place[b.path]
+    if pa and pb then return pa < pb end
+    if (pa == nil) ~= (pb == nil) then return pa ~= nil end
+  end
   local ka, kb = kind(a.path), kind(b.path)
   if ka ~= kb then return ka < kb end
   local sa, sb = smart[a.path], smart[b.path]
@@ -289,6 +306,19 @@ local function reorder(view)
   end
 end
 
+-- One line in today's request audit (lib/requests.js) for a claude -p run.
+local function count_request(source)
+  pcall(function()
+    local audit = vim.fn.expand("~/.local/state/switchboard/requests")
+    vim.fn.mkdir(audit, "p")
+    local log = io.open(audit .. "/" .. os.date("%Y-%m-%d") .. ".tsv", "a")
+    if log then
+      log:write(("%d\tAnthropic\tclaude -p\t%s\n"):format(os.time(), source))
+      log:close()
+    end
+  end)
+end
+
 local asked = {}
 local function ask_order(view)
   local entries = {}
@@ -323,16 +353,7 @@ local function ask_order(view)
     return ("%s (+%d -%d)"):format(e.path, stats.additions or 0, stats.deletions or 0)
   end, entries)
   vim.fn.mkdir(dir, "p")
-  -- The request audit (lib/requests.js): one line in today's file.
-  pcall(function()
-    local audit = vim.fn.expand("~/.local/state/switchboard/requests")
-    vim.fn.mkdir(audit, "p")
-    local log = io.open(audit .. "/" .. os.date("%Y-%m-%d") .. ".tsv", "a")
-    if log then
-      log:write(("%d\tAnthropic\tclaude -p\tdiff order\n"):format(os.time()))
-      log:close()
-    end
-  end)
+  count_request("diff order")
   vim.system({
     "claude", "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
     "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ORDER_PROMPT, "--output-format", "text",
@@ -345,6 +366,258 @@ local function ask_order(view)
       apply(order)
     end)
   end)
+end
+
+-- The story of the view's change (lua/diffstory.lua): its diff, each file's
+-- cut short, read by Haiku in the background once the list is known, its
+-- chapters then the list's order and headings. Kept by the diff's own text in
+-- Neovim's cache, so the same diff opens as a story at once, and an edit since
+-- is a new one.
+-- When Haiku can't tell it, the order is the kinds' and Haiku's path-only
+-- order (ask_order), as with the setting off.
+-- Stories known in this Neovim, by key, and the views waiting on one being
+-- asked for: each view that opens the same diff gets it, and it is asked
+-- for once.
+local stories, waiting = {}, {}
+local function ask_story(view)
+  local ds = require("diffstory")
+  local entries, paths, untracked = {}, {}, {}
+  for _, entry in view.files:iter() do
+    table.insert(paths, entry.path)
+    if entry.status == "?" then table.insert(untracked, entry.path) end
+    local stats = entry.stats or {}
+    table.insert(entries, { path = entry.path, additions = stats.additions, deletions = stats.deletions })
+  end
+  local function give(target, made)
+    target.story = made
+    if require("diffview.lib").get_current_view() == target then
+      active_story = made
+      reorder(target)
+      redraw_bars(target)
+    else
+      -- A view in another tab is put in its story's order as it is entered
+      -- (view_enter), its cursor kept on its file.
+      target.unsorted = true
+    end
+  end
+  -- A story told of another diff than the one shown now goes: the list is
+  -- the kinds' order again until this one's story is known.
+  local function forget(target)
+    if target.story then give(target, nil) end
+  end
+  -- Two files of someone's at least, or there is no story to tell: generated
+  -- files alone go last whatever is said.
+  local written = vim.tbl_filter(function(path) return not generated(path) end, paths)
+  if #paths < 2 or #written == 0 then
+    view.want = nil
+    return forget(view)
+  end
+  table.sort(paths)
+  local top = view.adapter.ctx.toplevel
+  local RevType = require("diffview.vcs.rev").RevType
+  local left, right = view.left and view.left.type, view.right and view.right.type
+  if vim.fn.executable("claude") == 0 or not (left == RevType.COMMIT or left == RevType.STAGE) then return ask_order(view) end
+  -- The change as diffview shows it, with git's own a/ and b/ whatever the
+  -- config says, which diffstory.split reads, and never the repository's
+  -- text converters: a commit against the branch's head, the index (--cached)
+  -- or the working tree; or, for the working tree against the index (plain
+  -- :DiffviewOpen), both its sections, the staged changes then the unstaged.
+  local git = { "git", "-C", top, "-c", "diff.noprefix=false", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M" }
+  local runs = {}
+  if left == RevType.STAGE then
+    table.insert(runs, vim.list_extend(vim.deepcopy(git), { "--cached" }))
+    table.insert(runs, vim.deepcopy(git))
+  else
+    local args = vim.deepcopy(git)
+    if right == RevType.STAGE then table.insert(args, "--cached") end
+    table.insert(args, view.left.commit)
+    if right == RevType.COMMIT then table.insert(args, view.right.commit) end
+    table.insert(runs, args)
+  end
+  local outputs = {}
+  local function each(i, done)
+    if i > #runs then return done({ code = 0, stdout = table.concat(outputs) }) end
+    vim.system(runs[i], { text = true }, function(out)
+      if out.code ~= 0 then return done(out) end
+      table.insert(outputs, out.stdout)
+      each(i + 1, done)
+    end)
+  end
+  each(1, function(diff)
+    vim.schedule(function()
+      -- Files git doesn't know yet, which its diff leaves out, as additions of
+      -- their first lines, in what Haiku reads and in the key.
+      -- A link as the path it points to, as git records one, never what it
+      -- points to, which may be outside the repository.
+      for _, path in ipairs(diff.code == 0 and untracked or {}) do
+        local full = top .. "/" .. path
+        local stat = vim.uv.fs_lstat(full)
+        local ok, lines
+        if stat and stat.type == "link" then
+          ok, lines = true, { vim.uv.fs_readlink(full) or "" }
+        elseif stat and stat.type == "file" then
+          ok, lines = pcall(vim.fn.readfile, full, "", require("diffstory").LINES_PER_FILE)
+        end
+        if ok then
+          diff.stdout = diff.stdout .. "diff --git a/" .. path .. " b/" .. path .. "\nnew file\n" .. table.concat(vim.tbl_map(function(l) return "+" .. l end, lines), "\n") .. "\n"
+        end
+      end
+      if diff.code ~= 0 then
+        forget(view)
+        return ask_order(view)
+      end
+      -- Known by the diff itself, so a working tree edited since is a new story.
+      local key = vim.fn.sha256(table.concat({ top, table.concat(paths, "\n"), diff.stdout }, "\0"))
+      -- What the view shows now, which an answer asked for before must match.
+      if view.want ~= key then forget(view) end
+      view.want = key
+      if stories[key] then return give(view, stories[key]) end
+      -- Haiku couldn't tell this one: not asked again in this Neovim.
+      if stories[key] == false then return ask_order(view) end
+      local dir = vim.fn.stdpath("cache") .. "/diff-story"
+      local file = dir .. "/" .. key .. ".txt"
+      local ok, cached = pcall(vim.fn.readfile, file)
+      local made = ok and ds.parse(table.concat(cached, "\n"), paths, generated)
+      if made then
+        stories[key] = made
+        return give(view, made)
+      end
+      if waiting[key] then return table.insert(waiting[key], view) end
+      waiting[key] = { view }
+      vim.fn.mkdir(dir, "p")
+      count_request("diff story")
+      vim.system({
+        "claude", "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
+        "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT, "--output-format", "text",
+      }, { stdin = ds.input(entries, ds.split(diff.stdout)), cwd = dir, timeout = 120000 }, function(result)
+        vim.schedule(function()
+          local views = waiting[key] or {}
+          waiting[key] = nil
+          local told = result.code == 0 and ds.parse(result.stdout, paths, generated)
+          stories[key] = told or false
+          if told then
+            vim.fn.writefile(vim.split(result.stdout, "\n"), file)
+          end
+          -- Only to the views still showing this diff.
+          for _, each in ipairs(views) do
+            if each.want == key then
+              if told then give(each, told) else ask_order(each) end
+            end
+          end
+        end)
+      end)
+    end)
+  end)
+end
+
+-- Each chapter's heading over its first file in the list, as lines drawn
+-- between the list's own (extmark virtual lines), so diffview's list, its
+-- keys and its cursor are left as they are. Drawn again after every redraw,
+-- which writes the list's lines anew.
+local headings = vim.api.nvim_create_namespace("diff_story")
+-- The list's files as shown, top to bottom, section by section, each with
+-- its entry, the component drawing it and its chapter: an entry, not a path,
+-- since a file both staged and changed again since is in the list twice.
+local function story_rows(panel, story)
+  local rows = {}
+  for _, name in ipairs({ "conflicting", "working", "staged" }) do
+    local section = panel.components and panel.components[name]
+    for _, comp in ipairs(section and section.files and section.files.comp and section.files.comp.components or {}) do
+      local entry = comp.context
+      if entry and entry.path then
+        table.insert(rows, { entry = entry, comp = comp, section = name, chapter = story.chapter[entry.path] })
+      end
+    end
+  end
+  return rows
+end
+local function draw_headings(panel)
+  if not (panel.bufid and vim.api.nvim_buf_is_valid(panel.bufid)) then return end
+  vim.api.nvim_buf_clear_namespace(panel.bufid, headings, 0, -1)
+  local story = current_story()
+  if not story then return end
+  local width = panel.winid and vim.api.nvim_win_is_valid(panel.winid) and vim.api.nvim_win_get_width(panel.winid) or 30
+  local rows = story_rows(panel, story)
+  local starts = require("diffstory").starts(rows)
+  for i, row in ipairs(rows) do
+    if starts[i] and row.comp and row.comp.lstart then
+      pcall(vim.api.nvim_buf_set_extmark, panel.bufid, headings, row.comp.lstart, 0, {
+        virt_lines = require("diffstory").heading(story, row.chapter, width),
+        virt_lines_above = true,
+      })
+    end
+  end
+end
+local function headings_after_redraw()
+  local FilePanel = require("diffview.scene.views.diff.file_panel").FilePanel
+  local redraw = FilePanel.redraw
+  FilePanel.redraw = function(self, ...)
+    local result = redraw(self, ...)
+    draw_headings(self)
+    return result
+  end
+end
+
+-- ]c and [c in the list: the next or the previous heading's file, as the
+-- headings are drawn.
+local function chapter_jump(step)
+  return function()
+    local view = require("diffview.lib").get_current_view()
+    local story = view and view.story
+    if not (story and view.panel) then return end
+    local item = view.panel:get_item_at_cursor()
+    local rows = story_rows(view.panel, story)
+    local at = 0
+    for i, row in ipairs(rows) do
+      if row.entry == item then at = i end
+    end
+    local to = rows[require("diffstory").jump(require("diffstory").starts(rows), at, step) or 0]
+    if to then view.panel:highlight_file(to.entry) end
+  end
+end
+local chapter_keys = {
+  { "n", "]c", chapter_jump(1), { desc = "The next chapter" } },
+  { "n", "[c", chapter_jump(-1), { desc = "The chapter before" } },
+}
+
+-- The bar over a side of the diff (diff_buf_win_enter), drawn again for the
+-- file shown when the story arrives, to name its chapter.
+path_bar = function(winid, symbol)
+  -- The file's path from the repository's root over each side, its
+  -- directory dimmed, as GitHub heads each file: the flat list in
+  -- reading order has no folders to say where a file is. The left
+  -- side's own path, so a renamed file shows where it was.
+  local view = require("diffview.lib").get_current_view()
+  local win = view and view.cur_layout and vim.tbl_filter(function(w) return w.id == winid end, view.cur_layout.windows)[1]
+  local file = win and win.file and win.file.path
+  -- The right side's alone when there are two, the left's only for a
+  -- file renamed, which names where it was.
+  local pair = view and view.cur_layout and #view.cur_layout.windows > 1
+  local other = pair and vim.tbl_filter(function(w) return w.id ~= winid end, view.cur_layout.windows)[1]
+  local renamed = other and other.file and other.file.path ~= file
+  if file and pair and symbol == "a" and not renamed then
+    -- A bar with nothing in it, so both sides start on the same row.
+    vim.wo[winid].winbar = " "
+  elseif file then
+    local dir, name = file:match("^(.*/)([^/]*)$")
+    local escape = function(text) return (text:gsub("%%", "%%%%")) end
+    -- With a story told, the file's chapter before its path.
+    local story = current_story()
+    local number = story and story.chapter[file]
+    local chapter = number and ("%#Comment#" .. number .. "/" .. #story.chapters .. " " .. escape(story.chapters[number].title) .. " · ") or ""
+    vim.wo[winid].winbar = " " .. chapter .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file)
+  end
+end
+redraw_bars = function(view)
+  for _, win in ipairs(view.cur_layout and view.cur_layout.windows or {}) do
+    if win.id and vim.api.nvim_win_is_valid(win.id) then path_bar(win.id, win.file and win.file.symbol) end
+  end
+end
+
+-- Whether the diff_story setting is on, as diff_order's is read below.
+local function story_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story" })) ~= "off"
 end
 
 -- Whether the diff_order setting is on: tmux's copy of it (tmux/settings.sh),
@@ -500,6 +773,15 @@ return {
     use_icons = false,
     file_panel = { win_config = { width = 30 } },
     hooks = {
+      view_enter = function(view)
+        active_story = view.story
+        if view.unsorted then
+          view.unsorted = nil
+          reorder(view)
+          redraw_bars(view)
+        end
+      end,
+      view_leave = function() active_story = nil end,
       view_opened = function(view)
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
         if view.emitter then
@@ -509,32 +791,15 @@ return {
             view.keep_panel = false
           end)
           if view.panel and view.panel.ordered_file_list and vim.g.diff_order then
-            view.emitter:on("files_updated", function() ask_order(view) end)
+            view.emitter:on("files_updated", function()
+              if vim.g.diff_story then ask_story(view) else ask_order(view) end
+            end)
           end
         end
       end,
       diff_buf_win_enter = function(_, winid, ctx)
         vim.wo[winid].winhighlight = minimal_for(ctx and ctx.symbol)
-        -- The file's path from the repository's root over each side, its
-        -- directory dimmed, as GitHub heads each file: the flat list in
-        -- reading order has no folders to say where a file is. The left
-        -- side's own path, so a renamed file shows where it was.
-        local view = require("diffview.lib").get_current_view()
-        local win = view and view.cur_layout and vim.tbl_filter(function(w) return w.id == winid end, view.cur_layout.windows)[1]
-        local file = win and win.file and win.file.path
-        -- The right side's alone when there are two, the left's only for a
-        -- file renamed, which names where it was.
-        local pair = view and view.cur_layout and #view.cur_layout.windows > 1
-        local other = pair and vim.tbl_filter(function(w) return w.id ~= winid end, view.cur_layout.windows)[1]
-        local renamed = other and other.file and other.file.path ~= file
-        if file and pair and ctx and ctx.symbol == "a" and not renamed then
-          -- A bar with nothing in it, so both sides start on the same row.
-          vim.wo[winid].winbar = " "
-        elseif file then
-          local dir, name = file:match("^(.*/)([^/]*)$")
-          local escape = function(text) return (text:gsub("%%", "%%%%")) end
-          vim.wo[winid].winbar = " " .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file)
-        end
+        path_bar(winid, ctx and ctx.symbol)
         -- No ╱ where the other side has no lines, and no ~ past the end of a
         -- short file: blank, as the space after a file in an editor is.
         -- Added to the global value, the blank lines between windows included
@@ -546,7 +811,7 @@ return {
     },
     keymaps = {
       view = { close, quit, unpack(copies) },
-      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], unpack(copies) },
+      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], unpack(copies) },
       file_history_panel = { close, escape, quit, back, scrolls[1], scrolls[2], unpack(copies) },
     },
   },
@@ -561,10 +826,12 @@ return {
     minimal_highlights()
     vim.api.nvim_create_autocmd("ColorScheme", { callback = minimal_highlights })
     vim.g.diff_order = order_on()
+    vim.g.diff_story = vim.g.diff_order and story_on()
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"
       sort_lists()
     end
+    if vim.g.diff_story then headings_after_redraw() end
     require("diffview").setup(opts)
     vim.api.nvim_create_autocmd("FileType", {
       pattern = { "DiffviewFiles", "DiffviewFileHistory" },
