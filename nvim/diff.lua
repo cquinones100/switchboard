@@ -24,6 +24,9 @@ vim.o.laststatus = 0
 -- a tabline naming it.
 vim.o.showtabline = 0
 vim.o.showmode = false
+-- Nothing past the end of a buffer: the file list and a short file stop
+-- there, with no column of ~ below them.
+vim.opt.fillchars:append({ eob = " " })
 vim.o.swapfile = false
 vim.o.shadafile = "NONE"
 vim.o.clipboard = "unnamedplus"
