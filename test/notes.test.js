@@ -995,6 +995,7 @@ test("a note renamed from the sidebar takes its tabs' links along, and a tab nam
   execFileSync("tmux", ["-S", socket, "set", "-w", "-t", own, "@tab_note", "Plans.md"]);
   execFileSync("tmux", ["-S", socket, "set", "-w", "-t", own, "@tab_name", "Release work"]);
   execFileSync("tmux", ["-S", socket, "set", "-w", "-t", beside, "@tab_note_last", "Work/Ideas.md"]);
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", beside, "@tab_note_arrived", "Work/Ideas.md"]);
   process.env.TMUX = `${socket},${pid},0`;
   t.after(() => {
     delete process.env.TMUX;
@@ -1024,6 +1025,7 @@ test("a note renamed from the sidebar takes its tabs' links along, and a tab nam
   assert.equal(show(own, "@tab_note"), "Plans- 2.md");
   assert.equal(show(own, "@tab_name"), "Release work", "a tab with a name of its own keeps it");
   assert.equal(show(beside, "@tab_note_last"), "Home/Ideas.md", "a renamed folder takes its notes' links along");
+  assert.equal(show(beside, "@tab_note_arrived"), "Home/Ideas.md", "and the note Notes came beside the tab with");
 });
 
 test("a squash asks in a box first, then shows a box while Claude works, with the notes and the time so far, and Esc in it cancels, leaving the notes as they were", (t) => {
@@ -1074,4 +1076,42 @@ test("a squash asks in a box first, then shows a box while Claude works, with th
   assert.equal(result.a && result.b, true, "the notes are untouched");
   assert.ok(result.said.some((m) => /canceled/.test(m)));
   assert.ok(!fs.existsSync(path.join(dir, "Both.md")));
+});
+
+test("a note opened beside a tab, other than the one Notes came with, is the tab's at once, and going back to the first counts too", (t) => {
+  const socket = path.join(fs.mkdtempSync("/tmp/ob-"), "tmux.sock");
+  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "sleep 60"]);
+  const pid = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pid}"], { encoding: "utf8" }).trim();
+  const window = execFileSync("tmux", ["-S", socket, "display", "-p", "#{window_id}"], { encoding: "utf8" }).trim();
+  const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pane_id}"], { encoding: "utf8" }).trim();
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", window, "@tab_note_arrived", "A.md"]);
+  process.env.TMUX = `${socket},${pid},0`;
+  process.env.TMUX_PANE = pane;
+  t.after(() => {
+    delete process.env.TMUX;
+    delete process.env.TMUX_PANE;
+    execFileSync("tmux", ["-S", socket, "kill-server"]);
+  });
+  const show = (option) => execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", window, option], { encoding: "utf8" }).trim();
+  lua(`
+    require("notes.store").opened_beside("A.md")
+    vim.wait(300)
+    io.write(vim.json.encode({}))
+  `);
+  assert.deepEqual([show("@tab_note_arrived"), show("@tab_note_last")], ["A.md", ""], "the note it came with isn't the tab's");
+  lua(`
+    require("notes.store").opened_beside("B.md")
+    vim.wait(2000, function() return vim.fn.system({ "tmux", "show", "-wqv", "@tab_note_last" }) ~= "" end, 20)
+    require("notes.store").opened_beside("A.md")
+    vim.wait(2000, function() return vim.fn.system({ "tmux", "show", "-wqv", "@tab_note_last" }) == "A.md\\n" end, 20)
+    io.write(vim.json.encode({}))
+  `);
+  assert.deepEqual([show("@tab_note_arrived"), show("@tab_note_last")], ["", "A.md"], "another is, and then going back to the first");
+  execFileSync("tmux", ["-S", socket, "set", "-w", "-t", window, "@notes", "1"]);
+  lua(`
+    require("notes.store").opened_beside("C.md")
+    vim.wait(300)
+    io.write(vim.json.encode({}))
+  `);
+  assert.equal(show("@tab_note_last"), "A.md", "never in Notes' own tab");
 });

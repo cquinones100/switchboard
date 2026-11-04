@@ -512,6 +512,7 @@ function M.open(path, opts)
   vim.b[buf].copilot_enabled = false
   vim.api.nvim_win_call(M.note_win, function() vim.cmd("silent keepalt buffer " .. buf) end)
   store.set_last(store.relative(path))
+  store.opened_beside(store.relative(path))
   setup_buffer(buf)
   setup_window(M.note_win)
   tables.align_all(buf)

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 
 # Carries the window options tmux-resurrect doesn't save across a restart:
-# a tab's reminder (@remind_at, @remind_note, @remind_said, from remind.sh).
-# Resurrect saves panes and layouts only, so without this every reminder was
-# gone once the Mac restarted.
+# a tab's reminder (@remind_at, @remind_note, @remind_said, from remind.sh)
+# and its note (@tab_note, @tab_note_last, @tab_note_asked, which M-e shows
+# beside it, and @tab_note_arrived, the note Notes came beside it with,
+# notes-open.sh). Resurrect saves panes and layouts only, so
+# without this every reminder and every tab's note was gone once the Mac
+# restarted.
 #
 # `save`, after every resurrect save (@resurrect-hook-post-save-all in
 # tmux.conf), writes each window holding one of OPTIONS to window-options.tsv
@@ -18,7 +21,7 @@
 set -u
 export LC_ALL=en_US.UTF-8
 
-OPTIONS=(@remind_at @remind_note @remind_said)
+OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived)
 
 # Resurrect's own folder, found as it finds it (scripts/helpers.sh): its
 # @resurrect-dir, with ~, $HOME and $HOSTNAME expanded, else ~/.tmux/resurrect

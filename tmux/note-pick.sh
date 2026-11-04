@@ -73,7 +73,8 @@ case "${1:-}" in
     tmux display -p -c "$client" '#{client_name}' >/dev/null 2>&1 || exit 0
     choices=$(mktemp) answer=$(mktemp)
     trap 'rm -f "$choices" "$answer"' EXIT
-    { printf 'Keep whatever is open\t\n'; list "$window"; } >"$choices"
+    # The likeliest note first, so Enter takes it; keeping what is open last.
+    { list "$window"; printf 'Keep whatever is open\t\n'; } >"$choices"
     name=$(tmux display -p -t "$window" '#{@tab_label}')
     tmux display-popup -c "$client" -E -w 70 -h 60% -T " Which note is this tab's? " \
       "fzf --delimiter '\t' --with-nth 1 --layout reverse --prompt 'Note: ' --header '${name//\'/} · Esc asks again next time' <'$choices' >'$answer'"

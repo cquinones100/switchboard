@@ -137,6 +137,21 @@ function M.set_last(rel)
   M.save_meta(data)
 end
 
+-- A note opened while Notes sits beside a tab (M-e), other than the one it
+-- came with (@tab_note_arrived), becomes the tab's last note
+-- (@tab_note_last) at once, so quitting Notes there keeps it, and the
+-- marker is dropped, so going back to the one it came with counts too.
+-- Never in Notes' own tab. In the background, and nothing outside tmux.
+function M.opened_beside(rel)
+  local pane = vim.env.TMUX_PANE or ""
+  if (vim.env.TMUX or "") == "" or pane == "" then return end
+  vim.system({ "tmux", "display", "-p", "-t", pane, "#{window_id}\t#{@notes}\t#{@tab_note_arrived}" }, { text = true }, function(out)
+    local window, own, arrived = (out.stdout or ""):match("^([^\t]*)\t([^\t]*)\t([^\n]*)")
+    if out.code ~= 0 or not window or own == "1" or arrived == rel then return end
+    vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note_last", rel, ";", "set-option", "-wu", "-t", window, "@tab_note_arrived" })
+  end)
+end
+
 function M.last()
   local rel = M.meta().last
   if type(rel) ~= "string" or rel:sub(1, #M.TRASH + 1) == M.TRASH .. "/" then return nil end
@@ -306,8 +321,9 @@ function M.create_folder(rel)
 end
 
 -- The tabs linked to a note (@tab_note, as /note-watch, M-e's question and
--- Notes' t set it, and @tab_note_last, the one Notes last showed beside a
--- tab: paths in the notes directory) follow it when it is renamed, moved or
+-- Notes' t set it, @tab_note_last, the one Notes last showed beside a
+-- tab, and @tab_note_arrived, the one Notes came beside it with: paths in
+-- the notes directory) follow it when it is renamed, moved or
 -- squashed into another. `follow` gives a linked path's new one, or nil to
 -- leave it. With `title` ({ from, to }, a note's title before and after),
 -- a tab linked to that note and named after it, as a tab opened for a note
@@ -316,13 +332,15 @@ end
 -- outside tmux.
 function M.relink(follow, title)
   if (vim.env.TMUX or "") == "" then return end
-  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_name}" }, { text = true }):wait()
+  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_note_arrived}\t#{@tab_name}" }, { text = true }):wait()
   if listed.code ~= 0 then return end
   local renamed = {}
   for line in (listed.stdout or ""):gmatch("[^\n]+") do
-    local window, session, note, last, name = unpack(vim.split(line, "\t", { plain = true }))
+    local window, session, note, last, arrived, name = unpack(vim.split(line, "\t", { plain = true }))
     local to_note = note ~= "" and follow(note) or nil
     local to_last = last ~= "" and follow(last) or nil
+    local to_arrived = arrived ~= "" and follow(arrived) or nil
+    if to_arrived then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note_arrived", to_arrived }):wait() end
     if to_note then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note", to_note }):wait() end
     if to_last then vim.system({ "tmux", "set-option", "-w", "-t", window, "@tab_note_last", to_last }):wait() end
     local linked = to_note or to_last or (title and (note == title.path or last == title.path))

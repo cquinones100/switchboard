@@ -54,17 +54,33 @@ notes_command=${NOTES_OPEN_COMMAND:-zsh -i -c notes}
 
 # Each tab's note: the one its Claude works from (@tab_note, which /note-watch
 # and /queue-and-clean set once a note is settled), else the one Notes last
-# showed beside it (@tab_note_last, kept here as Notes leaves it). Both are
+# showed beside it (@tab_note_last, kept here as Notes leaves it, but only once
+# the tab has a note or another was opened while beside it: a tab with none
+# that Notes merely passed through, still showing the last tab's note, would
+# otherwise take that note as its own; the app itself records a note opened
+# there as soon as it is, dropping the arrival marker, store.opened_beside,
+# so quitting Notes keeps it and going back to the first counts too). Both are
 # paths in the notes directory. M-e opens it in the running app, through the
 # socket bin/notes listens on, or, for an app not yet running, by making it
 # the note the app opens with (.notes.json's last).
 notes_socket=${NOTES_SOCKET:-$HOME/.local/state/switchboard/notes.sock}
 shown() { jq -r '.last // empty' "$notes_dir/.notes.json" 2>/dev/null; }
 remember() {
-  local window=$1 note
+  local window=$1 note arrived
   [ "$(tmux show -wqv -t "$window" @notes)" = 1 ] && return
   note=$(shown)
-  [ -n "$note" ] && tmux set-option -w -t "$window" @tab_note_last "$note"
+  arrived=$(tmux show -wqv -t "$window" @tab_note_arrived)
+  tmux set-option -wu -t "$window" @tab_note_arrived 2>/dev/null
+  [ -n "$note" ] || return 0
+  [ -n "$(note_for "$window")" ] || [ "$note" != "$arrived" ] || return 0
+  tmux set-option -w -t "$window" @tab_note_last "$note"
+}
+# What Notes showed as it came beside a tab, for remember to tell whether
+# another note was opened there.
+arrived() {
+  local window=$1 note
+  note=$(note_for "$window") || note=$(shown)
+  [ -n "$note" ] && tmux set-option -w -t "$window" @tab_note_arrived "$note"
 }
 note_for() {
   local window=$1 want
@@ -158,12 +174,13 @@ if [ "${1:-}" = show ]; then
   exit 0
 fi
 
-# A tab with no note of its own yet is asked which it is (note-pick.sh), once,
-# with the ask_tab_note setting on.
+# A tab with no note of its own yet, neither one chosen nor one shown beside
+# it before, is asked which it is (note-pick.sh), until it is told to keep
+# whatever is open, with the ask_tab_note setting on.
 ask_note() {
   local window=$1 client=$2
   [ "$(tmux show -gqv @setting_ask_tab_note)" = off ] && return
-  [ -n "$(tmux show -wqv -t "$window" @tab_note)" ] || [ -n "$(tmux show -wqv -t "$window" @tab_note_asked)" ] && return
+  [ -n "$(note_for "$window")" ] || [ -n "$(tmux show -wqv -t "$window" @tab_note_asked)" ] && return
   [ "$(tmux show -wqv -t "$window" @notes)" = 1 ] && return
   "${0%/*}/note-pick.sh" ask "$window" "$client"
 }
@@ -194,6 +211,7 @@ if [ "${1:-}" = side ]; then
   if [ -z "$existing" ]; then
     ask_note "$here_window" "$client"
     open_with "$here_window"
+    arrived "$here_window"
     sidebar=on
     [ "$(tmux show -gqv @setting_notes_hide_sidebar)" = off ] || sidebar=off
     pane=$(tmux split-window -h -l 40% -t "$here" -c "$HOME" -e "NOTES_SIDEBAR=$sidebar" -P -F '#{pane_id}' "$notes_command") || exit 0
@@ -211,6 +229,7 @@ if [ "${1:-}" = side ]; then
   # Leaving its own Notes tab, it leaves notes-away.sh in its place, so the
   # tab stays and says where Notes went. Leaving another tab, nothing.
   old=$(tmux display -p -t "$existing" '#{window_id}')
+  old_arrived=$(tmux show -wqv -t "$old" @tab_note_arrived)
   remember "$old"
   # Its own tab: marked @notes, or holding nothing else but the sidebar, as a
   # Notes tab that lost its marks (tmux-resurrect) does.
@@ -221,8 +240,10 @@ if [ "${1:-}" = side ]; then
   fi
   ask_note "$here_window" "$client"
   # A move that fails (a pane too narrow to split) leaves Notes where it was,
-  # its sidebar as it was, and takes back the stand-in just left for it.
+  # its sidebar and the tab's arrival marker as they were, and takes back the
+  # stand-in just left for it.
   if ! tmux join-pane -h -l 40% -s "$existing" -t "$here"; then
+    [ -n "$old_arrived" ] && tmux set-option -w -t "$old" @tab_note_arrived "$old_arrived"
     stand_in=$(placeholder)
     [ -n "$stand_in" ] && [ "$(tmux display -p -t "$stand_in" '#{window_id}')" = "$old" ] && tmux kill-pane -t "$stand_in"
     exit 0
@@ -237,6 +258,7 @@ if [ "${1:-}" = side ]; then
     sidebar_shown false
   fi
   show_for "$here_window"
+  arrived "$here_window"
   exit 0
 fi
 

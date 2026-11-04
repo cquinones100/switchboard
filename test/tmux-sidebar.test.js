@@ -1128,7 +1128,7 @@ test("M-e opens Notes to the right of the pane, moves the one Notes there from e
   }
 });
 
-test("M-e shows each tab its own note: the one its Claude works from, else the last one shown beside it", async (t) => {
+test("M-e shows each tab its own note: the one its Claude works from, else the last one opened beside it", async (t) => {
   const script = path.join(__dirname, "../tmux/notes-open.sh");
   const notesDir = fs.mkdtempSync(path.join(tmp, "tab-notes-"));
   ["A.md", "B.md", "C.md"].forEach((name) => fs.writeFileSync(path.join(notesDir, name), `# ${name}\n`));
@@ -1150,12 +1150,17 @@ test("M-e shows each tab its own note: the one its Claude works from, else the l
   showing("A.md");
   execFileSync("bash", [script, "side", "none", a], { env });
   execFileSync("bash", [script, "side", "none", b], { env });
-  assert.equal(tmux("show", "-wqv", "-t", first, "@tab_note_last"), "A.md", "the note it showed is kept on the tab it left");
+  assert.equal(tmux("show", "-wqv", "-t", first, "@tab_note_last"), "", "a note only passing through, the last tab's, isn't taken as the tab's own");
   assert.equal(opened(), "", "a tab with no note of its own leaves the note as it is");
 
-  showing("B.md");
   execFileSync("bash", [script, "side", "none", a], { env });
-  assert.equal(opened(), "A.md", "back beside the first tab, its note again");
+  showing("B.md");
+  execFileSync("bash", [script, "side", "none", b], { env });
+  assert.equal(tmux("show", "-wqv", "-t", first, "@tab_note_last"), "B.md", "one opened beside it is kept on the tab it left");
+
+  showing("A.md");
+  execFileSync("bash", [script, "side", "none", a], { env });
+  assert.equal(opened(), "B.md", "back beside the first tab, its note again");
 
   tmux("set", "-w", "-t", second, "@tab_note", "C.md");
   execFileSync("bash", [script, "side", "none", b], { env });
