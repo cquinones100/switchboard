@@ -1026,7 +1026,7 @@ test("a note renamed from the sidebar takes its tabs' links along, and a tab nam
   assert.equal(show(beside, "@tab_note_last"), "Home/Ideas.md", "a renamed folder takes its notes' links along");
 });
 
-test("a squash shows a box while Claude works, with the notes and the time so far, and Esc in it cancels, leaving the notes as they were", (t) => {
+test("a squash asks in a box first, then shows a box while Claude works, with the notes and the time so far, and Esc in it cancels, leaving the notes as they were", (t) => {
   const bin = fs.mkdtempSync(path.join(tmp, "claude-bin-"));
   // A stand-in claude that takes its time.
   fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\ncat >/dev/null\nsleep 5\nprintf '# Both\\n'\n", { mode: 0o755 });
@@ -1040,23 +1040,32 @@ test("a squash shows a box while Claude works, with the notes and the time so fa
     local a = s.create("", "First")
     local b = s.create("", "Second")
     sidebar.state.marked = { a, b }
-    vim.ui.select = function(_, _, choose) choose("Squash them") end
     local said = {}
     vim.notify = function(msg) table.insert(said, msg) end
-    sidebar.squash()
     local box = function()
       for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_config(w).relative ~= "" then return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n") end
       end
     end
+    local press = function(key) vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(key, true, false, true), "x", false) end
+    -- Asked first, in a box: n keeps the notes.
+    sidebar.squash()
+    local asked = box()
+    press("n")
+    local kept = box() == nil
+    -- Enter squashes.
+    sidebar.squash()
+    press("<CR>")
     local shown = box()
     vim.wait(1200)
     local later = box()
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "x", false)
     vim.wait(1500, function() return box() == nil end, 20)
     vim.wait(300)
-    io.write(vim.json.encode({ shown = shown, later = later, gone = box() == nil, a = vim.uv.fs_stat(a) ~= nil, b = vim.uv.fs_stat(b) ~= nil, said = said }))
+    io.write(vim.json.encode({ asked = asked, kept = kept, shown = shown, later = later, gone = box() == nil, a = vim.uv.fs_stat(a) ~= nil, b = vim.uv.fs_stat(b) ~= nil, said = said }))
   `);
+  assert.match(result.asked, /Squash these 2 notes into one\?[\s\S]*· First[\s\S]*· Second[\s\S]*Claude \(sonnet\)[\s\S]*Recently Deleted[\s\S]*\[Y\/n\]/, "asked in a box, Enter as yes");
+  assert.equal(result.kept, true, "n closes it, squashing nothing");
   assert.match(result.shown, /Squashing 2 notes with Claude \(sonnet\)/);
   assert.match(result.shown, /· First[\s\S]*· Second/);
   assert.match(result.shown, /Esc cancels/);

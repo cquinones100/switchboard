@@ -295,11 +295,8 @@ function M.squash()
     return
   end
   local squash = require("notes.squash")
-  vim.ui.select({ "Squash them", "Keep them as they are" }, {
-    prompt = ("Squash %d notes into one? Their text goes to Claude (%s) to merge; the originals go to Recently Deleted."):format(#marked, squash.options.model),
-  }, function(choice)
-    if choice ~= "Squash them" then return end
-    local titles = vim.tbl_map(function(p) return store.title_of(io.open(p):read("*a")) end, marked)
+  local titles = vim.tbl_map(function(p) return store.title_of(io.open(p):read("*a")) end, marked)
+  squash.confirm(titles, squash.options.model, function()
     local job, cancelled
     local close = squash.progress(titles, squash.options.model, function()
       cancelled = true
