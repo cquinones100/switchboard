@@ -1421,6 +1421,7 @@ again any time, and the `ask_tab_note` setting turns the question off.
 | `R` | rename a note (its title, so its file, as typing a new title on its first line does) or a folder; the tabs linked to the note, or to a note in the folder (`@tab_note`, and `@tab_note_last` from `M-e`), follow it, and a tab named after the note takes its new title. A note's title typed over, moved with `m` or squashed carries them along the same way |
 | `/` | search every note, by every word you type |
 | `Ctrl-F` | find a note with fzf (in a note too) |
+| `Ctrl-B` | put the list away, for the note to have the room; Ctrl-B in a note shows it again (in place of vim's page up) |
 | `x` | clear the search or tag |
 | `Tab` | go to the note |
 | `q` / `?` | quit / these keys |

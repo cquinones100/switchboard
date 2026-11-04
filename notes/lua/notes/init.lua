@@ -6,6 +6,7 @@
 --
 -- In a note:
 --   Ctrl-F             find a note with fzf (in the sidebar too)
+--   Ctrl-B             show or put away the sidebar (in the sidebar too)
 --   Enter              tick a checklist item, fold a heading, follow a link
 --   a click            the same, on a ☐, a heading's ▾ or a link
 --   Ctrl-P             the Format menu, with everything below
@@ -173,7 +174,10 @@ function M.forget(path)
     if next_note then
       M.open(next_note, { stay = true })
     else
-      vim.api.nvim_win_set_buf(M.note_win, vim.api.nvim_create_buf(false, true))
+      local empty = vim.api.nvim_create_buf(false, true)
+      -- No note left to show, but Ctrl-B still brings the list back.
+      vim.keymap.set({ "n", "i" }, "<C-b>", function() M.toggle_sidebar() end, { buffer = empty, desc = "Show or put away the sidebar" })
+      vim.api.nvim_win_set_buf(M.note_win, empty)
     end
   end
   pcall(vim.api.nvim_buf_delete, buf, { force = true })
@@ -391,6 +395,9 @@ local function setup_buffer(buf)
     vim.cmd("stopinsert")
     vim.schedule(function() require("notes.finder").open() end)
   end, "Find a note")
+  -- Ctrl-B, in place of vim's page up: show or put away the sidebar.
+  map("n", "<C-b>", function() M.toggle_sidebar() end, "Show or put away the sidebar")
+  map("i", "<C-b>", function() M.toggle_sidebar() end, "Show or put away the sidebar")
   -- An empty pair of style markers put in to type into goes if nothing was.
   vim.api.nvim_create_autocmd("InsertLeave", { buffer = buf, callback = function() format.drop_empty(buf) end })
   -- Character styles, on the word under the cursor or the selection.
@@ -535,6 +542,17 @@ function M.show_sidebar(show)
   elseif win and #vim.api.nvim_tabpage_list_wins(0) > 1 then
     vim.api.nvim_win_close(win, true)
     M.focus_note()
+  end
+end
+
+-- Ctrl-B: the list put away, or back as it was left, the folder, tag or
+-- search it showed kept, its cursor on the open note when the view lists it.
+function M.toggle_sidebar()
+  if sidebar.window() then return M.show_sidebar(false) end
+  M.layout()
+  local path = M.current_path() and vim.fs.normalize(M.current_path())
+  for row, item in pairs(sidebar.state.items) do
+    if path and item.note == path then return vim.api.nvim_win_set_cursor(sidebar.window(), { row, 0 }) end
   end
 end
 

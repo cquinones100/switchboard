@@ -648,12 +648,30 @@ test("the sidebar is put away and shown again on asking, and NOTES_SIDEBAR=off s
     seen.windows = #vim.api.nvim_tabpage_list_wins(0)
     n.show_sidebar(true)
     seen.back = sb.window() ~= nil
+    -- Ctrl-B, from a note, typing in it or not, and from the list.
+    n.show_sidebar(false)
+    vim.api.nvim_set_current_win(n.note_win)
+    vim.api.nvim_feedkeys(vim.keycode("<C-b>"), "x", false)
+    seen.key_shown = sb.window() ~= nil
+    vim.api.nvim_set_current_win(sb.window())
+    vim.api.nvim_feedkeys(vim.keycode("<C-b>"), "x", false)
+    seen.key_hidden = sb.window() == nil and vim.api.nvim_get_current_win() == n.note_win
+    vim.api.nvim_feedkeys(vim.keycode("i<C-b>"), "x", false)
+    seen.key_typing = sb.window() ~= nil
+    vim.cmd("stopinsert")
+    -- A search that leaves out the open note is still there when it comes back.
+    sb.show({ query = "nothing like it" })
+    vim.api.nvim_set_current_win(sb.window())
+    vim.api.nvim_feedkeys(vim.keycode("<C-b>"), "x", false)
+    vim.api.nvim_feedkeys(vim.keycode("<C-b>"), "x", false)
+    seen.view_kept = sb.window() ~= nil and sb.state.query == "nothing like it"
+    sb.show({})
     n.show_sidebar(false)
     require("notes.links").follow(vim.api.nvim_win_get_buf(n.note_win), 2, 1)
     seen.tag = sb.window() ~= nil and sb.state.tag == "todo"
     io.write(vim.json.encode(seen))
   `;
-  assert.deepEqual(lua(code("")).result, { started: true, hidden: true, in_note: true, windows: 1, back: true, tag: true }, "and a #tag followed brings it back with the tag's notes");
+  assert.deepEqual(lua(code("")).result, { started: true, hidden: true, in_note: true, windows: 1, back: true, key_shown: true, key_hidden: true, key_typing: true, view_kept: true, tag: true }, "and a #tag followed brings it back with the tag's notes");
   assert.equal(lua(code('vim.env.NOTES_SIDEBAR = "off"')).result.started, false, "started beside a tab, without it");
 });
 

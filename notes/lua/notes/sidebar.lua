@@ -7,6 +7,7 @@
 --   p  pin or unpin           m  move to a folder  r   restore, in Recently Deleted
 --   /  search all notes       x  clear the search or tag   Ctrl-F  find a note (fzf)
 --   R  rename a note or folder  q  quit            ?   these keys
+--   Ctrl-B  put the list away (in a note, show it again)
 
 local M = {}
 
@@ -405,6 +406,8 @@ function M.help()
     "  R                rename a note or folder",
     "  /                search every note",
     "  Ctrl-F           find a note with fzf",
+    "  Ctrl-B           put the list away (Ctrl-B again",
+    "                   in a note shows it)",
     "  x                clear the search or tag",
     "  Tab              go to the note",
     "  q                quit",
@@ -438,6 +441,7 @@ function M.keys(buf)
   map("R", M.rename)
   map("/", M.search)
   map("<C-f>", function() require("notes.finder").open() end)
+  map("<C-b>", function() require("notes").toggle_sidebar() end)
   map("x", function() M.show({ folder = M.state.folder }) end)
   map("<Tab>", function() require("notes").focus_note() end)
   map("q", function() require("notes").quit() end)
