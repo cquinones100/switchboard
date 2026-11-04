@@ -235,6 +235,13 @@
     "default": true
   },
   {
+    "key": "notes_palette",
+    "category": "Notes",
+    "label": "Notes command palette",
+    "description": "Ctrl-Shift-P in Notes lists every command Notes has, each with its key; off, it is your Neovim config's keymaps palette again",
+    "default": true
+  },
+  {
     "key": "note_tab_beside",
     "category": "Notes",
     "label": "Notes beside a note's tab",

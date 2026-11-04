@@ -8,6 +8,7 @@
 --   /  search all notes       x  clear the search or tag   Ctrl-F  find a note (fzf)
 --   R  rename a note or folder  q  quit            ?   these keys
 --   Ctrl-B  put the list away (in a note, show it again)
+--   Ctrl-Shift-P  every command, in a palette
 
 local M = {}
 
@@ -408,6 +409,7 @@ function M.help()
     "  Ctrl-F           find a note with fzf",
     "  Ctrl-B           put the list away (Ctrl-B again",
     "                   in a note shows it)",
+    "  Ctrl-Shift-P     every command, in a palette",
     "  x                clear the search or tag",
     "  Tab              go to the note",
     "  q                quit",
@@ -442,6 +444,7 @@ function M.keys(buf)
   map("/", M.search)
   map("<C-f>", function() require("notes.finder").open() end)
   map("<C-b>", function() require("notes").toggle_sidebar() end)
+  map("<C-S-p>", function() require("notes.palette").open() end)
   map("x", function() M.show({ folder = M.state.folder }) end)
   map("<Tab>", function() require("notes").focus_note() end)
   map("q", function() require("notes").quit() end)

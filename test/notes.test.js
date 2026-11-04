@@ -736,6 +736,55 @@ test("Ctrl-F lists every note for fzf, newest first, and opens the one picked", 
   assert.deepEqual(result, { opened: "Standup.md", key: "Find a note", wins: 2 }, "the picked note opens, and the finder's window is gone");
 });
 
+test("Ctrl-Shift-P lists every Notes command with its key, runs the one picked where it was opened, and lists the last picked first", () => {
+  // A stand-in fzf that keeps what it was given, and picks the line naming $PICK.
+  const bin = fs.mkdtempSync(path.join(tmp, "palette-bin-"));
+  const given = path.join(bin, "given.txt");
+  fs.writeFileSync(path.join(bin, "fzf"), `#!/bin/sh\ntee '${given}' | grep -m1 -F "$PICK"\n`, { mode: 0o755 });
+  const { result } = lua(`
+    vim.env.PATH = "${bin}:" .. vim.env.PATH
+    local s = require("notes.store")
+    local path = s.create("", "Plan")
+    local file = assert(io.open(path, "w"))
+    file:write("# Plan\\nShip it\\n")
+    file:close()
+    vim.cmd("Notes")
+    local n = require("notes")
+    local sb = require("notes.sidebar")
+    local seen = {}
+    local function pick(name)
+      vim.env.PICK = name
+      local before = vim.api.nvim_get_current_win()
+      vim.api.nvim_feedkeys(vim.keycode("<C-S-p>"), "x", false)
+      vim.wait(3000, function() return vim.api.nvim_get_current_win() == before or vim.api.nvim_get_current_win() == n.note_win end)
+      vim.wait(200)
+    end
+    -- From a note, a Format menu command on the line the cursor is on.
+    vim.api.nvim_set_current_win(n.note_win)
+    vim.api.nvim_win_set_cursor(n.note_win, { 2, 0 })
+    pick("Paragraph: Heading")
+    vim.cmd("stopinsert")
+    seen.heading = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(n.note_win), 1, 2, false)[1]
+    -- The list's toggle, from the note.
+    pick("Show or put away the list")
+    seen.list_hidden = sb.window() == nil
+    -- From the list, where the Format menu isn't offered.
+    n.toggle_sidebar()
+    vim.api.nvim_set_current_win(sb.window())
+    pick("Show or put away the list")
+    seen.list_hidden_from_list = sb.window() == nil
+    seen.lines = vim.fn.readfile("${given}")
+    io.write(vim.json.encode(seen))
+  `);
+  assert.equal(result.heading, "## Ship it", "the Format menu's Heading, on the cursor's line");
+  assert.equal(result.list_hidden, true, "the list put away from a note");
+  assert.equal(result.list_hidden_from_list, true, "and from the list");
+  const shown = result.lines.map((l) => l.split("\t")[1].replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.match(shown[0], /^Show or put away the list\s+Ctrl-B\s+#view$/, "the one picked last first, with its key and tag");
+  assert.ok(shown.some((l) => /^Move Notes beside your work.*M-e/.test(l)), "Switchboard's commands for Notes");
+  assert.ok(!shown.some((l) => /^Paragraph: Title/.test(l)), "no Format menu from the list");
+});
+
 test("only one Notes opens the notes at a time; a lock left by one that has gone is taken over, and quitting lets go", () => {
   const dir = fs.mkdtempSync(path.join(tmp, "notes-lock-"));
   // Held by a live process: this test's own.

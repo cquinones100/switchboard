@@ -7,6 +7,7 @@
 -- In a note:
 --   Ctrl-F             find a note with fzf (in the sidebar too)
 --   Ctrl-B             show or put away the sidebar (in the sidebar too)
+--   Ctrl-Shift-P       every command, in a palette (in the sidebar too)
 --   Enter              tick a checklist item, fold a heading, follow a link
 --   a click            the same, on a ☐, a heading's ▾ or a link
 --   Ctrl-P             the Format menu, with everything below
@@ -167,8 +168,10 @@ function M.forget(path)
       M.open(next_note, { stay = true })
     else
       local empty = vim.api.nvim_create_buf(false, true)
-      -- No note left to show, but Ctrl-B still brings the list back.
+      -- No note left to show, but Ctrl-B still brings the list back, and
+      -- Ctrl-Shift-P the palette.
       vim.keymap.set({ "n", "i" }, "<C-b>", function() M.toggle_sidebar() end, { buffer = empty, desc = "Show or put away the sidebar" })
+      vim.keymap.set({ "n", "i" }, "<C-S-p>", function() require("notes.palette").open() end, { buffer = empty, desc = "Notes commands" })
       vim.api.nvim_win_set_buf(M.note_win, empty)
     end
   end
@@ -233,14 +236,9 @@ local function feed(keys)
   vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "n", false)
 end
 
--- The Format menu: everything a note can do, each with its key, in a small
--- window. A key, Enter or a click on a line picks it; Escape or q closes it.
--- Opened from Visual mode, it acts on the selection. A paragraph or character
--- style (those marked `typing`) leaves you typing, as `a` would, unless it
--- already has: you pick a style to write in it.
-function M.menu(buf, visual, typing_col)
-  local first, last = vim.fn.line("."), vim.fn.line(".")
-  if visual then first, last = vim.fn.line("'<"), vim.fn.line("'>") end
+-- The Format menu's items, { key, label, action } under { heading } rows,
+-- for lines first to last; the palette (palette.lua) lists them too.
+function M.format_items(buf, first, last, visual, typing_col)
   local function para(style) return { fn = function() format.paragraph(buf, first, last, style) end, typing = true } end
   local function char(style) return { fn = function() format.character(buf, style, visual, typing_col) end, typing = true } end
   local items = {
@@ -275,6 +273,32 @@ function M.menu(buf, visual, typing_col)
     { "R", "Delete row", function() tables.delete_row(buf) end },
     { "X", "Delete column", function() tables.delete_column(buf) end },
   }
+  return items
+end
+
+-- Runs a Format menu action: a style picked to write in starts typing after
+-- it, through the note's own `a` (mapped, so it starts after a line's
+-- marker), once the style is in; not over a selection, which you were
+-- formatting rather than writing.
+function M.run_format(action, visual)
+  if type(action) == "function" then return action() end
+  action.fn()
+  if action.typing and not visual then
+    vim.schedule(function()
+      if vim.api.nvim_get_mode().mode ~= "i" then vim.api.nvim_feedkeys("a", "m", false) end
+    end)
+  end
+end
+
+-- The Format menu: everything a note can do, each with its key, in a small
+-- window. A key, Enter or a click on a line picks it; Escape or q closes it.
+-- Opened from Visual mode, it acts on the selection. A paragraph or character
+-- style (those marked `typing`) leaves you typing, as `a` would, unless it
+-- already has: you pick a style to write in it.
+function M.menu(buf, visual, typing_col)
+  local first, last = vim.fn.line("."), vim.fn.line(".")
+  if visual then first, last = vim.fn.line("'<"), vim.fn.line("'>") end
+  local items = M.format_items(buf, first, last, visual, typing_col)
   local lines, actions = {}, {}
   for _, item in ipairs(items) do
     if #item == 1 then
@@ -299,17 +323,7 @@ function M.menu(buf, visual, typing_col)
   local function pick(action)
     vim.api.nvim_win_close(win, true)
     vim.api.nvim_set_current_win(origin)
-    if not action then return end
-    if type(action) == "function" then return action() end
-    action.fn()
-    -- Through the note's own `a` (mapped, so it starts after a line's
-    -- marker), once the style is in; not over a selection, which you were
-    -- formatting rather than writing.
-    if action.typing and not visual then
-      vim.schedule(function()
-        if vim.api.nvim_get_mode().mode ~= "i" then vim.api.nvim_feedkeys("a", "m", false) end
-      end)
-    end
+    if action then M.run_format(action, visual) end
   end
   local opts = { buffer = menu_buf, nowait = true, silent = true }
   for row, item in pairs(actions) do
@@ -388,6 +402,9 @@ local function setup_buffer(buf)
   -- Ctrl-B, in place of vim's page up: show or put away the sidebar.
   map("n", "<C-b>", function() M.toggle_sidebar() end, "Show or put away the sidebar")
   map("i", "<C-b>", function() M.toggle_sidebar() end, "Show or put away the sidebar")
+  -- Ctrl-Shift-P, in place of the config's keymaps palette: every command.
+  map("n", "<C-S-p>", function() require("notes.palette").open() end, "Notes commands")
+  map("i", "<C-S-p>", function() require("notes.palette").open() end, "Notes commands")
   -- An empty pair of style markers put in to type into goes if nothing was.
   vim.api.nvim_create_autocmd("InsertLeave", { buffer = buf, callback = function() format.drop_empty(buf) end })
   -- Character styles, on the word under the cursor or the selection.
