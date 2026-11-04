@@ -2,7 +2,7 @@
 
 # Asks which directory to open something in, from the ones you work in, and
 # prints it. For the popups that open a tab running Claude: new-tab.zsh (M-t,
-# M-n) and shape-open.zsh (the palette's "Continue shaping Linear tickets").
+# M-n) and shape-open.zsh (the palette's "Continue shaping tickets").
 #
 # Usage: dir=$(pick-dir.zsh "<what Enter does>") || exit 0
 #

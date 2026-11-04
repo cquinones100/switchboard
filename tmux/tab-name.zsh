@@ -11,7 +11,7 @@
 #
 # Three ways to name it, picked with one key:
 #   Enter  type a name (the current one is filled in)
-#   t      a ticket: "ABC-123: <its Linear title>", as a ticket worktree's tab
+#   t      a ticket: "ABC-123: <its title>", as a ticket worktree's tab
 #          shows it. In that worktree, no prompt: the name is cleared so the
 #          tab shows its own ticket. Elsewhere it asks which ticket.
 #   s      shaping a ticket: "Shaping: ABC-123", the form `shape` uses, which
@@ -34,6 +34,8 @@ current=$(tmux show -wqv -t "$window" @tab_name)
 script_dir=${0:A:h}
 
 dim=$'\e[38;5;244m' red=$'\e[31m' reset=$'\e[0m'
+# Linear or Jira, as the tracker setting says, for what this says.
+tracker=${${(C)$(tmux show -gqv @setting_tracker 2>/dev/null)}:-Linear}
 
 # Esc cancels a line being typed; KEYTIMEOUT=1 keeps it from waiting for an
 # escape sequence.
@@ -64,13 +66,13 @@ branch_ticket=$(git branch --show-current 2>/dev/null |
 # the terminal.
 
 # Asks for a ticket, filled in from the branch, and sets $ticket to it as
-# ABC-123. Accepts a Linear URL too. Fails on Esc or on anything that is not a
-# ticket.
+# ABC-123. Accepts a Linear or Jira URL too. Fails on Esc or on anything that
+# is not a ticket.
 ask_ticket() {
   local input=$branch_ticket
   vared -p '  Ticket: ' input || return 1
   input=$(trim "$input")
-  [[ $input =~ '/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+)' ]] && input=$match[1]
+  [[ $input =~ '/(issue|browse)/([A-Za-z][A-Za-z0-9]*-[0-9]+)' ]] && input=$match[2]
   if [[ ! $input =~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+$' ]]; then
     print "\n  ${red}Not a ticket ID: ${input:-(empty)}${reset}"
     sleep 1.5
@@ -79,14 +81,14 @@ ask_ticket() {
   ticket=${(U)input}
 }
 
-# Sets $title, empty when Linear never answered. ticket-title.sh answers from
+# Sets $title, empty when the tracker never answered. ticket-title.sh answers from
 # its cache and looks a new ticket up in the background, so the first ask comes
 # back empty; someone is waiting here, so it asks again for a few seconds while
 # that lookup lands.
 look_up_title() {
   local tries=0
   title=
-  print -n "  ${dim}Reaching out to Linear...${reset}"
+  print -n "  ${dim}Reaching out to ${tracker}...${reset}"
   while (( tries++ < 16 )); do
     title=$("$script_dir/ticket-title.sh" "$ticket")
     [[ -n $title ]] && break
@@ -104,7 +106,7 @@ case $choice in
   t|T)
     # In a ticket's own worktree the tab already shows "ABC-123: <title>" when
     # it has no name of its own (tab-label.sh), kept current if the title
-    # changes in Linear. So the name is cleared rather than copied, once Linear
+    # changes in the tracker. So the name is cleared rather than copied, once it
     # has confirmed the ticket. Elsewhere, ask which ticket and save the same
     # text as the name.
     if [[ -n $branch_ticket ]]; then
@@ -114,7 +116,7 @@ case $choice in
     fi
     look_up_title
     if [[ -z $title ]]; then
-      print "  ${red}Linear has no title for $ticket, so the tab was left as it was.${reset}"
+      print "  ${red}${tracker} has no title for $ticket, so the tab was left as it was.${reset}"
       sleep 2
       exit 0
     fi

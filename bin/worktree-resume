@@ -2,14 +2,14 @@
 
 // worktree-resume <linear-ticket-pr-or-branch>
 //
-// Finds the worktree `wt`, `wtpr` or `wtb` already made for a Linear ticket, a
+// Finds the worktree `wt`, `wtpr` or `wtb` already made for a ticket, a
 // GitHub pull request or a branch, moves your shell into it, and hands off to
 // `claude-here` to resume the session that was running there. The companion to
 // those three for the morning after a restart.
 //
 // Nothing is created and nothing is fetched: the worktree is located by
 // matching the identifier against `git worktree list`, so this works offline
-// and needs neither a Linear API key nor gh.
+// and needs neither a tracker's key nor gh.
 //
 //   worktree-resume ABC-123                      resumes the ticket's worktree
 //   worktree-resume 123                          resumes the PR's worktree
@@ -82,7 +82,7 @@ const looksLikePr = (input) =>
   /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(input) || /^#?\d+$/.test(input);
 
 const looksLikeTicket = (input) =>
-  /\/issue\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
+  /\/(?:issue|browse)\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
   /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(input);
 
 // Both forms collapse to the token that `wt` and `wtpr` bake into the names
@@ -92,7 +92,7 @@ const looksLikeTicket = (input) =>
 // the branch was called.
 const parseTarget = (input) => {
   if (looksLikeTicket(input)) {
-    const identifier = (input.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
+    const identifier = (input.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
       input
     ).toLowerCase();
     return { token: identifier, label: identifier.toUpperCase(), create: `wt ${identifier.toUpperCase()}` };

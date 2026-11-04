@@ -1,19 +1,20 @@
 #!/bin/zsh
 
-# Popup for the M-p palette's "Open a Linear ticket in the browser": asks for a Linear ticket and opens it in the
+# Popup for the M-p palette's "Open a ticket in the browser": asks for a
+# ticket, in Linear or Jira as the tracker setting says, and opens it in the
 # browser. The ticket's counterpart to pr-open.zsh.
 #
 # Usage: ticket-open.zsh
 #
-# Takes a ticket ID (ABC-123), a Linear URL, or a bare number, which gets the
-# team key of the ticket the focused pane's branch names. Ctrl-T in the field
-# opens that branch's own ticket instead, what M-l does. When the clipboard
-# already holds a ticket ID or Linear URL, the field starts with it, since that
-# is usually where it came from.
+# Takes a ticket ID (ABC-123), a Linear or Jira URL, or a bare number, which
+# gets the team key of the ticket the focused pane's branch names. Ctrl-T in
+# the field opens that branch's own ticket instead, what M-l does. When the
+# clipboard already holds a ticket ID or URL, the field starts with it, since
+# that is usually where it came from.
 #
-# The workspace comes from $LINEAR_WORKSPACE, or linearWorkspace in
-# ~/.config/switchboard/linear.json, as linear-ticket.sh reads it, so
-# no workspace or team name lives in this repository.
+# The URL comes from tracker.sh, from Linear's workspace or Jira's site in
+# ~/.config/switchboard (linear.json, jira.json), as linear-ticket.sh finds it, so
+# no workspace, site or team name lives in this repository.
 #
 # zsh for vared, which edits a prefilled line.
 
@@ -39,7 +40,7 @@ fail() {
 }
 
 ticket_id='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
-ticket_url='^https://linear\.app/[^/]+/issue/[A-Za-z][A-Za-z0-9]*-[0-9]+([/?#].*)?$'
+ticket_url='^https://(linear\.app/[^/]+/issue|[A-Za-z0-9-]+\.atlassian\.net/browse)/[A-Za-z][A-Za-z0-9]*-[0-9]+([/?#].*)?$'
 bare_number='^#?[0-9]+$'
 
 # The ticket the focused pane's branch names, if any: the same match as
@@ -51,7 +52,7 @@ input=
 [[ $clipboard =~ $ticket_id || $clipboard =~ $ticket_url ]] && input=$clipboard
 
 print
-print "  ${dim}A ticket ID, number or Linear URL, then Enter.   Ctrl-T: this tab's ticket   Esc: cancel${reset}"
+print "  ${dim}A ticket ID, number or URL, then Enter.   Ctrl-T: this tab's ticket   Esc: cancel${reset}"
 print
 vared -p '  Ticket: ' input || exit 0
 input=${input//[[:space:]]/}
@@ -62,7 +63,7 @@ if $this_tab; then
 fi
 [[ -z $input ]] && exit 0
 
-# A URL opens as it is; anything else needs the workspace.
+# A URL opens as it is; anything else needs the workspace or site.
 if [[ $input =~ $ticket_url ]]; then
   open "$input"
   exit 0
@@ -73,12 +74,10 @@ if [[ $input =~ $bare_number ]]; then
     fail "Ticket ${input#\#} needs a team key, and this tab's branch doesn't name one. Type it in full, like ABC-${input#\#}."
   input="${branch_ticket%%-*}-${input#\#}"
 elif [[ ! $input =~ $ticket_id ]]; then
-  fail "Not a ticket ID, number or Linear URL: $input"
+  fail "Not a ticket ID, number or ticket URL: $input"
 fi
 
-config="$HOME/.config/switchboard/linear.json"
-workspace="${LINEAR_WORKSPACE:-$(jq -r '.linearWorkspace // empty' "$config" 2>/dev/null)}"
-[[ -n $workspace ]] || fail "No Linear workspace set: add linearWorkspace to $config."
+url=$(~/.config/tmux/tracker.sh url "${input:u}" 2>&1) || fail "$url"
 
 print -n "  ${dim}Opening ${input:u}...${reset}"
-open "https://linear.app/$workspace/issue/${input:u}"
+open "$url"

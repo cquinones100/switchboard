@@ -2,9 +2,10 @@
 
 // wt-batch <tickets...>
 //
-// Opens one tmux window per Linear ticket and runs `wt <ticket>` in each, so a
+// Opens one tmux window per ticket and runs `wt <ticket>` in each, so a
 // handful of tickets can be started in one go. Tickets are separated by commas,
-// spaces, or both, and full Linear issue URLs work in place of identifiers.
+// spaces, or both, and full Linear or Jira issue URLs work in place of
+// identifiers.
 //
 //   wt-batch ABC-123 ABC-124
 //   wt-batch "ABC-123, ABC-124"
@@ -40,10 +41,10 @@ const fail = (message) => {
 // into the shell, so the strict match below is also what keeps that line free
 // of anything the shell would interpret.
 const parseIdentifier = (input) => {
-  const fromUrl = input.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/);
+  const fromUrl = input.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/);
   const raw = fromUrl ? fromUrl[1] : input;
   if (!/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(raw)) {
-    fail(`could not parse a Linear ticket identifier from "${input}"`);
+    fail(`could not parse a ticket identifier from "${input}"`);
   }
   return raw.toUpperCase();
 };
