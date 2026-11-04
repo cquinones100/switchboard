@@ -118,12 +118,17 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
       vim.api.nvim_set_current_win(panel.winid)
       vim.api.nvim_win_set_cursor(0, { 3, 0 })
       vim.api.nvim_feedkeys(vim.keycode("]c"), "x", false)
+      local jumped = vim.api.nvim_get_current_line()
+      vim.api.nvim_feedkeys("E", "x", false)
+      local wide = vim.api.nvim_win_get_width(panel.winid)
+      vim.api.nvim_feedkeys("E", "x", false)
+      local narrow = vim.api.nvim_win_get_width(panel.winid)
       local spinning = 0
       for _, m in ipairs(vim.api.nvim_buf_get_extmarks(panel.bufid, -1, 0, -1, { details = true })) do
         local text = m[4].virt_lines and m[4].virt_lines[1][1] and m[4].virt_lines[1][1][1] or ""
         if text:find("telling the story", 1, true) then spinning = spinning + 1 end
       end
-      io.write(vim.json.encode({ telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = vim.api.nvim_get_current_line() }))`, "-c", "qa"],
+      io.write(vim.json.encode({ telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, wide = wide, narrow = narrow }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -131,6 +136,7 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
   assert.deepEqual(result.marks.map((m) => [m.line.split(" ")[1], m.title]), [["model.js", "1/2 Change the model"], ["ui.js", "2/2 Show it"]], "each chapter headed over its first file");
   assert.ok(result.bars.some((bar) => bar.includes("1/2 Change the model · ")), "the chapter in the bar");
   assert.match(result.jumped, /ui\.js/, "]c goes to the next chapter");
+  assert.deepEqual([result.wide, result.narrow], [32, 30], "E widens the list to its longest path, and again narrows it");
   assert.equal(result.telling.length, 1, "while Haiku reads the change, the list says so");
   assert.match(result.telling[0], /telling the story/);
   assert.equal(result.spinning, 0, "and stops saying so once the story is known");

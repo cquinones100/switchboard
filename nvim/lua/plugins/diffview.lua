@@ -138,6 +138,30 @@ local scrolls = {
   { "n", "K", scroll("<C-y>"), { desc = "Scroll the diff up" } },
 }
 
+-- E in the file list widens it to fit its longest path (at most half the
+-- screen), and pressed again narrows it back, the chapters' headings wrapped
+-- again to the new width. Every view's list shares the width, as diffview
+-- reads it from its config whenever it lays a list out.
+local LIST_WIDTH = 30
+local function widen_list()
+  local view = require("diffview.lib").get_current_view()
+  local panel = view and view.panel
+  if not (panel and panel.ordered_file_list and panel:is_open()) then return end
+  local config = require("diffview.config").get_config().file_panel.win_config
+  if config.width ~= LIST_WIDTH then
+    config.width = LIST_WIDTH
+  else
+    local longest = 0
+    for _, entry in ipairs(panel:ordered_file_list()) do longest = math.max(longest, vim.fn.strdisplaywidth(entry.path)) end
+    -- The path, and the status and counts drawn beside it.
+    config.width = math.max(LIST_WIDTH, math.min(longest + 14, math.floor(vim.o.columns / 2)))
+  end
+  panel:resize()
+  panel:render()
+  panel:redraw()
+end
+local widen = { "n", "E", widen_list, { desc = "Widen the file list, or narrow it again" } }
+
 -- Shows the file under the cursor in the tree, or a commit's first file in
 -- the history, without moving the cursor. A folder or commit is never folded
 -- by moving over it. Waits for the cursor to settle, so holding j doesn't load
@@ -809,7 +833,7 @@ return {
     -- files in reading order, each side's bar saying where one is.
     show_help_hints = false,
     use_icons = false,
-    file_panel = { win_config = { width = 30 } },
+    file_panel = { win_config = { width = LIST_WIDTH } },
     hooks = {
       view_enter = function(view)
         active_story = view.story
@@ -851,7 +875,7 @@ return {
     },
     keymaps = {
       view = { close, quit, unpack(copies) },
-      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], unpack(copies) },
+      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], widen, unpack(copies) },
       file_history_panel = { close, escape, quit, back, scrolls[1], scrolls[2], unpack(copies) },
     },
   },
