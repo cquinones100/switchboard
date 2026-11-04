@@ -16,12 +16,21 @@ here=${0%/*}
 repo=${SWITCHBOARD_DIR:-$HOME/switchboard}
 [ -n "$pane" ] || exit 0
 
-printf '\n'
-read -r -e -p '  Search notes, Linear, GitHub and Slack: ' query || exit 0
+# The query is asked in fzf too, with nothing to pick, so Esc closes the
+# popup there as it does everywhere else (readline's prompt took Esc as Meta).
+# Enter with no match leaves fzf with status 1 and the query printed; Esc or
+# Ctrl-C with 130.
+query=$(fzf --print-query --no-info --layout reverse --height 100% --prompt '  Search notes, Linear, GitHub and Slack: ' </dev/null)
+[ $? -eq 130 ] && exit 0
+query=$(printf '%s' "$query" | sed -n 1p)
 [ -n "${query// /}" ] || exit 0
 
-choice=$(zsh -i -c 'node "$1" "$2"' _ "$repo/lib/search.js" "$query" 2>/dev/null |
-  fzf --ansi --delimiter '\t' --with-nth 1 --prompt 'Narrow: ' --layout reverse --expect ctrl-o \
+# The search runs as fzf's own reload, so Esc ends it with fzf rather than
+# leaving the popup open until Slack has answered. The query and script reach
+# it in the environment, never in the command fzf runs.
+export SEARCH_JS="$repo/lib/search.js" SEARCH_QUERY="$query"
+choice=$(: | fzf --ansi --delimiter '\t' --with-nth 1 --prompt 'Narrow: ' --layout reverse --expect ctrl-o \
+    --bind 'start:reload:zsh -i +m -c "node \"\$SEARCH_JS\" \"\$SEARCH_QUERY\" 2>/dev/null"' \
     --header "\"$query\" · Slack's results come last, in a few seconds · Enter reads it beside the pane · Ctrl-O opens it in the browser") || exit 0
 key=$(printf '%s' "$choice" | sed -n 1p)
 url=$(printf '%s' "$choice" | sed -n 2p | cut -f2)
