@@ -49,7 +49,7 @@ A deploy of the head commit counts, and so does one of a commit pushed after it,
 
 As `/deploy-test`'s section says, with these changes:
 
-- **Files** go in `<scratchpad>/preview-test-<number>/`.
+- **Files** go in `<scratchpad>/preview-test-<number>/`, the video too, and stay there, as `/deploy-test` says.
 - **Change nothing real, as `/deploy-test` says, preview or not**: a preview's own address says where the page runs, not which database or APIs it talks to, and many previews use production's. Submitting, saving or creating test data is fine only when the repository's docs say its previews have data of their own, or the user says so when asked. Never send real email or pay for anything.
 - **One profile per repository**: a preview's host changes with every PR, so record with `--profile preview-<owner>--<repo>` (two dashes, which no GitHub owner's name has, so no two repositories share it), and sign in with `node ~/.claude/skills/walkthrough/scripts/record.js --login --url <url> --profile preview-<owner>--<repo>` when the preview needs it (a Vercel or Netlify protection page is a sign-in page). Once signed in there, later PRs' previews of the same repository reuse it.
 

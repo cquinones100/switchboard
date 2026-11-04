@@ -86,7 +86,7 @@ module.exports = async ({ page, step, highlight, expect }) => {
 `,
   );
   const out = path.join(tmp, "out");
-  const run = spawn("node", [path.join(scripts, "record.js"), steps, "--url", site, "--out", out, "--pace", "demo"], {
+  const run = spawn("node", [path.join(scripts, "record.js"), steps, "--url", site, "--out", out, "--pace", "demo", "--name", "Orders: open & closed tabs"], {
     env: { ...process.env, HOME: tmp, TMUX_PANE: "", PLAYWRIGHT_BROWSERS_PATH: browsers },
   });
   let stdout = "";
@@ -111,5 +111,5 @@ module.exports = async ({ page, step, highlight, expect }) => {
   assert.equal(fs.readFileSync(result.log, "utf8").match(/expect failed:/g).length, 3, fs.readFileSync(result.log, "utf8"));
   assert.ok(fs.existsSync(result.video), "the video");
   assert.ok(result.contact && fs.existsSync(result.contact), "the contact sheet");
-  assert.equal(path.basename(result.video, path.extname(result.video)), "walkthrough", "named walkthrough outside a tmux tab");
+  assert.equal(path.basename(result.video, path.extname(result.video)), "Orders-open-closed-tabs", "named by --name, made a file name");
 });

@@ -44,8 +44,11 @@ The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_m
 
    ```
    node ~/.claude/skills/walkthrough/scripts/record.js <scratchpad>/walkthrough-<slug>/steps.js \
-     --url <site root> --out <scratchpad>/walkthrough-<slug> --pace demo
+     --url <site root> --out <scratchpad>/walkthrough-<slug> --pace demo \
+     --name "<what it shows>"
    ```
+
+   `--name` names the video: a few words you write saying what the feature does, as someone would look for it in a folder ("Filter orders by status", "Invite a teammate to a campaign"), never the branch or ticket ID. The recorder makes it a file name (`Filter-orders-by-status.mp4`). Without it, the video is named after the tmux tab.
 
    `--pace demo` holds each step long enough to read and carries on past an `expect` that fails, noting it in the log; `/deploy-test` and `/preview-test` record at the default `--pace test`, which stops at the first failure. A site whose host changes (a preview) takes `--profile`, as `/preview-test` says. It prints `{ passed, video, contact, screenshot, log, error }`.
 3. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/.claude/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
@@ -61,8 +64,12 @@ Fix what is wrong in `steps.js` and record again, at most three times. A feature
 
 Then open the video with `open <video>`, so it plays in QuickTime, and ask with `AskUserQuestion`, saying in the question what it shows, in a line, anything the log caught, and the video's full path. The options:
 
-- **Keep it**: copy it to `~/Movies/Walkthroughs/` (made if missing), keeping its name, which is the tmux tab's, and reply `walkthrough: <its path there>`.
+- **Keep it**: copy it to `~/Movies/Walkthroughs/` (made if missing), keeping its name, with `-2`, `-3` and so on before the extension when a video there already has it, then tidy that folder as below, and reply `walkthrough: <its path there>`.
 - **Record again**: with what the user says to change (their notes on the option), change the steps and record again.
 - **Drop it**: reply `walkthrough: fail: <their reason>`.
+
+### Tidying the kept videos
+
+Each time a video is kept, look at what `~/Movies/Walkthroughs/` holds: each video's name, when it was made and its size (`ls -lhtT`). When any is over 30 days old, ask with `AskUserQuestion`, listing those with their dates and sizes and the folder's total size, whether to move them to the Trash: **Move them all**, **Choose which** (then a second question, `multiSelect`, the old ones as options, four at a time), or **Keep them**. Move a video with Finder, so it can be taken back from the Trash (`osascript -e 'tell application "Finder" to delete POSIX file "<path>"'`), never with `rm`, and only ones in that folder. With none over 30 days old, ask nothing.
 
 Putting the video anywhere outside this Mac (a PR, a ticket, Slack) is outward-facing: offer it only when the user asks.

@@ -36,9 +36,10 @@
 // after that are headless with that session. The profile is never in a
 // repository.
 //
-// Writes <dir>/<tab>.mp4 (or .webm without ffmpeg), named after the tmux tab
-// it runs in (the tab's name, as the tab bar shows it), so the video says
-// which work it is when it opens; outside tmux, walkthrough.mp4. Also
+// Writes <dir>/<name>.mp4 (or .webm without ffmpeg), named by --name, a few
+// words saying what the video shows that the skill writes, so the video says
+// what it is when it opens; without it, after the tmux tab it runs in (the
+// tab's name, as the tab bar shows it), and outside tmux walkthrough.mp4. Also
 // <dir>/contact.png, a frame every two seconds in a grid, to check the video
 // at a glance; <dir>/end.png; and <dir>/log.txt (each step, console errors,
 // responses of 500 and up, and in demo pace each expect that failed). Prints
@@ -60,7 +61,7 @@ const stepsFile = login ? undefined : args[0];
 const out = arg("out");
 const pace = arg("pace") ?? "test";
 if (!url || (!login && (!stepsFile || !out)) || !["demo", "test"].includes(pace)) {
-  console.error("usage: node record.js <steps.js> --url <url> --out <dir> [--pace demo|test] [--profile <name>]\n       node record.js --login --url <url> [--profile <name>]");
+  console.error("usage: node record.js <steps.js> --url <url> --out <dir> [--pace demo|test] [--profile <name>] [--name <title>]\n       node record.js --login --url <url> [--profile <name>]");
   process.exit(2);
 }
 
@@ -87,17 +88,18 @@ const signIn = async () => {
   console.log(JSON.stringify({ profile }));
 };
 
-// The tmux tab this runs in, as the tab bar names it (@tab_label), made a
-// file name the Slack relay finds in a message (files.js's MEDIA_PATH takes
-// ASCII letters, digits, . _ - and no spaces): anything else dropped, each
-// run of spaces a dash, and cut to 80 characters; "walkthrough" outside tmux
-// or for a tab with no name.
+// The video's name: --name, else the tmux tab this runs in, as the tab bar
+// names it (@tab_label), made a file name the Slack relay finds in a message
+// (files.js's MEDIA_PATH takes ASCII letters, digits, . _ - and no spaces):
+// anything else dropped, each run of spaces a dash, and cut to 80
+// characters; "walkthrough" outside tmux or for a tab with no name.
+const fileName = (text) => text.replace(/[^A-Za-z0-9 ._-]/g, "").trim().replace(/\s+/g, "-").replace(/-{2,}/g, "-").slice(0, 80).replace(/^[.-]+|[.-]+$/g, "");
 const videoName = () => {
+  if (arg("name") && fileName(arg("name"))) return fileName(arg("name"));
   if (!process.env.TMUX_PANE) return "walkthrough";
   try {
     const label = execFileSync("tmux", ["display-message", "-p", "-t", process.env.TMUX_PANE, "#{@tab_label}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    const name = label.replace(/[^A-Za-z0-9 ._-]/g, "").trim().replace(/\s+/g, "-").replace(/-{2,}/g, "-").slice(0, 80).replace(/^[.-]+|[.-]+$/g, "");
-    return name || "walkthrough";
+    return fileName(label) || "walkthrough";
   } catch {
     return "walkthrough";
   }
