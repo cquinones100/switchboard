@@ -3303,3 +3303,58 @@ Agree the plan.
   delete process.env.NOTES_DIR;
   fs.rmSync(notes, { recursive: true, force: true });
 });
+
+test("a tab with a reminder waits under Reminders with the time left, then needs you once it comes due", async () => {
+  const window = tmux("new-window", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  try {
+    const later = Math.floor(Date.now() / 1000) + 90 * 60 + 30;
+    tmux("setw", "-t", window, "@remind_at", String(later));
+    tmux("setw", "-t", window, "@remind_note", "check the deploy");
+    let tab = sidebar.tabsFrom(await sidebar.snapshot()).find((x) => x.id === window);
+    assert.equal(tab.remindAt, later);
+    assert.deepEqual(sidebar.grouped([tab]).map((g) => g.title), ["Reminders"]);
+    assert.deepEqual(sidebar.missionGrid([tab], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Reminders"]);
+    assert.match(sidebar.stateWords(tab), /^remind in 1h 3\dm · check the deploy/);
+    assert.match(sidebar.sidebarLines({ tabs: [tab], sections: [], cols: 50, rows: 10, view: { focused: false, cursor: window, frame: 0, here: window } }).lines.join(""), /⏰/);
+    // Put off, a tab waiting on you or finished waits too: you said when.
+    assert.deepEqual(sidebar.grouped([{ ...tab, state: "waiting", claude: { sessionId: "s" } }, { ...tab, id: "@98", state: "done", claude: { sessionId: "s" } }]).map((g) => g.title), ["Reminders"]);
+    assert.deepEqual(sidebar.needsYou([{ ...tab, state: "waiting" }]), []);
+
+    // Come due, it needs you, first in Needs you with the pinned ones.
+    tmux("setw", "-t", window, "@remind_at", String(Math.floor(Date.now() / 1000) - 5));
+    tab = sidebar.tabsFrom(await sidebar.snapshot()).find((x) => x.id === window);
+    const waiting = { ...tab, id: "@99", index: 99, name: "waiting", state: "waiting", since: 1, remindAt: undefined, remindNote: undefined };
+    assert.deepEqual(sidebar.grouped([waiting, tab]).map((g) => [g.title, g.tabs.map((t) => t.id)]), [["Needs you", [window, "@99"]]]);
+    assert.match(sidebar.stateWords(tab), /^reminder: check the deploy/);
+
+    // With the reminders setting off, neither shows.
+    fs.writeFileSync(path.join(home, ".config/switchboard/settings.json"), JSON.stringify({ reminders: false }));
+    require("../lib/settings").reloadSettings?.();
+    assert.deepEqual(sidebar.grouped([tab]).map((g) => g.title), ["Other"]);
+  } finally {
+    fs.rmSync(path.join(home, ".config/switchboard/settings.json"), { force: true });
+    require("../lib/settings").reloadSettings?.();
+    tmux("kill-window", "-t", window);
+  }
+});
+
+test("remind.sh reads the times Slack's Remind me offers, and one typed in", () => {
+  const script = path.join(__dirname, "../tmux/remind.sh");
+  const now = Math.floor(new Date(2026, 10, 4, 14, 0, 0).getTime() / 1000);
+  [
+    ["In 1 hour", "Wed Nov 04 2026 15:00"],
+    ["45m", "Wed Nov 04 2026 14:45"],
+    ["2h", "Wed Nov 04 2026 16:00"],
+    ["1d", "Thu Nov 05 2026 14:00"],
+    ["3pm", "Wed Nov 04 2026 15:00"],
+    ["9am", "Thu Nov 05 2026 09:00", "a time already past is tomorrow's"],
+    ["15:30", "Wed Nov 04 2026 15:30"],
+    ["Tomorrow at 9:00", "Thu Nov 05 2026 09:00"],
+    ["Next Monday at 9:00", "Mon Nov 09 2026 09:00"],
+    ["7", "", "a bare number names no time"],
+    ["soon", ""],
+  ].forEach(([text, expected, why]) => {
+    const out = execFileSync("bash", [script, "at", text, String(now)], { encoding: "utf8" }).trim();
+    assert.equal(out && new Date(Number(out) * 1000).toString().slice(0, 21), expected, why ?? text);
+  });
+});

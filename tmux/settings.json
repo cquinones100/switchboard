@@ -45,6 +45,13 @@
     "default": true
   },
   {
+    "key": "reminders",
+    "category": "Sidebar",
+    "label": "Reminders",
+    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due; off, reminders are neither set nor shown",
+    "default": true
+  },
+  {
     "key": "build_failing",
     "category": "Sidebar",
     "label": "Build failing",
