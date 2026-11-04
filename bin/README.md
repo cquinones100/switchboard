@@ -474,9 +474,15 @@ dashes, so `feature/login` lands in `feature-login` rather than nesting.
 ## claude-here
 
 Resumes the Claude Code session of the worktree you are in (the git
-repository's top level, or the current directory outside one), from its own
-recorded directory, so one started in a subfolder resumes there. With one
-session it resumes at once; with several it lists them, newest first, each
+repository's top level, or the current directory outside one), from the
+directory it started in, so one started in a subfolder resumes there, and one
+whose starting folder was renamed since, its transcript filed under the
+repository's current name (as one started through a link to it is), is still
+found by where it last ran; one filed under the old name can't be resumed
+from the new, since `claude --resume` looks only under the folder it runs in. With one
+session it resumes at once; with several it lists them, last active first
+(by the transcript's last timestamp, not the file's modified time, which
+reopening a session after a restart changes), each
 with how long ago it was active and the last thing you typed, to pick with
 `j`/`k` or the arrows and Enter (Esc cancels), or by number when its input
 is a pipe. A worktree nested under the repository

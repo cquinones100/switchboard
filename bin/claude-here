@@ -40,10 +40,90 @@ const resolveTargetDir = () => {
 // against the cwd recorded inside each session file.
 const encodePrefix = (dir) => dir.replace(/[^a-zA-Z0-9]/g, "-");
 
-// A transcript that can't be read (permissions, a link to nothing, a
-// folder by that name) reads as having nothing, so it is left out rather
-// than stopping the search.
-const readSessionCwd = async (filePath) => {
+// What a prompt shows in the picker: the text you typed, with terminal escapes
+// and other control characters a pasted prompt may hold dropped, so the
+// picker draws text, never commands. Meta entries, tool results, and the
+// synthetic <command-*>/<system-reminder> messages Claude Code records give
+// nothing.
+const promptText = (entry) => {
+  if (entry.type !== "user" || entry.isMeta) return null;
+  const content = entry.message?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(" ")
+        : "";
+  const cleaned = text
+    .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.)/g, "")
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned && !cleaned.startsWith("<") && !cleaned.startsWith("[Request interrupted") ? cleaned : null;
+};
+
+// A session's last activity, last directory and last prompt, read from the
+// end of its transcript, a growing piece at a time, since one can run to
+// hundreds of megabytes. The last entry with a timestamp is the last
+// activity, not the file's modified time: Claude Code appends bookkeeping
+// entries with none (cost-state, last-prompt) whenever a session is merely
+// opened, so tmux-resurrect resuming every tab after a restart would make
+// those the newest. The last directory, not the first, since a session can
+// outlive the folder it started in (a renamed repository). A transcript that
+// can't be read (permissions, a link to nothing, a folder by that name)
+// reads as having nothing, so it is left out rather than stopping the search.
+const TAIL_START = 256 * 1024;
+const readSessionTail = async (filePath) => {
+  const found = { cwd: null, lastActiveMs: null, lastMessage: null };
+  let handle;
+  try {
+    handle = await fsp.open(filePath, "r");
+    const { size } = await handle.stat();
+    for (let length = TAIL_START; ; length *= 4) {
+      const start = Math.max(0, size - length);
+      const buffer = Buffer.alloc(size - start);
+      await handle.read(buffer, 0, buffer.length, start);
+      const text = buffer.toString("utf8");
+      // From the start of a whole line, unless the read reached the file's.
+      const lines = (start === 0 ? text : text.slice(text.indexOf("\n") + 1)).split("\n").reverse();
+      for (const line of lines) {
+        if (found.cwd && found.lastActiveMs && found.lastMessage) break;
+        let entry;
+        try {
+          entry = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!found.cwd && typeof entry.cwd === "string" && entry.cwd) found.cwd = entry.cwd;
+        const time = Date.parse(entry.timestamp);
+        if (!found.lastActiveMs && Number.isFinite(time)) found.lastActiveMs = time;
+        if (!found.lastMessage) found.lastMessage = promptText(entry);
+      }
+      if ((found.cwd && found.lastActiveMs && found.lastMessage) || start === 0) return found;
+      Object.assign(found, { cwd: null, lastActiveMs: null, lastMessage: null });
+    }
+  } catch {
+    return { cwd: null, lastActiveMs: null, lastMessage: null };
+  } finally {
+    await handle?.close();
+  }
+};
+
+const formatRelativeTime = (timeMs, nowMs) => {
+  const minutes = Math.floor((nowMs - timeMs) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 2) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  return new Date(timeMs).toLocaleDateString();
+};
+
+// The first directory a transcript names, where its session started, read
+// from its start, which is near the top. One that can't be read has none.
+const readFirstCwd = async (filePath) => {
   const stream = fs.createReadStream(filePath, { encoding: "utf8" });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
@@ -65,61 +145,25 @@ const readSessionCwd = async (filePath) => {
   }
 };
 
-// The last user-authored text in a session — usually the best reminder of
-// where it left off. Skips meta entries, tool results, and the synthetic
-// <command-*>/<system-reminder> messages Claude Code records.
-const readLastUserMessage = async (filePath) => {
-  const stream = fs.createReadStream(filePath, { encoding: "utf8" });
-  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let lastMessage = null;
+// A folder a session can be resumed in: there, and readable. One whose folder
+// is gone, or can no longer be read, can't be resumed there.
+const usable = (dir) => {
   try {
-    for await (const line of lines) {
-      if (!line.includes('"user"')) continue;
-      let entry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (entry.type !== "user" || entry.isMeta) continue;
-      const content = entry.message?.content;
-      const text =
-        typeof content === "string"
-          ? content
-          : Array.isArray(content)
-            ? content.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join(" ")
-            : "";
-      // Terminal escapes and other control characters a pasted prompt may
-      // hold are dropped, so the picker draws text, never commands.
-      const cleaned = text
-        .replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|.)/g, "")
-        .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (cleaned && !cleaned.startsWith("<") && !cleaned.startsWith("[Request interrupted")) {
-        lastMessage = cleaned;
-      }
-    }
-    return lastMessage;
+    fs.accessSync(dir, fs.constants.R_OK | fs.constants.X_OK);
+    return fs.statSync(dir).isDirectory();
   } catch {
-    // Read as far as it could be: what was found, or nothing.
-    return lastMessage;
-  } finally {
-    lines.close();
-    stream.destroy();
+    return false;
   }
 };
 
-const formatRelativeTime = (mtimeMs, nowMs) => {
-  const minutes = Math.floor((nowMs - mtimeMs) / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 2) return "yesterday";
-  if (days < 7) return `${days}d ago`;
-  return new Date(mtimeMs).toLocaleDateString();
+// `claude --resume` finds a conversation only within the project directory
+// encoded from where it runs, which is where the session started, so it is
+// resumed from there; or, when that folder has since been renamed, from the
+// folder its last directory is in (or is) that encodes the same.
+const resumeDir = (firstCwd, lastCwd, projectDir) => {
+  const encoded = path.basename(projectDir);
+  const ancestors = (dir) => (path.dirname(dir) === dir ? [dir] : [dir, ...ancestors(path.dirname(dir))]);
+  return [...(firstCwd ? [firstCwd] : []), ...ancestors(lastCwd)].find((dir) => encodePrefix(dir) === encoded && usable(dir)) ?? null;
 };
 
 // Only the sessions that ran here: one moved into a worktree after it started
@@ -145,15 +189,14 @@ const findSessions = async (targetDir, projectsDir) => {
             .map(async (file) => {
               const filePath = path.join(dir, file);
               const stat = await fsp.stat(filePath).catch(() => null);
-              return stat?.isFile() ? { id: file.replace(/\.jsonl$/, ""), filePath, mtimeMs: stat.mtimeMs } : null;
+              return stat?.isFile() ? { id: file.replace(/\.jsonl$/, ""), filePath, projectDir: dir, mtimeMs: stat.mtimeMs } : null;
             })
         );
       })
     )
   )
     .flat()
-    .filter(Boolean)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .filter(Boolean);
 
   status(
     `found ${sessions.length} session file${sessions.length === 1 ? "" : "s"} across ` +
@@ -166,35 +209,34 @@ const findSessions = async (targetDir, projectsDir) => {
   // are separate checkouts with their own sessions — don't match them here.
   const nestedWorktrees = path.join(targetDir, ".claude", "worktrees") + path.sep;
   status("verifying session working directories");
-  const cwds = await Promise.all(sessions.map((session) => readSessionCwd(session.filePath)));
-  return sessions
-    .map((session, i) => ({ ...session, cwd: cwds[i] }))
-    .filter(({ cwd }) => {
-      if (!cwd || cwd.startsWith(nestedWorktrees)) return false;
-      if (cwd !== targetDir && !cwd.startsWith(`${targetDir}${path.sep}`)) return false;
-      // One whose folder is gone, or can no longer be read, can't be resumed
-      // there, so isn't offered.
-      try {
-        fs.accessSync(cwd, fs.constants.R_OK | fs.constants.X_OK);
-        return fs.statSync(cwd).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+  const tails = await Promise.all(sessions.map((session) => readSessionTail(session.filePath)));
+  // A session belongs here by the last directory it ran in: the target or a
+  // folder of it, never one of its nested worktrees.
+  const ranHere = (dir) => Boolean(dir) && !dir.startsWith(nestedWorktrees) && (dir === targetDir || dir.startsWith(`${targetDir}${path.sep}`));
+  const here = sessions
+    .map(({ mtimeMs, ...session }, i) => ({
+      ...session,
+      lastCwd: tails[i].cwd,
+      lastActiveMs: tails[i].lastActiveMs ?? mtimeMs,
+      lastMessage: tails[i].lastMessage,
+    }))
+    .filter(({ lastCwd }) => ranHere(lastCwd));
+  const firsts = await Promise.all(here.map((session) => readFirstCwd(session.filePath)));
+  return here
+    .map(({ lastCwd, ...session }, i) => ({ ...session, cwd: resumeDir(firsts[i], lastCwd, session.projectDir) }))
+    .filter(({ cwd }) => cwd)
+    .sort((a, b) => b.lastActiveMs - a.lastActiveMs);
 };
 
-const buildSessionLines = async (sessions) => {
+const buildSessionLines = (sessions) => {
   const nowMs = Date.now();
-  const messages = await Promise.all(
-    sessions.map((session) => readLastUserMessage(session.filePath))
-  );
   const timeWidth = Math.max(
-    ...sessions.map((session) => formatRelativeTime(session.mtimeMs, nowMs).length)
+    ...sessions.map((session) => formatRelativeTime(session.lastActiveMs, nowMs).length)
   );
-  return sessions.map((session, i) => {
-    const time = formatRelativeTime(session.mtimeMs, nowMs).padEnd(timeWidth);
+  return sessions.map((session) => {
+    const time = formatRelativeTime(session.lastActiveMs, nowMs).padEnd(timeWidth);
     // By character, so a cut never splits an emoji or other wide one.
-    const message = [...(messages[i] ?? "(no user messages)")].slice(0, 80).join("");
+    const message = [...(session.lastMessage ?? "(no user messages)")].slice(0, 80).join("");
     return `${time}   ${message}`;
   });
 };
@@ -326,7 +368,7 @@ const chooseSessionFromPipe = async (sessions, lines) => {
 };
 
 const chooseSession = async (sessions) => {
-  const lines = await buildSessionLines(sessions);
+  const lines = buildSessionLines(sessions);
   return process.stdin.isTTY
     ? chooseSessionInteractive(sessions, lines)
     : chooseSessionFromPipe(sessions, lines);
@@ -347,7 +389,7 @@ const main = async () => {
   const args = process.argv.slice(2);
   if (args.includes("--print")) {
     sessions.forEach((session) => {
-      console.log(`${session.id}\t${new Date(session.mtimeMs).toISOString()}\t${session.filePath}`);
+      console.log(`${session.id}\t${new Date(session.lastActiveMs).toISOString()}\t${session.filePath}`);
     });
     return;
   }
@@ -359,7 +401,7 @@ const main = async () => {
   }
 
   status(
-    `session found: ${match.id} (last active ${new Date(match.mtimeMs).toLocaleString()})`
+    `session found: ${match.id} (last active ${new Date(match.lastActiveMs).toLocaleString()})`
   );
 
   // Resume from the session's own recorded cwd, not targetDir: `claude
@@ -393,8 +435,8 @@ if (require.main === module) {
 
 module.exports = {
   encodePrefix,
-  readSessionCwd,
-  readLastUserMessage,
+  readSessionTail,
+  readFirstCwd,
   formatRelativeTime,
   findSessions,
 };
