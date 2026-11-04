@@ -391,7 +391,7 @@ test("a turn that ends with its pane no longer where the tab's name came from na
   assert.equal(tmux("display", "-p", "-t", window, "#{window_name}"), "renamed-work");
 });
 
-test("compaction shows the tab working, keeps its state and loop through the session it restarts, and a /compact you typed ends idle", async (t) => {
+test("compaction shows the tab working, keeps its state and loop through the session it restarts, a /compact you typed ends idle, and one while idle hands the tab back as it was", async (t) => {
   // A pane running node, as Claude started by claude-here reads (claude-pane.sh).
   const window = tmux("new-window", "-d", "-t", "test", "-P", "-F", "#{window_id}", "node -e 'setTimeout(() => {}, 300000)'");
   t.after(() => tmux("kill-window", "-t", window));
@@ -418,6 +418,22 @@ test("compaction shows the tab working, keeps its state and loop through the ses
   hook("working", { hook_event_name: "PostCompact", trigger: "auto" });
   assert.equal(opt("@agent_state"), "working", "the turn goes on");
   assert.equal(opt("@agent_activity"), "", "no longer compacting");
+
+  // Compacting while idle, as Claude Code does before the prompt cache
+  // expires: the tab is handed back finished, as long ago as it was.
+  hook("done", { hook_event_name: "Stop" });
+  tmux("set", "-p", "-t", pane, "@agent_since", "1000");
+  hook("working", { hook_event_name: "PreCompact", trigger: "auto" });
+  assert.equal(opt("@agent_state"), "working", "working while it compacts");
+  hook("clear", { hook_event_name: "SessionStart", source: "compact" });
+  hook("working", { hook_event_name: "PostCompact", trigger: "auto" });
+  assert.equal(opt("@agent_state"), "done", "finished again once it is done");
+  assert.equal(opt("@agent_since"), "1000", "since when it finished");
+  assert.equal(opt("@agent_activity"), "", "no longer compacting");
+  hook("clear", { hook_event_name: "SessionEnd" });
+  hook("working", { hook_event_name: "PreCompact", trigger: "auto" });
+  hook("working", { hook_event_name: "PostCompact", trigger: "auto" });
+  assert.equal(opt("@agent_state"), "", "and an idle one idle again");
 
   // A /compact you typed, on a tab with nothing going on.
   hook("clear", { hook_event_name: "SessionEnd" });

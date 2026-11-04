@@ -236,6 +236,10 @@ details() {
   elif [ "$event" = UserPromptSubmit ] || [ "$event" = SessionStart ] || [ "$event" = SessionEnd ]; then
     tmux set -pu -t "$pane" @agent_loop 2>/dev/null
   fi
+  # A compaction cut short by a new prompt or session leaves nothing to hand back.
+  case $event in
+    UserPromptSubmit | SessionStart | SessionEnd) tmux set -pu -t "$pane" @agent_compact_from 2>/dev/null ;;
+  esac
   case $state in
     clear | done)
       tmux set -pu -t "$pane" @agent_activity 2>/dev/null
@@ -265,13 +269,37 @@ case "${1:-}" in
     # Compaction: Claude is at work on it, whatever the tab showed, and a
     # session it restarts (SessionStart from compact) is the same one going
     # on, so it keeps its state and loop. After a /compact you typed, nothing
-    # follows, so the tab is idle again; after one in the middle of a turn,
-    # the turn goes on.
+    # follows, so the tab is idle again. An automatic one hands the tab back
+    # as it was before (@agent_compact_from, its state and since): working in
+    # the middle of a turn, idle or done when Claude compacted while idle.
     case "${event:-}:${source:-}" in
       SessionStart:compact) exit 0 ;;
-      PreCompact:*) state=working ;;
-      PostCompact:manual) state=clear ;;
-      PostCompact:*) state=working ;;
+      PreCompact:*)
+        before=$(tmux display -p -t "$TMUX_PANE" "#{@agent_state} #{@agent_since}" 2>/dev/null)
+        if [ "${before%% *}" = working ]; then
+          tmux set -pu -t "$TMUX_PANE" @agent_compact_from 2>/dev/null
+        else
+          tmux set -p -t "$TMUX_PANE" @agent_compact_from "$before"
+        fi
+        state=working ;;
+      PostCompact:*)
+        before=$(tmux display -p -t "$TMUX_PANE" "#{@agent_compact_from}" 2>/dev/null)
+        tmux set -pu -t "$TMUX_PANE" @agent_compact_from 2>/dev/null
+        if [ "$source" = manual ]; then
+          state=clear
+        elif [ -n "$before" ]; then
+          state=${before%% *}
+          state=${state:-clear}
+          # A look while it compacted has already made it idle (seen).
+          if [ "$state" != clear ]; then
+            # As it was, since included, so a finished tab keeps its age.
+            tmux set -p -t "$TMUX_PANE" @agent_state "$state"
+            tmux set -p -t "$TMUX_PANE" @agent_since "${before#* }"
+            refresh "$(tmux display -p -t "$TMUX_PANE" "#{window_id}")"
+          fi
+        else
+          state=working
+        fi ;;
     esac
     # A question to you is a wait from the moment it is asked.
     [ "${event:-}:${tool:-}" = PreToolUse:AskUserQuestion ] && state=waiting
@@ -325,9 +353,11 @@ case "${1:-}" in
     # With the done_clears setting at "prompt", a finished tab keeps its mark
     # until the next prompt, however long you look at it.
     [ "$(tmux display -p -t "$window" '#{&&:#{&&:#{window_active},#{session_attached}},#{!=:#{@setting_done_clears},prompt}}' 2>/dev/null)" = 1 ] &&
-    while IFS=$'\t' read -r pane state; do
+    while IFS=$'\t' read -r pane state from; do
       [ "$state" = done ] && tmux set -pu -t "$pane" @agent_state && tmux set -pu -t "$pane" @agent_since
-    done < <(tmux list-panes -t "$window" -F $'#{pane_id}\t#{@agent_state}' 2>/dev/null)
+      # A finished tab seen while it compacts comes back idle, not finished.
+      [ "${from%% *}" = done ] && tmux set -p -t "$pane" @agent_compact_from " "
+    done < <(tmux list-panes -t "$window" -F $'#{pane_id}\t#{@agent_state}\t#{@agent_compact_from}' 2>/dev/null)
     # Every window, not just this one, so a session that ended without saying
     # so loses its mark the next time any tab is focused.
     tmux list-windows -a -F '#{window_id}' | while read -r w; do refresh "$w"; done
