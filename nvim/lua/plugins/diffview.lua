@@ -517,7 +517,9 @@ return {
           local escape = function(text) return (text:gsub("%%", "%%%%")) end
           vim.wo[winid].winbar = " " .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file)
         end
-        vim.wo[winid].fillchars = "diff: "
+        -- No ╱ where the other side has no lines, and no ~ past the end of a
+        -- short file: blank, as the space after a file in an editor is.
+        vim.wo[winid].fillchars = "diff: ,eob: "
         vim.wo[winid].cursorline = false
       end,
     },
