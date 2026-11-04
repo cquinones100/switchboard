@@ -37,6 +37,8 @@ const RECENT_MS = 14 * 24 * 60 * 60 * 1000;
 // The directory is on most lines of a transcript, so the end of it says where
 // the session finished, and some transcripts are megabytes long.
 const CWD_TAIL = 64 * 1024;
+// Bumped when what tailFacts reads changes, so the cache is read again.
+const FACTS = 2;
 // A prompt can be followed by any amount of tool output, so the search for it
 // widens until it finds one or has read the whole file.
 const PROMPT_TAILS = [256 * 1024, 2 * 1024 * 1024, Infinity];
@@ -108,13 +110,31 @@ const tailOf = (file, size, length) => {
 };
 
 // The last directory counts, since a session that started elsewhere and moved
-// into a worktree belongs to the worktree.
-const cwdIn = (file, size) => {
-  const found = [...tailOf(file, size, CWD_TAIL).text.matchAll(/"cwd":("(?:[^"\\]|\\.)*")/g)].at(-1);
-  try {
-    return found ? JSON.parse(found[1]) : undefined;
-  } catch {
-    return undefined;
+// into a worktree belongs to the worktree. The last timestamp is when it was
+// last used, not the file's modified time: Claude Code appends entries with
+// none whenever a session is merely opened, as tmux-resurrect does to every
+// tab after a restart. Both are each entry's own, read from whole lines from
+// the end, never a "cwd" or "timestamp" inside a tool call's input; the piece
+// read grows until it holds them or is the whole file, since one line can be
+// longer than it.
+const tailFacts = (file, size, mtimeMs) => {
+  for (let length = CWD_TAIL; ; length *= 4) {
+    const { text, whole } = tailOf(file, size, length);
+    let cwd;
+    let activeMs;
+    for (const line of text.split("\n").reverse()) {
+      if (cwd !== undefined && activeMs !== undefined) break;
+      let entry;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (cwd === undefined && typeof entry?.cwd === "string" && entry.cwd) cwd = entry.cwd;
+      const time = Date.parse(entry?.timestamp);
+      if (activeMs === undefined && Number.isFinite(time)) activeMs = time;
+    }
+    if ((cwd !== undefined && activeMs !== undefined) || whole) return { cwd, activeMs: activeMs ?? mtimeMs };
   }
 };
 
@@ -152,8 +172,8 @@ const promptIn = (file, size) => {
   return [...(found.answer ?? "")].slice(0, 90).join("");
 };
 
-// Every transcript modified in the last two weeks, subagents' included, newest
-// first, each with the directory it ended in. Only a file whose size or
+// Every transcript modified in the last two weeks, subagents' included, last
+// used first, each with the directory it ended in. Only a file whose size or
 // modified time differs from the cache's is read.
 const recentSessions = (cache) => {
   let names;
@@ -177,11 +197,15 @@ const recentSessions = (cache) => {
     .map(({ file, mtimeMs, size }) => {
       const known = cache.transcripts[file];
       const entry =
-        known?.mtimeMs === mtimeMs && known?.size === size ? known : { mtimeMs, size, cwd: cwdIn(file, size) };
+        // FACTS marks entries read the way tailFacts reads them now, so one an
+        // older wt-revive cached is read again.
+        known?.mtimeMs === mtimeMs && known?.size === size && known.facts === FACTS
+          ? known
+          : { mtimeMs, size, facts: FACTS, ...tailFacts(file, size, mtimeMs) };
       return { file, ...entry };
     })
     .filter((session) => session.cwd)
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .sort((a, b) => b.activeMs - a.activeMs);
 };
 
 // A directory's repository, as its main checkout, so each one's worktrees are
@@ -254,7 +278,7 @@ const main = () => {
           const session = sessions.find((candidate) => candidate.cwd === tree || candidate.cwd.startsWith(`${tree}/`));
           if (session && session.prompt === undefined) session.prompt = promptIn(session.file, session.size);
           const when = session
-            ? Math.floor(session.mtimeMs / 1000)
+            ? Math.floor(session.activeMs / 1000)
             : Math.floor((fs.statSync(tree, { throwIfNoEntry: false })?.mtimeMs ?? 0) / 1000);
           return {
             when,
