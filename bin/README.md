@@ -1345,7 +1345,10 @@ Standups folder, `Standup <date>.md` (`lib/sidebar/standup.js`): the last
 working day (Friday's on a Monday), with the pull requests you merged, opened,
 worked on and reviewed, the Linear tickets assigned to or made by you that
 changed state, from where each started to where it ended, and your commits in
-the repositories your tabs are in, a squash merge left to its PR; then Today,
+the repositories your tabs are in, a squash merge left to its PR, under two or
+three sentences summing the day up, which Claude (Haiku, no tools) writes from
+that list alone (the `standup_summary` setting; the note is written without them
+when Claude can't); then Today,
 your tickets in progress and the reviews asked of you in the last two weeks;
 and an empty Blockers list. It reads GitHub through `gh` and Linear with the
 ticket scripts' key, while their settings are on, and tries again every 15

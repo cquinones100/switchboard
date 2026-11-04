@@ -108,6 +108,13 @@
     "default": true
   },
   {
+    "key": "standup_summary",
+    "category": "Integrations",
+    "label": "Standup summary",
+    "description": "Over the standup note's list of the last working day, two or three sentences summing it up, written by Claude (Haiku, no tools) from the PR, ticket and commit titles in that list",
+    "default": true
+  },
+  {
     "key": "todo_note",
     "category": "Integrations",
     "label": "Today's todo note",

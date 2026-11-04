@@ -3220,6 +3220,52 @@ test("the standup note lists the last working day's PRs, reviews, ticket moves a
   assert.equal(sidebar.standupDue(monday), false, "nor once the note is there");
   delete process.env.NOTES_DIR;
   fs.rmSync(notes, { recursive: true, force: true });
+
+  const told = sidebar.standupFrom({ commits: [{ repo: "o/repo", subjects: ["Do a"] }] }, monday, "I shipped a.\n");
+  assert.match(told, /^## Friday, Oct 23\n\nI shipped a\.\n\n- Commits in o\/repo: Do a\n/m, "the summary over the day's list");
+  assert.match(sidebar.summaryPrompt("- Merged it"), /<day>\n- Merged it\n<\/day>$/, "Claude reads the list alone, as data");
+});
+
+test("the standup's summary is asked of Claude for a day with work in it, and the note is written without it when Claude can't", async () => {
+  const notes = fs.mkdtempSync("/tmp/standup-summary-");
+  process.env.NOTES_DIR = notes;
+  const repo = path.join(notes, "repo");
+  fs.mkdirSync(repo);
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: new Date(2026, 9, 23, 11).toISOString(), GIT_COMMITTER_DATE: new Date(2026, 9, 23, 11).toISOString() } });
+  git("init", "-q");
+  git("config", "user.email", "me@example.com");
+  git("config", "user.name", "Me");
+  git("remote", "add", "origin", "https://github.com/o/repo.git");
+  git("commit", "-q", "--allow-empty", "-m", "Do a");
+  const tabs = [{ path: repo }];
+  const asked = [];
+  try {
+    await sidebar.writeStandup(tabs, { github: false, linear: false }, new Date(2026, 9, 26, 7), () => {}, async (prompt, opts) => {
+      asked.push([prompt, opts.model]);
+      return "I did a.";
+    });
+    assert.equal(asked.length, 1);
+    assert.equal(asked[0][1], "haiku");
+    assert.match(asked[0][0], /Commits in .*: Do a/);
+    assert.match(fs.readFileSync(path.join(notes, "Standups", "Standup 2026-10-26.md"), "utf8"), /## Friday, Oct 23\n\nI did a\.\n\n- Commits/);
+
+    await sidebar.writeStandup(tabs, { github: false, linear: false }, new Date(2026, 9, 27, 7), () => {}, async () => {
+      throw new Error("no Claude");
+    });
+    assert.match(fs.readFileSync(path.join(notes, "Standups", "Standup 2026-10-27.md"), "utf8"), /## Monday, Oct 26\n\n- Nothing found/, "a day with nothing isn't summed up");
+
+    await sidebar.writeStandup(tabs, { github: false, linear: false, summary: false }, new Date(2026, 9, 28, 7), () => {}, async () => {
+      throw new Error("not asked with the setting off");
+    });
+    fs.rmSync(path.join(notes, "Standups", "Standup 2026-10-26.md"));
+    await sidebar.writeStandup(tabs, { github: false, linear: false }, new Date(2026, 9, 26, 7), () => {}, async () => {
+      throw new Error("Claude is down");
+    });
+    assert.match(fs.readFileSync(path.join(notes, "Standups", "Standup 2026-10-26.md"), "utf8"), /## Friday, Oct 23\n\n- Commits/, "written all the same without one");
+  } finally {
+    delete process.env.NOTES_DIR;
+    fs.rmSync(notes, { recursive: true, force: true });
+  }
 });
 
 test("meeting notes write each of your Fathom meetings once, its action items yours first, and wait for a summary not ready yet", async () => {
