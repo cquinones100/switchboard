@@ -10,6 +10,8 @@
 # next focus rather than this one. That is the trade that keeps switching
 # windows instant; asking gh inline would cost a second per window, every time.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 # What it keeps names your branches, tickets and prompts: yours alone.
 umask 077
@@ -87,8 +89,10 @@ mkdir "$lock" 2>/dev/null || exit 0
   # fork's, which only gh pr view finds, from that upstream.
   merge=$(git -C "$path" config "branch.$branch.merge" 2>/dev/null)
   if [ -n "$merge" ] && [ "${merge#refs/heads/}" != "$branch" ]; then
+    count_request GitHub GraphQL 'tab name: PR' gh
     found=$(cd "$path" && gh pr view --json number --jq .number 2>/dev/null)
   else
+    count_request GitHub GraphQL 'tab name: PR' gh
     found=$(cd "$path" && gh pr list --head "$branch" --state all --limit 1 \
       --json number --jq '.[0].number' 2>/dev/null)
   fi

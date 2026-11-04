@@ -221,6 +221,8 @@ claude_md_pull() {
   repo=$(jq -r '.repo // empty' "$config" 2>/dev/null)
   if [[ -n $repo && -d $clone/.git && $(git -C "$clone" remote get-url origin 2>/dev/null) == "$repo" ]]; then
     helper=$(claude_md_gh_helper "$repo")
+    # The request audit (tmux/count-request.sh), as the other scripts count.
+    { . "$REPO_DIR/tmux/count-request.sh" && count_git_request "$clone" "your CLAUDE.md's repository"; } 2>/dev/null
     git ${helper:+-c "credential.helper=$helper"} -C "$clone" pull --quiet --ff-only 2>/dev/null || echo "  could not update your CLAUDE.md's repository: git -C $clone pull --ff-only" >&2
   fi
   return 0

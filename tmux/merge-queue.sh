@@ -12,6 +12,8 @@
 # The popup shows that it is working meanwhile, and closes once the browser
 # has the page; when there is nothing to open, it says why and waits for a key.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 dim=$'\033[2m' reset=$'\033[0m'
 say() {
   printf '\r\033[2K  %s\n\n  %sPress any key to close.%s' "$1" "$dim" "$reset"
@@ -22,10 +24,12 @@ say() {
 cd "${1:-$PWD}" 2>/dev/null || say "No such directory: ${1:-$PWD}"
 printf '\n  %sFinding the merge queue...%s' "$dim" "$reset"
 
+count_request GitHub GraphQL 'open the merge queue' gh
 if pr=$(gh pr view --json url,baseRefName --jq '"\(.url)\t\(.baseRefName)"' 2>/dev/null); then
   IFS=$'\t' read -r pr_url base <<<"$pr"
   url=${pr_url%/pull/*}
 else
+  count_request GitHub GraphQL 'open the merge queue' gh
   repo=$(gh repo view --json url,defaultBranchRef --jq '"\(.url)\t\(.defaultBranchRef.name)"' 2>/dev/null) ||
     say "This isn't a GitHub repository gh can reach."
   IFS=$'\t' read -r url base <<<"$repo"

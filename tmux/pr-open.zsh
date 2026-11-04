@@ -14,6 +14,8 @@
 #
 # zsh for vared, which edits a prefilled line.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${0:A:h}/count-request.sh" 2>/dev/null || count_request() { :; }
 dim=$'\e[38;5;244m' red=$'\e[31m' reset=$'\e[0m'
 
 # Esc cancels; KEYTIMEOUT=1 keeps it from waiting for an escape sequence.
@@ -54,6 +56,7 @@ input=${input//[[:space:]]/}
 if $this_tab; then
   git rev-parse --git-dir >/dev/null 2>&1 || fail "This tab is not in a repository, so it has no PR."
   print -n "  ${dim}Opening...${reset}"
+  count_request GitHub GraphQL 'open a PR' gh
   error=$(gh pr view --web 2>&1 >/dev/null) || fail "No PR for this tab's branch: ${error:-unknown error}"
   exit 0
 fi
@@ -69,4 +72,5 @@ elif [[ ! $input =~ $pr_url ]]; then
 fi
 
 print -n "  ${dim}Opening...${reset}"
+count_request GitHub GraphQL 'open a PR' gh
 error=$(gh pr view "$input" --web 2>&1 >/dev/null) || fail "gh could not open it: ${error:-unknown error}"

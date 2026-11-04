@@ -18,6 +18,8 @@
 # finds it to close it, and runs under an interactive zsh for the PATH (glow,
 # node, ~/.local/bin) the tmux server lacks.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 case "${1:-}" in
@@ -70,6 +72,7 @@ case "${1:-}" in
     trap '[ -z "$refresh" ] || kill "$refresh" 2>/dev/null; rm -rf "$work"' EXIT
     # The key goes to curl on stdin, as in ticket-title.sh, never on a command line.
     fetch() {
+      count_request Linear GraphQL 'M-i ticket view' curl
       printf 'Authorization: %s\n' "$key" |
         curl -s --max-time 15 https://api.linear.app/graphql \
           -H 'Content-Type: application/json' -H @- -d "$body" > "$1" && jq -e '.data.issue' "$1" >/dev/null 2>&1

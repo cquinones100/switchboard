@@ -323,6 +323,16 @@ local function ask_order(view)
     return ("%s (+%d -%d)"):format(e.path, stats.additions or 0, stats.deletions or 0)
   end, entries)
   vim.fn.mkdir(dir, "p")
+  -- The request audit (lib/requests.js): one line in today's file.
+  pcall(function()
+    local audit = vim.fn.expand("~/.local/state/switchboard/requests")
+    vim.fn.mkdir(audit, "p")
+    local log = io.open(audit .. "/" .. os.date("%Y-%m-%d") .. ".tsv", "a")
+    if log then
+      log:write(("%d\tAnthropic\tclaude -p\tdiff order\n"):format(os.time()))
+      log:close()
+    end
+  end)
   vim.system({
     "claude", "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
     "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ORDER_PROMPT, "--output-format", "text",

@@ -9,6 +9,8 @@
 # uses (from $LINEAR_API_KEY, the Keychain or its config file). The binding runs it in the
 # background, so the wait never holds up tmux.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 # What the popup runs: the message, wrapped and indented, until a key is
@@ -51,6 +53,7 @@ body=$(jq -nc --arg id "$ticket" \
   '{query: "query($id: String!) { issue(id: $id) { project { name url } } }", variables: {id: $id}}')
 # The key goes to curl on stdin (-H @-), as in ticket-title.sh, so it is never
 # on a command line where ps could show it.
+count_request Linear GraphQL 'open the ticket'"'"'s project' curl
 response=$(printf 'Authorization: %s\n' "$key" |
   curl -s --max-time 10 https://api.linear.app/graphql \
     -H 'Content-Type: application/json' -H @- -d "$body") ||

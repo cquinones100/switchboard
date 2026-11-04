@@ -11,6 +11,8 @@
 # as linear-ticket.sh finds them, so no network is needed. The PR comes from
 # gh, which takes a second; the binding runs this in the background meanwhile.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 what=$1
 cd "$2" 2>/dev/null || exit 0
 
@@ -32,6 +34,7 @@ case "$what" in
     ;;
   pr | pr-url)
     field=$([ "$what" = pr ] && echo number || echo url)
+    count_request GitHub GraphQL 'copy a PR field' gh
     value=$(gh pr view --json "$field" --jq ".$field" 2>/dev/null)
     [ -n "$value" ] || { say "This branch has no pull request."; exit 0; }
     ;;

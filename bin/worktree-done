@@ -32,6 +32,14 @@
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
+// The request audit (lib/requests.js), from Switchboard's clone; nothing counted without it.
+const count = (() => {
+  try {
+    return require("../lib/requests").count;
+  } catch {
+    return () => {};
+  }
+})();
 const path = require("node:path");
 
 const LINEAR_API = "https://api.linear.app/graphql";
@@ -187,6 +195,7 @@ const fetchIssues = async (identifiers, apiKey) => {
         and: [{ number: { eq: number } }, { team: { key: { eq: key } } }],
       }));
 
+      count("Linear", "GraphQL", "worktree-done: tickets");
       const response = await fetch(LINEAR_API, {
         method: "POST",
         headers: {

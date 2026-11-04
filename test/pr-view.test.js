@@ -48,7 +48,7 @@ views.forEach((view) => {
   test(`${view.name} draws the last copy at once, then the new one`, async () => {
     const cache = path.join(tmp, `cache-${view.cache}`);
     const open = () =>
-      tmux("new-session", "-d", "-s", view.cache, "-x", "100", "-y", "30", "-c", repo, `env PATH=${bin}:${process.env.PATH} LINEAR_API_KEY=k XDG_CACHE_HOME=${cache} ${view.command}`);
+      tmux("new-session", "-d", "-s", view.cache, "-x", "100", "-y", "30", "-c", repo, `env PATH=${bin}:${process.env.PATH} HOME=${tmp} LINEAR_API_KEY=k XDG_CACHE_HOME=${cache} ${view.command}`);
     const shows = async (text) => {
       const until = Date.now() + 10_000;
       while (Date.now() < until) {

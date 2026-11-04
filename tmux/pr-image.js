@@ -34,6 +34,14 @@
 // holds what was at the top.
 
 const { execFile, execFileSync } = require("node:child_process");
+// The request audit (lib/requests.js), from Switchboard's clone; nothing counted without it.
+const { count, countRun } = (() => {
+  try {
+    return require("../lib/requests");
+  } catch {
+    return { count: () => {}, countRun: () => {} };
+  }
+})();
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -218,6 +226,7 @@ const ticketPage = async (id) => {
   if (!key) return { error: "No Linear API key: set LINEAR_API_KEY, or store it in the Keychain as linear-api-key." };
   let issue;
   try {
+    count("Linear", "GraphQL", "ticket as an image");
     const res = await fetch("https://api.linear.app/graphql", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: key },
@@ -248,9 +257,10 @@ const ticketPage = async (id) => {
 
 // A PR as the page's parts, or a reason it can't be.
 const gh = (args, options = {}) =>
-  new Promise((resolve, reject) =>
-    execFile("gh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, ...options }, (err, stdout) => (err ? reject(err) : resolve(stdout))),
-  );
+  new Promise((resolve, reject) => {
+    countRun("gh", "GitHub", args[0] === "api" ? "REST" : "GraphQL", "PR as an image");
+    execFile("gh", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, ...options }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  });
 const prPage = async (dir) => {
   let pr;
   try {
@@ -328,6 +338,12 @@ const main = async () => {
   let view = size();
   const browser = await lib.launch({ headless: true });
   const page = await browser.newPage();
+  // What the page loads from the web (the stylesheet and scripts it names),
+  // counted as each request goes out.
+  page.on("request", (request) => {
+    const to = /^https?:/.test(request.url()) && new URL(request.url());
+    if (to) count(to.hostname, to.protocol === "http:" ? "HTTP" : "HTTPS", "PR as an image: page");
+  });
   const load = async () => {
     fs.writeFileSync(file, pageFor(parts, view.width));
     await page.setViewport({ width: view.width, height: 800, deviceScaleFactor: DPR });

@@ -27,6 +27,8 @@
 # only when the verdict needs it: a PR GitHub calls ready has every required
 # check passing by definition.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 wait=false
@@ -38,6 +40,7 @@ cd "$path" 2>/dev/null || { echo "No such directory: $path"; exit 1; }
 # The required checks, counted by outcome (see the top), into a file the
 # verdict reads if it needs them.
 required_file=$(mktemp -t pr-ready)
+count_request GitHub GraphQL 'M-m PR check' gh
 gh pr checks --required --json bucket 2>/dev/null |
   jq -r 'group_by(.bucket) | map("\(length) \(.[0].bucket)") | join(", ") | if . == "" then "none" else . end' >"$required_file" &
 required_pid=$!
@@ -50,6 +53,7 @@ actions=()
 # The failing checks, each with its link, and for a GitHub Actions job the
 # end of its failed log, in less.
 failing() {
+  count_request GitHub GraphQL 'M-m PR check' gh
   gh pr checks --json name,bucket,link,description 2>/dev/null |
     jq -r '.[] | select(.bucket == "fail") | [.name, .link, (.description // "")] | @tsv' |
     # The description last, since it may be empty and read takes runs of tabs as one.
@@ -60,6 +64,7 @@ failing() {
       job=$(sed -nE 's#.*/actions/runs/[0-9]+/job/([0-9]+).*#\1#p' <<<"$link")
       if [ -n "$job" ]; then
         printf '\n'
+        count_request GitHub REST 'M-m failing log' gh
         gh run view --job "$job" --log-failed 2>/dev/null | tail -n 25 | cut -f3- | sed 's/^/    /'
       fi
       printf '\n'
@@ -136,6 +141,7 @@ done_waiting() { [ -t 1 ] && printf '\r\033[2K'; }
 progress "Reaching out to GitHub..."
 
 fields=number,title,url,state,isDraft,mergeable,mergeStateStatus,reviewDecision,autoMergeRequest
+count_request GitHub GraphQL 'M-m PR check' gh
 if ! pr=$(gh pr view --json "$fields" 2>&1); then
   done_waiting
   echo "No pull request for this branch."
@@ -168,6 +174,7 @@ esac
 # still runs.
 progress "Checking the merge queue and checks..."
 IFS=/ read -r owner repo number < <(field .url | sed -E 's#^https://[^/]+/([^/]+)/([^/]+)/pull/([0-9]+).*#\1/\2/\3#')
+count_request GitHub GraphQL 'M-m PR check' gh
 extra=$(gh api graphql -F owner="$owner" -F repo="$repo" -F number="$number" \
   -f query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { mergeQueueEntry { state position } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 1) { checkRunCountsByState { state count } statusContextCountsByState { state count } } } } } } } } }' \
   --jq '.data.repository.pullRequest' 2>/dev/null) || extra=null
@@ -203,6 +210,7 @@ for _ in 1 2 3; do
   [ "$(field .mergeable)" != UNKNOWN ] && break
   progress "Waiting for GitHub to work out whether it can merge..."
   sleep 1
+  count_request GitHub GraphQL 'M-m PR check' gh
   pr=$(gh pr view --json "$fields" 2>/dev/null) || break
 done
 

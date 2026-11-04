@@ -26,6 +26,8 @@
 # under an interactive zsh, for the PATH (gh, glow, ~/.local/bin) the tmux
 # server lacks. mermaid-ascii is pinned and installed by `./setup.sh tmux`.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 case "${1:-}" in
@@ -53,6 +55,7 @@ case "${1:-}" in
     # The PR as it was last read for this branch is drawn at once, and read
     # again in the background: when it has changed, the pager is told as a
     # resize tells it, and draws it again where it was.
+    count_request GitHub GraphQL 'M-v PR view' gh
     fetch() { gh pr view --json number,title,url,state,isDraft,author,baseRefName,headRefName,body 2>/dev/null; }
     cache="${XDG_CACHE_HOME:-$HOME/.cache}/switchboard/pr-view/$(printf '%s:%s' "$(git rev-parse --absolute-git-dir 2>/dev/null)" "$(git branch --show-current 2>/dev/null)" | tr / %).json"
     work=$(mktemp -d)

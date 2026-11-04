@@ -1911,7 +1911,8 @@ test("the Sessions view starts with today's spend and the rate limits, as the st
   // A session last used on another day counts for nothing today.
   fs.writeFileSync(path.join(ownDir, "spend-old"), "2020-01-01\t9\t3");
 
-  assert.deepEqual(sidebar.usageItems().map((i) => [i.title, i.detail, i.state]), [
+  // The request rows after them have a test of their own (requests.test.js).
+  assert.deepEqual(sidebar.usageItems().slice(0, 3).map((i) => [i.title, i.detail, i.state]), [
     ["Spent today $3.75", "2 sessions, at API prices", "idle"],
     ["5-hour limit 42% used", "resets in 2h 10m", "idle"],
     ["Weekly limit 85% used", "resets in 50m", "attention"],

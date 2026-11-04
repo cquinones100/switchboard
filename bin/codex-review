@@ -71,6 +71,14 @@ const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+// The request audit (lib/requests.js), when this runs from Switchboard's clone; nothing counted installed alone.
+const { count, countRun } = (() => {
+  try {
+    return require("../lib/requests");
+  } catch {
+    return { count: () => {}, countRun: () => {} };
+  }
+})();
 
 const MAX_FINDINGS_HINT = 12;
 
@@ -235,6 +243,7 @@ const ensureClean = () => {
 // Only gh's own "no pull requests found" counts as absence; an auth or network
 // failure must not quietly turn into a review against the wrong base.
 const pullRequest = () => {
+  countRun("gh", "GitHub", "GraphQL", "codex-review: the PR");
   const result = spawnSync("gh", ["pr", "view", "--json", "number,title,body,url,baseRefName,isCrossRepository"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -564,6 +573,13 @@ const main = () => {
   // remote copies, as a branch does, would compare main with itself.
   const onBase = !pr && !opts.base && branch === baseName;
   if (onBase) {
+    // Under the host origin is on, and not at all for one on this Mac.
+    const origin = tryRun("git", ["remote", "get-url", "origin"]) ?? "";
+    // A URL with a scheme (not file://), or git's scp form (host:path, no /
+    // before the colon); anything else is a path on this Mac.
+    const remote = origin.startsWith("file:") ? null : /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(origin) ? origin.replace(/^[^:]+:\/\//, "") : /^[^/]+:/.test(origin) ? origin : null;
+    const host = remote && remote.replace(/^[^@/]*@/, "").split(/[/:]/)[0];
+    if (host) count(/^(gist\.)?github\.com$/.test(host) ? "GitHub" : host, "git", "codex-review: fetch the base");
     if (tryRun("git", ["fetch", "--quiet", "origin", `+refs/heads/${baseName}:refs/remotes/origin/${baseName}`]) === null) {
       console.error(`codex-review: couldn't fetch origin/${baseName}; comparing with the copy already here.`);
     }
@@ -676,6 +692,9 @@ const main = () => {
       maxBuffer: 64 * 1024 * 1024,
     });
 
+    // Counted once the reviewer has started.
+    // A launch that failed has no process ID.
+    if (result.pid) count(reviewer === "codex" ? "OpenAI" : "Anthropic", reviewer === "codex" ? "codex exec" : "claude -p", "codex-review: a round");
     if (result.error) fail(`could not run ${reviewer}: ${result.error.message}`);
     if (result.status !== 0) {
       fail(`${reviewer} exited with status ${result.status}${result.stderr ? `\n${result.stderr}` : ""}${reviewer === "claude" ? `\n${result.stdout}` : ""}`);

@@ -31,6 +31,8 @@
 # on the network. Main is only fast-forwarded: with commits of your own not
 # on GitHub, or another branch checked out, it says so and changes nothing.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 REPO="${SWITCHBOARD_DIR:-$HOME/switchboard}"
@@ -90,6 +92,7 @@ case "${1:-}" in
       GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=false SSH_ASKPASS_REQUIRE=never SWITCHBOARD_PULL_ONLY=true nohup bash "$REPO/setup.sh" claude_md >/dev/null 2>&1 </dev/null &
     fi
     [ "$1" = now ] && "${0%/*}/say.sh" -c "${2:-}" "Looking for Switchboard updates…"
+    count_git_request "$REPO" 'Switchboard update check'
     GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND="ssh -o BatchMode=yes" git_ fetch --quiet origin main 2>/dev/null || { setup_anyway "$1" "${2:-}" "Couldn't reach GitHub to look for updates; running the setup with what you have."; exit 0; }
     behind=$(git_ rev-list --count main..origin/main 2>/dev/null) || exit 0
     [ "${behind:-0}" -gt 0 ] || { setup_anyway "$1" "${2:-}" "Switchboard is up to date ($(git_ log -1 --format=%h main)); running its setup for anything not in place yet."; exit 0; }

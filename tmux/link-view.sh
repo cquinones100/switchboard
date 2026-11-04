@@ -35,6 +35,8 @@
 # it as written, never in the command line, where zsh would read a link's & or
 # ( as its own; only a link of nothing but a URL's characters is read.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 here=${0%/*}
 repo=${SWITCHBOARD_DIR:-$HOME/switchboard}
@@ -251,6 +253,7 @@ case "${1:-}" in
     # A GitHub pull request: the PR view's layout.
     if [[ $url =~ ^https://github\.com/[^/]+/[^/]+/pull/[0-9]+ ]]; then
       printf '\n  %sReading the PR...%s' "$dim" "$reset"
+      count_request GitHub GraphQL 'link view: PR' gh
       gh pr view "${BASH_REMATCH[0]}" --json number,title,url,state,isDraft,author,baseRefName,headRefName,body > "$work/pr.json" 2>/dev/null ||
         wait_key "${red}GitHub won't show that PR${reset} (gh)."
       "$here/pr-view.sh" page prepare "$work/pr.json" "$work"

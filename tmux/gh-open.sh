@@ -9,6 +9,8 @@
 # Usage: gh-open.sh <pr|repo> <dir> <client>
 #        gh-open.sh box <title> <reason> <hint>   the box itself
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 if [ "${1:-}" = box ]; then
@@ -43,8 +45,10 @@ branch=$(git -C "$dir" branch --show-current 2>/dev/null)
 remote=$(git -C "$dir" remote get-url origin 2>/dev/null)
 
 if [ "$what" = pr ]; then
+  count_request GitHub GraphQL 'open on GitHub' gh
   out=$(cd "$dir" && gh pr view --json url -q .url 2>&1)
 else
+  count_request GitHub GraphQL 'open on GitHub' gh
   out=$(cd "$dir" && gh repo view --json url -q .url 2>&1)
 fi
 if [ $? -eq 0 ] && [[ $out == https://* ]]; then

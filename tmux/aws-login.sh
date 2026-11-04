@@ -34,6 +34,8 @@ esac
 
 printf '\n  %sLogging in to %s...%s\n\n' "$dim" "$sessions" "$reset"
 # BROWSER for this command alone (see chrome-profile.sh).
+# The request audit (count-request.sh): the login, as AWS's SSO sees it.
+{ . "${BASH_SOURCE[0]%/*}/count-request.sh" && count_request AWS HTTPS 'AWS SSO login' aws; } 2>/dev/null
 if BROWSER=~/.config/tmux/chrome-profile.sh CHROME_PROFILE_DIR=$chrome_profile aws sso login --sso-session "$sessions"; then
   done_with "${green}Logged in.${reset}"
 else

@@ -68,7 +68,17 @@ function M.run(paths, done)
       done(path)
     end)
   end)
-  if not ok then done(nil, "Claude Code isn't installed") end
+  if not ok then return done(nil, "Claude Code isn't installed") end
+  -- The request audit (lib/requests.js): one line in today's file, once Claude has started.
+  pcall(function()
+    local dir = vim.fn.expand("~/.local/state/switchboard/requests")
+    vim.fn.mkdir(dir, "p")
+    local log = io.open(dir .. "/" .. os.date("%Y-%m-%d") .. ".tsv", "a")
+    if log then
+      log:write(("%d\tAnthropic\tclaude -p\tNotes: squash\n"):format(os.time()))
+      log:close()
+    end
+  end)
   return job
 end
 

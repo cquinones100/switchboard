@@ -200,6 +200,13 @@
     "default": true
   },
   {
+    "key": "request_audit",
+    "category": "Mission control",
+    "label": "Requests in Usage",
+    "description": "The Usage view lists today's requests to services outside this Mac (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
+    "default": true
+  },
+  {
     "key": "usage",
     "category": "Mission control",
     "label": "Usage",

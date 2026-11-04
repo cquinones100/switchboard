@@ -9,6 +9,8 @@
 # refresh in the background when the answer has gone stale. The API key is the
 # one worktree-from-ticket uses, from $LINEAR_API_KEY, the Keychain or its config file.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 # What it keeps names your branches, tickets and prompts: yours alone.
 umask 077
@@ -59,6 +61,7 @@ mkdir "$lock" 2>/dev/null || exit 0
   # The key goes to curl on stdin (-H @-) rather than as an argument, where any
   # process on the machine could read it from `ps`. printf is a shell builtin,
   # so the key is never on a command line here either.
+  count_request Linear GraphQL 'tab name: ticket title' curl
   response=$(printf 'Authorization: %s\n' "$key" |
     curl -s --max-time 10 https://api.linear.app/graphql \
       -H 'Content-Type: application/json' -H @- -d "$body") || exit 0

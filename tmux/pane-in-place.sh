@@ -27,6 +27,8 @@
 # pane killed instead (M-w's confirmation) is swapped back by confirm.sh
 # first, from @parked_pane.
 
+# The request audit (count-request.sh); counting nothing when it isn't there.
+. "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
 
 # The command that runs <tool> in <dir>, or nothing. <client> is shown a
@@ -78,6 +80,7 @@ tool_command() {
       fi
       tmux display-popup -c "$client" -E -w 60 -h 9 -T " diffview " \
         "printf '\\n\\n\\n%14s\\033[1mFetching the PR base branch...\\033[0m' ''; sleep 30" </dev/null >/dev/null 2>&1 &
+      count_request GitHub GraphQL 'M-d diff: PR base' gh
       base=$(cd "$dir" && gh pr view --json baseRefName -q .baseRefName 2>/dev/null)
       [ -n "$base" ] || base=$(git -C "$dir" rev-parse --abbrev-ref origin/HEAD 2>/dev/null)
       base=${base#origin/}
@@ -85,6 +88,7 @@ tool_command() {
       # It goes into a command line, so only a branch name's characters.
       [[ $base =~ ^[A-Za-z0-9._/-]+$ ]] || base=main
       fetched=1
+      count_git_request "$dir" 'M-d diff: fetch base'
       git -C "$dir" fetch --quiet origin "$base" 2>/dev/null || fetched=
       tmux display-popup -C -c "$client"
       [ -n "$fetched" ] || "${0%/*}/say.sh" -c "$client" "Could not fetch origin/$base; comparing with it as last fetched."
