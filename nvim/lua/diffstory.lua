@@ -153,21 +153,34 @@ function M.jump(starts, at, step)
   return nil
 end
 
--- The lines over a chapter's first file in the list: its number and title,
--- then its why, wrapped to `width`, as extmark virtual lines.
-function M.heading(story, i, width)
-  local chapter = story.chapters[i]
-  local lines = { { { ("%d/%d %s"):format(i, #story.chapters, chapter.title), "Title" } } }
-  local line = ""
-  for word in chapter.why:gmatch("%S+") do
-    if #line > 0 and vim.fn.strdisplaywidth(line .. " " .. word) > width - 2 then
-      table.insert(lines, { { "  " .. line, "Comment" } })
-      line = word
-    else
-      line = #line > 0 and (line .. " " .. word) or word
+-- `text`'s words in lines of at most `width` columns, each after `indent`
+-- (the first after `first`), a word longer than a line cut to fit.
+local function wrap(text, width, first, indent)
+  local lines, line, lead = {}, "", first
+  local room = function() return math.max(width - vim.fn.strdisplaywidth(lead), 1) end
+  for word in text:gmatch("%S+") do
+    if #line > 0 and vim.fn.strdisplaywidth(line .. " " .. word) > room() then
+      table.insert(lines, lead .. line)
+      line, lead = "", indent
+    end
+    line = #line > 0 and (line .. " " .. word) or word
+    while vim.fn.strdisplaywidth(line) > room() do
+      local cut = vim.fn.strcharpart(line, 0, room())
+      table.insert(lines, lead .. cut)
+      line, lead = vim.fn.strcharpart(line, vim.fn.strchars(cut)), indent
     end
   end
-  if #line > 0 then table.insert(lines, { { "  " .. line, "Comment" } }) end
+  if #line > 0 then table.insert(lines, lead .. line) end
+  return lines
+end
+
+-- The lines over a chapter's first file in the list: its number and title,
+-- then its why, each wrapped to `width` columns (the list's, less its sign
+-- column), so neither runs off the side, as extmark virtual lines.
+function M.heading(story, i, width)
+  local chapter = story.chapters[i]
+  local lines = vim.tbl_map(function(text) return { { text, "Title" } } end, wrap(chapter.title, width, ("%d/%d "):format(i, #story.chapters), "    "))
+  vim.list_extend(lines, vim.tbl_map(function(text) return { { text, "Comment" } } end, wrap(chapter.why, width, "  ", "  ")))
   -- A blank line between one chapter and the one before it.
   if i > 1 then table.insert(lines, 1, { { "", "Normal" } }) end
   return lines

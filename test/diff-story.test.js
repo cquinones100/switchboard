@@ -43,6 +43,7 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
         files = vim.tbl_map(function(c) return c.files end, story.chapters),
         place = story.place,
         heading = ds.heading(story, 2, 24),
+        narrow = ds.heading({ chapters = { { title = "Check the one-worktree cleanup mode", why = "The --worktree path must keep the same safety rules everywhere." } } }, 1, 16),
         bad = ds.parse("no json here", { "a" }, generated) == nil,
         renamed = diffs["new.js"] ~= nil,
         conflicted = diffs["src/both.js"] and #diffs["src/both.js"] or 0,
@@ -58,6 +59,8 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
   assert.deepEqual(result.files, [["src/model.js", "src/model.test.js"], ["src/page.js"], ["README.md"], ["pnpm-lock.yaml"]], "each once, unknown ones dropped, generated last");
   assert.deepEqual(result.place, { "src/model.js": 1, "src/model.test.js": 2, "src/page.js": 3, "README.md": 4, "pnpm-lock.yaml": 5 });
   assert.deepEqual(result.heading, [[["", "Normal"]], [["2/4 Show it", "Title"]], [["  The page shows it, a }", "Comment"]], [["  and all.", "Comment"]]], "its number and title, then its why, a brace in it kept");
+  assert.deepEqual(result.narrow.map((l) => l[0][0]), ["1/1 Check the", "    one-worktree", "    cleanup mode", "  The --worktree", "  path must keep", "  the same", "  safety rules", "  everywhere."], "a long title and why wrapped to the list's width, none running off its side");
+  assert.ok(result.narrow.every((l) => l[0][0].length <= 16));
   assert.equal(result.bad, true, "no story from an answer that isn't one");
   assert.equal(result.renamed, true, "a renamed file by its new path");
   assert.equal(result.conflicted, 3, "a conflicted file's combined diff by its path");

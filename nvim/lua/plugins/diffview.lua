@@ -608,7 +608,10 @@ local function draw_headings(panel)
   vim.api.nvim_buf_clear_namespace(panel.bufid, headings, 0, -1)
   local story = current_story()
   if not story then return end
-  local width = panel.winid and vim.api.nvim_win_is_valid(panel.winid) and vim.api.nvim_win_get_width(panel.winid) or 30
+  -- The columns the text has: the window's width less its sign column, which
+  -- virtual lines are drawn after too.
+  local info = panel.winid and vim.api.nvim_win_is_valid(panel.winid) and vim.fn.getwininfo(panel.winid)[1]
+  local width = info and (info.width - info.textoff) or 28
   local rows = story_rows(panel, story)
   local starts = require("diffstory").starts(rows)
   for i, row in ipairs(rows) do
