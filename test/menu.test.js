@@ -17,3 +17,7 @@ test("menu_read says what was pressed or clicked: keys, arrows, the wheel, a lef
   assert.equal(read("q"), "quit|");
   assert.equal(read("\x1b"), "quit|", "Esc alone");
 });
+
+test("menu_read reads Tab and Shift-Tab as tab and btab, which go round a menu's options", () => {
+  assert.equal(read("\t\x1b[Z "), "tab|btab|space|");
+});

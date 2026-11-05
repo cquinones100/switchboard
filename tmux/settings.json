@@ -193,6 +193,13 @@
     "default": true
   },
   {
+    "key": "tab_focus",
+    "category": "Mission control",
+    "label": "Tab moves focus",
+    "description": "Tab and Shift-Tab move a highlight through what can be clicked, as on a webpage, and Enter presses it (Space too, but in the sidebar, where Space peeks): in mission control the views' names, the filter and the items, with [ ] switching views; in the sidebar each of its rows, M-Space opening mission control; and the options of every box and menu; off, Tab switches views in mission control and opens it from the sidebar",
+    "default": true
+  },
+  {
     "key": "diff_story_progress",
     "category": "Diff",
     "label": "Diff story progress",

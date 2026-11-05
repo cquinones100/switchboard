@@ -26,7 +26,8 @@ menu_row() {
 }
 
 # One key or click, into MENU_KEY: j or k (the arrows and the wheel too),
-# enter, quit (Esc or q), "click <row> <col>" for a left click, none for a
+# tab or btab (Tab and Shift-Tab, which go round the options, as on a webpage),
+# space (which presses the option chosen, as Enter does), enter, quit (Esc or q), "click <row> <col>" for a left click, none for a
 # mouse event that means nothing (a release), else the key itself. Returns 1
 # at the end of the input.
 menu_read() {
@@ -35,6 +36,8 @@ menu_read() {
   case $key in
     '') MENU_KEY=enter; return 0 ;;
     q) MENU_KEY=quit; return 0 ;;
+    $'\t') MENU_KEY=tab; return 0 ;;
+    ' ') MENU_KEY=space; return 0 ;;
   esac
   if [ "$key" != $'\x1b' ]; then
     MENU_KEY=$key
@@ -49,6 +52,7 @@ menu_read() {
   case $c in
     A) MENU_KEY=k ;;
     B) MENU_KEY=j ;;
+    Z) MENU_KEY=btab ;;
     '<')
       seq=
       while IFS= read -rsn 1 -t 1 ch; do
@@ -97,5 +101,5 @@ menu_option() {
 # The keys under a menu, dim, after a blank line, as the boxes end.
 menu_keys() {
   [ -n "${MENU_DIM:-}" ] || menu_colors
-  printf '\n \033[38;5;%sm%s\033[0m' "$MENU_DIM" "${1:-jk move  ↵ or click choose  esc back}"
+  printf '\n \033[38;5;%sm%s\033[0m' "$MENU_DIM" "${1:-jk or tab move  ↵ or click choose  esc back}"
 }

@@ -26,22 +26,46 @@ else
   # (confirmModal).
   printf "%*s\033[38;5;220;1m%s\033[0m" "$pad_left" "" "$text"
   # Yes and No under it, each taken by a click too (menu.sh, the menu_mouse
-  # setting): the row they are on and the columns of each.
+  # setting): the row they are on and the columns of each. The one Enter
+  # takes has the ›, and Tab or Shift-Tab moves it, as on a webpage.
   . "${0%/*}/menu.sh"
   menu_mouse_on
   row=
-  if [ -n "${MENU_MOUSE:-}" ] && [ -t 0 ]; then
-    yes_at=$(( (cols - 9) / 2 + 1 ))
-    printf '\n\n%*s\033[1m› Yes\033[0m   No\033[1A\033[1A\r\033[%dC' "$((yes_at - 3))" "" "$((pad_left + ${#text}))"
-    row=$(( $(menu_row) + 2 ))
+  no=
+  tabbed=
+  yes_at=$(( (cols - 9) / 2 + 1 ))
+  buttons() {
+    if [ -n "$no" ]; then
+      printf '\r\033[2K%*s  Yes \033[1m› No\033[0m' "$((yes_at - 3))" ""
+    else
+      printf '\r\033[2K%*s\033[1m› Yes\033[0m   No' "$((yes_at - 3))" ""
+    fi
+  }
+  if [ -t 0 ]; then
+    printf '\n\n'
+    buttons
+    printf '\033[1A\033[1A\r\033[%dC' "$((pad_left + ${#text}))"
+    [ -n "${MENU_MOUSE:-}" ] && row=$(( $(menu_row) + 2 ))
   fi
 
   # Enter reads as an empty key and confirms too; a closed input does not.
   while :; do
     menu_read || { menu_mouse_off; exit 0; }
     case $MENU_KEY in
-      enter) ans=y ;;
+      enter) [ -n "$no" ] && ans=n || ans=y ;;
+      # Space presses the one chosen once Tab has moved there; before, it is
+      # any other key, so a stray Space never says yes.
+      space) [ -n "$tabbed" ] && [ -z "$no" ] && ans=y || ans=n ;;
       none) continue ;;
+      tab | btab)
+        [ -t 0 ] || continue
+        [ -n "$no" ] && no= || no=1
+        tabbed=1
+        printf '\033[2B'
+        buttons
+        printf '\033[2A\r\033[%dC' "$((pad_left + ${#text}))"
+        continue
+        ;;
       click\ *)
         set -- $MENU_KEY
         [ -n "$row" ] && [ "$2" = "$row" ] || continue

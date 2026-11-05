@@ -2891,6 +2891,8 @@ test("the Notifications view lists whole messages, the chosen one marked, its to
   const dee = plain.findIndex((l) => l === "▌ DM Dee · Dee");
   assert.equal(out.owners[dee], 1, "each line says which item it is, for the pointer");
   assert.match(plain.at(-1), /jk move +↵ actions +esc back/);
+  assert.doesNotMatch(out.lines[0], /\x1b\[7m/);
+  assert.match(sidebar.noticeListLines(items, 1, 30, 20, undefined, true).lines[0], /\x1b\[7m.*‹ tabs/, "‹ tabs drawn focused once Tab is on it");
 });
 
 test("moving onto the notifications brings a Notifications window to the front, no tab, whose view lists them and opens each one's actions", async (t) => {
@@ -3513,7 +3515,7 @@ test("every box in mission control is drawn one way: the keys box as a menu is",
   const menu = plain(sidebar.chooseModal({ title: "A tab", choices: [{ key: "a", label: "Go there" }], cursor: 0 }, 120, 40));
   [help, menu].forEach((box) => assert.match(box, /╭─ \S.*╮[\s\S]*╰─+╯/, "a rounded edge, its title in the top"));
   assert.match(help, /│ any key to go back +│/, "the keys on a row of their own at the bottom, as a menu's");
-  assert.match(menu, /│ jk move +↵ or click choose +esc back +│/);
+  assert.match(menu, /│ jk or tab move +↵ or click choose +esc back +│/);
   const popup = sidebar.helpLines("sidebar", 60, 30).map(plain);
   assert.match(popup[0], /^╭─ Keys ─+╮$/, "the sidebar's keys popup too");
   assert.match(popup.at(-1), /^╰─+╯$/);
@@ -3537,4 +3539,120 @@ test("six daemons started at once over a dead daemon's lock leave one running, t
   } finally {
     daemons.forEach((d) => d.kill());
   }
+});
+
+test("Tab moves focus through mission control's views' names, its filter and its items, Enter pressing it, and through a box's options", async (t) => {
+  const one = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-n", "focus one", "-P", "-F", "#{window_id}");
+  t.after(() => tmux("kill-window", "-t", one));
+  await sidebar.refresh();
+  const sent = [];
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 50, tmuxClient: "none" };
+  sidebar.draw(client);
+  const views = client.hits.filter((h) => h.view !== undefined).length;
+  const key = (k) => sidebar.missionKey(client, { key: k });
+
+  await key("Tab");
+  assert.deepEqual(client.focus, { view: 0 }, "the first Tab focuses the first view's name");
+  assert.match(sent.at(-1), /\x1b\[7m[^ ]*\s*Tabs/, "drawn in reverse video");
+  await key("BTab");
+  assert.equal(client.focus, "item", "Shift-Tab from the first wraps round to the last item");
+  assert.equal(client.view.cursor, sidebar.missionGrid(sidebar.state.tabs).order.length - 1);
+  await key("Tab");
+  for (let i = 1; i < views; i++) await key("Tab");
+  assert.deepEqual(client.focus, { view: views - 1 }, "Tab goes on through every view's name");
+  await key("Tab");
+  assert.equal(client.focus, "filter", "then the filter");
+  assert.ok(client.hits.some((h) => h.filter), "which is there to click even while empty");
+  await key("Tab");
+  assert.equal(client.focus, "item", "then the first item");
+  assert.equal(client.view.cursor, 0);
+  await key("Enter");
+  assert.ok(client.choose, "Enter on an item opens its menu");
+
+  await key("Tab");
+  assert.equal(client.choose.cursor, 1, "in a menu, Tab moves to the next option");
+  await key("BTab");
+  await key("BTab");
+  assert.equal(client.choose.cursor, client.choose.choices.length - 1, "Shift-Tab wraps round to the last");
+  await key("Escape");
+
+  let yes = 0;
+  client.confirm = { text: "Close it?", yes: () => { yes++; } };
+  sidebar.draw(client);
+  await key("Tab");
+  assert.equal(client.confirm.no, true, "in a question, Tab moves from Yes to No");
+  assert.match(plain(sent.at(-1)), /Yes +› No/, "the › on No");
+  await key("Enter");
+  assert.equal(yes, 0, "and Enter then says no");
+  assert.equal(client.confirm, undefined);
+  client.confirm = { text: "Close it?", yes: () => { yes++; } };
+  await key("Space");
+  assert.equal(yes, 0, "Space before Tab is any other key, no");
+  client.confirm = { text: "Close it?", yes: () => { yes++; } };
+  await key("Tab");
+  await key("BTab");
+  await key("Space");
+  assert.equal(yes, 1, "once Tab has moved to Yes, Space presses it");
+
+  // In M-j's picker, a menu over it takes Tab, the filter still typing.
+  client.picker = true;
+  client.filter = { text: "", typing: true };
+  client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act() {} }, { key: "b", label: "Second", act() {} }], cursor: 0 };
+  await key("Tab");
+  assert.equal(client.choose.cursor, 1, "Tab moves a picker's menu");
+  assert.equal(client.filter.typing, true);
+  await key("Escape");
+  assert.equal(client.choose, undefined, "Esc closes the menu, not the picker");
+  client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act() {} }], cursor: 0 };
+  await key("Space");
+  assert.equal(client.choose, undefined, "Space takes its option");
+  assert.equal(client.filter.text, "", "and types nothing into the filter");
+  client.view = { view: sidebar.viewsFor(client).findIndex((v) => v.title === "Work map") + 1, cursor: 0 };
+  const rows = sidebar.viewsFor(client)[client.view.view - 1].items.length;
+  await key("Tab");
+  assert.equal(client.view.cursor, Math.min(1, rows - 1), "Tab goes down the picker's rows");
+  for (let i = 1; i < rows; i++) await key("Tab");
+  assert.equal(client.view.cursor, 0, "and round from the last to the first");
+  assert.equal(client.filter.typing, true, "still typing");
+  client.choose = undefined;
+  client.picker = false;
+  client.filter = undefined;
+
+  client.focus = { view: 1 };
+  await key("Enter");
+  assert.equal(client.view.view, 1, "Enter on a view's name goes to it");
+  await key("]");
+  assert.deepEqual(client.focus, { view: 2 }, "] takes the focus on a view's name along to the next");
+  await key("[");
+  client.focus = "filter";
+  await key("Enter");
+  assert.equal(client.filter?.typing, true, "Enter on the filter starts typing in it");
+});
+
+test("with tab_focus off, Tab switches mission control's views as before", (t) => {
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ tab_focus: false }));
+  require("../lib/settings").reloadSettings?.();
+  t.after(() => {
+    fs.rmSync(settingsFile, { force: true });
+    require("../lib/settings").reloadSettings?.();
+  });
+  const client = { kind: "mission", socket: { write() {}, end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 50, tmuxClient: "none" };
+  sidebar.draw(client);
+  sidebar.missionKey(client, { key: "Tab" });
+  assert.equal(client.view.view, 1);
+  assert.equal(client.focus, undefined);
+  assert.ok(!client.hits.some((h) => h.filter), "and there is no empty filter to land on");
+});
+
+test("mission control's bar scrolls to keep the view's name or the filter Tab has focused in sight", () => {
+  const sections = Array.from({ length: 14 }, (_, i) => ({ title: `Section ${i}`, items: [], loaded: true }));
+  const lines = sidebar.missionLines({ tabs: [], sections, cols: 100, rows: 10, view: { view: 0, cursor: 0, focus: { view: 14 }, tabFocus: true }, config });
+  assert.match(plain(lines[0]), /‹ .*Section 13/, "the last view's name, those before it giving way to a ‹");
+  const hit = lines.hits.find((h) => h.view === 14);
+  assert.ok(hit && hit.x1 <= 100, "and its click lands where it is drawn");
+  const filter = sidebar.missionLines({ tabs: [], sections, cols: 100, rows: 10, view: { view: 0, cursor: 0, focus: "filter", tabFocus: true }, config });
+  assert.match(plain(filter[0]), / \/ filter /, "the filter too");
+  assert.ok(filter.hits.find((h) => h.filter).x1 <= 100);
 });

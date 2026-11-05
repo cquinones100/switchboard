@@ -204,7 +204,7 @@ case "${1:-}" in
       for i in "${!options[@]}"; do
         menu_option "$([ "$i" = "$cursor" ] && echo 1)" "${options[$i]}"
       done
-      menu_keys "jk move  ↵ or click choose  esc not now"
+      menu_keys "jk or tab move  ↵ or click choose  esc not now"
       # Where the first option is, for a click's row (only on a terminal):
       # asked once the keys are drawn, which can scroll the popup.
       start=
@@ -215,8 +215,10 @@ case "${1:-}" in
       case $MENU_KEY in
         j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
         k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
+        tab) cursor=$(( (cursor + 1) % ${#options[@]} )) ;;
+        btab) cursor=$(( (cursor + ${#options[@]} - 1) % ${#options[@]} )) ;;
         quit) menu_mouse_off; answered; exit 0 ;;
-        enter) pick=$cursor ;;
+        enter | space) pick=$cursor ;;
         click\ *)
           set -- $MENU_KEY
           i=$(( $2 - ${start:-0} ))

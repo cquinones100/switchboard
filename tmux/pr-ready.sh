@@ -118,8 +118,10 @@ finish() {
     case $MENU_KEY in
       j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
       k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
+      tab) cursor=$(( (cursor + 1) % ${#options[@]} )) ;;
+      btab) cursor=$(( (cursor + ${#options[@]} - 1) % ${#options[@]} )) ;;
       quit) menu_mouse_off; return ;;
-      enter) pick=$cursor ;;
+      enter | space) pick=$cursor ;;
       click\ *)
         set -- $MENU_KEY
         i=$(( $2 - ${start:-0} ))
