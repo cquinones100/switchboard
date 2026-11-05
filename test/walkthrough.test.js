@@ -9,7 +9,7 @@
 
 const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
-const { spawn } = require("node:child_process");
+const { spawn, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -34,7 +34,7 @@ const ready = fs.existsSync(path.join(scripts, "node_modules/playwright")) && fs
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "walkthrough-")));
 after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-test("record.js draws the caption, highlight, cursor and path bar into every page, and demo pace walks on past a failed expect", { skip: !ready && "needs the walkthrough skill's packages, Chrome and ffmpeg", timeout: 180_000 }, async () => {
+test("record.js draws the highlight and cursor into every page, lays the address bar and captions round the video, and demo pace walks on past a failed expect", { skip: !ready && "needs the walkthrough skill's packages, Chrome and ffmpeg", timeout: 180_000 }, async () => {
   const pages = {
     // Home links to the orders on another origin (the same server as localhost).
     "/": "<!doctype html><title>Home</title><h1>Home</h1><a id='orders'>Orders</a><script>document.getElementById('orders').href = 'http://localhost:' + location.port + '/orders?tab=open'</script>",
@@ -71,7 +71,7 @@ module.exports = async ({ page, step, highlight, expect }) => {
   await page.evaluate(() => document.getElementById("d").showModal());
   log.push(await page.evaluate(() => document.elementsFromPoint(640, 790).some((el) => el.id === "d") && document.querySelector("[popover]")?.matches(":popover-open")));
   await page.evaluate(() => document.getElementById("d").close());
-  // The path bar's and caption's text is never found in place of the page's.
+  // The caption's text is never found in the page.
   await expect(page.getByText("/orders?tab=closed")).toHaveCount(0);
   await expect(page.getByText("The orders table")).toHaveCount(0);
   await expect(page.getByText("Not on the page")).toBeVisible({ timeout: 500 });
@@ -99,17 +99,21 @@ module.exports = async ({ page, step, highlight, expect }) => {
 
   const [afterNavigation, highlighted, clientSide, overDialog, afterFailure] = JSON.parse(fs.readFileSync(seen, "utf8"));
   assert.equal(overDialog, true, "the overlay is in the top layer while a modal dialog is open");
-  assert.equal(afterNavigation.caption, "Open Orders from home", "the caption kept across a navigation to another origin");
-  assert.equal(afterNavigation.path, "/orders?tab=open", "the path bar, query included");
   assert.equal(afterNavigation.cursor, true, "a cursor where it clicked, drawn as SVG");
   assert.equal(highlighted.highlighted, "block", "the highlight drawn");
-  assert.equal(clientSide.path, "/orders?tab=closed", "the path bar after a client-side navigation");
+  assert.equal(clientSide.cursor, true, "the cursor after a client-side navigation");
   assert.equal(afterFailure.highlighted, "none", "the highlight cleared at the next step");
-  assert.equal(afterFailure.caption, "After the failed expect", "demo pace walks on past failed expects, a .not one too");
+  assert.deepEqual(result.timeline.captions.map((c) => c.text), ["Open Orders from home", "The orders table", "After the failed expect"], "demo pace walks on past failed expects, a .not one too");
+  const urls = result.timeline.urls.map((u) => u.text.replace(/:\d+/, ""));
+  assert.deepEqual(urls, ["http://127.0.0.1/", "http://localhost/orders?tab=open", "http://localhost/orders?tab=closed"], "the address bar, query included, through a client-side navigation and to another origin");
+  assert.ok(result.timeline.urls.every((u, i, all) => i === 0 || u.at >= all[i - 1].at), "each from when it came");
 
   assert.equal(result.passed, false, "but the failed expect is reported");
   assert.equal(fs.readFileSync(result.log, "utf8").match(/expect failed:/g).length, 3, fs.readFileSync(result.log, "utf8"));
   assert.ok(fs.existsSync(result.video), "the video");
+  const [width, height] = execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", result.video], { encoding: "utf8" }).trim().split(",").map(Number);
+  assert.deepEqual([width, height], [1280, 800 + 52 + 76], "taller than the page by the address bar and the caption, which cover none of it");
+  assert.doesNotMatch(fs.readFileSync(result.log, "utf8"), /no address bar or captions/);
   assert.ok(result.contact && fs.existsSync(result.contact), "the contact sheet");
   assert.equal(path.basename(result.video, path.extname(result.video)), "Orders-open-closed-tabs", "named by --name, made a file name");
 });

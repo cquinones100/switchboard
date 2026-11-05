@@ -1,6 +1,6 @@
 ---
 name: walkthrough
-description: Record a captioned video of a feature in a real browser, reached the way a person would reach it, with every click, highlight and page path shown, and hand back an MP4 to share. Use when asked for a walkthrough, a demo video, a screen recording of a feature, or a video to put in a PR, a ticket or Slack. Its recorder is the one /deploy-test and /preview-test record their tests with.
+description: Record a captioned video of a feature in a real browser, reached the way a person would reach it, with every click, highlight and the page's address shown, and hand back an MP4 to share. Use when asked for a walkthrough, a demo video, a screen recording of a feature, or a video to put in a PR, a ticket or Slack. Its recorder is the one /deploy-test and /preview-test record their tests with.
 argument-hint: "[what to show, a PR number, or a URL]"
 disable-model-invocation: true
 ---
@@ -29,17 +29,17 @@ A walkthrough shows a feature with realistic data in it. Seed it first only wher
 
 ## Recording
 
-The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/.claude/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.claude/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The MP4 and the contact sheet need the system's `ffmpeg`.
+The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/.claude/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.claude/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The video (its address bar and captions, the MP4) and the contact sheet need the system's `ffmpeg`; without it the recorder stops before recording and says so (`brew install ffmpeg`).
 
 1. **Write the steps** in the session's scratchpad, `<scratchpad>/walkthrough-<slug>/steps.js`, exporting one async function given `{ page, step, highlight, expect }` (`record.js` has an example):
-   - Start each part with `step("<what this shows>")`, which captions it along the bottom, kept across navigations.
+   - Start each part with `step("<what this shows>")`, which captions it in a strip under the page, kept across navigations.
    - Reach the feature through the app's own navigation, a step naming each click ("Campaigns › Opening Deck Demo › Opening Deck tab").
    - `highlight(locator)` outlines what is being shown, until the next `step`.
    - `expect` what should be on screen, so a broken page shows in the log.
    - Prefer roles and visible text to CSS selectors.
    - Keep it to about a minute.
 
-   The recorder draws the rest itself: a cursor that moves to each thing clicked, with a ripple where it clicks, and a bar along the top with the page's path and query, kept current through client-side navigation.
+   The recorder draws the rest itself: a cursor that moves to each thing clicked, with a ripple where it clicks, and, above the page, an address bar as a browser draws one with the page's whole address, kept current through client-side navigation. The address bar and the caption take space of their own above and below the page, so neither covers it.
 2. **Record it**:
 
    ```
@@ -57,7 +57,7 @@ The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_m
 
 Before showing anyone the video, look at it:
 
-- **The contact sheet** (`contact`, a frame every two seconds): Read it, and check every caption reads well, each step shows what its caption says, nothing is cut off or covered by the caption or the path bar, and no frame shows an error page, a spinner that never ends or a sign-in page.
+- **The contact sheet** (`contact`, a frame every two seconds): Read it, and check every caption reads well, each step shows what its caption says, nothing on the page is cut off, the log notes no caption cut short (shorten one that is), and no frame shows an error page, a spinner that never ends or a sign-in page.
 - **The log**: the steps, console errors, responses of 500 and up, and failed expects.
 
 Fix what is wrong in `steps.js` and record again, at most three times. A feature that doesn't do what it should is something to tell the user, not to hide by leaving it out of the video.
