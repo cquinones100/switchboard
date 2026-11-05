@@ -15,25 +15,29 @@ local function slug(text)
   return made ~= "" and made or "note"
 end
 
--- Saves the clipboard's image to `file` as a PNG, through AppleScript, which
--- macOS has with no tool of its own to install. Returns whether there was an
--- image to save. Tests replace it.
-function M.grab(file)
-  local script = {
-    "set f to POSIX file " .. vim.fn.json_encode(file),
-    "try",
-    "  set png to the clipboard as «class PNGf»",
-    "on error",
-    "  return \"none\"",
-    "end try",
-    "set out to open for access f with write permission",
-    "write png to out",
-    "close access out",
-    "return \"ok\"",
+-- Saves the clipboard's image to `file` as a PNG, through macOS's own
+-- pasteboard (AppKit, from JavaScript for Automation, which macOS has with
+-- nothing to install): its PNG, or its TIFF made a PNG, as a screenshot
+-- copied puts both there. AppleScript's `the clipboard as «class PNGf»`
+-- can't read an image the screenshot tool hands over only when asked.
+-- Returns whether there was an image to save. Tests replace it.
+local GRAB = [[
+ObjC.import("AppKit");
+function run(argv) {
+  const pb = $.NSPasteboard.generalPasteboard;
+  let data = pb.dataForType("public.png");
+  if (data.isNil()) {
+    const tiff = pb.dataForType("public.tiff");
+    if (tiff.isNil()) return "none";
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+    if (rep.isNil()) return "none";
+    data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
   }
-  local args = { "osascript" }
-  for _, line in ipairs(script) do vim.list_extend(args, { "-e", line }) end
-  local result = vim.system(args, { text = true }):wait()
+  return data.writeToFileAtomically(argv[0], true) ? "ok" : "none";
+}
+]]
+function M.grab(file)
+  local result = vim.system({ "osascript", "-l", "JavaScript", "-e", GRAB, file }, { text = true }):wait()
   return result.code == 0 and vim.trim(result.stdout or "") == "ok" and vim.uv.fs_stat(file) ~= nil
 end
 
