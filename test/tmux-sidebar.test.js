@@ -3469,3 +3469,23 @@ test("a click takes a menu's option, answers a question's Yes or No, and outside
   sidebar.draw(popup);
   assert.deepEqual(popup.modal.tags.map((t) => t.tag.option), [1, 2], "the answer popup's options take a click");
 });
+
+test("six daemons started at once over a dead daemon's lock leave one running, the one the lock names", async () => {
+  // Their own state directory, and no tmux server to reach, so they draw in
+  // none of the tests' windows.
+  const dir = path.join(tmp, "race");
+  fs.mkdirSync(path.join(dir, "tmux"), { recursive: true });
+  const lockFile = path.join(dir, "state/daemon.pid");
+  fs.mkdirSync(path.dirname(lockFile), { recursive: true });
+  fs.writeFileSync(lockFile, "99999");
+  const env = { ...process.env, TMUX: "", TMUX_TMPDIR: path.join(dir, "tmux"), TMUX_SIDEBAR_STATE_DIR: path.join(dir, "state") };
+  const daemons = Array.from({ length: 6 }, () => spawn(process.execPath, [path.join(__dirname, "../bin/tmux-sidebar"), "daemon"], { env, stdio: "ignore" }));
+  try {
+    await wait(2_000);
+    const running = daemons.filter((d) => d.exitCode === null && d.signalCode === null);
+    assert.equal(running.length, 1);
+    assert.equal(fs.readFileSync(lockFile, "utf8"), String(running[0].pid));
+  } finally {
+    daemons.forEach((d) => d.kill());
+  }
+});
