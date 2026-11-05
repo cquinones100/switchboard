@@ -355,7 +355,8 @@ const main = async () => {
   const extra = extraText.replace(/\s+/g, " ").trim();
 
   const prompt =
-    `Work on ticket ${issue.identifier}${stateClause}. ` +
+    `Work on ${tracker()?.name ?? "the"} ticket ${issue.identifier}${stateClause}, reading and editing it as ` +
+    "~/switchboard/claude/skills/shape/tracker.md says. " +
     (isClosed
       ? "That state is closed, so before doing anything else tell me and confirm whether we want to reopen it; " +
         "if we do, ask what needs to be done and whether the ticket should be updated to cover the new work. "

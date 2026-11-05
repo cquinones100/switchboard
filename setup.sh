@@ -1172,6 +1172,12 @@ case $tracker in
     else
       ok "Jira (M-i, M-l and ticket titles in tab names)"
     fi
+    # /shape files tickets in the project named here.
+    if [[ -n $(jq -r '.jiraProject // empty' ~/.config/switchboard/jira.json 2>/dev/null) ]]; then
+      ok "the Jira project for /shape"
+    else
+      optional "the Jira project /shape files tickets in: add \"jiraProject\": \"<project key>\" to ~/.config/switchboard/jira.json"
+    fi
     ;;
   off) ;;
   *)

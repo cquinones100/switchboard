@@ -3169,6 +3169,7 @@ test("today's todo note is written once a weekday past its hour, from the notes'
   assert.match(prompts[0], /Plan:\n  - Ship the export\n  - Star item\n  - Write the \[docs\]\(https:\/\/example\.com\/docs\)/);
   assert.match(prompts[0], /## Today's calendar\n```\n9:30 AM Standup/);
   assert.match(prompts[0], /## Linear tickets assigned to me/);
+  assert.match(sidebar.todoPrompt({ date: "Mon", trackerName: "Jira", tickets: ["AB-1 Fix it"] }), /## Jira tickets assigned to me/);
   assert.doesNotMatch(prompts[0], /Slack messages|Reviews asked|Someday thing|Still parked|in code|Big parked one/, "an empty source is left out");
   assert.equal(sidebar.todoDue(tuesday, 9), false, "written today");
   await sidebar.writeTodo([], {}, tuesday, () => {}, ask);
