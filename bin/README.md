@@ -221,6 +221,13 @@ the note as `/note-watch` does, lists the note's unticked items to pick from
 item, and respawns the pane, the note's path passed in `WTN_NOTE` and any text
 of yours in `WT_PROMPT`, which the `wtn` function passes on and clears.
 
+The M-p palette's "Start work on a note's checklist items in new tabs (wtn)"
+(`tmux/wtn-open.zsh`) does the same from any tab in the repository: it lists
+your notes by title, newest first, then the chosen note's unticked items (those
+under a parked section such as `## Defered` left out, those whose plan needs a
+choice marked), Tab picking several, and opens a tab for each at the end of the
+tab list, named after its item and linked to the note, with `wtn` running in it.
+
 `/queue-and-clean` lands it: on a branch with no PR, in a repository whose
 `CLAUDE.md` says it commits straight to its default branch, "Land on main"
 rebases it onto `origin/main`, squashes it into one commit, runs the review

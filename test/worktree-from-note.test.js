@@ -155,3 +155,74 @@ test("with an origin, an item's branch starts from origin's default branch as fe
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("M-p's wtn popup lists a note's unticked top-level items by line, marking those that need a choice, and none under a parked section, a subsection of one included", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-open-test-")));
+  try {
+    const note = path.join(tmp, "Work.md");
+    fs.writeFileSync(note, [
+      "# Work",
+      "",
+      "- [ ] First thing  ",
+      "  - a detail",
+      "",
+      "  Plan: [[Plan - First]] (needs a choice: A or B)",
+      "- [x] Done thing",
+      "- [ ] Second thing",
+      "  - [ ] a sub-item, not an item of its own",
+      "",
+      "## Feature",
+      "- [ ] Third thing",
+      "### Later",
+      "- [ ] Postponed under a feature",
+      "### Now",
+      "- [ ] Fourth thing",
+      "",
+      "## Defered",
+      "- [ ] Parked thing",
+      "",
+      "## Later work",
+      "- [ ] Also parked",
+      "### Its details",
+      "- [ ] Still parked",
+      "",
+    ].join("\n"));
+    const out = execFileSync("zsh", [path.join(__dirname, "../tmux/wtn-open.zsh"), "items", note], { encoding: "utf8" });
+    assert.deepEqual(out.trim().split("\n"), ["3\tFirst thing (needs a choice)", "8\tSecond thing", "12\tThird thing", "16\tFourth thing"]);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("M-p's wtn popup opens a tab for each item picked, named after it, linked to its note, the note in WTN_NOTE and wtn typed with the item's line", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-tabs-")));
+  const socket = path.join(tmp, "tmux.sock");
+  const bin = path.join(tmp, "bin");
+  const repo = path.join(tmp, "repo");
+  [bin, path.join(tmp, "Notes/Work"), repo].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), PATH: `${bin}:${process.env.PATH}`, TMUX: "", GIT_CONFIG_GLOBAL: "/dev/null" };
+  try {
+    execFileSync("git", ["init", "-q", repo], { env });
+    fs.writeFileSync(path.join(tmp, "Notes/Work/Plan's Notes.md"), "# Plan's Notes\n\n- [ ] First thing\n- [ ] Second thing $(x)\n  Plan: [[Plan - Second]] (needs a choice)\n");
+    // A stand-in fzf: the first note, and every item.
+    fs.writeFileSync(path.join(bin, "fzf"), `#!/bin/sh\ncase " $* " in *" --multi "*) cat ;; *) head -1 ;; esac\n`, { mode: 0o755 });
+    execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "120", "-y", "30", "cat"], { env });
+    const ran = spawnSync("zsh", [path.join(__dirname, "../tmux/wtn-open.zsh")], { cwd: repo, env: { ...env, TMUX: `${socket},1,0` }, encoding: "utf8" });
+    assert.equal(ran.status, 0, ran.stdout + ran.stderr);
+    const tabs = execFileSync("tmux", ["-S", socket, "list-windows", "-F", "#{window_id}\t#{@tab_name}\t#{@tab_note}\t#{pane_current_path}"], { env, encoding: "utf8" }).trim().split("\n").slice(1).map((row) => row.split("\t"));
+    assert.deepEqual(tabs.map(([, name, note]) => [name, note]), [["First thing", "Work/Plan's Notes.md"], ["Second thing $(x)", "Work/Plan's Notes.md"]], "a tab per item, named after it and linked to the note");
+    assert.ok(tabs.every(([, , , dir]) => fs.realpathSync(dir) === repo), "each in the repository the popup opened from");
+    const [, second] = tabs;
+    spawnSync("tmux", ["-S", socket, "send-keys", "-t", second[0], "print -r -- note=$WTN_NOTE", "Enter"], { env });
+    let screen = "";
+    for (let i = 0; i < 40 && !/note=Work/.test(screen); i += 1) {
+      spawnSync("sleep", ["0.1"]);
+      screen = execFileSync("tmux", ["-S", socket, "capture-pane", "-p", "-t", second[0]], { env, encoding: "utf8" });
+    }
+    assert.match(screen, /wtn --item 4/, "wtn typed with the item's line number alone");
+    assert.match(screen, /note=Work\/Plan's Notes\.md/, "the note's path in WTN_NOTE");
+  } finally {
+    spawnSync("tmux", ["-S", socket, "kill-server"], { env });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
