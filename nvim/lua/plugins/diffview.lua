@@ -652,6 +652,72 @@ local chapter_keys = {
   { "n", "[c", chapter_jump(-1), { desc = "The chapter before" } },
 }
 
+-- The story a page at a time, as if each chapter were a commit of its own:
+-- ]p from the whole diff opens its first chapter as a diffview of its own,
+-- the same revisions limited to that chapter's files (DiffviewOpen's paths),
+-- in a tab of its own; ]p and [p from a page close it and open the next or
+-- the one before, and [p from the first goes back to the whole diff, which
+-- stays open behind them. A page is told no story of its own, never asking
+-- Haiku again: it shows its chapter from the whole diff's (view.page). With
+-- the diff_story_pages setting off, or no story told, the keys are Vim's own.
+local pending_page
+local function open_page(page)
+  local files = page.story.chapters[page.index].files
+  -- A renamed file's old path too, so the page compares it as the whole
+  -- diff does rather than as a file added.
+  local paths = vim.list_extend({}, files)
+  local wanted = {}
+  for _, path in ipairs(files) do wanted[path] = true end
+  for _, entry in ipairs(page.parent.panel:ordered_file_list()) do
+    if wanted[entry.path] and entry.oldpath and entry.oldpath ~= entry.path then table.insert(paths, entry.oldpath) end
+  end
+  -- The same comparison as the whole diff's, from the commits it resolved
+  -- when it opened, so a commit made since changes no page: two commits as a
+  -- range, a commit against the index with --cached or against the working
+  -- tree alone, and the working tree against the index with none.
+  local RevType = require("diffview.vcs.rev").RevType
+  local left, right = page.parent.left, page.parent.right
+  local rev = ""
+  if left and left.type == RevType.COMMIT then
+    if right and right.type == RevType.COMMIT then
+      rev = left.commit .. ".." .. right.commit .. " "
+    elseif right and right.type == RevType.STAGE then
+      rev = "--cached " .. left.commit .. " "
+    else
+      rev = left.commit .. " "
+    end
+  end
+  -- The repository the whole diff is in (-C), its files as paths from its
+  -- top (:(top), git's pathspec magic) rather than on disk, which diffview
+  -- would take for the repository to open, a submodule's included.
+  local args = vim.tbl_map(function(path) return vim.fn.fnameescape(":(top)" .. path) end, paths)
+  pending_page = page
+  vim.cmd("DiffviewOpen -C" .. vim.fn.fnameescape(page.top) .. " " .. rev .. "-- " .. table.concat(args, " "))
+  pending_page = nil
+end
+local function turn_page(step, keys)
+  return function()
+    local view = require("diffview.lib").get_current_view()
+    local page = view and view.page
+    local story = page and page.story or (view and view.story)
+    -- Vim's own ]p or [p, which a list or a file not to be changed refuses quietly.
+    if not (vim.g.diff_pages and story) then return pcall(vim.cmd, "normal! " .. vim.v.count1 .. keys) end
+    local index = (page and page.index or 0) + step
+    if index > #story.chapters then return end
+    if page then vim.cmd("DiffviewClose") end
+    local parent = page and page.parent or view
+    if index < 1 then
+      if parent.tabpage and vim.api.nvim_tabpage_is_valid(parent.tabpage) then vim.api.nvim_set_current_tabpage(parent.tabpage) end
+      return
+    end
+    open_page({ story = story, index = index, parent = parent, top = parent.adapter.ctx.toplevel })
+  end
+end
+local page_keys = {
+  { "n", "]p", turn_page(1, "]p"), { desc = "The next chapter as a page of its own" } },
+  { "n", "[p", turn_page(-1, "[p"), { desc = "The chapter before as a page, or the whole diff" } },
+}
+
 -- The bar over a side of the diff (diff_buf_win_enter), drawn again for the
 -- file shown when the story arrives, to name its chapter.
 path_bar = function(winid, symbol)
@@ -684,6 +750,12 @@ redraw_bars = function(view)
   for _, win in ipairs(view.cur_layout and view.cur_layout.windows or {}) do
     if win.id and vim.api.nvim_win_is_valid(win.id) then path_bar(win.id, win.file and win.file.symbol) end
   end
+end
+
+-- Whether the diff_story_pages setting is on, as diff_order's is read below.
+local function pages_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_pages" })) ~= "off"
 end
 
 -- Whether the diff_story setting is on, as diff_order's is read below.
@@ -729,14 +801,19 @@ local function wrap_set_file(view)
     for _, entry in ipairs(files) do
       if entry ~= self.cur_entry then one_sided(entry) end
     end
-    if not self.picked_first and #files > 0 then
+    -- A page of the story (turn_page) opens only its chapter's files, never
+    -- another chapter's untracked one, which diffview lists on every page.
+    local chapter = {}
+    for _, path in ipairs(self.page and self.page.story.chapters[self.page.index].files or {}) do chapter[path] = true end
+    local ours = function(entry) return not self.page or chapter[entry.path] end
+    local stray = self.page and file and file.path and not chapter[file.path]
+    if (not self.picked_first or stray) and #files > 0 then
       self.picked_first = true
-      for _, entry in ipairs(files) do
-        if not generated(entry.path) then
-          file, highlight = entry, true
-          break
-        end
-      end
+      -- The first not generated, else, on a page of generated files alone,
+      -- the first of the page's own.
+      local first = vim.tbl_filter(function(entry) return not generated(entry.path) and ours(entry) end, files)[1]
+        or (self.page and vim.tbl_filter(ours, files)[1])
+      if first then file, highlight = first, true end
     end
     return set_file(self, file, focus, highlight)
   end
@@ -857,6 +934,8 @@ return {
       -- A view closed while its story is being told stops its spinner.
       view_closed = function(view) stop_loading(view) end,
       view_opened = function(view)
+        -- A page of the story (turn_page), shown its chapter from the whole diff's story.
+        view.page = pending_page
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
         if view.emitter then
           view.emitter:on("file_open_post", function()
@@ -866,7 +945,29 @@ return {
           end)
           if view.panel and view.panel.ordered_file_list and vim.g.diff_order then
             view.emitter:on("files_updated", function()
-              if vim.g.diff_story then ask_story(view) else ask_order(view) end
+              if view.page then
+                -- Only the chapter's files: diffview lists every untracked
+                -- file whatever paths it was given.
+                local keep = {}
+                for _, path in ipairs(view.page.story.chapters[view.page.index].files) do keep[path] = true end
+                for _, list in ipairs({ view.files.conflicting, view.files.working, view.files.staged }) do
+                  for i = #list, 1, -1 do
+                    if not keep[list[i].path] then table.remove(list, i) end
+                  end
+                end
+                view.story = view.page.story
+                if require("diffview.lib").get_current_view() == view then
+                  active_story = view.story
+                  reorder(view)
+                  redraw_bars(view)
+                else
+                  view.unsorted = true
+                end
+              elseif vim.g.diff_story then
+                ask_story(view)
+              else
+                ask_order(view)
+              end
             end)
           end
         end
@@ -884,8 +985,8 @@ return {
       end,
     },
     keymaps = {
-      view = { close, quit, unpack(copies) },
-      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], widen, unpack(copies) },
+      view = { close, quit, page_keys[1], page_keys[2], unpack(copies) },
+      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], page_keys[1], page_keys[2], widen, unpack(copies) },
       file_history_panel = { close, escape, quit, back, scrolls[1], scrolls[2], unpack(copies) },
     },
   },
@@ -901,6 +1002,7 @@ return {
     vim.api.nvim_create_autocmd("ColorScheme", { callback = minimal_highlights })
     vim.g.diff_order = order_on()
     vim.g.diff_story = vim.g.diff_order and story_on()
+    vim.g.diff_pages = vim.g.diff_story and pages_on()
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"
       sort_lists()

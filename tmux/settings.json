@@ -186,6 +186,13 @@
     "default": true
   },
   {
+    "key": "diff_story_pages",
+    "category": "Diff",
+    "label": "Diff story a page at a time",
+    "description": "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they are Vim's own",
+    "default": true
+  },
+  {
     "key": "view_work_map",
     "category": "Mission control",
     "label": "Work map",
