@@ -440,6 +440,18 @@ local function setup_buffer(buf)
     vim.schedule(function() format.link(buf, true) end)
   end, "Link")
 
+  -- Ctrl-V while typing: the clipboard's image pasted under the line, when it
+  -- holds one; else Neovim's own Ctrl-V (the next key typed as it is), as
+  -- with the notes_ctrl_v_image setting off. The terminal hands Cmd-V's text
+  -- over itself and sends nothing for an image, so Ctrl-V is the key that
+  -- can reach the note.
+  map("i", "<C-v>", function()
+    local off = (vim.env.TMUX or "") ~= "" and vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_notes_ctrl_v_image" })) == "off"
+    -- Put first in what is to be typed, so the key after it is the one it
+    -- takes as it is.
+    if off or not require("notes.images").paste(buf) then vim.api.nvim_feedkeys(vim.keycode("<C-v>"), "ni", false) end
+  end, "Paste the clipboard's image")
+
   map("i", "<CR>", function()
     if vim.fn.pumvisible() == 1 then return feed("<C-y>") end
     if not format.enter(buf) then feed("<CR>") end

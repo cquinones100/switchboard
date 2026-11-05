@@ -1454,9 +1454,11 @@ beside the list. Enter opens it. It takes the place of vim's Ctrl-F (page
 down) in notes only, and needs `fzf` (`brew install fzf`).
 
 Everything is in the Format menu, Ctrl-P, which acts on the selection when
-opened from Visual mode. Its Paste image (`v`) puts the image on the
-clipboard (a screenshot copied with Cmd-Ctrl-Shift-4, say) into the note,
-saved beside it in `.attachments/<note>/` in its folder, which the list
+opened from Visual mode. Its Paste image (`v`), or Ctrl-V while typing, as
+in Claude Code, puts the image on the clipboard (a screenshot copied with
+Cmd-Ctrl-Shift-4, say) into the note; with no image there, Ctrl-V does what
+it always does (Cmd-V can't: the terminal pastes only text). The image is
+saved beside the note in `.attachments/<note>/` in its folder, which the list
 leaves out, as `![name](path)` on a line of its own, indented under the
 item the cursor is on: the image goes with the item and Claude, working the
 note's items (`/note-watch`, `/note-tickets`), reads it with them. With

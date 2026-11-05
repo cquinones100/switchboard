@@ -1137,9 +1137,17 @@ test("an image pasted into a note is saved beside it and written under the item,
     images.open = function(file) opened = file end
     local followed = require("notes.links").follow(buf, 4, image.s)
     local outside = images.file(buf, "../../etc/passwd")
+    -- Ctrl-V while typing: the image pasted, as in Claude Code.
+    vim.api.nvim_win_set_cursor(0, { 3, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("A<C-v><Esc>"), "xt", false)
+    local typed = vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1]
     images.grab = function() return false end
+    -- With none on the clipboard, Ctrl-V is Neovim's own: the next key as it is.
+    vim.api.nvim_win_set_cursor(0, { 3, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("A<C-v><Tab><Esc>"), "xt", false)
+    local literal = vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1]
     local _, why = images.paste(buf)
-    io.write(vim.json.encode({ rel = rel, line = line, shown = line:sub(image.s + 1, image.e), followed = followed, opened = opened, outside = outside == nil, why = why }))
+    io.write(vim.json.encode({ rel = rel, line = line, shown = line:sub(image.s + 1, image.e), followed = followed, opened = opened, outside = outside == nil, why = why, typed = typed, literal = literal }))
   `);
   assert.match(result.rel, /^\.attachments\/Bug-report\/image-\d{4}-\d{2}-\d{2}-\d{6}\.png$/, "beside the note, in a folder the list leaves out, with no space in its path");
   assert.equal(result.line, `  ![${path.basename(result.rel, ".png")}](${result.rel})`, "on a line of its own, indented under the item");
@@ -1149,6 +1157,8 @@ test("an image pasted into a note is saved beside it and written under the item,
   assert.equal(result.opened, fs.realpathSync(path.join(dir, result.rel)), "Enter opens the image");
   assert.equal(result.outside, true, "never a file outside the notes");
   assert.equal(result.why, "no image on the clipboard");
+  assert.match(result.typed, /^  !\[image-.*\]\(\.attachments\/Bug-report\/image-.*\.png\)$/, "Ctrl-V while typing pastes the clipboard's image under the line");
+  assert.equal(result.literal, "- [ ] the button is cut off\t", "and with none there, types the next key as it is");
 });
 
 test("an image under a checklist item moves with it when an item is ticked, and with its note to another folder", () => {

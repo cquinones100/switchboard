@@ -277,6 +277,13 @@
     "default": true
   },
   {
+    "key": "notes_ctrl_v_image",
+    "category": "Notes",
+    "label": "Ctrl-V pastes an image",
+    "description": "Ctrl-V while typing in a note pastes the clipboard's image under the line, as in Claude Code, when the clipboard holds one; off, or with no image there, Ctrl-V is Neovim's own",
+    "default": true
+  },
+  {
     "key": "notes_images",
     "category": "Notes",
     "label": "Images drawn in a note",
