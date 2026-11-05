@@ -135,7 +135,7 @@ const looksLikePr = (input) =>
   /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(input) || /^#?\d+$/.test(input);
 
 const looksLikeTicket = (input) =>
-  /\/(?:issue|browse)\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
+  /(?:\/(?:issue|browse)\/|[?&]selectedIssue=)[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
   /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(input);
 
 // Bounded on both sides so ABC-12 does not match abc-123. The same rule
@@ -211,7 +211,7 @@ const matchesFor = (target, panes) => {
 
   if (looksLikeTicket(target)) {
     const token = (
-      target.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ?? target
+      target.match(/(?:\/(?:issue|browse)\/|[?&]selectedIssue=)([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ?? target
     ).toLowerCase();
     const matched = described.filter(
       (pane) => mentions(pane.dir, token) || mentions(pane.branch, token),

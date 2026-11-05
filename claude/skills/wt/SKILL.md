@@ -19,7 +19,7 @@ Usually run with no argument: the ticket comes from this session. A ticket ID or
 
    Work out the ticket ID.
 
-   - **Passed as an argument:** use it. Accept a Linear URL and take the ID from its `/issue/<ID>/` part, or a Jira one and take it from its `/browse/<ID>` part.
+   - **Passed as an argument:** use it. Accept a Linear URL and take the ID from its `/issue/<ID>/` part, or a Jira one and take it from its `/browse/<ID>` part or a board's `?selectedIssue=<ID>`.
    - **No argument:** take the first of these that gives an answer, and do not ask for an ID:
      1. A ticket this session created or saved in the tracker. If it saved more than one, the most recent.
      2. The one ticket ID (`ABC-123`) the conversation centered on.

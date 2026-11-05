@@ -83,7 +83,7 @@ const day = (iso) => (iso ?? "").slice(0, 10);
 const tidy = (text) =>
   (text ?? "")
     .replace(/(^|[^(<])<?(https:\/\/linear\.app\/[^/\s]+\/issue\/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)")
-    .replace(/(^|[^(<])<?(https:\/\/[\w-]+\.atlassian\.net\/browse\/([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)");
+    .replace(/(^|[^(<])<?(https:\/\/[\w-]+\.atlassian\.net\/(?:browse\/|[^\s)>?#]*\?(?:[^\s)>#]*&)?selectedIssue=)([A-Z][A-Z0-9]*-\d+)[^\s)>]*)>?/g, "$1[$3]($2)");
 const ticket = (ticketFile, dir, columns) => {
   const issue = JSON.parse(fs.readFileSync(ticketFile, "utf8")).data.issue;
   const facts = [

@@ -40,7 +40,7 @@ fail() {
 }
 
 ticket_id='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
-ticket_url='^https://(linear\.app/[^/]+/issue|[A-Za-z0-9-]+\.atlassian\.net/browse)/[A-Za-z][A-Za-z0-9]*-[0-9]+([/?#].*)?$'
+ticket_url='^https://(linear\.app/[^/]+/issue/[A-Za-z][A-Za-z0-9]*-[0-9]+([/?#].*)?|[A-Za-z0-9-]+\.atlassian\.net/(browse/[A-Za-z][A-Za-z0-9]*-[0-9]+([/?#].*)?|[^?#]*\?(.*&)?selectedIssue=[A-Za-z][A-Za-z0-9]*-[0-9]+([&#].*)?))$'
 bare_number='^#?[0-9]+$'
 
 # The ticket the focused pane's branch names, if any: the same match as

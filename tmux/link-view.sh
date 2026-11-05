@@ -228,10 +228,14 @@ case "${1:-}" in
     # tracker setting names, so a Jira link is read this way only with Jira
     # as the tracker, and a Linear one with Linear.
     tracker=$(tmux show -gqv @setting_tracker 2>/dev/null)
-    if [[ ${tracker:-linear} == linear && $url =~ ^https://linear\.app/[^/]+/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]] ||
-      [[ $tracker == jira && $url =~ ^https://[A-Za-z0-9-]+\.atlassian\.net/browse/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]]; then
-      exec "$here/ticket-view.sh" show "$(printf '%s' "${BASH_REMATCH[1]}" | tr 'a-z' 'A-Z')"
+    # A Jira link is a ticket's page or a board's ?selectedIssue=.
+    id=
+    if [[ ${tracker:-linear} == linear && $url =~ ^https://linear\.app/[^/]+/issue/([A-Za-z][A-Za-z0-9]*-[0-9]+) ]]; then
+      id=${BASH_REMATCH[1]}
+    elif [[ $tracker == jira && $url =~ ^https://[A-Za-z0-9-]+\.atlassian\.net/ && $url =~ (/browse/|[?\&]selectedIssue=)([A-Za-z][A-Za-z0-9]*-[0-9]+) ]]; then
+      id=${BASH_REMATCH[2]}
     fi
+    [ -n "$id" ] && exec "$here/ticket-view.sh" show "$(printf '%s' "$id" | tr 'a-z' 'A-Z')"
     # Slack: only Claude's connector reads it.
     if [[ $url =~ ^https://[^/]*slack\.com/ ]]; then
       printf '\n  A Slack message can'"'"'t be read here, only in Slack.\n\n  %so opens it in the browser · any other key closes%s' "$dim" "$reset"

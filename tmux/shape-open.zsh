@@ -33,7 +33,7 @@ fail() {
 }
 
 ticket_id='^[A-Za-z][A-Za-z0-9]*-[0-9]+$'
-issue_url='/(issue|browse)/([A-Za-z][A-Za-z0-9]*-[0-9]+)'
+issue_url='(/issue/|/browse/|[?&]selectedIssue=)([A-Za-z][A-Za-z0-9]*-[0-9]+)'
 
 # One ticket, as an ID or a Linear or Jira issue URL, becomes ABC-123 in $ticket.
 parse_ticket() {

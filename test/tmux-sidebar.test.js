@@ -3131,6 +3131,8 @@ test("a meeting's description gives the tickets and pull requests it names, link
     { id: "repo#45", url: "https://github.com/o/repo/pull/45" },
     { id: "CD-7" },
   ]);
+  // A Jira ticket's page, and a board's link to one.
+  assert.deepEqual(sidebar.refsFrom("https://acme.atlassian.net/browse/EF-3 and https://acme.atlassian.net/jira/software/projects/EF/boards/1?selectedIssue=EF-4").map((r) => r.id), ["EF-3", "EF-4"]);
 });
 
 test("today's todo note is written once a weekday past its hour, from the notes' open items and the views, by Claude", async (t) => {

@@ -82,7 +82,7 @@ const looksLikePr = (input) =>
   /github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(input) || /^#?\d+$/.test(input);
 
 const looksLikeTicket = (input) =>
-  /\/(?:issue|browse)\/[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
+  /(?:\/(?:issue|browse)\/|[?&]selectedIssue=)[A-Za-z][A-Za-z0-9]*-\d+/.test(input) ||
   /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(input);
 
 // Both forms collapse to the token that `wt` and `wtpr` bake into the names
@@ -92,7 +92,7 @@ const looksLikeTicket = (input) =>
 // the branch was called.
 const parseTarget = (input) => {
   if (looksLikeTicket(input)) {
-    const identifier = (input.match(/\/(?:issue|browse)\/([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
+    const identifier = (input.match(/(?:\/(?:issue|browse)\/|[?&]selectedIssue=)([A-Za-z][A-Za-z0-9]*-\d+)/)?.[1] ??
       input
     ).toLowerCase();
     return { token: identifier, label: identifier.toUpperCase(), create: `wt ${identifier.toUpperCase()}` };

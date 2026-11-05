@@ -72,7 +72,7 @@ ask_ticket() {
   local input=$branch_ticket
   vared -p '  Ticket: ' input || return 1
   input=$(trim "$input")
-  [[ $input =~ '/(issue|browse)/([A-Za-z][A-Za-z0-9]*-[0-9]+)' ]] && input=$match[2]
+  [[ $input =~ '(/issue/|/browse/|[?&]selectedIssue=)([A-Za-z][A-Za-z0-9]*-[0-9]+)' ]] && input=$match[2]
   if [[ ! $input =~ '^[A-Za-z][A-Za-z0-9]*-[0-9]+$' ]]; then
     print "\n  ${red}Not a ticket ID: ${input:-(empty)}${reset}"
     sleep 1.5
