@@ -39,12 +39,15 @@ test("a merged PR whose branch the remote deleted opens from the commits GitHub 
     git(clone, "fetch", "-q", "--prune");
 
     fs.mkdirSync(path.join(tmp, "bin"));
-    fs.writeFileSync(path.join(tmp, "bin/gh"), `#!/bin/sh\necho '${JSON.stringify({ number: 7, title: "Feature", author: { login: "t" }, headRefName: "feat", isCrossRepository: false, state: "MERGED", url: "https://github.com/o/r/pull/7" })}'\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(tmp, "bin/gh"), `#!/bin/sh\n[ "$1" = api ] && { echo t; exit 0; }\necho '${JSON.stringify({ number: 7, title: "Feature", author: { login: "t" }, headRefName: "feat", isCrossRepository: false, state: "MERGED", url: "https://github.com/o/r/pull/7" })}'\n`, { mode: 0o755 });
 
     const cdFile = path.join(tmp, "cd");
     execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "7"], { cwd: clone, env, stdio: ["ignore", "ignore", "pipe"] });
-    const worktree = fs.readFileSync(cdFile, "utf8").trim();
+    const worktree = fs.readFileSync(cdFile, "utf8").split("\n")[0];
     assert.equal(path.basename(worktree), "pr-7-feat");
+    const prompt = fs.readFileSync(cdFile, "utf8").split("\n")[1];
+    assert.match(prompt, /^Pick up PR #7 by t\. It is merged, so say that first\. /, "Claude starts by saying where the PR stands");
+    assert.match(prompt, /Don't change anything until I say\.$/, "and waits, on a PR of your own nothing about pushing");
     assert.equal(git(worktree, "rev-parse", "HEAD"), last, "at the PR's last commit");
     assert.equal(git(worktree, "branch", "--show-current"), "feat", "on a local branch of the PR's name");
     assert.throws(() => git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}"), "with no upstream to push to");
@@ -88,7 +91,7 @@ test("a PR URL from another repository opens in a clone of that one found among 
 
     const cdFile = path.join(tmp, "cd");
     assert.equal(run(here, "https://github.com/other/thing/pull/5", cdFile), "");
-    assert.equal(fs.readFileSync(cdFile, "utf8").trim(), path.join(thing, ".claude/worktrees/pr-5-fix"), "made in the clone of other/thing, for wtpr to cd into");
+    assert.equal(fs.readFileSync(cdFile, "utf8").split("\n")[0], path.join(thing, ".claude/worktrees/pr-5-fix"), "made in the clone of other/thing, for wtpr to cd into");
     assert.equal(fs.existsSync(path.join(here, ".claude/worktrees")), false, "not in the one you were in");
 
     // No clone of it anywhere: refused, nothing made.
@@ -125,7 +128,8 @@ test("a fork's PR opens on <owner>-<branch>, tracking the fork's branch from a r
 
     const cdFile = path.join(tmp, "cd");
     execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "9"], { cwd: clone, env, stdio: ["ignore", "ignore", "pipe"] });
-    const worktree = fs.readFileSync(cdFile, "utf8").trim();
+    const worktree = fs.readFileSync(cdFile, "utf8").split("\n")[0];
+    assert.match(fs.readFileSync(cdFile, "utf8").split("\n")[1], /It's alice's PR, so don't push to it unless I ask\.$/, "someone else's PR isn't pushed to unasked");
     assert.equal(git(clone, "config", "remote.alice.url"), "git@github.com:alice/widgets.git", "the fork added as a remote, over SSH as origin is");
     assert.equal(git(worktree, "rev-parse", "HEAD"), last, "at the fork's commit");
     assert.equal(git(worktree, "branch", "--show-current"), "alice-main", "on a branch that leaves your main alone");

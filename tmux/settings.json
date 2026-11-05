@@ -284,6 +284,13 @@
     "default": true
   },
   {
+    "key": "wtpr_prompt",
+    "category": "Sessions",
+    "label": "wtpr asks where the PR stands",
+    "description": "Claude, started in a PR's worktree by wtpr (or mission control's \"work on it in a new tab\"), first reads the PR, its review threads, failing checks and ticket and says where it stands and what it would do next, changing nothing until you say; off, it starts with no prompt",
+    "default": true
+  },
+  {
     "key": "note_tab_beside",
     "category": "Notes",
     "label": "Notes beside a note's tab",

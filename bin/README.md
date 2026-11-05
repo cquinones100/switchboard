@@ -339,7 +339,12 @@ it in a popup for the pane's repository, a spinner showing until it answers.
 
 The same idea for a GitHub pull request instead of a Linear ticket. Takes a PR
 number or URL, creates a worktree on that PR's head branch, moves your shell
-into it, and opens claude.
+into it, and opens claude. Claude starts by reading the PR (its description,
+diff, unresolved review threads, failing checks and its Linear ticket) and
+saying where it stands and what it would do next, changing nothing until you
+say, and, on someone else's PR, pushing nothing unless asked; the
+`wtpr_prompt` setting (Sessions) starts it with no prompt instead, and
+`WTPR_PROMPT` replaces it, as mission control's CI loop does.
 
 ```
 wtpr 123
@@ -367,8 +372,7 @@ directory is named after the PR rather than the branch because head branches
 often contain slashes, which would nest worktrees inside shared parent
 directories.
 
-Unlike `wt`, claude opens with no prompt — you say what you want when you get
-there.
+With the `wtpr_prompt` setting off, claude opens with no prompt and you say what you want when you get there.
 
 A PR from a fork is set up as `gh pr checkout` sets one up: the fork is added
 as a remote named after its owner (or a remote already pointing at it is

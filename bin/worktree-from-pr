@@ -63,7 +63,7 @@ const fail = (message) => {
 //
 // `rc`, not `status`: `status` is a read-only special variable in zsh.
 const shellFunction = () => `wtpr() {
-  local cdfile rc dir
+  local cdfile rc dir prompt
   cdfile=$(mktemp) || return 1
   ${SELF} --no-claude --cd-file "$cdfile" "$@"
   rc=$?
@@ -72,6 +72,7 @@ const shellFunction = () => `wtpr() {
     return $rc
   fi
   dir=$(sed -n 1p "$cdfile")
+  prompt=$(sed -n 2p "$cdfile")
   rm -f "$cdfile"
   if [ ! -d "$dir" ]; then
     echo "wtpr: expected a worktree directory, got: $dir" >&2
@@ -79,9 +80,47 @@ const shellFunction = () => `wtpr() {
   fi
   cd "$dir" || return 1
   # WTPR_PROMPT, when set, is Claude's first prompt there (mission control's
-  # CI view starts /ci-loop this way).
-  if [ -n "\${WTPR_PROMPT:-}" ]; then claude "$WTPR_PROMPT"; else claude; fi
+  # CI view starts /ci-loop this way); else the script's own, which asks
+  # where the PR stands (startPrompt), unless the wtpr_prompt setting is off.
+  if [ -n "\${WTPR_PROMPT:-}" ]; then claude "$WTPR_PROMPT"
+  elif [ -n "$prompt" ]; then claude "$prompt"
+  else claude; fi
 }`;
+
+// The prompt Claude starts with in the worktree: a PR picked up is often
+// someone else's or half done, so Claude first says where it stands and
+// waits, rather than starting on it as `wt` does on a ticket. One line, as
+// the `wtpr` function reads it back from the cd-file. Empty with the
+// wtpr_prompt setting off.
+const startPrompt = (pr) => {
+  let on = true;
+  try {
+    on = require("../lib/settings").setting("wtpr_prompt") !== false;
+  } catch {}
+  if (!on) return "";
+  let me = "";
+  try {
+    me = execFileSync("gh", ["api", "user", "--jq", ".login"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {}
+  const author = pr.author?.login ?? "";
+  // Someone else's unless gh says it is yours: when it can't say who you
+  // are, the PR is treated as someone else's.
+  const theirs = !author || !me || author.toLowerCase() !== me.toLowerCase();
+  const closed = pr.state && pr.state !== "OPEN";
+  return [
+    // Never its title: the PR's author wrote that, and here it would reach
+    // Claude as your own words; Claude reads it from GitHub, as data.
+    `Pick up PR #${pr.number}${author ? ` by ${author}` : ""}.`,
+    closed ? `It is ${pr.state.toLowerCase()}, so say that first.` : "",
+    "Before changing anything, read its description, its diff, its unresolved review threads and its failing checks, and its Linear ticket if the branch or the description names one.",
+    "Then tell me in a few lines where it stands: what's left (review comments to answer, failing checks, merge conflicts, anything the ticket asks for that the PR doesn't do) and what you would do next.",
+    "Don't change anything until I say.",
+    theirs ? `It's ${author ? `${author}'s` : "someone else's"} PR, so don't push to it unless I ask.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ");
+};
 
 // gh accepts a number or a URL, so the URL is passed through untouched. Its
 // repository is kept too: a PR in another repository is refused (see main).
@@ -479,13 +518,16 @@ const main = async () => {
   }
   linkLocalSettings(root, finalPath);
 
-  // Read by the `wtpr` shell function.
-  if (cdFile) fs.writeFileSync(cdFile, `${finalPath}\n`);
+  // Read by the `wtpr` shell function: line 1 the worktree, line 2 the
+  // prompt Claude starts with there, so the function and the standalone
+  // path can't drift apart.
+  const prompt = startPrompt(pr);
+  if (cdFile) fs.writeFileSync(cdFile, `${finalPath}\n${prompt}\n`);
 
   // `wtpr` launches claude itself, after cd'ing.
   if (noClaude) return;
 
-  const claude = spawnSync("claude", [], {
+  const claude = spawnSync("claude", prompt ? [prompt] : [], {
     cwd: finalPath,
     stdio: "inherit",
   });
