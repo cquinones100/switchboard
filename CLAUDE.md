@@ -29,7 +29,12 @@ The tmux server Switchboard runs in is the one being worked in. Before testing a
 ## Pushing
 
 Always ask before pushing this repo, every time, whatever the branch and
-whatever an earlier push was allowed. Before asking, run `/review-loop` on
+whatever an earlier push was allowed. Review each commit as it is made:
+run `/review-loop` on it before starting the next, folding the round's fixes
+into that commit while it is unpushed, so each commit carries its own
+review rather than a pile of commits getting one loop and a batch of fixes
+at the end; working through a list, push each once it is clean, before the
+next. Before asking, run `/review-loop` on
 the unpushed commits, unless Settings' "Review before pushing"
 (`review_before_push`) is off, which the hook then follows too: `.githooks/pre-push` refuses a push to main whose tip
 isn't the commit the skill last found clean, or whose review started past
