@@ -16,7 +16,9 @@ set -u
 if [ "${1:-}" = box ]; then
   printf '\033[?25l\n  \033[1m%s\033[0m\n\n' "$3"
   [ -n "${4:-}" ] && printf '  %s\n' "$4"
-  printf '\n  \033[38;5;244many key closes\033[0m'
+  printf '\n  \033[38;5;244many key or a click closes\033[0m'
+  # A click closes it too.
+  printf '\033[?1000h\033[?1006h'
   read -rsn 1
   exit 0
 fi

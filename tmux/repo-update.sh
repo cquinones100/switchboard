@@ -191,6 +191,9 @@ case "${1:-}" in
     options=("Update now" "Not now")
     { [ "$behind" -gt "$SHOWN" ] || [ -n "$cut_short" ]; } && options+=("See all $behind commit$([ "$behind" = 1 ] || echo s)")
     cursor=0
+    # A click takes an option too (menu.sh, the menu_mouse setting).
+    . "${BASH_SOURCE[0]%/*}/menu.sh"
+    menu_mouse_on
     while :; do
       printf '\033[H\033[2J'
       heading
@@ -203,31 +206,33 @@ case "${1:-}" in
           printf '    %s\n' "${options[$i]}"
         fi
       done
-      printf '\n  \033[38;5;244mj/k move  ↵ choose  esc not now\033[0m'
+      # Where the first option is, for a click's row (only on a terminal).
+      start=
+      [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} ))
+      printf '\n  \033[38;5;244mj/k move  ↵ or click choose  esc not now\033[0m'
       # A closed input answers nothing: the prompt goes, and asks again later.
-      IFS= read -rsn 1 key || exit 0
-      if [ "$key" = $'\x1b' ]; then
-        # An arrow sends ESC [ A or B; Esc alone sends nothing after it.
-        IFS= read -rsn 2 -t 1 rest || rest=
-        case $rest in
-          '[A') key=k ;;
-          '[B') key=j ;;
-          *) answered; exit 0 ;;
-        esac
-      fi
-      case $key in
+      menu_read || { menu_mouse_off; exit 0; }
+      pick=
+      case $MENU_KEY in
         j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
         k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
-        q) answered; exit 0 ;;
-        '')
-          case ${options[$cursor]} in
-            "Update now") break ;;
-            "Not now") answered; exit 0 ;;
-            *) { heading; CAP= commits; } | less -R ;;
-          esac
+        quit) menu_mouse_off; answered; exit 0 ;;
+        enter) pick=$cursor ;;
+        click\ *)
+          set -- $MENU_KEY
+          i=$(( $2 - ${start:-0} ))
+          [ -n "$start" ] && [ "$i" -ge 0 ] && [ "$i" -lt ${#options[@]} ] && cursor=$i && pick=$i
           ;;
       esac
+      if [ -n "$pick" ]; then
+        case ${options[$pick]} in
+          "Update now") break ;;
+          "Not now") menu_mouse_off; answered; exit 0 ;;
+          *) menu_mouse_off; { heading; CAP= commits; } | less -R; menu_mouse_on ;;
+        esac
+      fi
     done
+    menu_mouse_off
     answered
     # Answered, it is no longer a prompt a newer look may close: the update
     # and its setup run on undisturbed.

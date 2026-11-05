@@ -29,6 +29,9 @@
 
 # The request audit (count-request.sh); counting nothing when it isn't there.
 . "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
+# The menu the answer ends with (menu.sh), loaded before the cd below, which
+# would make this script's own relative path name the repository's file.
+. "${BASH_SOURCE[0]%/*}/menu.sh"
 set -u
 
 wait=false
@@ -91,37 +94,43 @@ resolve_in_tab() {
 }
 
 # The answer's last word: what can be done about it, moved through with j and
-# k and taken with Enter (Close last; Esc or q closes too), or, with nothing
-# to do, any key closes.
+# k and taken with Enter or a click (Close last; Esc or q closes too), or,
+# with nothing to do, any key closes.
 finish() {
   if [ ${#actions[@]} -eq 0 ]; then
     printf "\n  Press any key to close."
     read -rsn 1
     return
   fi
-  local options=("${actions[@]}" "Close") cursor=0 key rest i
+  local options=("${actions[@]}" "Close") cursor=0 i start= pick
   printf '\n'
+  menu_mouse_on
   while :; do
     for i in "${!options[@]}"; do
       if [ "$i" = "$cursor" ]; then printf '\r\033[2K  %s› %s%s\n' "$bold" "${options[$i]}" "$reset"; else printf '\r\033[2K    %s\n' "${options[$i]}"; fi
     done
-    IFS= read -rsn 1 key || return
-    if [ "$key" = $'\x1b' ]; then
-      IFS= read -rsn 2 -t 1 rest || rest=
-      case $rest in '[A') key=k ;; '[B') key=j ;; *) return ;; esac
-    fi
-    case $key in
+    # Where the first option is, for a click's row.
+    [ -n "$start" ] || { [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} )); }
+    menu_read || { menu_mouse_off; return; }
+    pick=
+    case $MENU_KEY in
       j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
       k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
-      q) return ;;
-      '')
-        case ${options[$cursor]} in
-          "See the failing checks") failing | less -R ;;
-          "Type /resolve-conflicts into this tab's Claude") resolve_in_tab; return ;;
-          *) return ;;
-        esac
+      quit) menu_mouse_off; return ;;
+      enter) pick=$cursor ;;
+      click\ *)
+        set -- $MENU_KEY
+        i=$(( $2 - ${start:-0} ))
+        [ -n "$start" ] && [ "$i" -ge 0 ] && [ "$i" -lt ${#options[@]} ] && cursor=$i && pick=$i
         ;;
     esac
+    if [ -n "$pick" ]; then
+      case ${options[$pick]} in
+        "See the failing checks") menu_mouse_off; failing | less -R; menu_mouse_on ;;
+        "Type /resolve-conflicts into this tab's Claude") menu_mouse_off; resolve_in_tab; return ;;
+        *) menu_mouse_off; return ;;
+      esac
+    fi
     printf '\033[%dA' "${#options[@]}"
   done
 }

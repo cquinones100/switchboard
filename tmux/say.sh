@@ -26,7 +26,9 @@ if [ "${1:-}" = box ]; then
   rm -f "$(pending "${2:-}")"
   printf '\033[?25l\n'
   printf '%s\n' "$SAY_TEXT" | sed 's/^/  /'
-  # Any key closes it, or the time running out; a closed input waits it out.
+  # Any key closes it, or a click, or the time
+  # running out; a closed input waits it out.
+  printf '\033[?1000h\033[?1006h'
   read -rsn 1 -t "$SAY_SECONDS" || sleep 0
   exit 0
 fi

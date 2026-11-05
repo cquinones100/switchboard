@@ -2058,7 +2058,7 @@ test("mission control's Settings view lists the options by category, / narrows t
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   fs.rmSync(settingsFile, { force: true });
   const sent = [];
-  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 80, tmuxClient: "none" };
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 140, tmuxClient: "none" };
   try {
     await sidebar.refresh();
     client.view.view = sidebar.viewsFor(client).findIndex((s) => s.title === "Settings") + 1;
@@ -3414,4 +3414,58 @@ test("remind.sh reads the times Slack's Remind me offers, and one typed in", () 
     const out = execFileSync("bash", [script, "at", text, String(now)], { encoding: "utf8" }).trim();
     assert.equal(out && new Date(Number(out) * 1000).toString().slice(0, 21), expected, why ?? text);
   });
+});
+
+test("a click takes a menu's option, answers a question's Yes or No, and outside the box closes it", async () => {
+  const sent = [];
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 100, rows: 30, tmuxClient: "none" };
+  const taken = [];
+  client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act: () => taken.push("first") }, { key: "b", label: "Second", act: () => taken.push("second") }], cursor: 0 };
+  sidebar.draw(client);
+  const rowOf = (label) => {
+    return client.modal.tags.find((t) => t.tag.choice === (label === "First" ? 0 : 1)).y;
+  };
+  const x = client.modal.left + 4;
+  await sidebar.missionKey(client, { mouse: { button: 0, x, y: rowOf("Second"), press: true } });
+  assert.deepEqual(taken, ["second"], "one click on an option takes it");
+  assert.equal(client.choose, undefined);
+
+  client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act: () => taken.push("first") }], cursor: 0 };
+  sidebar.draw(client);
+  await sidebar.missionKey(client, { mouse: { button: 0, x: 1, y: 1, press: true } });
+  assert.equal(client.choose, undefined, "a click outside closes it");
+  assert.deepEqual(taken, ["second"], "taking nothing");
+
+  let yes = 0;
+  client.confirm = { text: "Close it?", yes: () => { yes++; } };
+  sidebar.draw(client);
+  const row = client.modal.tags.find((t) => t.tag.yes).y;
+  await sidebar.missionKey(client, { mouse: { button: 0, x: client.modal.left + 1 + 3, y: row, press: true } });
+  assert.equal(yes, 1, "a click on Yes is yes");
+  client.confirm = { text: "Close it?", yes: () => { yes++; } };
+  sidebar.draw(client);
+  await sidebar.missionKey(client, { mouse: { button: 0, x: client.modal.left + 1 + 9, y: row, press: true } });
+  assert.equal(yes, 1, "and on No, no");
+  assert.equal(client.confirm, undefined);
+
+  // In M-j's picker, its filter typing: the box still takes the click.
+  client.picker = true;
+  client.filter = { text: "ab", typing: true };
+  client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act: () => taken.push("first") }, { key: "b", label: "Second", act: () => taken.push("second") }], cursor: 0 };
+  sidebar.draw(client);
+  await sidebar.missionKey(client, { mouse: { button: 65, x: client.modal.left + 4, y: client.modal.top + 1, press: true } });
+  assert.equal(client.choose.cursor, 1, "the wheel moves the menu, not the filter");
+  assert.equal(client.filter.text, "ab");
+  sidebar.draw(client);
+  await sidebar.missionKey(client, { mouse: { button: 0, x: client.modal.left + 4, y: client.modal.tags.find((t) => t.tag.choice === 0).y, press: true } });
+  assert.deepEqual(taken, ["second", "first"], "and a click takes its option");
+  assert.equal(client.filter.typing, true, "the filter typing again after");
+  client.picker = false;
+  client.filter = undefined;
+
+  // The answer popup a opens from the sidebar: each option a row to click.
+  const popup = { kind: "mission", only: true, socket: { write() {}, end() {} }, view: { view: 0, cursor: 0 }, cols: 80, rows: 24, tmuxClient: "none" };
+  popup.answering = { tab: { index: 1, name: "t" }, found: { question: "Which?", options: [{ n: 1, label: "One" }, { n: 2, label: "Two" }] }, text: "", typing: false };
+  sidebar.draw(popup);
+  assert.deepEqual(popup.modal.tags.map((t) => t.tag.option), [1, 2], "the answer popup's options take a click");
 });

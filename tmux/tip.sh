@@ -125,11 +125,14 @@ case "${1:-}" in
     printf '\033[?25l'
     text_of "$tip" | sed 's/^/ /'
     printf '\n \033[38;5;244m%s\033[0m' "$FOOTER"
+    # A click closes it too, and goes no further.
+    printf '\033[?1000h\033[?1006h'
     IFS= read -rsn 1 -t "$SHOW_SECONDS" first || exit 0
     # What else the key sent, as an arrow or Alt sends several bytes at once.
     keys=$first
     while IFS= read -rsn 1 -t 0.02 more; do keys+=$more; done
     [ -z "$first" ] && keys=$'\r'
+    case $keys in $'\033[<'*) exit 0 ;; esac
     name=$(key_name "$keys")
     # Sent by tmux a moment after the box has closed, so the key reaches what
     # was under it, a binding included. ## keeps a # from being read as a format.

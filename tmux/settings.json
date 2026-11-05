@@ -186,6 +186,13 @@
     "default": true
   },
   {
+    "key": "menu_mouse",
+    "category": "Mission control",
+    "label": "Click in menus",
+    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; and a click picks an option of M-m's, the update popup's and M-w's menus; off, they take keys alone",
+    "default": true
+  },
+  {
     "key": "diff_story_ahead",
     "category": "Diff",
     "label": "Diff story told ahead",

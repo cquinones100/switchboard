@@ -23,9 +23,36 @@ else
 
   for ((i = 0; i < pad_top; i++)); do echo; done
   printf "%*s%s" "$pad_left" "" "$text"
+  # Yes and No under it, each taken by a click too (menu.sh, the menu_mouse
+  # setting): the row they are on and the columns of each.
+  . "${0%/*}/menu.sh"
+  menu_mouse_on
+  row=
+  if [ -n "${MENU_MOUSE:-}" ] && [ -t 0 ]; then
+    yes_at=$(( (cols - 9) / 2 + 1 ))
+    printf '\n\n%*s\033[1mYes\033[0m   No\033[1A\033[1A\r\033[%dC' "$((yes_at - 1))" "" "$((pad_left + ${#text}))"
+    row=$(( $(menu_row) + 2 ))
+  fi
 
   # Enter reads as an empty key and confirms too; a closed input does not.
-  read -rsn 1 ans || exit 0
+  while :; do
+    menu_read || { menu_mouse_off; exit 0; }
+    case $MENU_KEY in
+      enter) ans=y ;;
+      none) continue ;;
+      click\ *)
+        set -- $MENU_KEY
+        [ -n "$row" ] && [ "$2" = "$row" ] || continue
+        if [ "$3" -ge "$yes_at" ] && [ "$3" -lt $((yes_at + 3)) ]; then ans=y
+        elif [ "$3" -ge $((yes_at + 6)) ] && [ "$3" -lt $((yes_at + 8)) ]; then ans=n
+        else continue
+        fi
+        ;;
+      *) ans=$MENU_KEY ;;
+    esac
+    break
+  done
+  menu_mouse_off
 fi
 
 case "$ans" in
