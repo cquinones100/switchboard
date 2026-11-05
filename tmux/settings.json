@@ -186,6 +186,13 @@
     "default": true
   },
   {
+    "key": "diff_story_ahead",
+    "category": "Diff",
+    "label": "Diff story told ahead",
+    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff to Claude (Haiku) for each new commit",
+    "default": true
+  },
+  {
     "key": "diff_story_pages",
     "category": "Diff",
     "label": "Diff story a page at a time",

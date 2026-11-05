@@ -353,6 +353,8 @@ end
 
 local asked = {}
 local function ask_order(view)
+  -- Not in the story told ahead of time, which only tells the story.
+  if vim.g.diff_ahead then return end
   local entries = {}
   for _, entry in view.files:iter() do
     -- The server's side too: Haiku's order holds within each group.
@@ -441,6 +443,59 @@ local function start_loading(view)
     })
   end))
 end
+-- While a view's story is being told, the diff waits under a cover saying
+-- so (shown only once the story has taken a moment, so one already known
+-- opens at once), so the list isn't read in an order about to change; Esc
+-- or q there shows the diff now, the story arriving into it as usual. The
+-- cover goes once the story is known or can't be (settle). In the story
+-- told ahead of time (tmux/diff-story-ahead.sh, g:diff_ahead), the headless
+-- Neovim quits then, the story kept in the cache for M-d.
+local function uncover(view)
+  if view.cover_timer then
+    view.cover_timer:stop()
+    view.cover_timer:close()
+    view.cover_timer = nil
+  end
+  if view.cover and vim.api.nvim_win_is_valid(view.cover) then vim.api.nvim_win_close(view.cover, true) end
+  view.cover = nil
+end
+-- `told`: whether the story is known now (or there was none to tell), which
+-- the story told ahead of time exits with, so a story that couldn't be told
+-- (Claude down, say) is tried again later.
+local function settle(view, told)
+  if view.settled then return end
+  view.settled = true
+  uncover(view)
+  if vim.g.diff_ahead then vim.schedule(function() vim.cmd(told and "qa!" or "cquit 2") end) end
+end
+local function cover(view)
+  vim.defer_fn(function()
+    if view.settled or view.cover or require("diffview.lib").get_current_view() ~= view then return end
+    local buf = vim.api.nvim_create_buf(false, true)
+    local width, height = vim.o.columns, vim.o.lines - vim.o.cmdheight
+    view.cover = vim.api.nvim_open_win(buf, true, { relative = "editor", row = 0, col = 0, width = width, height = height, style = "minimal", zindex = 200 })
+    vim.wo[view.cover].winhighlight = "Normal:Normal"
+    local frame = 0
+    local function draw()
+      if not vim.api.nvim_buf_is_valid(buf) then return end
+      frame = frame % #SPINNER + 1
+      local lines = {}
+      for _ = 1, math.floor(height / 2) - 1 do table.insert(lines, "") end
+      local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
+      table.insert(lines, centre(SPINNER[frame] .. " Telling the change as a story"))
+      table.insert(lines, "")
+      table.insert(lines, centre("Esc shows the diff now"))
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    end
+    draw()
+    view.cover_timer = vim.uv.new_timer()
+    view.cover_timer:start(100, 100, vim.schedule_wrap(draw))
+    for _, key in ipairs({ "<Esc>", "q" }) do
+      vim.keymap.set("n", key, function() uncover(view) end, { buffer = buf, nowait = true })
+    end
+  end, 300)
+end
+
 local function ask_story(view)
   local ds = require("diffstory")
   local entries, paths, untracked = {}, {}, {}
@@ -452,6 +507,7 @@ local function ask_story(view)
   end
   local function give(target, made)
     stop_loading(target)
+    if made then settle(target, true) end
     target.story = made
     if require("diffview.lib").get_current_view() == target then
       active_story = made
@@ -474,6 +530,7 @@ local function ask_story(view)
   if #paths < 2 or #written == 0 then
     view.want = nil
     stop_loading(view)
+    settle(view, true)
     return forget(view)
   end
   table.sort(paths)
@@ -481,7 +538,10 @@ local function ask_story(view)
   local RevType = require("diffview.vcs.rev").RevType
   local left, right = view.left and view.left.type, view.right and view.right.type
   local claude = claude_command()
-  if not claude or not (left == RevType.COMMIT or left == RevType.STAGE) then return ask_order(view) end
+  if not claude or not (left == RevType.COMMIT or left == RevType.STAGE) then
+    settle(view, false)
+    return ask_order(view)
+  end
   -- The change as diffview shows it, with git's own a/ and b/ whatever the
   -- config says, which diffstory.split reads, and never the repository's
   -- text converters: a commit against the branch's head, the index (--cached)
@@ -529,6 +589,7 @@ local function ask_story(view)
       end
       if diff.code ~= 0 then
         stop_loading(view)
+        settle(view, false)
         forget(view)
         return ask_order(view)
       end
@@ -541,6 +602,7 @@ local function ask_story(view)
       -- Haiku couldn't tell this one: not asked again in this Neovim.
       if stories[key] == false then
         stop_loading(view)
+        settle(view, false)
         return ask_order(view)
       end
       local dir = vim.fn.stdpath("cache") .. "/diff-story"
@@ -573,7 +635,10 @@ local function ask_story(view)
           for _, each in ipairs(views) do
             if each.want == key then
               stop_loading(each)
-              if told then give(each, told) else ask_order(each) end
+              if told then give(each, told) else
+                settle(each, false)
+                ask_order(each)
+              end
             end
           end
         end)
@@ -940,6 +1005,8 @@ return {
         -- A page of the story (turn_page), shown its chapter from the whole diff's story.
         view.page = pending_page
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
+        -- The diff under a cover until its story is told (a page has its own).
+        if vim.g.diff_story and not vim.g.diff_ahead and not view.page and view.panel and view.panel.ordered_file_list then cover(view) end
         if view.emitter then
           view.emitter:on("file_open_post", function()
             to_first_change(view)

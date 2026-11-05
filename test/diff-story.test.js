@@ -101,6 +101,13 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
     "nvim",
     ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1", "-c", "sleep 1000m", "-c", `lua
       local panel = require("diffview.lib").get_current_view().panel
+      local function covered()
+        for _, w in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_get_config(w).relative ~= "" and table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n"):find("Telling the change", 1, true) then return true end
+        end
+        return false
+      end
+      vim.g.covered = covered()
       -- Drawn again every tenth of a second, as the list's own redraws may clear it.
       vim.wait(500, function()
         vim.g.telling = {}
@@ -146,7 +153,11 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
         local text = m[4].virt_lines and m[4].virt_lines[1][1] and m[4].virt_lines[1][1][1] or ""
         if text:find("telling the story", 1, true) then spinning = spinning + 1 end
       end
-      io.write(vim.json.encode({ pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, wide = wide, narrow = narrow }))`, "-c", "qa"],
+      local uncovered = true
+      for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_config(w).relative ~= "" and table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n"):find("Telling the change", 1, true) then uncovered = false end
+      end
+      io.write(vim.json.encode({ covered = vim.g.covered, uncovered = uncovered, pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, wide = wide, narrow = narrow }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -163,6 +174,8 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
     { page: 0, files: ["src/model.js", "test/model.test.js", "src/ui.js"] },
   ], "]p turns to each chapter's own page and stops at the last; [p goes back, and from the first to the whole diff");
   assert.deepEqual([result.wide, result.narrow], [32, 30], "E widens the list to its longest path, and again narrows it");
+  assert.equal(result.covered, true, "the diff waits under a cover while its story is told");
+  assert.equal(result.uncovered, true, "and is shown once it is");
   assert.equal(result.telling.length, 1, "while Haiku reads the change, the list says so");
   assert.match(result.telling[0], /telling the story/);
   assert.equal(result.spinning, 0, "and stops saying so once the story is known");
@@ -243,4 +256,44 @@ test("in a working tree's list the headings and ]c follow its sections: a chapte
   assert.deepEqual(result.back, ["working", "src/ui.js"], "[c comes back");
   assert.notEqual(result.opened, "src/extra.js", "nor does it open on one");
   assert.deepEqual(result.page.sort(), ["src/model.js", "src/model.js", "test/model.test.js"], "the first page holds its chapter's files in both sections, no other chapter's untracked one");
+});
+
+test("a branch's story is told ahead of time by a hidden Neovim, kept where M-d finds it, once per commit", { skip: !ready && "needs lazy.nvim's diffview", timeout: 120_000 }, () => {
+  const root = path.join(tmp, "ahead");
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const origin = path.join(root, "origin.git");
+  const repo = path.join(root, "repo");
+  [path.join(home, ".config"), bin].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  fs.symlinkSync(nvimDir, path.join(home, ".config/nvim"));
+  const asked = path.join(root, "asked");
+  const answer = JSON.stringify({ chapters: [{ title: "Change the model", why: "The data changes shape.", files: ["src/model.js"] }, { title: "Show it", why: "The page shows it.", files: ["src/ui.js"] }] });
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > /dev/null\necho "x $$ $PPID $(echo "$@" | cut -c1-80)" >> '${asked}'\nprintf '%s\\n' '${answer}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho main\n", { mode: 0o755 });
+  const env = { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(root, "cache"), XDG_STATE_HOME: path.join(root, "state"), XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "", GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { env, stdio: "ignore" });
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env });
+  execFileSync("git", ["clone", "-q", origin, repo], { env, stdio: "ignore" });
+  fs.mkdirSync(path.join(repo, "src"));
+  fs.writeFileSync(path.join(repo, "src/model.js"), "a\n");
+  fs.writeFileSync(path.join(repo, "src/ui.js"), "b\n");
+  git("add", ".");
+  git("commit", "-qm", "one");
+  git("push", "-q", "origin", "HEAD:main");
+  git("checkout", "-q", "-b", "feature");
+  fs.writeFileSync(path.join(repo, "src/model.js"), "A\n");
+  fs.writeFileSync(path.join(repo, "src/ui.js"), "B\n");
+  git("commit", "-qam", "two");
+  const ahead = () => spawnSync("bash", [path.join(__dirname, "../tmux/diff-story-ahead.sh"), repo], { env, encoding: "utf8", timeout: 100_000 });
+  // Claude down first: nothing kept, and the commit left to tell again.
+  const working = fs.readFileSync(path.join(bin, "claude"), "utf8");
+  fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\ncat >/dev/null\nexit 1\n", { mode: 0o755 });
+  assert.notEqual(ahead().status, 0, "a story that couldn't be told is said so");
+  fs.writeFileSync(path.join(bin, "claude"), working, { mode: 0o755 });
+  assert.equal(ahead().status, 0, "told once Claude answers");
+  const kept = fs.readdirSync(path.join(root, "cache/nvim/diff-story"));
+  assert.equal(kept.length, 1, "the story kept in Neovim's cache, where M-d looks");
+  assert.match(fs.readFileSync(path.join(root, "cache/nvim/diff-story", kept[0]), "utf8"), /Change the model/);
+  ahead();
+  assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 1, "told once for the commit");
 });

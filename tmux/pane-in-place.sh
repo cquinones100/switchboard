@@ -54,49 +54,26 @@ tool_command() {
       echo "zsh -i -c 'node ~/.config/tmux/pr-image.js --ticket $ticket'"
       ;;
     # GitHub's "Files changed": the branch's commits since it left its PR's
-    # base branch (origin's default branch without a PR, main where origin
-    # doesn't say), as origin has that branch now, so it is fetched first: a
-    # base last fetched before the branch was rebased onto a newer one would
-    # count that newer work as the branch's. Committed changes only, as on
-    # GitHub. gh and the fetch each wait on the network, about a second, so a
-    # popup says it is loading until they are done. It is started in the
-    # background, since display-popup holds until the popup closes, and closes
-    # itself after 30 seconds should nothing close it. Both are skipped while
-    # the branch is at the commit last compared: its merge base with the base
-    # can't have moved, so neither can the diff. The cache holds, per
-    # worktree, that commit and the base it was compared with.
+    # base branch, which diff-base.sh works out and fetches (shared with the
+    # story told ahead of time, diff-story-ahead.sh). Committed changes only,
+    # as on GitHub. gh and the fetch each wait on the network, about a
+    # second, so a popup says it is loading until they are done. It is
+    # started in the background, since display-popup holds until the popup
+    # closes, and closes itself after 30 seconds should nothing close it.
+    # Both are skipped while the branch is at the commit last compared.
     diffview)
-      if ! facts=$(git -C "$dir" rev-parse --absolute-git-dir HEAD 2>/dev/null); then
+      if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
         "${0%/*}/say.sh" "Not in a git repository: $dir"
         exit 0
       fi
-      head=${facts##*$'\n'}
-      cache="${XDG_CACHE_HOME:-$HOME/.cache}/switchboard/diff-base/$(printf '%s' "${facts%%$'\n'*}" | tr / %)"
-      cached_head= ref=
-      IFS=$'\t' read -r cached_head ref 2>/dev/null <"$cache"
-      if [ "$cached_head" = "$head" ] && [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] && git -C "$dir" rev-parse --verify --quiet "$ref" >/dev/null; then
-        echo "nvim -u ~/.config/nvim/diff.lua --noplugin --cmd 'let g:diff_pane = 1' --cmd 'let g:diff_base = \"$ref\"' -c 'DiffviewOpen $ref...HEAD'"
-        return
+      if ! ref=$("${0%/*}/diff-base.sh" cached "$dir"); then
+        tmux display-popup -c "$client" -E -w 60 -h 9 -T " diffview " \
+          "printf '\\n\\n\\n%14s\\033[1mFetching the PR base branch...\\033[0m' ''; sleep 30" </dev/null >/dev/null 2>&1 &
+        ref=$("${0%/*}/diff-base.sh" fetch "$dir")
+        fetched=$?
+        tmux display-popup -C -c "$client"
+        [ "$fetched" -ne 3 ] || "${0%/*}/say.sh" -c "$client" "Could not fetch ${ref}; comparing with it as last fetched."
       fi
-      tmux display-popup -c "$client" -E -w 60 -h 9 -T " diffview " \
-        "printf '\\n\\n\\n%14s\\033[1mFetching the PR base branch...\\033[0m' ''; sleep 30" </dev/null >/dev/null 2>&1 &
-      count_request GitHub GraphQL 'M-d diff: PR base' gh
-      base=$(cd "$dir" && gh pr view --json baseRefName -q .baseRefName 2>/dev/null)
-      [ -n "$base" ] || base=$(git -C "$dir" rev-parse --abbrev-ref origin/HEAD 2>/dev/null)
-      base=${base#origin/}
-      [ -n "$base" ] || base=main
-      # It goes into a command line, so only a branch name's characters.
-      [[ $base =~ ^[A-Za-z0-9._/-]+$ ]] || base=main
-      fetched=1
-      count_git_request "$dir" 'M-d diff: fetch base'
-      git -C "$dir" fetch --quiet origin "$base" 2>/dev/null || fetched=
-      tmux display-popup -C -c "$client"
-      [ -n "$fetched" ] || "${0%/*}/say.sh" -c "$client" "Could not fetch origin/$base; comparing with it as last fetched."
-      # A repository with no origin compares with its own branch.
-      ref=origin/$base
-      git -C "$dir" rev-parse --verify --quiet "$ref" >/dev/null || ref=$base
-      # Only a comparison with a freshly fetched base is worth keeping.
-      [ -z "$fetched" ] || { mkdir -p "${cache%/*}" && printf '%s\t%s\n' "$head" "$ref" >"$cache"; }
       echo "nvim -u ~/.config/nvim/diff.lua --noplugin --cmd 'let g:diff_pane = 1' --cmd 'let g:diff_base = \"$ref\"' -c 'DiffviewOpen $ref...HEAD'"
       ;;
   esac
