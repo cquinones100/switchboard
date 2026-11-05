@@ -247,23 +247,25 @@ test("an epic's sub-issues in the ticket view are the issues under it", async ()
 test("Jira's searches go through JQL, every page, and its text search keeps only words", async () => {
   const pages = [
     { issues: [issue("AB-7")], isLast: false, nextPageToken: "two" },
-    { issues: [issue("AB-8")], isLast: true },
+    { issues: [issue("AB-8"), issue("AB-6", { status: status("Won't Do", "done") })], isLast: true },
   ];
   routes = {
     "POST /rest/api/3/search/jql": (req) => [200, req.body.nextPageToken ? pages[1] : pages[0]],
     "GET /rest/api/3/issue/AB-8": () => [200, issue("AB-8")],
   };
   requests.length = 0;
-  assert.deepEqual((await jira.assigned("2026-10-22T00:00:00Z")).map((i) => i.identifier), ["AB-7", "AB-8"]);
-  assert.match(requests[0].body.jql, /^assignee = currentUser\(\) AND \(statusCategory != Done OR updated >= "2026-10-2\d \d\d:\d\d"\) ORDER BY updated DESC$/);
+  assert.deepEqual((await jira.assigned("2026-10-22T00:00:00Z")).map((i) => i.identifier), ["AB-7", "AB-8"], "a canceled one left out");
+  assert.match(requests[0].body.jql, /^assignee = currentUser\(\) AND \(statusCategory != Done OR statusCategoryChangedDate >= -\d+m\) ORDER BY updated DESC$/);
+  // Minutes before now, which the Jira profile's time zone can't shift.
+  assert.equal(jira.jqlTime(new Date(Date.now() - 10 * 60_000).toISOString()), "-10m");
   assert.equal(requests[1].body.nextPageToken, "two");
 
   requests.length = 0;
-  assert.deepEqual((await jira.search('fix "login" (redirect)')).map((i) => i.identifier), ["AB-7", "AB-8"]);
+  assert.deepEqual((await jira.search('fix "login" (redirect)')).map((i) => i.identifier), ["AB-7", "AB-8", "AB-6"], "search finds canceled ones too");
   assert.equal(requests[0].body.jql, 'text ~ "fix login redirect" ORDER BY updated DESC');
 
   requests.length = 0;
-  assert.deepEqual((await jira.search("ab-8")).map((i) => i.identifier), ["AB-8", "AB-7"], "a key searched for comes first, once");
+  assert.deepEqual((await jira.search("ab-8")).map((i) => i.identifier), ["AB-8", "AB-7", "AB-6"], "a key searched for comes first, once");
 });
 
 test("the standup's ticket moves come from Jira's changelog", async () => {
@@ -280,10 +282,10 @@ test("the standup's ticket moves come from Jira's changelog", async () => {
   assert.deepEqual(data.started.nodes.map((i) => [i.identifier, i.state.name]), [["AB-10", "In Progress"]]);
 });
 
-test("closing a Jira ticket takes the first transition into Done", async () => {
+test("closing a Jira ticket takes the first transition into Done that doesn't cancel it", async () => {
   routes = {
     "GET /rest/api/3/issue/AB-2": () => [200, issue("AB-2")],
-    "GET /rest/api/3/issue/AB-2/transitions": () => [200, { transitions: [{ id: "11", name: "Start", to: status("In Progress", "indeterminate") }, { id: "31", name: "Finish", to: status("Shipped", "done") }] }],
+    "GET /rest/api/3/issue/AB-2/transitions": () => [200, { transitions: [{ id: "11", name: "Start", to: status("In Progress", "indeterminate") }, { id: "21", name: "Drop", to: status("Won't Do", "done") }, { id: "31", name: "Finish", to: status("Shipped", "done") }] }],
     "POST /rest/api/3/issue/AB-2/transitions": () => [204],
   };
   const done = await jira.doneStateOf("AB-2");
@@ -291,6 +293,12 @@ test("closing a Jira ticket takes the first transition into Done", async () => {
   requests.length = 0;
   assert.equal(await jira.closeTicket(done.issue, done.state.id), true);
   assert.deepEqual(requests[0].body, { transition: { id: "31" } });
+  // One already done, whose workflow offers only a way back out.
+  routes = {
+    "GET /rest/api/3/issue/AB-3": () => [200, issue("AB-3", { status: status("Done", "done"), resolution: { name: "Done" } })],
+    "GET /rest/api/3/issue/AB-3/transitions": () => [200, { transitions: [{ id: "41", name: "Reopen", to: status("To Do", "new") }] }],
+  };
+  assert.equal((await jira.doneStateOf("AB-3")).already, true);
 });
 
 test("the shell scripts' CLI answers from Jira, with exit codes for no such ticket and no epic", async () => {

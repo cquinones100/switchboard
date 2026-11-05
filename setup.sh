@@ -1166,7 +1166,7 @@ tracker=$(jq -r 'if .tracker then .tracker elif .linear == false then "off" else
 case $tracker in
   jira)
     if ! security find-generic-password -s jira-api-token >/dev/null 2>&1; then
-      optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, copied, then printf 'add-generic-password -U -a \"%s\" -s jira-api-token -w \"%s\"\\n' \"\$USER\" \"\$(pbpaste)\" | security -i"
+      optional "Jira, for M-i, M-l and ticket titles in tab names: an API token from https://id.atlassian.com/manage-profile/security/api-tokens, copied, then t=\$(pbpaste); if [[ \$t =~ ^[A-Za-z0-9=_-]+\$ ]]; then printf 'add-generic-password -U -a \"%s\" -s jira-api-token -w \"%s\"\\n' \"\$USER\" \"\$t\" | security -i; else echo \"The clipboard doesn't hold an API token.\"; fi"
     elif ! jq -e '.jiraSite and .jiraEmail' ~/.config/switchboard/jira.json >/dev/null 2>&1; then
       optional "Jira's site and your email: add \"jiraSite\": \"https://<yours>.atlassian.net\" and \"jiraEmail\" to ~/.config/switchboard/jira.json"
     else
