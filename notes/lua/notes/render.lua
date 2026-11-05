@@ -130,7 +130,7 @@ function M.inline(line, from_col)
     blank(s, e)
   end)
   -- ![name](path), an image (notes.images): its name styled as a link, the
-  -- rest hidden; image.nvim draws the picture under it where it is set up.
+  -- rest hidden; notes.images draws the picture under it.
   each("!%[([^%]]*)%]%(([^%)%s]+)%)", function(s, e, text, path)
     local close = s + #text + 2 -- the ]
     table.insert(spans, { s = s + 1, e = close - 1, hl = "NotesLink", image = path, conceal = { { s - 1, s + 1 }, { close - 1, e } } })
@@ -270,6 +270,8 @@ function M.draw(buf)
       end
     end
   end
+  -- The images it names, under their lines (notes.images).
+  pcall(require("notes.images").draw, buf, lines)
 end
 
 -- What is at a buffer position: the inline span (a link, a note link, a tag)

@@ -1195,7 +1195,7 @@ test("an image under a checklist item moves with it when an item is ticked, and 
   assert.equal(result.data, true, "never a data: address");
 });
 
-test("squashing notes from two folders copies the images the merged note names into its folder, and image.nvim draws only pictures inside the notes", (t) => {
+test("squashing notes from two folders copies the images the merged note names into its folder, and only images inside the notes are drawn", (t) => {
   const bin = fs.mkdtempSync(path.join(tmp, "claude-bin-"));
   fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat >/dev/null\nprintf '# Both\\n\\n- [ ] one\\n- [ ] two\\n  ![shot](.attachments/Two/shot.png)\\n'\n`, { mode: 0o755 });
   const saved = process.env.PATH;
@@ -1213,13 +1213,12 @@ test("squashing notes from two folders copies the images the merged note names i
     local made
     require("notes.squash").run({ a, b }, function(path) made = path or false end)
     vim.wait(5000, function() return made ~= nil end, 20)
-    local resolve = dofile(${JSON.stringify(path.join(__dirname, "../nvim/lua/plugins/image.lua"))}).opts.integrations.markdown.resolve_image_path
+    local resolve = require("notes.images").resolve
     io.write(vim.json.encode({
       made = made and s.relative(made),
       drawn = resolve(made, ".attachments/Two/shot.png") ~= nil,
       up = resolve(made, "../../outside.png") == nil,
       data = resolve(made, "data:image/png;base64,iVBORw0KGgo=") == nil,
-      kind = resolve(made, "One.md") == nil,
     }))
   `);
   assert.equal(result.made, "A/Both.md");
@@ -1227,33 +1226,100 @@ test("squashing notes from two folders copies the images the merged note names i
   assert.equal(result.drawn, true, "a picture beside the note is drawn");
   assert.equal(result.up, true, "never one outside the notes");
   assert.equal(result.data, true, "nor a data: address");
-  assert.equal(result.kind, true, "nor a file that isn't a picture");
 });
 
-test("image.nvim keeps a note's pictures while the window the notes pane is in now is in front, wherever M-e moved it", (t) => {
-  const socket = path.join(fs.mkdtempSync("/tmp/img-"), "tmux.sock");
-  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "sleep 60"]);
-  t.after(() => execFileSync("tmux", ["-S", socket, "kill-server"]));
-  const pid = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pid}"], { encoding: "utf8" }).trim();
-  const notesWindow = execFileSync("tmux", ["-S", socket, "display", "-p", "#{window_id}"], { encoding: "utf8" }).trim();
-  const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pane_id}"], { encoding: "utf8" }).trim();
-  const other = execFileSync("tmux", ["-S", socket, "new-window", "-d", "-P", "-F", "#{window_id}", "sleep 60"], { encoding: "utf8" }).trim();
-  process.env.TMUX = `${socket},${pid},0`;
-  process.env.TMUX_PANE = pane;
-  t.after(() => { delete process.env.TMUX; delete process.env.TMUX_PANE; });
+test("an image is drawn under its line as kitty placeholder cells, sized to the window and coloured with its id, and only a PNG", () => {
   const { result } = lua(`
-    -- image.nvim stood in for: its tmux helper says which window is in front.
-    local front
-    package.loaded["image/utils/tmux"] = { get_window_id = function() return front end }
-    package.loaded["image"] = { setup = function() end }
-    dofile(${JSON.stringify(path.join(__dirname, "../nvim/lua/plugins/image.lua"))}).config(nil, {})
-    local tmux = require("image/utils/tmux")
-    front = ${JSON.stringify(notesWindow)}
-    local here = tmux.get_window_id()
-    front = ${JSON.stringify(other)}
-    local away = tmux.get_window_id()
-    io.write(vim.json.encode({ here = here, away = away }))
+    -- A terminal that speaks kitty's graphics protocol, what is sent to it kept.
+    vim.env.TERM = "xterm-ghostty"
+    local seqs = {}
+    vim.api.nvim_ui_send = function(seq) table.insert(seqs, seq) end
+    local s = require("notes.store")
+    local path = s.create("", "Shots")
+    vim.fn.mkdir(vim.fs.dirname(path) .. "/.attachments/Shots", "p")
+    -- A PNG header saying 1300 by 280 pixels, which is all the drawing reads.
+    local png = "\\137PNG\\r\\n\\26\\n" .. "\\0\\0\\0\\13IHDR" .. "\\0\\0\\5\\20" .. "\\0\\0\\1\\24"
+    local img = io.open(vim.fs.dirname(path) .. "/.attachments/Shots/a.png", "wb"); img:write(png); img:close()
+    local txt = io.open(vim.fs.dirname(path) .. "/.attachments/Shots/b.png", "wb"); txt:write("not a png"); txt:close()
+    -- A JPEG, made from a real 1-by-1 PNG with macOS's sips.
+    local dot = io.open(vim.fs.dirname(path) .. "/dot.png", "wb"); dot:write(vim.base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==")); dot:close()
+    vim.system({ "sips", "-s", "format", "jpeg", vim.fs.dirname(path) .. "/dot.png", "--out", vim.fs.dirname(path) .. "/.attachments/Shots/c.jpg" }):wait()
+    local f = io.open(path, "w"); f:write("# Shots\\n\\n![a](.attachments/Shots/a.png)\\n![b](.attachments/Shots/b.png)\\n![c](.attachments/Shots/c.jpg) ![c2](.attachments/Shots/c.jpg)\\n\\n\`\`\`\\n![a](.attachments/Shots/a.png)\\n\`\`\`\\n"); f:close()
+    vim.cmd("Notes")
+    local n = require("notes")
+    n.open(path)
+    local buf = vim.api.nvim_get_current_buf()
+    local images = require("notes.images")
+    images.draw(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    -- A colorscheme loaded clears highlights: the pictures' are made again.
+    vim.cmd("hi clear")
+    vim.cmd("doautocmd ColorScheme")
+    vim.wait(200)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, images.ns, 0, -1, { details = true })
+    local m = marks[1]
+    local cells = m[4].virt_lines[1][2][1]
+    local group = m[4].virt_lines[1][2][2]
+    -- Drawn again at the same size: nothing sent again.
+    local count = #seqs
+    images.draw(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    local resent = #seqs - count
+    -- An image taken out of the note is taken back from the terminal.
+    local before = #seqs
+    vim.api.nvim_buf_set_lines(buf, 2, 3, false, {})
+    images.draw(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    local released = table.concat(vim.list_slice(seqs, before + 1), ""):find("a=d,d=I", 1, true) ~= nil
+    -- In a terminal that doesn't, an image is its name alone.
+    vim.env.TERM = "xterm-256color"
+    vim.cmd("doautocmd FocusGained")
+    vim.wait(200)
+    local plain = #vim.api.nvim_buf_get_extmarks(buf, images.ns, 0, -1, {})
+    io.write(vim.json.encode({
+      plain = plain, released = released, resent = resent,
+      count = #marks, row = m[2], jpeg = marks[2] and marks[2][2], twice = marks[2] and #marks[2][4].virt_lines, rows = #m[4].virt_lines,
+      cols = vim.fn.strchars(cells) / 3, first = vim.fn.char2nr(vim.fn.strcharpart(cells, 0, 1)),
+      fg = vim.api.nvim_get_hl(0, { name = group }).fg ~= nil,
+    }))
   `);
-  assert.equal(result.here, "notes", "the notes pane's window in front, wherever it is now");
-  assert.equal(result.away, other, "another in front");
+  assert.equal(result.count, 2, "the PNG and the JPEG drawn, the file that isn't a picture not");
+  assert.equal(result.jpeg, 4, "a JPEG made a PNG to draw, under its own line");
+  assert.equal(result.twice % 2, 0, "and two images a line names both drawn under it");
+  assert.ok(result.twice >= 2);
+  assert.equal(result.row, 2, "under its own line");
+  assert.equal(result.plain, 0, "and none in a terminal that can't draw them");
+  assert.equal(result.released, true, "an image taken out of the note is taken back from the terminal");
+  assert.equal(result.resent, 0, "a picture already sent isn't sent again when the note is drawn again");
+  assert.equal(result.first, 0x10eeee, "in placeholder cells");
+  assert.ok(result.cols > 0 && result.cols < Math.ceil(1300 / 8), "as wide as the window has room for, narrower than the picture at a common cell size");
+  assert.equal(result.rows, Math.ceil((result.cols * 8 * 280) / 1300 / 16), "and as tall as its shape says");
+  assert.equal(result.fg, true, "coloured with its id");
+});
+
+test("only the pictures on screen or near it are given to the terminal, the rest once scrolled to", () => {
+  const { result } = lua(`
+    vim.env.TERM = "xterm-ghostty"
+    local seqs = {}
+    vim.api.nvim_ui_send = function(seq) table.insert(seqs, seq) end
+    local s = require("notes.store")
+    local path = s.create("", "Long")
+    vim.fn.mkdir(vim.fs.dirname(path) .. "/.attachments/Long", "p")
+    local png = "\\137PNG\\r\\n\\26\\n" .. "\\0\\0\\0\\13IHDR" .. "\\0\\0\\0\\100" .. "\\0\\0\\0\\50"
+    local img = io.open(vim.fs.dirname(path) .. "/.attachments/Long/far.png", "wb"); img:write(png); img:close()
+    local text = { "# Long", "" }
+    for i = 1, 300 do text[#text + 1] = "line " .. i end
+    text[#text + 1] = "![far](.attachments/Long/far.png)"
+    local f = io.open(path, "w"); f:write(table.concat(text, "\\n") .. "\\n"); f:close()
+    vim.cmd("Notes")
+    require("notes").open(path)
+    local buf = vim.api.nvim_get_current_buf()
+    local images = require("notes.images")
+    local function sent() return #vim.tbl_filter(function(q) return q:find("a=T", 1, true) ~= nil end, seqs) end
+    images.draw(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    local far = sent()
+    vim.cmd("normal! G")
+    images.draw(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    io.write(vim.json.encode({ far = far, near = sent(), marks = #vim.api.nvim_buf_get_extmarks(buf, images.ns, 0, -1, {}) }))
+  `);
+  assert.equal(result.far, 0, "a picture far below the screen isn't sent");
+  assert.equal(result.near, 1, "it is once scrolled to");
+  assert.equal(result.marks, 1, "its lines kept either way");
 });

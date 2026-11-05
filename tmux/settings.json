@@ -287,7 +287,7 @@
     "key": "notes_images",
     "category": "Notes",
     "label": "Images drawn in a note",
-    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, through the terminal's graphics, with ImageMagick installed; off, it is its name, which Enter opens in Quick Look. Takes effect when Notes next starts",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty does); off, it is its name, which Enter opens in Quick Look",
     "default": true
   },
   {

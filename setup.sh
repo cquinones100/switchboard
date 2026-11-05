@@ -1313,12 +1313,6 @@ if in_zsh 'command -v mmdc' >/dev/null; then
 else
   optional "mermaid-cli, for M-p's PR description as an image: npm install -g @mermaid-js/mermaid-cli"
 fi
-if command -v magick >/dev/null; then
-  ok "ImageMagick (images drawn in a note in Notes)"
-else
-  optional "ImageMagick, for images drawn in a note in Notes, not only named: brew install imagemagick"
-fi
-
 if command -v ffmpeg >/dev/null; then
   ok "ffmpeg (/walkthrough's and /deploy-test's videos)"
 else
