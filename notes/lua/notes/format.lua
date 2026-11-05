@@ -309,7 +309,9 @@ local function checklist_bounds(buf, row)
     if ticked(first) and blank(first - 1) and part(first - 2) then first, grew = first - 2, true end
   end
   while first <= last and not is_check(lines[first]) do first = first + 1 end
-  while last >= first and not is_check(lines[last]) do last = last - 1 end
+  -- What is indented under the last item (an image pasted under it, say) is
+  -- the item's, and moves with it.
+  while last >= first and not is_check(lines[last]) and indent_of(lines[last]) == 0 do last = last - 1 end
   if first > last then return nil end
   return first, last
 end
@@ -402,8 +404,14 @@ end
 
 function M.delete_checked(buf)
   close_gaps(buf)
-  each_check(buf, function(row, _, kind)
-    if kind.done then vim.api.nvim_buf_set_lines(buf, row - 1, row, false, {}) end
+  -- Each ticked item with what is indented under it (an image pasted there,
+  -- say), bottom up, so the rows above stay where they are.
+  each_check(buf, function(row, line, kind)
+    if not kind.done then return end
+    local lines = vim.api.nvim_buf_get_lines(buf, row, -1, false)
+    local under = 0
+    while lines[under + 1] and lines[under + 1]:match("%S") and indent_of(lines[under + 1]) > indent_of(line) and not is_check(lines[under + 1]) do under = under + 1 end
+    vim.api.nvim_buf_set_lines(buf, row - 1, row + under, false, {})
   end)
 end
 

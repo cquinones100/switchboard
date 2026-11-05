@@ -21,4 +21,8 @@ mkdir -p "${sock%/*}"
 if [ -S "$sock" ] && ! nvim --server "$sock" --remote-expr 1 >/dev/null 2>&1; then rm -f "$sock"; fi
 listen=()
 [ -S "$sock" ] || listen=(--listen "$sock")
+# Images in a note are drawn through the terminal's graphics protocol
+# (nvim/lua/plugins/image.lua), which tmux passes on only for a pane that
+# allows it: this one, and no other.
+[ -n "${TMUX_PANE:-}" ] && tmux set-option -p -t "$TMUX_PANE" allow-passthrough on 2>/dev/null
 exec nvim "${listen[@]}" --cmd "let g:notes_app = 1" -c "set rtp^=$here/notes" -c "runtime plugin/notes.lua" -c "Notes" "$@"

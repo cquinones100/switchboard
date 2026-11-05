@@ -1115,3 +1115,135 @@ test("a note opened beside a tab, other than the one Notes came with, is the tab
   `);
   assert.equal(show("@tab_note_last"), "A.md", "never in Notes' own tab");
 });
+
+test("an image pasted into a note is saved beside it and written under the item, shown by its name, opened only from inside the notes", () => {
+  const { result, dir } = lua(`
+    local s = require("notes.store")
+    local path = s.create("", "Bug report")
+    local f = io.open(path, "w"); f:write("# Bug report\\n\\n- [ ] the button is cut off\\n"); f:close()
+    vim.cmd("Notes")
+    local n = require("notes")
+    n.open(path)
+    local buf = vim.api.nvim_get_current_buf()
+    local images = require("notes.images")
+    -- The clipboard stood in for: a PNG's bytes written where asked.
+    images.grab = function(file) local out = io.open(file, "wb"); out:write("\\137PNG"); out:close(); return true end
+    vim.api.nvim_win_set_cursor(0, { 3, 0 })
+    local rel = images.paste(buf)
+    local line = vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1]
+    local spans = require("notes.render").inline(line)
+    local image = vim.tbl_filter(function(sp) return sp.image end, spans)[1]
+    local opened
+    images.open = function(file) opened = file end
+    local followed = require("notes.links").follow(buf, 4, image.s)
+    local outside = images.file(buf, "../../etc/passwd")
+    images.grab = function() return false end
+    local _, why = images.paste(buf)
+    io.write(vim.json.encode({ rel = rel, line = line, shown = line:sub(image.s + 1, image.e), followed = followed, opened = opened, outside = outside == nil, why = why }))
+  `);
+  assert.match(result.rel, /^\.attachments\/Bug-report\/image-\d{4}-\d{2}-\d{2}-\d{6}\.png$/, "beside the note, in a folder the list leaves out, with no space in its path");
+  assert.equal(result.line, `  ![${path.basename(result.rel, ".png")}](${result.rel})`, "on a line of its own, indented under the item");
+  assert.ok(fs.existsSync(path.join(dir, result.rel)), "the image saved");
+  assert.equal(result.shown, path.basename(result.rel, ".png"), "shown by its name, the markup hidden");
+  assert.equal(result.followed, true);
+  assert.equal(result.opened, fs.realpathSync(path.join(dir, result.rel)), "Enter opens the image");
+  assert.equal(result.outside, true, "never a file outside the notes");
+  assert.equal(result.why, "no image on the clipboard");
+});
+
+test("an image under a checklist item moves with it when an item is ticked, and with its note to another folder", () => {
+  const { result, dir } = lua(`
+    local s = require("notes.store")
+    local path = s.create("", "Bugs")
+    local f = io.open(path, "w"); f:write("# Bugs\\n\\n- [ ] first\\n- [ ] second\\n  ![shot](.attachments/Bugs/shot.png)\\n"); f:close()
+    vim.fn.mkdir(vim.fs.dirname(path) .. "/.attachments/Bugs", "p")
+    local img = io.open(vim.fs.dirname(path) .. "/.attachments/Bugs/shot.png", "wb"); img:write("\\137PNG"); img:close()
+    vim.cmd("Notes")
+    local n = require("notes")
+    n.open(path)
+    local buf = vim.api.nvim_get_current_buf()
+    require("notes.format").toggle_check(buf, 3)
+    local sorted = vim.api.nvim_buf_get_lines(buf, 2, -1, false)
+    -- Deleting the ticked ones takes what is under each with it.
+    local other = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_lines(other, 0, -1, false, { "- [ ] keep", "", "- [x] done", "  ![old](.attachments/Bugs/old.png)" })
+    require("notes.format").delete_checked(other)
+    local deleted = vim.api.nvim_buf_get_lines(other, 0, -1, false)
+    n.save(buf)
+    local moved = s.move(path, "Work")
+    local data = require("notes.images").resolve(moved, "data:image/png;base64,iVBORw0KGgo=")
+    s.delete(moved)
+    io.write(vim.json.encode({ sorted = sorted, deleted = deleted, moved = s.relative(moved), data = data == nil }))
+  `);
+  assert.deepEqual(result.sorted, ["- [ ] second", "  ![shot](.attachments/Bugs/shot.png)", "", "- [x] first"], "the image stays under its item");
+  assert.deepEqual(result.deleted, ["- [ ] keep"], "a ticked item deleted with its image line, which isn't left under another");
+  assert.equal(result.moved, "Work/Bugs.md");
+  assert.ok(fs.existsSync(path.join(dir, "Work/.attachments/Bugs/shot.png")), "the image went along with the note");
+  assert.ok(fs.existsSync(path.join(dir, ".attachments/Bugs/shot.png")), "copied, so a note still naming it where it was keeps it");
+  assert.ok(fs.existsSync(path.join(dir, "Work/.attachments/Bugs/shot.png")), "a deleted note's image stays, for a note still naming it (a squash's)");
+  assert.ok(fs.existsSync(path.join(dir, ".trash/Work/.attachments/Bugs/shot.png")), "and goes with it to Recently Deleted, where it still shows");
+  assert.equal(result.data, true, "never a data: address");
+});
+
+test("squashing notes from two folders copies the images the merged note names into its folder, and image.nvim draws only pictures inside the notes", (t) => {
+  const bin = fs.mkdtempSync(path.join(tmp, "claude-bin-"));
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat >/dev/null\nprintf '# Both\\n\\n- [ ] one\\n- [ ] two\\n  ![shot](.attachments/Two/shot.png)\\n'\n`, { mode: 0o755 });
+  const saved = process.env.PATH;
+  process.env.PATH = `${bin}:${saved}`;
+  t.after(() => { process.env.PATH = saved; });
+  const { result, dir } = lua(`
+    local s = require("notes.store")
+    local a = s.create("A", "One")
+    local f = io.open(a, "w"); f:write("# One\\n\\n- [ ] one\\n"); f:close()
+    local b = s.create("B", "Two")
+    local g = io.open(b, "w"); g:write("# Two\\n\\n- [ ] two\\n  ![shot](.attachments/Two/shot.png)\\n"); g:close()
+    vim.fn.mkdir(vim.fs.dirname(b) .. "/.attachments/Two", "p")
+    local img = io.open(vim.fs.dirname(b) .. "/.attachments/Two/shot.png", "wb"); img:write("\\137PNG"); img:close()
+    local outside = io.open(s.root() .. "/../outside.png", "wb"); outside:write("x"); outside:close()
+    local made
+    require("notes.squash").run({ a, b }, function(path) made = path or false end)
+    vim.wait(5000, function() return made ~= nil end, 20)
+    local resolve = dofile(${JSON.stringify(path.join(__dirname, "../nvim/lua/plugins/image.lua"))}).opts.integrations.markdown.resolve_image_path
+    io.write(vim.json.encode({
+      made = made and s.relative(made),
+      drawn = resolve(made, ".attachments/Two/shot.png") ~= nil,
+      up = resolve(made, "../../outside.png") == nil,
+      data = resolve(made, "data:image/png;base64,iVBORw0KGgo=") == nil,
+      kind = resolve(made, "One.md") == nil,
+    }))
+  `);
+  assert.equal(result.made, "A/Both.md");
+  assert.ok(fs.existsSync(path.join(dir, "A/.attachments/Two/shot.png")), "the image copied into the merged note's folder");
+  assert.equal(result.drawn, true, "a picture beside the note is drawn");
+  assert.equal(result.up, true, "never one outside the notes");
+  assert.equal(result.data, true, "nor a data: address");
+  assert.equal(result.kind, true, "nor a file that isn't a picture");
+});
+
+test("image.nvim keeps a note's pictures while the window the notes pane is in now is in front, wherever M-e moved it", (t) => {
+  const socket = path.join(fs.mkdtempSync("/tmp/img-"), "tmux.sock");
+  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "sleep 60"]);
+  t.after(() => execFileSync("tmux", ["-S", socket, "kill-server"]));
+  const pid = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pid}"], { encoding: "utf8" }).trim();
+  const notesWindow = execFileSync("tmux", ["-S", socket, "display", "-p", "#{window_id}"], { encoding: "utf8" }).trim();
+  const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pane_id}"], { encoding: "utf8" }).trim();
+  const other = execFileSync("tmux", ["-S", socket, "new-window", "-d", "-P", "-F", "#{window_id}", "sleep 60"], { encoding: "utf8" }).trim();
+  process.env.TMUX = `${socket},${pid},0`;
+  process.env.TMUX_PANE = pane;
+  t.after(() => { delete process.env.TMUX; delete process.env.TMUX_PANE; });
+  const { result } = lua(`
+    -- image.nvim stood in for: its tmux helper says which window is in front.
+    local front
+    package.loaded["image/utils/tmux"] = { get_window_id = function() return front end }
+    package.loaded["image"] = { setup = function() end }
+    dofile(${JSON.stringify(path.join(__dirname, "../nvim/lua/plugins/image.lua"))}).config(nil, {})
+    local tmux = require("image/utils/tmux")
+    front = ${JSON.stringify(notesWindow)}
+    local here = tmux.get_window_id()
+    front = ${JSON.stringify(other)}
+    local away = tmux.get_window_id()
+    io.write(vim.json.encode({ here = here, away = away }))
+  `);
+  assert.equal(result.here, "notes", "the notes pane's window in front, wherever it is now");
+  assert.equal(result.away, other, "another in front");
+});

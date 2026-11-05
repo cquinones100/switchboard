@@ -266,6 +266,11 @@ function M.format_items(buf, first, last, visual, typing_col)
     { "s", "Move checked to bottom", function() format.sort_checked(buf, first) end },
     { "u", "Uncheck all", function() format.uncheck_all(buf) end },
     { "D", "Delete checked items", function() format.delete_checked(buf) end },
+    { "Image" },
+    { "v", "Paste image", function()
+      local _, why = require("notes.images").paste(buf)
+      if why then vim.notify("Notes: " .. why, vim.log.levels.WARN) end
+    end },
     { "Table" },
     { "t", "Table", function() tables.insert(buf) end },
     { "r", "Add row", function() tables.add_row(buf, first) end },

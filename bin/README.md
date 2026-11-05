@@ -1454,7 +1454,17 @@ beside the list. Enter opens it. It takes the place of vim's Ctrl-F (page
 down) in notes only, and needs `fzf` (`brew install fzf`).
 
 Everything is in the Format menu, Ctrl-P, which acts on the selection when
-opened from Visual mode. In a note it takes the place of your config's
+opened from Visual mode. Its Paste image (`v`) puts the image on the
+clipboard (a screenshot copied with Cmd-Ctrl-Shift-4, say) into the note,
+saved beside it in `.attachments/<note>/` in its folder, which the list
+leaves out, as `![name](path)` on a line of its own, indented under the
+item the cursor is on: the image goes with the item and Claude, working the
+note's items (`/note-watch`, `/note-tickets`), reads it with them. With
+ImageMagick installed (`brew install imagemagick`, which `./setup.sh` lists
+among the optional parts), the picture is drawn in the note under its line
+(image.nvim, through tmux for the notes pane alone, the `notes_images`
+setting); else it shows as its name. Enter or a click on it opens it in Quick
+Look. In a note it takes the place of your config's
 Ctrl-P (Telescope's file finder), which works as before everywhere else.
 The common ones also have their own `<leader>` key, picked to stay clear of
 the ones your config uses:

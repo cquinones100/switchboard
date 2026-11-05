@@ -49,6 +49,22 @@ function M.run(paths, done)
       if not f then return done(nil, "couldn't write the new note") end
       f:write(text .. "\n")
       f:close()
+      -- Each image the merged note names, copied into its folder from the
+      -- folder of the note it came from when that is another, before the
+      -- originals go to Recently Deleted (notes.images).
+      local here = vim.fs.dirname(path)
+      for rel in text:gmatch("!%[[^%]]*%]%((%.attachments/[^%)%s]+)%)") do
+        if not rel:find("..", 1, true) and not vim.uv.fs_stat(here .. "/" .. rel) then
+          for _, old in ipairs(paths) do
+            local src = vim.fs.dirname(old) .. "/" .. rel
+            if vim.uv.fs_stat(src) then
+              vim.fn.mkdir(vim.fs.dirname(here .. "/" .. rel), "p")
+              vim.uv.fs_copyfile(src, here .. "/" .. rel)
+              break
+            end
+          end
+        end
+      end
       local rels, titles = {}, {}
       for _, old in ipairs(paths) do
         table.insert(rels, store.relative(old))

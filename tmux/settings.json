@@ -277,6 +277,13 @@
     "default": true
   },
   {
+    "key": "notes_images",
+    "category": "Notes",
+    "label": "Images drawn in a note",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, through the terminal's graphics, with ImageMagick installed; off, it is its name, which Enter opens in Quick Look. Takes effect when Notes next starts",
+    "default": true
+  },
+  {
     "key": "note_tab_prompt",
     "category": "Notes",
     "label": "Tell a note's new tab its note",

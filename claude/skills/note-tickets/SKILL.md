@@ -22,7 +22,7 @@ Arguments: which notes to read. Any of a folder (`Work`), a note (`Work/Planning
 
 1. **Find the notes.** The notes directory is `$NOTES_DIR`, or `~/Notes`. Resolve the arguments to notes: a folder means every `.md` under it, a tag every note whose text has it (a `#word` at the start of a line or after a space, outside code), a title the note whose first line is `# <title>`. If one matches nothing, say so; if a title matches more than one, ask.
 
-2. **Collect the open items.** An item is an unticked checklist line, `- [ ] …`, at any indent; ticked ones (`- [x]`) are done. Skip any item that already names a ticket: an ID like `ABC-123`, or a Linear issue link. A nested item belongs to the one above it; keep it with its parent rather than as an item of its own. Keep each item's note and line number. Don't infer tasks from prose: only checklist items count. If the notes have none, say so and stop.
+2. **Collect the open items.** An item is an unticked checklist line, `- [ ] …`, at any indent; ticked ones (`- [x]`) are done. Skip any item that already names a ticket: an ID like `ABC-123`, or a Linear issue link. A nested item belongs to the one above it; keep it with its parent rather than as an item of its own. Keep each item's note and line number. An image in an item or under it (`![name](path)`, its path from the note's folder) is part of it: read it with the Read tool along with the item's text. Don't infer tasks from prose: only checklist items count. If the notes have none, say so and stop.
 
 3. **Settle the team.** Read `linearTeam` and `linearLabels` from `~/.config/switchboard/linear.json`, as `/shape` does. If `linearTeam` is missing, ask, and suggest adding it to that file.
 

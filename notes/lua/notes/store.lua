@@ -358,10 +358,33 @@ end
 -- Moves a note's file, keeping its pin and the tabs linked to it, and returns
 -- its new path. A note going to or coming back from Recently Deleted leaves
 -- its tabs alone: a deleted note is no tab's note.
+-- The images a note names (notes.images: ![name](.attachments/…), a path
+-- from the note's folder) copied along when the note moves to another
+-- folder, so its links still find them there; copied, not moved, since
+-- another note (a squash's original, restored) may still name them where
+-- they were. One already at the new place is left as it is.
+local function carry_attachments(from, to)
+  local old, new = vim.fs.dirname(from), vim.fs.dirname(to)
+  if old == new then return end
+  for rel in (read_file(to) or ""):gmatch("!%[[^%]]*%]%((%.attachments/[^%)%s]+)%)") do
+    if not rel:find("..", 1, true) then
+      local src, dst = old .. "/" .. rel, new .. "/" .. rel
+      if uv.fs_stat(src) and not uv.fs_stat(dst) then
+        vim.fn.mkdir(vim.fs.dirname(dst), "p")
+        uv.fs_copyfile(src, dst)
+      end
+    end
+  end
+end
+
 local function move_file(path, to)
   if path == to then return path end
   vim.fn.mkdir(vim.fs.dirname(to), "p")
   assert(uv.fs_rename(path, to))
+  -- Into Recently Deleted and back too, so a deleted note still shows its
+  -- images there, and one pasted there comes back with it; copied, so the
+  -- notes still naming them where they were (a squash's merged note) keep them.
+  carry_attachments(path, to)
   local from_rel, to_rel = M.relative(path), M.relative(to)
   repin(from_rel, to_rel)
   if not M.in_trash(path) and not M.in_trash(to) then
