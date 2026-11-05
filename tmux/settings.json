@@ -193,6 +193,13 @@
     "default": true
   },
   {
+    "key": "diff_story_progress",
+    "category": "Diff",
+    "label": "Diff story progress",
+    "description": "While M-d's story is told, its cover shows what Haiku is reading, each chapter as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
+    "default": true
+  },
+  {
     "key": "diff_story_ahead",
     "category": "Diff",
     "label": "Diff story told ahead",

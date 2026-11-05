@@ -418,6 +418,22 @@ end
 -- asked for: each view that opens the same diff gets it, and it is asked
 -- for once.
 local stories, waiting = {}, {}
+-- The answer so far of each story being told, by key, as this Neovim asks
+-- Haiku or follows another Neovim's ask: { text, started }, for the cover.
+local progress = {}
+-- The progress files this Neovim is writing, taken away if it quits first,
+-- so another one doesn't wait on an ask no one is finishing.
+local owned, leaving = {}, false
+local function own(path)
+  owned[path] = true
+  if leaving then return end
+  leaving = true
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function()
+      for each in pairs(owned) do os.remove(each) end
+    end,
+  })
+end
 -- While Haiku reads the change, a spinner and a few words on a line of their
 -- own under the list's first (a virtual line, since the path on the first
 -- fills the list's width), so the list in the kinds' order isn't taken for
@@ -480,15 +496,40 @@ local function cover(view)
     view.cover = vim.api.nvim_open_win(buf, true, { relative = "editor", row = 0, col = 0, width = width, height = height, style = "minimal", zindex = 200 })
     vim.wo[view.cover].winhighlight = "Normal:Normal"
     local frame = 0
+    local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
+    -- With the diff_story_progress setting, what is read and the chapters
+    -- as Haiku names them, a block centred as one so its ticks line up, or
+    -- (t) Haiku's answer itself so far, its last lines; else the spinner.
     local function draw()
       if not vim.api.nvim_buf_is_valid(buf) then return end
       frame = frame % #SPINNER + 1
+      local p = view.want and progress[view.want]
+      local block, keys
+      if not vim.g.diff_progress then
+        block, keys = { SPINNER[frame] .. " Telling the change as a story" }, "Esc shows the diff now"
+      elseif view.raw then
+        block, keys = { SPINNER[frame] .. " Haiku's answer so far" }, "Esc shows the diff now · t shows the chapters"
+        local room = math.max(width - 8, 20)
+        local wrapped = {}
+        for _, line in ipairs(vim.split(p and p.text or "", "\n")) do
+          repeat
+            table.insert(wrapped, vim.fn.strcharpart(line, 0, room))
+            line = vim.fn.strcharpart(line, room)
+          until line == ""
+        end
+        vim.list_extend(block, vim.list_slice(wrapped, math.max(1, #wrapped - (height - 6) + 1)))
+      else
+        block = require("diffstory").progress(p, view.reading, SPINNER[frame], os.time())
+        keys = "Esc shows the diff now · t shows Haiku's answer as it comes"
+      end
+      local wide = 0
+      for _, line in ipairs(block) do wide = math.max(wide, vim.fn.strdisplaywidth(line)) end
+      local pad = string.rep(" ", math.max(0, math.floor((width - wide) / 2)))
       local lines = {}
-      for _ = 1, math.floor(height / 2) - 1 do table.insert(lines, "") end
-      local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
-      table.insert(lines, centre(SPINNER[frame] .. " Telling the change as a story"))
+      for _ = 1, math.max(0, math.floor((height - #block - 2) / 2)) do table.insert(lines, "") end
+      for _, line in ipairs(block) do table.insert(lines, pad .. line) end
       table.insert(lines, "")
-      table.insert(lines, centre("Esc shows the diff now"))
+      table.insert(lines, centre(keys))
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
     end
     draw()
@@ -497,6 +538,10 @@ local function cover(view)
     for _, key in ipairs({ "<Esc>", "q" }) do
       vim.keymap.set("n", key, function() uncover(view) end, { buffer = buf, nowait = true })
     end
+    vim.keymap.set("n", "t", function()
+      view.raw = not view.raw
+      draw()
+    end, { buffer = buf, nowait = true })
   end, 300)
 end
 
@@ -508,6 +553,12 @@ local function ask_story(view)
     if entry.status == "?" then table.insert(untracked, entry.path) end
     local stats = entry.stats or {}
     table.insert(entries, { path = entry.path, additions = stats.additions, deletions = stats.deletions })
+  end
+  -- What Haiku is given, for the cover's first line.
+  view.reading = { files = #entries, additions = 0, deletions = 0 }
+  for _, e in ipairs(entries) do
+    view.reading.additions = view.reading.additions + (e.additions or 0)
+    view.reading.deletions = view.reading.deletions + (e.deletions or 0)
   end
   local function give(target, made)
     stop_loading(target)
@@ -621,32 +672,117 @@ local function ask_story(view)
       if waiting[key] then return table.insert(waiting[key], view) end
       waiting[key] = { view }
       vim.fn.mkdir(dir, "p")
-      count_request("diff story")
-      vim.system({
-        claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
-        "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT, "--output-format", "text",
-      }, { stdin = ds.input(entries, ds.split(diff.stdout)), cwd = dir, timeout = 120000 }, function(result)
-        vim.schedule(function()
-          local views = waiting[key] or {}
-          waiting[key] = nil
-          local told = result.code == 0 and ds.parse(result.stdout, paths, generated)
-          stories[key] = told or false
-          if told then
-            vim.fn.writefile(vim.split(result.stdout, "\n"), file)
-          end
-          -- Only to the views still showing this diff; a view asking about
-          -- a newer one keeps its spinner until that answer comes.
-          for _, each in ipairs(views) do
-            if each.want == key then
-              stop_loading(each)
-              if told then give(each, told) else
-                settle(each, false)
-                ask_order(each)
-              end
+      -- Only to the views still showing this diff; a view asking about a
+      -- newer one keeps its spinner until that answer comes.
+      local function finish(told)
+        local views = waiting[key] or {}
+        waiting[key] = nil
+        progress[key] = nil
+        stories[key] = told or false
+        for _, each in ipairs(views) do
+          if each.want == key then
+            stop_loading(each)
+            if told then give(each, told) else
+              settle(each, false)
+              ask_order(each)
             end
           end
+        end
+      end
+      local partial = file:gsub("%.txt$", ".partial")
+      local function ask()
+        progress[key] = { text = "", started = os.time() }
+        own(partial)
+        -- The answer so far in <key>.partial beside the story's file, so
+        -- another Neovim asked for the same story (M-d while it is told
+        -- ahead, or the other way round) follows this ask rather than paying
+        -- for its own: rewritten when the answer grows, at most every 250ms,
+        -- and every two seconds whatever, so a file left by a Neovim gone is
+        -- known by its age.
+        local written, wrote_at = nil, 0
+        local function save()
+          local p = progress[key]
+          if not p or (p.text == written and vim.uv.now() - wrote_at < 2000) then return end
+          local tmp = partial .. "." .. vim.fn.getpid()
+          if pcall(vim.fn.writefile, { vim.json.encode(p) }, tmp) then vim.uv.fs_rename(tmp, partial) end
+          written, wrote_at = p.text, vim.uv.now()
+        end
+        save()
+        local saving = vim.uv.new_timer()
+        saving:start(250, 250, vim.schedule_wrap(save))
+        -- With the diff_story_progress setting, the answer streamed, each
+        -- piece of text added to the answer so far as it comes, the whole
+        -- answer from the final result; else told at the end, as text.
+        local stream = vim.g.diff_progress
+        local args = {
+          claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
+          "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT,
+        }
+        vim.list_extend(args, stream and { "--output-format", "stream-json", "--include-partial-messages", "--verbose" } or { "--output-format", "text" })
+        local opts = { stdin = ds.input(entries, ds.split(diff.stdout)), cwd = dir, timeout = 120000 }
+        local pending, answer = "", nil
+        local function read(line)
+          local ok, event = pcall(vim.json.decode, line)
+          if not (ok and type(event) == "table") then return end
+          local inner = type(event.event) == "table" and event.event or {}
+          local delta = type(inner.delta) == "table" and inner.delta or {}
+          if event.type == "stream_event" and inner.type == "content_block_delta" and delta.type == "text_delta" and type(delta.text) == "string" then
+            local p = progress[key]
+            if p then p.text = p.text .. delta.text end
+          elseif event.type == "result" then
+            answer = event.is_error ~= true and type(event.result) == "string" and event.result or nil
+          end
+        end
+        if stream then
+          opts.stdout = function(_, data)
+            if not data then return end
+            pending = pending .. data
+            for line in pending:gmatch("([^\n]*)\n") do read(line) end
+            pending = pending:match("[^\n]*$")
+          end
+        end
+        count_request("diff story")
+        vim.system(args, opts, function(result)
+          vim.schedule(function()
+            saving:stop()
+            saving:close()
+            if stream then read(pending) end
+            local text = result.code == 0 and (stream and answer or result.stdout) or nil
+            local told = text and ds.parse(text, paths, generated)
+            -- The story kept before its progress goes, so a Neovim following
+            -- finds one or the other.
+            if told then vim.fn.writefile(vim.split(text, "\n"), file) end
+            os.remove(partial)
+            owned[partial] = nil
+            finish(told)
+          end)
         end)
-      end)
+      end
+      -- Another Neovim telling this story now (its progress updated in the
+      -- last 10 seconds): its progress shown on this cover, its story taken
+      -- from the cache once kept; asked here only if it stops (its progress
+      -- gone, or not updated for 30 seconds) with no story kept.
+      local stat = vim.uv.fs_stat(partial)
+      if not (stat and os.time() - stat.mtime.sec < 10) then return ask() end
+      local following = vim.uv.new_timer()
+      following:start(0, 250, vim.schedule_wrap(function()
+        local function kept()
+          local read_ok, lines = pcall(vim.fn.readfile, file)
+          return read_ok and ds.parse(table.concat(lines, "\n"), paths, generated)
+        end
+        local made = kept()
+        local now = vim.uv.fs_stat(partial)
+        if not made and not now then made = kept() end
+        if made or not now or os.time() - now.mtime.sec >= 30 then
+          following:stop()
+          following:close()
+          if made then return finish(made) end
+          return ask()
+        end
+        local read_ok, lines = pcall(vim.fn.readfile, partial)
+        local ok, p = pcall(vim.json.decode, read_ok and table.concat(lines, "\n") or "")
+        if ok and type(p) == "table" and type(p.text) == "string" and type(p.started) == "number" then progress[key] = p end
+      end))
     end)
   end)
 end
@@ -834,6 +970,12 @@ end
 local function pages_on()
   if not vim.env.TMUX then return true end
   return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_pages" })) ~= "off"
+end
+
+-- Whether the diff_story_progress setting is on, as diff_order's is read below.
+local function progress_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_progress" })) ~= "off"
 end
 
 -- Whether the diff_story setting is on, as diff_order's is read below.
@@ -1093,6 +1235,7 @@ return {
     vim.g.diff_order = order_on()
     vim.g.diff_story = vim.g.diff_order and story_on()
     vim.g.diff_pages = vim.g.diff_story and pages_on()
+    if vim.g.diff_progress == nil then vim.g.diff_progress = vim.g.diff_story and progress_on() end
     if vim.g.diff_list_wide == nil then vim.g.diff_list_wide = wide_on() end
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"

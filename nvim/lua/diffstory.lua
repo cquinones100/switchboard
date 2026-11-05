@@ -122,6 +122,56 @@ function M.parse(answer, paths, generated)
   return { chapters = chapters, place = at, chapter = number }
 end
 
+-- What Haiku has written so far, as its answer streams in, for M-d's cover:
+-- the titles of the chapters whose title is whole, and how many chapters
+-- have started, one more than the titles while the last one's title is
+-- still being written. Read without parsing the JSON, which is cut short.
+function M.partial(text)
+  text = text or ""
+  local titles, started, at = {}, 0, 1
+  while true do
+    local s, e = text:find('"title"%s*:%s*"', at)
+    if not s then break end
+    at = e + 1
+    -- A key, not the words "title" quoted inside another string.
+    if s == 1 or text:sub(s - 1, s - 1) ~= "\\" then
+      started = started + 1
+      local i, closed = e + 1, nil
+      while i <= #text and not closed do
+        local c = text:sub(i, i)
+        if c == "\\" then i = i + 2 elseif c == '"' then closed = i else i = i + 1 end
+      end
+      if not closed then break end
+      local ok, title = pcall(vim.json.decode, text:sub(e, closed))
+      if ok and type(title) == "string" then
+        local tidy = vim.trim(title):gsub("%s+", " ")
+        table.insert(titles, tidy)
+      end
+      at = closed + 1
+    end
+  end
+  return { titles = titles, started = started }
+end
+
+-- The cover's lines while a story is told: what is read, then each chapter
+-- as Haiku names it, ticked once the next has started, the one being written
+-- with the spinner's frame. `p` is { text, started } (the answer so far, and
+-- when the ask began, in seconds), `reading` { files, additions, deletions }.
+function M.progress(p, reading, spin, now)
+  local lines = {}
+  local elapsed = p and math.max(0, now - p.started) or nil
+  table.insert(lines, spin .. " Telling the change as a story" .. (elapsed and ("   %d:%02d"):format(math.floor(elapsed / 60), elapsed % 60) or ""))
+  if reading then
+    table.insert(lines, ("  Read %d %s (+%d −%d)"):format(reading.files, reading.files == 1 and "file" or "files", reading.additions, reading.deletions))
+  end
+  local part = M.partial(p and p.text)
+  for i, title in ipairs(part.titles) do
+    table.insert(lines, ("  %s %d. %s"):format(i < part.started and "✓" or spin, i, title))
+  end
+  if part.started > #part.titles then table.insert(lines, ("  %s %d. …"):format(spin, part.started)) end
+  return lines
+end
+
 -- Where the list's headings go, as it is shown: `rows` are its files top to
 -- bottom, each { chapter = its number or nil, section = the list's section it
 -- is in }. A row starts a chapter, and gets its heading, when it is the first

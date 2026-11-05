@@ -45,7 +45,7 @@ tmux new-session -A -s main
 | `M-s` | Into the sidebar and back out |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-f` | Pin the tab to the top of Needs you |
-| `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, its files grouped into chapters that tell the change as a story (`]c` / `[c` between them, `]p` / `[p` a chapter at a time as if each were a commit, `E` narrowing or widening the file list), the story told in the background for each new commit so it opens at once |
+| `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, its files grouped into chapters that tell the change as a story (`]c` / `[c` between them, `]p` / `[p` a chapter at a time as if each were a commit, `E` narrowing or widening the file list), the story told in the background for each new commit so it opens at once, and while one is being told, each chapter shown as Haiku names it (`t` shows its answer as it comes) |
 
 `M` is Option. Tips in the top-right corner teach the rest the first time each would help. Menus and questions take a click too: one click takes an option or answers Yes or No, and a click outside a box closes it.
 
