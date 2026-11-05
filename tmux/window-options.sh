@@ -23,16 +23,8 @@ export LC_ALL=en_US.UTF-8
 
 OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived)
 
-# Resurrect's own folder, found as it finds it (scripts/helpers.sh): its
-# @resurrect-dir, with ~, $HOME and $HOSTNAME expanded, else ~/.tmux/resurrect
-# when that is there, else the XDG one.
-if [ -d "$HOME/.tmux/resurrect" ]; then
-  dir="$HOME/.tmux/resurrect"
-else
-  dir="${XDG_DATA_HOME:-$HOME/.local/share}/tmux/resurrect"
-fi
-custom=$(tmux show -gqv @resurrect-dir 2>/dev/null)
-[ -n "$custom" ] && dir=$(printf '%s' "$custom" | sed "s,\$HOME,$HOME,g; s,\$HOSTNAME,$(hostname),g; s,~,$HOME,g")
+# Resurrect's own folder, found as it finds it.
+dir=$("${0%/*}/resurrect-dir.sh")
 file="$dir/window-options.tsv"
 [ -d "$dir" ] || exit 0
 last=$(readlink "$dir/last" 2>/dev/null)
