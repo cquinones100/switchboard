@@ -171,6 +171,16 @@ test("a Jira that answers not found because it refused the token says so, rather
   await assert.rejects(jira.issue("AB-2"), /may have expired/);
 });
 
+test("a bulk fetch from a Jira that refused the token says so, rather than that none of the issues are there", async () => {
+  routes = { "POST /rest/api/3/issue/bulkfetch": () => [200, { issues: [], issueErrors: [] }], "GET /rest/api/3/myself": () => [401, {}] };
+  await assert.rejects(jira.issues(["AB-2", "AB-3"]), /may have expired/);
+});
+
+test("a search from a Jira that refused the token says so, rather than that nothing matched", async () => {
+  routes = { "POST /rest/api/3/search/jql": () => [200, { issues: [], isLast: true }], "GET /rest/api/3/myself": () => [401, {}] };
+  await assert.rejects(jira.assigned(new Date(Date.now() - 86_400_000).toISOString()), /may have expired/);
+});
+
 test("Jira's issue comes back in Linear's shape: its status category as the state's type, its epic as the project", async () => {
   routes = {
     "GET /rest/api/3/myself": () => [200, { displayName: "Me" }],
