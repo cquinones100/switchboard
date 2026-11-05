@@ -328,6 +328,16 @@ test("the shell scripts' CLI answers from Jira, with exit codes for no such tick
     delete process.env.JIRA_SITE;
     try {
       assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+      // Never plain http but on this Mac, since every request carries the token.
+      fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "http://acme.atlassian.net" }));
+      assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+      // Nor a host that only looks like this Mac's before an @.
+      fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "http://localhost:@acme.atlassian.net" }));
+      assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+      // The address of a board pasted in for the site.
+      fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "https://acme.atlassian.net/jira/software/projects/AB/boards/1?selectedIssue=AB-1" }));
+      assert.deepEqual(await cli("url", "AB-2"), { code: 0, out: "https://acme.atlassian.net/browse/AB-2" });
+      fs.writeFileSync(path.join(own, "jira.json"), JSON.stringify({ jiraSite: "acme.atlassian.net", jiraEmail: "me@acme.com", jiraApiToken: "secret", jiraProject: "AB", jiraLabels: ["web"] }));
       // Where tickets are filed, and nothing secret.
       assert.deepEqual(JSON.parse((await cli("config")).out), { tracker: "Jira", site: "https://acme.atlassian.net", team: "AB", labels: ["web"] });
     } finally {
