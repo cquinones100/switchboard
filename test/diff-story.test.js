@@ -129,6 +129,7 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
       vim.api.nvim_win_set_cursor(0, { 3, 0 })
       vim.api.nvim_feedkeys(vim.keycode("]c"), "x", false)
       local jumped = vim.api.nvim_get_current_line()
+      local opened = vim.api.nvim_win_get_width(panel.winid)
       vim.api.nvim_feedkeys("E", "x", false)
       local wide = vim.api.nvim_win_get_width(panel.winid)
       vim.api.nvim_feedkeys("E", "x", false)
@@ -157,7 +158,7 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
       for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_config(w).relative ~= "" and table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n"):find("Telling the change", 1, true) then uncovered = false end
       end
-      io.write(vim.json.encode({ covered = vim.g.covered, uncovered = uncovered, pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, wide = wide, narrow = narrow }))`, "-c", "qa"],
+      io.write(vim.json.encode({ covered = vim.g.covered, uncovered = uncovered, pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, opened = opened, wide = wide, narrow = narrow }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -173,7 +174,8 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
     { page: 0, files: ["src/model.js", "test/model.test.js", "src/ui.js"] },
     { page: 0, files: ["src/model.js", "test/model.test.js", "src/ui.js"] },
   ], "]p turns to each chapter's own page and stops at the last; [p goes back, and from the first to the whole diff");
-  assert.deepEqual([result.wide, result.narrow], [32, 30], "E widens the list to its longest path, and again narrows it");
+  assert.equal(result.opened, 32, "the list opens wide enough for its longest path");
+  assert.deepEqual([result.wide, result.narrow], [30, 32], "E narrows it, and again widens it");
   assert.equal(result.covered, true, "the diff waits under a cover while its story is told");
   assert.equal(result.uncovered, true, "and is shown once it is");
   assert.equal(result.telling.length, 1, "while Haiku reads the change, the list says so");
@@ -208,7 +210,7 @@ test("in a working tree's list the headings and ]c follow its sections: a chapte
   fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '${answer}'\n`, { mode: 0o755 });
   const run = spawnSync(
     "nvim",
-    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen", "-c", "sleep 4000m", "-c", `lua
+    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "--cmd", "let g:diff_list_wide = v:false", "-c", "DiffviewOpen", "-c", "sleep 4000m", "-c", `lua
       local view = require("diffview.lib").get_current_view()
       local panel = view.panel
       local marks = {}
@@ -243,7 +245,7 @@ test("in a working tree's list the headings and ]c follow its sections: a chapte
       vim.wait(500)
       local shown = require("diffview.lib").get_current_view()
       local page = vim.tbl_map(function(e) return e.path end, shown.panel:ordered_file_list())
-      io.write(vim.json.encode({ headed = headed, next = next, back = back, page = page, opened = shown.cur_entry and shown.cur_entry.path }))`, "-c", "qa"],
+      io.write(vim.json.encode({ headed = headed, next = next, back = back, page = page, opened = shown.cur_entry and shown.cur_entry.path, width = vim.api.nvim_win_get_width(panel.winid) }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "worktree-cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -255,6 +257,7 @@ test("in a working tree's list the headings and ]c follow its sections: a chapte
   assert.deepEqual(result.next, ["staged", "src/model.js"], "]c goes on into the next section, to the staged copy of a file in both");
   assert.deepEqual(result.back, ["working", "src/ui.js"], "[c comes back");
   assert.notEqual(result.opened, "src/extra.js", "nor does it open on one");
+  assert.equal(result.width, 30, "with the diff_list_wide setting off, the list opens narrow");
   assert.deepEqual(result.page.sort(), ["src/model.js", "src/model.js", "test/model.test.js"], "the first page holds its chapter's files in both sections, no other chapter's untracked one");
 });
 

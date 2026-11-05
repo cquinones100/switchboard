@@ -200,6 +200,13 @@
     "default": true
   },
   {
+    "key": "diff_list_wide",
+    "category": "Diff",
+    "label": "Diff file list wide",
+    "description": "M-d's file list opens wide enough for its longest path (at most half the screen), E narrowing it; off, it opens narrow and E widens it",
+    "default": true
+  },
+  {
     "key": "diff_story_pages",
     "category": "Diff",
     "label": "Diff story a page at a time",

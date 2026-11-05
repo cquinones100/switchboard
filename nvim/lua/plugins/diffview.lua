@@ -143,22 +143,26 @@ local scrolls = {
 -- again to the new width. Every view's list shares the width, as diffview
 -- reads it from its config whenever it lays a list out.
 local LIST_WIDTH = 30
+-- The width that fits the list's longest path, the status and counts drawn
+-- beside it, at most half the screen.
+local function fit_width(panel)
+  local longest = 0
+  for _, entry in ipairs(panel:ordered_file_list()) do longest = math.max(longest, vim.fn.strdisplaywidth(entry.path)) end
+  return math.max(LIST_WIDTH, math.min(longest + 14, math.floor(vim.o.columns / 2)))
+end
+local function set_width(panel, width)
+  require("diffview.config").get_config().file_panel.win_config.width = width
+  if not panel:is_open() then return end
+  panel:resize()
+  panel:render()
+  panel:redraw()
+end
 local function widen_list()
   local view = require("diffview.lib").get_current_view()
   local panel = view and view.panel
   if not (panel and panel.ordered_file_list and panel:is_open()) then return end
-  local config = require("diffview.config").get_config().file_panel.win_config
-  if config.width ~= LIST_WIDTH then
-    config.width = LIST_WIDTH
-  else
-    local longest = 0
-    for _, entry in ipairs(panel:ordered_file_list()) do longest = math.max(longest, vim.fn.strdisplaywidth(entry.path)) end
-    -- The path, and the status and counts drawn beside it.
-    config.width = math.max(LIST_WIDTH, math.min(longest + 14, math.floor(vim.o.columns / 2)))
-  end
-  panel:resize()
-  panel:render()
-  panel:redraw()
+  local width = require("diffview.config").get_config().file_panel.win_config.width
+  set_width(panel, width ~= LIST_WIDTH and LIST_WIDTH or fit_width(panel))
 end
 local widen = { "n", "E", widen_list, { desc = "Widen the file list, or narrow it again" } }
 
@@ -821,6 +825,12 @@ redraw_bars = function(view)
 end
 
 -- Whether the diff_story_pages setting is on, as diff_order's is read below.
+-- Whether the diff_list_wide setting is on, as diff_order's is read below.
+local function wide_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_list_wide" })) ~= "off"
+end
+
 local function pages_on()
   if not vim.env.TMUX then return true end
   return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_pages" })) ~= "off"
@@ -1013,6 +1023,16 @@ return {
             if view.keep_panel and view.panel:is_open() then view.panel:focus() end
             view.keep_panel = false
           end)
+          -- The list opens wide enough for its longest path (diff_list_wide),
+          -- once its files are known, on the whole diff only: a page keeps
+          -- the width the whole diff has, and E's choice stands after.
+          if view.panel and view.panel.ordered_file_list and vim.g.diff_list_wide and not vim.g.diff_ahead and not view.page then
+            view.emitter:on("files_updated", function()
+              if view.widened then return end
+              view.widened = true
+              vim.schedule(function() set_width(view.panel, fit_width(view.panel)) end)
+            end)
+          end
           if view.panel and view.panel.ordered_file_list and vim.g.diff_order then
             view.emitter:on("files_updated", function()
               if view.page then
@@ -1073,6 +1093,7 @@ return {
     vim.g.diff_order = order_on()
     vim.g.diff_story = vim.g.diff_order and story_on()
     vim.g.diff_pages = vim.g.diff_story and pages_on()
+    if vim.g.diff_list_wide == nil then vim.g.diff_list_wide = wide_on() end
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"
       sort_lists()
