@@ -137,6 +137,17 @@ set_one() {
     echo "not a setting and value: $key $value" >&2
     return 1
   fi
+  # A file that is there but can't be read as a JSON object is never written
+  # over, since starting from nothing would lose every other setting in it;
+  # the version before each write is kept beside it as settings.json.bak.
+  if [ -e "$FILE" ]; then
+    # One JSON object, the whole file: jq alone would take the last of several.
+    if ! jq -s -e 'length == 1 and (.[0] | type == "object")' "$FILE" >/dev/null 2>&1; then
+      echo "${FILE/#$HOME/~} can't be read as JSON; fix it by hand, then set it again" >&2
+      return 1
+    fi
+    cp -p "$FILE" "$FILE.bak" || return 1
+  fi
   mkdir -p "$(dirname "$FILE")"
   mine | jq --arg k "$key" --argjson pick "$json" 'if $pick.value == $pick.default then del(.[$k]) else .[$k] = $pick.value end' >"$FILE.$$.tmp" &&
     mv "$FILE.$$.tmp" "$FILE"

@@ -75,3 +75,42 @@ test("with the github setting off, keys tagged #github only say why, once, and l
   assert.doesNotMatch(tmux("list-keys", "-N", "-T", "root"), /#github/);
   assert.match(tmux("list-keys", "-T", "root"), /M-i +display-message ticket/);
 });
+
+test("a settings file that can't be read is never written over, and each write keeps the one before as settings.json.bak", () => {
+  const own = path.join(tmp, "own.json");
+  const shEnv = { ...env, SWITCHBOARD_SETTINGS: own };
+  const sh = (...args) => require("node:child_process").spawnSync("bash", [path.join(repo, "tmux/settings.sh"), ...args], { env: shEnv, encoding: "utf8" });
+
+  fs.writeFileSync(own, JSON.stringify({ notifications: false }));
+  assert.equal(sh("set", "tips", "off").status, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(own, "utf8")), { notifications: false, tips: false });
+  assert.deepEqual(JSON.parse(fs.readFileSync(`${own}.bak`, "utf8")), { notifications: false }, "settings.sh keeps the one before");
+
+  fs.writeFileSync(own, '{"notifications": false,');
+  const refused = sh("set", "tips", "on");
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /can't be read as JSON/);
+  assert.equal(fs.readFileSync(own, "utf8"), '{"notifications": false,', "left as it was");
+  fs.writeFileSync(own, '{"notifications": false} {}');
+  assert.notEqual(sh("set", "tips", "on").status, 0, "nor a file of two documents");
+  assert.equal(fs.readFileSync(own, "utf8"), '{"notifications": false} {}');
+  fs.writeFileSync(own, '{"notifications": false,');
+
+  // lib/settings.js, the Settings view's writer, the same.
+  const saved = process.env.SWITCHBOARD_SETTINGS;
+  process.env.SWITCHBOARD_SETTINGS = own;
+  delete require.cache[require.resolve("../lib/settings")];
+  const { writeSetting } = require("../lib/settings");
+  try {
+    assert.throws(() => writeSetting("tips", true), /can't be read as JSON/);
+    assert.equal(fs.readFileSync(own, "utf8"), '{"notifications": false,', "left as it was");
+    fs.writeFileSync(own, JSON.stringify({ notifications: false }));
+    writeSetting("tips", false);
+    assert.deepEqual(JSON.parse(fs.readFileSync(own, "utf8")), { notifications: false, tips: false });
+    assert.deepEqual(JSON.parse(fs.readFileSync(`${own}.bak`, "utf8")), { notifications: false }, "and keeps the one before");
+  } finally {
+    if (saved === undefined) delete process.env.SWITCHBOARD_SETTINGS;
+    else process.env.SWITCHBOARD_SETTINGS = saved;
+    delete require.cache[require.resolve("../lib/settings")];
+  }
+});

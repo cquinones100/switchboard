@@ -47,7 +47,9 @@ in, starting from what it is (empty unsets it), or opens the whole file in
 Neovim. The options are kept in
 `~/.config/switchboard/settings.json`, only what differs from the
 defaults in `tmux/settings.json`, and a change made by hand there takes
-effect at once too.
+effect at once too. A file that can't be read as JSON (a typo in a hand
+edit) is never written over: Settings says so until it's fixed. The version
+before each change is kept beside it as `settings.json.bak`.
 
 New to it, you get a tip in the top-right corner the first time a key would
 help: when a tab first waits on you or finishes (`M-a`), once you have five
