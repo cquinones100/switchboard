@@ -311,7 +311,7 @@ case "${1:-}" in
     # no longer where its tab's name came from (window-names.sh's @tab_path)
     # names the tabs again, in the background.
     if [ "${event:-}" = Stop ]; then
-      tmux if -F -t "$TMUX_PANE" '#{!=:#{pane_current_path},#{@tab_path}}' "run-shell -b '~/.config/tmux/window-names.sh #{q:session_name}'" 2>/dev/null
+      tmux if -F -t "$TMUX_PANE" '#{!=:#{pane_current_path},#{@tab_path}}' "run-shell -b -t $TMUX_PANE '~/.config/tmux/window-names.sh #{q:session_name}'" 2>/dev/null
     fi
     # The first Claude to start in a worktree brings the tip on its PR's keys
     # (tip.sh), with GitHub on.
@@ -319,7 +319,7 @@ case "${1:-}" in
       tmux if -F -t "$TMUX_PANE" '#{&&:#{&&:#{!:#{@tip_seen_worktree}},#{!=:#{@setting_github},off}},#{m:*/.claude/worktrees/*,#{pane_current_path}}}' "run-shell -b '~/.config/tmux/tip.sh show worktree'" 2>/dev/null
       # One Claude to a tab: one starting beside another moves to a tab of its
       # own (one-claude.sh), in the background, with the setting on.
-      tmux if -F -t "$TMUX_PANE" '#{!=:#{@setting_one_claude_per_tab},off}' "run-shell -b '~/.config/tmux/one-claude.sh #{q:pane_id}'" 2>/dev/null
+      tmux if -F -t "$TMUX_PANE" '#{!=:#{@setting_one_claude_per_tab},off}' "run-shell -b -t $TMUX_PANE '~/.config/tmux/one-claude.sh #{q:pane_id}'" 2>/dev/null
     fi
     ;;
 

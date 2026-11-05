@@ -1264,6 +1264,35 @@ test("a Claude started in a tab already running one moves to a tab of its own", 
   assert.equal(tmux("display", "-p", "-t", first, "#{window_id}"), window, "alone in its tab, it stays");
 });
 
+test("a Claude starting alone in a tab moves nothing, even while the tab in front holds two", async (t) => {
+  const claude = `${process.execPath} -e "setTimeout(() => {}, 60000)"`;
+  fs.mkdirSync(path.join(home, ".claude/sessions"), { recursive: true });
+  // agent-state.sh runs the installed scripts, as setup.sh links them.
+  const installed = path.join(home, ".config/tmux");
+  fs.mkdirSync(installed, { recursive: true });
+  fs.readdirSync(path.join(__dirname, "../tmux"))
+    .filter((name) => name.endsWith(".sh") && !fs.existsSync(path.join(installed, name)))
+    .forEach((name) => fs.symlinkSync(path.join(__dirname, "../tmux", name), path.join(installed, name)));
+  // In front: a Claude with another beside it, as Notes sits beside one.
+  const front = tmux("new-window", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}", claude);
+  const other = tmux("display", "-p", "-t", front, "#{pane_id}");
+  const active = tmux("split-window", "-t", other, "-P", "-F", "#{pane_id}", claude);
+  const alone = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}", claude);
+  const started = tmux("display", "-p", "-t", alone, "#{pane_id}");
+  t.after(() => [front, alone, tmux("display", "-p", "-t", active, "#{window_id}")].forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} }));
+  await wait(300);
+  [other, active, started].forEach((pane) => {
+    const pid = tmux("display", "-p", "-t", pane, "#{pane_pid}");
+    fs.writeFileSync(path.join(home, ".claude/sessions", `${pid}.json`), JSON.stringify({ pid: Number(pid), sessionId: pane }));
+  });
+
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "set", "idle"], { env: { ...process.env, TMUX_PANE: started }, input: JSON.stringify({ hook_event_name: "SessionStart", session_id: started }) });
+  await wait(1000);
+
+  assert.equal(tmux("display", "-p", "-t", active, "#{window_id}"), front, "the pane in front stays in its tab");
+  assert.equal(tmux("display", "-p", "-t", started, "#{window_id}"), alone);
+});
+
 test("asked for a tab's note, the notes about its ticket come first, then those titled like the tab, the last one shown there, and its repository's", (t) => {
   const notesDir = fs.mkdtempSync(path.join(tmp, "pick-notes-"));
   const repo = path.join(tmp, "widgets");
