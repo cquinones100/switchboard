@@ -554,9 +554,23 @@ lib_packages() {
 # A file's permission bits, with macOS's stat or GNU's, whose -f means
 # something else.
 mode_of() { if [[ $OS == macos ]]; then stat -f %Lp "$1"; else stat -c %a "$1"; fi; }
+# Whether $1 is really a file of the home a switchboard-try try was made from
+# (SWITCHBOARD_TRY_OF, set in a try): a try links folders of that home into its
+# own, and moving a file out of one would take it into the try's /tmp home,
+# which switchboard-try --clean removes.
+in_real_home() {
+  [[ -n ${SWITCHBOARD_TRY_OF:-} ]] || return 1
+  local at of
+  at=$(realpath "$1" 2>/dev/null) && of=$(realpath "$SWITCHBOARD_TRY_OF" 2>/dev/null) || return 1
+  [[ $at == "$of" || $at == "$of"/* ]]
+}
 aws_login_config() {
   local old=~/.config/aws-login/config browser=~/.config/switchboard/browser.json profile backup
   [[ -f $old ]] || return 0
+  if in_real_home "$old"; then
+    echo "  ~/.config/aws-login/config is your real home's, linked into this try, so it is left where it is" >&2
+    return 0
+  fi
   profile=$(sed -n 's/^chrome_profile=//p' "$old" | tail -n 1)
   # A browser.json that is there but can't be read is never written over.
   if [[ -f $browser ]] && ! jq -e . "$browser" >/dev/null 2>&1; then
@@ -614,6 +628,10 @@ own_configs() {
   for ((i = 0; i < ${#pairs[@]}; i++)); do
     pair=${pairs[i]} old=${olds[i]} new=~/.config/switchboard/${pair#*:}
     [[ -e $old || -L $old ]] || continue
+    if in_real_home "$old"; then
+      echo "  ~/.config/${pair%%:*} is your real home's, linked into this try, so it is left where it is" >&2
+      continue
+    fi
     if [[ -e $new || -L $new ]]; then
       echo "  ~/.config/${pair%%:*} is still there beside ${new/#$HOME/~}, which is the one read; move what you want from it by hand" >&2
       continue

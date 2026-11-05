@@ -1,0 +1,526 @@
+#!/usr/bin/env bash
+# switchboard-try [--print | --detached] [<worktree>]
+# switchboard-try --clean [<worktree>]
+# switchboard-try --clean-all
+#
+# Tries a Switchboard worktree's setup without touching yours: a tmux server of
+# its own, under a home of its own, with the worktree as its ~/switchboard.
+# Everything Switchboard reads is found through ~, so a different HOME gets the
+# whole stack from the worktree (tmux.conf and its scripts, bin/, the sidebar
+# daemon, Claude's hooks, skills and statusline, Neovim's config) with no path
+# changed, and the worktree's own setup.sh lays it out there, so setup is tried
+# too. It opens in a new Ghostty window, since inside your tmux the outer one
+# would take every M- key; --print prints the command for another terminal
+# instead, and --detached starts its tmux server with no client and prints the
+# prefix that reaches it (`<prefix> send-keys`, `<prefix> capture-pane -p`),
+# for a Claude in the worktree to drive and read it. Running it again sets the home up again from the worktree, keeping
+# what the try saved, and reattaches.
+#
+# The home is /tmp/sb-<hash of the worktree's path>, short because a socket's
+# path can't be over 104 bytes on macOS. Its tmux socket is in the home too
+# (TMUX_TMPDIR), so a script that calls tmux without $TMUX, as the sidebar
+# daemon's children can, reaches the try's server, never yours. What isn't Switchboard's comes from
+# your real home:
+#
+#   linked   ~/Library/Keychains, without which Claude Code isn't signed in
+#            and the Keychain's keys aren't found; every dotfile in ~ but those
+#            below (oh-my-zsh, p10k, .ssh, .gitconfig, ...); every folder in
+#            ~/.config but Switchboard's, the tools it configures and those
+#            setup.sh moves files out of; ~/.local/share but tmux's
+#            (resurrect's saves, which would restore your real tabs; ~/.tmux
+#            and your XDG folders are kept out for the same reason); the
+#            programs in ~/.local/bin that aren't Switchboard's; your own
+#            skills, hooks and plugins in ~/.claude
+#   copied   zsh's startup files (each ending by moving any XDG or Switchboard
+#            path variable naming your home under the try's), ~/.claude.json,
+#            ~/.claude/settings.json and
+#            settings.local.json, ~/.config/switchboard, the ~/.config folders
+#            setup.sh moves files out of and tmux's plugins, through any link,
+#            so nothing the try does writes to yours
+#   fresh    ~/.local/state (the sidebar's, the relay's, the tips'), ~/.cache,
+#            Claude's sessions and transcripts, ~/Notes
+#
+# Its settings.json turns off what would duplicate your real workspace or
+# spend money on its own: the Slack look and view, meeting, standup and todo notes, banners,
+# the update check and restoring saved tabs. Turn any back on in its Settings.
+# The relay isn't started. Linked things are yours: an edit made through them
+# (a git config, Neovim's plugins updated from :Lazy) is made to the real one.
+#
+# --clean stops its tmux server and sidebar daemon and removes the home, for a
+# worktree already removed too, by the path it had; --clean-all does it for
+# every try of yours.
+
+set -u
+
+print=false
+detached=false
+clean=false
+clean_all=false
+target=
+for arg in "$@"; do
+  case $arg in
+    --print) print=true ;;
+    --detached) detached=true ;;
+    --clean) clean=true ;;
+    --clean-all) clean_all=true ;;
+    -h|--help) sed -n '2,4p' "$0" | sed 's/^# //'; exit 0 ;;
+    -*) echo "switchboard-try: unknown option $arg" >&2; exit 1 ;;
+    *) target=$arg ;;
+  esac
+done
+
+fail() { echo "switchboard-try: $1" >&2; exit 1; }
+# The try's home for a worktree's path.
+home_of() { echo "/tmp/sb-$(printf '%s' "$1" | shasum | cut -c1-8)"; }
+
+# Stops the try in home $1, its tmux server and sidebar daemon, and removes it.
+clean_try() {
+  local home=$1 pid daemon
+  env -u TMUX -u TMUX_PANE tmux -S "$home/t/tmux-$(id -u)/default" kill-server 2>/dev/null
+  pid=$(cut -d' ' -f1 "$home/.local/state/tmux-sidebar/daemon.pid" 2>/dev/null)
+  # Only while it still runs this try's sidebar daemon: a pid left by one that
+  # died may name some other process of yours by now, your real daemon too.
+  daemon="^[^ ]*node (/private)?$home/\.local/bin/tmux-sidebar daemon$"
+  [[ -n $pid && $(ps -p "$pid" -o command= 2>/dev/null) =~ $daemon ]] && kill "$pid" 2>/dev/null
+  rm -rf "$home" && echo "Removed $home and stopped its tmux."
+}
+
+if $clean_all; then
+  cleaned=false
+  # Only a try's home: eight hex digits, and the link to its worktree.
+  for home in /tmp/sb-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]; do
+    [[ -d $home && ! -L $home && -O $home && -L $home/switchboard ]] && clean_try "$home" && cleaned=true
+  done
+  $cleaned || echo "No tries to clean."
+  exit 0
+fi
+if $clean; then
+  # A worktree named is found by its path written as git writes a top level,
+  # absolute with its links resolved, whether or not it is still there: the
+  # part that still is resolved by cd, the rest added back.
+  if [[ -n $target ]]; then
+    wt=$target rest=
+    [[ $wt == /* ]] || wt=$PWD/$wt
+    wt=${wt%/}
+    while [[ -n $wt && ! -d $wt ]]; do rest=/${wt##*/}$rest wt=${wt%/*}; done
+    wt=$(cd "${wt:-/}" && pwd -P)
+    wt=${wt%/}$rest
+  else
+    wt=$(git rev-parse --show-toplevel 2>/dev/null) || fail "not in a git repository: name the worktree's path, or use --clean-all"
+  fi
+  home=$(home_of "$wt")
+  # A path inside a worktree still there names the try of its top level, as
+  # trying it did.
+  if [[ ! -d $home ]] && top=$(git -C "$wt" rev-parse --show-toplevel 2>/dev/null) && [[ -d $(home_of "$top") ]]; then
+    wt=$top home=$(home_of "$top")
+  fi
+  [[ -d $home ]] || { echo "Nothing to clean for $wt."; exit 0; }
+  clean_try "$home"
+  exit 0
+fi
+
+wt=$(git -C "${target:-$PWD}" rev-parse --show-toplevel 2>/dev/null) || fail "not in a git repository: run it in a Switchboard worktree, or name one"
+[[ -f $wt/setup.sh && -f $wt/tmux/tmux.conf && -d $wt/lib/sidebar ]] || fail "$wt isn't a Switchboard clone"
+real=$HOME
+# Its setup.sh and tmux.conf run with your Keychain and credentials linked in,
+# so only your own clone or a worktree git lists for it (a .git file can name
+# any git directory, so sharing one proves nothing), or a directory listed in
+# ~/.config/switchboard/trusted-dirs by its exact real path, is tried.
+want=$(cd "$wt" && pwd -P) trusted=false
+while IFS= read -r line; do
+  [[ $line == "worktree "* && $(cd "${line#worktree }" 2>/dev/null && pwd -P) == "$want" ]] && trusted=true
+done < <(git -C "$real/switchboard" worktree list --porcelain 2>/dev/null)
+# A listed path is only a path: a folder removed by hand stays listed, and
+# another repository made there later would pass. So its git directory must
+# also be your clone's own, or the one your clone keeps for a worktree at
+# exactly that path.
+if $trusted; then
+  real_dir() { (cd "$1" 2>/dev/null && pwd -P); }
+  own_git=$(real_dir "$(git -C "$real/switchboard" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")
+  wt_git=$(real_dir "$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)")
+  if [[ -z $own_git || $(real_dir "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)") != "$own_git" ]]; then
+    trusted=false
+  elif [[ $wt_git == "$own_git/worktrees/"* ]]; then
+    # Kept relative to the worktree's git directory by worktree.useRelativePaths.
+    back=$(cat "$wt_git/gitdir" 2>/dev/null)
+    [[ $back == /* ]] || back=$wt_git/$back
+    [[ $(real_dir "$(dirname "$back")") == "$want" ]] || trusted=false
+  elif [[ $wt_git != "$own_git" || $(real_dir "$own_git/..") != "$want" ]]; then
+    trusted=false
+  fi
+fi
+# A worktree of your clone may still hold someone else's code: one wtpr or
+# gh pr checkout made from a fork's PR. Its commits not on origin's branches
+# must be your own: found on no other remote's ref (a fork's, or origin's pr/
+# refs), and written and committed under your git email, since a PR fetched
+# straight to a local branch, or a fork's ref pruned since, leaves no ref.
+if $trusted; then
+  # Ref names have no spaces, so the lists are split on words (macOS's bash 3.2
+  # has no mapfile).
+  # Origin's branches only: wtpr's pr/ refs, and wherever a fetch refspec of
+  # origin's maps anything but its branches (+refs/pull/*/head:refs/remotes/
+  # origin/pull/*, say), hold PR heads, forks' included.
+  not_branches=$(git -C "$wt" config --get-all remote.origin.fetch 2>/dev/null | sed -n 's/^+\{0,1\}\([^:]*\):\(.*\)$/\1 \2/p' | awk '$1 !~ /^refs\/heads\// { sub(/\*.*$/, "", $2); print $2 }')
+  ours=$(git -C "$wt" for-each-ref --format='%(refname)' refs/remotes/origin | grep -v '^refs/remotes/origin/pr/' | SKIP=$not_branches awk 'BEGIN { n = split(ENVIRON["SKIP"], p, "\n") } { for (i = 1; i <= n; i++) if (p[i] != "" && index($0, p[i]) == 1) next; print }')
+  theirs=$(git -C "$wt" for-each-ref --format='%(refname)' refs/remotes | grep -vxF -f <(printf '%s\n' "$ours"))
+  # shellcheck disable=SC2086
+  if [[ -n $theirs && -n $(comm -12 <(git -C "$wt" rev-list HEAD --not $ours -- 2>/dev/null | sort) <(git -C "$wt" rev-list $theirs --not $ours -- 2>/dev/null | sort)) ]]; then
+    trusted=false foreign=true
+  fi
+  # Nor partway through bringing in other commits, whose files are in the tree
+  # before any of them is in HEAD.
+  for op in MERGE_HEAD SQUASH_MSG CHERRY_PICK_HEAD REVERT_HEAD REBASE_HEAD rebase-merge rebase-apply; do
+    [[ -e $(git -C "$wt" rev-parse --path-format=absolute --git-path "$op") ]] && trusted=false midway=$op
+  done
+  me=$(git -C "$wt" config user.email)
+  # shellcheck disable=SC2086
+  if [[ -z $me ]] || git -C "$wt" log --format='%ae%n%ce' HEAD --not $ours -- 2>/dev/null | grep -qvxF "$me"; then
+    trusted=false foreign=true
+  fi
+fi
+if ! $trusted; then
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ -z $line || $line == \#* ]] && continue
+    [[ $(cd "${line/#\~/$real}" 2>/dev/null && pwd -P) == "$want" ]] && trusted=true
+  done < <(cat "$real/.config/switchboard/trusted-dirs" 2>/dev/null)
+  [[ -n ${midway:-} ]] && ! $trusted && fail "$wt is partway through bringing in other commits (git's $midway is there), whose files may not be yours; finish or abort it first, or list it in ~/.config/switchboard/trusted-dirs"
+  ${foreign:-false} && ! $trusted && fail "$wt holds commits that aren't yours (a fork's PR, say), whose setup.sh would run with your credentials; read them, then list it in ~/.config/switchboard/trusted-dirs to try it"
+  $trusted || fail "$wt isn't a worktree of your ~/switchboard clone; list it in ~/.config/switchboard/trusted-dirs to try it"
+fi
+home=$(home_of "$wt")
+# SWITCHBOARD_TRY_OF, given to its setup and tmux, has setup.sh leave alone a
+# file of your real home it reaches through a linked folder, rather than move
+# it into the try, should the worktree's setup come to move one later.
+# Every tmux call names the try's socket: with $TMUX set, as it is inside your
+# tmux, a call that only set TMUX_TMPDIR reached your real server instead.
+socket=$home/t/tmux-$(id -u)/default
+# Your XDG folders, CLAUDE_CONFIG_DIR, and the paths Switchboard reads ahead
+# of ~ (your notes, its clone, settings and state), would send the try to your
+# real ones (resurrect saves under XDG_DATA_HOME), so neither setup nor tmux
+# gets them.
+# The Claude session (or other agent) it was started from passes its own
+# variables on, which would make the try's Claude take itself for that
+# session's child and reach it; neither setup nor tmux gets them either.
+# A tmux plugin manager's TMUX_PLUGIN_MANAGER_PATH, from a tmux of yours that
+# runs one, would point the try's plugins at your real folder the same way.
+from_session=$(env | grep -oE '^(CLAUDE[A-Z0-9_]*|AI_AGENT|TMUX_PLUGIN_MANAGER_PATH)=' | sed 's/=$//; s/^/-u /' | tr '\n' ' ')
+no_xdg="-u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME -u XDG_CACHE_HOME -u NOTES_DIR -u SWITCHBOARD_DIR -u SWITCHBOARD_SETTINGS -u TMUX_SIDEBAR_STATE_DIR -u CLAUDE_CONFIG_DIR -u ZDOTDIR"
+
+# Links $1 at $2 unless something of the try's own is there already.
+link() { [[ -e $2 || -L $2 ]] || ln -s "$1" "$2"; }
+# Copies $1 to $2 unless something is there already, with cp's flags $3
+# (following links by default), whole or not at all: one that fails partway
+# would otherwise be kept, and never made again.
+copy_in() {
+  [[ -e $2 || -L $2 ]] && return 0
+  rm -rf "$2.partial"
+  cp ${3:--RL} "$1" "$2.partial" && mv "$2.partial" "$2" && return 0
+  rm -rf "$2.partial"
+  echo "switchboard-try: could not copy $1, so the try goes without it" >&2
+  return 1
+}
+source_dir=
+[[ -d $real/.config/switchboard ]] && source_dir=$(realpath "$real/.config/switchboard")
+# Each link in the copy at $1 is followed from where it is in your folder,
+# since a relative one (as stow makes) names something else from the copy. In
+# sidebar-plugins it stays a link, written out in full; anywhere else (a file
+# of yours kept in a dotfiles repository) it is made a copy of what it names,
+# since Settings and setup.sh write through a link to the real file. One
+# naming nothing in your folder either, nothing to lose, is dropped.
+settle_links() {
+  local copy=$1 from=${2:-$source_dir} entry target
+  while IFS= read -r -d '' entry; do
+    if target=$(realpath "$from${entry#"$copy"}" 2>/dev/null); then
+      if [[ $entry == "$copy/sidebar-plugins" || $entry == "$copy/sidebar-plugins/"* ]]; then
+        ln -sfn "$target" "$entry"
+      else
+        rm "$entry" && cp -RL "$target" "$entry"
+      fi || { echo "switchboard-try: could not copy $target, which ${from/#$real/~} links to, into $home" >&2; return 1; }
+    else
+      rm "$entry"
+    fi
+  done < <(find "$copy" -type l -print0 2>/dev/null)
+}
+main_clone=$(cd "$real/switchboard" 2>/dev/null && pwd -P)
+# Whether $1 is a link into a Switchboard clone, which the try's setup.sh
+# links from the worktree instead.
+switchboards() {
+  local target
+  target=$(readlink "$1" 2>/dev/null) || return 1
+  [[ $target == "$real/switchboard/"* || $target == "$real/editor-configs/"* || ( -n $main_clone && $target == "$main_clone/"* ) ]]
+}
+
+mkdir -p "$home"/{Library,.config,.local/share,.local/bin,.local/state,.claude/skills,.claude/hooks} || fail "could not make $home"
+chmod 700 "$home"
+# Links an earlier run made into your home are made again below by today's
+# rules: one kept from before would stay a link where they now copy or leave
+# out (a ~/.config folder setup.sh has come to move files out of, ~/.tmux).
+wt_real=$(cd "$wt" && pwd -P)
+for entry in "$home"/.[!.]* "$home"/{.config,.local/share,.local/bin,.claude/skills,.claude/hooks,.claude}/*; do
+  # A link into the worktree (setup.sh's, the worktree often being under your
+  # home) is the try's own, kept so a try running meanwhile doesn't lose it.
+  [[ -L $entry ]] || continue
+  target=$(readlink "$entry")
+  [[ $target == "$wt/"* || $target == "$wt_real/"* ]] && continue
+  [[ $target == "$real/"* ]] && rm "$entry"
+done
+ln -sfn "$wt" "$home/switchboard"
+link "$real/Library/Keychains" "$home/Library/Keychains"
+
+for entry in "$real"/.[!.]*; do
+  case ${entry##*/} in
+    .claude|.claude.json|.config|.local|.cache|.zshenv|.zprofile|.zshrc|.zlogin|.Trash|.DS_Store|.pgclirc|.tmux.conf|.tmux) ;;
+    *) link "$entry" "$home/${entry##*/}" ;;
+  esac
+done
+for entry in "$real"/.config/*; do
+  case ${entry##*/} in
+    switchboard|editor-configs|tmux|tmux-sidebar|nvim|ghostty|lazygit|slack-relay) ;;
+    *)
+      # A folder the worktree's setup.sh names may be one its config part
+      # moves files out of (oncall/, aws-login/): copied, so a move takes the
+      # try's copy, never your real file into /tmp.
+      if grep -qE "\\.config/${entry##*/}/|^[[:space:]]+${entry##*/}/" "$wt/setup.sh"; then
+        copy_in "$entry" "$home/.config/${entry##*/}"
+      else
+        link "$entry" "$home/.config/${entry##*/}"
+      fi
+      ;;
+  esac
+done
+for entry in "$real"/.local/share/*; do
+  case ${entry##*/} in
+    switchboard|editor-configs|tmux) ;;
+    *) link "$entry" "$home/.local/share/${entry##*/}" ;;
+  esac
+done
+for entry in "$real"/.local/bin/*; do
+  switchboards "$entry" && continue
+  # A program setup.sh installs there itself (mermaid-ascii) is copied, so its
+  # install in the try never writes through a link to yours.
+  if grep -qE "\.local/bin/${entry##*/}([^A-Za-z0-9_.-]|$)" "$wt/setup.sh"; then
+    copy_in "$entry" "$home/.local/bin/${entry##*/}"
+  else
+    link "$entry" "$home/.local/bin/${entry##*/}"
+  fi
+done
+for entry in "$real"/.claude/skills/* "$real"/.claude/hooks/*; do
+  [[ -e $entry ]] && ! switchboards "$entry" && link "$entry" "$home/.claude/${entry#"$real/.claude/"}"
+done
+link "$real/.claude/plugins" "$home/.claude/plugins"
+
+# zsh's startup files, copied and each ended with the same unset the server
+# gets, so a shell in the try that reads one of yours doesn't take back an
+# export of your notes, settings or XDG folders.
+# A ZDOTDIR your .zshenv sets (~/.config/zsh, say) is where zsh reads the
+# rest from, so that folder is copied too rather than linked, and its files
+# get the same ending.
+# The ending moves each of those variables a startup file set into your home
+# to the same place under the try's (so a .zshrc using $XDG_CONFIG_HOME still
+# finds its files) and keeps it only when it really is in the try's home, its
+# links followed (zsh's :A), since a dotfolder there may be a link to yours,
+# or in the worktree; anything else is unset.
+vars=${no_xdg//-u /}
+vars=${vars/ ZDOTDIR/}
+real_q=$(printf '%q' "$real")
+# The worktree counts as the try's own: ~/switchboard there is a link to it.
+wt_q=$(printf '%q' "$(cd "$wt" && pwd -P)")
+unset_line="() { local v n h=\${HOME:A}; for v in $vars; do [[ -n \${(P)v:-} ]] || continue; n=\${(P)v}; case \$n in ($real_q|$real_q/*) n=\$HOME\${n#$real_q} ;; esac; if [[ \${n:A} == \$h || \${n:A} == \$h/* || \${n:A} == $wt_q || \${n:A} == $wt_q/* ]]; then export \$v=\$n; else unset \$v; fi; done }"
+zdotdirs=("")
+# Found as the try's shells will find it, without the variables they start
+# without (a ZDOTDIR built from an inherited XDG_CONFIG_HOME), its last line,
+# since your .zshenv may print something of its own first.
+# shellcheck disable=SC2086
+zdotdir=$(env $no_xdg $from_session zsh -c 'print -r -- ${ZDOTDIR:-}' 2>/dev/null | tail -n 1)
+zdotdir=${zdotdir%/}
+[[ $zdotdir == /* ]] || zdotdir=
+if [[ -n $zdotdir && ! -d $zdotdir ]]; then
+  echo "switchboard-try: without the variables a try leaves out, your .zshenv sets ZDOTDIR to $zdotdir, which isn't there, so the try's shells start without your startup files; build it from \$HOME" >&2
+  zdotdir=
+fi
+home_real=$(cd "$home" && pwd -P)
+# Whether $1 is really in the try's home, no link along the way leading out
+# of it into yours.
+# The nearest part of it there yet is the one looked at, so nothing is made
+# through such a link either.
+in_home() {
+  local dir=$1 at
+  while [[ ! -d $dir ]]; do dir=$(dirname "$dir"); done
+  at=$(cd "$dir" && pwd -P)
+  [[ $at == "$home_real" || $at == "$home_real"/* ]]
+}
+# One under your home goes to the same place under the try's; one anywhere
+# else (/Volumes/dotfiles/zsh) to .zdotdir there.
+rel=
+if [[ $zdotdir == "$real/"* ]]; then
+  rel=${zdotdir#"$real/"}
+elif [[ -n $zdotdir && $zdotdir != "$real" ]]; then
+  rel=.zdotdir
+fi
+if [[ -n $rel ]]; then
+  # Checked before anything is removed or made: the link at $rel is only the
+  # try's own when the folder it sits in is.
+  if in_home "$(dirname "$home/$rel")" && mkdir -p "$(dirname "$home/$rel")"; then
+    # Its links settled as the settings' are, followed from where they are in
+    # your folder (a stow-made relative one names something else from the
+    # copy), so every startup file in it is a file of the try's own to wrap.
+    # Made aside, and put in place of the link to yours an earlier loop made
+    # there only once it has worked: a failed copy keeps that link, so the
+    # try's shells still find your startup files.
+    if [[ -L $home/$rel || ! -e $home/$rel ]]; then
+      rm -rf "$home/$rel.partial"
+      if cp -RH "$zdotdir" "$home/$rel.partial" && settle_links "$home/$rel.partial" "$zdotdir"; then
+        rm -f "$home/$rel" && mv "$home/$rel.partial" "$home/$rel"
+      else
+        rm -rf "$home/$rel.partial"
+      fi
+    fi
+    # A folder the try makes itself (~/.config) was there before any copy, and
+    # the loops above link only what isn't a dotfile in it, so your dotfiles
+    # there (the startup files, .p10k.zsh) are copied in, followed through
+    # their links, leaving what the try has already.
+    if [[ -d $home/$rel && ! -L $home/$rel ]]; then
+      for entry in "$zdotdir"/.[!.]*; do
+        [[ -e $entry && ! -e $home/$rel/${entry##*/} && ! -L $home/$rel/${entry##*/} ]] || continue
+        [[ -e $home/$rel/${entry##*/}.yours ]] && continue
+        cp -RL "$entry" "$home/$rel/${entry##*/}" 2>/dev/null
+      done
+    fi
+    if [[ -d $home/$rel && ! -L $home/$rel ]]; then
+      zdotdirs+=("$rel")
+    else
+      echo "switchboard-try: could not copy your ZDOTDIR, ${zdotdir/#$real/~}, so the try's shells read your startup files as they are" >&2
+    fi
+  else
+    echo "switchboard-try: your ZDOTDIR, ${zdotdir/#$real/~}, is inside a folder the try links to yours, so its shells read your startup files as they are" >&2
+  fi
+fi
+# A ZDOTDIR written out in full in your .zshenv names your real folder in the
+# try too, so the try's .zshenv moves one under your home to the same place
+# under the try's.
+zdot_line="[[ \${ZDOTDIR:-} == $(printf '%q' "$real")/* ]] && ZDOTDIR=\$HOME\${ZDOTDIR#$(printf '%q' "$real")}"
+[[ $rel == .zdotdir ]] && zdot_line="[[ \${ZDOTDIR%/} == $(printf '%q' "$zdotdir") ]] && ZDOTDIR=\$HOME/.zdotdir"
+# Each startup file is yours moved aside (<file>.yours) and a file of the
+# try's own that sources it and then unsets, so the unset runs however yours
+# ends, a return partway included.
+# A ZDOTDIR /etc/zshenv sets to your folder by its full path is set before
+# any file of the try's is read, so the try can't move it: it says so.
+etc_zdotdir=$(env -u ZDOTDIR HOME=/var/empty zsh -c 'print -r -- ${ZDOTDIR:-}' 2>/dev/null | tail -n 1)
+if [[ ${etc_zdotdir%/} == "$real" || $etc_zdotdir == "$real/"* ]]; then
+  echo "switchboard-try: /etc/zshenv sets ZDOTDIR to ${etc_zdotdir/#$real/~}, so the try's shells read your startup files as they are" >&2
+fi
+for dir in "${zdotdirs[@]}"; do
+  for file in .zshenv .zprofile .zshrc .zlogin; do
+    path=$home${dir:+/$dir}/$file
+    # Never written through a link into your home.
+    in_home "$(dirname "$path")" && [[ ! -L $path ]] || continue
+    [[ -n $dir || -e $path || ! -f $real/$file ]] || cp "$real/$file" "$path"
+    [[ -f $path ]] || continue
+    # The try's own file is written again on every run, since what it ends
+    # with can change (a ZDOTDIR copied only on a later run); yours is moved
+    # aside the first time.
+    if [[ $(head -n 1 "$path") != "# switchboard-try:"* ]]; then
+      mv "$path" "$path.yours" || continue
+    fi
+    {
+      echo "# switchboard-try: your $file, then the try's own ending"
+      echo "source $(printf '%q' "$path.yours")"
+      echo "$unset_line"
+      # Only when there is a copy to move it to: else your folder, as it is.
+      [[ -z $dir && $file == .zshenv && ${#zdotdirs[@]} -gt 1 ]] && echo "$zdot_line"
+    } >"$path"
+  done
+done
+[[ -e $home/.claude.json ]] || cp "$real/.claude.json" "$home/.claude.json" 2>/dev/null
+for file in settings.json settings.local.json; do
+  [[ -e $home/.claude/$file || ! -f $real/.claude/$file ]] || cp "$real/.claude/$file" "$home/.claude/$file"
+done
+# Your settings, made in a folder of its own and moved into place only once
+# all of it has worked: one half made would be kept by every later run, the
+# try running without your settings or without its own turned off.
+if [[ -e $home/.config/switchboard ]]; then
+  # On a later run only a link that writes through into your home (one an
+  # earlier version kept) is made a copy of what it names; the try's own
+  # links, and sidebar-plugins, are left as they are.
+  while IFS= read -r -d '' entry; do
+    target=$(realpath "$entry" 2>/dev/null) && [[ $target == "$real/"* ]] || continue
+    # A link into the worktree (which may be under your home) is the try's own.
+    [[ $target == "$(cd "$wt" && pwd -P)"/* ]] && continue
+    rm "$entry" && cp -RL "$target" "$entry" || fail "could not copy $target into $home; run switchboard-try --clean, then try again"
+  done < <(find "$home/.config/switchboard" -path "$home/.config/switchboard/sidebar-plugins" -prune -o -type l -print0 2>/dev/null)
+else
+  staged=$home/.config/switchboard.partial
+  rm -rf "$staged"
+  # Through a link to the folder, but keeping the links in it: sidebar-plugins
+  # is one so its plugins load node_modules from beside where they really are.
+  if [[ -n $source_dir ]]; then
+    cp -R "$source_dir" "$staged" || { rm -rf "$staged"; fail "could not copy ~/.config/switchboard into $home; fix what cp said, then run it again"; }
+  else
+    mkdir -p "$staged"
+  fi
+  settle_links "$staged" || { rm -rf "$staged"; fail "fix what cp said, then run it again"; }
+  settings=$staged/settings.json
+  # An empty file counts as none, which jq would turn into no output at all.
+  { [[ -s $settings ]] && cat "$settings" || echo '{}'; } |
+    jq '. + {slack_background: false, view_slack: false, meeting_notes: false, standup_note: false, standup_summary: false, todo_note: false, notifications: false, update_check: "off", auto_restore: false}' >"$settings.tmp" &&
+    [[ -s $settings.tmp ]] && mv "$settings.tmp" "$settings" || { rm -rf "$staged"; fail "could not turn off the try's own Slack look, notes and update check: is ~/.config/switchboard/settings.json valid JSON?"; }
+  mv "$staged" "$home/.config/switchboard"
+fi
+# Your CLAUDE.md's rules named by a ~/ path are in your real home, which the
+# try's ~ isn't: written out in full, so the try's setup finds them.
+claude_json=$home/.config/switchboard/claude.json
+if jq -e '.path // "" | startswith("~/")' "$claude_json" >/dev/null 2>&1; then
+  jq --arg home "$real" '.path |= $home + ltrimstr("~")' "$claude_json" >"$claude_json.tmp" && mv "$claude_json.tmp" "$claude_json"
+fi
+# Your clone of your CLAUDE.md's repository, copied so the try's setup only
+# pulls it, which may fail, rather than clones it, which stops its claude part
+# before the skills and hooks when the network isn't there.
+if [[ ! -e $home/.local/share/switchboard/claude-md && -d $real/.local/share/switchboard/claude-md/.git ]]; then
+  mkdir -p "$home/.local/share/switchboard" && copy_in "$real/.local/share/switchboard/claude-md" "$home/.local/share/switchboard/claude-md"
+fi
+if [[ ! -e $home/.config/tmux/plugins && -d $real/.config/tmux/plugins ]]; then
+  mkdir -p "$home/.config/tmux" && copy_in "$real/.config/tmux/plugins" "$home/.config/tmux/plugins"
+fi
+
+# Your PATH, its folders under your home moved under the try's, so a program
+# setup or tmux calls by name is the try's (~/.local/bin's links into the
+# worktree), not your main clone's.
+try_path=
+IFS=: read -ra path_parts <<<"$PATH"
+for part in "${path_parts[@]}"; do
+  # Written with a ~ (as /etc/paths.d can give it), which tmux reads as yours.
+  [[ $part == "~/"* ]] && part=$real/${part#"~/"}
+  # Only where the try has that folder: one it neither links nor copies
+  # (~/go/bin) stays yours, rather than naming nothing.
+  [[ ( $part == "$real" || $part == "$real/"* ) && -e $home${part#"$real"} ]] && part=$home${part#"$real"}
+  try_path=${try_path:+$try_path:}$part
+done
+# The worktree's setup, the parts that ask nothing: git is left out, since
+# core.hooksPath is the repository's, shared with your clone.
+echo "Setting up $home from ${wt}…"
+mkdir -p "${socket%/*}" && chmod 700 "${socket%/*}"
+env -u TMUX -u TMUX_PANE $no_xdg $from_session PATH="$try_path" SWITCHBOARD_TRY_OF="$real" HOME="$home" TMUX_TMPDIR="$home/t" "$wt/setup.sh" tmux bin claude neovim lazygit | sed 's/^/  /'
+(( ${PIPESTATUS[0]} == 0 )) || echo "switchboard-try: setup.sh reported a failure above; starting anyway." >&2
+
+# tmux by its full path, since a new Ghostty window may start without
+# Homebrew's folder on its PATH.
+tmux_bin=$(command -v tmux) || fail "tmux isn't on your PATH"
+try_tmux="env -u TMUX -u TMUX_PANE $no_xdg $from_session PATH=$(printf '%q' "$try_path") SWITCHBOARD_TRY_OF=$(printf '%q' "$real") HOME=$(printf '%q' "$home") TMUX_TMPDIR=$(printf '%q' "$home/t") $(printf '%q' "$tmux_bin") -S $(printf '%q' "$socket") -f $(printf '%q' "$home/.config/tmux/tmux.conf")"
+attach="cd $(printf '%q' "$wt") && exec $try_tmux new -A -s try"
+if $detached; then
+  (cd "$wt" && eval "$try_tmux has-session -t try" 2>/dev/null || eval "$try_tmux new -d -s try -x 200 -y 50") ||
+    fail "could not start its tmux server"
+  echo "Its tmux is running with no client. Drive and read it with:"
+  echo "  $try_tmux send-keys -t try ..."
+  echo "  $try_tmux capture-pane -p -t try"
+  exit 0
+fi
+if $print; then
+  echo "$attach"
+  exit 0
+fi
+# Ghostty's -e runs the command in the new window; it reads your real Ghostty
+# config, so Option still acts as Alt.
+open -na Ghostty --args --title="Switchboard try: ${wt##*/}" -e /bin/zsh -c "$attach" ||
+  { echo "Could not open Ghostty. In another terminal, run:"; echo "$attach"; }
+echo "Opened $wt's Switchboard in a new Ghostty window. switchboard-try --clean removes it."

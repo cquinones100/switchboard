@@ -1694,3 +1694,54 @@ checkout and the Codex login.
   unnoticed, so leave the checkout alone while a review runs.
 - Codex's progress output is discarded so stdout is just the JSON. Set
   `CODEX_REVIEW_VERBOSE=1` to watch it on stderr.
+
+## switchboard-try
+
+Tries a Switchboard worktree's setup in a tmux of its own, leaving yours alone.
+Your real `~/switchboard`, and everything `setup.sh` linked from it, points at
+your main clone, so a change made in a worktree otherwise can't be tried until
+it is on `main` there.
+
+```
+switchboard-try            the worktree you are in, in a new Ghostty window
+switchboard-try <path>     another worktree
+switchboard-try --print    set it up and print the command, for another terminal
+switchboard-try --detached start its tmux with no client and print how to drive it
+switchboard-try --clean    stop its tmux and sidebar daemon and remove its home
+                           (name a removed worktree by the path it had)
+switchboard-try --clean-all  the same for every try of yours
+```
+
+It tries only a worktree of your own `~/switchboard` clone, or a directory
+listed in `~/.config/switchboard/trusted-dirs`, since its setup runs with your
+Keychain and credentials linked in.
+
+It gives the worktree a home of its own, `/tmp/sb-<hash>`, with the worktree
+as its `~/switchboard`, and runs the worktree's own `setup.sh` there (`tmux`,
+`bin`, `claude`, `neovim`, `lazygit`; not `git`, since `core.hooksPath` is the
+repository's), so setup is tried too. Since everything Switchboard reads is
+found through `~`, a tmux started with that `HOME` runs the worktree's
+tmux.conf, scripts, sidebar daemon, Claude hooks, skills and statusline, with
+no path changed. Its tmux socket is in that home (`TMUX_TMPDIR`), so nothing it
+runs can reach your real server. It opens in a new Ghostty window, since inside
+your tmux the outer one would take every `M-` key. Running it again sets the
+home up again from the worktree and reattaches. `--detached` is for a Claude
+working in the worktree, which can't see that window: it starts the server
+with no client and prints the `tmux` prefix that reaches it, to press keys
+with `send-keys` and read the screen with `capture-pane -p`. Clean it up with
+`--clean` when done: while a try's server runs, tmux-continuum won't restore
+your own tabs the next time your tmux starts.
+
+What isn't Switchboard's comes from your real home. Linked: `~/Library/Keychains`
+(without it Claude Code isn't signed in and the Keychain's keys aren't found),
+your dotfiles, your other `~/.config` folders, `~/.local/share` but tmux's
+(resurrect's saves would restore your real tabs), the programs in `~/.local/bin`
+that aren't Switchboard's, and your own skills, hooks and plugins in `~/.claude`.
+Copied, so the try writes to none of yours: zsh's startup files (each ending by moving any XDG or Switchboard path variable that names your home to the same place under the try's), `~/.claude.json`,
+Claude's `settings.json` and `settings.local.json`, `~/.config/switchboard` and
+tmux's plugins. Fresh: the state directories, caches, Claude's sessions and
+transcripts, and `~/Notes`. Its settings turn off what would duplicate your
+real workspace or cost money on its own: the Slack look and view, meeting, standup and todo
+notes, banners, the update check and restoring saved tabs; Settings turns them
+back on. A change made through a linked thing (a git config, Neovim's plugins
+updated from `:Lazy`) is made to your real one.
