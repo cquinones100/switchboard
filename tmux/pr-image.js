@@ -267,7 +267,10 @@ const main = async () => {
       return "";
     }
   };
-  const cache = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "switchboard", "pr-image", `${(ticket ? ticket.toUpperCase() : `${gitDir()}:${branch()}`).replace(/\//g, "%")}.json`);
+  // A ticket's copy is named for its tracker too, as M-i's is, so switching
+  // the tracker never shows the other one's ticket.
+  const trackerKey = () => require(path.join(path.dirname(fs.realpathSync(__filename)), "../lib/tracker")).tracker()?.key ?? "off";
+  const cache = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "switchboard", "pr-image", `${(ticket ? `${trackerKey()}-${ticket.toUpperCase()}` : `${gitDir()}:${branch()}`).replace(/\//g, "%")}.json`);
   const fresh = ticket ? ticketPage(ticket.toUpperCase()) : prPage(dir);
   const remember = (parts) => {
     fs.mkdirSync(path.dirname(cache), { recursive: true });
