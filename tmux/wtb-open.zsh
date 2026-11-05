@@ -17,6 +17,8 @@
 # and it stays in the worktree after Claude exits. So only a name git accepts
 # as a branch is ever typed.
 
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${0:A:h}/fzf-style.sh" 2>/dev/null)"
 dim=$'\e[38;5;244m' red=$'\e[31m' reset=$'\e[0m'
 
 fail() {
@@ -45,7 +47,7 @@ out=$(
   print -r -- "$branches" |
     fzf --ansi --delimiter=$'\t' --nth=1 --print-query --bind 'ctrl-n:print-query' \
       --header='Enter: work on the branch · a name no branch matches is created · ctrl-n: create the name typed' \
-      --prompt='branch> ' --layout=reverse --border=rounded --height=100%
+      --prompt='branch> ' --layout=reverse --height=100%
 )
 (( $? > 1 )) && exit 0
 picked=("${(@f)out}")

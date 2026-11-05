@@ -11,6 +11,8 @@
 # interactive zsh, as the link view's pane does.
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 pane=${1:-}
 here=${0%/*}
 repo=${SWITCHBOARD_DIR:-$HOME/switchboard}

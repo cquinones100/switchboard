@@ -51,6 +51,14 @@ effect at once too. A file that can't be read as JSON (a typo in a hand
 edit) is never written over: Settings says so until it's fixed. The version
 before each change is kept beside it as `settings.json.bak`.
 
+Every menu, question and list in a popup looks the same, as mission
+control's Enter menu does: a rounded blue edge with the title in its top,
+the chosen option highlighted with a yellow `›`, the keys dim at the
+bottom. tmux frames every popup that way, `tmux/menu.sh` draws the bash
+menus' rows (`M-m`'s, the update popup's) and `tmux/fzf-style.sh` gives
+every fzf list in a popup the same colors, with no second border inside
+the popup's.
+
 New to it, you get a tip in the top-right corner the first time a key would
 help: when a tab first waits on you or finishes (`M-a`), once you have five
 tabs or more (`M-j`), when a tool first takes a pane's place, a PR first

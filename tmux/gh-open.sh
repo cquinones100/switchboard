@@ -29,10 +29,10 @@ self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 say() {
   local reason=$1 hint=${2:-} title width
-  [ "$what" = pr ] && title=" Can't open the PR " || title=" Can't open the repository "
+  [ "$what" = pr ] && title="#[bold] Can't open the PR " || title="#[bold] Can't open the repository "
   width=$(printf '%s\n%s\n' "$reason" "$hint" | awk '{ if (length > n) n = length } END { print n + 6 }')
   (( width < 40 )) && width=40
-  tmux display-popup ${client:+-c "$client"} -E -w "$width" -h 8 -b rounded -T "$title" \
+  tmux display-popup ${client:+-c "$client"} -E -w "$width" -h 8 -T "$title" \
     "$self box $(printf '%q %q %q' "$title" "$reason" "$hint")"
   exit 0
 }

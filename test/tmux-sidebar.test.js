@@ -1534,7 +1534,7 @@ test("the sidebar's Space opens a popup with only that tab's peek, closed with i
   popup.on("data", (data) => (received += data));
   popup.on("close", () => (closed = true));
   popup.write(`mission none 100 20 peek:${window}\n`);
-  assert.ok(await until(() => /PEEK.*60/s.test(plain(received))), "the peek, at once");
+  assert.ok(await until(() => /Peek.*60/s.test(plain(received))), "the peek, at once");
   popup.write("q");
   assert.equal(await until(() => closed), true, "closing the peek closes the popup");
 
@@ -1559,9 +1559,9 @@ test("Space peeks at a tab from mission control: its screen, or its whole last t
     client.choose.cursor = client.choose.choices.findIndex((c) => c.key === "v");
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(client.peek.mode, "screen");
-    assert.match(plain(sent.at(-1)), /PEEK.*60/s);
+    assert.match(plain(sent.at(-1)), /Peek.*60/s);
     await sidebar.missionKey(client, { key: "g" });
-    assert.match(plain(sent.at(-1)), /PEEK +\d+ .* 1 +2 +3 /s, "g goes to the top");
+    assert.match(plain(sent.at(-1)), /Peek +\d+ [\s\S]*│ 1 +│[\s\S]*│ 2 +│[\s\S]*│ 3 +│/, "g goes to the top");
     await sidebar.missionKey(client, { key: "Escape" });
     assert.equal(client.peek, undefined);
     assert.equal(tmux("display", "-p", "#{window_id}") === window, false, "never went there");
@@ -3468,6 +3468,21 @@ test("a click takes a menu's option, answers a question's Yes or No, and outside
   popup.answering = { tab: { index: 1, name: "t" }, found: { question: "Which?", options: [{ n: 1, label: "One" }, { n: 2, label: "Two" }] }, text: "", typing: false };
   sidebar.draw(popup);
   assert.deepEqual(popup.modal.tags.map((t) => t.tag.option), [1, 2], "the answer popup's options take a click");
+  // A question too long for the popup is cut short, its options still shown.
+  popup.answering.found.question = Array.from({ length: 40 }, (_, i) => `question line ${i}`).join("\n");
+  sidebar.draw(popup);
+  assert.deepEqual(popup.modal.tags.map((t) => t.tag.option), [1, 2], "the options shown under a long question");
+});
+
+test("every box in mission control is drawn one way: the keys box as a menu is", () => {
+  const help = plain(sidebar.helpModal("mission", 120, 40));
+  const menu = plain(sidebar.chooseModal({ title: "A tab", choices: [{ key: "a", label: "Go there" }], cursor: 0 }, 120, 40));
+  [help, menu].forEach((box) => assert.match(box, /╭─ \S.*╮[\s\S]*╰─+╯/, "a rounded edge, its title in the top"));
+  assert.match(help, /│ any key to go back +│/, "the keys on a row of their own at the bottom, as a menu's");
+  assert.match(menu, /│ jk move +↵ or click choose +esc back +│/);
+  const popup = sidebar.helpLines("sidebar", 60, 30).map(plain);
+  assert.match(popup[0], /^╭─ Keys ─+╮$/, "the sidebar's keys popup too");
+  assert.match(popup.at(-1), /^╰─+╯$/);
 });
 
 test("six daemons started at once over a dead daemon's lock leave one running, the one the lock names", async () => {

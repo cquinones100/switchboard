@@ -69,3 +69,33 @@ menu_read() {
   esac
   return 0
 }
+
+# The colors mission control's boxes use (lib/sidebar/text.js's PALETTES),
+# for the mode theme.sh last set: MENU_TEXT, MENU_DIM, MENU_BRIGHT and
+# MENU_HIGHLIGHT, as 256-color numbers.
+menu_colors() {
+  if [ "$(cat "$HOME/.config/tmux/.theme-mode" 2>/dev/null)" = light ]; then
+    MENU_TEXT=236 MENU_DIM=242 MENU_BRIGHT=232 MENU_HIGHLIGHT=252
+  else
+    MENU_TEXT=250 MENU_DIM=244 MENU_BRIGHT=255 MENU_HIGHLIGHT=238
+  fi
+}
+
+# One option of a menu, as mission control's boxes draw one (chooseModal):
+# the chosen one on the highlight across the whole row, a yellow › and its
+# label bright and bold; the others in the text color. Clears the row first.
+# Usage: menu_option <1 if chosen> <label>
+menu_option() {
+  [ -n "${MENU_TEXT:-}" ] || menu_colors
+  if [ "$1" = 1 ]; then
+    printf '\r\033[2K\033[48;5;%sm\033[K \033[38;5;220;1m›\033[0m\033[48;5;%sm \033[38;5;%s;1m%s\033[0m\n' "$MENU_HIGHLIGHT" "$MENU_HIGHLIGHT" "$MENU_BRIGHT" "$2"
+  else
+    printf '\r\033[2K   \033[38;5;%sm%s\033[0m\n' "$MENU_TEXT" "$2"
+  fi
+}
+
+# The keys under a menu, dim, after a blank line, as the boxes end.
+menu_keys() {
+  [ -n "${MENU_DIM:-}" ] || menu_colors
+  printf '\n \033[38;5;%sm%s\033[0m' "$MENU_DIM" "${1:-jk move  ↵ or click choose  esc back}"
+}

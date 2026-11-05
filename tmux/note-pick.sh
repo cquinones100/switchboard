@@ -76,7 +76,8 @@ case "${1:-}" in
     # The likeliest note first, so Enter takes it; keeping what is open last.
     { list "$window"; printf 'Keep whatever is open\t\n'; } >"$choices"
     name=$(tmux display -p -t "$window" '#{@tab_label}')
-    tmux display-popup -c "$client" -E -w 70 -h 60% -T " Which note is this tab's? " \
+    # Its list looks like mission control's boxes (fzf-style.sh).
+    tmux display-popup -c "$client" -e "FZF_DEFAULT_OPTS=${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${0%/*}/fzf-style.sh" 2>/dev/null)" -E -w 70 -h 60% -T "#[bold] Which note is this tab's? " \
       "fzf --delimiter '\t' --with-nth 1 --layout reverse --prompt 'Note: ' --header '${name//\'/} · Esc asks again next time' <'$choices' >'$answer'"
     choice=$(cut -f2 "$answer")
     if [ -s "$answer" ] && [ -z "$choice" ]; then

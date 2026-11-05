@@ -97,6 +97,6 @@ height=$(( $(printf '%s\n' "$wrapped" | wc -l) + 3 ))
 mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/switchboard" && : > "$(pending "$client")"
 # In the background: a binding or hook that says something never waits on it.
 # The text goes in the environment (-e), as it is, never in the command line.
-tmux display-popup ${client:+-c "$client"} -E -w "$width" -h "$height" -b rounded \
+tmux display-popup ${client:+-c "$client"} -E -w "$width" -h "$height" \
   -e "SAY_TEXT=$wrapped" -e "SAY_SECONDS=$seconds" "bash $(printf %q "$self") box $(printf %q "$client")" >/dev/null 2>&1 &
 exit 0

@@ -34,6 +34,8 @@
 # The request audit (count-request.sh); counting nothing when it isn't there.
 . "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 
 REPO="${SWITCHBOARD_DIR:-$HOME/switchboard}"
 # A clone not yet set up under its new name (setup.sh links it).
@@ -58,7 +60,7 @@ case "${1:-}" in
     setup_anyway() {
       [ "$1" = now ] || return 0
       "${0%/*}/say.sh" close "${2:-}"
-      tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T ' Switchboard setup ' "SETUP_WHY=$(printf %q "$3") $0 run-setup"
+      tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T '#[bold] Switchboard setup ' "SETUP_WHY=$(printf %q "$3") $0 run-setup"
     }
     mkdir -p "$STATE"
     now=$(date +%s)
@@ -119,7 +121,7 @@ case "${1:-}" in
     rmdir "$lock" 2>/dev/null
     trap - EXIT
     "${0%/*}/say.sh" close "$client"
-    tmux display-popup -c "$client" -E -w 90 -h 85% -T ' Switchboard ' "$0 prompt $(printf %q "$client")"
+    tmux display-popup -c "$client" -E -w 90 -h 85% -T '#[bold] Switchboard ' "$0 prompt $(printf %q "$client")"
     # How updates also arrive, once (tip.sh), after a prompt answered: one
     # closed for a newer prompt leaves the client to that one.
     read -r answered_tip 2>/dev/null < "$STATE/update-offered"
@@ -200,16 +202,13 @@ case "${1:-}" in
       commits -n "$SHOWN"
       [ "$behind" -gt "$SHOWN" ] && printf '  \033[38;5;244m…and %s more\033[0m\n\n' $((behind - SHOWN))
       for i in "${!options[@]}"; do
-        if [ "$i" = "$cursor" ]; then
-          printf '  \033[38;5;220;1m› %s\033[0m\n' "${options[$i]}"
-        else
-          printf '    %s\n' "${options[$i]}"
-        fi
+        menu_option "$([ "$i" = "$cursor" ] && echo 1)" "${options[$i]}"
       done
-      # Where the first option is, for a click's row (only on a terminal).
+      menu_keys "jk move  ↵ or click choose  esc not now"
+      # Where the first option is, for a click's row (only on a terminal):
+      # asked once the keys are drawn, which can scroll the popup.
       start=
-      [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} ))
-      printf '\n  \033[38;5;244mj/k move  ↵ or click choose  esc not now\033[0m'
+      [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} - 1 ))
       # A closed input answers nothing: the prompt goes, and asks again later.
       menu_read || { menu_mouse_off; exit 0; }
       pick=
@@ -264,12 +263,12 @@ case "${1:-}" in
     ;;
 
   setup)
-    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T ' Switchboard setup ' "$0 run-setup"
+    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T '#[bold] Switchboard setup ' "$0 run-setup"
     ;;
 
   # M-p's "Check Switchboard's setup": what the guided setup would do, changing nothing.
   setup-check)
-    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T ' Switchboard setup, checked ' "$0 run-setup-check"
+    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T '#[bold] Switchboard setup, checked ' "$0 run-setup-check"
     ;;
 
   run-setup-check)
@@ -286,12 +285,12 @@ case "${1:-}" in
   # M-p's "Run a part of Switchboard's setup": the parts setup.sh lists, Tab
   # choosing several; Enter runs them, Ctrl-O only checks them.
   setup-part)
-    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T ' A part of Switchboard setup ' "$0 run-setup-part"
+    tmux display-popup -c "${2:-}" -E -w 90 -h 85% -T '#[bold] A part of Switchboard setup ' "$0 run-setup-part"
     ;;
 
   run-setup-part)
     [ -x "$REPO/setup.sh" ] || { printf '\n  There is no setup.sh in %s.\n\n  Press any key to close.' "$REPO"; read -rsn 1; exit 0; }
-    picked=$("$REPO/setup.sh" --parts | fzf --multi --delimiter=$'\t' --with-nth=1,2 --layout=reverse --border=rounded --height=100% \
+    picked=$("$REPO/setup.sh" --parts | fzf --multi --delimiter=$'\t' --with-nth=1,2 --layout=reverse --height=100% \
       --prompt='part> ' --header='Enter runs it (Tab picks several), Ctrl-O only checks what it would change' --expect=ctrl-o)
     key=$(head -1 <<<"$picked")
     chosen=()

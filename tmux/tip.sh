@@ -96,7 +96,7 @@ case "${1:-}" in
     width=$(( $( { text_of "$tip"; echo "$FOOTER"; } | awk '{ if (length > n) n = length } END { print n }') + 4 ))
     # A client shows one popup at a time: a tip that couldn't open, behind
     # another popup, is left to show another time.
-    tmux display-popup -c "$client" -e "TIP_KEY=${TIP_KEY:-}" -E -x R -y 0 -w "$width" -h $(( lines + 4 )) -b rounded -T ' tip ' "$0 box $(printf '%q %q' "$tip" "$client")" ||
+    tmux display-popup -c "$client" -e "TIP_KEY=${TIP_KEY:-}" -E -x R -y 0 -w "$width" -h $(( lines + 4 )) -T '#[bold] tip ' "$0 box $(printf '%q %q' "$tip" "$client")" ||
       unmark "$tip"
     ;;
   # A key picked from the palette that has a hotkey of its own: the key as the

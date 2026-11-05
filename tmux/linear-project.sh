@@ -31,7 +31,7 @@ client="${2:-}"
 # environment rather than the command, so nothing in it is read by a shell.
 explain() {
   "${0%/*}/say.sh" close "$client"
-  tmux display-popup -c "$client" -E -w 72 -h 9 -T ' Linear project ' \
+  tmux display-popup -c "$client" -E -w 72 -h 9 -T '#[bold] Linear project ' \
     -e "LINEAR_PROJECT_MESSAGE=$1" "$(printf %q "$0") --show"
 }
 

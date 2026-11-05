@@ -13,6 +13,8 @@
 #   remind.sh at <text> [<now>]   print the time <text> names, in seconds (for the tests)
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 here=${0%/*}
 
 # The time a choice or typed text names, in seconds, or nothing.

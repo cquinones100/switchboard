@@ -31,7 +31,7 @@ test("say.sh opens a box sized to its text, the text in the environment, or a st
 
     execFileSync("bash", [script, "-c", "client-1", "No #12 here"], { env });
     const box = await said();
-    assert.match(box, /display-popup -c client-1 -E -w 30 -h 4 -b rounded -e SAY_TEXT=No #12 here -e SAY_SECONDS=5 .*say\.sh box/, "a box as wide as the text needs, at least 30");
+    assert.match(box, /display-popup -c client-1 -E -w 30 -h 4 -e SAY_TEXT=No #12 here -e SAY_SECONDS=5 .*say\.sh box/, "a box as wide as the text needs, at least 30");
 
     execFileSync("bash", [script, "-t", "2", "x".repeat(100)], { env });
     assert.match(await said(), /-w 78 -h 5 .*SAY_SECONDS=2/s, "a long line wrapped to 72 columns, and the box grown a row for it");

@@ -67,7 +67,7 @@ tool_command() {
         exit 0
       fi
       if ! ref=$("${0%/*}/diff-base.sh" cached "$dir"); then
-        tmux display-popup -c "$client" -E -w 60 -h 9 -T " diffview " \
+        tmux display-popup -c "$client" -E -w 60 -h 9 -T "#[bold] diffview " \
           "printf '\\n\\n\\n%14s\\033[1mFetching the PR base branch...\\033[0m' ''; sleep 30" </dev/null >/dev/null 2>&1 &
         ref=$("${0%/*}/diff-base.sh" fetch "$dir")
         fetched=$?
@@ -103,7 +103,7 @@ case "${1:-}" in
     # A box said on the way (a fetch that failed) is read first: a key, or
     # its few seconds, and then the tool.
     "${0%/*}/say.sh" wait "$client"
-    tmux display-popup -c "$client" -E -w 95% -h 90% -d "$dir" -T " $tool " "$command"
+    tmux display-popup -c "$client" -E -w 95% -h 90% -d "$dir" -T "#[bold] $tool " "$command"
     ;;
   # Side by side: the parked pane (a Claude session, say) joins the tool's
   # window on its left, half the width, and goes back to waiting in a window

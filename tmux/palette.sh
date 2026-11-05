@@ -26,6 +26,8 @@
 # typed again (see --rank). The palette_learn setting turns that off.
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 # What it keeps names your branches, tickets and prompts: yours alone.
 umask 077
 
@@ -180,7 +182,7 @@ export PALETTE_SELF=$0 PALETTE_ROWS=$rows PALETTE_LEARNED=$learned_from
 picked=$(
   fzf --ansi --delimiter=$'\t' --with-nth=2 --no-sort --no-hscroll --exact --print-query \
     --bind 'change:reload("$PALETTE_SELF" --rank "$PALETTE_ROWS" {q} "$PALETTE_LEARNED")' \
-    --prompt='action> ' --layout=reverse --border=rounded --height=100% < "$rows"
+    --prompt='action> ' --layout=reverse --height=100% < "$rows"
 )
 query=$(head -1 <<<"$picked" | tr '[:upper:]' '[:lower:]' | tr -s ' \t' ' ' | sed 's/^ //; s/ $//')
 choice=$(sed -n 2p <<<"$picked" | cut -f1)

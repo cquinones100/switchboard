@@ -19,6 +19,8 @@
 #   <client>  the tmux client to use; default, the one in front of this pane
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 notes_dir=${NOTES_DIR:-$HOME/Notes}
 
 # Notes beside the tab's Claude, showing the tab's note; already there, it is
@@ -95,5 +97,5 @@ if [ -n "$window" ]; then
 fi
 
 title=$(head -1 "$notes_dir/$note" | sed 's/^#* *//')
-tmux display-popup ${client:+-c "$client"} -d "$HOME" -E -w 90 -h 60% -T " A tab for ${title//#/##} " \
+tmux display-popup ${client:+-c "$client"} -d "$HOME" -E -w 90 -h 60% -T "#[bold] A tab for ${title//#/##} " \
   "$(printf %q "$0") choose $(printf %q "$note") $(printf %q "$client")"

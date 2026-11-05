@@ -107,10 +107,12 @@ finish() {
   menu_mouse_on
   while :; do
     for i in "${!options[@]}"; do
-      if [ "$i" = "$cursor" ]; then printf '\r\033[2K  %s› %s%s\n' "$bold" "${options[$i]}" "$reset"; else printf '\r\033[2K    %s\n' "${options[$i]}"; fi
+      menu_option "$([ "$i" = "$cursor" ] && echo 1)" "${options[$i]}"
     done
-    # Where the first option is, for a click's row.
-    [ -n "$start" ] || { [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} )); }
+    menu_keys
+    # Where the first option is, for a click's row: asked once the keys are
+    # drawn, which can scroll the popup, the options above them and a blank line.
+    [ -n "$start" ] || { [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} - 1 )); }
     menu_read || { menu_mouse_off; return; }
     pick=
     case $MENU_KEY in
@@ -131,7 +133,8 @@ finish() {
         *) menu_mouse_off; return ;;
       esac
     fi
-    printf '\033[%dA' "${#options[@]}"
+    # Back up to the first option: past the keys line and the blank one.
+    printf '\r\033[2K\033[%dA' "$(( ${#options[@]} + 1 ))"
   done
 }
 

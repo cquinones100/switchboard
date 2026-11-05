@@ -22,7 +22,9 @@ else
   pad_top=$(( (lines - 1) / 2 ))
 
   for ((i = 0; i < pad_top; i++)); do echo; done
-  printf "%*s%s" "$pad_left" "" "$text"
+  # The question in yellow, bold, as mission control's questions are
+  # (confirmModal).
+  printf "%*s\033[38;5;220;1m%s\033[0m" "$pad_left" "" "$text"
   # Yes and No under it, each taken by a click too (menu.sh, the menu_mouse
   # setting): the row they are on and the columns of each.
   . "${0%/*}/menu.sh"
@@ -30,7 +32,7 @@ else
   row=
   if [ -n "${MENU_MOUSE:-}" ] && [ -t 0 ]; then
     yes_at=$(( (cols - 9) / 2 + 1 ))
-    printf '\n\n%*s\033[1mYes\033[0m   No\033[1A\033[1A\r\033[%dC' "$((yes_at - 1))" "" "$((pad_left + ${#text}))"
+    printf '\n\n%*s\033[1m› Yes\033[0m   No\033[1A\033[1A\r\033[%dC' "$((yes_at - 3))" "" "$((pad_left + ${#text}))"
     row=$(( $(menu_row) + 2 ))
   fi
 

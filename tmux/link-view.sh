@@ -38,6 +38,8 @@
 # The request audit (count-request.sh); counting nothing when it isn't there.
 . "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 here=${0%/*}
 repo=${SWITCHBOARD_DIR:-$HOME/switchboard}
 # A note found by search.sh comes as a file:// link, read only from the notes.

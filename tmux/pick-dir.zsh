@@ -15,6 +15,8 @@
 # nothing matches, what you typed if it is a directory. Exits 1 on Esc or a
 # path that isn't a directory, having said which.
 
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${0:A:h}/fzf-style.sh" 2>/dev/null)"
 here=$PWD
 typeset -U dirs
 dirs=(

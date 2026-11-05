@@ -21,6 +21,8 @@
 # its issues.
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 export LC_ALL=en_US.UTF-8
 
 fail() {
@@ -45,7 +47,7 @@ else
     cd "$notes" &&
       { [ -n "$open_note" ] && [ -f "$open_note" ] && printf '%s\n' "$open_note"
         find . -name '*.md' -not -path './.trash/*' -print0 | xargs -0 ls -t 2>/dev/null | sed 's#^\./##' | grep -vxF -- "$open_note"; } |
-      fzf --layout=reverse --border=rounded --height=100% --prompt='note> ' \
+      fzf --layout=reverse --height=100% --prompt='note> ' \
         --header='The note whose checklist to shape' --preview "grep -E '^[[:space:]]*- \\[ \\] ' {} | head -40"
   )
   [ -n "$note" ] || exit 0
@@ -100,7 +102,7 @@ else
 
   chosen=$(
     printf '%s\n' "$items" |
-      fzf --multi --bind 'load:select-all' --delimiter=$'\t' --with-nth=1 --layout=reverse --border=rounded --height=100% \
+      fzf --multi --bind 'load:select-all' --delimiter=$'\t' --with-nth=1 --layout=reverse --height=100% \
         --prompt='shape> ' --header="Tab deselects an item; Enter shapes the selected, one tab each" |
       cut -f2
   )
@@ -114,7 +116,7 @@ here=$(repo_of "$PWD")
 repo=$(
   { [ -n "$here" ] && echo "$here"
     tmux list-panes -a -F '#{pane_current_path}' | sort -u | while IFS= read -r dir; do repo_of "$dir"; done | sort -u | grep -vxF -- "${here:-/}"; } |
-    fzf --layout=reverse --border=rounded --height=100% --prompt='repo> ' --header='The repo these tickets are for'
+    fzf --layout=reverse --height=100% --prompt='repo> ' --header='The repo these tickets are for'
 )
 [ -n "$repo" ] || exit 0
 

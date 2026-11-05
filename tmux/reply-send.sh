@@ -14,6 +14,8 @@
 # than each pressing Enter.
 
 set -u
+# Its lists look like mission control's boxes (fzf-style.sh).
+export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 export LC_ALL=en_US.UTF-8
 
 if ! command -v node >/dev/null 2>&1; then
@@ -47,7 +49,7 @@ error=$(node "$reply_tool" "$source" 2>&1 >"$reply_file") || fail "$error"
 target=$(
   tmux list-windows -a -F $'#{window_id}\t#{window_index}  #{?@tab_label,#{@tab_label},#{window_name}}' |
     awk -F'\t' -v me="$source" '$1 != me' |
-    fzf --delimiter=$'\t' --with-nth=2 --layout=reverse --border=rounded --height=100% \
+    fzf --delimiter=$'\t' --with-nth=2 --layout=reverse --height=100% \
       --prompt='send to> ' \
       --header="$(head -c 300 "$reply_file" | tr '\n' ' ' | cut -c1-110)…" |
     cut -f1
