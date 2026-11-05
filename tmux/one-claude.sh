@@ -15,6 +15,10 @@ pane=${1:-}
 [ -n "$pane" ] || exit 0
 window=$(tmux display -p -t "$pane" '#{window_id}' 2>/dev/null) || exit 0
 . "${0%/*}/claude-pane.sh"
+# Only a pane running Claude moves: a claude -p started elsewhere that
+# inherited a pane's TMUX_PANE (Notes', say) names that pane too.
+IFS=$'\t' read -r command tty < <(tmux display -p -t "$pane" $'#{pane_current_command}\t#{pane_tty}')
+claude_pid "$command" "$tty" >/dev/null || exit 0
 
 # Every field is filled (@sidebar as 1 or 0): read splits on tabs as
 # whitespace, so an empty one would shift the rest.

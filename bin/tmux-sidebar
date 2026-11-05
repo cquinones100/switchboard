@@ -69,6 +69,10 @@ if (require.main !== module) {
   };
   const command = process.argv[2] ?? "daemon";
   if (command === "daemon") {
+    // Started by tmux's run-shell, it inherits the pane that was in front then
+    // as TMUX_PANE, though it runs in none; every claude -p it starts would
+    // pass that pane to Claude Code's hooks as its own (agent-state.sh).
+    delete process.env.TMUX_PANE;
     if (!parts.start()) process.exit(0);
   } else if (command === "stop") {
     const running = pid();

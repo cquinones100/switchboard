@@ -1262,6 +1262,11 @@ test("a Claude started in a tab already running one moves to a tab of its own", 
   assert.equal(tmux("display", "-p", "-t", first, "#{window_id}"), window, "the first stays");
   execFileSync("bash", [script, first]);
   assert.equal(tmux("display", "-p", "-t", first, "#{window_id}"), window, "alone in its tab, it stays");
+  // A pane that isn't Claude, as Notes beside it, named by a claude -p that
+  // inherited its TMUX_PANE.
+  const notes = tmux("split-window", "-d", "-t", first, "-P", "-F", "#{pane_id}");
+  execFileSync("bash", [script, notes]);
+  assert.equal(tmux("display", "-p", "-t", notes, "#{window_id}"), window, "a pane that isn't Claude stays");
 });
 
 test("a Claude starting alone in a tab moves nothing, even while the tab in front holds two", async (t) => {
