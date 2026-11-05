@@ -9,7 +9,7 @@ On a new Mac, `./setup.sh` sets up the whole tmux workspace these scripts
 belong to: it checks for macOS, zsh, the repo at `~/switchboard`,
 Homebrew's `tmux jq fzf gh glow lazygit neovim` (tmux 3.8 or newer), Node
 from nvm and `~/.local/bin` on the PATH, links the tmux, Neovim and lazygit
-configs and these scripts, adds the `wt`, `wtpr`, `wtr` and `wtb` functions
+configs and these scripts, adds the `wt`, `wtpr`, `wtr`, `wtb` and `wtn` functions
 to `~/.zshrc`, and installs Neovim's pinned plugins, asking
 before each install or change to `~/.zshrc`. Then come the optional parts, each asked for
 and off unless you say yes: Claude Code's hooks for tab states and `M-a`
@@ -198,6 +198,38 @@ stays one stable line that never needs re-editing when the tool changes.
   tabs' worktrees.
 - `wt-batch` opens several tickets at once, one tmux window each, and
   `wt-jump` gets you back to any of those windows by ticket, PR, or branch.
+
+## worktree-from-note
+
+`wt` for a checklist item of one of your notes rather than a Linear ticket, for
+a repository like this one that keeps its work in a note and commits straight
+to `main`. `wtn --note "Switchboard Notes" --item 12` makes a worktree on
+`note/<the item's first line, slugged>` in `.claude/worktrees/`, moves the
+shell into it and starts Claude there, told the item as written (with the
+lines indented under it), to read the plan its `Plan: [[…]]` line links first
+and ask about any choice the plan still needs, and to land the work with
+`/queue-and-clean` when done. `--item` is the item's line number in the note,
+and `--note` the note's path within your notes directory (`$NOTES_DIR` or
+`~/Notes`), `.md` optional; a ticked item, a line that isn't one, or a file
+outside the notes directory is refused. It reuses the worktree, and refuses a
+second Claude in it, as `wt` does, and shares that code with it
+(`lib/worktree.js`).
+
+`/wtn` in a Claude session hands its tab to `wtn` as `/wt` does: it settles
+the note as `/note-watch` does, lists the note's unticked items to pick from
+(those whose plan still needs a choice marked so), names the tab after the
+item, and respawns the pane, the note's path passed in `WTN_NOTE` and any text
+of yours in `WT_PROMPT`, which the `wtn` function passes on and clears.
+
+`/queue-and-clean` lands it: on a branch with no PR, in a repository whose
+`CLAUDE.md` says it commits straight to its default branch, "Land on main"
+rebases it onto `origin/main`, squashes it into one commit, runs the review
+loop, asks before pushing, pushes, fast-forwards the main clone, ticks the
+item in the note and removes the worktree. One worktree lands at a time: the
+landing lock (`claude/skills/queue-and-clean/scripts/land-lock.js`, a lock in
+the main clone's git directory) has the others wait their turn, however long
+a landing waits on you, and a lock whose worktree is gone, or has no Claude
+session running in it, is taken over.
 
 ## shape
 

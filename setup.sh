@@ -1115,13 +1115,13 @@ fi
 # popups type into a new tab and /wt runs: only a function can cd the shell.
 # Each comes from its script's `init zsh`, so ~/.zshrc evals that, and only the
 # ones it doesn't define yet are added.
-worktree_functions=(wt:worktree-from-ticket wtpr:worktree-from-pr wtr:worktree-resume wtb:worktree-from-branch)
+worktree_functions=(wt:worktree-from-ticket wtpr:worktree-from-pr wtr:worktree-resume wtb:worktree-from-branch wtn:worktree-from-note)
 undefined=()
 for pair in "${worktree_functions[@]}"; do
   [[ $(in_zsh "whence -w ${pair%%:*}") == *function ]] || undefined+=("$pair")
 done
 if (( ${#undefined[@]} == 0 )); then
-  ok "the wt, wtpr, wtr and wtb functions"
+  ok "the wt, wtpr, wtr, wtb and wtn functions"
 elif ask "Add ${undefined[*]%%:*} to ~/.zshrc, from their scripts' init?"; then
   for pair in "${undefined[@]}"; do
     echo "eval \"\$(${pair#*:} init zsh)\"" >> ~/.zshrc

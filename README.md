@@ -83,7 +83,7 @@ Settings (`M-p`) keeps what you change there in the same folder, as `settings.js
 |---|---|
 | `tmux/` | `tmux.conf`, the tab states, sidebar launcher, palette, settings and tips |
 | `lib/sidebar/`, `bin/tmux-sidebar` | The sidebar and mission control |
-| `bin/` | The scripts: worktrees (`wt`, `wtpr`, `wtb`, `wtr`), the notes app, the Slack relay, and more; see [bin/README.md](bin/README.md) |
+| `bin/` | The scripts: worktrees (`wt`, `wtpr`, `wtb`, `wtr`, `wtn`), the notes app, the Slack relay, and more; see [bin/README.md](bin/README.md) |
 | `nvim/`, `notes/` | Neovim's config, and the notes app built on it |
 | `claude/` | Claude Code's settings, hooks, statusline and skills |
 | `lazygit/`, `ghostty/`, `karabiner/`, `pgcli/` | Those tools' configs |

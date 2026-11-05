@@ -1,6 +1,6 @@
 ---
 name: queue-and-clean
-description: Queue the current branch's PR for merge if it is not queued already, watch it in the background, fix what stops it merging (failing checks, conflicts, being dropped from the merge queue), and once it merges wait for it to deploy, test the feature in a real browser and record a video of the test, and once you approve the test make sure its Linear ticket is done and its item in your notes ticked, then remove this worktree and its local branch.
+description: Queue the current branch's PR for merge if it is not queued already, watch it in the background, fix what stops it merging (failing checks, conflicts, being dropped from the merge queue), and once it merges wait for it to deploy, test the feature in a real browser and record a video of the test, and once you approve the test make sure its Linear ticket is done and its item in your notes ticked, then remove this worktree and its local branch. In a repository that commits straight to its default branch, with no PR, it lands the branch there instead, one worktree at a time.
 argument-hint: "[PR number]"
 disable-model-invocation: true
 ---
@@ -52,9 +52,27 @@ When no argument was given and `gh pr view` finds no PR for the branch (nor a cl
    - Merging the branch into the default branch changes nothing: `git -C <worktree> merge-tree --write-tree <default> HEAD` succeeds and prints the same tree as `git -C <worktree> rev-parse <default>^{tree}`. That settles it whichever way the work got there, a squash included. When it doesn't (a conflict, or a different tree), the work may still be there, squashed in with changes beside it: read what the branch changed (`git -C <worktree> diff <merge-base> HEAD`, the merge base from `git merge-base <default> HEAD`) against the default branch's version of those files, and count it as in when every change is there; when you can't tell, ask, showing what looks missing.
 2. **When it is**, there is nothing to queue, watch or test: settle the ticket and the note as step 4 of "Before watching" says (no deploy, no test), then follow "Cleanup" with this one change, that clean-worktree's step 2 counts the work as on GitHub because the default branch holds it, its own check of the branch's commits on a remote skipped. Then "Closing out" and "Back to the repository" as after a merge, the success line saying so: `queue-and-clean: success (no PR: already in <default>; …)`.
 3. **When it isn't**, say what the default branch lacks (`git -C <worktree> log --oneline <default>..HEAD`, and the files of `git -C <worktree> diff --stat <default>...HEAD`), and ask with `AskUserQuestion`:
-   - **Open a PR** (first, as recommended): push the branch, its first push, and open the PR with `gh pr create` as the repository's own PR conventions say, then carry on from "Before watching" with it.
+   - **Land on <default's name>**, only in a repository whose `CLAUDE.md` says its work is committed straight to the default branch with no PR, as Switchboard's does, and then first, as recommended: follow "Land on the default branch" below.
+   - **Open a PR** (first, as recommended, in any other repository): push the branch, its first push, and open the PR with `gh pr create` as the repository's own PR conventions say, then carry on from "Before watching" with it.
    - **I'll merge it myself**: reply `queue-and-clean: fail: no PR, and <default> lacks <n> commits`, changing nothing; merging into the default branch is the user's to do.
    - **Leave it**: the same reply, changing nothing.
+
+### Land on the default branch
+
+For a repository that takes its work straight on the default branch, as `/wtn`'s worktrees do (`bin/worktree-from-note`): the branch's work goes onto it as one commit, reviewed and pushed, one worktree of the repository at a time. `<lock>` below is `node ~/.claude/skills/queue-and-clean/scripts/land-lock.js`.
+
+1. **The note.** Settle it now, as step 4 of "Before watching" says for the note alone: no ticket, deploy or test, since the push is the whole landing. A worktree `/wtn` opened names its note in the prompt it started with.
+2. **Take the landing lock**: `<lock> take`. It exits 3 when another worktree is landing, printing which: say so in a line, run `<lock> wait` in the background (`run_in_background`), and go on once it finishes. From here, every way out of this section, a failure or a declined push included, runs `<lock> release` before the final line.
+3. **Clean tree.** `git status --porcelain` prints nothing, or ask about what is uncommitted as clean-worktree's step 2 would.
+4. **Onto the default branch as it is now**: `git fetch origin <name>`, then `git rebase origin/<name>`. On a conflict, resolve it as `/resolve-conflicts` does (read `~/.claude/skills/resolve-conflicts/SKILL.md`, without its push), and stop and ask when the right resolution isn't clear.
+5. **One commit**, squashed as the repository's `CLAUDE.md` says for squashing (Switchboard's: a `backup/pre-<what>` branch first, one commit whose message describes the feature as it now stands, in prose, the added lines and the message checked for anything identifying): `git reset --soft origin/<name>` and commit, then check the tree equals the backup's. Run the repository's tests on it, as its `CLAUDE.md` names them; when they fail, fix what the branch broke and fold the fix into the commit, or stop and ask when it isn't the branch's.
+6. **Review it**: read the review loop's `SKILL.md` (the repository's own `.claude/skills/review-loop/SKILL.md`, else `~/.claude/skills/review-loop/SKILL.md`) and follow it on this branch up to its final report, its push question excepted: the push is step 7's. Fold the loop's fix commits into the one commit as its squash steps say, recording the clean review for the squashed commit.
+7. **Ask before pushing**, with `AskUserQuestion`: **Push to <name>** or **Not yet**, the commit's subject in the question. On yes, check the lock is still this worktree's (`<lock> take` exits 0; when it doesn't, another landing took it over, so go back to step 2), then fetch again: when `origin/<name>` has moved since the rebase (`git merge-base --is-ancestor origin/<name> HEAD` fails), go back to step 4, since the review covered a commit on the old one. Then `git push origin HEAD:<name>`, never forced. A pre-push hook refusing it (Switchboard's checks the review) is a failure: say what it said.
+8. **The main clone**: `git -C <main-clone> fetch origin <name>`, then, when the main clone has `<name>` checked out, `git -C <main-clone> merge --ff-only origin/<name>`, which in Switchboard also runs its post-merge hook's setup. When it can't fast-forward (commits of the main clone's own not yet pushed, or uncommitted changes in the same files), leave it and say so in the final line.
+9. **Release the lock**: `<lock> release`.
+10. **Then as work already in the default branch**: carry on as step 2 above does, "Cleanup", "Closing out" and "Back to the repository", the note's item ticked with a `Done: <short hash>. <what the feature does now, in prose>` line under it when the note's other ticked items carry one. The success line says so: `queue-and-clean: success (landed on <name>: <short hash>; note: ticked "…")`.
+
+**Not yet**: release the lock and reply `queue-and-clean: fail: not pushed; the branch is one reviewed commit, ready to land`, keeping the worktree.
 
 ## Queuing
 
@@ -205,14 +223,14 @@ Only after GitHub reports the PR `MERGED` and the user has approved in "Approval
 - `clean-worktree: success`: close out the ticket and the note, as "Closing out" says, then move the tab to the main clone, as "Back to the repository" says. From here on every command needs `git -C <main-clone>` or an absolute path, since the shell's working directory no longer exists.
 - `clean-worktree: fail: <reason>`: reply `queue-and-clean: fail: <reason>`, closing out nothing.
 
-The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own branch, and a branch's first push when the user chooses **Open a PR** in "No PR", and never a force-push.
+The only pushes are `/ci-loop`'s fix commits (see "Fixing"), to the PR's own branch, a branch's first push when the user chooses **Open a PR** in "No PR", and the landed commit of "Land on the default branch", once the user says to push it, and never a force-push.
 
 ## Closing out
 
 After the cleanup, with the ticket and note settled before watching:
 
 1. **The ticket.** Read it with the Linear connector. In a completed state (its state's type is `completed`), there is nothing to do. Otherwise move it to the team's completed state, the one its other merged tickets use ("Done", "Deployed"…), unless the team's workflow moves it there on its own once the PR merges and it hasn't caught up yet: then leave it. Say which, in the final line's note (below).
-2. **The note.** Read only the note settled before watching. Find the checklist item for this work: one naming the ticket's ID or link, or the PR's number or link, else one whose words plainly match the ticket's or PR's title. Tick it (`- [x]`) and move it under the unticked items in its list, with anything indented under it, as the user's CLAUDE.md says for notes, changing those lines and nothing else. When no item matches, or more than one might, tick nothing and say so.
+2. **The note.** Read only the note settled before watching. Find the checklist item for this work: one naming the ticket's ID or link, or the PR's number or link, else one whose words plainly match the ticket's or PR's title; for a branch `/wtn` opened (`note/<slug>`), the item whose first line its slug was made from, as its prompt quoted it. Tick it (`- [x]`) and move it under the unticked items in its list, with anything indented under it, as the user's CLAUDE.md says for notes, changing those lines and nothing else. When no item matches, or more than one might, tick nothing and say so.
 
 Neither step fails the run: the PR merged and the cleanup finished. Add what they did to the success line, `queue-and-clean: success (ticket ABC-123 done; note: ticked "…")`, or what they couldn't (`note: no item for ABC-123`).
 
