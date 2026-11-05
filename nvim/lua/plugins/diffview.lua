@@ -343,6 +343,14 @@ local function count_request(source)
   end)
 end
 
+-- Claude Code's command: on the PATH, else where its installer puts it,
+-- ~/.local/bin, which the PATH of a Neovim tmux starts (M-d) leaves out.
+local function claude_command()
+  if vim.fn.executable("claude") == 1 then return "claude" end
+  local installed = vim.fn.expand("~/.local/bin/claude")
+  return vim.fn.executable(installed) == 1 and installed or nil
+end
+
 local asked = {}
 local function ask_order(view)
   local entries = {}
@@ -371,7 +379,8 @@ local function ask_order(view)
   end
   local ok, cached = pcall(function() return vim.json.decode(table.concat(vim.fn.readfile(file), "\n")) end)
   if ok then return apply(cached) end
-  if vim.fn.executable("claude") == 0 then return end
+  local claude = claude_command()
+  if not claude then return end
   local lines = vim.tbl_map(function(e)
     local stats = e.stats or {}
     return ("%s (+%d -%d)"):format(e.path, stats.additions or 0, stats.deletions or 0)
@@ -379,7 +388,7 @@ local function ask_order(view)
   vim.fn.mkdir(dir, "p")
   count_request("diff order")
   vim.system({
-    "claude", "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
+    claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
     "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ORDER_PROMPT, "--output-format", "text",
   }, { stdin = table.concat(lines, "\n"), cwd = dir, timeout = 60000 }, function(result)
     local found = result.code == 0 and (result.stdout or ""):match("%[.*%]")
@@ -471,7 +480,8 @@ local function ask_story(view)
   local top = view.adapter.ctx.toplevel
   local RevType = require("diffview.vcs.rev").RevType
   local left, right = view.left and view.left.type, view.right and view.right.type
-  if vim.fn.executable("claude") == 0 or not (left == RevType.COMMIT or left == RevType.STAGE) then return ask_order(view) end
+  local claude = claude_command()
+  if not claude or not (left == RevType.COMMIT or left == RevType.STAGE) then return ask_order(view) end
   -- The change as diffview shows it, with git's own a/ and b/ whatever the
   -- config says, which diffstory.split reads, and never the repository's
   -- text converters: a commit against the branch's head, the index (--cached)
@@ -547,7 +557,7 @@ local function ask_story(view)
       vim.fn.mkdir(dir, "p")
       count_request("diff story")
       vim.system({
-        "claude", "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
+        claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
         "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT, "--output-format", "text",
       }, { stdin = ds.input(entries, ds.split(diff.stdout)), cwd = dir, timeout = 120000 }, function(result)
         vim.schedule(function()
