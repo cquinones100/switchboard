@@ -92,6 +92,19 @@ impl Server {
             let panes = self.tab_panes(tab);
             self.sweep(&panes);
             self.redraw_tab(tab);
+            // The first tab to wait on you, or to finish, while you look
+            // elsewhere brings its tip on M-a, once.
+            if !front {
+                match self.agents.state(pane) {
+                    Some(State::Waiting) => {
+                        self.tip("waiting", None);
+                    }
+                    Some(State::Done) => {
+                        self.tip("done", None);
+                    }
+                    _ => {}
+                }
+            }
         }
         if hook.event == "SessionStart"
             && hook.source != "compact"
@@ -274,15 +287,31 @@ impl Server {
             .tab_panes(tab)
             .into_iter()
             .any(|p| p != pane && self.runs_claude(p));
-        if other && let Err(e) = self.break_pane(pane) {
-            eprintln!("one Claude to a tab: {e}");
+        if !other {
+            return;
+        }
+        let session = self.session_of_tab(tab).map(|s| s.name.clone());
+        match self.break_pane(pane) {
+            Ok(_) => {
+                // Said on a client showing that session, the one used last;
+                // with none, to no one.
+                if let Some(client) = session.and_then(|s| self.latest_client_of(&s)) {
+                    self.say(
+                        Some(client),
+                        "That tab already had a Claude, so this session has a tab of its own. (Settings: One Claude to a tab)",
+                    );
+                }
+            }
+            Err(e) => eprintln!("one Claude to a tab: {e}"),
         }
     }
 
     /// M-a: the next tab that needs you, as agent-state.sh's `next` walked
     /// them without the sidebar's daemon: pinned, then waiting, then done,
-    /// oldest first within each, across every session.
+    /// oldest first within each, across every session. With nowhere to go,
+    /// it says so. Pressing it is learning it, so its tip isn't shown after.
     pub fn next_needs_you(&mut self, client: ClientId) {
+        self.tip_seen("waiting");
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
@@ -291,6 +320,12 @@ impl Server {
         };
         let stops = self.needs_you();
         let Some(i) = self.agents.next_stop(&stops, here) else {
+            let words = if stops.is_empty() {
+                "Nothing needs you."
+            } else {
+                "This is the only tab that needs you."
+            };
+            self.say(Some(client), words);
             return;
         };
         let stop = stops[i].clone();
@@ -331,30 +366,36 @@ impl Server {
         stops
     }
 
-    /// M-c: into the pane running Claude in this tab (tmux/claude-focus.sh).
+    /// M-c: into the pane running Claude in this tab (tmux/claude-focus.sh),
+    /// or, with none, saying so.
     pub fn focus_claude(&mut self, tab: TabId) {
-        if let Some(pane) = self
+        match self
             .tab_panes(tab)
             .into_iter()
             .find(|p| self.runs_claude(*p))
         {
-            self.focus_pane(pane);
+            Some(pane) => self.focus_pane(pane),
+            None => self.say(None, "No Claude in this tab"),
         }
     }
 
     /// M-f: pins the tab, or unpins it. A pin of its own, not Claude's
     /// "done": visiting the tab doesn't clear it, and pinned tabs lead M-a's
-    /// walk (and the sidebar's Needs you).
+    /// walk (and the sidebar's Needs you). The first pin brings its tip.
     pub fn toggle_pin(&mut self, tab: TabId) {
         let Some(t) = self.tabs.get_mut(&tab) else {
             return;
         };
-        if t.opts.get("@pinned").is_some_and(|v| pinned(v)) {
-            t.opts.remove("@pinned");
-        } else {
+        let pinning = !t.opts.get("@pinned").is_some_and(|v| pinned(v));
+        if pinning {
             t.opts.insert("@pinned".into(), "1".into());
+        } else {
+            t.opts.remove("@pinned");
         }
         self.redraw_tab(tab);
+        if pinning {
+            self.tip("pinned", None);
+        }
     }
 
     /// One of a pane's `@agent_` options, for `show`; `None` for any other.

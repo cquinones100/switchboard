@@ -12,10 +12,12 @@
 //! - `hook`: `switchboard hook`, the side Claude Code runs.
 //! - `serve`: the server's side: hooks, focus, the keys, one Claude per tab.
 //!
-//! Left for the parts that come later: the tips agent-state.sh showed on a
-//! first wait, finish or worktree, the message boxes it said things in, and
-//! the sidebar's nudge and its Needs you list, which M-a walks once the
-//! sidebar is there.
+//! What it says goes in a message box (src/ui): nowhere for M-a to go, no
+//! Claude for M-c, a session moved to a tab of its own; a first wait or
+//! finish while you look elsewhere, and the first pin, bring their tips.
+//! Left for the parts that come later: the worktree tip (its keys come with
+//! the PR views), and the sidebar's nudge and its Needs you list, which M-a
+//! walks once the sidebar is there.
 
 pub mod hook;
 mod serve;
