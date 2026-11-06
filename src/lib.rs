@@ -14,6 +14,7 @@
 //! - `net`: HTTPS requests, each counted in the request audit.
 //! - `integrations`: GitHub and Linear over their APIs.
 //!
+//! - `items`: what mission control's views list, in one shape for every source.
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
 //! - `tabs`: what each tab is called and the color it wears.
@@ -24,6 +25,7 @@ pub mod agent;
 pub mod cmd;
 pub mod connector;
 pub mod integrations;
+pub mod items;
 pub mod mux;
 pub mod net;
 pub mod paths;
