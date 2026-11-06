@@ -152,7 +152,16 @@ Each step is a commit (or a few) on the branch, with its tests.
    search, link view, PR and ticket views, the request audit. GitHub and
    Linear's lookups done (src/sources: every tab's PR facts and landing
    place, and the PRs, CI, Merge queues, Tickets and Inbox views' data,
-   polled and guarded as the daemon did, paused while away).
+   polled and guarded as the daemon did, paused while away). Reading
+   beside your work done (src/views: `switchboard view`, `pr-view`,
+   `ticket-view` and `link-view`, glow's Markdown and mermaid-ascii's
+   diagrams drawn and paged as less did, opened and closed by M-v and M-i
+   in a pane to the right; M-r, M-l, M-m's box, search everything and the
+   palette's link commands), and every link opened in its site's Chrome
+   profile (src/links.rs, `switchboard open-url`). Left: the PR
+   description as an image (pr-image.js), the media picker, and OSC 8
+   links passed through the multiplexer to the terminal (a click in a view
+   opens its link meanwhile).
 6. **Worktrees and Claude programs**: `wt`/`wtn`/`wtr`/`wtb`, `claude-here`,
    `codex-review`, `shape`, `skill-path`, `land-lock`, `wait-deploy`,
    `watch-note`, the skills' scripts, the skills' text moved off tmux.

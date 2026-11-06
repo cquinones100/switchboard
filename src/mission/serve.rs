@@ -78,11 +78,11 @@ const KEYS: &[(&str, &str)] = &[
     ("?", "these keys"),
 ];
 
-/// Opens a link: through the desktop's opener for now. The one place
-/// mission control opens a link, so it can go through the Chrome-profile
-/// chooser (`links::open_url`) by changing this line.
+/// Opens a link through the Chrome-profile chooser (`links::open_url`, what
+/// open-url.sh did): the one place mission control opens a link. Blocking,
+/// so it is called off the server's task.
 pub fn open_link(url: &str) -> anyhow::Result<()> {
-    crate::platform::open(url)
+    crate::links::open_url(url)
 }
 
 /// What mission control opens on.

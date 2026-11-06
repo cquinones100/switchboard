@@ -1,8 +1,9 @@
 //! Key bindings: which key does what. The defaults are the multiplexer keys
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
-//! tab's Claude, M-f to pin a tab) and M-s into the sidebar, under the same
-//! keys, with the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
+//! tab's Claude, M-f to pin a tab), M-s into the sidebar and the views'
+//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), under the same keys, with
+//! the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
 //! adds to or changes them:
 //!
 //! ```json
@@ -93,6 +94,9 @@ pub enum Action {
     Settings,
     /// A reminder on the current tab (remind.sh).
     RemindTab,
+    /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f and the link
+    /// commands (src/views).
+    View(crate::views::Command),
 }
 
 impl Action {
@@ -103,9 +107,10 @@ impl Action {
     /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
-    /// `continue-shaping`,
-    /// `focus-sidebar`, `toggle-sidebar`, `mission-control`, `find-tab`,
-    /// `revive-worktree`, `settings`, `remind-tab`.
+    /// `continue-shaping`, `mission-control`, `find-tab`,
+    /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
+    /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
+    /// `search-everything`, `read-link`, `open-link-being-read`).
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -114,6 +119,9 @@ impl Action {
             "down" => Some(Direction::Down),
             _ => None,
         };
+        if let Some(command) = crate::views::Command::parse(name) {
+            return Some(Action::View(command));
+        }
         Some(match name {
             "prev-tab" => Action::PrevTab,
             "next-tab" => Action::NextTab,
@@ -200,6 +208,7 @@ impl Action {
             Action::ReviveWorktree => "revive-worktree".into(),
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
+            Action::View(command) => command.name().into(),
         }
     }
 
@@ -260,6 +269,7 @@ impl Action {
             Action::RemindTab => {
                 "Remind me about this tab later: it waits under Reminders with the time left, then needs you".into()
             }
+            Action::View(command) => command.about().into(),
         }
     }
 
@@ -297,6 +307,7 @@ impl Action {
             Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
+            Action::View(command) => command.tags(),
         }
     }
 
@@ -332,7 +343,11 @@ impl Action {
     /// The commands no key is bound to by default, which the palette lists
     /// with none (tmux.conf's `palette` key table).
     pub fn palette_only() -> Vec<Action> {
-        vec![
+        let views = crate::views::Command::ALL
+            .into_iter()
+            .filter(|c| c.key().is_none())
+            .map(Action::View);
+        [
             Action::ResetTips,
             Action::ToggleSidebar,
             Action::WorkOnPr,
@@ -341,6 +356,9 @@ impl Action {
             Action::Settings,
             Action::RemindTab,
         ]
+        .into_iter()
+        .chain(views)
+        .collect()
     }
 }
 
@@ -398,6 +416,11 @@ impl Default for Bindings {
         bind("M-Space", MissionControl);
         bind("M-j", FindTab);
         bind("M-o", ReviveWorktree);
+        for command in crate::views::Command::ALL {
+            if let Some(k) = command.key() {
+                bind(k, View(command));
+            }
+        }
         let mut prefix = HashMap::new();
         let mut pbind = |k: &str, a: Action| {
             prefix.insert(key(k), a);
@@ -520,6 +543,8 @@ mod tests {
             Action::ReviveWorktree,
             Action::Settings,
             Action::RemindTab,
+            Action::View(crate::views::Command::PrView),
+            Action::View(crate::views::Command::OpenLinkRead),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

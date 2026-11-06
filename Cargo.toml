@@ -43,6 +43,11 @@ unicode-width = "0.2"
 unicode-segmentation = "1"
 # Matching what is typed in the palette and the pickers, as fzf did.
 nucleo-matcher = "0.3"
+# The Markdown views (a PR's description, a ticket, a page read beside a
+# pane), in place of glow: Markdown parsed, and a web page's HTML turned
+# into Markdown first, as turndown did for the link view.
+pulldown-cmark = { version = "0.13", default-features = false }
+htmd = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

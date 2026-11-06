@@ -31,6 +31,9 @@
 //! - `usage`: how the workspace is used, on this computer alone: habits and
 //!   their suggestions, each tab's CPU and memory, the Claude sessions and
 //!   the day's spend, closed tabs, your own files' settings, plugins.
+//! - `links`: opening a link in the browser, in its site's Chrome profile.
+//! - `views`: reading things beside your work: the PR description, the
+//!   ticket, any link, search everything, and whether the PR can merge.
 
 pub mod agent;
 pub mod cmd;
@@ -39,6 +42,7 @@ pub mod day;
 pub mod facts;
 pub mod integrations;
 pub mod items;
+pub mod links;
 pub mod mission;
 pub mod mux;
 pub mod net;
@@ -53,4 +57,5 @@ pub mod tabs;
 pub mod ui;
 pub mod usage;
 pub mod util;
+pub mod views;
 pub mod worktree;

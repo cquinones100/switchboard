@@ -95,6 +95,8 @@ pub enum Event {
     Work(crate::cmd::work::WorkEvent),
     /// Mission control's timers and background work (src/mission).
     Mission(crate::mission::MissionEvent),
+    /// What the views' lookups found (src/views).
+    Views(crate::views::ViewsEvent),
     Tick,
     Quit,
 }
@@ -287,6 +289,8 @@ pub struct Server {
     /// Mission control's state across clients: the worktrees the Work map
     /// lists (src/mission).
     pub mission: crate::mission::MissionState,
+    /// Each client's search everything, as its sources answer (src/views).
+    pub views: crate::views::Views,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -526,6 +530,7 @@ impl Server {
             day: Default::default(),
             sidebar: Default::default(),
             mission: Default::default(),
+            views: Default::default(),
         }
     }
 
@@ -577,6 +582,7 @@ impl Server {
             Event::Sidebar(event) => self.sidebar_event(event),
             Event::Work(event) => self.work_event(event),
             Event::Mission(event) => self.mission_event(event),
+            Event::Views(event) => self.views_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
@@ -1556,6 +1562,7 @@ impl Server {
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
+            Action::View(command) => self.view_command(id, command),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

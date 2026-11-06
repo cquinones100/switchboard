@@ -1,8 +1,9 @@
 //! Every program Switchboard has, by name. `switchboard <name> [args]` runs
 //! one; alone, `switchboard` is the workspace. A link to the binary named
 //! after a program runs it too, so `wt-jump` and the rest keep their names.
-//! What used to be a program run inside tmux (the sidebar, the PR and ticket
-//! views, search) is part of the workspace now, not a command.
+//! What used to be a program run inside tmux is part of the workspace now
+//! (the sidebar, search), or a program of its own the workspace runs in a
+//! pane (`view`, `pr-view`, `ticket-view`, `link-view`, src/views).
 
 use std::process::ExitCode;
 
@@ -164,6 +165,31 @@ pub const COMMANDS: &[Command] = &[
         name: "today-save",
         run: today_save::main,
         about: "Save the day /today read",
+    },
+    Command {
+        name: "view",
+        run: crate::views::view_main,
+        about: "Page a Markdown file, drawn as the PR view draws one",
+    },
+    Command {
+        name: "pr-view",
+        run: crate::views::pr_view_main,
+        about: "The branch's PR description, paged (M-v runs it beside a pane)",
+    },
+    Command {
+        name: "ticket-view",
+        run: crate::views::ticket_view_main,
+        about: "A Linear ticket with its comments, paged (M-i runs it beside a pane)",
+    },
+    Command {
+        name: "link-view",
+        run: crate::views::link_view_main,
+        about: "What a link holds, read in the terminal",
+    },
+    Command {
+        name: "open-url",
+        run: crate::links::main,
+        about: "Open a link in its site's Chrome profile (browser.json)",
     },
 ];
 

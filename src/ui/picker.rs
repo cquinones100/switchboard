@@ -169,6 +169,31 @@ impl Picker {
         self
     }
 
+    /// The rows given anew while it is up, as a list filled in as its
+    /// sources answer: what is typed is kept, and the row chosen stays
+    /// chosen while it is there.
+    pub fn set_items(&mut self, items: Vec<PickItem>) {
+        let chosen = self.chosen().map(|i| i.value.clone());
+        self.items = items;
+        self.refilter();
+        if let Some(value) = chosen
+            && let Some(at) = self
+                .shown
+                .iter()
+                .position(|(i, _)| self.items[*i].value == value)
+        {
+            self.cursor = at;
+            if self.cursor >= self.top + self.room.max(1) {
+                self.top = self.cursor + 1 - self.room.max(1);
+            }
+        }
+    }
+
+    /// Its title given anew while it is up.
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+    }
+
     /// Typed, as if by hand.
     pub fn query(mut self, query: &str) -> Picker {
         self.query = query.to_string();
@@ -665,5 +690,32 @@ mod tests {
             ..click
         };
         assert_eq!(p.mouse(outside, &look), Step::Close(Outcome::Dismissed));
+    }
+
+    #[test]
+    fn a_free_list_gives_what_is_typed_and_takes_rows_while_up() {
+        let look = Look::default();
+        let mut p = Picker::new("Search", Vec::new()).free();
+        typed(&mut p, "deploy");
+        assert_eq!(
+            p.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Close(Outcome::Picked(Picked {
+                index: usize::MAX,
+                value: "deploy".into(),
+                query: "deploy".into(),
+            }))
+        );
+        let mut p = Picker::new("Found", items());
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
+        let mut more = vec![PickItem::new("Arrived first", "9")];
+        more.extend(items());
+        p.set_items(more);
+        assert_eq!(p.shown().len(), 5);
+        assert_eq!(
+            p.chosen().unwrap().text,
+            "Close the pane",
+            "the row chosen stays chosen"
+        );
     }
 }

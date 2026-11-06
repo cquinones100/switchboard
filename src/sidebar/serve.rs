@@ -1232,11 +1232,7 @@ impl Server {
             Target::Tab(t) => self.sidebar_go(&session, t),
             Target::Url(url) => {
                 self.sidebar_leave(&session);
-                if tokio::runtime::Handle::try_current().is_ok() {
-                    tokio::task::spawn_blocking(move || {
-                        let _ = crate::platform::open(&url);
-                    });
-                }
+                crate::links::open_in_background(url);
             }
             Target::Dir(dir) => {
                 self.sidebar_leave(&session);
