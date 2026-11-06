@@ -226,3 +226,28 @@ test("M-p's wtn popup opens a tab for each item picked, named after it, linked t
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("M-p's wtn popup leaves out an item a worktree is already working on, and shows it again once that worktree is removed, its branch kept", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-claimed-")));
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const popup = path.join(__dirname, "../tmux/wtn-open.zsh");
+  try {
+    const repo = path.join(tmp, "repo");
+    fs.mkdirSync(path.join(tmp, "Notes/Work"), { recursive: true });
+    const note = path.join(tmp, "Notes/Work/Plan's Notes.md");
+    fs.writeFileSync(note, "# Plan's Notes\n\n- [ ] First thing\n- [ ] Second thing\n  Plan: [[Plan - Second]] (needs a choice)\n- [ ] Third thing\n");
+    fs.writeFileSync(path.join(tmp, "Notes/Other.md"), "# Other\n\n- [ ] Third thing\n");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work/Plan's Notes", "--item", "4"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Other", "--item", "3"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+
+    const listed = () => execFileSync("zsh", [popup, "items", note], { cwd: repo, env, encoding: "utf8" }).trim().split("\n");
+    assert.deepEqual(listed(), ["3\tFirst thing", "6\tThird thing"], "the item with a worktree left out, a like item of another note kept");
+
+    execFileSync("git", ["-C", repo, "worktree", "remove", path.join(repo, ".claude/worktrees/note-second-thing")], { env });
+    assert.deepEqual(listed(), ["3\tFirst thing", "4\tSecond thing (needs a choice)", "6\tThird thing"], "back once its worktree is removed, its branch kept");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

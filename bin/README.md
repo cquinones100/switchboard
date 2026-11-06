@@ -224,8 +224,9 @@ of yours in `WT_PROMPT`, which the `wtn` function passes on and clears.
 The M-p palette's "Start work on a note's checklist items in new tabs (wtn)"
 (`tmux/wtn-open.zsh`) does the same from any tab in the repository: it lists
 your notes by title, newest first, then the chosen note's unticked items (those
-under a parked section such as `## Defered` left out, those whose plan needs a
-choice marked), Tab picking several, and opens a tab for each at the end of the
+under a parked section such as `## Defered` and those a worktree of the
+repository is already working on left out, those whose plan needs a choice
+marked), Tab picking several, and opens a tab for each at the end of the
 tab list, named after its item and linked to the note, with `wtn` running in it.
 
 `/queue-and-clean` lands it: on a branch with no PR, in a repository whose

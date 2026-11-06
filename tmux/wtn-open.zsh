@@ -11,7 +11,8 @@
 # Both lists are fzf: the notes by title, most recently changed first (never
 # their contents, nor deleted ones); the note's unticked top-level items in its
 # order, leaving out any under a section named for parked work (## Defered,
-# ## Later), each marked when its line says its plan still needs a choice. Tab
+# ## Later) and any a worktree of this repository is already working on, each
+# marked when its line says its plan still needs a choice. Tab
 # picks several. The tabs start in the focused pane's directory (the
 # binding's -d), so `wtn` finds that repository; each is named after its item
 # and linked to the note (@tab_note), and the first is selected. `wtn` is typed
@@ -34,15 +35,36 @@ items() {
       if (!parked || level <= parked) parked = (tolower($0) ~ /(^|[^a-z])(later|defer+ed|parked|someday|backlog)([^a-z]|$)/) ? level : 0
       next
     }
-    /^- \[ \] / && !parked { flush(); n = NR; text = substr($0, 7); sub(/[[:space:]]+$/, "", text); choice = ($0 ~ /needs (a )?choices?/); next }
+    /^- \[ \] / && !parked { flush(); n = NR; text = substr($0, 7); sub(/^[[:space:]]+/, "", text); sub(/[[:space:]]+$/, "", text); choice = ($0 ~ /needs (a )?choices?/); next }
     /^[^[:space:]]/ { flush(); next }
     n && /needs (a )?choices?/ { choice = 1 }
     END { flush() }
   ' "$1"
 }
 
+# Those of them no worktree is working on yet. wtn keeps the item a branch is
+# for in its git config, branch.<branch>.wtnItem, as "<note>: <item's first
+# line>", the note's path within the notes directory; an item counts as taken
+# only while its branch is checked out in a worktree, so one whose worktree
+# was removed, its branch kept, shows again.
+unclaimed() {
+  local file=$1 note=${1#${NOTES_DIR:-$HOME/Notes}/} key value row text
+  local -A claimed checked_out
+  git worktree list --porcelain 2>/dev/null | while read -r key value; do
+    [[ $key == branch ]] && checked_out[${value#refs/heads/}]=1
+  done
+  git config --get-regexp '^branch\..*\.wtnitem$' 2>/dev/null | while read -r key value; do
+    key=${${key#branch.}%.wtnitem}
+    (( ${+checked_out[$key]} )) && claimed[$value]=1
+  done
+  for row in ${(f)"$(items "$file")"}; do
+    text=${${row#*$'\t'}%' (needs a choice)'}
+    (( ${+claimed[$note: $text]} )) || print -r -- "$row"
+  done
+}
+
 if [[ ${1:-} == items ]]; then
-  items "$2"
+  unclaimed "$2"
   exit
 fi
 
@@ -78,8 +100,9 @@ note=$(
 file=$notes/$note.md
 [[ -f $file ]] || exit 0
 
-list=$(items "$file")
-[[ -n $list ]] || fail "$note has no unticked items."
+[[ -n $(items "$file") ]] || fail "$note has no unticked items."
+list=$(unclaimed "$file")
+[[ -n $list ]] || fail "Every unticked item of $note has a worktree already."
 picked=$(
   print -r -- "$list" | sed "s/ (needs a choice)\$/ ${yellow}(needs a choice)${reset}/" |
     fzf --ansi --multi --delimiter=$'\t' --with-nth=2 \
