@@ -467,11 +467,12 @@ local function start_loading(view)
     })
   end))
 end
--- While a view's story is being told, the diff waits under a cover saying
--- so (shown only once the story has taken a moment, so one already known
--- opens at once), so the list isn't read in an order about to change; Esc
--- or q there shows the diff now, the story arriving into it as usual. The
--- cover goes once the story is known or can't be (settle). In the story
+-- While a view's story is being told, the diff waits under a cover, put
+-- up as the view opens so the diff is never seen in the kinds' order first:
+-- blank for its first 300ms, so a story already known opens with no words
+-- flashing up and away, then saying so, so the list isn't read in an order
+-- about to change; Esc or q there shows the diff now, the story arriving
+-- into it as usual. The cover goes once the story is known or can't be (settle). In the story
 -- told ahead of time (tmux/diff-story-ahead.sh, g:diff_ahead), the headless
 -- Neovim quits then, the story kept in the cache for M-d.
 -- Setting guicursor again keeps the group a mode had when the new value
@@ -514,81 +515,103 @@ local function untold(view, why)
   settle(view, false)
 end
 local function cover(view)
-  vim.defer_fn(function()
-    if view.settled or view.cover or require("diffview.lib").get_current_view() ~= view then return end
-    local buf = vim.api.nvim_create_buf(false, true)
-    local width, height = vim.o.columns, vim.o.lines - vim.o.cmdheight
-    view.cover = vim.api.nvim_open_win(buf, true, { relative = "editor", row = 0, col = 0, width = width, height = height, style = "minimal", zindex = 200 })
-    vim.wo[view.cover].winhighlight = "Normal:Normal"
-    vim.bo[buf].modifiable = false
-    -- The cover holds still: its cursor hidden (a Cursor group with
-    -- blend=100, which the TUI hides) while it is in front, and put back
-    -- at its top whatever key or wheel moved it.
-    vim.api.nvim_set_hl(0, "SwitchboardHiddenCursor", { blend = 100, nocombine = true })
-    local function hide()
-      if view.guicursor == nil then view.guicursor = vim.o.guicursor end
-      vim.o.guicursor = "a:SwitchboardHiddenCursor"
-    end
-    hide()
-    vim.api.nvim_create_autocmd("BufEnter", { buffer = buf, callback = hide })
-    vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, { buffer = buf, callback = function() show_cursor(view) end })
-    local function hold()
-      if view.cover and vim.api.nvim_win_is_valid(view.cover) then
-        vim.api.nvim_win_call(view.cover, function() vim.fn.winrestview({ topline = 1, lnum = 1, col = 0, leftcol = 0 }) end)
-      end
-    end
-    vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, { buffer = buf, callback = hold })
-    local frame = 0
-    local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
-    -- With the diff_story_progress setting, what is read and the chapters
-    -- as Haiku names them, a block centred as one so its ticks line up, or
-    -- (t) Haiku's answer itself so far, its last lines; else the spinner.
-    local function draw()
-      if not vim.api.nvim_buf_is_valid(buf) then return end
-      frame = frame % #SPINNER + 1
-      local p = view.want and progress[view.want]
-      local block, keys
-      if not vim.g.diff_progress then
-        block, keys = { SPINNER[frame] .. " Telling the change as a story" }, "Esc shows the diff now"
-      elseif view.raw then
-        block, keys = { SPINNER[frame] .. " Haiku's answer so far" }, "Esc shows the diff now · t shows the chapters"
-        local room = math.max(width - 8, 20)
-        local wrapped = {}
-        for _, line in ipairs(vim.split(p and p.text or "", "\n")) do
-          repeat
-            table.insert(wrapped, vim.fn.strcharpart(line, 0, room))
-            line = vim.fn.strcharpart(line, room)
-          until line == ""
+  if view.settled or view.cover or require("diffview.lib").get_current_view() ~= view then return end
+  local buf = vim.api.nvim_create_buf(false, true)
+  local width, height = vim.o.columns, vim.o.lines - vim.o.cmdheight
+  view.cover = vim.api.nvim_open_win(buf, true, { relative = "editor", row = 0, col = 0, width = width, height = height, style = "minimal", zindex = 200 })
+  vim.wo[view.cover].winhighlight = "Normal:Normal"
+  vim.bo[buf].modifiable = false
+  -- Keys go to the cover while it is up: diffview focuses the diff once
+  -- its first file loads, under the cover, so focus comes back to it.
+  local tab = vim.api.nvim_get_current_tabpage()
+  vim.api.nvim_create_autocmd("WinEnter", {
+    callback = function()
+      if not (view.cover and vim.api.nvim_win_is_valid(view.cover)) then return true end
+      vim.schedule(function()
+        if view.cover and vim.api.nvim_win_is_valid(view.cover) and vim.api.nvim_get_current_tabpage() == tab and vim.api.nvim_get_current_win() ~= view.cover then
+          vim.api.nvim_set_current_win(view.cover)
         end
-        vim.list_extend(block, vim.list_slice(wrapped, math.max(1, #wrapped - (height - 6) + 1)))
-      else
-        block = require("diffstory").progress(p, view.reading, SPINNER[frame], os.time())
-        keys = "Esc shows the diff now · t shows Haiku's answer as it comes"
+      end)
+    end,
+  })
+  -- The cover holds still: its cursor hidden (a Cursor group with
+  -- blend=100, which the TUI hides) while it is in front, and put back
+  -- at its top whatever key or wheel moved it.
+  vim.api.nvim_set_hl(0, "SwitchboardHiddenCursor", { blend = 100, nocombine = true })
+  local function hide()
+    if view.guicursor == nil then view.guicursor = vim.o.guicursor end
+    vim.o.guicursor = "a:SwitchboardHiddenCursor"
+  end
+  hide()
+  vim.api.nvim_create_autocmd("BufEnter", { buffer = buf, callback = hide })
+  -- Shown again once Neovim is out of the cover, not while diffview edits a
+  -- file in a window it opens over the cover for a moment.
+  vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, {
+    buffer = buf,
+    callback = function()
+      vim.schedule(function()
+        if vim.api.nvim_get_current_win() ~= view.cover then show_cursor(view) end
+      end)
+    end,
+  })
+  local function hold()
+    if view.cover and vim.api.nvim_win_is_valid(view.cover) then
+      vim.api.nvim_win_call(view.cover, function() vim.fn.winrestview({ topline = 1, lnum = 1, col = 0, leftcol = 0 }) end)
+    end
+  end
+  vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, { buffer = buf, callback = hold })
+  local frame, worded = 0, false
+  local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
+  -- With the diff_story_progress setting, what is read and the chapters
+  -- as Haiku names them, a block centred as one so its ticks line up, or
+  -- (t) Haiku's answer itself so far, its last lines; else the spinner.
+  local function draw()
+    if not (worded and vim.api.nvim_buf_is_valid(buf)) then return end
+    frame = frame % #SPINNER + 1
+    local p = view.want and progress[view.want]
+    local block, keys
+    if not vim.g.diff_progress then
+      block, keys = { SPINNER[frame] .. " Telling the change as a story" }, "Esc shows the diff now"
+    elseif view.raw then
+      block, keys = { SPINNER[frame] .. " Haiku's answer so far" }, "Esc shows the diff now · t shows the chapters"
+      local room = math.max(width - 8, 20)
+      local wrapped = {}
+      for _, line in ipairs(vim.split(p and p.text or "", "\n")) do
+        repeat
+          table.insert(wrapped, vim.fn.strcharpart(line, 0, room))
+          line = vim.fn.strcharpart(line, room)
+        until line == ""
       end
-      local wide = 0
-      for _, line in ipairs(block) do wide = math.max(wide, vim.fn.strdisplaywidth(line)) end
-      local pad = string.rep(" ", math.max(0, math.floor((width - wide) / 2)))
-      local lines = {}
-      for _ = 1, math.max(0, math.floor((height - #block - 2) / 2)) do table.insert(lines, "") end
-      for _, line in ipairs(block) do table.insert(lines, pad .. line) end
-      table.insert(lines, "")
-      table.insert(lines, centre(keys))
-      vim.bo[buf].modifiable = true
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-      vim.bo[buf].modifiable = false
-      hold()
+      vim.list_extend(block, vim.list_slice(wrapped, math.max(1, #wrapped - (height - 6) + 1)))
+    else
+      block = require("diffstory").progress(p, view.reading, SPINNER[frame], os.time())
+      keys = "Esc shows the diff now · t shows Haiku's answer as it comes"
     end
+    local wide = 0
+    for _, line in ipairs(block) do wide = math.max(wide, vim.fn.strdisplaywidth(line)) end
+    local pad = string.rep(" ", math.max(0, math.floor((width - wide) / 2)))
+    local lines = {}
+    for _ = 1, math.max(0, math.floor((height - #block - 2) / 2)) do table.insert(lines, "") end
+    for _, line in ipairs(block) do table.insert(lines, pad .. line) end
+    table.insert(lines, "")
+    table.insert(lines, centre(keys))
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+    hold()
+  end
+  view.cover_timer = vim.uv.new_timer()
+  view.cover_timer:start(300, 100, vim.schedule_wrap(function()
+    worded = true
     draw()
-    view.cover_timer = vim.uv.new_timer()
-    view.cover_timer:start(100, 100, vim.schedule_wrap(draw))
-    for _, key in ipairs({ "<Esc>", "q" }) do
-      vim.keymap.set("n", key, function() uncover(view) end, { buffer = buf, nowait = true })
-    end
-    vim.keymap.set("n", "t", function()
-      view.raw = not view.raw
-      draw()
-    end, { buffer = buf, nowait = true })
-  end, 300)
+  end))
+  for _, key in ipairs({ "<Esc>", "q" }) do
+    vim.keymap.set("n", key, function() uncover(view) end, { buffer = buf, nowait = true })
+  end
+  vim.keymap.set("n", "t", function()
+    view.raw = not view.raw
+    draw()
+  end, { buffer = buf, nowait = true })
 end
 
 -- A few words in a box (tmux/say.sh), or Neovim's own message outside tmux.
@@ -713,6 +736,50 @@ local function line_reader(read)
   end
 end
 
+-- Which story each diff between two commits (M-d's) was last told, so M-d
+-- opening it again lists its files in that story's order from the start,
+-- with no cover, before git has read the diff to know its key:
+-- diff-story/index.json, "toplevel\0left commit\0right commit" -> the
+-- story's key, the story itself kept parsed as <key>.json beside its answer.
+-- ask_story still works the key out, so an entry gone stale costs only the
+-- cover coming up after all. The index and the working tree change with no
+-- commit, so a diff of either is never in it.
+local function index_at(view)
+  local RevType = require("diffview.vcs.rev").RevType
+  local left, right = view.left, view.right
+  if not (left and right and left.type == RevType.COMMIT and right.type == RevType.COMMIT) then return nil end
+  return table.concat({ view.adapter.ctx.toplevel, left.commit, right.commit }, "\0")
+end
+local function read_json(path)
+  local ok, lines = pcall(vim.fn.readfile, path)
+  local parsed, value = pcall(vim.json.decode, ok and table.concat(lines, "\n") or "")
+  return parsed and type(value) == "table" and value or nil
+end
+local function write_json(path, value)
+  local tmp = path .. "." .. vim.fn.getpid()
+  if pcall(vim.fn.writefile, { vim.json.encode(value) }, tmp) then vim.uv.fs_rename(tmp, path) end
+end
+local function indexed(view)
+  local at = index_at(view)
+  local dir = vim.fn.stdpath("cache") .. "/diff-story"
+  local key = at and (read_json(dir .. "/index.json") or {})[at]
+  local story = type(key) == "string" and key:match("^[%w_-]+$") and read_json(dir .. "/" .. key .. ".json")
+  return story and { key = key, story = story } or nil
+end
+local function index(view, key, story)
+  local at = index_at(view)
+  if not (at and key) then return end
+  local dir = vim.fn.stdpath("cache") .. "/diff-story"
+  vim.fn.mkdir(dir, "p")
+  local file = dir .. "/" .. key .. ".json"
+  if not vim.uv.fs_stat(file) then write_json(file, story) end
+  local all = read_json(dir .. "/index.json") or {}
+  if all[at] ~= key then
+    all[at] = key
+    write_json(dir .. "/index.json", all)
+  end
+end
+
 local function ask_story(view)
   local ds = require("diffstory")
   local entries, paths, untracked = changed(view)
@@ -731,6 +798,7 @@ local function ask_story(view)
         target.said_missed = target.want
         if vim.g.diff_ahead then io.stderr:write(missed .. "\n") else say(missed .. ".") end
       end
+      index(target, target.want, made)
       settle(target, true)
     end
     target.story = made
@@ -800,7 +868,12 @@ local function ask_story(view)
     -- edited since, or a commit reworded, is a new story.
     local key = ds.key(top, paths, diff.stdout, commits)
     -- What the view shows now, which an answer asked for before must match.
-    if view.want ~= key then forget(view) end
+    if view.want ~= key then
+      forget(view)
+      -- The index named another story: covered after all while this one is told.
+      if view.from_index then cover(view) end
+    end
+    view.from_index = nil
     view.want = key
     -- A story is kept parsed against the hunks as they were split into
     -- runs, so staging every change, which leaves the diff the same but
@@ -1767,8 +1840,17 @@ return {
         -- A page of the story (turn_page), shown its chapter from the whole diff's story.
         view.page = pending_page
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
-        -- The diff under a cover until its story is told (a page has its own).
-        if vim.g.diff_story and not vim.g.diff_ahead and not view.page and view.panel and view.panel.ordered_file_list then cover(view) end
+        -- The diff under a cover until its story is told (a page has its
+        -- own), unless the index knows it: then its files are listed in its
+        -- order from the start (view_enter makes it the one sorted by).
+        if vim.g.diff_story and not vim.g.diff_ahead and not view.page and view.panel and view.panel.ordered_file_list then
+          local known = indexed(view)
+          if known then
+            view.story, view.want, view.from_index = known.story, known.key, true
+          else
+            cover(view)
+          end
+        end
         if view.emitter then
           view.emitter:on("file_open_post", function()
             to_first_change(view)

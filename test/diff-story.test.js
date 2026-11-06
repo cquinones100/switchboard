@@ -287,6 +287,86 @@ test("M-d's cover shows each chapter as Haiku names it, then the diff in the sto
   assert.deepEqual(result.order, ["src/c.js", "src/a.js", "src/b.js"], "and the list is in its order");
 });
 
+test("M-d covers the diff as it opens, blank at first, and opens a story it has told before with no cover", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
+  const repo = path.join(tmp, "blank-repo");
+  const bin = path.join(tmp, "blank-bin");
+  const home = path.join(tmp, "blank-home");
+  const cache = path.join(tmp, "blank-cache");
+  [path.join(repo, "src"), bin, home].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  const config = path.join(tmp, "blank-config");
+  fs.mkdirSync(config);
+  fs.symlinkSync(nvimDir, path.join(config, "nvim"));
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  ["a", "b", "c"].forEach((name) => fs.writeFileSync(path.join(repo, `src/${name}.js`), "x\n"));
+  execFileSync("git", ["-C", repo, "add", "."]);
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "one"]);
+  ["a", "b", "c"].forEach((name) => fs.writeFileSync(path.join(repo, `src/${name}.js`), "y\n"));
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qam", "two"]);
+  // A stand-in claude that answers after a second, noting each time it is asked.
+  const asked = path.join(tmp, "blank-asked");
+  const answer = JSON.stringify({ chapters: [{ title: "Change c", why: "First.", files: ["src/c.js"] }, { title: "Change a", why: "Second.", files: ["src/a.js"] }, { title: "Change b", why: "Third.", files: ["src/b.js"] }] });
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > /dev/null\necho asked >> '${asked}'\nsleep 1\nprintf '%s\\n' '${JSON.stringify({ type: "result", result: answer })}'\n`, { mode: 0o755 });
+  // Watches M-d from the moment it opens: whether the cover is in front, its
+  // words, each order the list is seen in, until the story settles.
+  const open = () => {
+    const run = spawnSync(
+      "nvim",
+      ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1...HEAD", "-c", `lua
+        local function cover_text()
+          for _, w in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_config(w).relative ~= "" then return table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n") end
+          end
+        end
+        local first = { front = vim.api.nvim_win_get_config(0).relative ~= "", text = cover_text() }
+        local view = require("diffview.lib").get_current_view()
+        local orders, last, covered, worded, behind = {}, nil, first.text ~= nil, false, false
+        local function look()
+          local text = cover_text()
+          if text then covered = true end
+          if text and text:find("Telling the change", 1, true) then worded = true end
+          -- No diff window in front while the cover is up.
+          if text and vim.api.nvim_win_get_config(0).relative == "" then behind = true end
+          local order = table.concat(vim.tbl_map(function(e) return e.path end, view.panel:ordered_file_list()), ",")
+          if order ~= "" and order ~= last then table.insert(orders, order) end
+          last = order
+        end
+        vim.wait(150, function() look() return false end, 10)
+        local blank = cover_text()
+        vim.wait(8000, function() look() return view.settled and not cover_text() end, 10)
+        local index = io.open(vim.fn.stdpath("cache") .. "/diff-story/index.json")
+        io.write(vim.json.encode({ first = first, blank = blank or vim.NIL, covered = covered, worded = worded, behind = behind, orders = orders, index = index and index:read("*a") or "" }))`, "-c", "qa"],
+      { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: cache, HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
+    );
+    return JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
+  };
+  const told = open();
+  assert.deepEqual(told.first, { front: true, text: "" }, "the cover is in front, blank, as the view opens");
+  assert.equal(told.blank, "", "and still blank 150ms on");
+  assert.equal(told.behind, false, "no diff window comes in front of it");
+  assert.equal(told.worded, true, "it says so once the story takes a moment");
+  assert.equal(told.orders.at(-1), "src/c.js,src/a.js,src/b.js", "then the list is in the story's order");
+  const index = JSON.parse(told.index);
+  const [at, key] = Object.entries(index)[0];
+  assert.match(at, /\u0000[0-9a-f]{40}\u0000[0-9a-f]{40}$/, "the index knows the diff by its two commits");
+  assert.ok(fs.existsSync(path.join(cache, "nvim/diff-story", `${key}.json`)), "and keeps the story beside it");
+
+  const again = open();
+  assert.equal(again.covered, false, "a story told before opens with no cover");
+  assert.deepEqual(again.orders, ["src/c.js,src/a.js,src/b.js"], "its list in the story's order from the start");
+  assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 1, "and Haiku isn't asked again");
+
+  // The index pointing at another story: that one shown first, then the cover while the right one is told.
+  const dir = path.join(cache, "nvim/diff-story");
+  fs.writeFileSync(path.join(dir, "stale.json"), JSON.stringify({ chapters: [{ title: "Old", why: "", files: ["src/b.js", "src/a.js", "src/c.js"], touches: ["src/b.js", "src/a.js", "src/c.js"] }], place: { "src/b.js": 1, "src/a.js": 2, "src/c.js": 3 }, chapter: { "src/b.js": 1, "src/a.js": 1, "src/c.js": 1 }, hunks: {} }));
+  fs.writeFileSync(path.join(dir, "index.json"), JSON.stringify({ [at]: "stale" }));
+  fs.rmSync(path.join(dir, `${key}.txt`));
+  fs.rmSync(path.join(dir, `${key}.json`));
+  const stale = open();
+  assert.equal(stale.covered, true, "a stale entry brings the cover up after all");
+  assert.equal(stale.orders.at(-1), "src/c.js,src/a.js,src/b.js", "and the right story is told");
+  assert.deepEqual(JSON.parse(stale.index), { [at]: key }, "the entry is put right");
+});
+
 test("M-d's list is told as a story: in its chapters' order, each headed, the chapter in the bar, ]c going to the next", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
   const repo = path.join(tmp, "repo");
   const bin = path.join(tmp, "bin");
@@ -570,8 +650,9 @@ test("a branch's story is told ahead of time by a hidden Neovim, kept where M-d 
   assert.notEqual(ahead().status, 0, "a story that couldn't be told is said so");
   fs.writeFileSync(path.join(bin, "claude"), working, { mode: 0o755 });
   assert.equal(ahead().status, 0, "told once Claude answers");
-  const kept = fs.readdirSync(path.join(root, "cache/nvim/diff-story"));
+  const kept = fs.readdirSync(path.join(root, "cache/nvim/diff-story")).filter((name) => name.endsWith(".txt"));
   assert.equal(kept.length, 1, "the story kept in Neovim's cache, where M-d looks");
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(path.join(root, "cache/nvim/diff-story/index.json"), "utf8"))).length, 1, "and in its index, so M-d opens it with no cover");
   assert.match(fs.readFileSync(path.join(root, "cache/nvim/diff-story", kept[0]), "utf8"), /Change the model/);
   ahead();
   assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 1, "told once for the commit");
