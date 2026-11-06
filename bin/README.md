@@ -950,7 +950,9 @@ config is read again whenever it changes.
   the sidebar's title and are given their client again. While a restore runs
   (`@sidebar_hold`), no sidebar is added.
 - `wt-jump` leaves sidebar panes out.
-- The log is `~/.local/state/tmux-sidebar/daemon.log`.
+- The log is `~/.local/state/tmux-sidebar/daemon.log`. Started with `SIDEBAR_DEBUG=1`,
+  it also logs each draw's time (building the views, drawing, writing) and size,
+  and how long a hover took from the mouse's move to being drawn.
 
 ## claude-reply
 

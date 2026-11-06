@@ -1336,7 +1336,7 @@ test("a session's sidebars aren't drawn while mission control is open over it, a
   sidebar.accept(mission);
   mission.emit("data", `mission ${tmuxClient} 120 30\n`);
   await wait(100);
-  client.last = undefined;
+  client.lastLines = undefined;
   sidebar.draw(client);
   assert.equal(written.length, drawn, "not drawn under mission control");
 
@@ -3929,34 +3929,39 @@ test("what a click would press lights under the mouse, drawn again only when tha
   await sidebar.refresh();
   const sent = [];
   const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 50, tmuxClient: "none" };
+  // A hover draws at once when the last draw is over 16ms old.
+  const hover = async (at) => {
+    await wait(20);
+    sidebar.hoverTo(client, at);
+  };
   sidebar.draw(client);
   assert.ok(sent.some((text) => text.includes("\x1b[?1003h")), "the mouse's every move is asked for");
 
   // A view's name: reverse video, as Tab's focus; the chosen view isn't lit.
   const name = client.hits.find((h) => h.view === 1);
-  sidebar.hoverTo(client, { x: name.x0 + 1, y: 1 });
+  await hover({ x: name.x0 + 1, y: 1 });
   assert.equal(client.hover, "view:1");
   assert.match(sent.at(-1), new RegExp(`\\x1b\\[7m[^ ]* ${sidebar.state.sections[0]?.title ?? ""}`));
   const drawn = sent.length;
-  sidebar.hoverTo(client, { x: name.x0 + 2, y: 1 });
+  await hover({ x: name.x0 + 2, y: 1 });
   assert.equal(sent.length, drawn, "moving within it draws nothing");
-  sidebar.hoverTo(client, { x: client.hits.find((h) => h.view === 0).x0 + 1, y: 1 });
+  await hover({ x: client.hits.find((h) => h.view === 0).x0 + 1, y: 1 });
   assert.equal(client.hover, undefined, "the chosen view's name isn't lit");
 
   // A card other than the chosen one: its border in its tab's color.
   const card = client.hits.find((h) => h.index === 1);
-  sidebar.hoverTo(client, { x: card.x0 + 2, y: card.y });
+  await hover({ x: card.x0 + 2, y: card.y });
   assert.equal(client.hover, "index:1");
-  sidebar.hoverTo(client, { x: client.cols, y: card.y });
+  await hover({ x: client.cols, y: card.y });
   assert.equal(client.hover, undefined, "the screen's edge, the way out, puts it out");
-  sidebar.hoverTo(client, { x: card.x0 + 2, y: card.y });
+  await hover({ x: card.x0 + 2, y: card.y });
 
   // Yes and No of a question, in reverse video, without moving Enter's choice.
   client.confirm = { text: "Close it?", yes() {} };
   client.hover = undefined;
   sidebar.draw(client);
   const row = client.modal.tags.find((t) => t.tag.yes).y;
-  sidebar.hoverTo(client, { x: client.modal.left + 1 + 9, y: row });
+  await hover({ x: client.modal.left + 1 + 9, y: row });
   assert.equal(client.hover, "no");
   assert.equal(client.confirm.no, undefined, "Enter still takes Yes");
   assert.match(plain(sent.at(-1).replace(/\x1b\[7m/g, "<lit>")), /› Yes +<lit>No/);
@@ -3980,6 +3985,48 @@ test("what a click would press lights under the mouse, drawn again only when tha
   sidebar.draw(client);
   assert.ok(sent.some((text) => text.includes("\x1b[?1003l")));
   assert.equal(client.hover, undefined);
+});
+
+test("a burst of the mouse's moves draws once, sending only the rows it changed, from the views it last built", async (t) => {
+  const windows = ["one", "two", "three"].map((name) => tmux("new-window", "-d", "-t", "test", "-c", tmp, "-n", `burst ${name}`, "-P", "-F", "#{window_id}"));
+  t.after(() => windows.forEach((id) => tmux("kill-window", "-t", id)));
+  await sidebar.refresh();
+  const sent = [];
+  const socket = new (require("node:events").EventEmitter)();
+  Object.assign(socket, { setEncoding() {}, write: (text) => sent.push(text), end() {} });
+  sidebar.accept(socket);
+  socket.emit("data", "mission none 160 50\n");
+  await wait(100);
+  const client = [...sidebar.state.clients].find((c) => c.socket === socket);
+  t.after(() => socket.emit("close"));
+  const cards = client.hits.filter((h) => h.index >= 1).slice(0, 2);
+  assert.equal(cards.length, 2);
+  const move = ({ x0, y }) => `\x1b[<35;${x0 + 2};${y}M`;
+  const views = client.views;
+
+  // Twenty moves between two cards in one read: one draw, for the last.
+  await wait(20);
+  const before = sent.length;
+  socket.emit("data", Array.from({ length: 20 }, (_, i) => move(cards[i % 2])).join(""));
+  await wait(50);
+  assert.equal(sent.length - before, 1, "one draw for the burst");
+  assert.equal(client.hover, `index:${cards[1].index}`, "lit where the mouse ended");
+  assert.equal(client.views, views, "the views weren't built again");
+
+  // Only the rows that changed, each put in place, not the whole screen.
+  socket.emit("data", move(cards[0]));
+  await wait(50);
+  const rows = sent.at(-1).match(/\x1b\[\d+;1H/g) ?? [];
+  assert.ok(rows.length > 0 && rows.length < client.rows / 2, `${rows.length} rows sent of ${client.rows}`);
+  assert.match(sent.at(-1), /^\x1b\[\d+;1H/, "starting with a move to its row");
+
+  // A box opened since the last frame: the whole frame.
+  client.confirm = { text: "Close it?", yes() {} };
+  client.hover = undefined;
+  socket.emit("data", move(cards[1]));
+  await wait(50);
+  assert.equal((sent.at(-1).match(/\x1b\[\d+;1H/g) ?? []).length, client.rows, "every row");
+  client.confirm = undefined;
 });
 
 test("with tab_focus off, Tab switches mission control's views as before", (t) => {
