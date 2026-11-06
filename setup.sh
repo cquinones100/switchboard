@@ -721,7 +721,14 @@ part_config() {
   return $aws
 }
 
+# Set by the tmux part when it changed something, or when tmux.conf's text
+# differs from what setup last loaded into this tmux server (a pull that only
+# edits it changes no link), so a run of parts reloads tmux.conf once they are
+# done and the running tmux takes in what it linked.
+reload_tmux=false
+conf_sum() { cksum < ~/.config/tmux/tmux.conf 2>/dev/null; }
 part_tmux() {
+  local before=$changes
   dir ~/.config/tmux
   part_config
   put_link "$SRC/tmux/tmux.conf" ~/.config/tmux/tmux.conf
@@ -733,7 +740,23 @@ part_tmux() {
     put_link "$file" ~/.config/tmux/
   done
   # Keeps resurrect's saves private and few; it changes nothing once they are.
-  $CHECK || "$SRC/tmux/resurrect-tidy.sh"
+  local status=0
+  $CHECK || "$SRC/tmux/resurrect-tidy.sh" || status=$?
+  (( changes > before )) && reload_tmux=true
+  [[ -n ${TMUX:-} && $(tmux show-option -gqv @setup_conf_sum) != "$(conf_sum)" ]] && reload_tmux=true
+  return $status
+}
+
+# Reloads tmux.conf in the tmux this runs in (a try's, inside one), and
+# nothing outside tmux or with --check, noting the text it loaded, or, when the
+# reload fails, forgetting it, so the next run of the tmux part tries again.
+reload_tmux_conf() {
+  [[ -n ${TMUX:-} ]] && ! $CHECK || return 0
+  if ! tmux source-file ~/.config/tmux/tmux.conf; then
+    tmux set-option -gu @setup_conf_sum
+    return 1
+  fi
+  tmux set-option -g @setup_conf_sum "$(conf_sum)" && echo "Reloaded tmux."
 }
 
 # tmux-resurrect's saves, which tmux-continuum makes from a job in
@@ -955,6 +978,7 @@ if (( ${#parts[@]} )); then
   for part in "${parts[@]}"; do
     run_part "$part"
   done
+  $reload_tmux && { reload_tmux_conf || failed+=(tmux); }
   if (( ${#failed[@]} )); then
     echo "" >&2
     echo "Failed: ${failed[*]}" >&2
@@ -1399,6 +1423,7 @@ if ! $CHECK && [[ -n $pid ]] && [[ $(ps -p "$pid" -o command= 2>/dev/null) =~ ^[
 fi
 
 echo ""
+reload_tmux_conf || todo "reload tmux.conf: fix what tmux said above, then run ./setup.sh tmux"
 if (( problems )); then
   echo "Left to do:"
   printf '  ✗ %s\n' "${left[@]}"
@@ -1406,7 +1431,6 @@ if (( problems )); then
   exit 1
 fi
 if [[ -n ${TMUX:-} ]]; then
-  $CHECK || tmux source-file ~/.config/tmux/tmux.conf
   echo "Ready."
 else
   echo "Ready. Start tmux with: tmux"

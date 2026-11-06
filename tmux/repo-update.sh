@@ -317,7 +317,7 @@ case "${1:-}" in
 
   run-setup)
     # The guided setup, as an update runs it: it changes only what isn't in
-    # place and asks before anything else. Then tmux takes in what it linked.
+    # place, asks before anything else and reloads tmux.conf at its end.
     printf '\n'
     [ -n "${SETUP_WHY:-}" ] && printf '  %s\n\n' "$SETUP_WHY"
     if [ -x "$REPO/setup.sh" ]; then
@@ -325,7 +325,6 @@ case "${1:-}" in
     else
       printf '  There is no setup.sh in %s.\n' "$REPO"
     fi
-    [ -n "${TMUX:-}" ] && tmux source-file ~/.config/tmux/tmux.conf && printf '\n  Reloaded tmux.\n'
     printf '\n  \033[38;5;244mPress any key to close.\033[0m'
     menu_any_key
     ;;

@@ -23,10 +23,13 @@ hooks (`./setup.sh git`, for committing to it). It also lists GitHub, the
 Linear key and slack-relay, with the keys each one is for. `./setup.sh
 --check` only reports.
 
-It ends by listing again whatever is left to do. Once `./setup.sh git` has
+It ends by reloading tmux.conf when run inside tmux, then listing again
+whatever is left to do. `./setup.sh tmux` reloads tmux.conf too, inside tmux,
+when it changed something or tmux.conf changed since setup last loaded it. Once `./setup.sh git` has
 set this clone's git hooks, every `git pull` links what the pull added (the
-`tmux`, `bin` and `git` parts, and `claude` if you use all of it) and prints
-that list, when there is anything on it.
+`tmux`, `bin` and `git` parts, and `claude` if you use all of it), reloading
+tmux.conf when that linked anything for tmux, and prints that list, when there
+is anything on it.
 
 To turn parts of the workspace on or off (banners, the sidebar, the second
 status line, PR and ticket lookups, project colors, the theme, saving pane
