@@ -114,3 +114,40 @@ test("a settings file that can't be read is never written over, and each write k
     delete require.cache[require.resolve("../lib/settings")];
   }
 });
+
+test("settings.sh write only writes, a tmux server of its own leaves continuum's restore to continuum-save.sh, and moving to one, by hand too, sets it up", async () => {
+  const show = (option) => execFileSync("tmux", ["-S", socket, "show", "-gv", option], { encoding: "utf8" }).trim();
+  const sh = (...args) => execFileSync("bash", [path.join(repo, "tmux/settings.sh"), ...args], { env, stdio: "ignore" });
+  // tmux.conf as setup.sh links it on tmux's default server.
+  const conf = path.join(tmp, ".config/tmux/tmux.conf");
+  fs.mkdirSync(path.dirname(conf), { recursive: true });
+  fs.symlinkSync(path.join(tmp, "switchboard/tmux/tmux.conf"), conf);
+  const linked = () => {
+    try {
+      return fs.readlinkSync(conf);
+    } catch {
+      return "";
+    }
+  };
+  fs.writeFileSync(file, "{}");
+  sh("apply", "--load");
+  assert.equal(show("@continuum-restore"), "on");
+
+  sh("write", "tmux_server", "switchboard");
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { tmux_server: "switchboard" });
+  assert.equal(show("@setting_tmux_server"), "default", "write applies nothing, which the sidebar daemon does wherever Switchboard runs");
+
+  sh("apply");
+  assert.equal(show("@setting_tmux_server"), "switchboard");
+  assert.equal(show("@continuum-restore"), "off");
+  // setup.sh's tmux_server part, in the background, here in the temporary HOME.
+  for (let i = 0; i < 50 && linked().endsWith("/tmux.conf"); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(linked(), path.join(tmp, "switchboard/tmux/own-server.conf"));
+
+  // Changed by hand while tmux was closed: set up as tmux starts (tmux.conf's apply --load).
+  fs.writeFileSync(file, "{}");
+  sh("apply", "--load");
+  assert.equal(show("@continuum-restore"), "on");
+  for (let i = 0; i < 50 && linked().endsWith("/own-server.conf"); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(linked(), path.join(tmp, "switchboard/tmux/tmux.conf"));
+});

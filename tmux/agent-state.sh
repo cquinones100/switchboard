@@ -19,7 +19,8 @@
 # words ("Run the test suite", "editing render.js"), set as each tool starts
 # (PreToolUse) and kept until the next, and @agent_wait, what it waits on
 # ("permission: Bash git push", "asks: Which layout?"), while it waits. An
-# AskUserQuestion call is a wait from the moment it starts. @agent_loop names
+# AskUserQuestion call is a wait from the moment it starts. @agent_session is
+# its Claude session's ID, from its start and each prompt. @agent_loop names
 # the loop a session is running (review, ci, queue or deploy) from the moment its
 # skill is asked for, typed as /review-loop, /ci-loop, /queue-and-clean or
 # /deploy-test or
@@ -119,16 +120,31 @@ parked_pane() {
   done
   return 1
 }
+# Switchboard on a tmux server of its own (the tmux_server setting): a Claude
+# session in any other tmux server, which stays plain tmux, is left alone, as
+# one outside tmux is (no states, tips or moved tabs there), and a parked
+# job's tab is looked for in Switchboard's server, the tmux calls below
+# reaching it through TMUX. Read with builtins, starting nothing. Not linked
+# yet (a pull setup hasn't followed), tmux's default server, as before it.
+if ! source "${BASH_SOURCE[0]%/*}/switchboard-tmux.sh" 2>/dev/null; then
+  sb_server() { SB_SERVER=default; }
+  sb_elsewhere() { return 1; }
+fi
+sb_server
+parked=false
 if [ -z "${TMUX_PANE:-}" ]; then
   case "${1:-}" in
     set | notification)
+      [ "$SB_SERVER" = default ] || [ -n "${TMUX:-}" ] || export TMUX="${TMUX_TMPDIR:-/tmp}/tmux-$UID/$SB_SERVER"
       session=$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null)
       [ -n "$session" ] && TMUX_PANE=$(parked_pane "$session") || exit 0
+      parked=true
       ;;
   esac
 fi
 
 [ -n "${TMUX:-}${TMUX_PANE:-}" ] || exit 0
+sb_elsewhere && exit 0
 
 source "${BASH_SOURCE[0]%/*}/claude-pane.sh"
 
@@ -217,12 +233,13 @@ DETAILS='
         elif $tool == "AskUserQuestion" then "asks: " + ((($in.questions // [])[0].question) // "") | short(80)
         else "" end),
       ( {"review-loop": "review", "ci-loop": "ci", "queue-and-clean": "queue", "deploy-test": "deploy", "preview-test": "deploy"}[
-          if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | capture("^\\s*/(?<s>[a-z-]+)")?.s // "")
+          if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | (capture("^\\s*/(?<s>[a-z-]+)")? | .s) // "")
           elif $tool == "Skill" then ($in.skill // "")
           else "" end ] // ""),
       # What started a session (startup, resume, clear, compact) or a
       # compaction (manual, auto).
-      (.source // .trigger // "") ]
+      (.source // .trigger // ""),
+      (.session_id // "") ]
   | map(gsub("[\t\n\u001f]"; " ")) | join("\u001f")'
 
 # Keeps a pane's @agent_activity and @agent_wait in step with its state: a
@@ -269,7 +286,7 @@ details() {
 case "${1:-}" in
   set)
     [ -n "${TMUX_PANE:-}" ] || exit 0
-    IFS=$'\x1f' read -r event tool activity wait loop source < <(jq -r "$DETAILS" <<<"${payload:-{\}}" 2>/dev/null)
+    IFS=$'\x1f' read -r event tool activity wait loop source session < <(jq -r "$DETAILS" <<<"${payload:-{\}}" 2>/dev/null)
     state=${2:-clear}
     # Compaction: Claude is at work on it, whatever the tab showed, and a
     # session it restarts (SessionStart from compact) is the same one going
@@ -310,6 +327,13 @@ case "${1:-}" in
     [ "${event:-}:${tool:-}" = PreToolUse:AskUserQuestion ] && state=waiting
     set_state "$TMUX_PANE" "$state"
     details "$TMUX_PANE" "$state" "${event:-}" "${activity:-}" "${wait:-}" "${loop:-}"
+    # The pane's own Claude session, for the sidebar, which can't tell its
+    # session files from another tmux server's by the pane they name alone:
+    # each server numbers its panes from %0. Not a parked job's, which names
+    # no pane.
+    case ${event:-} in
+      SessionStart | UserPromptSubmit) $parked || [ -z "${session:-}" ] || tmux set -p -t "$TMUX_PANE" @agent_session "$session" ;;
+    esac
     # Tabs are named on a focus change, so a turn that ran a command elsewhere
     # (an interactive shell takes the pane's terminal, and its directory with
     # it) can leave the tab named for that place. At the end of a turn, a pane

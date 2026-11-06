@@ -139,3 +139,38 @@ test("every described root key, and M-2 to M-9, counts itself in @used_keys", ()
   tmux("used", "M-d,");
   assert.equal(tmux("show", "-gqv", "@used_keys").stdout.trim(), "M-Tab,M-d,");
 });
+
+test("own-server.conf, tmux.conf with Switchboard on a server of its own, loads it only on the server named switchboard, and anywhere once the setting is back at the default", () => {
+  // Each server named by its socket's last part; HOME's ~/switchboard is this
+  // clone, and the helper the file asks is linked as setup.sh links it.
+  const sockets = path.join(tmp, "sockets");
+  fs.mkdirSync(sockets, { recursive: true });
+  if (!fs.existsSync(path.join(tmp, "switchboard"))) fs.symlinkSync(path.join(__dirname, ".."), path.join(tmp, "switchboard"));
+  fs.mkdirSync(path.join(tmp, ".config/tmux"), { recursive: true });
+  const helper = path.join(tmp, ".config/tmux/switchboard-tmux.sh");
+  if (!fs.existsSync(helper)) fs.symlinkSync(path.join(__dirname, "../tmux/switchboard-tmux.sh"), helper);
+  const settings = path.join(tmp, ".config/switchboard/settings.json");
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  const loaded = (name) => {
+    const at = path.join(sockets, name);
+    const on = (...args) => spawnSync("tmux", ["-S", at, ...args], { encoding: "utf8", env });
+    execFileSync("tmux", ["-S", at, "-f", "/dev/null", "new-session", "-d", "cat"], { env });
+    try {
+      const sourced = on("set", "-g", "@conf_check", "1", ";", "source-file", path.join(__dirname, "../tmux/own-server.conf"));
+      assert.equal(sourced.status, 0, sourced.stderr);
+      return on("show", "-gqv", "@agent_marker").stdout.trim() !== "";
+    } finally {
+      on("kill-server");
+    }
+  };
+  try {
+    fs.writeFileSync(settings, JSON.stringify({ tmux_server: "switchboard" }));
+    assert.equal(loaded("switchboard"), true, "Switchboard's own server loads it");
+    assert.equal(loaded("default"), false, "any other stays plain tmux");
+    // Changed back by hand while tmux was closed.
+    fs.writeFileSync(settings, "{}");
+    assert.equal(loaded("default"), true, "tmux's default server is Switchboard's again");
+  } finally {
+    fs.rmSync(settings);
+  }
+});

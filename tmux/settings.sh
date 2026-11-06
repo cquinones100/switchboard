@@ -16,6 +16,10 @@
 #   settings.sh theme            apply the theme setting (tmux.conf, after
 #                                the plugins, as theme.sh always ran)
 #   settings.sh set <key> <value>   change one setting, then apply
+#   settings.sh write <key> <value> change one setting only, for setup.sh,
+#                                which can run outside tmux or in a tmux that
+#                                isn't Switchboard's: the sidebar daemon
+#                                applies it, wherever Switchboard runs
 #   settings.sh toggle-theme     between dark and light, as the palette's
 #                                theme toggle does, keeping it as the setting
 
@@ -63,8 +67,9 @@ apply_theme() {
 apply() {
   local load=${1:-} key value prev changed=() args=()
   # What was applied last, to act only on what changed.
-  local before
+  local before server link
   before=$(tmux show-options -g 2>/dev/null | grep '^@setting_')
+  server=$(value_of tmux_server)
   while IFS=$'\t' read -r key value; do
     prev=$(awk -v k="@setting_$key" '$1 == k { print $2 }' <<<"$before")
     prev=${prev//\"/}
@@ -73,7 +78,10 @@ apply() {
     case $key in
       second_status) args+=(set -g status "$([ "$value" = on ] && echo 2 || echo on)" \;) ;;
       save_contents) args+=(set -g @resurrect-capture-pane-contents "$value" \;) ;;
-      auto_restore) args+=(set -g @continuum-restore "$value" \;) ;;
+      # On a tmux server of its own, continuum's restore would wait for every
+      # other tmux server to close, plain ones too; continuum-save.sh
+      # --started restores there instead.
+      auto_restore) args+=(set -g @continuum-restore "$([ "$server" = default ] && echo "$value" || echo off)" \;) ;;
       # Only when the setting itself changes, so M-s's hide-for-now holds.
       sidebar)
         if [ "$prev" != "$value" ]; then
@@ -85,6 +93,15 @@ apply() {
   (( ${#args[@]} )) || return 1
   tmux "${args[@]}"
   disable_services
+  # The server Switchboard runs on: tmux.conf, and Ghostty's command, set up
+  # for it (setup.sh's tmux_server part), from when Switchboard next starts,
+  # whenever the link isn't what the setting says, so a setting changed by
+  # hand while tmux was closed is set up as tmux starts. Only once setup has
+  # linked it.
+  link=$(readlink ~/.config/tmux/tmux.conf 2>/dev/null)
+  if [ -n "$link" ] && [ "${link##*/}" != "$([ "$server" = default ] && echo tmux.conf || echo own-server.conf)" ] && [ -x "$REPO/setup.sh" ]; then
+    "$REPO/setup.sh" tmux_server </dev/null >/dev/null 2>&1 &
+  fi
   [ -n "$load" ] && return 0
   # The rest only when tmux is already running with the old values.
   local list=" ${changed[*]} "
@@ -157,12 +174,13 @@ case "${1:-}" in
   apply) apply "${2:-}" ;;
   theme) apply_theme ;;
   set) set_one "${2:-}" "${3:-}" && apply ;;
+  write) set_one "${2:-}" "${3:-}" ;;
   toggle-theme)
     current=$(cat "$script_dir/.theme-mode" 2>/dev/null || echo dark)
     set_one theme "$([ "$current" = dark ] && echo light || echo dark)" && apply
     ;;
   *)
-    echo "Usage: $0 apply [--load] | theme | set <key> <value> | toggle-theme" >&2
+    echo "Usage: $0 apply [--load] | theme | set <key> <value> | write <key> <value> | toggle-theme" >&2
     exit 1
     ;;
 esac

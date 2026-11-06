@@ -9,10 +9,10 @@ What every Switchboard user's Claude Code needs to know about the workspace. You
 
 # My tabs
 
-My work runs in tmux tabs, most of them a Claude session in a worktree of their own, so much of what is in flight is in a tab rather than in git or Linear. When an answer could depend on work that may be under way in another tab, look before answering, with this one command (it reads tmux only, so it costs nothing to run):
+My work runs in tmux tabs, most of them a Claude session in a worktree of their own, so much of what is in flight is in a tab rather than in git or Linear. When an answer could depend on work that may be under way in another tab, look before answering, with this one command (it reads tmux only, so it costs nothing to run; `switchboard-tmux.sh` is tmux on the server Switchboard runs on, so it reads that one from any terminal, also when Switchboard runs on a tmux server of its own):
 
 ```
-tmux list-panes -a -f '#{&&:#{!=:#{@sidebar},1},#{!=:#{@pane_parked},1}}' -F '#{window_index}	#{session_name}:#{window_id}.#{pane_id}	#{@tab_label}	#{@agent_state}	#{pane_current_command}	#{pane_current_path}'
+~/.config/tmux/switchboard-tmux.sh list-panes -a -f '#{&&:#{!=:#{@sidebar},1},#{!=:#{@pane_parked},1}}' -F '#{window_index}	#{session_name}:#{window_id}.#{pane_id}	#{@tab_label}	#{@agent_state}	#{pane_current_command}	#{pane_current_path}'
 ```
 
 One line per pane: the tab's number, the pane's place in tmux (the `main:@<window>.%<pane>` a Claude session's `ListAgents` row names), its name (with the PR number and the Linear ticket and title when it has them), Claude's state there (`waiting` on me, `done` and not yet seen, `working`, blank for idle), the program (a version number is Claude Code), and its directory, a worktree's naming its branch. Some cases where it matters, as examples of the kind of question, not a list of the only ones:

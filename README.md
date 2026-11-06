@@ -32,6 +32,12 @@ Then start tmux:
 tmux new-session -A -s main
 ```
 
+Setup also asks, once, whether to run Switchboard on a tmux server of its own, so any other tmux you start stays plain tmux. Say yes, or pick it later in Settings' "tmux server", and start it with this instead (Ghostty, with Switchboard's config, does it for you):
+
+```
+tmux -L switchboard new-session -A -s main
+```
+
 ## First keys
 
 | Key | What it does |
