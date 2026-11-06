@@ -11,12 +11,16 @@
 //! - `presence`: whether you're at the computer.
 //! - `connector`: one call to a Claude connector.
 //! - `worktree`: what the worktree commands share.
+//! - `net`: HTTPS requests, each counted in the request audit.
+//! - `integrations`: GitHub and Linear over their APIs.
 //!
 //! - `mux`: the multiplexer (in place of tmux).
 
 pub mod cmd;
 pub mod connector;
+pub mod integrations;
 pub mod mux;
+pub mod net;
 pub mod paths;
 pub mod platform;
 pub mod presence;
