@@ -463,6 +463,11 @@ impl Server {
                 for p in parsed {
                     self.dispatch(id, p);
                 }
+                // Still held: a paste whose end hasn't come. It is let go
+                // once nothing more of it has come for PASTE_TIMEOUT.
+                if self.clients.get(&id).is_some_and(|c| c.parser.pending()) {
+                    self.flush_later(id, input::PASTE_TIMEOUT);
+                }
             }
             Event::Tick => self.refresh_names(),
             Event::Quit => self.quit = true,
@@ -1029,12 +1034,17 @@ impl Server {
             self.dispatch(id, p);
         }
         if self.clients.get(&id).is_some_and(|c| c.parser.pending()) {
-            let tx = self.tx.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(input::ESC_TIMEOUT).await;
-                let _ = tx.send(Event::FlushInput(id));
-            });
+            self.flush_later(id, input::ESC_TIMEOUT);
         }
+    }
+
+    /// Asks for what a client's parser holds to be let go after `after`.
+    fn flush_later(&self, id: ClientId, after: Duration) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = tx.send(Event::FlushInput(id));
+        });
     }
 
     /// The current pane of a client's session.
