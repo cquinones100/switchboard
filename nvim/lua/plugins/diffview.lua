@@ -470,7 +470,18 @@ end
 -- cover goes once the story is known or can't be (settle). In the story
 -- told ahead of time (tmux/diff-story-ahead.sh, g:diff_ahead), the headless
 -- Neovim quits then, the story kept in the cache for M-d.
+-- Setting guicursor again keeps the group a mode had when the new value
+-- names none, as Neovim's default doesn't, so every mode is first given an
+-- empty group, which draws as no group does.
+local function show_cursor(view)
+  if view.guicursor == nil then return end
+  vim.api.nvim_set_hl(0, "SwitchboardShownCursor", {})
+  vim.o.guicursor = "a:SwitchboardShownCursor"
+  vim.o.guicursor = view.guicursor
+  view.guicursor = nil
+end
 local function uncover(view)
+  show_cursor(view)
   if view.cover_timer then
     view.cover_timer:stop()
     view.cover_timer:close()
@@ -495,6 +506,24 @@ local function cover(view)
     local width, height = vim.o.columns, vim.o.lines - vim.o.cmdheight
     view.cover = vim.api.nvim_open_win(buf, true, { relative = "editor", row = 0, col = 0, width = width, height = height, style = "minimal", zindex = 200 })
     vim.wo[view.cover].winhighlight = "Normal:Normal"
+    vim.bo[buf].modifiable = false
+    -- The cover holds still: its cursor hidden (a Cursor group with
+    -- blend=100, which the TUI hides) while it is in front, and put back
+    -- at its top whatever key or wheel moved it.
+    vim.api.nvim_set_hl(0, "SwitchboardHiddenCursor", { blend = 100, nocombine = true })
+    local function hide()
+      if view.guicursor == nil then view.guicursor = vim.o.guicursor end
+      vim.o.guicursor = "a:SwitchboardHiddenCursor"
+    end
+    hide()
+    vim.api.nvim_create_autocmd("BufEnter", { buffer = buf, callback = hide })
+    vim.api.nvim_create_autocmd({ "BufLeave", "BufWipeout" }, { buffer = buf, callback = function() show_cursor(view) end })
+    local function hold()
+      if view.cover and vim.api.nvim_win_is_valid(view.cover) then
+        vim.api.nvim_win_call(view.cover, function() vim.fn.winrestview({ topline = 1, lnum = 1, col = 0, leftcol = 0 }) end)
+      end
+    end
+    vim.api.nvim_create_autocmd({ "CursorMoved", "WinScrolled" }, { buffer = buf, callback = hold })
     local frame = 0
     local function centre(text) return string.rep(" ", math.max(0, math.floor((width - vim.fn.strdisplaywidth(text)) / 2))) .. text end
     -- With the diff_story_progress setting, what is read and the chapters
@@ -530,7 +559,10 @@ local function cover(view)
       for _, line in ipairs(block) do table.insert(lines, pad .. line) end
       table.insert(lines, "")
       table.insert(lines, centre(keys))
+      vim.bo[buf].modifiable = true
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+      vim.bo[buf].modifiable = false
+      hold()
     end
     draw()
     view.cover_timer = vim.uv.new_timer()

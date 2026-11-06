@@ -49,16 +49,22 @@ setup("colorscheme.lua")
 vim.cmd.runtime("plugin/diffview.lua")
 setup("diffview.lua")
 
--- M-Left, M-Down, M-Up and M-Right, which tmux passes to Neovim (tmux.conf,
--- pane_arrows setting): the window on that side, else tmux's pane there, as
--- vim-tmux-navigator does in the editor; with the setting off, the key unmapped.
+-- The window on that side, else tmux's pane there (the sidebar to the
+-- left), as vim-tmux-navigator does in the editor, which this Neovim doesn't
+-- load: C-w h, j, k and l, which tmux passes to Neovim (is_vim in tmux.conf),
+-- and M-Left, M-Down, M-Up and M-Right (pane_arrows setting), the M-arrows
+-- unmapped with the setting off.
+local function move(dir)
+  if vim.fn.winnr(dir) ~= vim.fn.winnr() then return vim.cmd.wincmd(dir) end
+  if vim.env.TMUX then vim.fn.system({ "tmux", "select-pane", "-" .. ({ h = "L", j = "D", k = "U", l = "R" })[dir] }) end
+end
 for key, dir in pairs({ Left = "h", Down = "j", Up = "k", Right = "l" }) do
+  vim.keymap.set("n", "<C-w>" .. dir, function() move(dir) end, { desc = "The window or pane " .. key:lower() })
   vim.keymap.set({ "n", "x", "s" }, "<M-" .. key .. ">", function()
     if vim.env.TMUX and vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_pane_arrows" })) == "off" then
       return vim.api.nvim_feedkeys(vim.keycode("<M-" .. key .. ">"), "n", false)
     end
-    if vim.fn.winnr(dir) ~= vim.fn.winnr() then return vim.cmd.wincmd(dir) end
-    if vim.env.TMUX then vim.fn.system({ "tmux", "select-pane", "-" .. ({ h = "L", j = "D", k = "U", l = "R" })[dir] }) end
+    move(dir)
   end, { desc = "The window or pane " .. key:lower() })
 end
 

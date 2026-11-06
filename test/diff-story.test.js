@@ -247,6 +247,11 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
         return false
       end
       vim.g.covered = covered()
+      -- The cover holds still: keys and the wheel leave its cursor at its top, hidden.
+      vim.wait(3000, covered, 20)
+      vim.api.nvim_feedkeys(vim.keycode("jjjlG<ScrollWheelDown>"), "x", false)
+      vim.wait(250)
+      vim.g.held = { cursor = vim.api.nvim_win_get_cursor(0), top = vim.fn.line("w0"), guicursor = vim.o.guicursor }
       -- Drawn again every tenth of a second, as the list's own redraws may clear it.
       vim.wait(500, function()
         vim.g.telling = {}
@@ -297,7 +302,7 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
       for _, w in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_config(w).relative ~= "" and table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n"):find("Telling the change", 1, true) then uncovered = false end
       end
-      io.write(vim.json.encode({ covered = vim.g.covered, uncovered = uncovered, pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, opened = opened, wide = wide, narrow = narrow }))`, "-c", "qa"],
+      io.write(vim.json.encode({ covered = vim.g.covered, held = vim.g.held, shown = vim.o.guicursor ~= "a:SwitchboardHiddenCursor", uncovered = uncovered, pages = pages, telling = vim.g.telling, spinning = spinning, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marks = marks, bars = bars, jumped = jumped, opened = opened, wide = wide, narrow = narrow }))`, "-c", "qa"],
     { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
   );
   const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
@@ -316,6 +321,8 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
   assert.equal(result.opened, 32, "the list opens wide enough for its longest path");
   assert.deepEqual([result.wide, result.narrow], [30, 32], "E narrows it, and again widens it");
   assert.equal(result.covered, true, "the diff waits under a cover while its story is told");
+  assert.deepEqual(result.held, { cursor: [1, 0], top: 1, guicursor: "a:SwitchboardHiddenCursor" }, "the cover's cursor hidden and kept at its top whatever is pressed");
+  assert.equal(result.shown, true, "the cursor shown again once the cover goes");
   assert.equal(result.uncovered, true, "and is shown once it is");
   assert.equal(result.telling.length, 1, "while Haiku reads the change, the list says so");
   assert.match(result.telling[0], /telling the story/);
