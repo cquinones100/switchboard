@@ -1303,6 +1303,33 @@ test("an option taken from a menu shows a box with a spinner until it is done, t
   assert.doesNotMatch(plain(sent.at(-1)), /One moment/);
 });
 
+test("switching mission control's view paints over a cell the terminal shows that tmux doesn't know of", async (t) => {
+  // A terminal of its own for a client of the tests' server: a pane of a
+  // second throwaway server, whose screen is what that terminal shows.
+  const outer = path.join(tmp, "outer.sock");
+  const terminal = (...args) => execFileSync("tmux", ["-S", outer, ...args], { encoding: "utf8" }).trimEnd();
+  execFileSync("tmux", ["-S", outer, "-f", "/dev/null", "new-session", "-d", "-x", "120", "-y", "30", `env -u TMUX tmux -S ${socket} attach -t test`]);
+  t.after(() => {
+    try {
+      terminal("kill-server");
+    } catch {}
+  });
+  let tmuxClient;
+  for (let i = 0; i < 50 && !tmuxClient; i++) {
+    await wait(100);
+    tmuxClient = tmux("list-clients", "-F", "#{client_name}").split("\n").find(Boolean);
+  }
+  // Written to the client's terminal behind tmux's back, as the stray digits were.
+  fs.writeFileSync(tmux("display", "-p", "-c", tmuxClient, "#{client_tty}"), "\x1b7\x1b[20;4HZ\x1b8");
+  await wait(200);
+  assert.equal(terminal("capture-pane", "-p").split("\n")[19][3], "Z", "the stray cell is there");
+  const client = { kind: "mission", socket: { write() {}, end() {} }, view: { view: 0, cursor: 0 }, cols: 120, rows: 30, tmuxClient };
+  sidebar.draw(client);
+  await sidebar.missionKey(client, { key: "]" });
+  await wait(300);
+  assert.notEqual(terminal("capture-pane", "-p").split("\n")[19][3], "Z");
+});
+
 test("a Claude started in a tab already running one moves to a tab of its own", async (t) => {
   // Node in the foreground with a session file, as claude-pane.sh tells
   // Claude started by claude-here.
