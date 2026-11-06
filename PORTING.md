@@ -128,10 +128,13 @@ Each step is a commit (or a few) on the branch, with its tests.
    tab's color (update-colors.sh), and reminders (remind.sh).
 4. **Sidebar and mission control** — the boxes done (src/ui: an overlay stack
    per client, messages, tips, the question before M-w closes a busy pane,
-   menus, pickers with nucleo-matcher, the M-p palette and its ranking); left:
-   `lib/sidebar/` on the server's model, its views, menus and keys, Settings,
-   and the tips whose keys come with later parts (worktree, merged, loop,
-   sidebar, in-place, updates, github_off, linear_off, option-alt).
+   menus, pickers with nucleo-matcher, the M-p palette and its ranking), and
+   the sidebar done (src/sidebar: drawn by the server left of the panes, the
+   model with its groups and stages, Claude's transcripts read, M-s and its
+   keys, the mouse, peeking, M-a's walk through Needs you, and the merged,
+   loop and sidebar tips); left: mission control on the same model, its
+   views, menus and keys, Settings, and the tips whose keys come with later
+   parts (worktree, in-place, updates, github_off, linear_off, option-alt).
 5. **Integrations**: GitHub, Linear, calendar, Slack look, meetings, standup and
    todo notes, habits, resources, usage, plugins (executables printing JSON),
    search, link view, PR and ticket views, the request audit. GitHub and

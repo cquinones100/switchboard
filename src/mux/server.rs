@@ -88,6 +88,8 @@ pub enum Event {
     Usage(crate::usage::UsageEvent),
     /// The calendar, Slack and the notes written for you answered (src/day).
     Day(crate::day::DayEvent),
+    /// The sidebar's timers (src/sidebar).
+    Sidebar(crate::sidebar::SidebarEvent),
     Tick,
     Quit,
 }
@@ -130,12 +132,37 @@ pub struct Session {
     /// The size its tabs are laid out for: its latest client's.
     pub cols: u16,
     pub rows: u16,
+    /// The columns the sidebar takes on the left, its line beside the panes
+    /// included; 0 with none (src/sidebar).
+    pub sidebar: u16,
 }
 
 impl Session {
-    /// The area panes are laid out in: all but the status line.
+    /// The area panes are laid out in: all but the status line and the
+    /// sidebar.
     pub fn main_area(&self) -> Rect {
+        let side = self.sidebar.min(self.cols.saturating_sub(1));
+        Rect::new(
+            side,
+            0,
+            self.cols.saturating_sub(side).max(1),
+            self.rows.saturating_sub(1).max(1),
+        )
+    }
+
+    /// All but the status line: a zoomed pane takes it, covering the
+    /// sidebar, as a zoomed tmux pane covered the sidebar's.
+    pub fn full_area(&self) -> Rect {
         Rect::new(0, 0, self.cols.max(1), self.rows.saturating_sub(1).max(1))
+    }
+
+    /// Where a tab's panes go: the whole of it when zoomed.
+    pub fn area_for(&self, zoomed: bool) -> Rect {
+        if zoomed {
+            self.full_area()
+        } else {
+            self.main_area()
+        }
     }
 }
 
@@ -248,6 +275,10 @@ pub struct Server {
     pub usage: crate::usage::Usage,
     /// Your day: the calendar, Slack, the notes written for you (src/day).
     pub day: crate::day::Day,
+    /// The sidebar's state: what was read of each pane's Claude, each
+    /// session's focus and cursor, where each client's was drawn
+    /// (src/sidebar).
+    pub sidebar: crate::sidebar::Sidebar,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -299,6 +330,7 @@ async fn run() -> Result<()> {
     for p in problems {
         eprintln!("keys.json: {p}");
     }
+    server.sidebar_load();
     super::persist::restore(&mut server);
     loop {
         // A program holding a frame back (synchronized output) that never
@@ -484,6 +516,7 @@ impl Server {
             ui: Default::default(),
             usage: Default::default(),
             day: Default::default(),
+            sidebar: Default::default(),
         }
     }
 
@@ -532,12 +565,14 @@ impl Server {
             Event::Ui(event) => self.ui_event(event),
             Event::Usage(event) => self.usage_event(event),
             Event::Day(event) => self.day_event(event),
+            Event::Sidebar(event) => self.sidebar_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
                 self.refresh_names();
                 self.sources_tick();
                 self.day_tick();
+                self.sidebar_tick();
                 super::persist::tick(self);
                 self.usage_tick();
             }
@@ -553,6 +588,7 @@ impl Server {
                 };
                 let notices = slot.pane.process(&bytes);
                 let tab = slot.tab;
+                self.sidebar.output(id);
                 for notice in notices {
                     match notice {
                         TermNotice::Clipboard(text) => self.to_clipboard(None, &text),
@@ -768,17 +804,19 @@ impl Server {
         }
         let tab = TabId(self.next_tab);
         self.next_tab += 1;
-        let area = Rect::new(0, 0, cols.max(1), rows.saturating_sub(1).max(1));
-        let pane = self.spawn_pane(tab, Some(paths::home()), None, area.width, area.height)?;
-        self.tabs.insert(tab, new_tab(tab, pane));
-        self.sessions.push(Session {
+        let session = Session {
             name: name.to_string(),
             tabs: vec![tab],
             current: tab,
             last: None,
             cols,
             rows,
-        });
+            sidebar: self.sidebar_columns(cols),
+        };
+        let area = session.main_area();
+        let pane = self.spawn_pane(tab, Some(paths::home()), None, area.width, area.height)?;
+        self.tabs.insert(tab, new_tab(tab, pane));
+        self.sessions.push(session);
         self.refresh_name(tab);
         Ok(())
     }
@@ -1029,11 +1067,13 @@ impl Server {
         }
     }
 
-    /// Focuses a pane, its tab made current in its session.
+    /// Focuses a pane, its tab made current in its session, the focus taken
+    /// out of the session's sidebar.
     pub fn focus_pane(&mut self, pane: PaneId) {
         let Some(tab_id) = self.panes.get(&pane).map(|s| s.tab) else {
             return;
         };
+        self.sidebar_leave_tab(tab_id);
         let Some(tab) = self.tabs.get_mut(&tab_id) else {
             return;
         };
@@ -1065,10 +1105,10 @@ impl Server {
 
     /// Lays a tab's panes out for its session's size, resizing each pane.
     pub fn relayout(&mut self, tab_id: TabId) {
-        let Some(area) = self.session_of_tab(tab_id).map(Session::main_area) else {
+        let Some(tab) = self.tabs.get(&tab_id) else {
             return;
         };
-        let Some(tab) = self.tabs.get(&tab_id) else {
+        let Some(area) = self.session_of_tab(tab_id).map(|s| s.area_for(tab.zoomed)) else {
             return;
         };
         let rects: Vec<(PaneId, Rect)> = if tab.zoomed {
@@ -1157,6 +1197,7 @@ impl Server {
             return;
         };
         let (name, cols, rows) = (c.session.clone(), c.cols, c.rows);
+        let sidebar = self.sidebar_columns(cols);
         let Some(s) = self.session_mut(&name) else {
             return;
         };
@@ -1165,6 +1206,7 @@ impl Server {
         }
         s.cols = cols;
         s.rows = rows;
+        s.sidebar = sidebar;
         let tabs = s.tabs.clone();
         for t in tabs {
             self.relayout(t);
@@ -1284,7 +1326,7 @@ impl Server {
         Some(self.tabs.get(&s.current)?.active)
     }
 
-    fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
+    pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
         // An overlay up takes the keys, the mouse and pastes (src/ui).
         let Some(parsed) = self.overlay_input(id, parsed) else {
             return;
@@ -1293,6 +1335,9 @@ impl Server {
             Input::Key(key) => self.key(id, key, &parsed.raw),
             Input::Mouse(m) => self.mouse(id, m),
             Input::Paste(text) => {
+                if self.sidebar_paste(id, &text) {
+                    return;
+                }
                 if let Some(pane) = self.current_pane(id) {
                     self.leave_copy(pane);
                     if let Some(slot) = self.panes.get_mut(&pane) {
@@ -1338,6 +1383,9 @@ impl Server {
             self.act(id, action);
             return;
         }
+        if self.sidebar_key(id, key, raw) {
+            return;
+        }
         let Some(pane) = self.current_pane(id) else {
             return;
         };
@@ -1369,6 +1417,12 @@ impl Server {
         let current_tab = s.current;
         let tabs = s.tabs.clone();
         let pane = self.tabs.get(&current_tab).map(|t| t.active);
+        // The sidebar's part first: M-s, and a key pressed in it (src/sidebar).
+        let (done, side_focused) = self.sidebar_before_action(id, &action);
+        if done {
+            return;
+        }
+        let after = action.clone();
         match action {
             Action::SelectPane(dir) => {
                 let (Some(pane), Some(tab), Some(s)) =
@@ -1378,6 +1432,8 @@ impl Server {
                 };
                 if let Some(next) = tab.layout.neighbor(s.main_area(), pane, dir) {
                     self.focus_pane(next);
+                } else if dir == super::Direction::Left && !tab.zoomed {
+                    self.sidebar_from_left(id);
                 }
             }
             Action::PrevTab | Action::NextTab => {
@@ -1467,7 +1523,10 @@ impl Server {
             Action::TogglePin => self.toggle_pin(current_tab),
             Action::Palette => self.open_palette(id),
             Action::ResetTips => self.reset_tips(),
+            // Taken by `sidebar_before_action`.
+            Action::FocusSidebar | Action::ToggleSidebar => {}
         }
+        self.sidebar_after_action(id, side_focused, &after);
     }
 
     /// Keys while scrolling back: vi's, as tmux's copy mode with
@@ -1527,7 +1586,7 @@ impl Server {
         let c = self.clients.get(&id)?;
         let s = self.session(&c.session)?;
         let tab = self.tabs.get(&s.current)?;
-        let area = s.main_area();
+        let area = s.area_for(tab.zoomed);
         let rects = if tab.zoomed {
             vec![(tab.active, area)]
         } else {
@@ -1540,6 +1599,9 @@ impl Server {
     }
 
     fn mouse(&mut self, id: ClientId, m: Mouse) {
+        if self.sidebar_mouse(id, m) {
+            return;
+        }
         let Some(c) = self.clients.get(&id) else {
             return;
         };
@@ -1695,6 +1757,7 @@ impl Server {
     // ── Drawing ──────────────────────────────────────────────────────────────
 
     pub fn draw_dirty(&mut self) {
+        self.sidebar_before_draw();
         let ids: Vec<ClientId> = self
             .clients
             .values()
@@ -1711,9 +1774,10 @@ impl Server {
             return;
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
-        let spans = match self.session(&c.session) {
+        let session = c.session.clone();
+        let (spans, side) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
-            None => Vec::new(),
+            None => (Vec::new(), None),
         };
         let c = self.clients.get_mut(&id).expect("checked above");
         c.overlays.draw(&mut frame);
@@ -1721,21 +1785,31 @@ impl Server {
         c.dirty = false;
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
+        self.sidebar_drawn(id, &session, side);
+        self.sync_motion(id);
     }
 
-    fn compose(&self, frame: &mut Frame, s: &Session, c: &Client) -> compose::TabSpans {
+    fn compose(
+        &self,
+        frame: &mut Frame,
+        s: &Session,
+        c: &Client,
+    ) -> (compose::TabSpans, Option<crate::sidebar::Drawn>) {
         let rows = frame.area().height;
         let cols = frame.area().width;
-        let main = s.main_area().intersection(frame.area());
+        // With the sidebar focused, no pane has the focus.
+        let side_focused = self.sidebar.focused(&s.name);
         let mut cursor = None;
         if let Some(tab) = self.tabs.get(&s.current) {
+            let area = s.area_for(tab.zoomed);
+            let main = area.intersection(frame.area());
             let placement = if tab.zoomed {
                 super::layout::Placement {
-                    panes: vec![(tab.active, s.main_area())],
+                    panes: vec![(tab.active, area)],
                     borders: Vec::new(),
                 }
             } else {
-                tab.layout.place(s.main_area())
+                tab.layout.place(area)
             };
             let mut focused_rect = None;
             for (pid, rect) in &placement.panes {
@@ -1743,7 +1817,8 @@ impl Server {
                 let Some(slot) = self.panes.get(pid) else {
                     continue;
                 };
-                let focused = *pid == tab.active && c.overlays.is_empty();
+                let active = *pid == tab.active && !side_focused;
+                let focused = active && c.overlays.is_empty();
                 let at = slot.pane.render(
                     &mut frame.buf,
                     rect,
@@ -1752,7 +1827,7 @@ impl Server {
                         dim: false,
                     },
                 );
-                if *pid == tab.active {
+                if active {
                     focused_rect = Some(rect);
                     if slot.copy.is_none() {
                         cursor = at;
@@ -1779,6 +1854,7 @@ impl Server {
                 compose::draw_borders(&mut frame.buf, &placement, focused_rect);
             }
         }
+        let side = self.sidebar_draw(&mut frame.buf, s, c.id);
         let tabs: Vec<TabStatus> = s
             .tabs
             .iter()
@@ -1807,7 +1883,7 @@ impl Server {
             );
         }
         frame.cursor = cursor;
-        spans
+        (spans, side)
     }
 }
 

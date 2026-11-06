@@ -185,19 +185,33 @@ impl Server {
             return;
         };
         c.dirty = true;
-        let motion = !c.overlays.layers.is_empty() && c.overlays.look.hover;
+        let deadline = c.overlays.deadline();
+        self.sync_motion(id);
+        if let Some(at) = deadline {
+            let after = at.saturating_duration_since(Instant::now()) + Duration::from_millis(10);
+            self.send_later(after, Event::Ui(UiEvent::Due(id)));
+        }
+    }
+
+    /// Asks a client's terminal for every mouse movement while something
+    /// lights what is under the mouse (an overlay with hover_highlight, or
+    /// the sidebar's rows), and stops asking when nothing does. Turning
+    /// 1003 off leaves a terminal reporting no mouse at all, so the presses
+    /// and drags the client asked for (1002) are asked for again with it.
+    pub fn sync_motion(&mut self, id: ClientId) {
+        let sidebar = self.sidebar_wants_motion(id);
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar;
         if motion != c.overlays.motion {
             c.overlays.motion = motion;
             let mode: &[u8] = if motion {
                 b"\x1b[?1003h"
             } else {
-                b"\x1b[?1003l"
+                b"\x1b[?1003l\x1b[?1002h"
             };
             let _ = c.tx.send(ServerMsg::Output(mode.to_vec()));
-        }
-        if let Some(at) = c.overlays.deadline() {
-            let after = at.saturating_duration_since(Instant::now()) + Duration::from_millis(10);
-            self.send_later(after, Event::Ui(UiEvent::Due(id)));
         }
     }
 

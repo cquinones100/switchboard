@@ -157,7 +157,12 @@ impl Server {
         let result = match name.as_str() {
             "list" => Ok(Reply::ok(format!("{}\n", self.list()))),
             "sources" => Ok(self.sources_command(rest)),
-            "hook" => Ok(self.agent_hook(rest, caller, stdin)),
+            "hook" => {
+                // What the sidebar read of Claude's files is read again
+                // before the next draw (src/sidebar).
+                self.sidebar.stale = true;
+                Ok(self.agent_hook(rest, caller, stdin))
+            }
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
@@ -344,7 +349,13 @@ impl Server {
                         }))
                     })
                     .collect();
-                json!({ "name": s.name, "cols": s.cols, "rows": s.rows, "tabs": tabs })
+                json!({
+                    "name": s.name,
+                    "cols": s.cols,
+                    "rows": s.rows,
+                    "sidebar": { "columns": s.sidebar, "focused": self.sidebar.focused(&s.name) },
+                    "tabs": tabs,
+                })
             })
             .collect();
         let clients: Vec<Value> = self

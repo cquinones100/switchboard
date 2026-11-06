@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::sessions;
-use super::state::{DONE, PINNED, QUESTION_KINDS, State, Stop, WAITING};
+use super::state::{QUESTION_KINDS, State};
 use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
@@ -306,64 +306,13 @@ impl Server {
         }
     }
 
-    /// M-a: the next tab that needs you, as agent-state.sh's `next` walked
-    /// them without the sidebar's daemon: pinned, then waiting, then done,
-    /// oldest first within each, across every session. With nowhere to go,
-    /// it says so. Pressing it is learning it, so its tip isn't shown after.
+    /// M-a: the next tab that needs you, in the sidebar's order (its Needs
+    /// you, then the notifications), as agent-state.sh's `next` walked the
+    /// list the sidebar's daemon wrote: src/sidebar has the walk. Pressing
+    /// it is learning it, so its tip isn't shown after.
     pub fn next_needs_you(&mut self, client: ClientId) {
         self.tip_seen("waiting");
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return;
-        };
-        let Some(here) = self.session(&session).map(|s| s.current) else {
-            return;
-        };
-        let stops = self.needs_you();
-        let Some(i) = self.agents.next_stop(&stops, here) else {
-            let words = if stops.is_empty() {
-                "Nothing needs you."
-            } else {
-                "This is the only tab that needs you."
-            };
-            self.say(Some(client), words);
-            return;
-        };
-        let stop = stops[i].clone();
-        // The tab's pane first, so switching sessions lands on it rather
-        // than on whatever was last focused there.
-        self.focus_pane(stop.pane);
-        if stop.session != session {
-            self.switch_client(client, &stop.session);
-        }
-    }
-
-    /// Every tab that needs you, in M-a's order.
-    fn needs_you(&self) -> Vec<Stop> {
-        let mut stops = Vec::new();
-        for s in &self.sessions {
-            for id in &s.tabs {
-                let Some(tab) = self.tabs.get(id) else {
-                    continue;
-                };
-                let leader = self.agents.leader(&tab.layout.panes());
-                let pinned = tab.opts.get("@pinned").is_some_and(|v| pinned(v));
-                let (rank, since) = match leader {
-                    _ if pinned => (PINNED, 0),
-                    Some((_, State::Waiting, since)) => (WAITING, since),
-                    Some((_, State::Done, since)) => (DONE, since),
-                    _ => continue,
-                };
-                stops.push(Stop {
-                    rank,
-                    since,
-                    tab: *id,
-                    pane: leader.map(|(p, _, _)| p).unwrap_or(tab.active),
-                    session: s.name.clone(),
-                });
-            }
-        }
-        stops.sort_by_key(|s| (s.rank, s.since, s.tab));
-        stops
+        self.sidebar_next_needs_you(client);
     }
 
     /// M-c: into the pane running Claude in this tab (tmux/claude-focus.sh),

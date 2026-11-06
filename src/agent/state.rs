@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 
-use crate::mux::{PaneId, TabId};
+use crate::mux::PaneId;
 
 /// What a pane's Claude is doing. Ordered by how much it needs you, so the
 /// most urgent of several is their `max`.
@@ -274,43 +274,10 @@ fn one_line(text: &str) -> String {
     text.replace(['\t', '\n', '\u{1f}'], " ")
 }
 
-/// A tab that needs you, as M-a walks them: pinned first, then waiting, then
-/// done, each oldest first.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stop {
-    /// 0 pinned, 1 waiting, 2 done.
-    pub rank: u8,
-    pub since: i64,
-    pub tab: TabId,
-    /// The pane to focus: the Claude that needs you, else the tab's own.
-    pub pane: PaneId,
-    pub session: String,
-}
-
-pub const PINNED: u8 = 0;
-pub const WAITING: u8 = 1;
-pub const DONE: u8 = 2;
-
-impl Stop {
-    fn key(&self) -> (u8, i64, TabId) {
-        (self.rank, self.since, self.tab)
-    }
-}
-
-/// Where M-a's walk got to: the tab it last went to, and that stop's place in
-/// the order, kept as a place rather than a tab, since a done tab stops being
-/// done the moment it is seen and is then no longer in the list to count from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Walk {
-    tab: TabId,
-    key: (u8, i64, TabId),
-}
-
 /// Every pane's Claude, by pane.
 #[derive(Debug, Default)]
 pub struct Agents {
     panes: HashMap<PaneId, PaneAgent>,
-    walk: Option<Walk>,
     /// When every marked pane was last checked for a Claude still running.
     pub(super) swept: Option<Instant>,
 }
@@ -546,41 +513,6 @@ impl Agents {
             self.panes.remove(&pane);
         }
         Some(result)
-    }
-
-    /// M-a: which of `stops` (in their order) to go to from the tab `here`,
-    /// keeping where the walk got to. Each press goes to the stop after the
-    /// one it last went to, wrapping at the end, so pressing it again and
-    /// again walks the whole list; a tab stays waiting after a visit until
-    /// you answer it, so "the most urgent tab" would keep coming back to the
-    /// same one. From a finished tab in the walk, a tab pinned or waiting
-    /// comes first. `None` when nothing needs you, or only `here` does.
-    pub fn next_stop(&mut self, stops: &[Stop], here: TabId) -> Option<usize> {
-        if stops.is_empty() {
-            return None;
-        }
-        let walk = self.walk.as_ref().filter(|w| w.tab == here);
-        let away = || stops.iter().position(|s| s.tab != here);
-        let to = match walk {
-            Some(w) => {
-                let urgent = (w.key.0 == DONE)
-                    .then(|| stops.iter().position(|s| s.rank < DONE && s.tab != here))
-                    .flatten();
-                urgent
-                    .or_else(|| stops.iter().position(|s| s.key() > w.key))
-                    .unwrap_or(0)
-            }
-            None => away().unwrap_or(0),
-        };
-        let stop = &stops[to];
-        if stop.tab == here {
-            return None;
-        }
-        self.walk = Some(Walk {
-            tab: stop.tab,
-            key: stop.key(),
-        });
-        Some(to)
     }
 }
 
@@ -990,51 +922,5 @@ mod tests {
         assert_eq!(a.set_option(P, "@tab_name", Some("x"), 50), None);
         assert_eq!(a.option(P, "@other"), None);
         assert!(a.get(P).is_none());
-    }
-
-    fn stop(rank: u8, since: i64, tab: u32) -> Stop {
-        Stop {
-            rank,
-            since,
-            tab: TabId(tab),
-            pane: PaneId(tab * 10),
-            session: "main".into(),
-        }
-    }
-
-    #[test]
-    fn the_walk_goes_round_what_needs_you() {
-        let mut a = Agents::default();
-        let stops = vec![stop(WAITING, 10, 1), stop(WAITING, 20, 2)];
-        // From elsewhere, the first; then each press the next, wrapping.
-        assert_eq!(a.next_stop(&stops, TabId(9)), Some(0));
-        assert_eq!(a.next_stop(&stops, TabId(1)), Some(1));
-        assert_eq!(a.next_stop(&stops, TabId(2)), Some(0));
-        // Pressed in a tab the walk didn't go to, it starts again from the
-        // top, passing over the tab it is pressed in.
-        assert_eq!(a.next_stop(&stops, TabId(2)), Some(0));
-        assert_eq!(a.next_stop(&stops, TabId(9)), Some(0));
-        // A done tab leaves the list once seen; pressed there, the walk
-        // carries on from its place rather than from the top.
-        let with_done = vec![stop(DONE, 4, 2), stop(DONE, 5, 3), stop(DONE, 6, 4)];
-        assert_eq!(a.next_stop(&with_done, TabId(2)), Some(1));
-        let seen = vec![stop(DONE, 4, 2), stop(DONE, 6, 4)];
-        assert_eq!(a.next_stop(&seen, TabId(3)), Some(1));
-    }
-
-    #[test]
-    fn from_a_finished_tab_a_waiting_one_comes_first() {
-        let mut a = Agents::default();
-        let stops = vec![stop(PINNED, 0, 4), stop(DONE, 5, 3), stop(DONE, 6, 5)];
-        assert_eq!(a.next_stop(&stops, TabId(4)), Some(1));
-        // From the finished tab 3, the pinned tab 4 first.
-        assert_eq!(a.next_stop(&stops, TabId(3)), Some(0));
-    }
-
-    #[test]
-    fn nothing_to_walk_to_goes_nowhere() {
-        let mut a = Agents::default();
-        assert_eq!(a.next_stop(&[], TabId(1)), None);
-        assert_eq!(a.next_stop(&[stop(WAITING, 1, 1)], TabId(1)), None);
     }
 }

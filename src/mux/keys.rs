@@ -1,8 +1,9 @@
 //! Key bindings: which key does what. The defaults are the multiplexer keys
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
-//! zooming, resizing) and its Claude keys (M-a to what needs you, M-c to the
-//! tab's Claude, M-f to pin a tab), under the same keys, with the prefix
-//! `M-b` for the rest; `~/.config/switchboard/keys.json` adds to or changes them:
+//! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
+//! tab's Claude, M-f to pin a tab) and M-s into the sidebar, under the same
+//! keys, with the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
+//! adds to or changes them:
 //!
 //! ```json
 //! { "root": { "M-g": "new-tab", "M-w": null }, "prefix": { "y": "copy-mode" } }
@@ -65,6 +66,10 @@ pub enum Action {
     Palette,
     /// Show every tip again, each once more.
     ResetTips,
+    /// Into the sidebar, or back out of it (M-s).
+    FocusSidebar,
+    /// Turn the sidebar on or off (the sidebar setting).
+    ToggleSidebar,
 }
 
 impl Action {
@@ -72,7 +77,8 @@ impl Action {
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
-    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`.
+    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`,
+    /// `focus-sidebar`, `toggle-sidebar`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -97,6 +103,8 @@ impl Action {
             "toggle-pin" => Action::TogglePin,
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
+            "focus-sidebar" => Action::FocusSidebar,
+            "toggle-sidebar" => Action::ToggleSidebar,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -141,6 +149,8 @@ impl Action {
             Action::TogglePin => "toggle-pin".into(),
             Action::Palette => "palette".into(),
             Action::ResetTips => "reset-tips".into(),
+            Action::FocusSidebar => "focus-sidebar".into(),
+            Action::ToggleSidebar => "toggle-sidebar".into(),
         }
     }
 
@@ -182,6 +192,8 @@ impl Action {
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
             Action::Palette => "Find a command and run it (the palette)".into(),
             Action::ResetTips => "Show the tips again, each once more".into(),
+            Action::FocusSidebar => "Jump into the sidebar, or back out of it".into(),
+            Action::ToggleSidebar => "Turn the sidebar on or off".into(),
         }
     }
 
@@ -206,6 +218,8 @@ impl Action {
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
             Action::ResetTips => &["help", "tips"],
+            Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
+            Action::ToggleSidebar => &["sidebar"],
         }
     }
 
@@ -241,7 +255,7 @@ impl Action {
     /// The commands no key is bound to by default, which the palette lists
     /// with none (tmux.conf's `palette` key table).
     pub fn palette_only() -> Vec<Action> {
-        vec![Action::ResetTips]
+        vec![Action::ResetTips, Action::ToggleSidebar]
     }
 }
 
@@ -293,6 +307,7 @@ impl Default for Bindings {
         bind("M-c", FocusClaude);
         bind("M-f", TogglePin);
         bind("M-p", Palette);
+        bind("M-s", FocusSidebar);
         let mut prefix = HashMap::new();
         let mut pbind = |k: &str, a: Action| {
             prefix.insert(key(k), a);
@@ -408,6 +423,8 @@ mod tests {
             Action::TogglePin,
             Action::Palette,
             Action::ResetTips,
+            Action::FocusSidebar,
+            Action::ToggleSidebar,
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

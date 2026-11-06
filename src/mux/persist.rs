@@ -707,6 +707,7 @@ impl Persist {
                 tabs[0]
             };
             let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
+            let sidebar = server.sidebar_columns(cols);
             server.sessions.push(Session {
                 name: ss.name,
                 tabs: tabs.clone(),
@@ -714,6 +715,7 @@ impl Persist {
                 last,
                 cols,
                 rows,
+                sidebar,
             });
             for t in tabs {
                 server.relayout(t);

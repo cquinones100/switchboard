@@ -22,6 +22,8 @@
 //! - `sources`: what the sidebar and mission control know from GitHub and
 //!   Linear, looked up in the background.
 //! - `day`: your day: the calendar, Slack, the notes written for you.
+//! - `sidebar`: every tab on the left of the screen, most in need of you
+//!   first, and the model mission control shares.
 //! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
 //!   pickers and the palette.
 //! - `usage`: how the workspace is used, on this computer alone: habits and
@@ -42,6 +44,7 @@ pub mod platform;
 pub mod presence;
 pub mod requests;
 pub mod settings;
+pub mod sidebar;
 pub mod sources;
 pub mod tabs;
 pub mod ui;
