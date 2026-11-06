@@ -23,6 +23,8 @@
 //! display [-t pane] pane|tab|session|cwd|command|title
 //! list-keys | detach [-s session] | kill-server
 //! save                                   the layout now; prints its file
+//! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
+//!                                        stdin (src/agent)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -137,7 +139,6 @@ impl Server {
         pane: Option<&str>,
         stdin: Option<&[u8]>,
     ) -> Reply {
-        let _ = stdin;
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("no command given");
         };
@@ -146,6 +147,7 @@ impl Server {
             .filter(|p| self.panes.contains_key(p));
         let result = match name.as_str() {
             "list" => Ok(Reply::ok(format!("{}\n", self.list()))),
+            "hook" => Ok(self.agent_hook(rest, caller, stdin)),
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
@@ -309,6 +311,7 @@ impl Server {
                                     "cols": cols,
                                     "rows": rows,
                                     "options": slot.opts,
+                                    "agent": self.agent_json(p),
                                 }))
                             })
                             .collect();
@@ -319,6 +322,7 @@ impl Server {
                             "current": *id == s.current,
                             "zoomed": tab.zoomed,
                             "options": tab.opts,
+                            "agent": self.tab_agent(*id).map(|a| a.name()),
                             "panes": panes,
                         }))
                     })
@@ -468,6 +472,10 @@ impl Server {
         let unset = a.has('u');
         match self.option_target(&a, caller, name)? {
             Target::Pane(p) => {
+                // What Claude is doing is kept by the agent state, typed.
+                if let Some(set) = self.set_agent_option(p, name, (!unset).then_some(&value)) {
+                    return set.map(|()| Reply::ok(""));
+                }
                 let slot = self.panes.get_mut(&p).ok_or("the pane is gone")?;
                 if unset {
                     slot.opts.remove(name);
@@ -496,7 +504,11 @@ impl Server {
             return Err("show: which option?".into());
         };
         let value = match self.option_target(&a, caller, name)? {
-            Target::Pane(p) => self.panes.get(&p).and_then(|s| s.opts.get(name)).cloned(),
+            Target::Pane(p) => self
+                .agent_option(p, name)
+                .unwrap_or_else(|| self.panes.get(&p).and_then(|s| s.opts.get(name)).cloned()),
+            // A tab's `@agent` is its panes' most urgent state.
+            Target::Tab(t) if name == "@agent" => self.tab_agent(t).map(|a| a.name().to_string()),
             Target::Tab(t) => self
                 .tabs
                 .get(&t)

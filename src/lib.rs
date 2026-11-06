@@ -15,7 +15,9 @@
 //! - `integrations`: GitHub and Linear over their APIs.
 //!
 //! - `mux`: the multiplexer (in place of tmux).
+//! - `agent`: what each Claude session is doing, from its hooks.
 
+pub mod agent;
 pub mod cmd;
 pub mod connector;
 pub mod integrations;

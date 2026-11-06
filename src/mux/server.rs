@@ -69,6 +69,9 @@ pub enum Event {
     },
     /// Time for a client's held ESC to count as the Escape key.
     FlushInput(ClientId),
+    /// A tab focused `agent::SEEN_DELAY` ago, to clear what it showed as
+    /// finished if it is still in front (src/agent).
+    AgentSeen(TabId),
     Tick,
     Quit,
 }
@@ -199,6 +202,8 @@ pub struct Server {
     pub panes: HashMap<PaneId, PaneSlot>,
     pub clients: BTreeMap<ClientId, Client>,
     pub bindings: Bindings,
+    /// What each pane's Claude is doing (src/agent).
+    pub agents: crate::agent::Agents,
     pub(super) next_tab: u32,
     pub(super) next_pane: u32,
     pub quit: bool,
@@ -427,6 +432,7 @@ impl Server {
             panes: HashMap::new(),
             clients: BTreeMap::new(),
             bindings: Bindings::default(),
+            agents: crate::agent::Agents::default(),
             next_tab: 1,
             next_pane: 1,
             quit: false,
@@ -473,6 +479,7 @@ impl Server {
                     self.flush_later(id, input::PASTE_TIMEOUT);
                 }
             }
+            Event::AgentSeen(tab) => self.agent_seen(tab),
             Event::Tick => {
                 self.refresh_names();
                 super::persist::tick(self);
@@ -722,6 +729,56 @@ impl Server {
         Ok(pane)
     }
 
+    /// Moves a pane out of its tab into a tab of its own, after that one, and
+    /// makes it current, as tmux's `break-pane` did; gives the new tab. The
+    /// pane goes on running as it was.
+    pub fn break_pane(&mut self, pane: PaneId) -> Result<TabId> {
+        let from = self
+            .panes
+            .get(&pane)
+            .map(|s| s.tab)
+            .ok_or_else(|| anyhow!("no pane {pane}"))?;
+        let session = self
+            .session_of_tab(from)
+            .map(|s| s.name.clone())
+            .ok_or_else(|| anyhow!("{from} is in no session"))?;
+        let tab = self
+            .tabs
+            .get_mut(&from)
+            .ok_or_else(|| anyhow!("no tab {from}"))?;
+        if !tab.layout.remove(pane) {
+            return Err(anyhow!("{pane} is the only pane in its tab"));
+        }
+        if tab.active == pane {
+            tab.active = tab
+                .last_pane
+                .filter(|p| *p != pane && tab.layout.contains(*p))
+                .unwrap_or_else(|| tab.layout.panes()[0]);
+        }
+        if tab.last_pane == Some(pane) {
+            tab.last_pane = None;
+        }
+        tab.zoomed = false;
+        let id = TabId(self.next_tab);
+        self.next_tab += 1;
+        self.tabs.insert(id, new_tab(id, pane));
+        if let Some(slot) = self.panes.get_mut(&pane) {
+            slot.tab = id;
+        }
+        if let Some(s) = self.session_mut(&session) {
+            let at = s
+                .tabs
+                .iter()
+                .position(|t| *t == from)
+                .map_or(s.tabs.len(), |i| i + 1);
+            s.tabs.insert(at, id);
+        }
+        self.relayout(from);
+        self.refresh_name(from);
+        self.select_tab(&session, id);
+        Ok(id)
+    }
+
     /// Ends a pane's program and takes it out (its tab too, when it was the last).
     pub fn kill_pane(&mut self, pane: PaneId) {
         if let Some(slot) = self.panes.get_mut(&pane) {
@@ -833,6 +890,7 @@ impl Server {
         self.refresh_name(tab);
         self.relayout(tab);
         self.dirty_session(session);
+        self.agent_focus(tab);
     }
 
     /// Focuses a pane, its tab made current in its session.
@@ -959,6 +1017,9 @@ impl Server {
         };
         self.clients.insert(id, client);
         self.size_session_to(id);
+        if let Some(tab) = self.session(&name).map(|s| s.current) {
+            self.agent_focus(tab);
+        }
     }
 
     fn resize_client(&mut self, id: ClientId, cols: u16, rows: u16) {
@@ -992,6 +1053,24 @@ impl Server {
             self.relayout(t);
         }
         self.dirty_session(&name);
+    }
+
+    /// Shows a client another session, as tmux's `switch-client`.
+    pub fn switch_client(&mut self, id: ClientId, session: &str) {
+        let Some(tab) = self.session(session).map(|s| s.current) else {
+            return;
+        };
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        if c.session == session {
+            return;
+        }
+        c.session = session.to_string();
+        c.screen.invalidate();
+        c.dirty = true;
+        self.size_session_to(id);
+        self.agent_focus(tab);
     }
 
     /// The client acting now: the most recently active one.
@@ -1065,6 +1144,19 @@ impl Server {
         tokio::spawn(async move {
             tokio::time::sleep(after).await;
             let _ = tx.send(Event::FlushInput(id));
+        });
+    }
+
+    /// Sends the server an event after `after`, for whatever has to look
+    /// again in a moment (the agent state's "seen a second later").
+    pub fn send_later(&self, after: Duration, event: Event) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            let _ = tx.send(event);
         });
     }
 
@@ -1257,6 +1349,9 @@ impl Server {
                     c.dirty = true;
                 }
             }
+            Action::NextNeedsYou => self.next_needs_you(id),
+            Action::FocusClaude => self.focus_claude(current_tab),
+            Action::TogglePin => self.toggle_pin(current_tab),
         }
     }
 
@@ -1596,6 +1691,7 @@ impl Server {
                     index: i + 1,
                     name: tab.display_name().to_string(),
                     current: *t == s.current,
+                    agent: self.tab_agent(*t),
                 })
             })
             .collect();

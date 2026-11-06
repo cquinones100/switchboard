@@ -141,6 +141,37 @@ pub fn run_command(args: Vec<String>) -> ExitCode {
     ExitCode::from(code)
 }
 
+/// How long `send_quiet` waits on the server: Claude Code waits on its hooks,
+/// so a server that has stopped answering mustn't hold Claude up for long.
+const QUIET_WAIT: Duration = Duration::from_secs(1);
+
+/// Runs a command in the server and gives its reply's code, printing nothing
+/// and waiting at most `QUIET_WAIT` on each read and write: for `switchboard
+/// hook`, which Claude Code runs on every tool call. `None` when no server
+/// answered. Like `run_command`, it never starts a server.
+pub fn send_quiet(args: Vec<String>, pane: Option<String>, stdin: Option<Vec<u8>>) -> Option<i32> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let mut stream = UnixStream::connect(socket_path()).ok()?;
+    stream.set_read_timeout(Some(QUIET_WAIT)).ok()?;
+    stream.set_write_timeout(Some(QUIET_WAIT)).ok()?;
+    let msg = ClientMsg::Command {
+        args,
+        cwd,
+        pane,
+        stdin,
+    };
+    exchange(&mut stream, &msg).ok().map(|(code, _, _)| code)
+}
+
+/// Whether stdin holds data to read: a pipe or a file, as a hook's JSON is
+/// given, not a terminal.
+pub fn stdin_is_data() -> bool {
+    is_data(libc::STDIN_FILENO)
+}
+
 /// `run_command` on the socket at `path`, writing to `out` and `err`, for the
 /// tests to run against a server of their own.
 fn run_command_at(path: &Path, msg: &ClientMsg, out: &mut impl Write, err: &mut impl Write) -> u8 {

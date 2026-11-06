@@ -1,0 +1,452 @@
+//! What Claude is doing, as the workspace shows it: `switchboard hook` run as
+//! Claude Code's hooks run it, with a pane's SWITCHBOARD and SWITCHBOARD_PANE
+//! and the hook's JSON on stdin, against a server of the test's own, and the
+//! pane's state read back from `list` and the status line.
+//!
+//! A pane counts as running Claude when a process in front on its terminal
+//! has a session file in `~/.claude/sessions`; the tests write one for the
+//! pane's shell, in the test's own home, so the shell stands in for Claude.
+
+mod common;
+
+use std::io::Write;
+use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use common::{TempDir, TestServer};
+use serde_json::{Value, json};
+
+const ALT: &str = "\x1b";
+
+/// Runs `switchboard hook <event>` with `input` on stdin, in the home and
+/// state directory given, inside the pane `pane` of the server at `socket`
+/// when both are given: (code, stdout, stderr).
+fn run_hook(
+    home: &Path,
+    state: &Path,
+    pane: Option<(&Path, &str)>,
+    event: &str,
+    input: &str,
+) -> (i32, String, String) {
+    let mut cmd = Command::new(common::BIN);
+    cmd.args(["hook", event])
+        .env("HOME", home)
+        .env("SWITCHBOARD_STATE_DIR", state)
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .env_remove("SLACK_RELAY_HELPER")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some((socket, pane)) = pane {
+        cmd.env("SWITCHBOARD", socket).env("SWITCHBOARD_PANE", pane);
+    }
+    let mut child = cmd.spawn().expect("switchboard runs");
+    // A hook that has stopped reading is no reason to fail here.
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes());
+    let out = child.wait_with_output().expect("switchboard ends");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A hook in `pane`, which must succeed and say nothing.
+fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
+    let got = run_hook(
+        &server.home,
+        &server.state,
+        Some((&server.socket(), pane)),
+        event,
+        &input.to_string(),
+    );
+    assert_eq!(
+        got,
+        (0, String::new(), String::new()),
+        "hook {event}; server log: {}",
+        server.log()
+    );
+}
+
+/// Settings for the tests: no desktop notifications from them.
+fn settings(server: &TestServer, extra: Value) {
+    let dir = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut all = json!({"notifications": false});
+    for (k, v) in extra.as_object().unwrap() {
+        all[k] = v.clone();
+    }
+    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+}
+
+/// Writes a Claude session file for `pid`, as Claude Code does for each of
+/// its processes.
+fn session_file(home: &Path, pid: u64, session: Value) {
+    let dir = home.join(".claude/sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut file = json!({"pid": pid, "entrypoint": "cli"});
+    for (k, v) in session.as_object().unwrap() {
+        file[k] = v.clone();
+    }
+    std::fs::write(dir.join(format!("{pid}.json")), file.to_string()).unwrap();
+}
+
+/// The first session's tabs.
+fn tabs(list: &Value) -> Vec<Value> {
+    list["sessions"][0]["tabs"].as_array().unwrap().clone()
+}
+
+/// A pane's entry in `list`, by id.
+fn pane_of(list: &Value, id: &str) -> Value {
+    tabs(list)
+        .iter()
+        .flat_map(|t| t["panes"].as_array().unwrap().clone())
+        .find(|p| p["id"] == id)
+        .unwrap_or_else(|| panic!("no pane {id} in {list}"))
+}
+
+/// The first tab's first pane: its id and its shell's pid.
+fn first_pane(server: &TestServer) -> (String, u64) {
+    let pane = tabs(&server.list())[0]["panes"][0].clone();
+    (
+        pane["id"].as_str().unwrap().to_string(),
+        pane["pid"].as_u64().unwrap(),
+    )
+}
+
+/// Waits until `list` satisfies `pred`.
+fn wait_list(server: &TestServer, what: &str, pred: impl Fn(&Value) -> bool) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let list = server.list();
+        if pred(&list) {
+            return list;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {what}: {list}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_hook_marks_its_pane_and_the_status_line_shows_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "/review-loop now"}),
+    );
+    let agent = pane_of(&server.list(), &pane)["agent"].clone();
+    assert_eq!(agent["state"], "working");
+    assert_eq!(agent["loop"], "review");
+    assert!(agent["since"].as_i64().unwrap() > 0);
+    client.wait_for("the working badge", |s| s[29].contains("1:  ⋯"));
+
+    hook(
+        &server,
+        &pane,
+        "PreToolUse",
+        json!({"tool_name": "Bash", "tool_input": {"command": "cargo test", "description": "Run the tests"}}),
+    );
+    assert_eq!(
+        pane_of(&server.list(), &pane)["agent"]["activity"],
+        "Run the tests"
+    );
+
+    // Finishing in the tab you're looking at isn't news, so look elsewhere.
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    hook(&server, &pane, "Stop", json!({"session_id": "s-1"}));
+    let list = server.list();
+    assert_eq!(pane_of(&list, &pane)["agent"]["state"], "done");
+    assert_eq!(tabs(&list)[0]["agent"], "done");
+    let screen = client.wait_for("the done badge and count", |s| {
+        s[29].contains("1:  ✓") && s[29].contains("✓ 1")
+    });
+    assert!(!screen[29].contains('⋯'), "{:?}", screen[29]);
+
+    hook(
+        &server,
+        &pane,
+        "Notification",
+        json!({"notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}),
+    );
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "waiting");
+    assert_eq!(
+        server.ok(&["show", "-t", &pane, "@agent_state"]).trim(),
+        "waiting"
+    );
+    client.wait_for("the waiting badge", |s| {
+        s[29].contains("1:  !") && s[29].contains("! 1")
+    });
+
+    hook(&server, &pane, "SessionEnd", json!({"reason": "exit"}));
+    let list = server.list();
+    assert_eq!(pane_of(&list, &pane)["agent"], Value::Null);
+    assert_eq!(tabs(&list)[0]["agent"], Value::Null);
+    client.wait_for("no badge", |s| !s[29].contains('!'));
+}
+
+#[test]
+fn a_finished_tab_clears_once_it_has_been_in_front() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    hook(&server, &pane, "Stop", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the finished mark seen", |l| {
+        pane_of(l, &pane)["agent"].is_null()
+    });
+
+    // With done_clears at "prompt", it stays until the next prompt.
+    settings(&server, json!({"done_clears": "prompt"}));
+    let second = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    server.ok(&["select-tab", "-t", &second]);
+    hook(&server, &pane, "Stop", json!({}));
+    server.ok(&["select-tab", "-t", &first]);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+}
+
+#[test]
+fn a_pane_not_running_claude_keeps_no_state() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, _) = first_pane(&server);
+    // No session file for the pane's shell: whatever said it was Claude
+    // isn't, and nothing is left behind.
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"], Value::Null);
+}
+
+#[test]
+fn a_headless_claudes_hooks_mark_nothing() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "tab"}));
+    session_file(
+        &server.home,
+        999_998,
+        json!({"sessionId": "loop", "entrypoint": "sdk-cli"}),
+    );
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "loop"}),
+    );
+    assert_eq!(pane_of(&server.list(), &pane)["agent"], Value::Null);
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "tab"}),
+    );
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+}
+
+#[test]
+fn a_backgrounded_conversation_marks_the_tab_it_came_from() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    // The tab's Claude parked job j1, which runs on with no pane of its own.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "tab", "parkedJobId": "j1"}),
+    );
+    session_file(
+        &server.home,
+        999_997,
+        json!({"sessionId": "job", "jobId": "j1"}),
+    );
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    let got = run_hook(
+        &server.home,
+        &server.state,
+        None,
+        "Stop",
+        &json!({"session_id": "job"}).to_string(),
+    );
+    assert_eq!(got, (0, String::new(), String::new()));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "done");
+}
+
+#[test]
+fn a_second_claude_in_a_tab_gets_a_tab_of_its_own() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (first, first_pid) = first_pane(&server);
+    let second = server.ok(&["split", "-t", &first]).trim().to_string();
+    let second_pid = pane_of(&server.list(), &second)["pid"].as_u64().unwrap();
+    session_file(&server.home, first_pid, json!({"sessionId": "a"}));
+    session_file(&server.home, second_pid, json!({"sessionId": "b"}));
+    hook(
+        &server,
+        &second,
+        "SessionStart",
+        json!({"source": "startup"}),
+    );
+    let list = server.list();
+    let tabs = tabs(&list);
+    assert_eq!(tabs.len(), 2, "{list}");
+    assert_eq!(tabs[0]["panes"].as_array().unwrap().len(), 1);
+    assert_eq!(tabs[0]["panes"][0]["id"], first.as_str());
+    assert_eq!(tabs[1]["panes"][0]["id"], second.as_str());
+    assert_eq!(tabs[1]["current"], true);
+    // A session restarted by compaction is the same one going on: it stays.
+    let third = server.ok(&["split", "-t", &first]).trim().to_string();
+    let third_pid = pane_of(&server.list(), &third)["pid"].as_u64().unwrap();
+    session_file(&server.home, third_pid, json!({"sessionId": "c"}));
+    hook(
+        &server,
+        &third,
+        "SessionStart",
+        json!({"source": "compact"}),
+    );
+    assert_eq!(tab_count(&server), 2);
+}
+
+fn tab_count(server: &TestServer) -> usize {
+    tabs(&server.list()).len()
+}
+
+#[test]
+fn the_keys_go_to_what_needs_you_to_claude_and_pin() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s"}));
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    hook(
+        &server,
+        &pane,
+        "PermissionRequest",
+        json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
+    );
+    assert_eq!(
+        pane_of(&server.list(), &pane)["agent"]["wait"],
+        "permission: Bash git push"
+    );
+    // M-a: to the waiting tab.
+    client.type_text(&format!("{ALT}a"));
+    wait_list(&server, "the waiting tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    // M-c: from a pane beside it, back into the pane running Claude.
+    client.type_text(&format!("{ALT}L"));
+    wait_list(&server, "a second pane focused", |l| {
+        tabs(l)[0]["panes"].as_array().unwrap().len() == 2 && pane_of(l, &pane)["active"] == false
+    });
+    client.type_text(&format!("{ALT}c"));
+    wait_list(&server, "Claude's pane focused", |l| {
+        pane_of(l, &pane)["active"] == true
+    });
+    // M-f pins the tab, and again unpins it.
+    client.type_text(&format!("{ALT}f"));
+    wait_list(&server, "the tab pinned", |l| {
+        tabs(l)[0]["options"]["@pinned"] == "1"
+    });
+    client.type_text(&format!("{ALT}f"));
+    wait_list(&server, "the tab unpinned", |l| {
+        tabs(l)[0]["options"].get("@pinned").is_none()
+    });
+}
+
+#[test]
+fn a_hook_outside_the_workspace_says_nothing_and_succeeds() {
+    let dir = TempDir::new("sbt-hook");
+    let home = dir.path().join("home");
+    let state = dir.path().join("s");
+    std::fs::create_dir_all(&home).unwrap();
+    let silent = (0, String::new(), String::new());
+    // No server at all, outside a pane and in one.
+    assert_eq!(run_hook(&home, &state, None, "Stop", "{}"), silent);
+    let missing = state.join("sock");
+    assert_eq!(
+        run_hook(&home, &state, Some((&missing, "%1")), "Stop", "{}"),
+        silent
+    );
+    // JSON that can't be read, no event, and nothing on stdin.
+    assert_eq!(
+        run_hook(&home, &state, Some((&missing, "%1")), "Stop", "{not json"),
+        silent
+    );
+    assert_eq!(run_hook(&home, &state, None, "", ""), silent);
+
+    // While the Slack relay runs, its events file hears of the turn.
+    let relay = home.join(".local/state/slack-relay");
+    std::fs::create_dir_all(&relay).unwrap();
+    std::fs::write(relay.join("events.jsonl"), "").unwrap();
+    let input = json!({"session_id": "s", "transcript_path": "/t.jsonl", "cwd": "/w", "last_assistant_message": "Done."});
+    assert_eq!(
+        run_hook(&home, &state, None, "Stop", &input.to_string()),
+        silent
+    );
+    assert_eq!(
+        run_hook(&home, &state, None, "PreToolUse", &input.to_string()),
+        silent
+    );
+    let events = std::fs::read_to_string(relay.join("events.jsonl")).unwrap();
+    let lines: Vec<Value> = events
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 1, "{events}");
+    assert_eq!(lines[0]["event"], "done");
+    assert_eq!(lines[0]["last"], "Done.");
+    assert_eq!(lines[0]["transcript_path"], "/t.jsonl");
+
+    // A server running, a pane it doesn't know.
+    let server = TestServer::start();
+    let got = run_hook(
+        &server.home,
+        &server.state,
+        Some((&server.socket(), "%99")),
+        "Stop",
+        "{}",
+    );
+    assert_eq!(got, silent);
+}

@@ -18,6 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use unicode_width::UnicodeWidthStr;
 
 use super::layout::Placement;
+use crate::agent::State;
 
 /// tmux.conf's colours, by the 256-colour palette's numbers.
 pub mod colors {
@@ -192,13 +193,39 @@ pub struct TabStatus {
     pub index: usize,
     pub name: String,
     pub current: bool,
+    /// Its Claude's state, most urgent of its panes' (src/agent).
+    pub agent: Option<State>,
+}
+
+/// The badge a Claude state wears (tmux.conf's `@agent_marker`): a black !
+/// on yellow when it is waiting on you, a black ✓ on green when it has
+/// responded and you have not looked, a white ⋯ on muted blue while it
+/// works, a colour that reads as busy rather than as needing you. Badges
+/// with their own background, because tab names are drawn in each project's
+/// accent colour, and a coloured dot vanishes on a tab of the same colour.
+fn badge(state: State) -> (&'static str, Style) {
+    let (symbol, bg, fg) = match state {
+        State::Waiting => ("!", 220, 232),
+        State::Done => ("✓", 41, 232),
+        State::Working => ("⋯", 67, 255),
+    };
+    (
+        symbol,
+        Style::new()
+            .bg(Color::Indexed(bg))
+            .fg(Color::Indexed(fg))
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 /// Where each tab's label went on the status line, for clicks: (start
 /// column, end column, tab index).
 pub type TabSpans = Vec<(u16, u16, usize)>;
 
-/// The status line in `area` (one row): the session's name, then the tabs.
+/// The status line in `area` (one row): the session's name, how many of its
+/// tabs wait on you, have finished unseen and are working (tmux.conf's
+/// `@agent_counts`, a zero hiding its badge), then the tabs, each with its
+/// badge after its number.
 pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatus]) -> TabSpans {
     let base = Style::new().bg(colors::STATUS_BG).fg(colors::STATUS_FG);
     buf.set_style(area, base);
@@ -214,10 +241,16 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
             .fg(colors::WHITE)
             .add_modifier(Modifier::BOLD),
     );
+    for state in [State::Waiting, State::Done, State::Working] {
+        let n = tabs.iter().filter(|t| t.agent == Some(state)).count();
+        if n > 0 {
+            let (symbol, style) = badge(state);
+            x = put(buf, x, area, &format!("  {symbol} {n}  "), style);
+        }
+    }
     x = put(buf, x, area, " ", base);
     let mut spans = Vec::new();
     for tab in tabs {
-        let label = format!(" {}:{} ", tab.index, tab.name);
         let style = if tab.current {
             Style::new()
                 .bg(colors::CURRENT_BG)
@@ -227,7 +260,13 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
             base.fg(colors::TAB_FG)
         };
         let start = x;
-        x = put(buf, x, area, &label, style);
+        x = put(buf, x, area, &format!(" {}:", tab.index), style);
+        if let Some(state) = tab.agent {
+            let (symbol, marker) = badge(state);
+            x = put(buf, x, area, &format!("  {symbol}  "), marker);
+            x = put(buf, x, area, " ", style);
+        }
+        x = put(buf, x, area, &format!("{} ", tab.name), style);
         spans.push((start, x, tab.index));
         if x >= area.right() {
             break;
@@ -309,11 +348,13 @@ mod tests {
                     index: 1,
                     name: "api".into(),
                     current: true,
+                    agent: None,
                 },
                 TabStatus {
                     index: 2,
                     name: "web".into(),
                     current: false,
+                    agent: None,
                 },
             ],
         );
@@ -324,6 +365,43 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].2, 2);
+    }
+
+    #[test]
+    fn claudes_states_show_as_badges_and_counts() {
+        let mut frame = Frame::new(80, 1);
+        let area = frame.area();
+        let tab = |index: usize, name: &str, agent: Option<State>| TabStatus {
+            index,
+            name: name.into(),
+            current: index == 1,
+            agent,
+        };
+        let spans = draw_status(
+            &mut frame.buf,
+            area,
+            "main",
+            &[
+                tab(1, "api", Some(State::Waiting)),
+                tab(2, "web", Some(State::Done)),
+                tab(3, "db", Some(State::Waiting)),
+                tab(4, "ops", None),
+            ],
+        );
+        let line = row(&frame.buf, 0);
+        assert!(
+            line.starts_with("  main   ! 2    ✓ 1    1:  !   api  2:  ✓   web  3:  !   db  4:ops "),
+            "{line:?}"
+        );
+        // The badge has colours of its own, and the tab's click span covers it.
+        let bang = line.find('!').unwrap() as u16;
+        assert_eq!(frame.buf[(bang, 0)].bg, Color::Indexed(220));
+        let check = line.chars().position(|c| c == '✓').unwrap() as u16;
+        assert_eq!(frame.buf[(check, 0)].bg, Color::Indexed(41));
+        assert_eq!(
+            spans[0].1 - spans[0].0,
+            " 1:  !   api ".chars().count() as u16
+        );
     }
 
     #[test]

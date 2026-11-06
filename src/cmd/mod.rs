@@ -45,6 +45,11 @@ pub const COMMANDS: &[Command] = &[
         about: "The server every client attaches to (started for you)",
     },
     Command {
+        name: "hook",
+        run: crate::agent::hook::main,
+        about: "Tell the workspace what a Claude session is doing (run by Claude Code's hooks)",
+    },
+    Command {
         name: "platform",
         run: platform::main,
         about: "What differs between macOS and Linux, for the shell scripts",

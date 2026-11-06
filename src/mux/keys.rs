@@ -1,7 +1,8 @@
 //! Key bindings: which key does what. The defaults are the multiplexer keys
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
-//! zooming, resizing), under the same keys, with the prefix `M-b` for the
-//! rest; `~/.config/switchboard/keys.json` adds to or changes them:
+//! zooming, resizing) and its Claude keys (M-a to what needs you, M-c to the
+//! tab's Claude, M-f to pin a tab), under the same keys, with the prefix
+//! `M-b` for the rest; `~/.config/switchboard/keys.json` adds to or changes them:
 //!
 //! ```json
 //! { "root": { "M-g": "new-tab", "M-w": null }, "prefix": { "y": "copy-mode" } }
@@ -48,13 +49,20 @@ pub enum Action {
     SendPrefix,
     /// Every binding, in a list.
     ListKeys,
+    /// The next tab that needs you: pinned, then waiting, then done.
+    NextNeedsYou,
+    /// Into the pane running Claude in this tab.
+    FocusClaude,
+    /// Pin the tab, keeping it at the top of what needs you, or unpin it.
+    TogglePin,
 }
 
 impl Action {
     /// An action from its name in keys.json: `select-pane-left`,
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
-    /// `copy-mode`, `send-prefix`, `list-keys`.
+    /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
+    /// `focus-claude`, `toggle-pin`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -74,6 +82,9 @@ impl Action {
             "copy-mode" => Action::CopyMode,
             "send-prefix" => Action::SendPrefix,
             "list-keys" => Action::ListKeys,
+            "next-needs-you" => Action::NextNeedsYou,
+            "focus-claude" => Action::FocusClaude,
+            "toggle-pin" => Action::TogglePin,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -113,6 +124,9 @@ impl Action {
             Action::CopyMode => "copy-mode".into(),
             Action::SendPrefix => "send-prefix".into(),
             Action::ListKeys => "list-keys".into(),
+            Action::NextNeedsYou => "next-needs-you".into(),
+            Action::FocusClaude => "focus-claude".into(),
+            Action::TogglePin => "toggle-pin".into(),
         }
     }
 
@@ -139,6 +153,9 @@ impl Action {
             Action::CopyMode => "Scroll back through the pane's history".into(),
             Action::SendPrefix => "Send the prefix key to the pane".into(),
             Action::ListKeys => "List the keys".into(),
+            Action::NextNeedsYou => "Go to the next tab that needs you".into(),
+            Action::FocusClaude => "Jump to the pane running Claude in this tab".into(),
+            Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
         }
     }
 }
@@ -187,6 +204,9 @@ impl Default for Bindings {
         bind("M-S-Down", Resize(Down, 5));
         bind("M-t", NewTab);
         bind("M-n", NewTab);
+        bind("M-a", NextNeedsYou);
+        bind("M-c", FocusClaude);
+        bind("M-f", TogglePin);
         let mut prefix = HashMap::new();
         let mut pbind = |k: &str, a: Action| {
             prefix.insert(key(k), a);
@@ -297,6 +317,9 @@ mod tests {
             Action::Resize(Direction::Left, 3),
             Action::Split(Direction::Down),
             Action::Detach,
+            Action::NextNeedsYou,
+            Action::FocusClaude,
+            Action::TogglePin,
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }
