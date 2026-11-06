@@ -15,6 +15,10 @@
 //! a text or tags too long for theirs cut with an ellipsis, so every row's
 //! tags and key line up.
 //!
+//! A list that takes what is typed as well as its rows (`free`, as fzf's
+//! `--print-query` let pick-dir.zsh take a path typed in) gives back the
+//! text typed when Enter finds no row matching it, or at once on Alt-Enter.
+//!
 //! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab, the wheel)
 //! move; Enter picks; Esc or C-c closes; Backspace, C-w and C-u edit what is
 //! typed. A click moves to a row and a second click on it picks it, as fzf
@@ -69,7 +73,8 @@ impl PickItem {
 }
 
 /// An item picked: where it is in the list given, its value, and what was
-/// typed before it was.
+/// typed before it was. From a `free` list, what was typed alone has the
+/// index `TYPED` and the text typed as its value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picked {
     pub index: usize,
@@ -81,6 +86,9 @@ pub struct Picked {
 /// matched items' indices (in the list's order), the order to show them in.
 pub type Order = Box<dyn Fn(&str, &[usize]) -> Vec<usize> + Send>;
 
+/// The index a `free` list gives what was typed, picked in place of a row.
+pub const TYPED: usize = usize::MAX;
+
 pub struct Picker {
     kind: &'static str,
     title: String,
@@ -88,6 +96,7 @@ pub struct Picker {
     items: Vec<PickItem>,
     query: String,
     exact: bool,
+    free: bool,
     order: Option<Order>,
     matcher: Matcher,
     /// The rows shown, in order: the item and the grapheme indices matched
@@ -111,6 +120,7 @@ impl Picker {
             items,
             query: String::new(),
             exact: false,
+            free: false,
             order: None,
             matcher: Matcher::new(Config::DEFAULT),
             shown: Vec::new(),
@@ -142,6 +152,13 @@ impl Picker {
     pub fn exact(mut self) -> Picker {
         self.exact = true;
         self.refilter();
+        self
+    }
+
+    /// What is typed taken too: Enter with no row matching it, or Alt-Enter
+    /// whatever matches, gives it back (`TYPED`).
+    pub fn free(mut self) -> Picker {
+        self.free = true;
         self
     }
 
@@ -231,8 +248,21 @@ impl Picker {
                 value: self.items[*i].value.clone(),
                 query: self.query.clone(),
             })),
+            None if self.free => self.take_typed(),
             None => Step::Close(Outcome::Dismissed),
         }
+    }
+
+    /// What is typed, picked as it is; nothing typed closes the list.
+    fn take_typed(&self) -> Step {
+        if self.query.trim().is_empty() {
+            return Step::Close(Outcome::Dismissed);
+        }
+        Step::Close(Outcome::Picked(Picked {
+            index: TYPED,
+            value: self.query.clone(),
+            query: self.query.clone(),
+        }))
     }
 
     fn move_to(&mut self, to: usize) -> Step {
@@ -406,7 +436,11 @@ impl Overlay for Picker {
             lines.push(self.row_line(row, widths, look));
         }
         let mut spec = BoxSpec::new(&self.title, &lines);
-        spec.keys = Some("type to filter  ↑↓ move  ↵ choose  esc close");
+        spec.keys = Some(if self.free {
+            "type to filter  ↑↓ move  ↵ choose  alt-↵ take what's typed  esc close"
+        } else {
+            "type to filter  ↑↓ move  ↵ choose  esc close"
+        });
         spec.place = Place::Share {
             cols_pct: 60,
             rows_pct: 60,
@@ -420,6 +454,7 @@ impl Overlay for Picker {
         let ctrl = key.mods == Mods::CTRL;
         let plain = key.mods == Mods::NONE || key.mods == Mods::SHIFT;
         match key.code {
+            KeyCode::Enter if self.free && key.mods == Mods::ALT => self.take_typed(),
             KeyCode::Enter => self.pick(),
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
@@ -526,6 +561,40 @@ mod tests {
                 value: "2".into(),
                 query: "nwtb".into(),
             }))
+        );
+    }
+
+    #[test]
+    fn a_free_list_takes_what_is_typed_when_no_row_matches_or_on_alt_enter() {
+        let enter = |p: &mut Picker, mods| p.key(Key::new(KeyCode::Enter, mods), &Look::default());
+        let mut p = Picker::new("Pick", items()).exact().free();
+        typed(&mut p, "~/elsewhere");
+        assert!(p.shown().is_empty());
+        assert_eq!(
+            enter(&mut p, Mods::NONE),
+            Step::Close(Outcome::Picked(Picked {
+                index: TYPED,
+                value: "~/elsewhere".into(),
+                query: "~/elsewhere".into(),
+            }))
+        );
+        let mut p = Picker::new("Pick", items()).exact().free();
+        typed(&mut p, "pane");
+        assert!(matches!(
+            enter(&mut p, Mods::ALT),
+            Step::Close(Outcome::Picked(Picked { index: TYPED, .. }))
+        ));
+        let mut empty = Picker::new("Pick", Vec::new()).free();
+        assert_eq!(
+            enter(&mut empty, Mods::NONE),
+            Step::Close(Outcome::Dismissed),
+            "nothing typed is nothing taken"
+        );
+        let mut strict = Picker::new("Pick", items());
+        typed(&mut strict, "zzzz");
+        assert_eq!(
+            enter(&mut strict, Mods::NONE),
+            Step::Close(Outcome::Dismissed)
         );
     }
 

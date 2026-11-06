@@ -11,8 +11,9 @@
 //! sources [refresh [view]]               mission control's GitHub and Linear
 //!                                        views as JSON, or asked for now
 //!                                        (src/sources)
-//! new-tab [-s session] [-c dir] [-n name] [-d] [-- command...]
-//!                                        prints the new tab's and pane's ids
+//! new-tab [-s session] [-c dir] [-n name] [-d] [-E] [-- command...]
+//!                                        prints the new tab's and pane's ids;
+//!                                        -E puts it at the end of the tabs
 //! split [-t pane] [-L|-R|-U|-D] [-c dir] [-p percent] [-d] [-- command...]
 //!                                        prints the new pane's id
 //! send-keys [-t pane] [-l] key...        keys by name (Enter, C-c, M-x), or
@@ -399,6 +400,9 @@ impl Server {
                 a.has('d'),
             )
             .map_err(|e| e.to_string())?;
+        if a.has('E') {
+            self.tab_to_end(tab);
+        }
         Ok(Reply::ok(format!("{tab} {pane}\n")))
     }
 

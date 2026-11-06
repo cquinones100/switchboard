@@ -166,6 +166,56 @@ pub fn send_quiet(args: Vec<String>, pane: Option<String>, stdin: Option<Vec<u8>
     exchange(&mut stream, &msg).ok().map(|(code, _, _)| code)
 }
 
+/// Runs a command in the server and gives its answer, its code, what it
+/// printed and what it said went wrong, for a program that reads the answer
+/// rather than passing it on (`wt-jump` reading `list`, `wt-batch` opening
+/// tabs). The caller's pane is its `SWITCHBOARD_PANE`, as for `run_command`.
+/// An error when no server answers; like `run_command`, it never starts one.
+pub fn ask(args: &[&str]) -> Result<(i32, String, String)> {
+    let cwd = std::env::current_dir()
+        .ok()
+        .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let pane = std::env::var("SWITCHBOARD_PANE")
+        .ok()
+        .filter(|p| !p.is_empty());
+    let mut stream =
+        UnixStream::connect(socket_path()).context("no Switchboard server is running")?;
+    let msg = ClientMsg::Command {
+        args: args.iter().map(|a| a.to_string()).collect(),
+        cwd,
+        pane,
+        stdin: None,
+    };
+    let (code, stdout, stderr) = exchange(&mut stream, &msg)?;
+    Ok((
+        code,
+        String::from_utf8_lossy(&stdout).into_owned(),
+        String::from_utf8_lossy(&stderr).into_owned(),
+    ))
+}
+
+/// As `ask`, for a command that must succeed: what it printed, or an error
+/// carrying what it said went wrong.
+pub fn ask_ok(args: &[&str]) -> Result<String> {
+    let (code, stdout, stderr) = ask(args)?;
+    if code != 0 {
+        bail!(
+            "{}",
+            stderr.trim().lines().next().unwrap_or("the server refused")
+        );
+    }
+    Ok(stdout)
+}
+
+/// Whether this process runs in a pane of a running Switchboard: its
+/// `SWITCHBOARD` and `SWITCHBOARD_PANE` set, as tmux's `TMUX` and
+/// `TMUX_PANE` told a script it was inside tmux.
+pub fn in_pane() -> bool {
+    let set = |var: &str| std::env::var_os(var).is_some_and(|v| !v.is_empty());
+    set("SWITCHBOARD") && set("SWITCHBOARD_PANE")
+}
+
 /// Whether stdin holds data to read: a pipe or a file, as a hook's JSON is
 /// given, not a terminal.
 pub fn stdin_is_data() -> bool {
