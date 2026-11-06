@@ -36,18 +36,21 @@ tmux new-session -A -s main
 
 | Key | What it does |
 |---|---|
-| `M-p` | Find any command by what it does, Settings included; what you picked after typing the same words comes first |
+| `M-p` | Find any command by what it does, Settings included; what you picked after typing the same words comes first; the ⌘ Commands button in the status bar opens it too |
 | `M-a` | Go to the next tab that needs you, one waiting on you before one that finished, and last the notifications |
 | `M-j` | Find a tab by typing its name |
 | `M-S-f` | Search your notes, Linear, GitHub and Slack at once |
 | `M-Space` | Mission control: every tab, the Work map, PRs, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
 | `M-s` | Into the sidebar and back out |
+| `C-w h` `j` `k` `l` | To the pane on that side, and between Neovim's windows on the way; `M-Left`, `M-Down`, `M-Up` and `M-Right` do the same |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-f` | Pin the tab to the top of Needs you |
 | `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, its files grouped into chapters that tell the change as a story (`]c` / `[c` between them, `]p` / `[p` a chapter at a time as if each were a commit, `E` narrowing or widening the file list), the story told in the background for each new commit so it opens at once, and while one is being told, each chapter shown as Haiku names it (`t` shows its answer as it comes) |
 
 `M` is Option. Tips in the top-right corner teach the rest the first time each would help. Menus and questions take a click too: one click takes an option or answers Yes or No, and a click outside a box closes it.
+
+Vim's keys are the default, and you don't need to know them. Notes has a toolbar over each note, a button for each of its styles. Settings' Easy mode (off at first) lets Shift-arrows and the mouse select in Notes, typing replace a selection, and Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X save, undo, redo and cut there (through Switchboard's Ghostty config); it gives `M-d`'s diff a row of buttons for its keys, and both a line at the bottom naming the keys that work.
 
 ## Staying up to date
 

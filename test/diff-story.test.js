@@ -453,3 +453,27 @@ test("an ask whose Neovim is gone, its progress not updated for 30 seconds, is a
   assert.deepEqual(result.order, ["src/b.js", "src/a.js"], "the story is told");
   assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 2, "by asking Haiku again");
 });
+
+test("easy mode puts a button for each of the list's keys at the bottom of M-d's diff, with the keys named after them unless the help line is off", { skip: !ready && "diffview isn't installed" }, () => {
+  const home = path.join(tmp, "easy-home");
+  const config = path.join(tmp, "easy-config");
+  [home, config].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  fs.symlinkSync(nvimDir, path.join(config, "nvim"));
+  // Each case starts M-d's Neovim with the settings given as --cmd, and reads
+  // its statusline as it starts.
+  [
+    { cmds: ["--cmd", "let g:diff_easy = v:true"], buttons: 7, help: true, laststatus: "3" },
+    { cmds: ["--cmd", "let g:diff_easy = v:true", "--cmd", "let g:diff_key_help = v:false"], buttons: 7, help: false, laststatus: "3" },
+    { cmds: [], buttons: 0, help: false, laststatus: "0" },
+  ].forEach(({ cmds, buttons, help, laststatus }) => {
+    const run = spawnSync("nvim", ["--headless", "-u", path.join(nvimDir, "diff.lua"), ...cmds, "-c", "lua io.write(vim.o.laststatus .. '\\n' .. vim.o.statusline .. '\\n')", "-c", "qa!"], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config, XDG_CACHE_HOME: path.join(tmp, "easy-cache"), XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" },
+    });
+    const [last, line] = (run.stdout + run.stderr).trim().split("\n").slice(-2);
+    assert.equal(last, laststatus, `${cmds.join(" ")}: the bar is shown only in easy mode`);
+    assert.equal(line.match(/@v:lua\.diff_button_click@/g)?.length ?? 0, buttons);
+    if (buttons) ["Chapter ▶", "Page ▶", "Widen", "Copy link", "Close"].forEach((label) => assert.ok(line.includes(` ${label} `), label));
+    assert.equal(/\]c \[c chapters/.test(line), help, "the keys are named unless the help line is off");
+  });
+});

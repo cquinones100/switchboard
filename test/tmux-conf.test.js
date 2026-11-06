@@ -105,3 +105,21 @@ test("tmux.conf loads without an error, and every binding keeps all its commands
     assert.equal(found.commands, bind.commands, `${bind.table} ${bind.key} runs ${found.commands} command(s), the file gives it ${bind.commands}\n${bind.line}`);
   });
 });
+
+test("M-arrows move between panes, each listed in M-p, and the Commands button shows only with its setting on", () => {
+  assert.equal(tmux("set", "-g", "@conf_check", "1").status, 0);
+  assert.equal(tmux("source-file", conf).status, 0);
+  const notes = tmux("list-keys", "-N", "-T", "root").stdout;
+  ["M-Left", "M-Down", "M-Up", "M-Right"].forEach((key) => {
+    assert.match(notes, new RegExp(`^\\S+ ${key} +Move to the pane .*#panes #navigate$`, "m"), `${key} has a description for M-p`);
+  });
+  assert.match(tmux("list-keys", "-T", "root", "M-Left").stdout, /select-pane -L/);
+
+  assert.equal(tmux("set", "-gu", "@setting_palette_button").status, 0);
+  assert.match(tmux("display", "-p", "#{E:status-left}").stdout, /range=user\|palette.*⌘ Commands/);
+  assert.equal(tmux("set", "-g", "@setting_palette_button", "off").status, 0);
+  const off = tmux("display", "-p", "#{E:status-left}").stdout;
+  assert.doesNotMatch(off, /palette|Commands/);
+  assert.match(off, / conf /, "the rest of the status line stays");
+  assert.match(tmux("list-keys", "-T", "root", "MouseDown1Status").stdout, /mouse_status_range.*palette/);
+});

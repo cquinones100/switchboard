@@ -1502,7 +1502,19 @@ beside the list. Enter opens it. It takes the place of vim's Ctrl-F (page
 down) in notes only, and needs `fzf` (`brew install fzf`).
 
 Everything is in the Format menu, Ctrl-P, which acts on the selection when
-opened from Visual mode. Its Paste image (`v`), or Ctrl-V while typing, as
+opened from Visual mode. The toolbar over the note has a button for the
+common ones (bold, italic, strikethrough, monospaced, title, heading,
+bulleted list, checklist, table, link, image) and `⋯` for the whole menu;
+a click runs it on the selection, or else on the word or line the cursor
+is on, and the button under the mouse lights up (the `notes_toolbar`
+setting hides it). Settings' Easy mode (`easy_keys`, off at first) is for
+anyone who doesn't know Vim's keys: Shift-arrows and the mouse select,
+typing replaces the selection, and Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z
+redoes and Cmd-X cuts, through Switchboard's Ghostty config, which sends
+them as keys tmux passes to Notes alone (Cmd-C stays Ghostty's own copy,
+of text selected with Shift-drag); a line at the bottom names the keys
+that work in the mode you are in (`key_help_line`). Vim's keys keep
+working beside them. Its Paste image (`v`), or Ctrl-V while typing, as
 in Claude Code, puts the image on the clipboard (a screenshot copied with
 Cmd-Ctrl-Shift-4, say) into the note; with no image there, Ctrl-V does what
 it always does (Cmd-V can't: the terminal pastes only text). The image is

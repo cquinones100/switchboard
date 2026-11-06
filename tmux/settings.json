@@ -326,6 +326,13 @@
     "default": true
   },
   {
+    "key": "notes_toolbar",
+    "category": "Notes",
+    "label": "Toolbar",
+    "description": "A row of buttons over each note, one for each of the Format menu's styles (bold, italic, headings, lists, checklist, table, link, image) and ⋯ for the whole menu, each acting on the line or the selection; off, the Format menu is Ctrl-P alone",
+    "default": true
+  },
+  {
     "key": "note_tab_prompt",
     "category": "Notes",
     "label": "Tell a note's new tab its note",
@@ -494,6 +501,13 @@
     "default": true
   },
   {
+    "key": "palette_button",
+    "category": "Palette",
+    "label": "Commands button",
+    "description": "A ⌘ Commands button in the status bar, after the session name, that opens M-p when clicked",
+    "default": true
+  },
+  {
     "key": "review_security",
     "category": "Safety",
     "label": "Security review in the review loop",
@@ -512,6 +526,27 @@
     "category": "Help",
     "label": "Tips",
     "description": "A box in the top-right corner, once each, when a key would help (M-a, M-j, putting a pane back); any key closes it",
+    "default": true
+  },
+  {
+    "key": "easy_keys",
+    "category": "Help",
+    "label": "Easy mode",
+    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (through Switchboard's Ghostty config), and the diff gets a row of buttons for its keys; Vim's keys keep working. Takes effect when Notes or the diff next opens",
+    "default": false
+  },
+  {
+    "key": "key_help_line",
+    "category": "Help",
+    "label": "Key help line",
+    "description": "With Easy mode on, a line at the bottom of Notes and M-d's diff naming the keys that work there",
+    "default": true
+  },
+  {
+    "key": "pane_arrows",
+    "category": "Help",
+    "label": "Alt-arrows move between panes",
+    "description": "M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do, and between Neovim's windows first; off, they reach the pane",
     "default": true
   },
   {

@@ -23,6 +23,15 @@ keybind = super+w=unbind
 keybind = super+shift+w=unbind
 keybind = super+q=unbind
 
+# Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X as Ctrl+Alt+Shift keys (CSI u), which
+# tmux passes only to the notes app, where the easy_keys setting makes them
+# save, undo, redo and cut (tmux.conf, "Cmd keys for Notes' easy mode"); tmux
+# would read a Cmd key as Alt. Cmd-C and Cmd-V stay Ghostty's own.
+keybind = super+s=csi:115;8u
+keybind = super+z=csi:122;8u
+keybind = super+shift+z=csi:121;8u
+keybind = super+x=csi:120;8u
+
 # Allow Cmd+Click to open links even inside tmux
 mouse-shift-capture = false
 

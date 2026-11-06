@@ -48,3 +48,93 @@ end
 setup("colorscheme.lua")
 vim.cmd.runtime("plugin/diffview.lua")
 setup("diffview.lua")
+
+-- M-Left, M-Down, M-Up and M-Right, which tmux passes to Neovim (tmux.conf,
+-- pane_arrows setting): the window on that side, else tmux's pane there, as
+-- vim-tmux-navigator does in the editor; with the setting off, the key unmapped.
+for key, dir in pairs({ Left = "h", Down = "j", Up = "k", Right = "l" }) do
+  vim.keymap.set({ "n", "x", "s" }, "<M-" .. key .. ">", function()
+    if vim.env.TMUX and vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_pane_arrows" })) == "off" then
+      return vim.api.nvim_feedkeys(vim.keycode("<M-" .. key .. ">"), "n", false)
+    end
+    if vim.fn.winnr(dir) ~= vim.fn.winnr() then return vim.cmd.wincmd(dir) end
+    if vim.env.TMUX then vim.fn.system({ "tmux", "select-pane", "-" .. ({ h = "L", j = "D", k = "U", l = "R" })[dir] }) end
+  end, { desc = "The window or pane " .. key:lower() })
+end
+
+-- Easy mode (the easy_keys setting, off by default): a row of buttons at the
+-- bottom for the keys the list takes, then the keys themselves named
+-- (key_help_line setting). A button runs its key in the file list, so it
+-- does what the key does.
+local settings = { easy_keys = false, key_help_line = true }
+if vim.env.TMUX then
+  for _, line in ipairs(vim.fn.systemlist({ "tmux", "show", "-g" })) do
+    local key, value = line:match("^@setting_([%w_]+)%s+(%S+)")
+    -- tmux quotes a value when it needs to: "on" as well as on.
+    value = value and value:gsub('^"(.*)"$', "%1")
+    if key and settings[key] ~= nil then settings[key] = value == "on" end
+  end
+end
+-- Set with --cmd first, as the tests do, in place of the settings.
+if vim.g.diff_easy ~= nil then settings.easy_keys = vim.g.diff_easy end
+if vim.g.diff_key_help ~= nil then settings.key_help_line = vim.g.diff_key_help end
+
+local BUTTONS = {
+  { label = "◀ Chapter", keys = "[c" },
+  { label = "Chapter ▶", keys = "]c" },
+  { label = "◀ Page", keys = "[p" },
+  { label = "Page ▶", keys = "]p" },
+  { label = "Widen", keys = "E" },
+  { label = "Copy link", keys = "yl" },
+  { label = "Close", keys = "q" },
+}
+local HELP = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · q close"
+
+local hover
+-- The bar, the button under the mouse lit, and each button's { from, to }
+-- screen columns, 1-based.
+local function bar(hovered)
+  local parts, spans, col = { " " }, {}, 2
+  for i, button in ipairs(BUTTONS) do
+    local text = " " .. button.label .. " "
+    local width = vim.fn.strdisplaywidth(text)
+    table.insert(parts, ("%%%d@v:lua.diff_button_click@%%#%s#%s%%X%%#StatusLine# "):format(i, i == hovered and "SwitchboardButtonHover" or "SwitchboardButton", text))
+    spans[i] = { col, col + width - 1 }
+    col = col + width + 1
+  end
+  -- %< cuts the help, never a button, when the screen is too narrow for both.
+  if settings.key_help_line then table.insert(parts, "%<%#Comment# " .. HELP) end
+  return table.concat(parts), spans
+end
+
+local function press(index)
+  local button = BUTTONS[index]
+  local view = require("diffview.lib").get_current_view()
+  if not (button and view) then return end
+  if view.panel and view.panel:is_open() then view.panel:focus() end
+  vim.api.nvim_feedkeys(vim.keycode(button.keys), "m", false)
+end
+_G.diff_button_click = function(index, _, mouse)
+  if mouse == "l" then press(index) end
+end
+
+if settings.easy_keys then
+  vim.api.nvim_set_hl(0, "SwitchboardButton", { default = true, link = "TabLine" })
+  vim.api.nvim_set_hl(0, "SwitchboardButtonHover", { default = true, link = "PmenuSel" })
+  vim.o.laststatus = 3
+  vim.o.statusline = (bar())
+  vim.o.mousemoveevent = true
+  vim.keymap.set({ "n", "x" }, "<MouseMove>", function()
+    local pos = vim.fn.getmousepos()
+    local now
+    if pos.screenrow == vim.o.lines - vim.o.cmdheight then
+      for i, span in ipairs(select(2, bar())) do
+        if pos.screencol >= span[1] and pos.screencol <= span[2] then now = i end
+      end
+    end
+    if now ~= hover then
+      hover = now
+      vim.o.statusline = (bar(hover))
+    end
+  end, { desc = "Light the button under the mouse" })
+end

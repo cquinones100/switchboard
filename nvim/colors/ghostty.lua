@@ -108,6 +108,11 @@ for _, group in ipairs({ "Normal", "NormalNC", "SignColumn", "LineNr", "FoldColu
   hl.bg = nil
   vim.api.nvim_set_hl(0, group, hl)
 end
+-- Switchboard's buttons (the notes app's toolbar, M-d's easy mode): a padded
+-- label on a shade of the background, lit in the accent blue under the mouse,
+-- as tmux's Commands button (@button_style) is drawn.
+vim.api.nvim_set_hl(0, "SwitchboardButton", { bg = mix(bg, fg, 0.18), fg = fg })
+vim.api.nvim_set_hl(0, "SwitchboardButtonHover", { bg = ansi[4], fg = bg, bold = true })
 -- The terminal's background, for anything that blends toward it (diffview's
 -- line colors), since Normal has none.
 vim.g.ghostty_background = bg

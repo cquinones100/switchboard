@@ -11,6 +11,7 @@
 --   Enter              tick a checklist item, fold a heading, follow a link
 --   a click            the same, on a ☐, a heading's ▾ or a link
 --   Ctrl-P             the Format menu, with everything below
+--   the toolbar        a click on a button over the note: B, I, S, H1… (easy.lua)
 --   <leader>b i U x h `  bold, italic, underline, strikethrough, highlight, monospaced
 --   <leader>1 2 3 0    title, heading, subheading, body
 --   <leader>l 8 - 7 q  checklist, bulleted, dashed, numbered, block quote
@@ -29,6 +30,7 @@ local fold = require("notes.fold")
 local links = require("notes.links")
 local tables = require("notes.table")
 local sync = require("notes.sync")
+local easy = require("notes.easy")
 
 M.options = {
   -- Notes' "Move checked items to bottom", on so a list leads with what is
@@ -210,6 +212,8 @@ local function setup_window(win)
   wo.spell = false
   wo.showbreak = "NONE"
   fold.attach(win)
+  -- The toolbar, when the notes_toolbar setting is on (easy.lua).
+  easy.window(win)
 end
 
 -- Whatever Enter or a click does at a place in a note: tick a checklist item,
@@ -376,7 +380,9 @@ local function setup_buffer(buf)
   end
   -- Ctrl-P, which outside a note is your config's Telescope file finder.
   map("n", "<C-p>", function() M.menu(buf, false) end, "Format menu")
-  map("x", "<C-p>", function()
+  -- Visual and Select mode both, so a selection made with Shift-arrows or
+  -- the mouse in easy mode (easy.lua) opens it too.
+  map("v", "<C-p>", function()
     feed("<Esc>")
     vim.schedule(function() M.menu(buf, true) end)
   end, "Format menu")
@@ -451,6 +457,9 @@ local function setup_buffer(buf)
     -- takes as it is.
     if off or not require("notes.images").paste(buf) then vim.api.nvim_feedkeys(vim.keycode("<C-v>"), "ni", false) end
   end, "Paste the clipboard's image")
+
+  -- Cmd-S, Cmd-Z and the rest, in easy mode (easy.lua).
+  easy.buffer(buf)
 
   map("i", "<CR>", function()
     if vim.fn.pumvisible() == 1 then return feed("<C-y>") end
@@ -699,6 +708,7 @@ function M.start()
     end,
   })
   vim.o.mouse = "a"
+  easy.start()
   M.note_win = vim.api.nvim_get_current_win()
   M.layout()
   local notes = store.notes()

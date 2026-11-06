@@ -1323,3 +1323,99 @@ test("only the pictures on screen or near it are given to the terminal, the rest
   assert.equal(result.near, 1, "it is once scrolled to");
   assert.equal(result.marks, 1, "its lines kept either way");
 });
+
+test("the toolbar has a button for each of its Format menu items, a click styles the word or the selection, and easy mode adds the Cmd keys", () => {
+  const { result } = lua(`
+    -- A config's Visual mode map of a character, as nvim/init.lua's J.
+    vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv")
+    vim.g.mapleader = " "
+    vim.keymap.set("v", "<leader>f", "<Nop>")
+    -- And one a FileType autocommand makes for the note's buffer.
+    vim.api.nvim_create_autocmd("FileType", { pattern = "notes", callback = function(a) vim.keymap.set("v", "K", "<Nop>", { buffer = a.buf }) end })
+    local easy = require("notes.easy")
+    easy.settings = function() return { notes_toolbar = true, easy_keys = true, key_help_line = true } end
+    vim.cmd("Notes")
+    local n = require("notes")
+    local buf = vim.api.nvim_win_get_buf(n.note_win)
+    vim.cmd("stopinsert")
+    local labels = vim.tbl_map(function(item) return item[2] end, n.format_items(buf, 1, 1, false))
+    local missing = vim.tbl_filter(function(b) return not b.menu and not vim.tbl_contains(labels, b.item) end, easy.BUTTONS)
+    local _, regions = easy.toolbar(nil, 200):gsub("@v:lua.notes_toolbar_click@", "")
+    local _, shown = vim.wo[n.note_win].winbar:gsub("@v:lua.notes_toolbar_click@", "")
+    -- In a window too narrow for them all, Notes beside a pane: the first
+    -- buttons and ⋯, and nothing past the window's edge.
+    local narrow, narrow_spans = easy.toolbar(nil, 30)
+    local last_col = 0
+    for _, span in pairs(narrow_spans) do last_col = math.max(last_col, span[2]) end
+    local narrow_buttons = {}
+    for i in pairs(narrow_spans) do table.insert(narrow_buttons, i) end
+    table.sort(narrow_buttons)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "# Title", "", "hello big world", "one two" })
+    vim.api.nvim_win_set_cursor(n.note_win, { 3, 1 })
+    easy.click(1)
+    vim.wait(50, function() return false end)
+    vim.cmd("stopinsert")
+    vim.api.nvim_win_set_cursor(n.note_win, { 4, 0 })
+    vim.api.nvim_feedkeys(vim.keycode("vee<Cmd>lua require('notes.easy').click(2)<CR>"), "x", false)
+    vim.wait(50, function() return false end)
+    io.write(vim.json.encode({
+      missing = #missing, regions = regions, buttons = #easy.BUTTONS, narrow_buttons = narrow_buttons, last_col = last_col, shown = shown,
+      word = vim.api.nvim_buf_get_lines(buf, 2, 3, false)[1], selection = vim.api.nvim_buf_get_lines(buf, 3, 4, false)[1],
+      keymodel = vim.o.keymodel, select_j = vim.fn.maparg("J", "s"), select_leader = vim.fn.maparg(" f", "s"), select_buffer_k = vim.fn.maparg("K", "s"), visual_buffer_k = vim.fn.maparg("K", "x"), visual_j = vim.fn.maparg("J", "x"), copy = vim.fn.maparg("<C-c>", "v"), save = vim.fn.maparg("<C-M-S-s>", "n", false, true).desc, help = vim.o.statusline,
+    }))
+  `);
+  assert.equal(result.missing, 0, "every button names an item of the Format menu");
+  assert.equal(result.regions, result.buttons, "one click region per button, given the room");
+  assert.ok(result.shown >= 2, "the note window shows the buttons that fit it");
+  assert.equal(result.narrow_buttons[0], 1, "a narrow window keeps the first buttons");
+  assert.equal(result.narrow_buttons.at(-1), result.buttons, "and ⋯, for the rest");
+  assert.ok(result.narrow_buttons.length < result.buttons);
+  assert.ok(result.last_col <= 30, "nothing past the window's edge");
+  assert.equal(result.word, "**hello** big world", "B bolds the word under the cursor");
+  assert.equal(result.selection, "*one two*", "I italicizes the selection");
+  assert.equal(result.keymodel, "startsel,stopsel", "Shift-arrows select in easy mode");
+  assert.equal(result.save, "Save (Cmd-S)");
+  assert.equal(result.select_j, "", "J typed over a selection replaces it");
+  assert.equal(result.select_leader, "", "and so does Space f, with Space as the leader");
+  assert.equal(result.select_buffer_k, "", "and a key the note's own buffer maps");
+  assert.equal(result.visual_buffer_k, "<Nop>");
+  assert.notEqual(result.visual_j, "", "the config's J still moves lines in Visual mode");
+  assert.equal(result.copy, '"+y', "Ctrl-C copies a selection");
+  assert.match(result.help, /notes_key_help/);
+});
+
+test("with the toolbar and easy mode off, a note has no toolbar and Vim's keys alone", () => {
+  const { result } = lua(`
+    require("notes.easy").settings = function() return { notes_toolbar = false, easy_keys = false, key_help_line = true } end
+    vim.cmd("Notes")
+    local n = require("notes")
+    io.write(vim.json.encode({ bar = vim.wo[n.note_win].winbar, keymodel = vim.o.keymodel, save = vim.fn.maparg("<C-M-S-s>", "n") }))
+  `);
+  assert.deepEqual(result, { bar: "", keymodel: "", save: "" });
+});
+
+test("Notes reads the toolbar and easy mode settings from tmux, as tmux/settings.sh sets them, and marks its pane for the Cmd keys while it runs", () => {
+  const socket = path.join(tmp, "easy.sock");
+  execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "cat"]);
+  try {
+    execFileSync("tmux", ["-S", socket, "set", "-g", "@setting_easy_keys", "on"]);
+    execFileSync("tmux", ["-S", socket, "set", "-g", "@setting_notes_toolbar", "off"]);
+    const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pane_id}"], { encoding: "utf8" }).trim();
+    const { result } = lua(`
+      vim.env.TMUX = ${JSON.stringify(socket)} .. ",1,0"
+      vim.env.TMUX_PANE = ${JSON.stringify(pane)}
+      local easy = require("notes.easy")
+      local settings = easy.settings()
+      easy.start()
+      local marked = vim.trim(vim.fn.system({ "tmux", "show", "-pqv", "-t", vim.env.TMUX_PANE, "@notes_cmd_keys" }))
+      vim.api.nvim_exec_autocmds("VimLeavePre", {})
+      local left = vim.trim(vim.fn.system({ "tmux", "show", "-pqv", "-t", vim.env.TMUX_PANE, "@notes_cmd_keys" }))
+      io.write(vim.json.encode({ settings = settings, marked = marked, left = left }))
+    `);
+    assert.deepEqual(result.settings, { notes_toolbar: false, easy_keys: true, key_help_line: true });
+    assert.equal(result.marked, "1", "easy mode marks its pane, for tmux to pass it the Cmd keys");
+    assert.equal(result.left, "", "and the mark goes with Notes");
+  } finally {
+    execFileSync("tmux", ["-S", socket, "kill-server"]);
+  }
+});

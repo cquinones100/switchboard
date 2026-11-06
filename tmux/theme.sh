@@ -27,11 +27,13 @@ fi
 case "$mode" in
   dark)
     BG_DARK=colour235; BG_MED=colour238; BG_DIM=colour236
+    BUTTON="bg=colour238,fg=colour255"
     FG=colour248; FG_DIM=colour244; FG_BRIGHT=colour255
     GHOSTTY_THEME="$GHOSTTY_THEME_DARK"
     ;;
   light)
     BG_DARK=colour253; BG_MED=colour248; BG_DIM=colour254
+    BUTTON="bg=colour250,fg=colour232"
     FG=colour234; FG_DIM=colour238; FG_BRIGHT=colour232
     GHOSTTY_THEME="$GHOSTTY_THEME_LIGHT"
     ;;
@@ -51,6 +53,8 @@ tmux set -g status-right ""
 continuum_tmux=~/.config/tmux/plugins/tmux-continuum/continuum.tmux
 [ -x "$continuum_tmux" ] && "$continuum_tmux"
 tmux setw -g window-status-format "#[fg=$FG_DIM] #I:#{E:@agent_marker}#[bg=default,fg=$FG_DIM,nobold]#{?@agent, ,}#W "
+# Buttons in the status line (the Commands button, @palette_button in tmux.conf).
+tmux set -g @button_style "$BUTTON"
 tmux set -g pane-border-style "fg=$BG_MED"
 tmux set -g window-style "bg=$BG_DIM"
 tmux set -g window-active-style "bg=terminal"

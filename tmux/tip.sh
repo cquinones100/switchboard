@@ -26,6 +26,12 @@ SEEN=~/.local/state/switchboard/tips
 SHOW_SECONDS=8
 FOOTER="any key closes · tips are in Settings"
 
+# M-p, and the Commands button that opens it too while the palette_button
+# setting shows it: Vim-style keys first, the click after.
+palette_key() {
+  if [ "$(tmux show -gqv @setting_palette_button 2>/dev/null)" = off ]; then printf "M-p"; else printf "M-p (or click ⌘ Commands)"; fi
+}
+
 text_of() {
   case $1 in
     waiting) printf '%s\n' "A tab is waiting on you." "" "M-a  jump to it, then to each tab" "     that needs you after it" ;;
@@ -38,8 +44,8 @@ text_of() {
     sidebar) printf '%s\n' "The sidebar." "" "Enter  go to a tab     a  answer it" "Space  peek at it      ?  every key" ;;
     loop) printf '%s\n' "A tab is looping." "" "It runs again on its own. Mission" "control (M-Space) shows when, under Loops." ;;
     updates) printf '%s\n' "Updates." "" "A git pull links what it adds too," "and the update check is in Settings." ;;
-    github_off) printf '%s\n' "GitHub is off in Settings." "" "Its keys do nothing until it is on" "again: M-p, then Settings." ;;
-    linear_off) printf '%s\n' "Linear is off in Settings." "" "Its keys do nothing until it is on" "again: M-p, then Settings." ;;
+    github_off) printf '%s\n' "GitHub is off in Settings." "" "Its keys do nothing until it is on" "again: $(palette_key), then Settings." ;;
+    linear_off) printf '%s\n' "Linear is off in Settings." "" "Its keys do nothing until it is on" "again: $(palette_key), then Settings." ;;
     option-alt) printf '%s\n' "Option isn't acting as Alt here," "so the M- keys type letters instead." "" "~/switchboard/setup.sh terminal  fixes it" "(then restart the terminal)" ;;
     key-*) printf '%s\n' "Next time, press ${TIP_KEY:-its key}" "" "for what you just picked from M-p." ;;
     *) return 1 ;;
