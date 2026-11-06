@@ -16,6 +16,9 @@ vim.opt.splitright = true
 vim.opt.splitbelow = true
 vim.opt.updatetime = 50
 
+-- Web links through tmux/open-url.sh, in their Chrome profile.
+require("open_url")
+
 -- Yank entire line with Shift+Y
 vim.keymap.set("n", "<S-y>", "yy")
 

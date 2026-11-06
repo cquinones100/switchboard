@@ -54,7 +54,7 @@ else
   out=$(cd "$dir" && gh repo view --json url -q .url 2>&1)
 fi
 if [ $? -eq 0 ] && [[ $out == https://* ]]; then
-  open "$out"
+  "${BASH_SOURCE[0]%/*}/open-url.sh" "$out"
   exit 0
 fi
 

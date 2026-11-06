@@ -18,4 +18,4 @@ config="$HOME/.config/switchboard/linear.json"
 workspace="${LINEAR_WORKSPACE:-$(jq -r '.linearWorkspace // empty' "$config" 2>/dev/null)}"
 [ -z "$workspace" ] && exit 0
 
-open "https://linear.app/$workspace/issue/$ticket"
+"${BASH_SOURCE[0]%/*}/open-url.sh" "https://linear.app/$workspace/issue/$ticket"

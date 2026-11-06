@@ -15,6 +15,9 @@ for _, name in ipairs({ "diffview.nvim", "mini.base16", "nvim-web-devicons" }) d
   if vim.uv.fs_stat(lazy .. "/" .. name) then vim.opt.runtimepath:prepend(lazy .. "/" .. name) end
 end
 
+-- Web links through tmux/open-url.sh, in their Chrome profile, as in init.lua.
+require("open_url")
+
 vim.o.termguicolors = true
 vim.o.mouse = "a"
 vim.o.number = false

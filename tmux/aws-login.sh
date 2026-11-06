@@ -11,8 +11,8 @@
 #
 # Which Chrome profile is yours, not this public repository's: the one
 # ~/.config/switchboard/browser.json gives awsapps.com, AWS's access portal,
-# as it gives every site its profile ({"hosts": {"awsapps.com": "Profile 2"}});
-# without one, Chrome picks.
+# as it gives every site its profile ({"hosts": {"awsapps.com": "Profile 2"}}),
+# else its default profile ("default"); without either, Chrome picks.
 
 dim=$'\033[2m' red=$'\033[31m' green=$'\033[32m' reset=$'\033[0m'
 
@@ -22,7 +22,10 @@ done_with() {
   exit 0
 }
 
-chrome_profile=$(jq -r '.hosts["awsapps.com"] // empty' ~/.config/switchboard/browser.json 2>/dev/null)
+chrome_profile=$(jq -r '.hosts["awsapps.com"] // .default // empty' ~/.config/switchboard/browser.json 2>/dev/null)
+browser=~/.config/tmux/chrome-profile.sh
+# The chrome_profiles setting off: the default browser, as every link then.
+[ "$(tmux show -gqv @setting_chrome_profiles 2>/dev/null)" = off ] && browser=open
 command -v aws >/dev/null 2>&1 || done_with "${red}aws isn't on the PATH.${reset} Install it with: brew install awscli"
 
 sessions=$(sed -n 's/^\[sso-session \(.*\)\]$/\1/p' ~/.aws/config 2>/dev/null)
@@ -36,7 +39,7 @@ printf '\n  %sLogging in to %s...%s\n\n' "$dim" "$sessions" "$reset"
 # BROWSER for this command alone (see chrome-profile.sh).
 # The request audit (count-request.sh): the login, as AWS's SSO sees it.
 { . "${BASH_SOURCE[0]%/*}/count-request.sh" && count_request AWS HTTPS 'AWS SSO login' aws; } 2>/dev/null
-if BROWSER=~/.config/tmux/chrome-profile.sh CHROME_PROFILE_DIR=$chrome_profile aws sso login --sso-session "$sessions"; then
+if BROWSER=$browser CHROME_PROFILE_DIR=$chrome_profile aws sso login --sso-session "$sessions"; then
   done_with "${green}Logged in.${reset}"
 else
   done_with "${red}The login failed.${reset}"

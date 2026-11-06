@@ -36,4 +36,4 @@ else
 fi
 [ -n "$url" ] && [ -n "$base" ] || say "GitHub didn't say which branch's queue to open."
 
-open "$url/queue/$base"
+"${BASH_SOURCE[0]%/*}/open-url.sh" "$url/queue/$base"

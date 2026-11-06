@@ -68,7 +68,7 @@ Your own settings go in `~/.config/switchboard/`, which is never in this reposit
 | `lazygit.yml` | lazygit, over its config, in panes tmux starts |
 | `CLAUDE.md` | Claude Code, your own rules, imported with Switchboard's part into `~/.claude/CLAUDE.md` |
 | `claude.json` | where your CLAUDE.md's rules come from, a file or a git repository |
-| `browser.json` | the Chrome profile each site's links open in, `awsapps.com` for the AWS login |
+| `browser.json` | the Chrome profile each site's links open in (`hosts`), `awsapps.com` for the AWS login, and the `default` profile for any other site |
 | `linear.json` | your Linear workspace, the team and labels `/shape` files tickets with |
 | `slack-updates.json` | the channels the Slack view shows in full |
 | `slack-relay.json` | your Slack member ID, the one person the relay listens to |

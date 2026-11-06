@@ -266,6 +266,10 @@ for entry in "$home"/.[!.]* "$home"/{.config,.local/share,.local/bin,.claude/ski
 done
 ln -sfn "$wt" "$home/switchboard"
 link "$real/Library/Keychains" "$home/Library/Keychains"
+# Chrome's list of its profiles, which Settings' Default Chrome profile reads
+# (lib/sidebar/own-config.js's chromeProfiles); the profiles themselves stay out.
+chrome_state="Library/Application Support/Google/Chrome/Local State"
+[[ -e $real/$chrome_state ]] && mkdir -p "$home/${chrome_state%/*}" && link "$real/$chrome_state" "$home/$chrome_state"
 
 for entry in "$real"/.[!.]*; do
   case ${entry##*/} in

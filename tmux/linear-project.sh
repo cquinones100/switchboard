@@ -71,4 +71,4 @@ fi
 url=$(printf '%s' "$response" | jq -r '.data.issue.project.url // empty')
 [ -n "$url" ] || { explain "$ticket isn't in a Linear project."; exit 0; }
 
-open "$url"
+"${BASH_SOURCE[0]%/*}/open-url.sh" "$url"

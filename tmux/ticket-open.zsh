@@ -64,7 +64,7 @@ fi
 
 # A URL opens as it is; anything else needs the workspace.
 if [[ $input =~ $ticket_url ]]; then
-  open "$input"
+  "${0:A:h}/open-url.sh" "$input"
   exit 0
 fi
 
@@ -81,4 +81,4 @@ workspace="${LINEAR_WORKSPACE:-$(jq -r '.linearWorkspace // empty' "$config" 2>/
 [[ -n $workspace ]] || fail "No Linear workspace set: add linearWorkspace to $config."
 
 print -n "  ${dim}Opening ${input:u}...${reset}"
-open "https://linear.app/$workspace/issue/${input:u}"
+"${0:A:h}/open-url.sh" "https://linear.app/$workspace/issue/${input:u}"

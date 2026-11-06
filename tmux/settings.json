@@ -122,6 +122,13 @@
     "default": true
   },
   {
+    "key": "chrome_profiles",
+    "category": "Integrations",
+    "label": "Chrome profiles",
+    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, gh's --web) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser",
+    "default": true
+  },
+  {
     "key": "standup_note",
     "category": "Integrations",
     "label": "Standup note",

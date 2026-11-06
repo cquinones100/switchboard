@@ -40,7 +40,8 @@ CLAUDE.md, under Claude Code, says where your own Claude rules come from, and
 Enter changes it: the local file, another file, or a git repository, typed in;
 it writes `~/.config/switchboard/claude.json` and runs setup's `claude_md`
 step at once. Below it, each setting kept in a file of your own in
-`~/.config/switchboard` (your Linear team, the Chrome profile for each site,
+`~/.config/switchboard` (your Linear team, the Chrome profile for each site
+and the default one, picked from Chrome's own profiles,
 the Slack channels, the relay's owner, the on-call config, the sidebar's
 sizes, your overrides) is listed under the file's name: Enter types a value
 in, starting from what it is (empty unsets it), or opens the whole file in
