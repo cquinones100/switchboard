@@ -390,7 +390,9 @@ test("working a note continuously takes items with a settled plan first, then th
     execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "120", "-y", "30", "cat"], { env });
     // Its tabs run cat, not a shell that would write into HOME as it goes.
     execFileSync("tmux", ["-S", socket, "set", "-g", "default-command", "cat"], { env });
-    const out = execFileSync("zsh", [popup, "next", "Work.md", "2"], { cwd: repo, env: { ...env, TMUX: `${socket},1,0` }, encoding: "utf8" }).trim().split("\n").map((row) => row.split("\t"));
+    // In the session the daemon names by its id, as the mode does.
+    const session = execFileSync("tmux", ["-S", socket, "display", "-p", "-t", "t", "#{session_id}"], { env, encoding: "utf8" }).trim();
+    const out = execFileSync("zsh", [popup, "next", "Work.md", "2"], { cwd: repo, env: { ...env, TMUX: `${socket},1,0`, WTN_SESSION: session }, encoding: "utf8" }).trim().split("\n").map((row) => row.split("\t"));
     assert.deepEqual(out.map(([line, , text]) => [line, text]), [["5", "Planned"], ["11", "Also planned"]], "the first two taken, by line");
     const tabs = execFileSync("tmux", ["-S", socket, "list-windows", "-F", "#{window_id}\t#{@tab_name}\t#{@tab_note}\t#{@autopilot}\t#{window_active}"], { env, encoding: "utf8" }).trim().split("\n").slice(1).map((row) => row.split("\t"));
     assert.deepEqual(tabs.map(([id, name, note]) => [id, name, note]), out.map(([, window, text]) => [window, text, "Work.md"]), "a tab for each, named after it and linked to the note");

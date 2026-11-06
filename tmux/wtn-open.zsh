@@ -141,7 +141,8 @@ queue() {
 # item's line alone. Prints the window's id.
 open_tab() {
   local note=$1 line=$2 name=$3 window
-  window=$(tmux new-window -d ${WTN_SESSION:+-t "$WTN_SESSION:"} -c "${PWD//\#/##}" -e "WTN_NOTE=$note" -n "wtn" -P -F '#{window_id}') || return 1
+  # Two words, -t and the session: zsh doesn't split one expansion into two.
+  window=$(tmux new-window -d ${WTN_SESSION:+-t} ${WTN_SESSION:+"$WTN_SESSION:"} -c "${PWD//\#/##}" -e "WTN_NOTE=$note" -n "wtn" -P -F '#{window_id}') || return 1
   tmux set-option -w -t "$window" @tab_name "${name[1,50]}"
   tmux set-option -w -t "$window" @tab_note "$note"
   tmux send-keys -t "$window" "wtn --item $line" Enter
