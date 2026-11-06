@@ -67,15 +67,13 @@ apply_theme() {
 apply() {
   local load=${1:-} key value prev changed=() args=()
   # What was applied last, to act only on what changed.
-  local before server moved=false
+  local before server link
   before=$(tmux show-options -g 2>/dev/null | grep '^@setting_')
   server=$(value_of tmux_server)
   while IFS=$'\t' read -r key value; do
     prev=$(awk -v k="@setting_$key" '$1 == k { print $2 }' <<<"$before")
     prev=${prev//\"/}
     [ "$prev" != "$value" ] && changed+=("$key")
-    # Moved, not set for the first time.
-    [ "$key" = tmux_server ] && [ -n "$prev" ] && [ "$prev" != "$value" ] && moved=true
     args+=(set -g "@setting_$key" "$value" \;)
     case $key in
       second_status) args+=(set -g status "$([ "$value" = on ] && echo 2 || echo on)" \;) ;;
@@ -95,6 +93,15 @@ apply() {
   (( ${#args[@]} )) || return 1
   tmux "${args[@]}"
   disable_services
+  # The server Switchboard runs on: tmux.conf, and Ghostty's command, set up
+  # for it (setup.sh's tmux_server part), from when Switchboard next starts,
+  # whenever the link isn't what the setting says, so a setting changed by
+  # hand while tmux was closed is set up as tmux starts. Only once setup has
+  # linked it.
+  link=$(readlink ~/.config/tmux/tmux.conf 2>/dev/null)
+  if [ -n "$link" ] && [ "${link##*/}" != "$([ "$server" = default ] && echo tmux.conf || echo own-server.conf)" ] && [ -x "$REPO/setup.sh" ]; then
+    "$REPO/setup.sh" tmux_server </dev/null >/dev/null 2>&1 &
+  fi
   [ -n "$load" ] && return 0
   # The rest only when tmux is already running with the old values.
   local list=" ${changed[*]} "
@@ -112,9 +119,6 @@ apply() {
     done
   fi
   [[ $list == *" sidebar "* ]] && "$script_dir/sidebar.sh" nudge
-  # The server Switchboard runs on: tmux.conf, and Ghostty's command, set up
-  # for it (setup.sh's tmux_server part), from when Switchboard next starts.
-  $moved && [ -x "$REPO/setup.sh" ] && { "$REPO/setup.sh" tmux_server </dev/null >/dev/null 2>&1 & }
   return 0
 }
 

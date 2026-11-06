@@ -740,8 +740,8 @@ part_tmux() {
 }
 
 # Switchboard on a tmux server of its own, with the tmux_server setting on
-# ("switchboard"; settings.sh runs this part when it changes, and the guided
-# setup asks): tmux reads ~/.config/tmux/tmux.conf whenever any tmux server
+# ("switchboard"; settings.sh runs this part whenever the link isn't what it
+# says, and the guided setup asks): tmux reads ~/.config/tmux/tmux.conf whenever any tmux server
 # starts, so it is tmux/own-server.conf there, which loads Switchboard's
 # tmux.conf only on the server named switchboard (tmux -L switchboard), and
 # every other tmux you start stays plain tmux. Ghostty, with Switchboard's
