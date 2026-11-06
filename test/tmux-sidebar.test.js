@@ -935,6 +935,67 @@ test("a turn an API error cut short is found in the transcript until the convers
   assert.equal(sidebar.backgroundWork(file, now - 60_000).apiError, undefined, "said something after it, it is gone");
 });
 
+test("a turn interrupted on a permission request is found in the transcript until the conversation goes on", () => {
+  const file = path.join(home, ".claude/projects/-work/interrupted.jsonl");
+  const now = Date.now();
+  const at = (ms) => new Date(now - ms).toISOString();
+  const entries = [
+    { type: "user", timestamp: at(9_000), message: { content: "push it" } },
+    { type: "assistant", timestamp: at(8_000), message: { content: [{ type: "tool_use", id: "p1", name: "Bash", input: { command: "git push" } }] } },
+    { type: "user", timestamp: at(7_000), message: { content: [{ type: "tool_result", tool_use_id: "p1", is_error: true, content: "The user doesn't want to proceed with this tool use." }] } },
+    { type: "user", timestamp: at(7_000), message: { content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } },
+  ];
+  fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).interruptedAt, Date.parse(at(7_000)));
+  assert.equal(sidebar.backgroundWork(file, now - 1_000).interruptedAt, undefined, "not one from before the session");
+  fs.appendFileSync(file, JSON.stringify({ type: "assistant", isSidechain: true, timestamp: at(6_000), message: { content: [{ type: "text", text: "a subagent" }] } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", isMeta: true, timestamp: at(5_000), message: { content: "Caveat" } }) + "\n");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: at(4_000), message: { content: [{ type: "tool_result", tool_use_id: "p2", content: "[Request interrupted by user for tool use]" }] } }) + "\n");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).interruptedAt, Date.parse(at(7_000)), "a subagent's lines, a note of Claude Code's or a tool's result don't clear it");
+  fs.appendFileSync(file, JSON.stringify({ type: "user", timestamp: at(1_000), message: { content: "push it to a branch instead" } }) + "\n");
+  assert.equal(sidebar.backgroundWork(file, now - 60_000).interruptedAt, undefined, "said something after it, it is gone");
+});
+
+test("a tab left waiting on a permission request you denied is idle again, and its pane is cleared, unless it has moved on since", async (t) => {
+  // A pane running node, as Claude started by claude-here reads (claude-pane.sh).
+  const window = tmux("new-window", "-d", "-t", "test", "-P", "-F", "#{window_id}", "node -e 'setTimeout(() => {}, 300000)'");
+  t.after(() => tmux("kill-window", "-t", window));
+  const pane = tmux("display", "-p", "-t", window, "#{pane_id}");
+  const tty = tmux("display", "-p", "-t", pane, "#{pane_tty}");
+  const pid = execFileSync("ps", ["-t", tty.replace("/dev/", ""), "-o", "pid=,comm="], { encoding: "utf8" }).split("\n").find((l) => /node/.test(l)).trim().split(/\s+/)[0];
+  const sessionFile = path.join(home, ".claude/sessions", `${pid}.json`);
+  fs.writeFileSync(sessionFile, JSON.stringify({ pid: Number(pid), sessionId: "denied", cwd: "/work", tmux: `test:${window}.${pane}`, startedAt: Date.now() - 60_000 }));
+  t.after(() => fs.rmSync(sessionFile, { force: true }));
+  const file = path.join(home, ".claude/projects/-work/denied.jsonl");
+  const hook = (state, payload) => execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "set", state], { env: { ...process.env, TMUX_PANE: pane }, input: JSON.stringify({ session_id: "denied", ...payload }) });
+  const opt = (name) => tmux("display", "-p", "-t", pane, `#{${name}}`);
+  const tab = async () => sidebar.tabsFrom(await sidebar.snapshot()).find((x) => x.id === window);
+  const say = (entry) => fs.appendFileSync(file, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n");
+
+  fs.writeFileSync(file, "");
+  say({ type: "user", message: { content: "push it" } });
+  hook("waiting", { hook_event_name: "PermissionRequest", tool_name: "Bash", tool_input: { command: "git push" } });
+  assert.equal(opt("@agent_wait"), "permission: Bash git push");
+  assert.equal((await tab()).state, "waiting", "with no interruption, it waits");
+
+  say({ type: "user", message: { content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } });
+  const handed = await tab();
+  assert.equal(handed.state, "idle", "interrupted, it is idle");
+  assert.equal(handed.wait, undefined, "waiting on nothing");
+  assert.deepEqual(handed.interrupted, { pane, at: handed.since }, "for the daemon to clear the pane after");
+
+  // A prompt typed since wins: the pane has moved on.
+  tmux("set", "-p", "-t", pane, "@agent_since", String(handed.since + 5));
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "interrupted", pane, String(handed.since)]);
+  assert.equal(opt("@agent_state"), "waiting", "a pane that has moved on is left alone");
+
+  tmux("set", "-p", "-t", pane, "@agent_since", String(handed.since));
+  execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "interrupted", pane, String(handed.since)]);
+  assert.equal(opt("@agent_state"), "", "the pane is cleared");
+  assert.equal(opt("@agent_wait"), "");
+  assert.equal(tmux("display", "-p", "-t", window, "#{@agent}"), "", "and so is the window's");
+});
+
 test("a background command stays running though Claude Code copies its request, untimed, into the transcript after it", () => {
   const file = path.join(home, ".claude/projects/-work/blob.jsonl");
   const now = Date.now();

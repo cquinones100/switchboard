@@ -7,6 +7,7 @@
 #   agent-state.sh set <working|waiting|done|clear>   from Claude Code hooks, for $TMUX_PANE; reads their JSON
 #   agent-state.sh notification               from the Notification hook; reads its JSON
 #   agent-state.sh seen <window_id>           from the pane-focus-in hook
+#   agent-state.sh interrupted <pane> <time>  from the sidebar daemon: a turn interrupted on a wait
 #   agent-state.sh next                       from M-a: go to the tab most in need of you
 #
 # Each pane running Claude carries @agent_state (working, waiting, or done) and
@@ -371,6 +372,20 @@ case "${1:-}" in
     # Every window, not just this one, so a session that ended without saying
     # so loses its mark the next time any tab is focused.
     tmux list-windows -a -F '#{window_id}' | while read -r w; do refresh "$w"; done
+    ;;
+
+  interrupted)
+    # A turn you interrupted (a permission request denied, or Esc) runs no
+    # hook, so the pane is left waiting on the request. The sidebar daemon
+    # reads the interruption from the transcript and runs this with its time,
+    # in seconds: the pane goes idle unless it has moved on since (a prompt
+    # typed meanwhile, a new request).
+    pane=${2:-} at=${3:-}
+    [ -n "$pane" ] && [[ $at =~ ^[0-9]+$ ]] || exit 0
+    IFS=$'\t' read -r state since window < <(tmux display -p -t "$pane" $'#{@agent_state}\t#{@agent_since}\t#{window_id}' 2>/dev/null)
+    [ "${state:-}" = waiting ] && [[ ${since:-} =~ ^[0-9]+$ ]] && [ "$since" -le "$at" ] || exit 0
+    tmux set -pu -t "$pane" @agent_state \; set -pu -t "$pane" @agent_since \; set -pu -t "$pane" @agent_wait 2>/dev/null
+    refresh "$window"
     ;;
 
   next)
