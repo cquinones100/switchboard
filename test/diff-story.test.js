@@ -617,7 +617,7 @@ test("in a working tree's list the headings and ]c follow its sections: a chapte
   assert.deepEqual(result.page.sort(), ["src/model.js", "src/model.js", "test/model.test.js"], "the first page holds its chapter's files in both sections, no other chapter's untracked one");
 });
 
-test("a branch's story is told ahead of time by a hidden Neovim, kept where M-d finds it, once per commit", { skip: !ready && "needs lazy.nvim's diffview", timeout: 120_000 }, () => {
+test("a branch's story is told ahead of time by a hidden Neovim, kept where M-d finds it, once per commit, and cleared from M-p", { skip: !ready && "needs lazy.nvim's diffview", timeout: 120_000 }, () => {
   const root = path.join(tmp, "ahead");
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
@@ -656,6 +656,35 @@ test("a branch's story is told ahead of time by a hidden Neovim, kept where M-d 
   assert.match(fs.readFileSync(path.join(root, "cache/nvim/diff-story", kept[0]), "utf8"), /Change the model/);
   ahead();
   assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 1, "told once for the commit");
+  // M-p's "Clear this tab's diff cache", from a copy whose say.sh keeps what
+  // it says, with a tmux that answers nothing, so neither reaches a tmux server.
+  const tools = path.join(root, "tools");
+  fs.mkdirSync(tools);
+  fs.copyFileSync(path.join(__dirname, "../tmux/diff-cache-clear.sh"), path.join(tools, "diff-cache-clear.sh"));
+  fs.symlinkSync(path.join(__dirname, "../tmux/diff-base.sh"), path.join(tools, "diff-base.sh"));
+  fs.writeFileSync(path.join(bin, "tmux"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const said = path.join(root, "said");
+  fs.writeFileSync(path.join(tools, "say.sh"), `#!/bin/sh\nprintf '%s\\n' "$2" >> '${said}'\n`, { mode: 0o755 });
+  const story = path.join(root, "cache/nvim/diff-story");
+  fs.writeFileSync(path.join(story, "unrelated.txt"), "another diff's story\n");
+  const clear = () => {
+    fs.rmSync(said, { force: true });
+    assert.equal(spawnSync("bash", [path.join(tools, "diff-cache-clear.sh"), path.join(repo, "src")], { env, encoding: "utf8", timeout: 60_000 }).status, 0);
+    return fs.readFileSync(said, "utf8").trim();
+  };
+  // While another Neovim tells it, the story is kept, since that telling would keep it again.
+  const partial = path.join(story, kept[0].replace(/\.txt$/, ".partial"));
+  fs.writeFileSync(partial, "{}");
+  assert.equal(fs.readdirSync(path.join(root, "cache/switchboard/diff-base")).length, 1, "the PR base kept for the worktree");
+  assert.match(clear(), /^This tab's diff cache is cleared: 1 file\. Its story is being told right now, so it was kept/);
+  assert.ok(fs.existsSync(path.join(story, kept[0])), "the story being told kept");
+  assert.equal(fs.readdirSync(path.join(root, "cache/switchboard/diff-base")).length, 0, "the PR base gone");
+  fs.rmSync(partial);
+  assert.equal(clear(), "This tab's diff cache is cleared: 3 files.", "the base asked for again, then cleared with the story");
+  assert.deepEqual(fs.readdirSync(story).sort(), ["index.json", "unrelated.txt"], "the diff's story gone, another's kept");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(story, "index.json"), "utf8")), {}, "and its index entry");
+  assert.equal(fs.readdirSync(path.join(root, "cache/switchboard/diff-base")).length, 0, "and the PR base");
+  assert.equal(fs.readFileSync(asked, "utf8").trim().split("\n").length, 1, "nothing told again");
 });
 
 test("M-d opened while another Neovim tells the same story follows that ask rather than asking again", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, async () => {

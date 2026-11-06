@@ -355,26 +355,34 @@ local function claude_command()
   return vim.fn.executable(installed) == 1 and installed or nil
 end
 
-local asked = {}
-local function ask_order(view)
-  -- Not in the story told ahead of time, which only tells the story.
-  if vim.g.diff_ahead then return end
+-- The files Haiku orders, and the file its order of them is kept in by
+-- their paths and the diff's revisions: the implementation's, the server's
+-- side too, since its order holds within each group; nil with fewer than two.
+local function order_file(view)
   local entries = {}
   for _, entry in view.files:iter() do
-    -- The server's side too: Haiku's order holds within each group.
     local k = kind(entry.path)
     if k == SERVER_SIDE or k == IMPLEMENTATION then table.insert(entries, entry) end
   end
-  if #entries < 2 then return end
+  if #entries < 2 then return nil end
   local paths = vim.tbl_map(function(e) return e.path end, entries)
   table.sort(paths)
   local key = vim.fn.sha256(table.concat({
     view.adapter.ctx.toplevel, view.left.commit or "", view.right.commit or "", table.concat(paths, "\n"),
   }, "\0"))
+  return { key = key, file = vim.fn.stdpath("cache") .. "/diff-order/" .. key .. ".json", entries = entries }
+end
+
+local asked = {}
+local function ask_order(view)
+  -- Not in the story told ahead of time, which only tells the story.
+  if vim.g.diff_ahead then return end
+  local order = order_file(view)
+  if not order then return end
+  local key, file, entries = order.key, order.file, order.entries
   if asked[key] then return end
   asked[key] = true
-  local dir = vim.fn.stdpath("cache") .. "/diff-order"
-  local file = dir .. "/" .. key .. ".json"
+  local dir = vim.fn.fnamemodify(file, ":h")
   local function apply(order)
     if type(order) ~= "table" then return end
     smart = {}
@@ -780,6 +788,59 @@ local function index(view, key, story)
   end
 end
 
+-- A story's key: known by the diff itself and its commits' messages, so a
+-- working tree edited since, or a commit reworded, is a new story; `paths`
+-- sorted, `outputs` and `raw_commits` as read_diff gives them.
+local function story_key(top, paths, outputs, raw_commits)
+  local ds = require("diffstory")
+  return ds.key(top, paths, table.concat(outputs), ds.commits(raw_commits))
+end
+
+-- What the cache keeps of this diff (g:diff_clear, tmux/diff-cache-clear.sh):
+-- Haiku's order of its files, its story's answer and parsed story, and the
+-- index entries naming that story or these revisions, then Neovim quits,
+-- printing how many files went. The next M-d asks Haiku again.
+local function clear(view)
+  if view.clearing then return end
+  view.clearing = true
+  local removed = 0
+  local function remove(file)
+    if os.remove(file) then removed = removed + 1 end
+  end
+  local order = order_file(view)
+  if order then remove(order.file) end
+  local _, paths, untracked = changed(view)
+  table.sort(paths)
+  local dir = vim.fn.stdpath("cache") .. "/diff-story"
+  local function finish(key)
+    -- A story being told now (its progress written in the last 30 seconds,
+    -- as a Neovim following it counts) would be kept again once told, so it
+    -- is left whole and the script says so.
+    local partial = key and vim.uv.fs_stat(dir .. "/" .. key .. ".partial")
+    local telling = partial and os.time() - partial.mtime.sec < 30
+    if telling then key = nil end
+    if key then
+      remove(dir .. "/" .. key .. ".txt")
+      remove(dir .. "/" .. key .. ".json")
+    end
+    local at = index_at(view)
+    local all = not telling and read_json(dir .. "/index.json")
+    if all then
+      local kept = {}
+      for each, named in pairs(all) do
+        if each ~= at and named ~= key then kept[each] = named end
+      end
+      if vim.tbl_count(kept) ~= vim.tbl_count(all) then write_json(dir .. "/index.json", next(kept) and kept or vim.empty_dict()) end
+    end
+    io.stdout:write("cleared " .. removed .. (telling and " telling" or "") .. "\n")
+    vim.schedule(function() vim.cmd("qa!") end)
+  end
+  local runs = read_diff(view, untracked, function(code, outputs, raw_commits)
+    finish(code == 0 and story_key(view.adapter.ctx.toplevel, paths, outputs, raw_commits) or nil)
+  end)
+  if not runs then finish(nil) end
+end
+
 local function ask_story(view)
   local ds = require("diffstory")
   local entries, paths, untracked = changed(view)
@@ -864,9 +925,7 @@ local function ask_story(view)
     local input = ds.input(entries, diffs, hunks, commits)
     view.ask_input = { diff = input, hunks = hunks, runs = #outputs }
     local function parse(text) return ds.parse(text, paths, generated, hunks) end
-    -- Known by the diff itself and its commits' messages, so a working tree
-    -- edited since, or a commit reworded, is a new story.
-    local key = ds.key(top, paths, diff.stdout, commits)
+    local key = story_key(top, paths, outputs, raw_commits)
     -- What the view shows now, which an answer asked for before must match.
     if view.want ~= key then
       forget(view)
@@ -1843,7 +1902,7 @@ return {
         -- The diff under a cover until its story is told (a page has its
         -- own), unless the index knows it: then its files are listed in its
         -- order from the start (view_enter makes it the one sorted by).
-        if vim.g.diff_story and not vim.g.diff_ahead and not view.page and view.panel and view.panel.ordered_file_list then
+        if vim.g.diff_story and not vim.g.diff_ahead and not vim.g.diff_clear and not view.page and view.panel and view.panel.ordered_file_list then
           local known = indexed(view)
           if known then
             view.story, view.want, view.from_index = known.story, known.key, true
@@ -1892,7 +1951,9 @@ return {
           end
           if view.panel and view.panel.ordered_file_list and vim.g.diff_order then
             view.emitter:on("files_updated", function()
-              if view.page then
+              if vim.g.diff_clear then
+                clear(view)
+              elseif view.page then
                 -- Only the chapter's files: diffview lists every untracked
                 -- file whatever paths it was given.
                 local keep = {}
@@ -1947,7 +2008,8 @@ return {
     vim.opt.diffopt:append({ "algorithm:histogram", "indent-heuristic", "linematch:60", "inline:word", "context:3" })
     minimal_highlights()
     vim.api.nvim_create_autocmd("ColorScheme", { callback = minimal_highlights })
-    vim.g.diff_order = order_on()
+    -- Clearing the cache (g:diff_clear) finds what to clear whatever the settings say.
+    vim.g.diff_order = vim.g.diff_clear or order_on()
     vim.g.diff_story = vim.g.diff_order and story_on()
     vim.g.diff_pages = vim.g.diff_story and pages_on()
     if vim.g.diff_progress == nil then vim.g.diff_progress = vim.g.diff_story and progress_on() end
