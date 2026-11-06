@@ -727,7 +727,9 @@ part_config() {
 part_tmux() {
   dir ~/.config/tmux
   part_config
+  # With Ghostty's command, so the two always agree with the setting.
   tmux_conf_link
+  ghostty_server
   tmux_plugins
   mermaid_ascii
   lib_packages

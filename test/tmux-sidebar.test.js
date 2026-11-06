@@ -126,6 +126,19 @@ test("a tab's own Claude wins its pane over a headless one that names it too", (
   }
 });
 
+test("a Claude in another tmux server, whose pane has the same number, isn't taken for the tab's", () => {
+  const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
+  // A plain tmux server beside Switchboard's own numbers its panes from %0 too.
+  fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `mine:@0.${pane}`, entrypoint: "cli" }));
+  try {
+    assert.equal(sidebar.sessionsByPane(new Set(["test"])).get(pane), undefined);
+    fs.writeFileSync(path.join(home, ".claude/sessions/121.json"), JSON.stringify({ pid: 121, sessionId: "own", cwd: "/work", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
+    assert.equal(sidebar.sessionsByPane(new Set(["test"])).get(pane).sessionId, "own");
+  } finally {
+    ["121", "141"].forEach((pid) => fs.rmSync(path.join(home, `.claude/sessions/${pid}.json`), { force: true }));
+  }
+});
+
 test("a tab's conversation is found from the session file that names its pane", () => {
   const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
   fs.writeFileSync(path.join(home, ".claude/sessions/111.json"), JSON.stringify({ pid: 111, sessionId: "s1", cwd: "/work", tmux: `test:@9.${pane}`, name: "Login retry", nameSource: "user", startedAt: 1700000000000 }));

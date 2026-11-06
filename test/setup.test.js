@@ -131,7 +131,11 @@ test("setup.sh tmux_server loads tmux.conf only on Switchboard's own tmux server
     assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n", "a second run changes nothing");
     assert.doesNotMatch(run("--check", "tmux").stdout, /tmux\.conf/, "and the tmux part, which a pull runs, keeps it");
 
+    // Changed back by hand: the tmux part, which a pull runs, sets both right.
     fs.writeFileSync(settings, "{}");
+    const pulled = run("--check", "tmux").stdout;
+    assert.match(pulled, /would: link .*\.config\/tmux\/tmux\.conf/);
+    assert.match(pulled, /would: remove .*tmux-server\.conf/);
     assert.equal(run("tmux_server").status, 0);
     assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/tmux.conf"), "back on tmux's default server");
     assert.equal(fs.existsSync(ghostty), false);
