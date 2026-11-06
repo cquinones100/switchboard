@@ -249,6 +249,13 @@
     "default": true
   },
   {
+    "key": "diff_ask",
+    "category": "Diff",
+    "label": "Ask Claude about the diff",
+    "description": "ga in M-d's diff, and M-p's command while the diff is open, ask Haiku a question about the change: it reads the story, the diff and where the cursor is, and may read the repository's files to answer, its answer streamed into a window beside the diff. Sends the diff and the question to Claude",
+    "default": true
+  },
+  {
     "key": "diff_story_notes",
     "category": "Diff",
     "label": "Diff story notes on changes",

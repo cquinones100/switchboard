@@ -81,6 +81,29 @@ if [ "${1:-}" = --rank ]; then
   exit 0
 fi
 
+# The rows of bindings() worth offering. Commands tagged #github or #linear
+# are left out while that setting is off (tmux/settings.sh), so the palette
+# offers nothing that would ask it. A command for one tool in a pane's place
+# carries that tool's name as a tag (#diffview) and is listed only while the
+# pane M-p was pressed in shows it (@in_place, pane-in-place.sh); "Ask Claude
+# about the diff" (#diffview #ai) also only with the diff_ask setting on.
+#
+# Usage (from the tests too): palette.sh --filter <github> <linear> <in_place> <diff_ask> < rows
+filter() {
+  awk -F'\t' -v github="$1" -v linear="$2" -v in_place="$3" -v ask="$4" '
+    $1 == "M-p" { next }
+    github == "off" && $2 ~ / #github( |$)/ { next }
+    linear == "off" && $2 ~ / #linear( |$)/ { next }
+    in_place != "diffview" && $2 ~ / #diffview( |$)/ { next }
+    ask == "off" && $2 ~ / #diffview( |$)/ && $2 ~ / #ai( |$)/ { next }
+    { print }'
+}
+if [ "${1:-}" = --filter ]; then
+  shift
+  filter "$@"
+  exit 0
+fi
+
 # tmux rewrites control characters in its output, tab included, without a
 # UTF-8 locale.
 export LC_ALL=en_US.UTF-8
@@ -152,15 +175,11 @@ text_width=$(( width - tags_width - key_width - 2 ))
 (( text_width < 30 )) && text_width=30
 rows=$(mktemp)
 trap 'rm -f "$rows"' EXIT
-# Commands tagged #github or #linear are left out while that setting is off
-# (tmux/settings.sh), so the palette offers nothing that would ask it.
-IFS='|' read -r github linear learn habits < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_palette_learn}|#{@setting_habits}')
+IFS='|' read -r github linear learn habits in_place ask sidebar < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_palette_learn}|#{@setting_habits}|#{@in_place}|#{@setting_diff_ask}|#{@sidebar}')
+# From the sidebar, the pane its commands act on (leave-sidebar).
+[ "$sidebar" = 1 ] && in_place=$(tmux display -p -t '{last}' '#{@in_place}' 2>/dev/null)
 [ "$learn" = off ] && learned_from="" || learned_from=$queries_file
-bindings | awk -F'\t' -v github="$github" -v linear="$linear" '
-    $1 == "M-p" { next }
-    github == "off" && $2 ~ / #github( |$)/ { next }
-    linear == "off" && $2 ~ / #linear( |$)/ { next }
-    { print }' | sort -t$'\t' -k2,2 |
+bindings | filter "$github" "$linear" "$in_place" "$ask" | sort -t$'\t' -k2,2 |
   awk -F'\t' -v recent_file="$recent_file" '
     BEGIN { while ((getline key < recent_file) > 0) if (!(key in rank)) rank[key] = ++n }
     { print ($1 in rank ? rank[$1] : n + 1) "\t" NR "\t" $0 }' |

@@ -95,6 +95,11 @@ local BUTTONS = {
   { label = "Close", keys = "q" },
 }
 local HELP = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · q close"
+-- Ask, with the diff_ask setting on (ga, lua/plugins/diffview.lua).
+if vim.g.diff_ask then
+  table.insert(BUTTONS, #BUTTONS, { label = "Ask", keys = "ga" })
+  HELP = HELP:gsub(" · q close$", " · ga ask Claude · q close")
+end
 
 local hover
 -- The bar, the button under the mouse lit, and each button's { from, to }

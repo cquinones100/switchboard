@@ -663,8 +663,8 @@ test("easy mode puts a button for each of the list's keys at the bottom of M-d's
   // Each case starts M-d's Neovim with the settings given as --cmd, and reads
   // its statusline as it starts.
   [
-    { cmds: ["--cmd", "let g:diff_easy = v:true"], buttons: 7, help: true, laststatus: "3" },
-    { cmds: ["--cmd", "let g:diff_easy = v:true", "--cmd", "let g:diff_key_help = v:false"], buttons: 7, help: false, laststatus: "3" },
+    { cmds: ["--cmd", "let g:diff_easy = v:true"], buttons: 8, help: true, laststatus: "3" },
+    { cmds: ["--cmd", "let g:diff_easy = v:true", "--cmd", "let g:diff_key_help = v:false"], buttons: 8, help: false, laststatus: "3" },
     { cmds: [], buttons: 0, help: false, laststatus: "0" },
   ].forEach(({ cmds, buttons, help, laststatus }) => {
     const run = spawnSync("nvim", ["--headless", "-u", path.join(nvimDir, "diff.lua"), ...cmds, "-c", "lua io.write(vim.o.laststatus .. '\\n' .. vim.o.statusline .. '\\n')", "-c", "qa!"], {
@@ -674,7 +674,122 @@ test("easy mode puts a button for each of the list's keys at the bottom of M-d's
     const [last, line] = (run.stdout + run.stderr).trim().split("\n").slice(-2);
     assert.equal(last, laststatus, `${cmds.join(" ")}: the bar is shown only in easy mode`);
     assert.equal(line.match(/@v:lua\.diff_button_click@/g)?.length ?? 0, buttons);
-    if (buttons) ["Chapter ▶", "Page ▶", "Widen", "Copy link", "Close"].forEach((label) => assert.ok(line.includes(` ${label} `), label));
+    if (buttons) ["Chapter ▶", "Page ▶", "Widen", "Copy link", "Ask", "Close"].forEach((label) => assert.ok(line.includes(` ${label} `), label));
     assert.equal(/\]c \[c chapters/.test(line), help, "the keys are named unless the help line is off");
   });
+});
+
+test("a question about the diff gives Haiku the story, the diff and where the cursor is before the question, and reads its stream", () => {
+  const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
+    encoding: "utf8",
+    input: `
+      local da = require("diffask")
+      local hunks = { ["src/a.js"] = { { id = "src/a.js#1", new_start = 3, new_count = 4 }, { id = "src/a.js#2", new_start = 20, new_count = 0 } } }
+      local story = { chapters = { { title = "Change a", why = "It changes a.", files = { "src/a.js" }, touches = { "src/a.js" } } }, hunks = {} }
+      local at = { path = "src/a.js", line = 5, side = "b", hunk = da.hunk_at(hunks, "src/a.js", 5).id }
+      local texts, tools, result = {}, {}, nil
+      local read = da.reader(function(t) table.insert(texts, t) end, function(name, input) table.insert(tools, da.tool_line(name, input, "/repo")) end, function(t) result = t end)
+      read('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"It "}}}')
+      read('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/lib/b.js"}}]}}')
+      read('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"works."}}}')
+      read('not json')
+      read('{"type":"result","result":"It works."}')
+      io.write(vim.json.encode({
+        input = da.input(story, "<diff>\\nD\\n</diff>", at, "  Why this?  "),
+        none = da.input(nil, nil, { path = "src/a.js" }, "Q"),
+        old = da.where({ path = "src/a.js", line = 2, side = "a" }),
+        outside = da.hunk_at(hunks, "src/a.js", 8) == nil,
+        removed = da.hunk_at(hunks, "src/a.js", 20).id,
+        old_side = da.hunk_at({ ["o.js"] = { { id = "o.js#1", old_start = 10, old_count = 2, new_start = 3, new_count = 1 } } }, "o.js", 11, nil, "a").id,
+        unstaged = da.hunk_at({ ["s.js"] = { { id = "s.js#1", run = 1, new_start = 1, new_count = 3 }, { id = "s.js#2", run = 2, new_start = 2, new_count = 1 } } }, "s.js", 2, 2).id,
+        texts = texts, tools = tools, result = result,
+        cited = da.cited("See src/a.js:12 and lib/b.js:3.", 22),
+        cited_none = da.cited("See src/a.js:12.", 0) == nil,
+        entries = da.entries(require("diffstory").split("diff --git a/b.js b/b.js\\n--- a/b.js\\n+++ b/b.js\\n@@ -1,2 +1,2 @@\\n-x\\n+y\\n+z\\ndiff --git a/a.js b/a.js\\n@@ -1 +0,0 @@\\n-q\\ndiff --git a/b.js b/b.js\\n--- a/b.js\\n+++ b/b.js\\n@@ -5 +5 @@\\n-m\\n+n\\n")),
+        cited_svelte = da.cited("At src/routes/+page.svelte:12 and app/@modal/page.tsx:4", 5),
+        cited_slot = da.cited("At src/routes/+page.svelte:12 and app/@modal/page.tsx:4", 40),
+        cited_route = da.cited("(see src/app/[slug]/(auth)/page.tsx:7)", 10),
+      }))
+    `,
+  });
+  const r = JSON.parse(out);
+  assert.equal(r.input, "<story>\n### 1. Change a\n\nIt changes a.\n\n- `src/a.js`\n</story>\n\n<diff>\nD\n</diff>\n\n<cursor>\nsrc/a.js:5 in hunk [src/a.js#1]\n</cursor>\n\n<question>\nWhy this?\n</question>", "the story, the diff, the cursor and its hunk, then the question");
+  assert.match(r.none, /^<story>\nNo story told for this diff\.\n<\/story>\n\n<diff>\n<\/diff>\n\n<cursor>\nsrc\/a\.js\n<\/cursor>/, "with no story or diff, says so");
+  assert.equal(r.old, "src/a.js:2 (the old side, before the change)");
+  assert.equal(r.outside, true, "a line past a hunk is in none");
+  assert.equal(r.removed, "src/a.js#2", "a hunk that only removes lines holds the line it sits at");
+  assert.equal(r.old_side, "o.js#1", "a line of the old side by the hunk's old lines");
+  assert.equal(r.unstaged, "s.js#2", "the unstaged change at a line, not the staged one there too");
+  assert.deepEqual(r.texts, ["It ", "works."]);
+  assert.deepEqual(r.tools, ["_Read lib/b.js_"], "each file it opens, relative to the repository");
+  assert.equal(r.result, "It works.");
+  assert.deepEqual(r.cited, { path: "lib/b.js", line: 3 }, "the path:line under the cursor");
+  assert.equal(r.cited_none, true);
+  assert.deepEqual([r.cited_svelte, r.cited_slot], [{ path: "src/routes/+page.svelte", line: 12 }, { path: "app/@modal/page.tsx", line: 4 }], "+ and @ in a path kept");
+  assert.deepEqual(r.entries, [{ path: "a.js", additions: 0, deletions: 1 }, { path: "b.js", additions: 3, deletions: 2 }], "each file and its counts from the diff itself, its staged and unstaged diffs both, their headers left out");
+  assert.deepEqual(r.cited_route, { path: "src/app/[slug]/(auth)/page.tsx", line: 7 }, "brackets and parentheses in a path kept, an opening one around it left out");
+});
+
+test("ga in M-d's diff asks Haiku in the repository with its read-only tools, and streams the answer into a window beside the diff", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
+  const repo = path.join(tmp, "ask-repo");
+  const bin = path.join(tmp, "ask-bin");
+  const home = path.join(tmp, "ask-home");
+  [path.join(repo, "src"), bin, home].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  const config = path.join(tmp, "ask-config");
+  fs.mkdirSync(config);
+  fs.symlinkSync(nvimDir, path.join(config, "nvim"));
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  fs.writeFileSync(path.join(repo, "src/a.js"), "x\n");
+  execFileSync("git", ["-C", repo, "add", "."]);
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "one"]);
+  fs.writeFileSync(path.join(repo, "src/a.js"), "y\n");
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qam", "two"]);
+  // A stand-in claude: keeps its arguments, directory and input, then streams an answer in two pieces.
+  const kept = path.join(tmp, "ask-kept");
+  const lines = ["It ", "changes x to y."].map((text) => JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text } } }));
+  lines.push(JSON.stringify({ type: "result", result: "It changes x to y." }));
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${kept}.args'\npwd > '${kept}.cwd'\ncat > '${kept}.input'\n${lines.map((line) => `printf '%s\\n' '${line}'\nsleep 0.3\n`).join("")}`, { mode: 0o755 });
+  const run = spawnSync(
+    "nvim",
+    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1", "-c", `lua
+      local view
+      vim.wait(8000, function() view = require("diffview.lib").get_current_view() return view and view.cur_entry ~= nil end, 50)
+      vim.wait(500)
+      view.panel:focus()
+      -- The box's title as it opens, then the question typed into it and
+      -- Enter, in one go, so the box stays in Insert mode throughout.
+      local boxed
+      local bar
+      vim.api.nvim_create_autocmd("WinEnter", { once = true, callback = function() boxed = vim.api.nvim_win_get_config(0).title end })
+      vim.api.nvim_create_autocmd("InsertEnter", { once = true, callback = function() bar = vim.wo.winbar end })
+      vim.api.nvim_feedkeys(vim.keycode("gaWhat does it change?<CR>"), "xt", false)
+      local shown = ""
+      vim.wait(8000, function()
+        for _, w in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_get_config(w).relative ~= "" then
+            local text = table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(w), 0, -1, false), "\\n")
+            if text:find("x to y", 1, true) then shown = text end
+          end
+        end
+        return shown == "It changes x to y."
+      end, 50)
+      local answer_bar = ""
+      for _, w in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_config(w).relative ~= "" then answer_bar = vim.wo[w].winbar end
+      end
+      io.write(vim.json.encode({ boxed = boxed and boxed[1] and boxed[1][1] or "", shown = shown, bar = bar or "", answer_bar = answer_bar }))`, "-c", "qa!"],
+    { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "ask-cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
+  );
+  const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
+  assert.equal(result.boxed, " Ask about this diff ", "ga opens the box");
+  assert.equal(result.shown, "It changes x to y.", "the answer streamed into its window");
+  assert.match(result.bar, /diff_ask_click@%#SwitchboardButton# Ask %X.*diff_ask_click@%#SwitchboardButton# Cancel %X/, "the box's buttons, each a click");
+  assert.match(result.answer_bar, / Close .* Ask again .* Copy /, "and the answer's");
+  const args = fs.readFileSync(`${kept}.args`, "utf8").split("\n");
+  assert.equal(args[args.indexOf("--tools") + 1], "Read,Grep,Glob", "only the tools that read");
+  assert.ok(args.includes("--restricted") && args.includes("--no-session-persistence"));
+  assert.equal(fs.realpathSync(fs.readFileSync(`${kept}.cwd`, "utf8").trim()), fs.realpathSync(repo), "in the repository's top");
+  const input = fs.readFileSync(`${kept}.input`, "utf8");
+  assert.match(input, /<diff>[\s\S]*-x\n\+y[\s\S]*<\/diff>/, "with the diff, read with git since one file tells no story");
+  assert.match(input, /<cursor>\nsrc\/a\.js\n<\/cursor>\n\n<question>\nWhat does it change\?\n<\/question>$/, "the file under the list's cursor, then the question");
 });

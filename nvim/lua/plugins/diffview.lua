@@ -608,8 +608,9 @@ local function missed_text(story)
   return m and ("Haiku's answer named hunks this diff doesn't have (%d of %d ids matched), so the story may be thin"):format(m.matched, m.given)
 end
 
-local function ask_story(view)
-  local ds = require("diffstory")
+-- The view's changed files: { path, additions, deletions } each, their
+-- paths, and those git doesn't know yet.
+local function changed(view)
   local entries, paths, untracked = {}, {}, {}
   for _, entry in view.files:iter() do
     table.insert(paths, entry.path)
@@ -617,6 +618,104 @@ local function ask_story(view)
     local stats = entry.stats or {}
     table.insert(entries, { path = entry.path, additions = stats.additions, deletions = stats.deletions })
   end
+  return entries, paths, untracked
+end
+
+-- The change as diffview shows it, read with git for Haiku: done(code,
+-- outputs, raw_commits) on the main loop, code being git's (0 when read), `outputs` being each run's diff
+-- (diffstory.split's texts), the untracked files added to the last, and
+-- `raw_commits` the commits' messages as diffstory.commits reads them.
+-- Returns how many runs there are, or nil, calling nothing, when the view's
+-- left side isn't one git can diff.
+local function read_diff(view, untracked, done)
+  local ds = require("diffstory")
+  local top = view.adapter.ctx.toplevel
+  local RevType = require("diffview.vcs.rev").RevType
+  local left, right = view.left and view.left.type, view.right and view.right.type
+  if not (left == RevType.COMMIT or left == RevType.STAGE) then return nil end
+  -- The change as diffview shows it, with git's own a/ and b/ whatever the
+  -- config says, which diffstory.split reads, and never the repository's
+  -- text converters: a commit against the branch's head, the index (--cached)
+  -- or the working tree; or, for the working tree against the index (plain
+  -- :DiffviewOpen), both its sections, the staged changes then the unstaged.
+  local git = { "git", "-C", top, "-c", "diff.noprefix=false", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M" }
+  local runs = {}
+  if left == RevType.STAGE then
+    table.insert(runs, vim.list_extend(vim.deepcopy(git), { "--cached" }))
+    table.insert(runs, vim.deepcopy(git))
+  else
+    local args = vim.deepcopy(git)
+    if right == RevType.STAGE then table.insert(args, "--cached") end
+    table.insert(args, view.left.commit)
+    if right == RevType.COMMIT then table.insert(args, view.right.commit) end
+    table.insert(runs, args)
+  end
+  -- The commits' messages, for the why of each chapter: those from the left
+  -- side to the right's commit, or to HEAD for the index or working tree;
+  -- none for the working tree against the index.
+  local log = left == RevType.COMMIT and {
+    "git", "-C", top, "log", "--no-color", "--format=%H%x00%s%x00%b%x1e",
+    view.left.commit .. ".." .. (right == RevType.COMMIT and view.right.commit or "HEAD"),
+  }
+  local outputs, raw_commits = {}, ""
+  local function each(i, finish)
+    if i > #runs then
+      if not log then return finish(0) end
+      return vim.system(log, { text = true }, function(out)
+        raw_commits = out.code == 0 and out.stdout or ""
+        finish(0)
+      end)
+    end
+    vim.system(runs[i], { text = true }, function(out)
+      if out.code ~= 0 then return finish(out.code) end
+      table.insert(outputs, out.stdout)
+      each(i + 1, finish)
+    end)
+  end
+  each(1, function(code)
+    vim.schedule(function()
+      -- Files git doesn't know yet, which its diff leaves out, as additions of
+      -- their first lines, in what Haiku reads and in the key.
+      -- A link as the path it points to, as git records one, never what it
+      -- points to, which may be outside the repository.
+      for _, path in ipairs(code == 0 and untracked or {}) do
+        local full = top .. "/" .. path
+        local stat = vim.uv.fs_lstat(full)
+        local read, lines
+        if stat and stat.type == "link" then
+          read, lines = true, { vim.uv.fs_readlink(full) or "" }
+        elseif stat and stat.type == "file" then
+          read, lines = pcall(vim.fn.readfile, full, "", ds.LINES_PER_FILE)
+        end
+        -- In the last run, the unstaged changes, with a hunk of its own.
+        if read then
+          outputs[#outputs] = outputs[#outputs] .. "diff --git a/" .. path .. " b/" .. path .. "\nnew file\n@@ -0,0 +1," .. #lines .. " @@\n" .. table.concat(vim.tbl_map(function(l) return "+" .. l end, lines), "\n") .. "\n"
+        end
+      end
+      done(code, outputs, raw_commits)
+    end)
+  end)
+  return #runs
+end
+
+-- A process's output split into lines for `read` as it comes: the stdout
+-- handler, and a flush for what is left once the process ends.
+local function line_reader(read)
+  local pending = ""
+  return function(_, data)
+    if not data then return end
+    pending = pending .. data
+    for line in pending:gmatch("([^\n]*)\n") do read(line) end
+    pending = pending:match("[^\n]*$")
+  end, function()
+    read(pending)
+    pending = ""
+  end
+end
+
+local function ask_story(view)
+  local ds = require("diffstory")
+  local entries, paths, untracked = changed(view)
   -- What Haiku is given, for the cover's first line.
   view.reading = { files = #entries, additions = 0, deletions = 0 }
   for _, e in ipairs(entries) do
@@ -678,248 +777,192 @@ local function ask_story(view)
     untold(view, "a merge conflict is unresolved")
     return ask_order(view)
   end
-  -- The change as diffview shows it, with git's own a/ and b/ whatever the
-  -- config says, which diffstory.split reads, and never the repository's
-  -- text converters: a commit against the branch's head, the index (--cached)
-  -- or the working tree; or, for the working tree against the index (plain
-  -- :DiffviewOpen), both its sections, the staged changes then the unstaged.
-  local git = { "git", "-C", top, "-c", "diff.noprefix=false", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M" }
-  local runs = {}
-  if left == RevType.STAGE then
-    table.insert(runs, vim.list_extend(vim.deepcopy(git), { "--cached" }))
-    table.insert(runs, vim.deepcopy(git))
-  else
-    local args = vim.deepcopy(git)
-    if right == RevType.STAGE then table.insert(args, "--cached") end
-    table.insert(args, view.left.commit)
-    if right == RevType.COMMIT then table.insert(args, view.right.commit) end
-    table.insert(runs, args)
-  end
   -- Which run a hunk is from, for its note (draw_notes): a working tree's
   -- staged changes are the first, its unstaged the second.
-  view.story_runs = #runs
-  -- The commits' messages, for the why of each chapter: those from the left
-  -- side to the right's commit, or to HEAD for the index or working tree;
-  -- none for the working tree against the index.
-  local log = left == RevType.COMMIT and {
-    "git", "-C", top, "log", "--no-color", "--format=%H%x00%s%x00%b%x1e",
-    view.left.commit .. ".." .. (right == RevType.COMMIT and view.right.commit or "HEAD"),
-  }
-  local outputs, raw_commits = {}, ""
-  local function each(i, done)
-    if i > #runs then
-      if not log then return done({ code = 0 }) end
-      return vim.system(log, { text = true }, function(out)
-        raw_commits = out.code == 0 and out.stdout or ""
-        done({ code = 0 })
+  view.story_runs = read_diff(view, untracked, function(code, outputs, raw_commits)
+    local diff = { code = code, stdout = table.concat(outputs) }
+    if diff.code ~= 0 then
+      stop_loading(view)
+      untold(view, ("git diff failed (exit %d)"):format(diff.code))
+      forget(view)
+      return ask_order(view)
+    end
+    local diffs, hunks = ds.split(outputs)
+    -- How long it should take, for the cover.
+    view.reading.estimate = ds.estimate(ds.count(hunks))
+    local commits = ds.commits(raw_commits)
+    -- What Haiku reads, kept for a question about the diff (ga), which
+    -- then needs no git of its own.
+    local input = ds.input(entries, diffs, hunks, commits)
+    view.ask_input = { diff = input, hunks = hunks, runs = #outputs }
+    local function parse(text) return ds.parse(text, paths, generated, hunks) end
+    -- Known by the diff itself and its commits' messages, so a working tree
+    -- edited since, or a commit reworded, is a new story.
+    local key = ds.key(top, paths, diff.stdout, commits)
+    -- What the view shows now, which an answer asked for before must match.
+    if view.want ~= key then forget(view) end
+    view.want = key
+    -- A story is kept parsed against the hunks as they were split into
+    -- runs, so staging every change, which leaves the diff the same but
+    -- moves it to the other run, parses the answer again rather than
+    -- drawing no note.
+    local split_as = key .. ":" .. table.concat(vim.tbl_map(function(output) return #output end, outputs), ",")
+    if stories[split_as] then return give(view, stories[split_as]) end
+    -- Haiku couldn't tell this one: not asked again in this Neovim.
+    if failures[key] then
+      stop_loading(view)
+      untold(view, failures[key])
+      return ask_order(view)
+    end
+    local dir = vim.fn.stdpath("cache") .. "/diff-story"
+    local file = dir .. "/" .. key .. ".txt"
+    local ok, cached = pcall(vim.fn.readfile, file)
+    local made = ok and parse(table.concat(cached, "\n"))
+    if made then
+      stories[split_as] = made
+      return give(view, made)
+    end
+    -- Each view waiting parses the answer against its own hunks, since
+    -- staging every change while Haiku answers moves them to another run.
+    view.story_parse, view.story_split = parse, split_as
+    start_loading(view)
+    if waiting[key] then return table.insert(waiting[key], view) end
+    waiting[key] = { view }
+    vim.fn.mkdir(dir, "p")
+    -- Only to the views still showing this diff; a view asking about a
+    -- newer one keeps its spinner until that answer comes.
+    local function finish(text, why)
+      local views = waiting[key] or {}
+      waiting[key] = nil
+      progress[key] = nil
+      if not text then failures[key] = why or "Haiku's answer didn't parse as a story" end
+      for _, each in ipairs(views) do
+        if each.want == key then
+          stop_loading(each)
+          local told = text and each.story_parse(text)
+          if told then stories[each.story_split] = told end
+          if told then give(each, told) else
+            untold(each, failures[key] or "Haiku's answer didn't parse as a story")
+            ask_order(each)
+          end
+        end
+      end
+    end
+    local partial = file:gsub("%.txt$", ".partial")
+    local function ask()
+      progress[key] = { text = "", started = os.time() }
+      own(partial)
+      -- The answer so far in <key>.partial beside the story's file, so
+      -- another Neovim asked for the same story (M-d while it is told
+      -- ahead, or the other way round) follows this ask rather than paying
+      -- for its own: rewritten when the answer grows, at most every 250ms,
+      -- and every two seconds whatever, so a file left by a Neovim gone is
+      -- known by its age.
+      local written, wrote_at = nil, 0
+      local function save()
+        local p = progress[key]
+        if not p or (p.text == written and vim.uv.now() - wrote_at < 2000) then return end
+        local tmp = partial .. "." .. vim.fn.getpid()
+        if pcall(vim.fn.writefile, { vim.json.encode(p) }, tmp) then vim.uv.fs_rename(tmp, partial) end
+        written, wrote_at = p.text, vim.uv.now()
+      end
+      save()
+      local saving = vim.uv.new_timer()
+      saving:start(250, 250, vim.schedule_wrap(save))
+      -- The answer streamed, each piece of text added to the answer so far
+      -- as it comes (shown on the cover with the diff_story_progress
+      -- setting), the whole answer from the final result, else from those
+      -- pieces once the turn has ended: claude -p's last line, the result,
+      -- holds the whole answer again, and a long one loses its end on the
+      -- way through the pipe (a diff of 474 hunks, its last line cut at 63 KB of 69).
+      local args = {
+        claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
+        "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT,
+      }
+      vim.list_extend(args, { "--output-format", "stream-json", "--include-partial-messages", "--verbose" })
+      local opts = { stdin = input, cwd = dir, timeout = STORY_TIMEOUT }
+      local pending, answer, error_text, streamed, ended = "", nil, nil, {}, false
+      local function read(line)
+        local ok, event = pcall(vim.json.decode, line)
+        if not (ok and type(event) == "table") then return end
+        local inner = type(event.event) == "table" and event.event or {}
+        local delta = type(inner.delta) == "table" and inner.delta or {}
+        if event.type == "stream_event" and inner.type == "content_block_delta" and delta.type == "text_delta" and type(delta.text) == "string" then
+          local p = progress[key]
+          if p then p.text = p.text .. delta.text end
+          table.insert(streamed, delta.text)
+        elseif event.type == "stream_event" and inner.type == "message_delta" and delta.stop_reason == "end_turn" then
+          ended = true
+        elseif event.type == "result" then
+          answer = event.is_error ~= true and type(event.result) == "string" and event.result or nil
+          if not answer then error_text = type(event.result) == "string" and event.result or "an error" end
+        end
+      end
+      opts.stdout = function(_, data)
+        if not data then return end
+        pending = pending .. data
+        for line in pending:gmatch("([^\n]*)\n") do read(line) end
+        pending = pending:match("[^\n]*$")
+      end
+      count_request("diff story")
+      vim.system(args, opts, function(result)
+        vim.schedule(function()
+          saving:stop()
+          saving:close()
+          read(pending)
+          local whole = ended and not error_text and table.concat(streamed)
+          local text = result.code == 0 and (answer or (whole ~= "" and whole or nil)) or nil
+          local told, unfit
+          if text then told, unfit = parse(text) end
+          -- Why not, for the box ]p and ]c show and the story told ahead's log.
+          local function first(s) return vim.trim(vim.split(s or "", "\n")[1] or "") end
+          local why
+          if result.code == 124 then
+            why = ("Haiku took longer than %d seconds"):format(STORY_TIMEOUT / 1000)
+          elseif result.code ~= 0 then
+            local said = first(result.stderr)
+            why = ("claude exited with code %d%s"):format(result.code, said ~= "" and (": " .. said) or "")
+          elseif error_text then
+            why = "Claude answered with an error: " .. first(error_text)
+          elseif not told then
+            why = unfit or "Haiku's answer didn't parse as a story"
+          end
+          -- The story kept before its progress goes, so a Neovim following
+          -- finds one or the other.
+          if told then vim.fn.writefile(vim.split(text, "\n"), file) end
+          os.remove(partial)
+          owned[partial] = nil
+          finish(told and text, why)
+        end)
       end)
     end
-    vim.system(runs[i], { text = true }, function(out)
-      if out.code ~= 0 then return done(out) end
-      table.insert(outputs, out.stdout)
-      each(i + 1, done)
-    end)
-  end
-  each(1, function(diff)
-    vim.schedule(function()
-      -- Files git doesn't know yet, which its diff leaves out, as additions of
-      -- their first lines, in what Haiku reads and in the key.
-      -- A link as the path it points to, as git records one, never what it
-      -- points to, which may be outside the repository.
-      for _, path in ipairs(diff.code == 0 and untracked or {}) do
-        local full = top .. "/" .. path
-        local stat = vim.uv.fs_lstat(full)
-        local ok, lines
-        if stat and stat.type == "link" then
-          ok, lines = true, { vim.uv.fs_readlink(full) or "" }
-        elseif stat and stat.type == "file" then
-          ok, lines = pcall(vim.fn.readfile, full, "", ds.LINES_PER_FILE)
-        end
-        -- In the last run, the unstaged changes, with a hunk of its own.
-        if ok then
-          outputs[#outputs] = outputs[#outputs] .. "diff --git a/" .. path .. " b/" .. path .. "\nnew file\n@@ -0,0 +1," .. #lines .. " @@\n" .. table.concat(vim.tbl_map(function(l) return "+" .. l end, lines), "\n") .. "\n"
-        end
+    -- Another Neovim telling this story now (its progress updated in the
+    -- last 10 seconds): its progress shown on this cover, its story taken
+    -- from the cache once kept; asked here only if it stops (its progress
+    -- gone, or not updated for 30 seconds) with no story kept.
+    local stat = vim.uv.fs_stat(partial)
+    if not (stat and os.time() - stat.mtime.sec < 10) then return ask() end
+    local following = vim.uv.new_timer()
+    following:start(0, 250, vim.schedule_wrap(function()
+      -- The story's answer once kept, when it parses.
+      local function kept()
+        local read_ok, lines = pcall(vim.fn.readfile, file)
+        local text = read_ok and table.concat(lines, "\n")
+        return text and parse(text) and text
       end
-      diff.stdout = table.concat(outputs)
-      if diff.code ~= 0 then
-        stop_loading(view)
-        untold(view, ("git diff failed (exit %d)"):format(diff.code))
-        forget(view)
-        return ask_order(view)
+      local made = kept()
+      local now = vim.uv.fs_stat(partial)
+      if not made and not now then made = kept() end
+      if made or not now or os.time() - now.mtime.sec >= 30 then
+        following:stop()
+        following:close()
+        if made then return finish(made) end
+        return ask()
       end
-      local diffs, hunks = ds.split(outputs)
-      -- How long it should take, for the cover.
-      view.reading.estimate = ds.estimate(ds.count(hunks))
-      local commits = ds.commits(raw_commits)
-      local function parse(text) return ds.parse(text, paths, generated, hunks) end
-      -- Known by the diff itself and its commits' messages, so a working tree
-      -- edited since, or a commit reworded, is a new story.
-      local key = ds.key(top, paths, diff.stdout, commits)
-      -- What the view shows now, which an answer asked for before must match.
-      if view.want ~= key then forget(view) end
-      view.want = key
-      -- A story is kept parsed against the hunks as they were split into
-      -- runs, so staging every change, which leaves the diff the same but
-      -- moves it to the other run, parses the answer again rather than
-      -- drawing no note.
-      local split_as = key .. ":" .. table.concat(vim.tbl_map(function(output) return #output end, outputs), ",")
-      if stories[split_as] then return give(view, stories[split_as]) end
-      -- Haiku couldn't tell this one: not asked again in this Neovim.
-      if failures[key] then
-        stop_loading(view)
-        untold(view, failures[key])
-        return ask_order(view)
-      end
-      local dir = vim.fn.stdpath("cache") .. "/diff-story"
-      local file = dir .. "/" .. key .. ".txt"
-      local ok, cached = pcall(vim.fn.readfile, file)
-      local made = ok and parse(table.concat(cached, "\n"))
-      if made then
-        stories[split_as] = made
-        return give(view, made)
-      end
-      -- Each view waiting parses the answer against its own hunks, since
-      -- staging every change while Haiku answers moves them to another run.
-      view.story_parse, view.story_split = parse, split_as
-      start_loading(view)
-      if waiting[key] then return table.insert(waiting[key], view) end
-      waiting[key] = { view }
-      vim.fn.mkdir(dir, "p")
-      -- Only to the views still showing this diff; a view asking about a
-      -- newer one keeps its spinner until that answer comes.
-      local function finish(text, why)
-        local views = waiting[key] or {}
-        waiting[key] = nil
-        progress[key] = nil
-        if not text then failures[key] = why or "Haiku's answer didn't parse as a story" end
-        for _, each in ipairs(views) do
-          if each.want == key then
-            stop_loading(each)
-            local told = text and each.story_parse(text)
-            if told then stories[each.story_split] = told end
-            if told then give(each, told) else
-              untold(each, failures[key] or "Haiku's answer didn't parse as a story")
-              ask_order(each)
-            end
-          end
-        end
-      end
-      local partial = file:gsub("%.txt$", ".partial")
-      local function ask()
-        progress[key] = { text = "", started = os.time() }
-        own(partial)
-        -- The answer so far in <key>.partial beside the story's file, so
-        -- another Neovim asked for the same story (M-d while it is told
-        -- ahead, or the other way round) follows this ask rather than paying
-        -- for its own: rewritten when the answer grows, at most every 250ms,
-        -- and every two seconds whatever, so a file left by a Neovim gone is
-        -- known by its age.
-        local written, wrote_at = nil, 0
-        local function save()
-          local p = progress[key]
-          if not p or (p.text == written and vim.uv.now() - wrote_at < 2000) then return end
-          local tmp = partial .. "." .. vim.fn.getpid()
-          if pcall(vim.fn.writefile, { vim.json.encode(p) }, tmp) then vim.uv.fs_rename(tmp, partial) end
-          written, wrote_at = p.text, vim.uv.now()
-        end
-        save()
-        local saving = vim.uv.new_timer()
-        saving:start(250, 250, vim.schedule_wrap(save))
-        -- The answer streamed, each piece of text added to the answer so far
-        -- as it comes (shown on the cover with the diff_story_progress
-        -- setting), the whole answer from the final result, else from those
-        -- pieces once the turn has ended: claude -p's last line, the result,
-        -- holds the whole answer again, and a long one loses its end on the
-        -- way through the pipe (a diff of 474 hunks, its last line cut at 63 KB of 69).
-        local args = {
-          claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
-          "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT,
-        }
-        vim.list_extend(args, { "--output-format", "stream-json", "--include-partial-messages", "--verbose" })
-        local opts = { stdin = ds.input(entries, diffs, hunks, commits), cwd = dir, timeout = STORY_TIMEOUT }
-        local pending, answer, error_text, streamed, ended = "", nil, nil, {}, false
-        local function read(line)
-          local ok, event = pcall(vim.json.decode, line)
-          if not (ok and type(event) == "table") then return end
-          local inner = type(event.event) == "table" and event.event or {}
-          local delta = type(inner.delta) == "table" and inner.delta or {}
-          if event.type == "stream_event" and inner.type == "content_block_delta" and delta.type == "text_delta" and type(delta.text) == "string" then
-            local p = progress[key]
-            if p then p.text = p.text .. delta.text end
-            table.insert(streamed, delta.text)
-          elseif event.type == "stream_event" and inner.type == "message_delta" and delta.stop_reason == "end_turn" then
-            ended = true
-          elseif event.type == "result" then
-            answer = event.is_error ~= true and type(event.result) == "string" and event.result or nil
-            if not answer then error_text = type(event.result) == "string" and event.result or "an error" end
-          end
-        end
-        opts.stdout = function(_, data)
-          if not data then return end
-          pending = pending .. data
-          for line in pending:gmatch("([^\n]*)\n") do read(line) end
-          pending = pending:match("[^\n]*$")
-        end
-        count_request("diff story")
-        vim.system(args, opts, function(result)
-          vim.schedule(function()
-            saving:stop()
-            saving:close()
-            read(pending)
-            local whole = ended and not error_text and table.concat(streamed)
-            local text = result.code == 0 and (answer or (whole ~= "" and whole or nil)) or nil
-            local told, unfit
-            if text then told, unfit = parse(text) end
-            -- Why not, for the box ]p and ]c show and the story told ahead's log.
-            local function first(s) return vim.trim(vim.split(s or "", "\n")[1] or "") end
-            local why
-            if result.code == 124 then
-              why = ("Haiku took longer than %d seconds"):format(STORY_TIMEOUT / 1000)
-            elseif result.code ~= 0 then
-              local said = first(result.stderr)
-              why = ("claude exited with code %d%s"):format(result.code, said ~= "" and (": " .. said) or "")
-            elseif error_text then
-              why = "Claude answered with an error: " .. first(error_text)
-            elseif not told then
-              why = unfit or "Haiku's answer didn't parse as a story"
-            end
-            -- The story kept before its progress goes, so a Neovim following
-            -- finds one or the other.
-            if told then vim.fn.writefile(vim.split(text, "\n"), file) end
-            os.remove(partial)
-            owned[partial] = nil
-            finish(told and text, why)
-          end)
-        end)
-      end
-      -- Another Neovim telling this story now (its progress updated in the
-      -- last 10 seconds): its progress shown on this cover, its story taken
-      -- from the cache once kept; asked here only if it stops (its progress
-      -- gone, or not updated for 30 seconds) with no story kept.
-      local stat = vim.uv.fs_stat(partial)
-      if not (stat and os.time() - stat.mtime.sec < 10) then return ask() end
-      local following = vim.uv.new_timer()
-      following:start(0, 250, vim.schedule_wrap(function()
-        -- The story's answer once kept, when it parses.
-        local function kept()
-          local read_ok, lines = pcall(vim.fn.readfile, file)
-          local text = read_ok and table.concat(lines, "\n")
-          return text and parse(text) and text
-        end
-        local made = kept()
-        local now = vim.uv.fs_stat(partial)
-        if not made and not now then made = kept() end
-        if made or not now or os.time() - now.mtime.sec >= 30 then
-          following:stop()
-          following:close()
-          if made then return finish(made) end
-          return ask()
-        end
-        local read_ok, lines = pcall(vim.fn.readfile, partial)
-        local ok, p = pcall(vim.json.decode, read_ok and table.concat(lines, "\n") or "")
-        if ok and type(p) == "table" and type(p.text) == "string" and type(p.started) == "number" then progress[key] = p end
-      end))
-    end)
+      local read_ok, lines = pcall(vim.fn.readfile, partial)
+      local ok, p = pcall(vim.json.decode, read_ok and table.concat(lines, "\n") or "")
+      if ok and type(p) == "table" and type(p.text) == "string" and type(p.started) == "number" then progress[key] = p end
+    end))
   end)
 end
 
@@ -1220,6 +1263,300 @@ local function copy_story()
 end
 local share = { "n", "yS", copy_story, { desc = "Copy the story as Markdown" } }
 
+-- ga asks Haiku a question about the diff (lua/diffask.lua): a box to type
+-- it in, then an answer window on the right half, streamed in as it comes.
+-- Haiku reads the story, the diff as the story read it (view.ask_input,
+-- read with git on the first question when no story was told) and where the
+-- cursor is, and may Read, Grep and Glob the repository, its working
+-- directory, and nothing else. Each question stands alone: no session is kept.
+vim.api.nvim_set_hl(0, "SwitchboardAskBorder", { default = true, fg = "#5fd7ff", ctermfg = 81 })
+vim.api.nvim_set_hl(0, "SwitchboardAskTitle", { default = true, fg = "#5fd7ff", ctermfg = 81, bold = true })
+local ASK_LOOK = "NormalFloat:Normal,FloatBorder:SwitchboardAskBorder,FloatTitle:SwitchboardAskTitle,FloatFooter:Comment"
+
+-- A row of buttons along a window's top (its winbar), each a click on what
+-- its key does, drawn as buttons are everywhere (SwitchboardButton). A click
+-- outside the window closes it, through its WinLeave.
+vim.api.nvim_set_hl(0, "SwitchboardButton", { default = true, link = "TabLine" })
+local ask_clicks, ask_click_ids = {}, 0
+_G.diff_ask_click = function(id, _, mouse)
+  if mouse == "l" and ask_clicks[id] then vim.schedule(ask_clicks[id]) end
+end
+vim.api.nvim_set_hl(0, "SwitchboardButtonHover", { default = true, link = "PmenuSel" })
+local function ask_buttons(win, buttons)
+  local ids, spans = {}, {}
+  -- Its buffer goes as the window closes, and its clicks with it.
+  local buf = vim.api.nvim_win_get_buf(win)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = function()
+    for _, id in ipairs(ids) do ask_clicks[id] = nil end
+  end })
+  local col = 2
+  for i, button in ipairs(buttons) do
+    ask_click_ids = ask_click_ids + 1
+    ask_clicks[ask_click_ids] = button[2]
+    ids[i] = ask_click_ids
+    local width = vim.fn.strdisplaywidth(button[1]) + 2
+    spans[i] = { col, col + width - 1 }
+    col = col + width + 1
+  end
+  -- The bar, the button under the mouse lit.
+  local function draw(hovered)
+    if not vim.api.nvim_win_is_valid(win) then return end
+    local parts = {}
+    for i, button in ipairs(buttons) do
+      table.insert(parts, ("%%%d@v:lua.diff_ask_click@%%#%s# %s %%X%%#Normal# "):format(ids[i], i == hovered and "SwitchboardButtonHover" or "SwitchboardButton", button[1]))
+    end
+    vim.wo[win].winbar = " " .. table.concat(parts)
+  end
+  draw()
+  -- With the hover_highlight setting, as easy mode's buttons (diff.lua).
+  if not vim.g.diff_hover then return end
+  vim.o.mousemoveevent = true
+  local hover
+  vim.keymap.set({ "n", "i" }, "<MouseMove>", function()
+    local pos = vim.fn.getmousepos()
+    local now
+    if pos.winid == win and pos.line == 0 then
+      for i, span in ipairs(spans) do
+        if pos.wincol >= span[1] and pos.wincol <= span[2] then now = i end
+      end
+    end
+    if now ~= hover then
+      hover = now
+      draw(hover)
+    end
+  end, { buffer = buf, desc = "Light the button under the mouse" })
+end
+
+-- Where the cursor is, for the question: the file and line of the diff
+-- window it is in ({ path, line, side }), or the file under it in the list.
+-- A deleted file, shown alone as it was (one_sided), is all old side.
+local function cursor_at(view)
+  local win = vim.api.nvim_get_current_win()
+  for _, w in ipairs(view.cur_layout and view.cur_layout.windows or {}) do
+    if w.id == win and view.cur_entry then
+      local old = (w.file and w.file.symbol == "a") or view.cur_entry.status == "D"
+      return { path = view.cur_entry.path, line = vim.api.nvim_win_get_cursor(win)[1], side = old and "a" or "b", kind = view.cur_entry.kind }
+    end
+  end
+  if view.panel and view.panel:is_focused() then
+    local item = view.panel:get_item_at_cursor()
+    if item and item.path then return { path = item.path } end
+  end
+  return view.cur_entry and { path = view.cur_entry.path } or nil
+end
+
+local ask_box
+-- The answer window, on the right half of the diff, titled with the question.
+local function answer(view, question, at)
+  local da = require("diffask")
+  local top = view.adapter.ctx.toplevel
+  -- A page of the story asks with the whole diff, as its story is the whole
+  -- diff's.
+  local source = view.page and view.page.parent or view
+  local buf = vim.api.nvim_create_buf(false, true)
+  local width = math.max(40, math.floor(vim.o.columns / 2) - 2)
+  local height = math.max(5, vim.o.lines - vim.o.cmdheight - 4)
+  local title = question:gsub("%s+", " ")
+  if vim.fn.strdisplaywidth(title) > width - 6 then title = vim.fn.strcharpart(title, 0, width - 7) .. "…" end
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor", row = 1, col = vim.o.columns - width - 2, width = width, height = height, style = "minimal", zindex = 150,
+    border = "rounded", title = " " .. title .. " ", title_pos = "center",
+    footer = " q close · ga ask again · gf open path:line · yy copy ", footer_pos = "center",
+  })
+  vim.wo[win].winhighlight = ASK_LOOK
+  vim.wo[win].wrap = true
+  vim.wo[win].linebreak = true
+  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].modifiable = false
+  local body, done, process, frame = "", false, nil, 0
+  local function draw()
+    if not vim.api.nvim_buf_is_valid(buf) then return end
+    local text = body
+    if not done then
+      frame = frame % #SPINNER + 1
+      text = text .. (text == "" and "" or "\n\n") .. SPINNER[frame] .. (body == "" and " reading the diff" or "")
+    end
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n"))
+    vim.bo[buf].modifiable = false
+  end
+  local timer = vim.uv.new_timer()
+  timer:start(0, 100, vim.schedule_wrap(draw))
+  local function stop()
+    if timer:is_active() then timer:stop() end
+    if not timer:is_closing() then timer:close() end
+  end
+  local function close()
+    stop()
+    if process and not done then pcall(process.kill, process, 15) end
+    done = true
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = function()
+    stop()
+    if process and not done then pcall(process.kill, process, 15) end
+    done = true
+  end })
+  local function map(key, fn, desc) vim.keymap.set("n", key, fn, { buffer = buf, nowait = true, desc = desc }) end
+  map("q", close, "Close the answer")
+  map("<Esc>", close, "Close the answer")
+  local function again()
+    close()
+    ask_box(view)
+  end
+  local function copy_answer()
+    vim.fn.setreg("+", vim.trim(body) .. "\n")
+    say("Copied the answer")
+  end
+  map("ga", again, "Ask another question")
+  map("yy", copy_answer, "Copy the answer")
+  -- M-p's "Copy the diff's story" presses yS wherever the cursor is.
+  map("yS", copy_story, "Copy the story as Markdown")
+  ask_buttons(win, { { "Close", close }, { "Ask again", again }, { "Copy", copy_answer } })
+  vim.api.nvim_create_autocmd("WinLeave", { buffer = buf, once = true, callback = function() vim.schedule(close) end })
+  -- A path:line in the answer: in the diff when the change has that file,
+  -- the cursor on that line, else in a window of its own.
+  map("gf", function()
+    local cursor = vim.api.nvim_win_get_cursor(0)
+    local cited = da.cited(vim.api.nvim_get_current_line(), cursor[2])
+    if not cited then return say("No path:line under the cursor") end
+    local path = cited.path:gsub("^%./", "")
+    if path:sub(1, #top + 1) == top .. "/" then path = path:sub(#top + 2) end
+    close()
+    for _, entry in ipairs(view.panel:ordered_file_list()) do
+      if entry.path == path then
+        view.goto_line = { path = path, line = cited.line }
+        if view.cur_entry == entry then
+          local main = view.cur_layout:get_main_win()
+          if main and vim.api.nvim_win_is_valid(main.id) then
+            vim.api.nvim_set_current_win(main.id)
+            pcall(vim.api.nvim_win_set_cursor, main.id, { cited.line, 0 })
+          end
+          view.goto_line = nil
+          return
+        end
+        return view:set_file(entry, true)
+      end
+    end
+    local full = top .. "/" .. path
+    if not vim.uv.fs_stat(full) then return say(path .. " isn't in the repository") end
+    vim.cmd("belowright split " .. vim.fn.fnameescape(full))
+    pcall(vim.api.nvim_win_set_cursor, 0, { cited.line, 0 })
+  end, "Open the path:line under the cursor")
+
+  local function go()
+    if done then return end
+    local claude = claude_command()
+    if not claude then
+      done = true
+      stop()
+      body = "Claude Code isn't installed: `claude` is neither on the PATH nor in ~/.local/bin."
+      return draw()
+    end
+    local input = source.ask_input or {}
+    if at and at.line then
+      local hunk = da.hunk_at(input.hunks, at.path, at.line, input.runs == 2 and (at.kind == "staged" and 1 or 2) or nil, at.side)
+      at.hunk = hunk and hunk.id
+    end
+    local story = view.page and view.page.story or view.story
+    local args = {
+      claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", da.TOOLS, "--allowedTools", da.TOOLS,
+      "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", da.PROMPT,
+      "--output-format", "stream-json", "--include-partial-messages", "--verbose",
+    }
+    local result_text
+    local on_stdout, flush = line_reader(da.reader(function(text)
+      body = body .. text
+    end, function(name, tool_input)
+      body = body .. (body == "" and "" or "\n\n") .. da.tool_line(name, tool_input, top) .. "\n\n"
+    end, function(text) result_text = text end))
+    count_request("diff ask")
+    process = vim.system(args, { stdin = da.input(story, input.diff, at, question), cwd = top, timeout = 120000, stdout = on_stdout }, function(result)
+      vim.schedule(function()
+        flush()
+        if done then return end
+        done = true
+        stop()
+        if vim.trim(body) == "" and result_text then body = result_text end
+        if result.code ~= 0 or not result_text then
+          local why = vim.trim(((result.stderr or ""):match("[^\n]+")) or "")
+          body = body .. (body == "" and "" or "\n\n") .. "**Haiku couldn't answer**" .. (why ~= "" and (": " .. why) or (result.signal == 15 and ": it took over two minutes" or ""))
+        end
+        draw()
+      end)
+    end)
+  end
+  if source.ask_input then return go() end
+  -- No story read the diff yet (no Claude, a merge conflict, a single file,
+  -- the story turned off): read it now, as the story would.
+  -- Its files from git's diff, since a page's whole diff, in a hidden tab,
+  -- is not brought up to date by diffview.
+  local _, _, untracked = changed(source)
+  local runs = read_diff(source, untracked, function(code, outputs, raw_commits)
+    if code == 0 then
+      local ds = require("diffstory")
+      local diffs, hunks = ds.split(outputs)
+      source.ask_input = { diff = ds.input(da.entries(diffs), diffs, hunks, ds.commits(raw_commits)), hunks = hunks, runs = #outputs }
+    end
+    go()
+  end)
+  if not runs then go() end
+end
+
+-- The box a question is typed in, in the middle of the diff.
+ask_box = function(view)
+  view = view or require("diffview.lib").get_current_view()
+  if not view or not view.adapter then return end
+  -- A commit's history (c) has no one diff to ask about.
+  if not view.files then return say("Ask works in the diff, not in the history") end
+  local at = cursor_at(view)
+  local buf = vim.api.nvim_create_buf(false, true)
+  -- Nothing typed goes anywhere before Enter, as in the notes app.
+  vim.b[buf].copilot_enabled = false
+  vim.b[buf].completion = false
+  local width = math.min(80, vim.o.columns - 8)
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = "editor", row = math.floor((vim.o.lines - 6) / 2), col = math.floor((vim.o.columns - width) / 2), width = width, height = 4,
+    style = "minimal", zindex = 160, border = "rounded", title = " Ask about this diff ", title_pos = "center",
+    footer = " Enter ask · Shift-Enter new line · Esc cancel ", footer_pos = "center",
+  })
+  vim.wo[win].winhighlight = ASK_LOOK
+  vim.wo[win].wrap = true
+  local function cancel()
+    vim.cmd("stopinsert")
+    if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
+  end
+  local function send()
+    local question = vim.trim(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+    cancel()
+    if question ~= "" then answer(view, question, at) end
+  end
+  for _, mode in ipairs({ "i", "n" }) do
+    vim.keymap.set(mode, "<CR>", send, { buffer = buf, desc = "Ask" })
+    vim.keymap.set(mode, "<Esc>", cancel, { buffer = buf, desc = "Cancel" })
+  end
+  vim.keymap.set("n", "q", cancel, { buffer = buf, desc = "Cancel" })
+  ask_buttons(win, { { "Ask", send }, { "Cancel", cancel } })
+  vim.keymap.set("i", "<S-CR>", "<CR>", { buffer = buf, remap = false, desc = "New line" })
+  vim.keymap.set("i", "<C-j>", "<CR>", { buffer = buf, remap = false, desc = "New line" })
+  vim.api.nvim_create_autocmd("WinLeave", { buffer = buf, once = true, callback = function() vim.schedule(cancel) end })
+  vim.cmd("startinsert")
+end
+local ask = { "n", "ga", function() ask_box() end, { desc = "Ask Claude about the diff" } }
+
+-- Whether the hover_highlight setting is on, as diff_order's is read below.
+local function hover_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_hover_highlight" })) ~= "off"
+end
+
+-- Whether the diff_ask setting is on, as diff_order's is read below.
+local function ask_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_ask" })) ~= "off"
+end
+
 -- Whether the diff_story_notes setting is on, as diff_order's is read below.
 local function notes_on()
   if not vim.env.TMUX then return true end
@@ -1435,9 +1772,31 @@ return {
         if view.emitter then
           view.emitter:on("file_open_post", function()
             to_first_change(view)
+            -- A path:line opened from an answer (ga): that line, not the first
+            -- change, once diffview has put a file opened for the first time
+            -- at its top (file_open_new, after this event).
+            local goto_line = view.goto_line
+            view.goto_line = nil
+            if goto_line and view.cur_entry and view.cur_entry.path == goto_line.path then
+              vim.schedule(function()
+                local main = view.cur_layout and view.cur_layout:get_main_win()
+                if main and vim.api.nvim_win_is_valid(main.id) then
+                  pcall(vim.api.nvim_win_set_cursor, main.id, { goto_line.line, 0 })
+                  vim.api.nvim_win_call(main.id, function() vim.cmd("normal! zz") end)
+                end
+              end)
+            end
             draw_notes(view)
             if view.keep_panel and view.panel:is_open() then view.panel:focus() end
             view.keep_panel = false
+          end)
+          -- What a question read of the diff (ga) is forgotten once its
+          -- files change, and read again by the story or the next question;
+          -- a page's whole diff's too, which a page asks with and which
+          -- diffview doesn't update while its tab is hidden.
+          view.emitter:on("files_updated", function()
+            view.ask_input = nil
+            if view.page then view.page.parent.ask_input = nil end
           end)
           -- The list opens wide enough for its longest path (diff_list_wide),
           -- once its files are known, on the whole diff only: a page keeps
@@ -1512,6 +1871,12 @@ return {
     if vim.g.diff_progress == nil then vim.g.diff_progress = vim.g.diff_story and progress_on() end
     if vim.g.diff_list_wide == nil then vim.g.diff_list_wide = wide_on() end
     if vim.g.diff_notes == nil then vim.g.diff_notes = vim.g.diff_story and notes_on() end
+    if vim.g.diff_ask == nil then vim.g.diff_ask = ask_on() end
+    if vim.g.diff_hover == nil then vim.g.diff_hover = vim.g.diff_ask and hover_on() end
+    if vim.g.diff_ask then
+      table.insert(opts.keymaps.view, ask)
+      table.insert(opts.keymaps.file_panel, ask)
+    end
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"
       sort_lists()

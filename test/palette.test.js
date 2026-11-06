@@ -27,3 +27,14 @@ test("palette.sh --rank puts first the command picked after the same words, then
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("palette.sh --filter lists a #diffview command only while the pane shows M-d's diff, and Ask only with diff_ask on", () => {
+  const rows = "M-p\tShow this list #palette\n@palette D\tCopy the diff's story #story #diffview\n@palette k\tAsk Claude about the diff #ai #diffview\nM-r\tOpen the PR #github\n";
+  const keys = (...args) => spawnSync("bash", [script, "--filter", ...args], { input: rows, encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean).map((row) => row.split("\t")[0]);
+
+  assert.deepEqual(keys("on", "on", "diffview", "on"), ["@palette D", "@palette k", "M-r"], "with the diff open, both of its commands");
+  assert.deepEqual(keys("on", "on", "", "on"), ["M-r"], "in any other pane, neither");
+  assert.deepEqual(keys("on", "on", "lazygit", "on"), ["M-r"], "nor with another tool in its place");
+  assert.deepEqual(keys("on", "on", "diffview", "off"), ["@palette D", "M-r"], "Ask left out with diff_ask off");
+  assert.deepEqual(keys("off", "on", "diffview", "on"), ["@palette D", "@palette k"], "#github still follows its setting");
+});
