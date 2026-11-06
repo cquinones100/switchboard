@@ -214,6 +214,9 @@ pub struct Server {
     /// When a key was last pressed in any client, for telling whether you're
     /// here where the desktop can't say.
     pub last_input: Instant,
+    /// The settings file's modification time when last read, so a change
+    /// made in the Settings view or by hand takes effect on the next tick.
+    settings_seen: Option<std::time::SystemTime>,
     /// Saving the layout and restoring it (`persist`).
     pub(super) persist: super::persist::Persist,
 }
@@ -442,6 +445,7 @@ impl Server {
             next_pane: 1,
             quit: false,
             last_input: Instant::now(),
+            settings_seen: None,
             persist: Default::default(),
         }
     }
@@ -487,6 +491,7 @@ impl Server {
             Event::AgentSeen(tab) => self.agent_seen(tab),
             Event::TabLookup(answer) => self.tab_lookup(answer),
             Event::Tick => {
+                self.reload_settings_if_changed();
                 self.refresh_names();
                 super::persist::tick(self);
             }
@@ -515,6 +520,26 @@ impl Server {
                     slot.pane.set_exited(code);
                 }
                 self.remove_pane(id);
+            }
+        }
+    }
+
+    /// Reads the settings again when their file has changed (or gone), so
+    /// `settings::is_on` follows the file, as the sidebar daemon's watch did,
+    /// and draws every client again with them.
+    fn reload_settings_if_changed(&mut self) {
+        let seen = std::fs::metadata(crate::settings::settings_file())
+            .and_then(|m| m.modified())
+            .ok();
+        if seen == self.settings_seen {
+            return;
+        }
+        let first = self.settings_seen.is_none() && seen.is_some();
+        self.settings_seen = seen;
+        crate::settings::reload_settings();
+        if !first {
+            for c in self.clients.values_mut() {
+                c.dirty = true;
             }
         }
     }
