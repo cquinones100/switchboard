@@ -3738,3 +3738,49 @@ test("mission control's bar scrolls to keep the view's name or the filter Tab ha
   assert.match(plain(filter[0]), / \/ filter /, "the filter too");
   assert.ok(filter.hits.find((h) => h.filter).x1 <= 100);
 });
+
+test("the sidebar's list holds at the line it was scrolled to while the cursor stays in sight, and scrolls only as far as it must to keep it there", () => {
+  const tabs = Array.from({ length: 8 }, (_, i) => ({ id: `@${i + 1}`, index: i + 1, name: `tab ${i + 1}`, state: "idle", session: "$1", sessionName: "s", panes: [], sidebars: [] }));
+  const free = sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@3", frame: 0, here: "@1" } }).scroll;
+  assert.equal(free.top, 0, "nothing kept: as little scrolling as it takes");
+  assert.equal(sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@3", frame: 0, here: "@1", top: 9 } }).scroll.top, free.cursorAt, "kept past the cursor: back up to it");
+  assert.equal(sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@5", frame: 0, here: "@1", top: 4 } }).scroll.top, 4, "the cursor in sight: the list holds");
+  const last = sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@8", frame: 0, here: "@1", top: 0 } }).scroll;
+  assert.ok(last.top > 0 && last.top <= last.cursorAt, "kept above the cursor's sight: down to it");
+  assert.equal(sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@8", frame: 0, here: "@1", top: 99 } }).scroll.top, last.length - last.room, "never past the end");
+});
+
+test("C-d and C-u in the sidebar scroll its list half a screen and move the cursor onto the tab there, stopping at the last tab", async (t) => {
+  const windows = Array.from({ length: 3 }, () => tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}"));
+  const side = tmux("split-window", "-hb", "-d", "-t", windows[0], "-P", "-F", "#{pane_id}");
+  tmux("set", "-p", "-t", side, "@sidebar", "1");
+  t.after(() => windows.forEach((w) => tmux("kill-window", "-t", w)));
+  await sidebar.refresh();
+  const session = tmux("display", "-p", "-t", windows[0], "#{session_id}");
+  // Each tab two lines with a rule between, under the two heading lines and
+  // a group's, six lines shown at a time.
+  const owners = [];
+  windows.forEach((w, i) => (owners[3 + i * 3] = owners[4 + i * 3] = w));
+  const client = { kind: "sidebar", pane: side, socket: { write() {}, end() {} }, scroll: { top: 0, room: 6, length: 12, owners, cursorAt: 3 } };
+  sidebar.state.cursors.set(session, windows[0]);
+  await sidebar.sidebarKey(client, { key: "C-d" });
+  assert.equal(sidebar.state.cursors.get(session), windows[1], "three lines on, the next tab");
+  assert.equal(sidebar.state.sidebarTops.get(session), 3, "the list three lines on too");
+  client.scroll = { top: 3, room: 6, length: 12, owners, cursorAt: 9 };
+  sidebar.state.cursors.set(session, windows[2]);
+  await sidebar.sidebarKey(client, { key: "C-d" });
+  assert.equal(sidebar.state.cursors.get(session), windows[2], "past the last tab, it stays on it");
+  assert.equal(sidebar.state.sidebarTops.get(session), 6, "the list no further than its end");
+  client.scroll = { top: 6, room: 6, length: 12, owners, cursorAt: 9 };
+  await sidebar.sidebarKey(client, { key: "C-u" });
+  assert.equal(sidebar.state.cursors.get(session), windows[1], "three lines back, the tab before");
+  assert.equal(sidebar.state.sidebarTops.get(session), 3);
+  // A tab taller than half the list: C-d still goes on to the next one.
+  const tall = [];
+  tall[3] = tall[4] = tall[5] = tall[6] = tall[7] = windows[0];
+  tall[9] = windows[1];
+  client.scroll = { top: 0, room: 6, length: 12, owners: tall, cursorAt: 3 };
+  sidebar.state.cursors.set(session, windows[0]);
+  await sidebar.sidebarKey(client, { key: "C-d" });
+  assert.equal(sidebar.state.cursors.get(session), windows[1], "past the tall tab");
+});

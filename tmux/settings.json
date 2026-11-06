@@ -45,6 +45,13 @@
     "default": true
   },
   {
+    "key": "sidebar_half_page",
+    "category": "Sidebar",
+    "label": "Half-page scrolling",
+    "description": "C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do",
+    "default": true
+  },
+  {
     "key": "reminders",
     "category": "Sidebar",
     "label": "Reminders",

@@ -804,6 +804,7 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | `M-Space` | open mission control | close it |
 | `M-w` | close the pane | close it, whatever is open over it |
 | `j` `k` (arrows) | choose a tab, bringing it to the front (the list holds still until you leave the sidebar) | move down or up a row |
+| `C-d` `C-u` | scroll the list half a screen down or up, the cursor moving as many lines onto the tab there and stopping at the first and last tab, as in Vim (the `sidebar_half_page` setting, Sidebar; off, they run in the chosen tab) | |
 | `h` `l` | back out / go to the tab | move left or right |
 | `Enter` | go into the chosen tab's pane | what can be done with the chosen card or row, in a menu: on a tab, go there (first, so Enter twice goes), answer it, peek at it, its diff or lazygit, the `M-p` palette there, and on a merged tab close every Merged tab; elsewhere the view's own actions |
 | `1`–`9` | put the cursor on that tab, in its sidebar (Enter goes in) | choose that tab |
