@@ -651,6 +651,58 @@ pub fn init_shell(args: &[String]) -> Option<bool> {
     ))
 }
 
+/// The shell a tab that starts work runs: yours (`$SHELL`) when it is zsh
+/// or bash, which the functions `init` writes are for; else zsh or bash,
+/// whichever is there.
+pub fn work_shell() -> String {
+    let yours = std::env::var("SHELL").unwrap_or_default();
+    let name = Path::new(&yours)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if matches!(name.as_str(), "zsh" | "bash") {
+        return yours;
+    }
+    ["zsh", "bash"]
+        .iter()
+        .find_map(|s| util::which(s))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bash".into())
+}
+
+/// A new tab's command that runs `script` with `args` (its `"$@"`) in an
+/// interactive shell, which reads your rc for the PATH Claude is on, and
+/// stays a shell when it ends, in whatever directory it left the shell in:
+/// a worktree's, after `wt`. The arguments are words of their own, never
+/// read as shell, so a ticket or an idea can hold anything. tmux's version
+/// typed `wt <ticket>` into the new tab's shell, which raced the shell's
+/// start and lost its Enter when the prompt wasn't ready (shape-batch's
+/// comment); a command has nothing to race.
+pub fn tab_command(script: &str, name: &str, args: &[String]) -> Vec<String> {
+    let shell = work_shell();
+    let line = format!("{script}; exec {} -i", shell_quote(&shell));
+    let mut command = vec![shell, "-i".into(), "-c".into(), line, name.to_string()];
+    command.extend(args.iter().cloned());
+    command
+}
+
+/// A new tab's command that defines a worktree command's shell function
+/// from its `init` (`wt` from `worktree-from-ticket`), so it is there
+/// whether or not your rc defines it, and runs it with `args`.
+pub fn tab_running(program: &str, function: &str, args: &[String]) -> Vec<String> {
+    let shell = work_shell();
+    let kind = if shell.ends_with("bash") {
+        "bash"
+    } else {
+        "zsh"
+    };
+    let script = format!(
+        "eval \"$({} init {kind})\"; {function} \"$@\"",
+        self_command(program)
+    );
+    tab_command(&script, function, args)
+}
+
 /// Says what went wrong as every worktree command does, `Error: ...`, and
 /// gives the exit code 1.
 pub fn fail(message: &str) -> ExitCode {
