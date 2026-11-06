@@ -1,0 +1,6 @@
+# The Rust that builds Switchboard (setup.sh's `rust` part installs it with
+# rustup, into your home, and builds with it). Bumped with each stable release.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

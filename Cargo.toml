@@ -1,0 +1,50 @@
+[package]
+name = "switchboard"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "A terminal workspace for working with coding agents: the sidebar daemon, mission control, the Slack relay and the worktree scripts, as one binary"
+publish = false
+default-run = "switchboard"
+
+# One binary for every program: bin/<name> links to it, and it runs the
+# program its name (or its first argument, as `switchboard <name>`) says.
+[[bin]]
+name = "switchboard"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Pure-Rust crates only, so building needs nothing beyond what rustup gives
+# and a C compiler (which linking needs anyway): TLS is rustls, D-Bus is zbus,
+# and no crate links a system library the person would have to install.
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+# Objects keep their keys in insertion order, as JavaScript's do, so files
+# written here read as they did when Node wrote them.
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+jiff = "0.2"
+tokio = { version = "1", features = ["rt", "macros", "process", "net", "time", "io-util", "fs", "sync", "signal"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's services on Linux, where macOS has a command for each: the
+# Secret Service (the Keychain's part), notifications, logind's idle, lock and
+# sleep inhibitor.
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
+
+[dev-dependencies]
+
+[profile.release]
+# Small and quick to start, since tmux runs some of these on every focus.
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"
