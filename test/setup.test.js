@@ -606,3 +606,23 @@ test("the post-commit hook runs setup.sh tmux bin in ~/switchboard after a commi
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("setup.sh's zsh checks leave the terminal to setup.sh, so the question after them can be read", () => {
+  // In a terminal, zsh -i with job control makes itself the foreground, and
+  // one that ends by running its command in its own place (`node --version`)
+  // never gives it back: the read of the next question stopped setup.sh.
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-tty-")));
+  const env = { ...process.env, HOME: home, ZDOTDIR: home };
+  try {
+    fs.writeFileSync(path.join(home, ".zshrc"), "");
+    const inZsh = fs.readFileSync(script, "utf8").match(/^in_zsh\(\) \{.*\}$/m)[0];
+    const probe = `${inZsh}\nin_zsh /usr/bin/true\nps -o tpgid= -o pgid= -p $$`;
+    // script(1) gives the probe a terminal of its own, as setup.sh has one.
+    const result = spawnSync("script", ["-q", "/dev/null", "bash", "-c", probe], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const groups = result.stdout.match(/(\d+)\s+(\d+)\s*$/);
+    assert.ok(groups, result.stdout + result.stderr);
+    assert.equal(groups[1], groups[2], "the terminal's foreground is still setup.sh's process group");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
