@@ -44,5 +44,40 @@ test("menu_any_key closes on one key or a whole click, reading what else it sent
     encoding: "utf8",
     env: { ...process.env, TMUX: "" },
   });
-  assert.equal(out.replace(/\x1b\[\?100[06][hl]/g, ""), "closed||ended", "the click's bytes are all read, none left for what follows");
+  assert.equal(out.replace(/\x1b\[\?100[036][hl]/g, ""), "closed||ended", "the click's bytes are all read, none left for what follows");
+});
+
+test("menu_read says where the mouse moved, and lights the close button while it is over it, until a key", () => {
+  const out = execFileSync("bash", ["-c", `. ${JSON.stringify(path.join(__dirname, "../tmux/menu.sh"))}; MENU_CLOSE=77; while menu_read; do printf '%s|' "$MENU_KEY"; done`], {
+    input: "\x1b[<35;10;4M\x1b[<35;78;1Mj",
+    encoding: "utf8",
+    env: { ...process.env, TMUX: "" },
+  });
+  const draws = out.match(/\x1b7.*?\x1b8/g);
+  assert.equal(out.replace(/\x1b7.*?\x1b8/g, ""), "move 4 10|move 1 78|j|");
+  assert.deepEqual(draws.map((d) => d.includes("\x1b[7m")), [false, false, true, false], "lit only while the mouse is over it");
+});
+
+test("menu_read_menu reads past the mouse's moves but onto another option, which it says as hover", () => {
+  const out = execFileSync("bash", ["-c", `. ${JSON.stringify(path.join(__dirname, "../tmux/menu.sh"))}; while menu_read_menu 5 3 0; do printf '%s|' "$MENU_KEY"; done`], {
+    input: "\x1b[<35;4;5M\x1b[<35;4;9M\x1b[<35;4;6Mk",
+    encoding: "utf8",
+    env: { ...process.env, TMUX: "" },
+  });
+  assert.equal(out, "hover 1|k|", "the chosen option and past the last are read past");
+});
+
+test("menu_any_key isn't closed by the mouse moving", () => {
+  const out = execFileSync("bash", ["-c", `. ${JSON.stringify(path.join(__dirname, "../tmux/menu.sh"))}; menu_any_key && printf 'closed|'; IFS= read -rsn 1 next; printf '%s|' "$next"`], {
+    input: "\x1b[<35;4;5Mxy",
+    encoding: "utf8",
+    env: { ...process.env, TMUX: "" },
+  });
+  assert.equal(out.replace(/\x1b\[\?100[036][hl]/g, ""), "closed|y|");
+});
+
+test("menu_row_of reads the terminal's answer past mouse moves that came in ahead of it", () => {
+  const row = (reply) => execFileSync("bash", ["-c", `. ${JSON.stringify(path.join(__dirname, "../tmux/menu.sh"))}; menu_row_of "$1"`, "_", reply], { encoding: "utf8" });
+  assert.equal(row("\x1b[24;1"), "24");
+  assert.equal(row("\x1b[<35;30;15M\x1b[<35;31;15M\x1b[24;1"), "24");
 });

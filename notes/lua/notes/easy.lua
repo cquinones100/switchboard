@@ -13,7 +13,7 @@ local M = {}
 -- The settings this module reads, from tmux's copies of them (tmux/settings.sh)
 -- in one `tmux show`, their defaults outside tmux.
 function M.settings()
-  local on = { notes_toolbar = true, easy_keys = false, key_help_line = true }
+  local on = { notes_toolbar = true, easy_keys = false, key_help_line = true, hover_highlight = true }
   if (vim.env.TMUX or "") == "" then return on end
   for _, line in ipairs(vim.fn.systemlist({ "tmux", "show", "-g" })) do
     local key, value = line:match("^@setting_([%w_]+)%s+(%S+)")
@@ -45,6 +45,17 @@ M.BUTTONS = {
 
 local hover
 local toolbar_win
+-- Easy mode's close buttons open now (M.close_button), each with whether Tab
+-- has put focus on it and whether the mouse is over it, either of which
+-- lights it.
+local closers = {}
+
+local function paint(button)
+  local state = closers[button]
+  if state and vim.api.nvim_win_is_valid(button) then
+    vim.wo[button].winhighlight = (state.focused or state.hovered) and "Normal:SwitchboardButtonHover" or "Normal:SwitchboardButton"
+  end
+end
 
 -- The winbar for the toolbar in a window `width` columns wide, the button
 -- under the mouse lit, and where each button shown sits: { from, to } window
@@ -118,12 +129,24 @@ _G.notes_toolbar_click = function(index, _, button)
   if button == "l" then M.click(index) end
 end
 
--- The button under the mouse is lit, from Neovim's mouse-move events.
+-- The toolbar's button and the close button under the mouse are lit, from
+-- Neovim's mouse-move events (the hover_highlight setting), each drawn again
+-- only when what is under the mouse changes.
 local function track_hover()
   vim.o.mousemoveevent = true
-  vim.keymap.set({ "n", "i", "x", "s" }, "<MouseMove>", function()
-    if not (toolbar_win and vim.api.nvim_win_is_valid(toolbar_win)) then return end
+  vim.keymap.set({ "n", "i", "x", "s", "t" }, "<MouseMove>", function()
     local pos = vim.fn.getmousepos()
+    for button, state in pairs(closers) do
+      if vim.api.nvim_win_is_valid(button) then
+        local top, left = unpack(vim.api.nvim_win_get_position(button))
+        local over = pos.screenrow == top + 1 and pos.screencol > left and pos.screencol <= left + 3
+        if over ~= state.hovered then
+          state.hovered = over
+          paint(button)
+        end
+      end
+    end
+    if not (toolbar_win and vim.api.nvim_win_is_valid(toolbar_win)) then return end
     local top, left = unpack(vim.api.nvim_win_get_position(toolbar_win))
     local now
     if pos.screenrow == top + 1 then
@@ -137,7 +160,7 @@ local function track_hover()
       hover = now
       draw_toolbar()
     end
-  end, { desc = "Light the toolbar button under the mouse" })
+  end, { desc = "Light the button under the mouse" })
 end
 
 -- ── Easy mode ───────────────────────────────────────────────────────────────
@@ -189,8 +212,8 @@ function M.start()
   M.on = M.settings()
   vim.api.nvim_set_hl(0, "SwitchboardButton", { default = true, link = "TabLine" })
   vim.api.nvim_set_hl(0, "SwitchboardButtonHover", { default = true, link = "PmenuSel" })
+  if M.on.hover_highlight and (M.on.notes_toolbar or M.on.easy_keys) then track_hover() end
   if M.on.notes_toolbar then
-    track_hover()
     -- Fitted again to the note window's width as it changes (M-e moving
     -- Notes beside a pane, the sidebar shown or put away).
     vim.api.nvim_create_autocmd({ "WinResized", "VimResized" }, { callback = draw_toolbar })
@@ -247,7 +270,8 @@ function M.close_button(win, close, tab)
     relative = "win", win = win, row = 0, col = vim.api.nvim_win_get_width(win) - 2, width = 3, height = 1,
     style = "minimal", border = "none", focusable = false, zindex = (vim.api.nvim_win_get_config(win).zindex or 50) + 1,
   })
-  vim.wo[button].winhighlight = "Normal:SwitchboardButton"
+  closers[button] = {}
+  paint(button)
   -- A press on it, in the window's buffer (a terminal's too, for fzf's
   -- lists), the click going on as it would anywhere else.
   vim.keymap.set({ "n", "t" }, "<LeftMouse>", function()
@@ -263,11 +287,10 @@ function M.close_button(win, close, tab)
   end, { buffer = vim.api.nvim_win_get_buf(win), expr = true, nowait = true, desc = "Close (easy mode's ×)" })
   if tab then
     local target = vim.api.nvim_win_get_buf(win)
-    local focused = false
     local opts = { buffer = target, nowait = true, silent = true }
     local function toggle()
-      focused = not focused
-      if vim.api.nvim_win_is_valid(button) then vim.wo[button].winhighlight = focused and "Normal:SwitchboardButtonHover" or "Normal:SwitchboardButton" end
+      closers[button].focused = not closers[button].focused
+      paint(button)
     end
     vim.keymap.set("n", "<Tab>", toggle, vim.tbl_extend("force", opts, { desc = "Focus easy mode's ×" }))
     vim.keymap.set("n", "<S-Tab>", toggle, vim.tbl_extend("force", opts, { desc = "Focus easy mode's ×" }))
@@ -276,7 +299,7 @@ function M.close_button(win, close, tab)
     for _, key in ipairs({ "<CR>", "<Space>" }) do
       local own = vim.fn.maparg(key, "n", false, true)
       vim.keymap.set("n", key, function()
-        if focused then return close() end
+        if closers[button] and closers[button].focused then return close() end
         if own.callback then return own.callback() end
         if own.rhs then return vim.api.nvim_feedkeys(vim.keycode(own.rhs), own.noremap == 1 and "n" or "m", false) end
         vim.cmd("normal! " .. vim.keycode(key))
@@ -286,7 +309,10 @@ function M.close_button(win, close, tab)
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(win),
     once = true,
-    callback = function() if vim.api.nvim_win_is_valid(button) then vim.api.nvim_win_close(button, true) end end,
+    callback = function()
+      closers[button] = nil
+      if vim.api.nvim_win_is_valid(button) then vim.api.nvim_win_close(button, true) end
+    end,
   })
   return button
 end

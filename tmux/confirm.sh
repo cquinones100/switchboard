@@ -34,14 +34,30 @@ else
   no=
   onclose=
   tabbed=
+  lit=
   yes_at=$(( (cols - 9) / 2 + 1 ))
+  # One of them: › and bold when Enter takes it (<chosen> 1), in reverse
+  # video while the mouse is over it (<lit> 1, hover_highlight), which
+  # Enter doesn't take.
+  button() {
+    printf '%s%s%s\033[0m' "$([ "$2" = 1 ] && printf '\033[1m› ' || printf '  ')" "$([ "$3" = 1 ] && printf '\033[7m')" "$1"
+  }
   buttons() {
-    if [ -n "$no" ]; then
-      printf '\r\033[2K%*s  Yes \033[1m› No\033[0m' "$((yes_at - 3))" ""
-    elif [ -n "$onclose" ]; then
-      printf '\r\033[2K%*s  Yes   No' "$((yes_at - 3))" ""
-    else
-      printf '\r\033[2K%*s\033[1m› Yes\033[0m   No' "$((yes_at - 3))" ""
+    printf '\r\033[2K%*s' "$((yes_at - 3))" ""
+    button Yes "$([ -z "$no$onclose" ] && echo 1)" "$([ "$lit" = yes ] && echo 1)"
+    printf ' '
+    button No "$([ -n "$no" ] && echo 1)" "$([ "$lit" = no ] && echo 1)"
+  }
+  # Yes and No drawn again where they are, from the question's line.
+  redraw() {
+    printf '\033[2B'
+    buttons
+    printf '\033[2A\r\033[%dC' "$((pad_left + ${#text}))"
+  }
+  # Which of them a column on their row is: yes, no or nothing.
+  under() {
+    if [ "$1" -ge "$yes_at" ] && [ "$1" -lt $((yes_at + 3)) ]; then echo yes
+    elif [ "$1" -ge $((yes_at + 6)) ] && [ "$1" -lt $((yes_at + 8)) ]; then echo no
     fi
   }
   if [ -t 0 ]; then
@@ -56,12 +72,21 @@ else
     # Easy mode's close button (menu.sh) is a Tab stop after No, pressed as no.
     MENU_CLOSE_FOCUS=$onclose
     menu_read || { menu_mouse_off; exit 0; }
+    # Any key puts out what the mouse lit.
+    case $MENU_KEY in move\ *) ;; *) [ -n "$lit" ] && [ -t 0 ] && { lit=; redraw; } ;; esac
     case $MENU_KEY in
       enter) [ -n "$no$onclose" ] && ans=n || ans=y ;;
       # Space presses the one chosen once Tab has moved there; before, it is
       # any other key, so a stray Space never says yes.
       space) [ -n "$tabbed" ] && [ -z "$no$onclose" ] && ans=y || ans=n ;;
       none) continue ;;
+      move\ *)
+        set -- $MENU_KEY
+        now=
+        [ -n "$row" ] && [ "$2" = "$row" ] && now=$(under "$3")
+        [ "$now" != "$lit" ] && { lit=$now; redraw; }
+        continue
+        ;;
       tab | btab)
         [ -t 0 ] || continue
         if [ -n "${MENU_CLOSE:-}" ]; then
@@ -75,18 +100,17 @@ else
           [ -n "$no" ] && no= || no=1
         fi
         tabbed=1
-        printf '\033[2B'
-        buttons
-        printf '\033[2A\r\033[%dC' "$((pad_left + ${#text}))"
+        redraw
         continue
         ;;
       click\ *)
         set -- $MENU_KEY
         [ -n "$row" ] && [ "$2" = "$row" ] || continue
-        if [ "$3" -ge "$yes_at" ] && [ "$3" -lt $((yes_at + 3)) ]; then ans=y
-        elif [ "$3" -ge $((yes_at + 6)) ] && [ "$3" -lt $((yes_at + 8)) ]; then ans=n
-        else continue
-        fi
+        case $(under "$3") in
+          yes) ans=y ;;
+          no) ans=n ;;
+          *) continue ;;
+        esac
         ;;
       *) ans=$MENU_KEY ;;
     esac

@@ -5,16 +5,21 @@
 # what was pressed or clicked. Sourced, not run.
 
 # Mouse reporting on (SGR, so a click says its row and column), and off again.
+# With the hover_highlight setting on, the mouse's every move too (1003, which
+# replaces 1000's clicks alone), for what is under it to light (menu_read's
+# move).
 menu_mouse_on() {
   MENU_MOUSE=
   [ "$(tmux show -gqv @setting_menu_mouse 2>/dev/null)" = off ] && return 0
   printf '\033[?1000h\033[?1006h'
+  [ "$(tmux show -gqv @setting_hover_highlight 2>/dev/null)" = off ] || printf '\033[?1003h'
   MENU_MOUSE=1
   menu_close_on
 }
 menu_mouse_off() {
-  [ -n "${MENU_MOUSE:-}" ] && printf '\033[?1000l\033[?1006l'
+  [ -n "${MENU_MOUSE:-}" ] && printf '\033[?1003l\033[?1000l\033[?1006l'
   MENU_MOUSE=
+  MENU_CLOSE_HOVER=
 }
 
 # Easy mode's close button (the easy_keys setting), as mission control's
@@ -23,7 +28,8 @@ menu_mouse_off() {
 # empty when it isn't drawn; menu_read draws it again before each read, since
 # a menu drawing over the top row can wipe it, and takes a click on it as Esc.
 # It is a Tab stop after a menu's options: MENU_CLOSE_FOCUS=1 draws it in
-# reverse video, as mission control draws focus, and menu_stops counts it.
+# reverse video, as mission control draws focus, and menu_stops counts it;
+# MENU_CLOSE_HOVER=1, which menu_read sets while the mouse is over it, too.
 menu_close_on() {
   MENU_CLOSE=
   [ -t 0 ] && [ "$(tmux show -gqv @setting_easy_keys 2>/dev/null)" = on ] || return 0
@@ -33,7 +39,7 @@ menu_close_on() {
 menu_close_draw() {
   [ -n "${MENU_CLOSE:-}" ] || return 0
   [ -n "${MENU_BRIGHT:-}" ] || menu_colors
-  printf '\0337\033[1;%dH%s\033[38;5;%s;1m × \033[0m\0338' "$MENU_CLOSE" "$([ "${MENU_CLOSE_FOCUS:-}" = 1 ] && printf '\033[7m')" "$MENU_BRIGHT"
+  printf '\0337\033[1;%dH%s\033[38;5;%s;1m × \033[0m\0338' "$MENU_CLOSE" "$([ "${MENU_CLOSE_FOCUS:-}${MENU_CLOSE_HOVER:-}" != "" ] && printf '\033[7m')" "$MENU_BRIGHT"
 }
 # How many stops Tab goes round in a menu of <n> options: the options, and
 # the close button after them when it is drawn.
@@ -42,39 +48,48 @@ menu_stops() { echo $(( $1 + ($([ -n "${MENU_CLOSE:-}" ] && echo 1 || echo 0)) )
 # "Press any key to close": one key or click, the close button drawn while
 # it waits, and the rest of a click read too, so nothing is left for what runs
 # after. Returns 1 at the end of the input, as read does.
+# The mouse moving (or a click's release) isn't a key, and is read past.
 menu_any_key() {
-  local key c status
+  local status=0
   menu_mouse_on
-  menu_close_draw
-  IFS= read -rsn 1 key
-  status=$?
-  # A click is Esc [ < button ; column ; row M, sent at once (macOS's bash
-  # takes no fraction of a second for -t).
-  if [ "$key" = $'\x1b' ] && IFS= read -rsn 1 -t 1 c && [ "$c" = '[' ] && IFS= read -rsn 1 -t 1 c && [ "$c" = '<' ]; then
-    while IFS= read -rsn 1 -t 1 c; do case $c in M | m) break ;; esac; done
-  fi
+  while :; do
+    menu_read || { status=1; break; }
+    case $MENU_KEY in move\ * | none) continue ;; esac
+    break
+  done
   menu_mouse_off
   return $status
 }
 
 # The row the cursor is on now, from 1, asked of the terminal: where a menu's
-# first option is, for a click's row to say which it chose.
+# first option is, for a click's row to say which it chose. The mouse's moves
+# (hover_highlight) can come in ahead of the answer, ESC [ row ; col R, so
+# only what follows the last [ is read as it.
 menu_row() {
-  local row col
+  local reply
   printf '\033[6n' >/dev/tty
-  IFS='[;' read -rsd R _ row col </dev/tty
-  printf '%s' "$row"
+  IFS= read -rsd R reply </dev/tty
+  menu_row_of "$reply"
+}
+# The row in a cursor-position answer read up to its R.
+menu_row_of() {
+  local reply=${1##*[}
+  printf '%s' "${reply%%;*}"
 }
 
 # One key or click, into MENU_KEY: j or k (the arrows and the wheel too),
 # tab or btab (Tab and Shift-Tab, which go round the options, as on a webpage),
 # space (which presses the option chosen, as Enter does), enter, quit (Esc or q), "click <row> <col>" for a left click, none for a
-# mouse event that means nothing (a release), else the key itself; a click on
-# the close button is quit. Returns 1 at the end of the input.
+# mouse event that means nothing (a release), "move <row> <col>" for the
+# mouse moving (hover_highlight), which lights the close button under it,
+# else the key itself; a click on the close button is quit. Returns 1 at the
+# end of the input.
 menu_read() {
   local key c ch seq b x y
   menu_close_draw
   IFS= read -rsn 1 key || return 1
+  # Any key puts out the close button the mouse lit, until it next moves.
+  MENU_CLOSE_HOVER=
   case $key in
     '') MENU_KEY=enter; return 0 ;;
     q) MENU_KEY=quit; return 0 ;;
@@ -104,7 +119,10 @@ menu_read() {
       IFS=';' read -r b x y <<<"$seq"
       MENU_KEY=none
       # Digits only, since callers do arithmetic with them.
-      if [ "$ch" = M ] && [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]]; then
+      if [ "$ch" = M ] && [[ $b =~ ^[0-9]+$ && $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]] && [ "$b" -ge 32 ] && [ "$b" -lt 64 ]; then
+        MENU_KEY="move $y $x"
+        [ -n "${MENU_CLOSE:-}" ] && [ "$y" = 1 ] && [ "$x" -ge "$MENU_CLOSE" ] && [ "$x" -le $((MENU_CLOSE + 2)) ] && MENU_CLOSE_HOVER=1
+      elif [ "$ch" = M ] && [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]]; then
         case $b in
           0)
             if [ -n "${MENU_CLOSE:-}" ] && [ "$y" = 1 ] && [ "$x" -ge "$MENU_CLOSE" ] && [ "$x" -le $((MENU_CLOSE + 2)) ]; then
@@ -120,6 +138,31 @@ menu_read() {
       ;;
   esac
   return 0
+}
+
+# menu_read for a menu of <count> options, the first on row <start> (empty
+# when unknown) and <cursor> chosen: the mouse moving onto another option is
+# "hover <i>", which the menu takes as moving its cursor there, as mission
+# control's menus do; any other move is read past, the close button lit or
+# put out, so the menu is drawn again only when what is under the mouse
+# changes. Returns 1 at the end of the input.
+menu_read_menu() {
+  local start=$1 count=$2 cursor=$3 row i
+  while menu_read; do
+    case $MENU_KEY in
+      move\ *)
+        row=${MENU_KEY#move }
+        row=${row%% *}
+        i=$(( row - ${start:-0} ))
+        if [ -n "$start" ] && [ "$i" -ge 0 ] && [ "$i" -lt "$count" ] && [ "$i" != "$cursor" ]; then
+          MENU_KEY="hover $i"
+          return 0
+        fi
+        ;;
+      *) return 0 ;;
+    esac
+  done
+  return 1
 }
 
 # The colors mission control's boxes use (lib/sidebar/text.js's PALETTES),

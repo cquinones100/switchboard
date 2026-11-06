@@ -1563,7 +1563,7 @@ popup's and `M-w`'s menus, the message and tip boxes, and Notes' Format
 menu, palette, finder and squash boxes (with `menu_mouse` on, since a click
 must reach it). In Notes' palette and finder, whose Tab is fzf's, and the
 message and tip boxes, which any key closes, it is the mouse's alone. The
-fzf lists in popups (`M-p`, `M-t`) close with Esc alone. Vim's keys keep working beside them. Its Paste image (`v`), or Ctrl-V while typing, as
+fzf lists in popups (`M-p`, `M-t`) close with Esc alone. Vim's keys keep working beside them. What a click would press lights up under the mouse (Settings' Highlight on hover, `hover_highlight`, on at first): in mission control a view's name, the filter, a card's border or a row, a menu's option (which the cursor moves to), Yes and No, an answer's option and the ×; the sidebar's tabs and notifications; the options of `M-m`'s, the update popup's and `M-w`'s menus; Notes' toolbar and its boxes' ×, and the diff's buttons. The bash menus, Notes and the diff take a change to it when they next open. tmux says nothing once the mouse leaves a pane or popup, so what was lit goes out at its edge, on the next key or click, or when its window goes behind another; tmux's status line and fzf's lists have no such event and don't light. Its Paste image (`v`), or Ctrl-V while typing, as
 in Claude Code, puts the image on the clipboard (a screenshot copied with
 Cmd-Ctrl-Shift-4, say) into the note; with no image there, Ctrl-V does what
 it always does (Cmd-V can't: the terminal pastes only text). The image is

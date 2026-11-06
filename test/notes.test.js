@@ -1479,7 +1479,7 @@ test("Notes reads the toolbar and easy mode settings from tmux, as tmux/settings
       local left = vim.trim(vim.fn.system({ "tmux", "show", "-pqv", "-t", vim.env.TMUX_PANE, "@notes_cmd_keys" }))
       io.write(vim.json.encode({ settings = settings, marked = marked, left = left }))
     `);
-    assert.deepEqual(result.settings, { notes_toolbar: false, easy_keys: true, key_help_line: true });
+    assert.deepEqual(result.settings, { notes_toolbar: false, easy_keys: true, key_help_line: true, hover_highlight: true });
     assert.equal(result.marked, "1", "easy mode marks its pane, for tmux to pass it the Cmd keys");
     assert.equal(result.left, "", "and the mark goes with Notes");
   } finally {

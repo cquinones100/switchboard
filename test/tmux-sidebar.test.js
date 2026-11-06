@@ -2209,7 +2209,7 @@ test("mission control's Settings view lists the options by category, / narrows t
     // / then "notif": the Notifications header and its two options, and no other category.
     for (const key of ["/", "n", "o", "t", "i", "f", "Enter"]) await sidebar.missionKey(client, { key });
     const items = sidebar.viewsFor(client)[client.view.view - 1].items;
-    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "M-a goes to notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes", "Help", "Suggestions from how you work"], "the Notifications category, and the options elsewhere that mention notifications");
+    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "M-a goes to notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes", "Mission control", "Highlight on hover", "Help", "Suggestions from how you work"], "the Notifications category, and the options elsewhere that mention notifications");
     assert.doesNotMatch(plain(sent.at(-1)), /Theme/);
 
     // Enter on an on/off option turns it off, and only what differs from the default is written.
@@ -3844,6 +3844,67 @@ test("Tab moves focus through mission control's views' names, its filter and its
   client.focus = "filter";
   await key("Enter");
   assert.equal(client.filter?.typing, true, "Enter on the filter starts typing in it");
+});
+
+test("what a click would press lights under the mouse, drawn again only when that changes, and goes on a key or at the edge", async (t) => {
+  const one = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-n", "hover one", "-P", "-F", "#{window_id}");
+  const two = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-n", "hover two", "-P", "-F", "#{window_id}");
+  t.after(() => tmux("kill-window", "-t", one));
+  t.after(() => tmux("kill-window", "-t", two));
+  await sidebar.refresh();
+  const sent = [];
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 50, tmuxClient: "none" };
+  sidebar.draw(client);
+  assert.ok(sent.some((text) => text.includes("\x1b[?1003h")), "the mouse's every move is asked for");
+
+  // A view's name: reverse video, as Tab's focus; the chosen view isn't lit.
+  const name = client.hits.find((h) => h.view === 1);
+  sidebar.hoverTo(client, { x: name.x0 + 1, y: 1 });
+  assert.equal(client.hover, "view:1");
+  assert.match(sent.at(-1), new RegExp(`\\x1b\\[7m[^ ]* ${sidebar.state.sections[0]?.title ?? ""}`));
+  const drawn = sent.length;
+  sidebar.hoverTo(client, { x: name.x0 + 2, y: 1 });
+  assert.equal(sent.length, drawn, "moving within it draws nothing");
+  sidebar.hoverTo(client, { x: client.hits.find((h) => h.view === 0).x0 + 1, y: 1 });
+  assert.equal(client.hover, undefined, "the chosen view's name isn't lit");
+
+  // A card other than the chosen one: its border in its tab's color.
+  const card = client.hits.find((h) => h.index === 1);
+  sidebar.hoverTo(client, { x: card.x0 + 2, y: card.y });
+  assert.equal(client.hover, "index:1");
+  sidebar.hoverTo(client, { x: client.cols, y: card.y });
+  assert.equal(client.hover, undefined, "the screen's edge, the way out, puts it out");
+  sidebar.hoverTo(client, { x: card.x0 + 2, y: card.y });
+
+  // Yes and No of a question, in reverse video, without moving Enter's choice.
+  client.confirm = { text: "Close it?", yes() {} };
+  client.hover = undefined;
+  sidebar.draw(client);
+  const row = client.modal.tags.find((t) => t.tag.yes).y;
+  sidebar.hoverTo(client, { x: client.modal.left + 1 + 9, y: row });
+  assert.equal(client.hover, "no");
+  assert.equal(client.confirm.no, undefined, "Enter still takes Yes");
+  assert.match(plain(sent.at(-1).replace(/\x1b\[7m/g, "<lit>")), /› Yes +<lit>No/);
+  client.confirm = undefined;
+
+  // The sidebar's tabs: a row on the panel's shade.
+  const tabs = sidebar.state.tabs.filter((tab) => tab.session === sidebar.state.tabs.find((x) => x.id === one).session);
+  const { lines, owners } = sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 30, view: { focused: false, cursor: tabs[0].id, frame: 0, here: tabs[0].id, hover: two } });
+  const lit = lines.filter((line, i) => owners[i] === two);
+  assert.ok(lit.length && lit.every((line) => line.startsWith("\x1b[48;5;236m")), "every line of the tab under the mouse is shaded");
+  assert.ok(lines.filter((line, i) => owners[i] === one).every((line) => !line.startsWith("\x1b[48;5;236m")), "and no other");
+
+  // Off, the mouse's moves are no longer asked for, and nothing is lit.
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  fs.writeFileSync(settingsFile, JSON.stringify({ hover_highlight: false }));
+  require("../lib/settings").reloadSettings();
+  t.after(() => {
+    fs.writeFileSync(settingsFile, "{}");
+    require("../lib/settings").reloadSettings();
+  });
+  sidebar.draw(client);
+  assert.ok(sent.some((text) => text.includes("\x1b[?1003l")));
+  assert.equal(client.hover, undefined);
 });
 
 test("with tab_focus off, Tab switches mission control's views as before", (t) => {

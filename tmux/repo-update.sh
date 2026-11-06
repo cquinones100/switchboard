@@ -213,7 +213,7 @@ case "${1:-}" in
       # The cursor past the options is on the close button (menu.sh).
       MENU_CLOSE_FOCUS=$([ "$cursor" = ${#options[@]} ] && echo 1)
       # A closed input answers nothing: the prompt goes, and asks again later.
-      menu_read || { menu_mouse_off; exit 0; }
+      menu_read_menu "$start" ${#options[@]} "$cursor" || { menu_mouse_off; exit 0; }
       [ -n "$MENU_CLOSE_FOCUS" ] && case $MENU_KEY in enter | space) MENU_KEY=quit ;; esac
       pick=
       case $MENU_KEY in
@@ -222,6 +222,8 @@ case "${1:-}" in
         tab) cursor=$(( (cursor + 1) % $(menu_stops ${#options[@]}) )) ;;
         btab) cursor=$(( (cursor + $(menu_stops ${#options[@]}) - 1) % $(menu_stops ${#options[@]}) )) ;;
         quit) menu_mouse_off; answered; exit 0 ;;
+        # The mouse moving onto an option (hover_highlight) chooses it.
+        hover\ *) cursor=${MENU_KEY#hover } ;;
         enter | space) pick=$cursor ;;
         click\ *)
           set -- $MENU_KEY

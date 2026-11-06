@@ -115,7 +115,7 @@ finish() {
     [ -n "$start" ] || { [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} - 1 )); }
     # The cursor past the options is on the close button (menu.sh).
     MENU_CLOSE_FOCUS=$([ "$cursor" = ${#options[@]} ] && echo 1)
-    menu_read || { menu_mouse_off; return; }
+    menu_read_menu "$start" ${#options[@]} "$cursor" || { menu_mouse_off; return; }
     [ -n "$MENU_CLOSE_FOCUS" ] && case $MENU_KEY in enter | space) MENU_KEY=quit ;; esac
     pick=
     case $MENU_KEY in
@@ -124,6 +124,8 @@ finish() {
       tab) cursor=$(( (cursor + 1) % $(menu_stops ${#options[@]}) )) ;;
       btab) cursor=$(( (cursor + $(menu_stops ${#options[@]}) - 1) % $(menu_stops ${#options[@]}) )) ;;
       quit) menu_mouse_off; return ;;
+      # The mouse moving onto an option (hover_highlight) chooses it.
+      hover\ *) cursor=${MENU_KEY#hover } ;;
       enter | space) pick=$cursor ;;
       click\ *)
         set -- $MENU_KEY

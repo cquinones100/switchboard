@@ -72,7 +72,7 @@ end
 -- bottom for the keys the list takes, then the keys themselves named
 -- (key_help_line setting). A button runs its key in the file list, so it
 -- does what the key does.
-local settings = { easy_keys = false, key_help_line = true }
+local settings = { easy_keys = false, key_help_line = true, hover_highlight = true }
 if vim.env.TMUX then
   for _, line in ipairs(vim.fn.systemlist({ "tmux", "show", "-g" })) do
     local key, value = line:match("^@setting_([%w_]+)%s+(%S+)")
@@ -129,6 +129,9 @@ if settings.easy_keys then
   vim.api.nvim_set_hl(0, "SwitchboardButtonHover", { default = true, link = "PmenuSel" })
   vim.o.laststatus = 3
   vim.o.statusline = (bar())
+end
+-- The button under the mouse lit (the hover_highlight setting).
+if settings.easy_keys and settings.hover_highlight then
   vim.o.mousemoveevent = true
   vim.keymap.set({ "n", "x" }, "<MouseMove>", function()
     local pos = vim.fn.getmousepos()
