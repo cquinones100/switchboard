@@ -53,6 +53,11 @@ pub const NAMES: &[&str] = &[
     "kill-server",
 ];
 
+/// The commands that read their stdin (a Claude Code hook's JSON); no other
+/// command's stdin is read, since one run with a pipe nobody closes would
+/// wait for it forever.
+pub const TAKES_STDIN: &[&str] = &["hook"];
+
 /// A command's arguments: its flags, with or without a value, and the rest.
 struct Args {
     flags: Vec<(char, Option<String>)>,

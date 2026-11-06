@@ -100,7 +100,8 @@ pub fn bind() -> Result<tokio::net::UnixListener> {
 /// It never starts a server: a command that changes a tab means nothing to
 /// a server that has none, and a hook run outside Switchboard should cost
 /// nothing. Stdin is read whole when it is a pipe or a file, as a hook's JSON
-/// is given; a terminal, `/dev/null` or a socket is not read at all.
+/// is given, and only for the commands that take it (`commands::TAKES_STDIN`);
+/// a terminal, `/dev/null` or a socket is not read at all.
 pub fn run_command(args: Vec<String>) -> ExitCode {
     let cwd = std::env::current_dir()
         .ok()
@@ -109,7 +110,13 @@ pub fn run_command(args: Vec<String>) -> ExitCode {
     let pane = std::env::var("SWITCHBOARD_PANE")
         .ok()
         .filter(|p| !p.is_empty());
-    let stdin = if is_data(libc::STDIN_FILENO) {
+    // Only a command that takes input reads it: one run where stdin is a pipe
+    // nobody closes (some tools hand their commands one) would otherwise wait
+    // for it forever.
+    let takes_input = args
+        .first()
+        .is_some_and(|a| super::commands::TAKES_STDIN.contains(&a.as_str()));
+    let stdin = if takes_input && is_data(libc::STDIN_FILENO) {
         let mut input = Vec::new();
         io::stdin()
             .lock()
