@@ -6,17 +6,46 @@
 //! program's queries (cursor position, device attributes, colors) go
 //! straight back to the PTY.
 //!
-//! STUB: the signatures are the contract; step 2 fills them in.
+//! What is written to the program goes through a second thread rather than
+//! straight to the PTY: a program that stops reading its input (a long
+//! build, a stopped process) fills the terminal's input buffer, and a write
+//! then blocks until it reads again. tmux never waits on a pane, and neither
+//! may the server, so its writes are queued and the thread waits instead.
+//!
+//! The program is in a session of its own with the PTY as its controlling
+//! terminal (portable-pty's `setsid`), so its pid is its process group's,
+//! and the group in front of the terminal is the program you're using:
+//! the pane's directory and command are read from that (`procinfo`).
+//!
+//! A pane is drawn the way tmux drew one: the named ANSI colors stay
+//! palette indexes, so your own terminal's colors apply, and the program's
+//! default colors are your terminal's default; only a color the program
+//! set itself (OSC 4, 10, 11) is drawn as the color it set.
 
-use std::io;
+use std::ffi::OsString;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Instant;
 
-use anyhow::Result;
+use alacritty_terminal::event::{Event, EventListener, WindowSize};
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
+use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor, Processor, Rgb};
+use anyhow::{Context, Result};
+use crossterm::cursor::SetCursorStyle;
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{PaneEvent, PaneId, PaneModes, TermNotice};
+use super::{MouseReporting, PaneEvent, PaneId, PaneModes, TermNotice};
 
 /// What to start in a new pane.
 #[derive(Clone, Debug, Default)]
@@ -52,16 +81,203 @@ pub struct Point {
     pub line: i32,
 }
 
+/// The size a cell is taken to be, in pixels, for programs that ask (a
+/// window's size in pixels, `CSI 14 t`, or the PTY's): there is no font
+/// here to measure, so a common one stands in, enough for a program that
+/// divides one by the other to find the grid.
+const CELL_WIDTH: u16 = 8;
+const CELL_HEIGHT: u16 = 16;
+
+/// Bytes read from the PTY at a time.
+const READ_SIZE: usize = 64 * 1024;
+
+/// The next pane's id when the server doesn't give one.
+static NEXT_ID: AtomicU32 = AtomicU32::new(0);
+
 pub struct Pane {
     id: PaneId,
+    term: Term<Listener>,
+    parser: Processor,
+    /// What the emulator reported while reading, until `process` handles it.
+    events: Arc<Mutex<Vec<Event>>>,
+    master: Box<dyn MasterPty + Send>,
+    /// To the thread that writes to the program.
+    input: mpsc::Sender<Vec<u8>>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    pid: Option<u32>,
+    /// Set once the reader thread has reaped the program, after which its
+    /// pid may be another process's and is never signalled.
+    reaped: Arc<AtomicBool>,
+    cols: u16,
+    rows: u16,
+    title: String,
+    exited: Option<Option<i32>>,
+    /// Which side of its cell the selection's fixed end is on; see
+    /// `select_extend`.
+    anchor_side: Side,
+}
+
+/// Collects what the emulator reports while it reads, for `process` to
+/// handle once it has. The emulator calls this from inside its parser,
+/// where nothing can be answered yet, so it only queues.
+#[derive(Clone)]
+struct Listener(Arc<Mutex<Vec<Event>>>);
+
+impl EventListener for Listener {
+    fn send_event(&self, event: Event) {
+        // Only for a window with a mouse pointer and a blinking cursor of
+        // its own, which the server draws for itself.
+        if matches!(
+            event,
+            Event::MouseCursorDirty | Event::Wakeup | Event::CursorBlinkingChange
+        ) {
+            return;
+        }
+        lock(&self.0).push(event);
+    }
+}
+
+/// The lock, whether or not a thread panicked holding it: the queue is
+/// only ever pushed to and drained, so it is never left half-changed.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// A grid's size, as the emulator takes it.
+struct Size {
+    cols: usize,
+    rows: usize,
+}
+
+impl Dimensions for Size {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+}
+
+/// The emulator needs two columns and a line at least; a pane squeezed
+/// smaller is given that much, and drawn cut to its area.
+fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.max(2), rows.max(1))
+}
+
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: cols.saturating_mul(CELL_WIDTH),
+        pixel_height: rows.saturating_mul(CELL_HEIGHT),
+    }
 }
 
 impl Pane {
     /// Starts the program on a new PTY of the given size, and a thread that
     /// sends its output (and its end) to `events`.
     pub fn spawn(spec: PaneSpawn, events: UnboundedSender<PaneEvent>) -> Result<Pane> {
-        let _ = (spec, events);
-        todo!("pane::Pane::spawn")
+        let id = match spec.id {
+            Some(id) => {
+                // So an id handed out later never repeats one restored.
+                NEXT_ID.fetch_max(id.0.saturating_add(1), Ordering::Relaxed);
+                id
+            }
+            None => PaneId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
+        };
+        let (cols, rows) = clamp_size(spec.cols, spec.rows);
+
+        let pair = native_pty_system()
+            .openpty(pty_size(cols, rows))
+            .context("opening a terminal for the pane")?;
+        let reader = pair.master.try_clone_reader()?;
+        let writer = pair.master.take_writer()?;
+
+        // portable-pty starts the shell as a login shell (`-zsh` as its
+        // argv[0]), as terminals do, and in $HOME when no directory is
+        // given or the one given is gone.
+        let mut cmd = match spec.command.filter(|argv| !argv.is_empty()) {
+            Some(argv) => CommandBuilder::from_argv(argv.into_iter().map(OsString::from).collect()),
+            None => CommandBuilder::new_default_prog(),
+        };
+        if let Some(cwd) = &spec.cwd {
+            cmd.cwd(cwd);
+        }
+        // A server started from inside tmux mustn't make its panes think
+        // they are in tmux: the hooks and scripts would talk to it.
+        cmd.env_remove("TMUX");
+        cmd.env_remove("TMUX_PANE");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        // The pane's id as the hooks read it, as tmux's TMUX_PANE was; set
+        // here since a pane numbered by the counter has its id only now.
+        cmd.env("SWITCHBOARD_PANE", id.to_string());
+        for (key, value) in &spec.env {
+            cmd.env(key, value);
+        }
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .context("starting the pane's program")?;
+        // Our copy of the terminal's other end is closed, so the reader
+        // sees the end once the program and whatever it started have
+        // closed theirs.
+        drop(pair.slave);
+        let pid = child.process_id();
+        let mut killer = child.clone_killer();
+        let reaped = Arc::new(AtomicBool::new(false));
+
+        let (input, queue) = mpsc::channel::<Vec<u8>>();
+        let started = std::thread::Builder::new()
+            .name(format!("pane {id} writer"))
+            .spawn(move || write_loop(writer, queue))
+            .and_then(|_| {
+                let reaped = reaped.clone();
+                std::thread::Builder::new()
+                    .name(format!("pane {id} reader"))
+                    .spawn(move || read_loop(id, reader, child, reaped, events))
+            });
+        if let Err(err) = started {
+            let _ = killer.kill();
+            return Err(err).context("starting the pane's threads");
+        }
+
+        let queued = Arc::new(Mutex::new(Vec::new()));
+        let config = Config {
+            scrolling_history: spec.scrollback,
+            // Programs may put text on the clipboard (OSC 52), and one that
+            // asks for it is answered, with nothing: the clipboard is
+            // yours, not every program's.
+            osc52: Osc52::CopyPaste,
+            ..Config::default()
+        };
+        let size = Size {
+            cols: cols.into(),
+            rows: rows.into(),
+        };
+        let term = Term::new(config, &size, Listener(queued.clone()));
+
+        Ok(Pane {
+            id,
+            term,
+            parser: Processor::new(),
+            events: queued,
+            master: pair.master,
+            input,
+            killer,
+            pid,
+            reaped,
+            cols,
+            rows,
+            title: String::new(),
+            exited: None,
+            anchor_side: Side::Left,
+        })
     }
 
     pub fn id(&self) -> PaneId {
@@ -71,138 +287,1426 @@ impl Pane {
     /// Feeds what the program wrote to the emulator, writing its answers to
     /// the program's queries back to the PTY; gives what the server should
     /// know of (a title, the bell, the clipboard).
+    ///
+    /// A program drawing a frame inside a synchronized update (mode 2026,
+    /// as Claude Code does) has it held back until the update ends, so a
+    /// half-drawn frame is never shown; one that never ends is let through
+    /// after 150ms, here when more output comes, else by `flush_sync`.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<TermNotice> {
-        let _ = bytes;
-        todo!("pane::Pane::process")
+        if self.sync_deadline().is_some_and(|at| at <= Instant::now()) {
+            self.parser.stop_sync(&mut self.term);
+        }
+        self.parser.advance(&mut self.term, bytes);
+        self.handle_events()
     }
 
-    /// Sends bytes to the program, as if typed.
+    /// When the synchronized update the program began, if any, has waited
+    /// long enough to be drawn as it is: the server calls `flush_sync`
+    /// then, unless more output came first.
+    pub fn sync_deadline(&self) -> Option<Instant> {
+        self.parser.sync_timeout().sync_timeout()
+    }
+
+    /// Draws what a synchronized update has held back, ended or not.
+    pub fn flush_sync(&mut self) -> Vec<TermNotice> {
+        if self.sync_deadline().is_some() {
+            self.parser.stop_sync(&mut self.term);
+        }
+        self.handle_events()
+    }
+
+    /// Answers what the program asked and gathers what the server should
+    /// know of, from what the emulator queued while reading.
+    fn handle_events(&mut self) -> Vec<TermNotice> {
+        let events = std::mem::take(&mut *lock(&self.events));
+        let mut notices = Vec::new();
+        for event in events {
+            match event {
+                Event::PtyWrite(text) => self.reply(text),
+                Event::Title(title) => self.set_title(Some(title), &mut notices),
+                Event::ResetTitle => self.set_title(None, &mut notices),
+                Event::Bell => notices.push(TermNotice::Bell),
+                Event::ClipboardStore(_, text) => notices.push(TermNotice::Clipboard(text)),
+                Event::ClipboardLoad(_, format) => self.reply(format("")),
+                Event::ColorRequest(index, format) => {
+                    let color = self.term.colors()[index.min(COLOR_COUNT - 1)]
+                        .unwrap_or_else(|| default_color(index));
+                    self.reply(format(color));
+                }
+                Event::TextAreaSizeRequest(format) => {
+                    let (cols, rows) = (self.term.columns(), self.term.screen_lines());
+                    self.reply(format(WindowSize {
+                        num_lines: rows as u16,
+                        num_cols: cols as u16,
+                        cell_width: CELL_WIDTH,
+                        cell_height: CELL_HEIGHT,
+                    }));
+                }
+                _ => {}
+            }
+        }
+        notices
+    }
+
+    /// A title the program set; an empty one is a reset. Told to the server
+    /// only when it changes, since a shell sets the same one at every
+    /// prompt.
+    fn set_title(&mut self, title: Option<String>, notices: &mut Vec<TermNotice>) {
+        let title = title.filter(|t| !t.is_empty());
+        let now = title.as_deref().unwrap_or("");
+        if now == self.title {
+            return;
+        }
+        self.title = now.to_string();
+        notices.push(TermNotice::Title(title));
+    }
+
+    fn reply(&mut self, text: String) {
+        let _ = self.write(text.as_bytes());
+    }
+
+    /// Sends bytes to the program, as if typed. They are queued for the
+    /// pane's writer thread, so this never waits on the program; it fails
+    /// once the program has ended or its terminal can't be written to.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let _ = bytes;
-        todo!("pane::Pane::write")
+        let gone = || io::Error::new(io::ErrorKind::BrokenPipe, "the pane's program has ended");
+        if self.reaped.load(Ordering::Acquire) {
+            return Err(gone());
+        }
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        self.input.send(bytes.to_vec()).map_err(|_| gone())
     }
 
     /// Resizes the PTY and the emulator; a no-op when the size is the same.
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        let _ = (cols, rows);
-        todo!("pane::Pane::resize")
+        let (cols, rows) = clamp_size(cols, rows);
+        if (cols, rows) == (self.cols, self.rows) {
+            return;
+        }
+        self.cols = cols;
+        self.rows = rows;
+        self.term.resize(Size {
+            cols: cols.into(),
+            rows: rows.into(),
+        });
+        // The program learns of it by SIGWINCH; a terminal that is gone
+        // has no program left to tell.
+        let _ = self.master.resize(pty_size(cols, rows));
     }
 
     /// (columns, rows).
     pub fn size(&self) -> (u16, u16) {
-        todo!("pane::Pane::size")
+        (self.cols, self.rows)
     }
 
     /// The modes the program has set, for encoding what is sent to it.
     pub fn modes(&self) -> PaneModes {
-        todo!("pane::Pane::modes")
+        let mode = *self.term.mode();
+        let mouse = if mode.contains(TermMode::MOUSE_MOTION) {
+            MouseReporting::Motion
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            MouseReporting::Drag
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            MouseReporting::Press
+        } else {
+            MouseReporting::Off
+        };
+        PaneModes {
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
+            app_keypad: mode.contains(TermMode::APP_KEYPAD),
+            bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+            focus_events: mode.contains(TermMode::FOCUS_IN_OUT),
+            mouse,
+            mouse_sgr: mode.contains(TermMode::SGR_MOUSE),
+            mouse_utf8: mode.contains(TermMode::UTF8_MOUSE),
+            alt_screen: mode.contains(TermMode::ALT_SCREEN),
+            alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+        }
+    }
+
+    /// The cursor's shape as the program set it (`CSI q`), for the client
+    /// to show while this pane has the focus: Neovim's bar in Insert mode.
+    /// A steady block, which is also what a program that never set one
+    /// has, is your terminal's own cursor.
+    pub fn cursor_style(&self) -> SetCursorStyle {
+        let style = self.term.cursor_style();
+        match (style.shape, style.blinking) {
+            (CursorShape::Block | CursorShape::HollowBlock, false) => {
+                SetCursorStyle::DefaultUserShape
+            }
+            (CursorShape::Block | CursorShape::HollowBlock, true) => SetCursorStyle::BlinkingBlock,
+            (CursorShape::Underline, false) => SetCursorStyle::SteadyUnderScore,
+            (CursorShape::Underline, true) => SetCursorStyle::BlinkingUnderScore,
+            (CursorShape::Beam, false) => SetCursorStyle::SteadyBar,
+            (CursorShape::Beam, true) => SetCursorStyle::BlinkingBar,
+            (CursorShape::Hidden, _) => SetCursorStyle::DefaultUserShape,
+        }
     }
 
     /// Draws the screen (scrolled back as far as `scroll` says) into `area`
     /// of `buf`, with the selection shown reversed; gives where the cursor
     /// is, in `buf`'s coordinates, when it should be shown.
     pub fn render(&self, buf: &mut Buffer, area: Rect, view: &PaneView) -> Option<(u16, u16)> {
-        let _ = (buf, area, view);
-        todo!("pane::Pane::render")
+        let visible = area.intersection(buf.area);
+        let grid = self.term.grid();
+        let (cols, rows) = (self.term.columns(), self.term.screen_lines());
+        let offset = grid.display_offset();
+        let colors = self.term.colors();
+        let selection = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
+        let mut symbol = String::new();
+
+        for y in visible.top()..visible.bottom() {
+            let row = usize::from(y - area.y);
+            // Whether the cell just drawn was a wide character, whose second
+            // half ratatui leaves blank for it.
+            let mut wide_before = false;
+            for x in visible.left()..visible.right() {
+                let col = usize::from(x - area.x);
+                let Some(out) = buf.cell_mut((x, y)) else {
+                    continue;
+                };
+                out.reset();
+                if row >= rows || col >= cols {
+                    wide_before = false;
+                    continue;
+                }
+                let point = GridPoint::new(Line(row as i32 - offset as i32), Column(col));
+                let cell = &grid[point];
+
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) && wide_before {
+                    wide_before = false;
+                    continue;
+                }
+                let wide = cell.flags.contains(Flags::WIDE_CHAR);
+                // A wide character with no room for its second half here, or
+                // the gap at a line's end where one didn't fit, is a blank.
+                let fits = !wide || x + 1 < visible.right();
+                let blank = !fits
+                    || cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);
+                symbol.clear();
+                if blank || cell.c == '\t' || cell.c.is_control() {
+                    symbol.push(' ');
+                } else {
+                    symbol.push(cell.c);
+                    if let Some(marks) = cell.zerowidth() {
+                        symbol.extend(marks);
+                    }
+                }
+                out.set_symbol(&symbol);
+                out.fg = to_color(cell.fg, colors);
+                out.bg = to_color(cell.bg, colors);
+                let mut modifier = modifiers(cell);
+                let selected = selection.is_some_and(|range| {
+                    range.contains(point)
+                        || (wide && range.contains(GridPoint::new(point.line, point.column + 1)))
+                });
+                if selected {
+                    modifier.toggle(Modifier::REVERSED);
+                }
+                if view.dim {
+                    modifier.insert(Modifier::DIM);
+                }
+                out.modifier = modifier;
+                wide_before = wide && fits;
+            }
+        }
+
+        let cursor = grid.cursor.point;
+        let shown = view.focused
+            && offset == 0
+            && self.term.mode().contains(TermMode::SHOW_CURSOR)
+            && self.term.cursor_style().shape != CursorShape::Hidden;
+        if !shown {
+            return None;
+        }
+        let mut col = cursor.column.0;
+        // On a wide character's second half, it is drawn on the first.
+        if col > 0
+            && col < cols
+            && grid[cursor.line][Column(col)]
+                .flags
+                .contains(Flags::WIDE_CHAR_SPACER)
+        {
+            col -= 1;
+        }
+        let x = area.x.checked_add(u16::try_from(col).ok()?)?;
+        let y = area.y.checked_add(u16::try_from(cursor.line.0).ok()?)?;
+        (x >= visible.left() && x < visible.right() && y >= visible.top() && y < visible.bottom())
+            .then_some((x, y))
     }
 
     /// Scrolls the view back (positive) or forward (negative) by lines.
     pub fn scroll(&mut self, lines: i32) {
-        let _ = lines;
-        todo!("pane::Pane::scroll")
+        self.term.scroll_display(Scroll::Delta(lines));
     }
 
     /// Back to the live screen.
     pub fn scroll_to_bottom(&mut self) {
-        todo!("pane::Pane::scroll_to_bottom")
+        self.term.scroll_display(Scroll::Bottom);
     }
 
     /// How many lines back the view is (0: the live screen).
     pub fn scrolled(&self) -> usize {
-        todo!("pane::Pane::scrolled")
+        self.term.grid().display_offset()
+    }
+
+    /// A point on the screen as now shown (scrolled back or not), as the
+    /// emulator's grid has it, kept inside the screen.
+    fn screen_point(&self, col: u16, row: u16) -> GridPoint {
+        let cols = self.term.columns();
+        let rows = self.term.screen_lines();
+        let col = usize::from(col).min(cols.saturating_sub(1));
+        let row = usize::from(row).min(rows.saturating_sub(1));
+        let offset = self.term.grid().display_offset();
+        GridPoint::new(Line(row as i32 - offset as i32), Column(col))
     }
 
     /// Starts a selection at a point on the screen as now shown (`col`,
-    /// `row` from its top left); `block` for a rectangle.
+    /// `row` from its top left); `block` for a rectangle. Nothing is
+    /// selected until it is extended, so a click alone selects nothing.
     pub fn select_start(&mut self, col: u16, row: u16, block: bool) {
-        let _ = (col, row, block);
-        todo!("pane::Pane::select_start")
+        let point = self.screen_point(col, row);
+        let ty = if block {
+            SelectionType::Block
+        } else {
+            SelectionType::Simple
+        };
+        self.anchor_side = Side::Left;
+        self.term.selection = Some(Selection::new(ty, point, Side::Left));
     }
 
     /// Moves the selection's end to a point on the screen as now shown.
+    ///
+    /// Both ends' cells are selected, as tmux selects, whichever way the
+    /// mouse goes. alacritty's selection counts the side of a cell each end
+    /// is on, so the fixed end (the anchor) is put on the side facing away
+    /// from the other: its left when the end is after it, its right when
+    /// before. The selection is built again from the anchor each time, and
+    /// the anchor is read back from the selection the emulator holds rather
+    /// than kept here, since the emulator moves a selection with its text
+    /// as output scrolls the screen.
     pub fn select_extend(&mut self, col: u16, row: u16) {
-        let _ = (col, row);
-        todo!("pane::Pane::select_extend")
+        let point = self.screen_point(col, row);
+        let Some(selection) = self.term.selection.as_mut() else {
+            return;
+        };
+        let ty = selection.ty;
+        if matches!(ty, SelectionType::Semantic | SelectionType::Lines) {
+            // These grow to whole words or lines at both ends whichever
+            // side is given, so only the moving end changes.
+            selection.update(point, Side::Right);
+            return;
+        }
+        let Some(anchor) = self.selection_anchor() else {
+            return;
+        };
+        let anchor_first = match ty {
+            SelectionType::Block => {
+                anchor.column < point.column
+                    || (anchor.column == point.column && anchor.line <= point.line)
+            }
+            _ => anchor <= point,
+        };
+        let (anchor_side, end_side) = if anchor_first {
+            (Side::Left, Side::Right)
+        } else {
+            (Side::Right, Side::Left)
+        };
+        let mut selection = Selection::new(ty, anchor, anchor_side);
+        selection.update(point, end_side);
+        self.anchor_side = anchor_side;
+        self.term.selection = Some(selection);
+    }
+
+    /// Where the selection's fixed end is now. The selection keeps it as
+    /// its first point, which only the emulator's scrolling moves; asking
+    /// for its range with the other end put at the screen's last cell
+    /// gives it back as the range's start (a cell on when it is on its
+    /// cell's right side, which is taken off again).
+    fn selection_anchor(&self) -> Option<GridPoint> {
+        let selection = self.term.selection.as_ref()?;
+        let last = GridPoint::new(self.term.bottommost_line(), self.term.last_column());
+        let mut probe = selection.clone();
+        probe.update(last, Side::Right);
+        // Empty only when the anchor is that last cell itself, on its right.
+        let Some(range) = probe.to_range(&self.term) else {
+            return Some(last);
+        };
+        let mut anchor = range.start;
+        if self.anchor_side == Side::Right {
+            if anchor.column.0 > 0 {
+                anchor.column -= 1;
+            } else if selection.ty == SelectionType::Simple {
+                anchor.line -= 1;
+                anchor.column = self.term.last_column();
+            }
+        }
+        Some(anchor)
     }
 
     /// Selects the word, or with `line` the line, at a point.
     pub fn select_semantic(&mut self, col: u16, row: u16, line: bool) {
-        let _ = (col, row, line);
-        todo!("pane::Pane::select_semantic")
+        let point = self.screen_point(col, row);
+        let ty = if line {
+            SelectionType::Lines
+        } else {
+            SelectionType::Semantic
+        };
+        self.anchor_side = Side::Left;
+        self.term.selection = Some(Selection::new(ty, point, Side::Left));
     }
 
     pub fn select_clear(&mut self) {
-        todo!("pane::Pane::select_clear")
+        self.term.selection = None;
     }
 
     /// The selected text, lines joined by newlines, wrapped lines joined.
     pub fn selection_text(&self) -> Option<String> {
-        todo!("pane::Pane::selection_text")
+        self.term
+            .selection_to_string()
+            .filter(|text| !text.is_empty())
     }
 
     /// The last `lines` lines of the screen and scrollback as text, trailing
     /// blanks trimmed: what tmux's `capture-pane -p -S -<lines>` gave.
+    ///
+    /// As with tmux, that is the whole screen (the live one, however far
+    /// the view is scrolled back) and up to `lines` lines of scrollback
+    /// above it, with each line's trailing blanks trimmed, wrapped lines
+    /// joined (its `-J`), and the empty lines at the end dropped, so a
+    /// screen with a prompt at its top gives the prompt, not a page of
+    /// blanks. Lines are joined by newlines, with none after the last.
     pub fn text(&self, lines: usize) -> String {
-        let _ = lines;
-        todo!("pane::Pane::text")
+        let grid = self.term.grid();
+        let cols = self.term.columns();
+        let history = grid.history_size().min(lines);
+        let top = -(history as i32);
+        let bottom = self.term.screen_lines() as i32;
+
+        let mut out: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for line in top..bottom {
+            let row = &grid[Line(line)];
+            for col in 0..cols {
+                let cell = &row[Column(col)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                current.push(if cell.c == '\t' { ' ' } else { cell.c });
+                if let Some(marks) = cell.zerowidth() {
+                    current.extend(marks);
+                }
+            }
+            if cols > 0 && row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
+                continue;
+            }
+            out.push(current.trim_end().to_string());
+            current.clear();
+        }
+        if !current.is_empty() {
+            out.push(current.trim_end().to_string());
+        }
+        while out.last().is_some_and(|line| line.is_empty()) {
+            out.pop();
+        }
+        out.join("\n")
     }
 
     /// The title the program set, or "".
     pub fn title(&self) -> &str {
-        todo!("pane::Pane::title")
+        &self.title
     }
 
     /// The pane's own program (its shell, usually).
     pub fn pid(&self) -> Option<u32> {
-        todo!("pane::Pane::pid")
+        self.pid
     }
 
     /// The process group in front on the PTY (the program you're using).
     pub fn foreground_pgid(&self) -> Option<u32> {
-        todo!("pane::Pane::foreground_pgid")
+        self.master
+            .process_group_leader()
+            .and_then(|pgid| u32::try_from(pgid).ok())
+            .filter(|&pgid| pgid > 0)
     }
 
     /// The directory of the program in front, else of the pane's own:
     /// what tmux's `pane_current_path` was.
     pub fn cwd(&self) -> Option<PathBuf> {
-        todo!("pane::Pane::cwd")
+        self.foreground_pgid()
+            .and_then(super::procinfo::cwd_of)
+            .or_else(|| self.pid.and_then(super::procinfo::cwd_of))
     }
 
     /// The name of the program in front (`zsh`, `claude`, `node`): what
     /// tmux's `pane_current_command` was.
     pub fn foreground_command(&self) -> Option<String> {
-        todo!("pane::Pane::foreground_command")
+        self.foreground_pgid()
+            .and_then(super::procinfo::command_of)
+            .or_else(|| self.pid.and_then(super::procinfo::command_of))
     }
 
     /// Every process in front on the PTY (the foreground process group), for
     /// finding which runs Claude (it has a session file by its pid).
     pub fn foreground_pids(&self) -> Vec<u32> {
-        todo!("pane::Pane::foreground_pids")
+        self.foreground_pgid()
+            .map(super::procinfo::group_members)
+            .unwrap_or_default()
     }
 
     /// The exit code once the program has ended (`Some(None)` for a signal).
     pub fn exited(&self) -> Option<Option<i32>> {
-        todo!("pane::Pane::exited")
+        self.exited
     }
 
     /// Marks the pane's program ended (from `PaneEvent::Exited`).
     pub fn set_exited(&mut self, code: Option<i32>) {
-        let _ = code;
-        todo!("pane::Pane::set_exited")
+        self.exited = Some(code);
     }
 
     /// Ends the program: SIGHUP to its process group, as closing a terminal does.
+    ///
+    /// Closing a terminal hangs up both the shell's group and the group in
+    /// front (a program the shell started, in a group of its own), so both
+    /// get it here too; the shell passes it on to its other jobs.
     pub fn kill(&mut self) {
-        todo!("pane::Pane::kill")
+        if self.exited.is_some() || self.reaped.load(Ordering::Acquire) {
+            return;
+        }
+        let pid = self.pid.and_then(|pid| libc::pid_t::try_from(pid).ok());
+        if let Some(front) = self.foreground_pgid()
+            && let Ok(front) = libc::pid_t::try_from(front)
+            && Some(front) != pid
+        {
+            // SAFETY: a signal to a process group of this pane's terminal.
+            unsafe { libc::killpg(front, libc::SIGHUP) };
+        }
+        // The program leads a session of its own (portable-pty starts it
+        // with setsid), so its pid is its process group's too.
+        // SAFETY: a signal to the group of a child not yet reaped.
+        if let Some(pid) = pid
+            && unsafe { libc::killpg(pid, libc::SIGHUP) } == 0
+        {
+            return;
+        }
+        let _ = self.killer.kill();
+    }
+}
+
+/// A pane let go of takes its program with it, as closing a tmux pane did:
+/// the reader thread's copy of the terminal keeps it open, so dropping the
+/// pane alone wouldn't hang it up.
+impl Drop for Pane {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Reads the program's output until the terminal's other end is closed
+/// (portable-pty reads the EIO a closed terminal gives as the end), then
+/// waits for the program and says how it ended. Once the server stops
+/// listening it keeps reading and dropping what it reads, so the program
+/// never blocks on a full terminal.
+fn read_loop(
+    id: PaneId,
+    mut reader: Box<dyn Read + Send>,
+    mut child: Box<dyn Child + Send + Sync>,
+    reaped: Arc<AtomicBool>,
+    events: UnboundedSender<PaneEvent>,
+) {
+    let mut buf = vec![0u8; READ_SIZE];
+    let mut listening = true;
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if listening
+                    && events
+                        .send(PaneEvent::Output(id, buf[..n].to_vec()))
+                        .is_err()
+                {
+                    listening = false;
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    let code = match child.wait() {
+        Ok(status) if status.signal().is_none() => i32::try_from(status.exit_code()).ok(),
+        _ => None,
+    };
+    reaped.store(true, Ordering::Release);
+    let _ = events.send(PaneEvent::Exited(id, code));
+}
+
+/// Writes what the server queued for the program, in order, until the pane
+/// is dropped or the terminal can't be written to.
+fn write_loop(mut writer: Box<dyn Write + Send>, queue: mpsc::Receiver<Vec<u8>>) {
+    while let Ok(bytes) = queue.recv() {
+        if writer
+            .write_all(&bytes)
+            .and_then(|()| writer.flush())
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
+/// How many colors the emulator keeps: the 256 of the palette, then the
+/// default foreground, background and cursor, the dim colors, the bright
+/// and dim foreground (alacritty's `term::color::COUNT`).
+const COLOR_COUNT: usize = 269;
+
+/// A cell's color for ratatui. The sixteen named colors and the palette
+/// stay indexes, so they come out in your terminal's own colors, and the
+/// default foreground and background are your terminal's default; a color
+/// the program changed (OSC 4, 10, 11) is drawn as it set it.
+fn to_color(color: AnsiColor, colors: &Colors) -> Color {
+    let set = |index: usize| colors[index].map(|Rgb { r, g, b }| Color::Rgb(r, g, b));
+    match color {
+        AnsiColor::Spec(Rgb { r, g, b }) => Color::Rgb(r, g, b),
+        AnsiColor::Indexed(index) => set(index.into()).unwrap_or(Color::Indexed(index)),
+        AnsiColor::Named(name) => {
+            let index = name as usize;
+            match name {
+                _ if index < 16 => set(index).unwrap_or(Color::Indexed(index as u8)),
+                NamedColor::DimBlack
+                | NamedColor::DimRed
+                | NamedColor::DimGreen
+                | NamedColor::DimYellow
+                | NamedColor::DimBlue
+                | NamedColor::DimMagenta
+                | NamedColor::DimCyan
+                | NamedColor::DimWhite => set(index).unwrap_or(Color::Indexed(
+                    (index - NamedColor::DimBlack as usize) as u8,
+                )),
+                NamedColor::Background => set(index).unwrap_or(Color::Reset),
+                NamedColor::Foreground
+                | NamedColor::BrightForeground
+                | NamedColor::DimForeground => {
+                    set(NamedColor::Foreground as usize).unwrap_or(Color::Reset)
+                }
+                // The cursor's color, which no cell is drawn in.
+                _ => Color::Reset,
+            }
+        }
+    }
+}
+
+fn modifiers(cell: &Cell) -> Modifier {
+    let flags = cell.flags;
+    let mut modifier = Modifier::empty();
+    for (flag, add) in [
+        (Flags::BOLD, Modifier::BOLD),
+        (Flags::DIM, Modifier::DIM),
+        (Flags::ITALIC, Modifier::ITALIC),
+        (Flags::ALL_UNDERLINES, Modifier::UNDERLINED),
+        (Flags::INVERSE, Modifier::REVERSED),
+        (Flags::HIDDEN, Modifier::HIDDEN),
+        (Flags::STRIKEOUT, Modifier::CROSSED_OUT),
+    ] {
+        if flags.intersects(flag) {
+            modifier.insert(add);
+        }
+    }
+    modifier
+}
+
+/// The answer to a program asking what a color is, when it hasn't set it
+/// itself: xterm's 256-color palette, and for the defaults a light grey
+/// (xterm's white, #e5e5e5) on black, the usual dark terminal. The real
+/// colors are your terminal's, which the server doesn't know; a program
+/// asks mostly to tell a dark background from a light one, and dark is
+/// the likelier.
+fn default_color(index: usize) -> Rgb {
+    const ANSI: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0xcd, 0x00, 0x00),
+        (0x00, 0xcd, 0x00),
+        (0xcd, 0xcd, 0x00),
+        (0x00, 0x00, 0xee),
+        (0xcd, 0x00, 0xcd),
+        (0x00, 0xcd, 0xcd),
+        (0xe5, 0xe5, 0xe5),
+        (0x7f, 0x7f, 0x7f),
+        (0xff, 0x00, 0x00),
+        (0x00, 0xff, 0x00),
+        (0xff, 0xff, 0x00),
+        (0x5c, 0x5c, 0xff),
+        (0xff, 0x00, 0xff),
+        (0x00, 0xff, 0xff),
+        (0xff, 0xff, 0xff),
+    ];
+    const FOREGROUND: Rgb = Rgb {
+        r: 0xe5,
+        g: 0xe5,
+        b: 0xe5,
+    };
+    let rgb = |(r, g, b): (u8, u8, u8)| Rgb { r, g, b };
+    // Two thirds as bright, as alacritty dims a color.
+    let dim = |Rgb { r, g, b }: Rgb| Rgb {
+        r: (u16::from(r) * 2 / 3) as u8,
+        g: (u16::from(g) * 2 / 3) as u8,
+        b: (u16::from(b) * 2 / 3) as u8,
+    };
+    match index {
+        0..=15 => rgb(ANSI[index]),
+        16..=231 => {
+            let level = |n: usize| if n == 0 { 0 } else { (55 + 40 * n) as u8 };
+            let n = index - 16;
+            rgb((level(n / 36), level(n / 6 % 6), level(n % 6)))
+        }
+        232..=255 => {
+            let grey = (8 + 10 * (index - 232)) as u8;
+            rgb((grey, grey, grey))
+        }
+        256 | 258 => FOREGROUND,
+        257 => rgb((0, 0, 0)),
+        259..=266 => dim(rgb(ANSI[index - 259])),
+        267 => rgb((0xff, 0xff, 0xff)),
+        268 => dim(FOREGROUND),
+        // Past the emulator's colors: none asks, but the foreground serves.
+        _ => FOREGROUND,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+    fn assert_send<T: Send>() {}
+
+    #[test]
+    fn a_pane_can_move_between_threads() {
+        assert_send::<Pane>();
+    }
+
+    struct Running {
+        home: PathBuf,
+        pane: Pane,
+        rx: UnboundedReceiver<PaneEvent>,
+        notices: Vec<TermNotice>,
+        exit: Option<Option<i32>>,
+    }
+
+    impl Drop for Running {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.home);
+        }
+    }
+
+    /// A temporary directory of the test's own, so nothing reads or writes
+    /// the real HOME: it is the panes' HOME too.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "sb-pane-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        dir.canonicalize().expect("canonical scratch dir")
+    }
+
+    fn start(command: Option<&[&str]>, cols: u16, rows: u16, env: &[(&str, &str)]) -> Running {
+        let home = scratch("home");
+        let mut vars = vec![("HOME".to_string(), home.display().to_string())];
+        vars.extend(env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+        let (tx, rx) = unbounded_channel();
+        let pane = Pane::spawn(
+            PaneSpawn {
+                command: command.map(|c| c.iter().map(|s| s.to_string()).collect()),
+                env: vars,
+                cols,
+                rows,
+                scrollback: 1000,
+                ..PaneSpawn::default()
+            },
+            tx,
+        )
+        .expect("spawn");
+        Running {
+            home,
+            pane,
+            rx,
+            notices: Vec::new(),
+            exit: None,
+        }
+    }
+
+    impl Running {
+        /// Feeds the program's output to the emulator until `done` holds
+        /// (or five seconds pass, which fails the test).
+        fn until(&mut self, what: &str, done: impl Fn(&Running) -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if done(self) {
+                    return;
+                }
+                match self.rx.try_recv() {
+                    Ok(PaneEvent::Output(id, bytes)) => {
+                        assert_eq!(id, self.pane.id());
+                        let notices = self.pane.process(&bytes);
+                        self.notices.extend(notices);
+                    }
+                    Ok(PaneEvent::Exited(id, code)) => {
+                        assert_eq!(id, self.pane.id());
+                        self.pane.set_exited(code);
+                        self.exit = Some(code);
+                    }
+                    Err(_) => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for {what}; screen:\n{}",
+                            self.pane.text(100)
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        }
+
+        fn until_text(&mut self, needle: &str) {
+            self.until(needle, |r| r.pane.text(1000).contains(needle));
+        }
+
+        fn until_exit(&mut self) -> Option<i32> {
+            self.until("the exit", |r| r.exit.is_some());
+            self.exit.flatten()
+        }
+    }
+
+    /// A pane whose program waits and prints nothing, for feeding the
+    /// emulator by hand.
+    fn idle(cols: u16, rows: u16) -> Running {
+        start(Some(&["sleep", "30"]), cols, rows, &[])
+    }
+
+    fn render(pane: &Pane, view: PaneView) -> (Buffer, Option<(u16, u16)>) {
+        let (cols, rows) = pane.size();
+        let area = Rect::new(0, 0, cols, rows);
+        let mut buf = Buffer::empty(area);
+        let cursor = pane.render(&mut buf, area, &view);
+        (buf, cursor)
+    }
+
+    fn row_text(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol().to_string())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn output_and_a_title_reach_the_screen_and_the_server() {
+        let mut run = start(
+            Some(&["/bin/sh", "-c", "printf 'hello\\033]2;title\\007'"]),
+            40,
+            5,
+            &[],
+        );
+        run.until_text("hello");
+        run.until("the title", |r| r.pane.title() == "title");
+        assert!(
+            run.notices
+                .contains(&TermNotice::Title(Some("title".to_string())))
+        );
+        assert_eq!(run.until_exit(), Some(0));
+        assert_eq!(run.pane.exited(), Some(Some(0)));
+    }
+
+    #[test]
+    fn the_exit_code_and_a_signal() {
+        let mut run = start(Some(&["/bin/sh", "-c", "exit 3"]), 20, 5, &[]);
+        assert_eq!(run.until_exit(), Some(3));
+
+        let mut run = idle(20, 5);
+        let pid = run.pane.pid().expect("pid");
+        assert!(crate::util::is_alive(pid.into()));
+        run.pane.kill();
+        assert_eq!(run.until_exit(), None);
+        assert_eq!(run.pane.exited(), Some(None));
+    }
+
+    #[test]
+    fn the_program_gets_answers_to_its_queries() {
+        // bash reads the answer to "where is the cursor?" as typed input.
+        let script =
+            r#"printf 'ab\033[6n'; IFS= read -rs -d R reply; printf '\ngot:%s\n' "${reply#*[}""#;
+        let mut run = start(Some(&["bash", "-c", script]), 40, 5, &[]);
+        run.until_text("got:1;3");
+        assert_eq!(run.until_exit(), Some(0));
+    }
+
+    #[test]
+    fn color_size_clipboard_and_attribute_queries_are_answered() {
+        // The terminal echoes what is written to the program, so its
+        // answers show on the screen (as ^[ for ESC).
+        let mut run = idle(80, 24);
+        run.until("the program to start", |r| {
+            r.pane.foreground_command().as_deref() == Some("sleep")
+        });
+        run.pane.process(b"\x1b]11;?\x07");
+        run.until_text("]11;rgb:0000/0000/0000");
+        run.pane.process(b"\x1b]10;?\x1b\\");
+        run.until_text("]10;rgb:e5e5/e5e5/e5e5");
+        run.pane.process(b"\x1b]4;196;?\x07");
+        run.until_text("]4;196;rgb:ffff/0000/0000");
+        run.pane.process(b"\x1b[14t");
+        run.until_text("[4;384;640t");
+        run.pane.process(b"\x1b]52;c;?\x07");
+        run.until_text("]52;c;^G");
+        run.pane.process(b"\x1b[c");
+        run.until_text("[?6c");
+        // A color the program set is the one it is told.
+        run.pane.process(b"\x1b]4;1;rgb:12/34/56\x07\x1b]4;1;?\x07");
+        run.until_text("]4;1;rgb:1212/3434/5656");
+    }
+
+    #[test]
+    fn the_bell_and_the_clipboard_are_told() {
+        let mut run = idle(20, 5);
+        let notices = run.pane.process(b"\x07\x1b]52;c;aGVsbG8=\x07");
+        assert_eq!(
+            notices,
+            vec![TermNotice::Bell, TermNotice::Clipboard("hello".to_string())]
+        );
+        let notices = run.pane.process(b"\x1b]2;one\x07\x1b]2;one\x07\x1b]2;\x07");
+        assert_eq!(
+            notices,
+            vec![
+                TermNotice::Title(Some("one".to_string())),
+                TermNotice::Title(None)
+            ]
+        );
+        assert_eq!(run.pane.title(), "");
+    }
+
+    #[test]
+    fn a_resize_reaches_the_program() {
+        let mut run = start(
+            Some(&["/bin/sh", "-c", "stty size; read x; stty size; read x"]),
+            80,
+            24,
+            &[],
+        );
+        run.until_text("24 80");
+        run.pane.resize(100, 30);
+        assert_eq!(run.pane.size(), (100, 30));
+        run.pane.write(b"\n").expect("write");
+        run.until_text("30 100");
+        // The same size again changes nothing; too small is made usable.
+        run.pane.resize(100, 30);
+        run.pane.resize(0, 0);
+        assert_eq!(run.pane.size(), (2, 1));
+    }
+
+    #[test]
+    fn the_environment_and_directory() {
+        let dir = scratch("cwd");
+        let script = r#"printf '%s|%s|%s|%s|%s|%s\n' "$TERM" "$COLORTERM" "$FOO" "${TMUX-none}" "$SWITCHBOARD_PANE" "$PWD""#;
+        let (tx, rx) = unbounded_channel();
+        let pane = Pane::spawn(
+            PaneSpawn {
+                command: Some(vec!["/bin/sh".into(), "-c".into(), script.into()]),
+                cwd: Some(dir.clone()),
+                env: vec![
+                    ("FOO".into(), "bar".into()),
+                    ("HOME".into(), dir.display().to_string()),
+                ],
+                cols: 200,
+                rows: 5,
+                ..PaneSpawn::default()
+            },
+            tx,
+        )
+        .expect("spawn");
+        let mut run = Running {
+            home: dir.clone(),
+            pane,
+            rx,
+            notices: Vec::new(),
+            exit: None,
+        };
+        let id = run.pane.id();
+        run.until_text(&format!(
+            "xterm-256color|truecolor|bar|none|{id}|{}",
+            dir.display()
+        ));
+    }
+
+    #[test]
+    fn with_no_command_the_login_shell_runs_in_home() {
+        let mut run = start(None, 80, 5, &[("SHELL", "/bin/sh")]);
+        run.pane
+            .write(b"echo \"[$0] [$PWD]\"; exit\n")
+            .expect("write");
+        let home = run.home.clone();
+        run.until_text(&format!("[-sh] [{}]", home.display()));
+        assert_eq!(run.until_exit(), Some(0));
+    }
+
+    #[test]
+    fn the_program_in_front_its_directory_and_group() {
+        // An interactive shell runs each command in a group of its own and
+        // puts it in front; this one runs sleep elsewhere than itself.
+        let mut run = start(Some(&["bash", "--norc", "--noprofile", "-i"]), 80, 5, &[]);
+        let shell = run.pane.pid().expect("pid");
+        run.until("the shell in front", |r| {
+            r.pane.foreground_pgid() == Some(shell)
+        });
+        assert_eq!(run.pane.cwd(), Some(run.home.clone()));
+        assert_eq!(run.pane.foreground_command().as_deref(), Some("bash"));
+        let dir = scratch("front");
+        run.pane
+            .write(format!("(cd '{}' && exec sleep 30)\n", dir.display()).as_bytes())
+            .expect("write");
+        run.until("sleep in front", |r| {
+            r.pane.foreground_command().as_deref() == Some("sleep")
+        });
+        let front = run.pane.foreground_pgid().expect("a group in front");
+        assert_ne!(front, shell);
+        assert_eq!(run.pane.cwd(), Some(dir.clone()));
+        assert_eq!(run.pane.foreground_pids(), vec![front]);
+        // Closing it hangs up both, as closing a terminal would.
+        run.pane.kill();
+        assert_eq!(run.until_exit(), None);
+        run.until("sleep to end", |_| !crate::util::is_alive(front.into()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wide_characters_take_two_cells() {
+        let mut run = idle(10, 3);
+        run.pane.process("a漢b\r\n123456789漢".as_bytes());
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert_eq!(buf[(0, 0)].symbol(), "a");
+        assert_eq!(buf[(1, 0)].symbol(), "漢");
+        assert_eq!(buf[(2, 0)].symbol(), " ");
+        assert_eq!(buf[(3, 0)].symbol(), "b");
+        // No room at the end of a line: it went to the next, leaving a gap.
+        assert_eq!(buf[(9, 1)].symbol(), " ");
+        assert_eq!(run.pane.text(10), "a漢b\n123456789漢");
+        // Cut by a narrower area, the half that doesn't fit is a blank.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 2, 1));
+        run.pane
+            .render(&mut buf, Rect::new(0, 0, 2, 1), &PaneView::default());
+        assert_eq!(buf[(0, 0)].symbol(), "a");
+        assert_eq!(buf[(1, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn combining_marks_stay_with_their_character() {
+        let mut run = idle(10, 2);
+        run.pane.process("e\u{301}x".as_bytes());
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert_eq!(buf[(0, 0)].symbol(), "e\u{301}");
+        assert_eq!(buf[(1, 0)].symbol(), "x");
+        assert_eq!(run.pane.text(1), "e\u{301}x");
+    }
+
+    #[test]
+    fn colors_and_attributes_map_to_ratatuis() {
+        let mut run = idle(20, 2);
+        run.pane.process(
+            b"\x1b[31;42mA\x1b[0m\x1b[38;5;200;48;5;17mB\x1b[0m\x1b[38;2;1;2;3;48;2;4;5;6mC\
+              \x1b[0mD\x1b[1;2;3;4;7;8;9mE\x1b[0m\x1b[91mF\x1b[0m",
+        );
+        let (buf, _) = render(&run.pane, PaneView::default());
+        let cell = |x: u16| buf[(x, 0)].clone();
+        assert_eq!(
+            (cell(0).fg, cell(0).bg),
+            (Color::Indexed(1), Color::Indexed(2))
+        );
+        assert_eq!(
+            (cell(1).fg, cell(1).bg),
+            (Color::Indexed(200), Color::Indexed(17))
+        );
+        assert_eq!(
+            (cell(2).fg, cell(2).bg),
+            (Color::Rgb(1, 2, 3), Color::Rgb(4, 5, 6))
+        );
+        assert_eq!((cell(3).fg, cell(3).bg), (Color::Reset, Color::Reset));
+        assert_eq!(cell(3).modifier, Modifier::empty());
+        assert_eq!(
+            cell(4).modifier,
+            Modifier::BOLD
+                | Modifier::DIM
+                | Modifier::ITALIC
+                | Modifier::UNDERLINED
+                | Modifier::REVERSED
+                | Modifier::HIDDEN
+                | Modifier::CROSSED_OUT
+        );
+        assert_eq!(cell(5).fg, Color::Indexed(9));
+
+        // Dimmed as an inactive pane.
+        let (buf, _) = render(
+            &run.pane,
+            PaneView {
+                dim: true,
+                focused: false,
+            },
+        );
+        assert!(buf[(3, 0)].modifier.contains(Modifier::DIM));
+
+        // A color the program set for itself is drawn as it set it.
+        run.pane
+            .process(b"\x1b]4;1;rgb:ff/80/00\x07\x1b]11;rgb:10/20/30\x07");
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert_eq!(buf[(0, 0)].fg, Color::Rgb(0xff, 0x80, 0x00));
+        assert_eq!(buf[(3, 0)].bg, Color::Rgb(0x10, 0x20, 0x30));
+    }
+
+    #[test]
+    fn the_default_palette_is_xterms() {
+        assert_eq!(
+            default_color(1),
+            Rgb {
+                r: 0xcd,
+                g: 0,
+                b: 0
+            }
+        );
+        assert_eq!(default_color(16), Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(
+            default_color(196),
+            Rgb {
+                r: 0xff,
+                g: 0,
+                b: 0
+            }
+        );
+        assert_eq!(
+            default_color(110),
+            Rgb {
+                r: 0x87,
+                g: 0xaf,
+                b: 0xd7
+            }
+        );
+        assert_eq!(
+            default_color(231),
+            Rgb {
+                r: 0xff,
+                g: 0xff,
+                b: 0xff
+            }
+        );
+        assert_eq!(default_color(232), Rgb { r: 8, g: 8, b: 8 });
+        assert_eq!(
+            default_color(255),
+            Rgb {
+                r: 0xee,
+                g: 0xee,
+                b: 0xee
+            }
+        );
+        assert_eq!(default_color(257), Rgb { r: 0, g: 0, b: 0 });
+        assert_eq!(default_color(256), default_color(7));
+        assert_eq!(
+            default_color(260),
+            Rgb {
+                r: 0x88,
+                g: 0,
+                b: 0
+            }
+        );
+        assert_eq!(default_color(9999), default_color(256));
+    }
+
+    #[test]
+    fn the_cursor_is_given_only_when_it_should_show() {
+        let mut run = idle(10, 3);
+        run.pane.process(b"ab\r\nc");
+        let focused = PaneView {
+            focused: true,
+            dim: false,
+        };
+        assert_eq!(render(&run.pane, focused).1, Some((1, 1)));
+        assert_eq!(render(&run.pane, PaneView::default()).1, None);
+        // Offset by the area.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+        let at = run.pane.render(&mut buf, Rect::new(5, 2, 10, 3), &focused);
+        assert_eq!(at, Some((6, 3)));
+        // Not in the area: nothing drawn outside it, no cursor.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+        let at = run.pane.render(&mut buf, Rect::new(5, 2, 1, 1), &focused);
+        assert_eq!(at, None);
+        assert_eq!(buf[(6, 2)].symbol(), " ");
+        assert_eq!(buf[(5, 2)].symbol(), "a");
+        // Hidden by the program.
+        run.pane.process(b"\x1b[?25l");
+        assert_eq!(render(&run.pane, focused).1, None);
+        run.pane.process(b"\x1b[?25h\x1b[6 q");
+        assert_eq!(render(&run.pane, focused).1, Some((1, 1)));
+        assert_eq!(run.pane.cursor_style(), SetCursorStyle::SteadyBar);
+        run.pane.process(b"\x1b[0 q");
+        assert_eq!(run.pane.cursor_style(), SetCursorStyle::DefaultUserShape);
+    }
+
+    #[test]
+    fn scrollback_scrolls_and_reads_back() {
+        let mut run = idle(20, 5);
+        for n in 0..50 {
+            run.pane.process(format!("line {n}\r\n").as_bytes());
+        }
+        let focused = PaneView {
+            focused: true,
+            dim: false,
+        };
+        let (buf, cursor) = render(&run.pane, focused);
+        assert_eq!(row_text(&buf, 0), "line 46");
+        assert_eq!(cursor, Some((0, 4)));
+
+        run.pane.scroll(10);
+        assert_eq!(run.pane.scrolled(), 10);
+        let (buf, cursor) = render(&run.pane, focused);
+        assert_eq!(row_text(&buf, 0), "line 36");
+        assert_eq!(cursor, None, "no cursor while scrolled back");
+        // New output keeps the view on what it shows.
+        run.pane.process(b"line 50\r\n");
+        assert_eq!(run.pane.scrolled(), 11);
+        assert_eq!(row_text(&render(&run.pane, focused).0, 0), "line 36");
+        run.pane.scroll(-4);
+        assert_eq!(run.pane.scrolled(), 7);
+        run.pane.scroll(1000);
+        assert_eq!(run.pane.scrolled(), 47);
+        assert_eq!(row_text(&render(&run.pane, focused).0, 0), "line 0");
+        run.pane.scroll_to_bottom();
+        assert_eq!(run.pane.scrolled(), 0);
+
+        // The screen and that much scrollback, as tmux captured it.
+        assert_eq!(
+            run.pane.text(2),
+            "line 45\nline 46\nline 47\nline 48\nline 49\nline 50"
+        );
+        assert!(run.pane.text(1000).starts_with("line 0\nline 1\n"));
+        assert_eq!(run.pane.text(0), "line 47\nline 48\nline 49\nline 50");
+    }
+
+    #[test]
+    fn text_joins_wrapped_lines_and_trims() {
+        let mut run = idle(5, 4);
+        run.pane.process(b"abcdefgh  \r\nxy   \r\n\r\n");
+        assert_eq!(run.pane.text(10), "abcdefgh\nxy");
+        let mut run = idle(20, 4);
+        assert_eq!(run.pane.text(10), "");
+        // A tab is the blanks it moved over, as tmux captured it.
+        run.pane.process(b"a\tb");
+        assert_eq!(run.pane.text(10), "a       b");
+    }
+
+    #[test]
+    fn the_alternate_screen() {
+        let mut run = idle(20, 4);
+        run.pane.process(b"main text\r\n");
+        assert!(!run.pane.modes().alt_screen);
+        run.pane.process(b"\x1b[?1049h\x1b[Hfull screen");
+        assert!(run.pane.modes().alt_screen);
+        assert_eq!(run.pane.text(100), "full screen");
+        run.pane.process(b"\x1b[?1049l");
+        assert!(!run.pane.modes().alt_screen);
+        assert_eq!(run.pane.text(100), "main text");
+    }
+
+    #[test]
+    fn modes_follow_the_program() {
+        let mut run = idle(20, 4);
+        let modes = run.pane.modes();
+        assert_eq!(modes.mouse, MouseReporting::Off);
+        assert!(!modes.app_cursor && !modes.bracketed_paste && !modes.focus_events);
+        run.pane
+            .process(b"\x1b[?1h\x1b=\x1b[?2004h\x1b[?1004h\x1b[?1000h\x1b[?1005h");
+        let modes = run.pane.modes();
+        assert!(modes.app_cursor && modes.app_keypad && modes.bracketed_paste);
+        assert!(modes.focus_events && modes.mouse_utf8 && !modes.mouse_sgr);
+        assert_eq!(modes.mouse, MouseReporting::Press);
+        // SGR and UTF-8 coordinates are one or the other.
+        run.pane.process(b"\x1b[?1006h");
+        assert!(run.pane.modes().mouse_sgr && !run.pane.modes().mouse_utf8);
+        run.pane.process(b"\x1b[?1002h");
+        assert_eq!(run.pane.modes().mouse, MouseReporting::Drag);
+        run.pane.process(b"\x1b[?1003h");
+        assert_eq!(run.pane.modes().mouse, MouseReporting::Motion);
+        run.pane.process(b"\x1b[?1003l\x1b[?1007l");
+        assert_eq!(run.pane.modes().mouse, MouseReporting::Off);
+        assert!(!run.pane.modes().alternate_scroll);
+    }
+
+    #[test]
+    fn selections_select_both_ends_either_way() {
+        let mut run = idle(20, 4);
+        run.pane.process(b"hello world\r\nsecond line");
+
+        run.pane.select_start(0, 0, false);
+        assert_eq!(run.pane.selection_text(), None, "a click selects nothing");
+        run.pane.select_extend(4, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("hello"));
+        run.pane.select_extend(10, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("hello world"));
+
+        run.pane.select_start(4, 0, false);
+        run.pane.select_extend(0, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("hello"));
+        run.pane.select_extend(4, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("o"));
+        run.pane.select_extend(5, 1);
+        assert_eq!(
+            run.pane.selection_text().as_deref(),
+            Some("o world\nsecond")
+        );
+        run.pane.select_extend(2, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("llo"));
+
+        // Shown reversed.
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(5, 0)].modifier.contains(Modifier::REVERSED));
+
+        run.pane.select_semantic(8, 0, false);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("world"));
+        run.pane.select_semantic(1, 1, true);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("second line\n"));
+
+        run.pane.select_start(8, 0, true);
+        run.pane.select_extend(7, 1);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("or\nli"));
+        run.pane.select_extend(9, 1);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("rl\nin"));
+        run.pane.select_start(7, 1, true);
+        run.pane.select_extend(8, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("or\nli"));
+
+        run.pane.select_clear();
+        assert_eq!(run.pane.selection_text(), None);
+        run.pane.select_extend(3, 0);
+        assert_eq!(run.pane.selection_text(), None, "nothing to extend");
+    }
+
+    #[test]
+    fn a_selection_keeps_to_its_text_as_output_scrolls() {
+        let mut run = idle(20, 4);
+        run.pane.process(b"alpha\r\nbravo\r\ncharlie\r\n");
+        run.pane.select_start(4, 1, false);
+        run.pane.select_extend(0, 1);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("bravo"));
+        run.pane.process(b"delta\r\necho\r\n");
+        assert_eq!(run.pane.selection_text().as_deref(), Some("bravo"));
+        // Its fixed end, the "o" of bravo, moved with it.
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert_eq!(row_text(&buf, 0), "charlie");
+        run.pane.select_extend(6, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("o\ncharlie"));
+
+        // A selection scrolled back reads the same, by the screen as shown.
+        run.pane.scroll(1);
+        run.pane.select_start(0, 0, false);
+        run.pane.select_extend(4, 0);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("bravo"));
+    }
+
+    #[test]
+    fn a_selection_across_a_wrapped_line_is_one_line() {
+        let mut run = idle(5, 4);
+        run.pane.process(b"abcdefgh\r\nxy");
+        run.pane.select_start(0, 0, false);
+        run.pane.select_extend(1, 2);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("abcdefgh\nxy"));
+    }
+
+    #[test]
+    fn a_synchronized_update_is_drawn_whole() {
+        let mut run = idle(20, 4);
+        run.pane.process(b"\x1b[?2026hhalf");
+        assert_eq!(run.pane.text(10), "");
+        assert!(run.pane.sync_deadline().is_some());
+        run.pane.process(b" done\x1b[?2026l");
+        assert_eq!(run.pane.text(10), "half done");
+        assert!(run.pane.sync_deadline().is_none());
+
+        // One that never ends is drawn when asked.
+        run.pane.process(b"\r\n\x1b[?2026hstuck");
+        assert_eq!(run.pane.text(10), "half done");
+        run.pane.flush_sync();
+        assert_eq!(run.pane.text(10), "half done\nstuck");
+        assert!(run.pane.sync_deadline().is_none());
+    }
+
+    #[test]
+    fn writes_after_the_program_ends_fail_rather_than_wait() {
+        let mut run = start(Some(&["/bin/sh", "-c", "exit 0"]), 20, 4, &[]);
+        run.until_exit();
+        let err = run.pane.write(b"x").expect_err("the program has ended");
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        // And killing an ended pane signals nothing.
+        run.pane.kill();
+    }
+
+    #[test]
+    fn ids_count_up_past_one_restored() {
+        let (tx, _rx) = unbounded_channel();
+        let restored = Pane::spawn(
+            PaneSpawn {
+                id: Some(PaneId(5000)),
+                command: Some(vec!["true".into()]),
+                cwd: Some(std::env::temp_dir()),
+                env: vec![("HOME".into(), std::env::temp_dir().display().to_string())],
+                cols: 10,
+                rows: 2,
+                ..PaneSpawn::default()
+            },
+            tx.clone(),
+        )
+        .expect("spawn");
+        assert_eq!(restored.id(), PaneId(5000));
+        let next = Pane::spawn(
+            PaneSpawn {
+                command: Some(vec!["true".into()]),
+                cwd: Some(std::env::temp_dir()),
+                env: vec![("HOME".into(), std::env::temp_dir().display().to_string())],
+                cols: 10,
+                rows: 2,
+                ..PaneSpawn::default()
+            },
+            tx,
+        )
+        .expect("spawn");
+        assert!(next.id().0 > 5000);
+    }
+
+    #[test]
+    fn a_program_that_isnt_there_is_an_error() {
+        let (tx, _rx) = unbounded_channel();
+        let spawned = Pane::spawn(
+            PaneSpawn {
+                command: Some(vec!["/nonexistent/program".into()]),
+                cwd: Some(std::env::temp_dir()),
+                env: vec![("HOME".into(), std::env::temp_dir().display().to_string())],
+                cols: 10,
+                rows: 2,
+                ..PaneSpawn::default()
+            },
+            tx,
+        );
+        assert!(spawned.is_err());
     }
 }
