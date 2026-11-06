@@ -143,6 +143,12 @@ M.ns = vim.api.nvim_create_namespace("notes.images")
 local sent = {}
 local drawn = {}
 
+-- What tmux answers, through vim.system: vim.fn.system has Neovim's terminal
+-- hide the cursor while it waits and show it again, which, run on every
+-- redraw, made the cursor flicker as you typed.
+local function tmux(args)
+  return vim.system(vim.list_extend({ "tmux" }, args), { text = true }):wait().stdout or ""
+end
 
 -- A PNG's size in pixels, from its header, or nil.
 local function png_size(file)
@@ -162,7 +168,7 @@ local function cell_size()
   if cell then return cell end
   cell = { w = 8, h = 16 }
   if (vim.env.TMUX or "") ~= "" then
-    local w, h = vim.fn.system({ "tmux", "display-message", "-p", "#{client_cell_width} #{client_cell_height}" }):match("^(%d+) (%d+)")
+    local w, h = tmux({ "display-message", "-p", "#{client_cell_width} #{client_cell_height}" }):match("^(%d+) (%d+)")
     if w and tonumber(w) > 0 and tonumber(h) > 0 then cell = { w = tonumber(w), h = tonumber(h) } end
   end
   return cell
@@ -185,7 +191,7 @@ local function send(command)
   if vim.api.nvim_ui_send then return pcall(vim.api.nvim_ui_send, seq) end
   local tty = "/dev/tty"
   if (vim.env.TMUX_PANE or "") ~= "" then
-    local pane = vim.trim(vim.fn.system({ "tmux", "display-message", "-p", "-t", vim.env.TMUX_PANE, "#{pane_tty}" }))
+    local pane = vim.trim(tmux({ "display-message", "-p", "-t", vim.env.TMUX_PANE, "#{pane_tty}" }))
     if pane ~= "" then tty = pane end
   end
   local out = io.open(tty, "w")
@@ -243,15 +249,20 @@ local capable
 local function terminal_can()
   if capable ~= nil then return capable end
   local name = (vim.env.TERM or "") .. " " .. (vim.env.TERM_PROGRAM or "")
-  if (vim.env.TMUX or "") ~= "" then name = vim.fn.system({ "tmux", "display-message", "-p", "#{client_termname} #{client_termtype}" }) end
+  if (vim.env.TMUX or "") ~= "" then name = tmux({ "display-message", "-p", "#{client_termname} #{client_termtype}" }) end
   capable = name:lower():find("ghostty", 1, true) ~= nil or name:lower():find("kitty", 1, true) ~= nil
   return capable
 end
 
+-- The notes_images setting, read once and again each time Neovim comes back
+-- into focus (changing it in Settings takes the focus away), so typing,
+-- which draws the note again after each key, starts no process.
+local setting
 local function on()
   if not terminal_can() then return false end
   if (vim.env.TMUX or "") == "" then return true end
-  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_notes_images" })) ~= "off"
+  if setting == nil then setting = vim.trim(tmux({ "show", "-gqv", "@setting_notes_images" })) ~= "off" end
+  return setting
 end
 
 -- Draws each image `buf` names under its line, as wide as the window lets
@@ -332,7 +343,7 @@ local function redraw()
 end
 vim.api.nvim_create_autocmd({ "FocusGained", "VimResume", "VimResized" }, {
   callback = function()
-    sent, cell, capable = {}, nil, nil
+    sent, cell, capable, setting = {}, nil, nil, nil
     vim.schedule(redraw)
   end,
 })
