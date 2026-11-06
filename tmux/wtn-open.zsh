@@ -13,8 +13,9 @@
 # order, leaving out any under a section named for parked work (## Defered,
 # ## Later) and any a worktree of this repository is already working on, each
 # marked when its line says its plan still needs a choice. Tab
-# picks several. The tabs start in the focused pane's directory (the
-# binding's -d), so `wtn` finds that repository; each is named after its item
+# picks several. It asks first which repository (pick-dir.zsh), the focused
+# pane's (the binding's -d) at the top, and the tabs start there, so `wtn`
+# finds it; each is named after its item
 # and linked to the note (@tab_note), and the first is selected. `wtn` is typed
 # into each tab's shell, which defines it from ~/.zshrc, with only the item's
 # line number on the command line: the note's path goes in WTN_NOTE, set on the
@@ -83,8 +84,10 @@ fail() {
 # Its lists look like mission control's boxes (fzf-style.sh).
 export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${0:A:h}/fzf-style.sh" 2>/dev/null)"
 
-git rev-parse --git-dir >/dev/null 2>&1 ||
-  fail "This tab is not in a repository, so wtn has nowhere to make the worktrees. Run it from the repo the note's work belongs to."
+# Which repository, asked first (pick-dir.zsh), the focused pane's (the
+# binding's -d) at the top, so Enter alone keeps it.
+dir=$("${0:A:h}/pick-dir.zsh" --repos "Work on a note's items here: Enter lists your notes") || exit 0
+cd "$dir" || exit 0
 
 notes=${NOTES_DIR:-$HOME/Notes}
 [[ -d $notes ]] || fail "No notes directory at $notes."
@@ -116,7 +119,7 @@ for row in "${(@f)picked}"; do
   [[ $line == <-> ]] || continue
   name=${${row#*$'\t'}//$'\e'\[[0-9;]#m/}
   name=${name%' (needs a choice)'}
-  window=$(tmux new-window -d -c "$PWD" -e "WTN_NOTE=$note.md" -n "wtn" -P -F '#{window_id}') ||
+  window=$(tmux new-window -d -c "${PWD//\#/##}" -e "WTN_NOTE=$note.md" -n "wtn" -P -F '#{window_id}') ||
     fail "tmux could not open a tab for: $name"
   tmux set-option -w -t "$window" @tab_name "${name[1,50]}"
   tmux set-option -w -t "$window" @tab_note "$note.md"

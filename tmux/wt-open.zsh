@@ -6,8 +6,9 @@
 #
 # Usage: wt-open.zsh
 #
-# The new tabs go at the end of the tab list, in order, start in the focused
-# pane's directory (the binding's -d) so `wt` finds that repository, and the
+# It asks first which repository to make the worktrees in (pick-dir.zsh), the
+# focused pane's (the binding's -d) at the top. The new tabs go at the end of
+# the tab list, in order, start in that repository so `wt` finds it, and the
 # first is selected. `wt` is typed into each tab's interactive shell rather than
 # run as its command, as wt-batch does: the shell is what reads ~/.zshrc, where
 # `wt` is defined and node is put on the PATH, and it stays in the worktree
@@ -47,6 +48,11 @@ parse_ticket() {
 # Commas, spaces, or both separate tickets, the way wt-batch splits them.
 tokens_of() { print -r -- ${(s:,:)${1//[[:space:]]/,}}; }
 
+# Which repository, asked first (pick-dir.zsh), the focused pane's (the
+# binding's -d) at the top, so Enter alone keeps it.
+dir=$("${0:A:h}/pick-dir.zsh" --repos "Make the tickets' worktrees here: Enter asks which tickets") || exit 0
+cd "$dir" || exit 0
+
 # The clipboard fills the field when every piece of it is a ticket, so a copied
 # list works as well as a single link.
 clipboard=$(pbpaste 2>/dev/null | head -1)
@@ -73,15 +79,12 @@ for token in $(tokens_of "$input"); do
 done
 (( ${#tickets} )) || exit 0
 
-git rev-parse --git-dir >/dev/null 2>&1 ||
-  fail "This tab is not in a repository, so wt has nowhere to make the worktrees. Run it from the repo the tickets belong to."
-
 # Each tab goes at the end, so the order matches the input and no open tab is
 # renumbered: M-1 to M-9 reach tabs by number. -d keeps focus while they
 # open, and the first is selected at the end.
 first=
 for ticket in $tickets; do
-  window=$(tmux new-window -d -c "$PWD" -n "$ticket" -P -F '#{window_id}') ||
+  window=$(tmux new-window -d -c "${PWD//\#/##}" -n "$ticket" -P -F '#{window_id}') ||
     fail "tmux could not open a tab for $ticket."
   tmux send-keys -t "$window" "wt $ticket" Enter
   first=${first:-$window}

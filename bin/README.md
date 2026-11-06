@@ -198,6 +198,15 @@ stays one stable line that never needs re-editing when the tool changes.
   tabs' worktrees.
 - `wt-batch` opens several tickets at once, one tmux window each, and
   `wt-jump` gets you back to any of those windows by ticket, PR, or branch.
+- `M-W` does the same from a popup: it asks which repository to make the
+  worktrees in (see below), then for the tickets, and opens a tab for each.
+
+The worktree popups (`M-W`, `M-B`, and `M-p`'s wtpr and wtn) ask first which
+repository the worktree goes in (`tmux/pick-dir.zsh --repos`): the
+repositories you work in, each once as its main clone, the one the pane you
+were in belongs to at the top, so Enter alone keeps it; typing narrows the
+list, and a path typed in works too. wtpr asks only for a bare PR number,
+since a URL names its own repository.
 
 ## worktree-from-note
 
@@ -222,7 +231,7 @@ item, and respawns the pane, the note's path passed in `WTN_NOTE` and any text
 of yours in `WT_PROMPT`, which the `wtn` function passes on and clears.
 
 The M-p palette's "Start work on a note's checklist items in new tabs (wtn)"
-(`tmux/wtn-open.zsh`) does the same from any tab in the repository: it lists
+(`tmux/wtn-open.zsh`) does the same from any tab: it asks which repository, then lists
 your notes by title, newest first, then the chosen note's unticked items (those
 under a parked section such as `## Defered` and those a worktree of the
 repository is already working on left out, those whose plan needs a choice
@@ -405,8 +414,9 @@ wtpr https://github.com/owner/repo/pull/123
 ```
 
 The M-p palette's "Start work on a PR in a new tab (wtpr)" (`tmux/wtpr-open.zsh`)
-asks for a PR number or URL, the clipboard filled in when it holds one, and runs
-`wtpr` with it in a new tab.
+asks for a PR number or URL, the clipboard filled in when it holds one, then,
+for a number, which repository it is a PR of, and runs `wtpr` with it in a new
+tab.
 
 From anywhere, for a URL: when the PR is in another repository than the one
 you are in, or you are in none, it finds a clone of that repository among the
@@ -494,11 +504,11 @@ rather than from wherever your checkout sits; it gets an upstream on its first
 push. With no remote, it starts at `HEAD`.
 
 `M-B` ("Start work on a branch, new or existing, in a new tab (wtb)" in `M-p`)
-(`tmux/wtb-open.zsh`) lists the branches, local and remote, newest commit first, in
+(`tmux/wtb-open.zsh`) asks which repository, then lists its branches, local and remote, newest commit first, in
 fzf: Enter works on the one picked, or creates the name typed when no branch
 matches it, and ctrl-n creates the name typed even when some do. It runs `wtb`
-with that in a new tab,
-in the repository of the pane you were in. The tab is named by
+with that in a new tab
+in that repository. The tab is named by
 `tmux/tab-label.sh` as for any directory, since there is no ticket to name it.
 
 That creates `.claude/worktrees/<branch>` off the repo root, slashes made

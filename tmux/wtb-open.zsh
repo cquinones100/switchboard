@@ -9,8 +9,9 @@
 #
 # Usage: wtb-open.zsh
 #
-# The tab starts in the focused pane's directory (the binding's -d), so the
-# worktree is made in that repository. The list is read from the refs already
+# It asks first which repository (pick-dir.zsh), the focused pane's (the
+# binding's -d) at the top, and the tab starts there, so the worktree is made
+# in it. The list is read from the refs already
 # here, with no fetch, so a branch pushed since the last fetch is typed by name.
 # `wtb` is typed into the new tab's interactive shell rather than run as its
 # command, as wtpr-open.zsh does: the shell is what defines it, from ~/.zshrc,
@@ -28,7 +29,10 @@ fail() {
   exit 0
 }
 
-git rev-parse --git-dir >/dev/null 2>&1 || fail "This tab is not in a repository. Run it from the repo the branch belongs to."
+# Which repository, asked first (pick-dir.zsh), the focused pane's (the
+# binding's -d) at the top, so Enter alone keeps it.
+dir=$("${0:A:h}/pick-dir.zsh" --repos "Work on a branch here: Enter lists its branches") || exit 0
+cd "$dir" || exit 0
 
 # Each branch once, under its own name: a remote's copy of a local branch, and
 # the remote's HEAD, are left out.
@@ -59,5 +63,5 @@ input=${input//[[:space:]]/}
 [[ $input =~ '^[A-Za-z0-9._/-]+$' ]] && git check-ref-format --branch "$input" >/dev/null 2>&1 ||
   fail "Not a branch name git accepts: $input"
 
-window=$(tmux new-window -c "$PWD" -n "$input" -P -F '#{window_id}') || fail "tmux could not open a tab."
+window=$(tmux new-window -c "${PWD//\#/##}" -n "$input" -P -F '#{window_id}') || fail "tmux could not open a tab."
 tmux send-keys -t "$window" "wtb $input" Enter
