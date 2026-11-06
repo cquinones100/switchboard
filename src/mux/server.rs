@@ -202,6 +202,9 @@ pub struct Server {
     pub bindings: Bindings,
     /// What each pane's Claude is doing (src/agent).
     pub agents: crate::agent::Agents,
+    /// What GitHub and the landing queue say of each tab (src/facts.rs),
+    /// written by the sources, read by the sidebar.
+    pub facts: crate::facts::Facts,
     /// What each tab is called and the color it wears (src/tabs).
     pub tab_names: crate::tabs::TabNames,
     pub(super) next_tab: u32,
@@ -438,6 +441,7 @@ impl Server {
             clients: BTreeMap::new(),
             bindings: Bindings::default(),
             agents: crate::agent::Agents::default(),
+            facts: crate::facts::Facts::default(),
             tab_names: Default::default(),
             next_tab: 1,
             next_pane: 1,
