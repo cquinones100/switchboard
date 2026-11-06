@@ -32,6 +32,13 @@
 //   --model <name>    the reviewer's model; the only reviewer option that passes through
 //   --dry-run         print the prompt and the reviewer's command, run nothing
 //
+// codex-review --patch-id <from> <to> prints the patch from one commit to the
+// other as one hash (patchId, below) and runs no review: the JSON's patchId is
+// the reviewed range's, which Switchboard's .githooks/pre-push compares with
+// the range a push adds, so a reviewed commit rebased unchanged onto a newer
+// main still counts as reviewed, and queue-and-clean's landing checks the same
+// before it pushes.
+//
 // When Codex isn't there, Claude Code reviews in its place with the same
 // prompt and schema (claudeArgs, below), so the JSON is the same either way,
 // its "reviewer" field saying which ran.
@@ -138,7 +145,8 @@ const SCHEMA = {
 
 const usage = () => {
   console.error(
-    "Usage: codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]\n\n" +
+    "Usage: codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]\n" +
+      "       codex-review --patch-id <from> <to>\n\n" +
       "Runs Codex (or Claude, when Codex isn't available) as a skeptical, read-only static\n" +
       "reviewer of the current branch and prints its findings as JSON.\n\n" +
       "  --base <ref>       base to diff against (default: the PR's remote base, else origin's default)\n" +
@@ -147,7 +155,8 @@ const usage = () => {
       "  --no-rules         leave the repository's and your own CLAUDE.md rules out of the prompt\n" +
       "  --reviewer <name>  codex or claude (default: codex, else claude)\n" +
       "  --model <name>     the reviewer's model\n" +
-      "  --dry-run          print the prompt and command without running the reviewer",
+      "  --dry-run          print the prompt and command without running the reviewer\n" +
+      "  --patch-id         print the patch between two commits as one hash, and review nothing",
   );
   process.exit(1);
 };
@@ -194,6 +203,19 @@ const parseArgs = (argv) => {
     }
   });
   return opts;
+};
+
+// The change from one commit to another as one hash, git's patch-id: the same
+// change made on another base gives the same one, but not a change whose
+// context lines differ, so a commit rebased past a change next to its own no
+// longer matches. --verbatim keeps whitespace, and the diff's options are
+// fixed, its context and how it lays out hunks included, so a person's git
+// config (diff.context=0 would drop the context lines) can't change it
+// between a review and a push.
+const patchId = (from, to) => {
+  const diff = execFileSync("git", ["-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--full-index", "--binary", "--unified=3", "--inter-hunk-context=0", "--diff-algorithm=myers", "--indent-heuristic", from, to], { stdio: ["ignore", "pipe", "pipe"], maxBuffer: 1 << 30 });
+  if (!diff.length) return "";
+  return execFileSync("git", ["patch-id", "--verbatim"], { input: diff, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).split(" ")[0];
 };
 
 const git = (...args) =>
@@ -553,6 +575,16 @@ const claudeArgs = (schema, diffDir, model) => [
 ];
 
 const main = () => {
+  if (process.argv[2] === "--patch-id") {
+    if (process.argv.length !== 5) usage();
+    try {
+      console.log(patchId(process.argv[3], process.argv[4]));
+    } catch (err) {
+      console.error(`codex-review: ${err.stderr?.toString().trim() || err.message}`);
+      process.exit(1);
+    }
+    return;
+  }
   const opts = parseArgs(process.argv.slice(2));
   // Resolved before the chdir below so a relative --notes path means what the
   // caller meant, not the same name at the repo root.
@@ -740,6 +772,9 @@ const main = () => {
     // reviewedCommit was reviewed, which a pre-push hook can check covers
     // what is pushed (Switchboard's .githooks/pre-push).
     review.mergeBase = mergeBase;
+    // The reviewed range's patch, for the same hook: a push that adds exactly
+    // this change counts as reviewed on whatever base it lands.
+    review.patchId = patchId(mergeBase, head);
     review.warnings = outsideRepositoryWarnings(review, root, reviewer === "claude" ? tmpDir : null);
 
     review.warnings.forEach((warning) => console.error(`codex-review: warning: ${warning}`));

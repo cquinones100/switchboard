@@ -9,6 +9,19 @@
 # not only the last few. A commit made after the review, a fix or anything
 # else, needs a review of its own. Pushes to other branches are left alone.
 #
+# The reviewed commit rebased onto a newer main counts too, when the push adds
+# one commit, straight on main on the remote (the reviewed base in it, so it
+# is a newer main, not an older one missing what the change needs), making
+# exactly the change the review covered, under the reviewed commit's own
+# message (one commit, since
+# commits that add something and take it out again would leave the same
+# change and an unreviewed history): its third field is the reviewed
+# range's patch (codex-review's patchId), which must equal the patch from main
+# on the remote to the tip pushed (codex-review --patch-id, the one place it is
+# worked out). The patch takes in each change's context lines, so a commit
+# rebased past a change beside its own no longer matches and needs a review of
+# its own; queue-and-clean's landing checks the same before it pushes.
+#
 # Claude can't get around it (claude/hooks/enforce-git-hooks-run.sh blocks
 # `git push --no-verify`); you can, by hand, with `git push --no-verify`.
 #
@@ -25,13 +38,22 @@ command -v node >/dev/null 2>&1 && node -e '
   process.exit(s && typeof s === "object" && !Array.isArray(s) && s.review_before_push === false ? 0 : 1);
 ' "$settings" 2>/dev/null && exit 0
 
-read -r reviewed reviewed_base 2>/dev/null <"$(git rev-parse --git-path review-loop-clean)"
+read -r reviewed reviewed_base reviewed_patch 2>/dev/null <"$(git rev-parse --git-path review-loop-clean)"
+same_patch() {
+  [ -n "$reviewed_patch" ] && [ "$remote_sha" != "$zero" ] && [ -n "$reviewed_base" ] &&
+    git merge-base --is-ancestor "$reviewed_base" "$remote_sha" 2>/dev/null &&
+    [ "$(git rev-list --parents -n 1 "$local_sha" 2>/dev/null)" = "$local_sha $remote_sha" ] &&
+    [ "$(git log -1 --format=%B "$local_sha" 2>/dev/null)" = "$(git log -1 --format=%B "$reviewed" 2>/dev/null)" ] &&
+    [ "$("$(dirname "$0")/../bin/codex-review" --patch-id "$remote_sha" "$local_sha" 2>/dev/null)" = "$reviewed_patch" ]
+}
 zero=0000000000000000000000000000000000000000
 status=0
 while read -r _ local_sha remote_ref remote_sha; do
   [ "$remote_ref" = refs/heads/main ] || continue
   [ "$local_sha" = "$zero" ] && continue
-  if [ "$local_sha" != "$reviewed" ]; then
+  if [ "$local_sha" != "$reviewed" ] && same_patch; then
+    continue
+  elif [ "$local_sha" != "$reviewed" ]; then
     echo "pre-push: ${local_sha:0:7} hasn't been through /review-loop, which this repository runs before every push to main." >&2
     echo "  Run /review-loop; it records the commit it finds clean. (By hand, git push --no-verify skips this.)" >&2
     status=1

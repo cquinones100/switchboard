@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The landing lock of queue-and-clean's "Land on the default branch": one
 // worktree of a repository lands on its default branch at a time, so two
-// never rebase onto the same one and push over each other. It lives in the
+// never rebase onto the same one and push over each other. Each tests and
+// reviews before taking it. It lives in the
 // main clone's git directory, shared by every worktree of it.
 //
 //   land-lock.js take      takes it for this worktree: exit 0 taken (or held
@@ -12,8 +13,10 @@
 //   land-lock.js release   lets it go, when this worktree holds it
 //   land-lock.js holder    prints which worktree holds it, nothing when none
 //
-// A landing can wait on you for as long as you like (its push question), so
-// the lock never expires with time: it is taken over only from a landing that
+// A landing holds it only to rebase, test and push, but one whose change no
+// longer matches its review reviews again and asks again while holding it,
+// which can wait on you for as long as you like, so the lock never expires
+// with time: it is taken over only from a landing that
 // is gone, its worktree removed or no Claude session running in it.
 
 const { execFileSync } = require("node:child_process");

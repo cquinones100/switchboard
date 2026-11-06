@@ -231,12 +231,17 @@ tab list, named after its item and linked to the note, with `wtn` running in it.
 
 `/queue-and-clean` lands it: on a branch with no PR, in a repository whose
 `CLAUDE.md` says it commits straight to its default branch, "Land on main"
-rebases it onto `origin/main`, squashes it into one commit, runs the review
-loop, asks before pushing, pushes, fast-forwards the main clone, ticks the
-item in the note and removes the worktree. One worktree lands at a time: the
-landing lock (`claude/skills/queue-and-clean/scripts/land-lock.js`, a lock in
-the main clone's git directory) has the others wait their turn, however long
-a landing waits on you, and a lock whose worktree is gone, or has no Claude
+rebases it onto `origin/main`, squashes it into one commit, runs the tests
+(which must pass) and then the review loop, and asks before pushing, all in
+every worktree at once. Only then does it take the landing lock
+(`claude/skills/queue-and-clean/scripts/land-lock.js`, a lock in the main
+clone's git directory), so one worktree pushes at a time: it rebases onto
+what landed meanwhile and runs the tests again, and when the commit is still
+the change the review found clean (`codex-review --patch-id`, which takes in
+each change's context lines, so nothing landed beside it), pushes with no
+second review; when it isn't, it reviews again and asks again under the
+lock. Then it fast-forwards the main clone, ticks the item in the note and
+removes the worktree. A lock whose worktree is gone, or has no Claude
 session running in it, is taken over.
 
 ## shape
@@ -1654,7 +1659,16 @@ codex-review --no-rules            leave your rules and the repository's out of 
 codex-review --reviewer claude     have Claude review even with Codex there
 codex-review --dry-run             print the prompt and the reviewer's command, run nothing
 codex-review --model gpt-5.5       pick the reviewer's model; no other option passes through
+codex-review --patch-id A B        print the change from A to B as one hash, and review nothing
 ```
+
+The JSON's `patchId` is the reviewed change as one hash (`git patch-id
+--verbatim` of the diff, its options fixed so git config can't change it),
+which `/review-loop` records with the commit and its base. This repository's
+pre-push hook takes the reviewed commit rebased onto a newer `main` as
+reviewed when it pushes that one commit and its change has that same hash,
+context lines included, so a rebase past a change beside its own needs a
+review of its own.
 
 Without Codex, `claude -p` reviews with the same prompt and JSON schema, and the
 JSON's `reviewer` says which ran. It gets less than Codex does: only the Read,

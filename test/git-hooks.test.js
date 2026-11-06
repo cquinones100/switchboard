@@ -52,6 +52,82 @@ test("pre-push refuses a push to main whose tip /review-loop hasn't found clean,
   }
 });
 
+test("pre-push takes the reviewed commit rebased unchanged onto a newer main, but not one rebased past a change beside its own, nor one with more on top", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "pre-push-patch-")));
+  const env = { ...process.env, HOME: tmp, SWITCHBOARD_SETTINGS: path.join(tmp, "no-settings.json"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const lines = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`);
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", tmp], { env });
+    fs.writeFileSync(path.join(tmp, "a.txt"), lines.join("\n") + "\n");
+    execFileSync("git", ["-C", tmp, "add", "."], { env });
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-m", "base"], { env });
+    const base = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    // The work, reviewed on the base: line 20 changed.
+    fs.writeFileSync(path.join(tmp, "a.txt"), lines.map((l, i) => (i === 19 ? "work" : l)).join("\n") + "\n");
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-am", "work"], { env });
+    const work = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    const patch = execFileSync(path.join(repo, "bin/codex-review"), ["--patch-id", base, work], { cwd: tmp, env, encoding: "utf8" }).trim();
+    assert.match(patch, /^[0-9a-f]{40}$/);
+    fs.writeFileSync(path.join(tmp, ".git/review-loop-clean"), `${work} ${base} ${patch}\n`);
+
+    // Main gained a change far from it (line 2), and the work was rebased onto it.
+    execFileSync("git", ["-C", tmp, "checkout", "-q", "-b", "far", base], { env });
+    fs.writeFileSync(path.join(tmp, "a.txt"), lines.map((l, i) => (i === 1 ? "far" : l)).join("\n") + "\n");
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-am", "far"], { env });
+    const far = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", tmp, "cherry-pick", work], { env, stdio: "ignore" });
+    const rebased = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    const push = (tip, remote) => spawnSync(path.join(repo, ".githooks/pre-push"), ["origin", "url"], { cwd: tmp, env, encoding: "utf8", input: `refs/heads/main ${tip} refs/heads/main ${remote}\n` });
+    assert.equal(push(rebased, far).status, 0, "the same change, on the newer main");
+    // The same change under a message the review didn't read.
+    execFileSync("git", ["-C", tmp, "commit", "-q", "--amend", "-m", "reworded"], { env });
+    const reworded = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    assert.equal(push(reworded, far).status, 1);
+    execFileSync("git", ["-C", tmp, "reset", "-q", "--hard", rebased], { env });
+
+    // More on top of it, even when it leaves the same change (something added
+    // and taken out again): only one commit is taken this way.
+    fs.writeFileSync(path.join(tmp, "b.txt"), "b\n");
+    execFileSync("git", ["-C", tmp, "add", "b.txt"], { env });
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-m", "more"], { env });
+    const more = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    const added = push(more, far);
+    assert.equal(added.status, 1);
+    assert.match(added.stderr, /hasn't been through \/review-loop/);
+    execFileSync("git", ["-C", tmp, "rm", "-q", "b.txt"], { env });
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-m", "taken out"], { env });
+    const takenOut = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    assert.equal(push(takenOut, far).status, 1);
+
+    // Main gained a change beside it (line 18, inside its context): the rebased
+    // change reads differently, so it needs a review of its own.
+    execFileSync("git", ["-C", tmp, "checkout", "-q", "-b", "near", base], { env });
+    fs.writeFileSync(path.join(tmp, "a.txt"), lines.map((l, i) => (i === 17 ? "near" : l)).join("\n") + "\n");
+    execFileSync("git", ["-C", tmp, "commit", "-q", "-am", "near"], { env });
+    const near = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    execFileSync("git", ["-C", tmp, "cherry-pick", work], { env, stdio: "ignore" });
+    const beside = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    assert.equal(push(beside, near).status, 1);
+    // Nor with git set to show no context, which would leave the change beside it out.
+    assert.equal(spawnSync(path.join(repo, ".githooks/pre-push"), ["origin", "url"], { cwd: tmp, env: { ...env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "diff.context", GIT_CONFIG_VALUE_0: "0" }, encoding: "utf8", input: `refs/heads/main ${beside} refs/heads/main ${near}\n` }).status, 1);
+
+    // Reviewed on a base main on the remote doesn't have yet: the change may
+    // need what that base added.
+    fs.writeFileSync(path.join(tmp, ".git/review-loop-clean"), `${work} ${far} ${patch}\n`);
+    execFileSync("git", ["-C", tmp, "checkout", "-q", "-b", "older", base], { env });
+    execFileSync("git", ["-C", tmp, "cherry-pick", work], { env, stdio: "ignore" });
+    const older = execFileSync("git", ["-C", tmp, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+    assert.equal(push(older, base).status, 1);
+
+    // A record from before the patch was kept: the exact commit only.
+    fs.writeFileSync(path.join(tmp, ".git/review-loop-clean"), `${work} ${base}\n`);
+    assert.equal(push(rebased, far).status, 1);
+    assert.equal(push(work, base).status, 0);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("this repository's Claude settings run the push guard and the hook guard before every command", () => {
   const settings = JSON.parse(fs.readFileSync(path.join(repo, ".claude/settings.json"), "utf8"));
   const commands = settings.hooks.PreToolUse.filter((h) => h.matcher === "Bash").flatMap((h) => h.hooks.map((x) => x.command));
