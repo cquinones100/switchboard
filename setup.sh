@@ -58,10 +58,10 @@ esac
 if [[ $OS == macos ]]; then
   LAZYGIT_DIR="$HOME/Library/Application Support/lazygit"
   # Karabiner only exists on macOS.
-  PARTS=(lazygit neovim git claude claude_md skills karabiner tmux config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills karabiner tmux autosave config ghostty terminal pgcli bin)
 else
   LAZYGIT_DIR="$HOME/.config/lazygit"
-  PARTS=(lazygit neovim git claude claude_md skills tmux config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills tmux autosave config ghostty terminal pgcli bin)
 fi
 
 # ── Parts ───────────────────────────────────────────────────────────────────
@@ -731,6 +731,31 @@ part_tmux() {
   $CHECK || "$SRC/tmux/resurrect-tidy.sh"
 }
 
+# tmux-resurrect's saves, which tmux-continuum makes from a job in
+# status-right: a reload while another tmux server ran (a test's, a try's) used
+# to leave the job out, and the saves stopped. Only inside your tmux, with
+# continuum installed; tmux/continuum-save.sh puts the job back.
+part_autosave() {
+  [[ -n ${TMUX:-} && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]] || return 0
+  local script="$REPO_DIR/tmux/continuum-save.sh" status saved
+  "$script" --check
+  status=$?
+  if (( status == 2 )); then
+    echo "  tmux-continuum hasn't saved since tmux started beside another tmux server, which kept it from restoring your tabs too: restore them with M-b C-r if you want them, then run ~/.config/tmux/continuum-save.sh --start" >&2
+    return 1
+  fi
+  if (( status == 1 )); then
+    $CHECK || "$script" || return 1
+    change "put tmux-continuum's autosave back in status-right"
+    return 0
+  fi
+  saved=$(tmux display -p '#{@continuum-save-last-timestamp}')
+  if (( $(date +%s) - ${saved:-0} > 300 )); then
+    echo "  tmux-continuum's last save is $(( ($(date +%s) - ${saved:-0}) / 60 ))m old though its autosave is in place: tmux draws it from status-right, so the status line has to be on" >&2
+    return 1
+  fi
+}
+
 part_ghostty() {
   dir ~/.config/ghostty
   put_link "$SRC/ghostty/config" ~/.config/ghostty/config
@@ -897,6 +922,7 @@ about_part() {
     skills) echo "link the skills that ship with Switchboard into ~/.claude/skills" ;;
     karabiner) echo "link Karabiner's config" ;;
     tmux) echo "link tmux's config and scripts, the plugins and lib's packages" ;;
+    autosave) echo "put tmux-continuum's autosave back when it is missing" ;;
     config) echo "move your own files into ~/.config/switchboard" ;;
     ghostty) echo "link Ghostty's config" ;;
     terminal) echo "make Option act as Alt in your terminal" ;;
@@ -1109,6 +1135,22 @@ elif [[ -L ~/.config/tmux/tmux.conf ]] || ask "Link the tmux, Neovim and lazygit
   apply "${WORKSPACE[@]}" && ok "linked the configs" || todo "./setup.sh ${WORKSPACE[*]} failed"
 else
   todo "./setup.sh ${WORKSPACE[*]}"
+fi
+
+# tmux-resurrect's saves, kept by tmux-continuum (part_autosave), only inside
+# tmux and once the plugins are there.
+# What it can't fix is said on stderr, which pending drops.
+if [[ -n ${TMUX:-} && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]]; then
+  why=$( (CHECK=true; part_autosave >/dev/null) 2>&1 )
+  if [[ -n $why ]]; then
+    todo "${why#  }"
+  elif (( $(pending autosave) == 0 )); then
+    ok "tmux-resurrect saves your tabs"
+  elif $CHECK; then
+    todo "tmux-continuum's autosave is off: ./setup.sh autosave"
+  else
+    apply autosave && ok "put tmux-continuum's autosave back" || todo "./setup.sh autosave failed"
+  fi
 fi
 
 # The shell functions that move a tab into a worktree, which the palette's

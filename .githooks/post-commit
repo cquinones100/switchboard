@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+
+# After a commit that adds a file under tmux/ or bin/, links it with
+# `setup.sh tmux bin`, as post-merge does after a pull: a script committed in
+# the clone was otherwise missing from ~/.config/tmux or ~/.local/bin until
+# setup ran by hand, and whatever called it failed quietly (M-d opening on an
+# empty diff without diff-base.sh). Silent when nothing changed.
+#
+# Only in the clone ~/switchboard is, whose files the links point at: a
+# worktree's new files aren't there until it lands. Not during a rebase,
+# which post-rewrite covers.
+
+set -u
+
+[[ ${GIT_REFLOG_ACTION:-} == *rebase* ]] && exit 0
+repo=$(git rev-parse --show-toplevel) || exit 0
+[[ -x $repo/setup.sh && $repo -ef ~/switchboard ]] || exit 0
+git diff-tree --no-commit-id --root -r --diff-filter=A --name-only HEAD -- tmux bin | grep -q . || exit 0
+
+changed=$("$repo/setup.sh" tmux bin 2>&1 | grep -v ': up to date$')
+[ -n "$changed" ] && printf 'setup.sh linked what the commit added:\n%s\n' "$(sed 's/^/  /' <<<"$changed")"
+exit 0

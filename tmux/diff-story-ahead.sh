@@ -33,6 +33,9 @@ trap 'rmdir "$state/$key.lock" 2>/dev/null' EXIT
 if ! ref=$("$here/diff-base.sh" cached "$top"); then
   ref=$("$here/diff-base.sh" fetch "$top") || exit 3
 fi
+# Left untold, to try again, when there is no base at all (diff-base.sh not
+# linked yet, say), rather than told against nothing.
+[ -n "$ref" ] || { echo "Couldn't work out the PR's base branch" >&2; exit 3; }
 [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || exit 0
 command -v nvim >/dev/null || exit 0
 # At most five and a half minutes, as long as the story's own wait and a bit.

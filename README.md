@@ -54,7 +54,7 @@ Vim's keys are the default, and you don't need to know them. Notes has a toolbar
 
 ## Staying up to date
 
-Each time tmux opens, and hourly after that, it checks GitHub for new commits and offers them in a popup that updates the clone and runs `setup.sh`. With the git hooks on, a `git pull` links whatever it added too. `M-p`'s "Update Switchboard" runs the setup even when there is nothing new, so a clone you pulled by hand gets set up too. To run the setup again yourself, say to set up something you turned down the first time, use `M-p`, "Run Switchboard's setup". "Check Switchboard's setup" says what isn't in place without changing anything (`./setup.sh --check`), and "Run a part of Switchboard's setup" runs or checks one part (`./setup.sh <part>`), picked from a list.
+Each time tmux opens, and hourly after that, it checks GitHub for new commits and offers them in a popup that updates the clone and runs `setup.sh`. With the git hooks on, a `git pull` links whatever it added too, and so does a commit in the clone that adds a script. `M-p`'s "Update Switchboard" runs the setup even when there is nothing new, so a clone you pulled by hand gets set up too. To run the setup again yourself, say to set up something you turned down the first time, use `M-p`, "Run Switchboard's setup". "Check Switchboard's setup" says what isn't in place without changing anything (`./setup.sh --check`), and "Run a part of Switchboard's setup" runs or checks one part (`./setup.sh <part>`), picked from a list.
 
 ## Making it yours
 

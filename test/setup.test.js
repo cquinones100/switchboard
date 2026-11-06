@@ -571,3 +571,36 @@ test("setup.sh claude turns a CLAUDE.md linked into the repo's old claude/CLAUDE
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("the post-commit hook runs setup.sh tmux bin in ~/switchboard after a commit adds a file under tmux/ or bin/", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-commit-")));
+  const clone = path.join(home, "switchboard");
+  const env = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+  delete env.GIT_REFLOG_ACTION;
+  const git = (...args) => execFileSync("git", ["-C", clone, ...args], { env, encoding: "utf8" });
+  const ran = path.join(home, "ran");
+  const commit = (file) => {
+    fs.mkdirSync(path.dirname(path.join(clone, file)), { recursive: true });
+    fs.writeFileSync(path.join(clone, file), String(Math.random()));
+    git("add", file);
+    return git("commit", "-qm", file);
+  };
+  try {
+    fs.mkdirSync(path.join(clone, ".githooks"), { recursive: true });
+    git("init", "-q");
+    fs.copyFileSync(path.join(repo, ".githooks/post-commit"), path.join(clone, ".githooks/post-commit"));
+    fs.chmodSync(path.join(clone, ".githooks/post-commit"), 0o755);
+    // A stand-in for setup.sh that says what it was asked to do.
+    fs.writeFileSync(path.join(clone, "setup.sh"), `#!/bin/sh\necho "$*" >> ${JSON.stringify(ran)}\necho "tmux:\n  link new.sh"\n`, { mode: 0o755 });
+    git("config", "core.hooksPath", ".githooks");
+
+    commit("README.md");
+    assert.equal(fs.existsSync(ran), false, "nothing under tmux/ or bin/ added");
+    commit("tmux/new.sh");
+    assert.equal(fs.readFileSync(ran, "utf8"), "tmux bin\n");
+    commit("tmux/new.sh");
+    assert.equal(fs.readFileSync(ran, "utf8"), "tmux bin\n", "a change to a file there adds nothing to link");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

@@ -49,9 +49,11 @@ tmux set -g status-style "bg=$BG_DARK,fg=$FG"
 tmux set -g status-right ""
 
 # theme.sh overwrites status-right, where tmux-continuum keeps its periodic-save
-# hook; re-run the plugin to put it back.
+# hook; re-run the plugin to put it back, and put it back here when the
+# plugin won't, as it won't while another tmux server runs.
 continuum_tmux=~/.config/tmux/plugins/tmux-continuum/continuum.tmux
 [ -x "$continuum_tmux" ] && "$continuum_tmux"
+"$script_dir/continuum-save.sh"
 tmux setw -g window-status-format "#[fg=$FG_DIM] #I:#{E:@agent_marker}#[bg=default,fg=$FG_DIM,nobold]#{?@agent, ,}#W "
 # Buttons in the status line (the Commands button, @palette_button in tmux.conf).
 tmux set -g @button_style "$BUTTON"

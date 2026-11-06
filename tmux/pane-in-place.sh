@@ -74,6 +74,16 @@ tool_command() {
         tmux display-popup -C -c "$client"
         [ "$fetched" -ne 3 ] || "${0%/*}/say.sh" -c "$client" "Could not fetch ${ref}; comparing with it as last fetched."
       fi
+      # With no base, diffview would open on an empty diff (...HEAD) and say
+      # nothing, as it did while diff-base.sh wasn't linked yet.
+      if [ -z "$ref" ]; then
+        if [ -x "${0%/*}/diff-base.sh" ]; then
+          "${0%/*}/say.sh" -c "$client" "Couldn't work out the PR's base branch"
+        else
+          "${0%/*}/say.sh" -c "$client" "Couldn't work out the PR's base branch: diff-base.sh isn't linked. Run ./setup.sh tmux in ~/switchboard"
+        fi
+        return
+      fi
       echo "nvim -u ~/.config/nvim/diff.lua --noplugin --cmd 'let g:diff_pane = 1' --cmd 'let g:diff_base = \"$ref\"' -c 'DiffviewOpen $ref...HEAD'"
       ;;
   esac
