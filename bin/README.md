@@ -236,7 +236,9 @@ The M-p palette's "Start work on a note's checklist items in new tabs (wtn)"
 your notes by title, newest first, then the chosen note's unticked items (those
 under a parked section such as `## Defered` and those a worktree of the
 repository is already working on left out, those whose plan needs a choice
-marked), Tab picking several, and opens a tab for each at the end of the
+marked), the one under the cursor shown whole in a pane below the list, its
+full text and what is indented under it (`wtn_item_preview` setting), Tab
+picking several, and opens a tab for each at the end of the
 tab list, named after its item and linked to the note, with `wtn` running in it.
 
 `/queue-and-clean` lands it: on a branch with no PR, in a repository whose

@@ -219,6 +219,18 @@ test("M-p's wtn popup lists a note's unticked top-level items by line, marking t
   }
 });
 
+test("M-p's wtn popup shows an item whole for its preview: its line and what is indented under it, blank lines between kept, none trailing", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-item-test-")));
+  try {
+    const note = path.join(tmp, "Work.md");
+    fs.writeFileSync(note, ["# Work", "", "- [ ] First thing, a long line", "  - a detail", "", "  Plan: [[Plan - First]]", "", "- [ ] Second thing", "## Feature", ""].join("\n"));
+    assert.equal(execFileSync("zsh", [path.join(__dirname, "../tmux/wtn-open.zsh"), "item", note, "3"], { encoding: "utf8" }), "- [ ] First thing, a long line\n  - a detail\n\n  Plan: [[Plan - First]]\n");
+    assert.equal(execFileSync("zsh", [path.join(__dirname, "../tmux/wtn-open.zsh"), "item", note, "8"], { encoding: "utf8" }), "- [ ] Second thing\n");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("M-p's wtn popup opens a tab for each item picked, named after it, linked to its note, the note in WTN_NOTE and wtn typed with the item's line", () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-tabs-")));
   const socket = path.join(tmp, "tmux.sock");

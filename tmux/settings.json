@@ -361,6 +361,13 @@
     "default": true
   },
   {
+    "key": "wtn_item_preview",
+    "category": "Notes",
+    "label": "Show a note's item whole in wtn's list",
+    "description": "M-p's wtn popup shows the item under the cursor whole in a pane below its list, its full text and what is indented under it, since the list cuts each item to one line",
+    "default": true
+  },
+  {
     "key": "ask_tab_note",
     "category": "Notes",
     "label": "Ask for a tab's note",

@@ -6,14 +6,17 @@
 # `wt` for tickets.
 #
 # Usage: wtn-open.zsh
-#        wtn-open.zsh items <note file>   prints the note's items, for the tests
+#        wtn-open.zsh items <note file>         prints the note's items, for the tests
+#        wtn-open.zsh item <note file> <line>   prints one item whole, for the preview
 #
 # Both lists are fzf: the notes by title, most recently changed first (never
 # their contents, nor deleted ones); the note's unticked top-level items in its
 # order, leaving out any under a section named for parked work (## Defered,
 # ## Later) and any a worktree of this repository is already working on, each
-# marked when its line says its plan still needs a choice. Tab
-# picks several. It asks first which repository (pick-dir.zsh), the focused
+# marked when its line says its plan still needs a choice, and the one under
+# the cursor shown whole in a pane below the list, its full text and what is
+# indented under it, since the list cuts it to one line (wtn_item_preview
+# setting). Tab picks several. It asks first which repository (pick-dir.zsh), the focused
 # pane's (the binding's -d) at the top, and the tabs start there, so `wtn`
 # finds it; each is named after its item
 # and linked to the note (@tab_note), and the first is selected. `wtn` is typed
@@ -43,6 +46,18 @@ items() {
   ' "$1"
 }
 
+# One item whole: its line and what is indented under it, blank lines between
+# included, up to the next line of the note's top level, as wtn hands it to
+# Claude (bin/worktree-from-note).
+item() {
+  awk -v at="$2" '
+    NR == at { print; shown = 1; next }
+    shown && /^[^[:space:]]/ { exit }
+    shown && /^[[:space:]]*$/ { blank = blank "\n"; next }
+    shown { printf "%s", blank; blank = ""; print }
+  ' "$1"
+}
+
 # Those of them no worktree is working on yet. wtn keeps the item a branch is
 # for in its git config, branch.<branch>.wtnItem, as "<note>: <item's first
 # line>", the note's path within the notes directory; an item counts as taken
@@ -66,6 +81,10 @@ unclaimed() {
 
 if [[ ${1:-} == items ]]; then
   unclaimed "$2"
+  exit
+fi
+if [[ ${1:-} == item ]]; then
+  item "$2" "$3"
   exit
 fi
 
@@ -106,9 +125,16 @@ file=$notes/$note.md
 [[ -n $(items "$file") ]] || fail "$note has no unticked items."
 list=$(unclaimed "$file")
 [[ -n $list ]] || fail "Every unticked item of $note has a worktree already."
+# The cursor's item whole, below the list. The note's path reaches the preview
+# in the environment, never in its command line, which a shell reads.
+preview=()
+if [[ $(tmux show -gqv @setting_wtn_item_preview) != off ]]; then
+  export WTN_PREVIEW_FILE=$file
+  preview=(--preview "${(q)${0:A}} item \"\$WTN_PREVIEW_FILE\" {1}" --preview-window=down,50%,wrap,border-top)
+fi
 picked=$(
   print -r -- "$list" | sed "s/ (needs a choice)\$/ ${yellow}(needs a choice)${reset}/" |
-    fzf --ansi --multi --delimiter=$'\t' --with-nth=2 \
+    fzf --ansi --multi --delimiter=$'\t' --with-nth=2 "${preview[@]}" \
       --header='Enter: work on it in a new tab · Tab: pick several · Esc: cancel' \
       --prompt="${note:t}> " --layout=reverse --height=100%
 ) || exit 0
