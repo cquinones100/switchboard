@@ -2040,7 +2040,7 @@ test("the Sessions view starts with today's spend and the rate limits, as the st
   ]);
 });
 
-test("the Resources view counts each tab's processes from its panes down, heaviest first", async () => {
+test("the Resources view counts each tab's processes from its panes down, heaviest overall first, in a table", async () => {
   const list = sidebar.parsePs([
     "  100     1   1024   0.5 /bin/zsh",
     "  101   100 2097152  80.0 /usr/local/bin/node",
@@ -2053,12 +2053,31 @@ test("the Resources view counts each tab's processes from its panes down, heavie
     { index: 1, name: "light", panes: [{ pane_pid: "200" }] },
     { index: 2, name: "heavy", panes: [{ pane_pid: "100" }] },
   ];
-  assert.deepEqual(sidebar.resourceItems(tabs, list).map((i) => [i.title, i.detail, i.state]), [
-    ["All tabs", "CPU 121% · 3.2 GB · 5 processes", "idle"],
-    ["2 heavy", "CPU 121% · 3.0 GB · 3 processes · node ×2 3.0 GB, zsh 1 MB", "attention"],
-    ["1 light", "CPU 0% · 202 MB · 2 processes · nvim 200 MB, zsh 2 MB", "idle"],
+  assert.deepEqual(sidebar.resourceItems(tabs, list).map((i) => [i.cells, i.more, i.state]), [
+    [["2 heavy", "120.5", "3.0 GB", "3"], "node ×2 3.0 GB, zsh 1 MB", "attention"],
+    [["1 light", "0.4", "202 MB", "2"], "nvim 200 MB, zsh 2 MB", "idle"],
   ]);
+  assert.deepEqual(sidebar.resourceTotals(tabs, list), ["All tabs", "120.9", "3.2 GB", "5"]);
+  // Heavy overall, not by memory alone: a pegged core outweighs a GB.
+  const busy = sidebar.parsePs(["  400     1 1048576   0.0 /bin/big", "  500     1  10240 150.0 /bin/spin"].join("\n"));
+  assert.deepEqual(sidebar.resourceItems([{ index: 1, name: "big", panes: [{ pane_pid: "400" }] }, { index: 2, name: "spin", panes: [{ pane_pid: "500" }] }], busy).map((i) => i.title), ["2 spin", "1 big"]);
   assert.deepEqual(sidebar.resourceItems(tabs, undefined), [], "nothing before the first look");
+  // The view lines its columns up under their names, the figures on the
+  // right, the chosen row adding its heaviest processes, totals at the foot.
+  const section = { title: "Resources", items: sidebar.resourceItems(tabs, list), table: sidebar.RESOURCE_COLUMNS, footer: sidebar.resourceTotals(tabs, list), loaded: true };
+  const text = sidebar.missionLines({ tabs: [], sections: [section], cols: 80, rows: 12, view: { view: 1, cursor: 0, frame: 0 }, config: {} }).map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd());
+  assert.deepEqual(text.slice(1, 4), [
+    "   Tab       % CPU  Memory  Processes",
+    " ● 2 heavy   120.5  3.0 GB          3  node ×2 3.0 GB, zsh 1 MB",
+    " ○ 1 light     0.4  202 MB          2",
+  ]);
+  // A long tab name gives way to the chosen row's processes, and / finds a
+  // tab by its figures.
+  const long = { ...section, items: section.items.map((item, i) => (i ? item : { ...item, cells: ["2 " + "x".repeat(70), ...item.cells.slice(1)] })) };
+  const longText = sidebar.missionLines({ tabs: [], sections: [long], cols: 80, rows: 12, view: { view: 1, cursor: 0, frame: 0 }, config: {} }).map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd());
+  assert.match(longText[2], /x…  120\.5  3\.0 GB          3  node ×2 3\.0 GB, zsh 1 MB$/);
+  assert.ok(section.items[1].search.includes("202 MB"));
+  assert.deepEqual(text.slice(9, 11), [` ${"─".repeat(78)}`, "   All tabs  120.9  3.2 GB          5"]);
   // The daemon's own snapshot carries each pane's pid for it.
   const snap = await sidebar.snapshot();
   assert.ok(snap.panes.every((p) => /^\d+$/.test(p.pane_pid)));
