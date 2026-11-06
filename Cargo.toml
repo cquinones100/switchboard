@@ -41,6 +41,8 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm"]
 crossterm = "0.29"
 unicode-width = "0.2"
 unicode-segmentation = "1"
+# Matching what is typed in the palette and the pickers, as fzf did.
+nucleo-matcher = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

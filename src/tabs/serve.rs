@@ -66,7 +66,7 @@ impl Server {
         };
         let (facts, asks) = self.tab_names.names.facts(&dir, Instant::now());
         for ask in asks {
-            self.ask(ask);
+            self.start_lookup(ask);
         }
         let shown = Shown {
             path: Some(dir),
@@ -109,7 +109,7 @@ impl Server {
     }
 
     // Runs a lookup off the server task, answering with `Event::TabLookup`.
-    fn ask(&self, ask: Ask) {
+    fn start_lookup(&self, ask: Ask) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }

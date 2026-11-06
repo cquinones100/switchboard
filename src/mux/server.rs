@@ -74,6 +74,8 @@ pub enum Event {
     AgentSeen(TabId),
     /// A PR or ticket lookup for the tab names answered (src/tabs).
     TabLookup(crate::tabs::Answer),
+    /// The overlays' timers (src/ui).
+    Ui(crate::ui::UiEvent),
     Tick,
     Quit,
 }
@@ -172,13 +174,6 @@ enum Drag {
     Forward(PaneId),
 }
 
-/// What is shown over the tab, taking the keys while it is.
-#[derive(Clone, Debug)]
-pub enum Overlay {
-    /// The list of keys, scrolled this far.
-    Keys { scroll: usize },
-}
-
 pub struct Client {
     pub id: ClientId,
     pub tx: mpsc::UnboundedSender<ServerMsg>,
@@ -192,7 +187,8 @@ pub struct Client {
     drag: Option<Drag>,
     last_click: Option<(Instant, u16, u16, u8)>,
     tab_spans: compose::TabSpans,
-    pub overlay: Option<Overlay>,
+    /// What is shown over the tab, the top one taking the input (src/ui).
+    pub overlays: crate::ui::Stack,
     pub activity: Instant,
 }
 
@@ -219,6 +215,8 @@ pub struct Server {
     settings_seen: Option<std::time::SystemTime>,
     /// Saving the layout and restoring it (`persist`).
     pub(super) persist: super::persist::Persist,
+    /// What the overlays keep across clients: the tips shown (src/ui).
+    pub ui: crate::ui::Ui,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -447,6 +445,7 @@ impl Server {
             last_input: Instant::now(),
             settings_seen: None,
             persist: Default::default(),
+            ui: Default::default(),
         }
     }
 
@@ -490,6 +489,7 @@ impl Server {
             }
             Event::AgentSeen(tab) => self.agent_seen(tab),
             Event::TabLookup(answer) => self.tab_lookup(answer),
+            Event::Ui(event) => self.ui_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.refresh_names();
@@ -914,7 +914,8 @@ impl Server {
         let Some(s) = self.session_mut(session) else {
             return;
         };
-        if s.current != tab && s.tabs.contains(&tab) {
+        let switched = s.current != tab && s.tabs.contains(&tab);
+        if switched {
             s.last = Some(s.current);
             s.current = tab;
         }
@@ -922,6 +923,9 @@ impl Server {
         self.relayout(tab);
         self.dirty_session(session);
         self.agent_focus(tab);
+        if switched {
+            self.tab_switched(session);
+        }
     }
 
     /// Focuses a pane, its tab made current in its session.
@@ -1024,7 +1028,7 @@ impl Server {
             drag: None,
             last_click: None,
             tab_spans: Vec::new(),
-            overlay: None,
+            overlays: Default::default(),
             activity: Instant::now(),
         };
         self.clients.insert(id, client);
@@ -1180,12 +1184,10 @@ impl Server {
     }
 
     fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
-        if let Some(overlay) = self.clients.get(&id).and_then(|c| c.overlay.clone()) {
-            if let Input::Key(key) = parsed.input {
-                self.overlay_key(id, overlay, key);
-            }
+        // An overlay up takes the keys, the mouse and pastes (src/ui).
+        let Some(parsed) = self.overlay_input(id, parsed) else {
             return;
-        }
+        };
         match parsed.input {
             Input::Key(key) => self.key(id, key, &parsed.raw),
             Input::Mouse(m) => self.mouse(id, m),
@@ -1311,7 +1313,7 @@ impl Server {
             }
             Action::ClosePane => {
                 if let Some(p) = pane {
-                    self.kill_pane(p);
+                    self.close_pane(id, p);
                 }
             }
             Action::Zoom => {
@@ -1355,15 +1357,12 @@ impl Server {
                     let _ = slot.pane.write(&bytes);
                 }
             }
-            Action::ListKeys => {
-                if let Some(c) = self.clients.get_mut(&id) {
-                    c.overlay = Some(Overlay::Keys { scroll: 0 });
-                    c.dirty = true;
-                }
-            }
+            Action::ListKeys => self.list_keys(id),
             Action::NextNeedsYou => self.next_needs_you(id),
             Action::FocusClaude => self.focus_claude(current_tab),
             Action::TogglePin => self.toggle_pin(current_tab),
+            Action::Palette => self.open_palette(id),
+            Action::ResetTips => self.reset_tips(),
         }
     }
 
@@ -1413,25 +1412,6 @@ impl Server {
         {
             slot.pane.scroll_to_bottom();
             slot.pane.select_clear();
-        }
-    }
-
-    fn overlay_key(&mut self, id: ClientId, overlay: Overlay, key: Key) {
-        let Some(c) = self.clients.get_mut(&id) else {
-            return;
-        };
-        match overlay {
-            Overlay::Keys { scroll } => {
-                let next = match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => Some(scroll + 1),
-                    KeyCode::Char('k') | KeyCode::Up => Some(scroll.saturating_sub(1)),
-                    KeyCode::PageDown | KeyCode::Char(' ') => Some(scroll + 10),
-                    KeyCode::PageUp => Some(scroll.saturating_sub(10)),
-                    _ => None,
-                };
-                c.overlay = next.map(|scroll| Overlay::Keys { scroll });
-                c.dirty = true;
-            }
         }
     }
 
@@ -1632,6 +1612,7 @@ impl Server {
             None => Vec::new(),
         };
         let c = self.clients.get_mut(&id).expect("checked above");
+        c.overlays.draw(&mut frame);
         c.tab_spans = spans;
         c.dirty = false;
         let bytes = c.screen.render(&frame);
@@ -1658,7 +1639,7 @@ impl Server {
                 let Some(slot) = self.panes.get(pid) else {
                     continue;
                 };
-                let focused = *pid == tab.active && c.overlay.is_none();
+                let focused = *pid == tab.active && c.overlays.is_empty();
                 let at = slot.pane.render(
                     &mut frame.buf,
                     rect,
@@ -1721,53 +1702,8 @@ impl Server {
                     .add_modifier(Modifier::BOLD),
             );
         }
-        if let Some(Overlay::Keys { scroll }) = &c.overlay {
-            self.draw_keys(frame, *scroll);
-            cursor = None;
-        }
         frame.cursor = cursor;
         spans
-    }
-
-    fn draw_keys(&self, frame: &mut Frame, scroll: usize) {
-        let area = frame.area();
-        let width = area.width.saturating_sub(8).clamp(20, 90);
-        let height = area.height.saturating_sub(4).max(5);
-        let outer = Rect::new(
-            (area.width.saturating_sub(width)) / 2,
-            (area.height.saturating_sub(height)) / 2,
-            width,
-            height,
-        );
-        let inner = compose::draw_box(&mut frame.buf, outer, "Keys");
-        let list = self.bindings.list();
-        let key_width = list.iter().map(|(k, _)| k.len()).max().unwrap_or(0) as u16 + 2;
-        for (row, (keys, about)) in list
-            .iter()
-            .skip(scroll)
-            .take(inner.height as usize)
-            .enumerate()
-        {
-            let y = inner.y + row as u16;
-            let line = Rect::new(inner.x, y, inner.width, 1);
-            let x = compose::put(
-                &mut frame.buf,
-                inner.x + 1,
-                line,
-                keys,
-                Style::new()
-                    .fg(compose::colors::ACCENT)
-                    .add_modifier(Modifier::BOLD),
-            );
-            let _ = x;
-            compose::put(
-                &mut frame.buf,
-                inner.x + 1 + key_width,
-                line,
-                about,
-                Style::new(),
-            );
-        }
     }
 }
 

@@ -11,6 +11,12 @@
 //! A binding names an action, as `switchboard help-keys` lists them, or
 //! `null` to unbind. Each action is one of `Action`'s, written as it is
 //! parsed by `Action::parse`.
+//!
+//! Each action has a description and tags (`Action::note`), as tmux.conf
+//! gave every binding one with `bind -N "Split pane to the left #panes
+//! #split"`: the M-p palette (src/ui/palette.rs) lists every action by it,
+//! with its keys, and the actions no key is bound to by default
+//! (`Action::palette_only`) with none.
 
 use std::collections::HashMap;
 
@@ -55,6 +61,10 @@ pub enum Action {
     FocusClaude,
     /// Pin the tab, keeping it at the top of what needs you, or unpin it.
     TogglePin,
+    /// The palette: every command, to find and run one (M-p).
+    Palette,
+    /// Show every tip again, each once more.
+    ResetTips,
 }
 
 impl Action {
@@ -62,7 +72,7 @@ impl Action {
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
-    /// `focus-claude`, `toggle-pin`.
+    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -85,6 +95,8 @@ impl Action {
             "next-needs-you" => Action::NextNeedsYou,
             "focus-claude" => Action::FocusClaude,
             "toggle-pin" => Action::TogglePin,
+            "palette" => Action::Palette,
+            "reset-tips" => Action::ResetTips,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -127,28 +139,40 @@ impl Action {
             Action::NextNeedsYou => "next-needs-you".into(),
             Action::FocusClaude => "focus-claude".into(),
             Action::TogglePin => "toggle-pin".into(),
+            Action::Palette => "palette".into(),
+            Action::ResetTips => "reset-tips".into(),
         }
     }
 
-    /// What it does, in words, for the list of keys.
+    /// What it does, in words, for the list of keys: tmux.conf's
+    /// descriptions without their tags.
     pub fn about(&self) -> String {
-        let dir = |d: &Direction| match d {
-            Direction::Left => "left",
-            Direction::Right => "right",
+        let side = |d: &Direction| match d {
+            Direction::Left => "to the left",
+            Direction::Right => "to the right",
             Direction::Up => "above",
             Direction::Down => "below",
         };
+        let toward = |d: &Direction| match d {
+            Direction::Left => "left",
+            Direction::Right => "right",
+            Direction::Up => "up",
+            Direction::Down => "down",
+        };
         match self {
-            Action::SelectPane(d) => format!("Move to the pane {}", dir(d)),
+            Action::SelectPane(Direction::Left) => "Move to the pane on the left".into(),
+            Action::SelectPane(Direction::Right) => "Move to the pane on the right".into(),
+            Action::SelectPane(d) => format!("Move to the pane {}", side(d)),
             Action::PrevTab => "Previous tab".into(),
             Action::NextTab => "Next tab".into(),
             Action::LastTab => "Go back to the previous tab".into(),
             Action::SelectTab(n) => format!("Go to tab {n}"),
             Action::NewTab => "New tab".into(),
-            Action::Split(d) => format!("Split pane {}", dir(d)),
+            Action::Split(d) => format!("Split pane {}", side(d)),
             Action::ClosePane => "Close the pane".into(),
             Action::Zoom => "Zoom the pane in or out".into(),
-            Action::Resize(d, n) => format!("Grow pane {} by {n}", dir(d)),
+            Action::Resize(d, 5) => format!("Grow pane {}", toward(d)),
+            Action::Resize(d, n) => format!("Grow pane {} by {n}", toward(d)),
             Action::Detach => "Detach, leaving everything running".into(),
             Action::CopyMode => "Scroll back through the pane's history".into(),
             Action::SendPrefix => "Send the prefix key to the pane".into(),
@@ -156,7 +180,68 @@ impl Action {
             Action::NextNeedsYou => "Go to the next tab that needs you".into(),
             Action::FocusClaude => "Jump to the pane running Claude in this tab".into(),
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
+            Action::Palette => "Find a command and run it (the palette)".into(),
+            Action::ResetTips => "Show the tips again, each once more".into(),
         }
+    }
+
+    /// What it is about, as tmux.conf's `#tags`: matched in the palette as
+    /// any other word, and shown dimmed.
+    pub fn tags(&self) -> &'static [&'static str] {
+        match self {
+            Action::SelectPane(_) => &["panes", "navigate"],
+            Action::PrevTab | Action::NextTab | Action::LastTab | Action::SelectTab(_) => {
+                &["tabs", "navigate"]
+            }
+            Action::NewTab => &["tabs", "new"],
+            Action::Split(_) => &["panes", "split"],
+            Action::ClosePane => &["panes", "close"],
+            Action::Zoom => &["panes", "layout"],
+            Action::Resize(..) => &["panes", "resize"],
+            Action::Detach => &["session", "detach"],
+            Action::CopyMode => &["panes", "scroll", "history"],
+            Action::SendPrefix => &["keys"],
+            Action::ListKeys => &["help", "keys"],
+            Action::NextNeedsYou | Action::FocusClaude => &["claude", "tabs", "navigate"],
+            Action::TogglePin => &["tabs", "pin"],
+            Action::Palette => &["palette"],
+            Action::ResetTips => &["help", "tips"],
+        }
+    }
+
+    /// Its description as tmux.conf wrote one: the words, then the tags
+    /// (`Split pane to the left #panes #split`).
+    pub fn note(&self) -> String {
+        let mut note = self.about();
+        for tag in self.tags() {
+            note.push_str(" #");
+            note.push_str(tag);
+        }
+        note
+    }
+
+    /// The words and tags the palette lists it by, or `None` to leave it
+    /// out: of M-1 to M-9, only the first, for all nine, as tmux.conf gave
+    /// only M-1 a description.
+    pub fn palette_note(&self) -> Option<(String, String)> {
+        let words = match self {
+            Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
+            Action::SelectTab(_) => return None,
+            _ => self.about(),
+        };
+        let tags = self
+            .tags()
+            .iter()
+            .map(|t| format!("#{t}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some((words, tags))
+    }
+
+    /// The commands no key is bound to by default, which the palette lists
+    /// with none (tmux.conf's `palette` key table).
+    pub fn palette_only() -> Vec<Action> {
+        vec![Action::ResetTips]
     }
 }
 
@@ -207,6 +292,7 @@ impl Default for Bindings {
         bind("M-a", NextNeedsYou);
         bind("M-c", FocusClaude);
         bind("M-f", TogglePin);
+        bind("M-p", Palette);
         let mut prefix = HashMap::new();
         let mut pbind = |k: &str, a: Action| {
             prefix.insert(key(k), a);
@@ -320,6 +406,8 @@ mod tests {
             Action::NextNeedsYou,
             Action::FocusClaude,
             Action::TogglePin,
+            Action::Palette,
+            Action::ResetTips,
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }
@@ -329,5 +417,26 @@ mod tests {
         );
         assert_eq!(Action::parse("select-tab-0"), None);
         assert_eq!(Action::parse("fly"), None);
+    }
+
+    #[test]
+    fn notes_read_as_tmux_confs() {
+        assert_eq!(
+            Action::Split(Direction::Left).note(),
+            "Split pane to the left #panes #split"
+        );
+        assert_eq!(
+            Action::Resize(Direction::Down, 5).note(),
+            "Grow pane down #panes #resize"
+        );
+        assert_eq!(
+            Action::Resize(Direction::Up, 2).about(),
+            "Grow pane up by 2"
+        );
+        assert_eq!(
+            Action::SelectTab(1).palette_note().unwrap().0,
+            "Go to a tab by number (M-1 to M-9)"
+        );
+        assert_eq!(Action::SelectTab(4).palette_note(), None);
     }
 }

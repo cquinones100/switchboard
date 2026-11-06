@@ -23,6 +23,9 @@
 //! display [-t pane] pane|tab|session|cwd|command|title
 //! list-keys | detach [-s session] | kill-server
 //! save                                   the layout now; prints its file
+//! say [-t seconds] text...               a message in a box (src/ui)
+//! tip <name> | tip seen <name> | tip reset
+//!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
 //!                                        stdin (src/agent)
 //! ```
@@ -55,6 +58,8 @@ pub const NAMES: &[&str] = &[
     "detach",
     "kill-server",
     "save",
+    "say",
+    "tip",
 ];
 
 /// The commands that read their stdin (a Claude Code hook's JSON); no other
@@ -205,6 +210,8 @@ impl Server {
                 self.quit = true;
                 Ok(Reply::ok(""))
             }
+            "say" => Ok(self.cmd_say(rest, caller)),
+            "tip" => Ok(self.cmd_tip(rest, caller)),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| e.to_string()),

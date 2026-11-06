@@ -17,6 +17,8 @@
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
 //! - `tabs`: what each tab is called and the color it wears.
+//! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
+//!   pickers and the palette.
 
 pub mod agent;
 pub mod cmd;
@@ -30,5 +32,6 @@ pub mod presence;
 pub mod requests;
 pub mod settings;
 pub mod tabs;
+pub mod ui;
 pub mod util;
 pub mod worktree;
