@@ -11,13 +11,21 @@
 //! - `pane`: one pane's PTY and terminal emulator, drawn into a cell buffer.
 //! - `procinfo`: a pane's processes: their directory and command.
 //! - `layout`: a tab's panes as a tree of splits.
+//! - `keys`: which key does what.
+//! - `compose`: drawing a client's screen, sending only what changed.
+//! - `server`: the server task, owning all of it.
+//! - `commands`: what shells, hooks and skills ask of the server.
 
 pub mod client;
+pub mod commands;
+pub mod compose;
 pub mod input;
+pub mod keys;
 pub mod layout;
 pub mod pane;
 pub mod procinfo;
 pub mod proto;
+pub mod server;
 pub mod socket;
 
 use serde::{Deserialize, Serialize};

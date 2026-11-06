@@ -40,6 +40,11 @@ pub struct Command {
 
 pub const COMMANDS: &[Command] = &[
     Command {
+        name: "server",
+        run: crate::mux::server::main,
+        about: "The server every client attaches to (started for you)",
+    },
+    Command {
         name: "platform",
         run: platform::main,
         about: "What differs between macOS and Linux, for the shell scripts",
@@ -168,6 +173,9 @@ pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
             println!("switchboard {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        Some(name) if crate::mux::commands::NAMES.contains(&name) => {
+            crate::mux::socket::run_command(std::iter::once(name.to_string()).chain(args).collect())
+        }
         Some(name) => match COMMANDS.iter().find(|c| c.name == name) {
             Some(command) => (command.run)(args),
             None => {
@@ -185,6 +193,10 @@ fn help() {
     for c in COMMANDS {
         println!("  {:width$}  {}", c.name, c.about);
     }
+    println!(
+        "\nAnd, asked of the running server (switchboard <command> --help-less; see src/mux/commands.rs):"
+    );
+    println!("  {}", crate::mux::commands::NAMES.join(" "));
 }
 
 /// What a program not yet ported from Node says.
