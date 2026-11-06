@@ -112,10 +112,11 @@ Each step is a commit (or a few) on the branch, with its tests.
 1. **Foundation** — done: the crate, `paths`, `util`, `settings`, `requests`,
    `platform` (macOS and Linux), `presence`, `connector`, `worktree`, the
    command table.
-2. **The multiplexer core**: IPC, client, server loop, panes, input, layout,
-   drawing, bindings for panes and tabs, scrollback and copy mode, mouse,
-   clipboard, detach/attach, persistence. Tests run a server in a temporary
-   HOME and read its screen through a test client.
+2. **The multiplexer core** — done but persistence: IPC, client, server loop,
+   panes, input, layout, drawing, bindings for panes and tabs, scrollback and
+   copy mode, mouse, clipboard, detach/attach (tests/mux.rs runs a server in
+   a temporary HOME and reads its screen through a test client); persistence
+   is next.
 3. **Agent state and tabs**: `switchboard hook`, tab names and accent colors,
    the status line, notifications, one Claude per tab, reminders, pinned tabs.
 4. **Sidebar and mission control**: `lib/sidebar/` on the server's model, its
