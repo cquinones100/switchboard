@@ -127,6 +127,31 @@ test("the landing lock: one worktree at a time, the second taking it once the fi
   }
 });
 
+test("the landing's phase marks this tab's pane with the step and queue-and-clean's loop, and no words clear the step", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "land-phase-")));
+  const socket = path.join(tmp, "tmux.sock");
+  const env = { ...process.env, HOME: tmp, TMUX: "", TMUX_PANE: "", GIT_CONFIG_GLOBAL: "/dev/null" };
+  try {
+    const repo = path.join(tmp, "repo");
+    execFileSync("git", ["init", "-q", repo], { env });
+    fs.mkdirSync(path.join(tmp, ".local/state/tmux-sidebar"), { recursive: true });
+    execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t", "cat"], { env });
+    const pane = execFileSync("tmux", ["-S", socket, "display", "-p", "#{pane_id}"], { env, encoding: "utf8" }).trim();
+    const inTab = { ...env, TMUX: `${socket},1,0`, TMUX_PANE: pane };
+    const options = () => execFileSync("tmux", ["-S", socket, "display", "-p", "-t", pane, "#{@agent_phase}|#{@agent_loop}"], { env, encoding: "utf8" }).trim();
+    assert.equal(spawnSync(process.execPath, [lock, "phase", "waiting", "for the landing lock"], { cwd: repo, env: inTab }).status, 0);
+    assert.equal(options(), "waiting for the landing lock|queue");
+    assert.ok(fs.existsSync(path.join(tmp, ".local/state/tmux-sidebar/nudge")), "the sidebar nudged");
+    // Cleared last, after the cleanup has removed the worktree: from outside a repository.
+    assert.equal(spawnSync(process.execPath, [lock, "phase"], { cwd: tmp, env: inTab }).status, 0);
+    assert.equal(options(), "|queue", "the step cleared, the loop kept");
+    assert.equal(spawnSync(process.execPath, [lock, "phase", "testing"], { cwd: repo, env }).status, 0, "outside tmux it does nothing");
+  } finally {
+    spawnSync("tmux", ["-S", socket, "kill-server"], { env });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("with an origin, an item's branch starts from origin's default branch as fetched now, leaving out the main clone's unpushed commits, and an origin that can't be fetched stops it", () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-origin-test-")));
   const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };

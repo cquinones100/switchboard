@@ -1,13 +1,13 @@
 ---
 name: wtn
-description: Replace this Claude session with `wtn` in the same tmux pane, so a worktree opens in this tab for one checklist item of a note, with a fresh Claude session working on it and its plan. For repositories like Switchboard that keep their work in a note and commit straight to main; /queue-and-clean lands it.
+description: Replace this Claude session with `wtn` in the same tmux pane, so a worktree opens in this tab for one checklist item of a note, with a fresh Claude session working on it and its plan. For work kept in a note in any repository; /queue-and-clean lands it, straight on the default branch where the repository commits there with no PR, as Switchboard does, else through a PR.
 argument-hint: "[note] [item text or line number] [what to add to its prompt]"
 disable-model-invocation: true
 ---
 
 # wtn
 
-Hand this tab over to `wtn` for one checklist item of a note: `/wt`'s counterpart for work kept in a note rather than a Linear ticket. This session ends, and in its place `wtn` (`bin/worktree-from-note`) makes a worktree on a branch named after the item (`note/<slug>`), moves the pane's shell into it, and starts a new Claude session there, told the item, its plan, and to land it with `/queue-and-clean` when done.
+Hand this tab over to `wtn` for one checklist item of a note: `/wt`'s counterpart for work kept in a note rather than a Linear ticket. This session ends, and in its place `wtn` (`bin/worktree-from-note`) makes a worktree on a branch named after the item (`note/<slug>`), moves the pane's shell into it, and starts a new Claude session there, told the item, its plan, and to land it with `/queue-and-clean` when done: on the default branch in a repository whose `CLAUDE.md` commits straight there, else through a PR.
 
 The conversation does not carry over. The item and its plan are the hand-off.
 

@@ -238,7 +238,12 @@ details() {
   fi
   # A compaction cut short by a new prompt or session leaves nothing to hand back.
   case $event in
-    UserPromptSubmit | SessionStart | SessionEnd) tmux set -pu -t "$pane" @agent_compact_from 2>/dev/null ;;
+    UserPromptSubmit | SessionStart | SessionEnd)
+      tmux set -pu -t "$pane" @agent_compact_from 2>/dev/null
+      # A loop's step (queue-and-clean's landing, land-lock.js phase) is set
+      # again by the loop as it goes on, so a new prompt or session ends it.
+      tmux set -pu -t "$pane" @agent_phase 2>/dev/null
+      ;;
   esac
   case $state in
     clear | done)

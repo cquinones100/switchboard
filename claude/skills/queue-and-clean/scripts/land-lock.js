@@ -12,6 +12,11 @@
 //   land-lock.js wait      takes it, waiting as long as another holds it
 //   land-lock.js release   lets it go, when this worktree holds it
 //   land-lock.js holder    prints which worktree holds it, nothing when none
+//   land-lock.js phase [words]
+//                          shows the landing's step in this tab, the pane's
+//                          @agent_phase, its loop marked queue-and-clean's
+//                          (@agent_loop), since a session following the skill
+//                          by reading it never invokes it; no words clear it
 //
 // A landing holds it only to rebase, test and push, but one whose change no
 // longer matches its review reviews again and asks again while holding it,
@@ -19,12 +24,28 @@
 // with time: it is taken over only from a landing that
 // is gone, its worktree removed or no Claude session running in it.
 
-const { execFileSync } = require("node:child_process");
+const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { liveSessionsIn } = require("../../../../lib/worktree");
 
 const git = (...args) => execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+
+// The phase needs no repository, so it is set before the lookup below:
+// the landing clears it last, after its cleanup has removed the worktree.
+const phase = () => {
+  const words = process.argv.slice(3).join(" ").replace(/\s+/g, " ").trim();
+  const pane = process.env.TMUX_PANE;
+  if (!pane || !process.env.TMUX) return;
+  spawnSync("tmux", words ? ["set", "-p", "-t", pane, "@agent_phase", words, ";", "set", "-p", "-t", pane, "@agent_loop", "queue"] : ["set", "-pu", "-t", pane, "@agent_phase"], { stdio: "ignore" });
+  const state = path.join(os.homedir(), ".local/state/tmux-sidebar");
+  if (fs.existsSync(state)) fs.appendFileSync(path.join(state, "nudge"), "\n");
+};
+if (process.argv[2] === "phase") {
+  phase();
+  process.exit(0);
+}
 
 let common;
 let here;
@@ -85,7 +106,7 @@ const main = async () => {
     if (current) console.log(current.path);
     return;
   }
-  console.error("usage: land-lock.js take|wait|release|holder");
+  console.error("usage: land-lock.js take|wait|release|holder|phase [words]");
   process.exit(2);
 };
 

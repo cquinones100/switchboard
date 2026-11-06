@@ -4,9 +4,10 @@
 //
 // Creates a git worktree on a new branch named after a checklist item in one
 // of your notes (the notes app's Markdown files, in $NOTES_DIR or ~/Notes) and
-// opens claude in it, told to work on the item and its plan. For repositories
-// like Switchboard that keep their work in a note and commit straight to main:
-// /queue-and-clean lands the branch on main once the work is done.
+// opens claude in it, told to work on the item and its plan, and to land it
+// with /queue-and-clean once the work is done: straight on the default branch
+// in a repository whose CLAUDE.md commits there with no PR, as Switchboard's
+// does, else through a PR.
 //
 // <note> is the note's path, absolute or within the notes directory, ".md"
 // optional; <line> is the item's line number in it, an unticked "- [ ]" line
@@ -251,8 +252,8 @@ const main = () => {
       : planName
         ? `It links a plan, "${planName}", that isn't in the notes directory: tell me before going on. `
         : "It has no plan: read the code the item touches, and ask me before building anything it leaves open. ") +
-    "This repository commits straight to main with no PR, so commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. " +
-    "When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read ~/.claude/skills/queue-and-clean/SKILL.md and follow it: it reviews the work, asks me before pushing, lands it on main and ticks the item." +
+    "Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. " +
+    "When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read ~/.claude/skills/queue-and-clean/SKILL.md and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open." +
     (extra ? ` Also, from me for this item: ${extra}` : "");
 
   // Read by the `wtn` shell function: line 1 the worktree path, the rest the prompt.

@@ -956,13 +956,18 @@ test("a loop running in the background reads as that loop, with its round: revie
   // queue-and-clean's watch reads the checks too, but is the queue's.
   fs.appendFileSync(file, [ended("ci2"), ...run("u7", "q1", "gh api graphql -f query='{ pullRequest { mergeQueueEntry { state } } }'; gh pr checks 12 --required", 500)].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   assert.deepEqual(sidebar.backgroundWork(file, now - 60_000), { count: 1, loop: { kind: "queue", round: 1 }, monitors: [] });
+  // So is its landing's wait for the landing lock.
+  fs.appendFileSync(file, [ended("q1"), ...run("u9", "q2", "node ~/.claude/skills/queue-and-clean/scripts/land-lock.js wait", 300)].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  assert.deepEqual(sidebar.backgroundWork(file, now - 60_000), { count: 1, loop: { kind: "queue", round: 2 }, monitors: [] });
   // Anything else is plain background work.
-  fs.appendFileSync(file, [ended("q1"), ...run("u8", "x1", "sleep 100", 100)].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  fs.appendFileSync(file, [ended("q2"), ...run("u8", "x1", "sleep 100", 100)].map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   assert.deepEqual(sidebar.backgroundWork(file, now - 60_000), { count: 1, monitors: [] });
 
   const tab = { id: "@9", index: 9, name: "review", state: "background", background: 2, loop: { kind: "review", round: 2 }, session: "$1", panes: [], sidebars: [] };
   assert.equal(sidebar.stateWords({ ...tab, loop: { kind: "ci", round: 3 } }), "CI loop · round 3");
   assert.equal(sidebar.stateWords({ ...tab, loop: { kind: "queue", round: 1 } }), "queue-and-clean · watching");
+  assert.equal(sidebar.stateWords({ ...tab, loop: { kind: "queue", round: 1 }, phase: "waiting for the landing lock" }), "queue-and-clean · waiting for the landing lock", "a landing's step in place of watching");
+  assert.equal(sidebar.stateWords({ ...tab, state: "working", since: undefined, loop: undefined, loopSkill: "queue", phase: "testing", activity: "Run the tests" }), "working · queue-and-clean · testing · Run the tests", "and while Claude works in the foreground");
   assert.equal(sidebar.stateWords(tab), "review loop · round 2");
   const { lines } = sidebar.sidebarLines({ tabs: [tab], sections: [], cols: 40, rows: 12, view: { focused: false, cursor: "@9", frame: 0, here: "@9" } });
   assert.match(lines.join("\n"), /\x1b\[48;5;97m/, "the review loop's own badge color");
