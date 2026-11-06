@@ -331,6 +331,21 @@ end
 -- then shows). One tmux call to look, and none
 -- outside tmux.
 function M.relink(follow, title)
+  -- The note the sidebar daemon's mode works continuously
+  -- (lib/sidebar/autopilot.js), kept in its state file, follows too.
+  local state = (vim.env.TMUX_SIDEBAR_STATE_DIR or vim.fn.expand("~/.local/state/tmux-sidebar")) .. "/autopilot.json"
+  local ok, mode = pcall(vim.json.decode, read_file(state) or "")
+  local to_mode = ok and type(mode) == "table" and type(mode.note) == "string" and mode.note ~= "" and follow(mode.note)
+  if to_mode then
+    mode.note = to_mode
+    if mode.said and mode.said:find("^Can't find the note") then mode.said = "" end
+    local f = io.open(state .. ".tmp", "w")
+    if f then
+      f:write(vim.json.encode(mode))
+      f:close()
+      uv.fs_rename(state .. ".tmp", state)
+    end
+  end
   if (vim.env.TMUX or "") == "" then return end
   local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_note_arrived}\t#{@tab_name}" }, { text = true }):wait()
   if listed.code ~= 0 then return end

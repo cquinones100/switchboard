@@ -347,3 +347,56 @@ test("M-p's wtn popup leaves out an item a worktree is already working on, and s
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("working a note continuously takes items with a settled plan first, then those with none, never one needing a choice on its line or in its plan note, one a worktree has or one skipped, and opens a background tab for each it takes", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-next-")));
+  const socket = path.join(tmp, "tmux.sock");
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), TMUX: "", GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const popup = path.join(__dirname, "../tmux/wtn-open.zsh");
+  try {
+    const repo = path.join(tmp, "repo");
+    fs.mkdirSync(path.join(tmp, "Notes"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "Notes/Work.md"), [
+      "# Work",
+      "",
+      "- [ ] Plain",
+      "- [ ] ",
+      "- [ ] Planned",
+      "  Plan: [[Plan - Planned]]",
+      "- [ ] Undecided",
+      "  Plan: [[Plan - Undecided]] (needs a choice)",
+      "- [ ] Taken",
+      "  Plan: [[Plan - Taken]]",
+      "- [ ] Also planned",
+      "  Plan: [[Plan - Also]]",
+      "- [ ] Also plain",
+      "- [ ] Open in its plan",
+      "  Plan: [[Plan - Open]]",
+      "- [ ] Lost plan",
+      "  Plan: [[Plan - Gone]]",
+      "",
+    ].join("\n"));
+    fs.mkdirSync(path.join(tmp, "Notes/Plans"));
+    ["Planned", "Also", "Taken"].forEach((name) => fs.writeFileSync(path.join(tmp, `Notes/Plans/Plan - ${name}.md`), `# Plan - ${name}\n\nChosen: the first.\n\n## Steps\n`));
+    fs.writeFileSync(path.join(tmp, "Notes/Plans/Plan - Open.md"), "# Plan - Open\n\n## Decision needed\n\nA or B.\n");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "9"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    const queue = (...args) => execFileSync("zsh", [popup, "queue", "Work.md", ...args], { cwd: repo, env, encoding: "utf8" }).trim().split("\n");
+    assert.deepEqual(queue(), ["5\tPlanned", "11\tAlso planned", "3\tPlain", "13\tAlso plain", "16\tLost plan"], "a plan whose note isn't there taken as no plan, one whose note needs a decision never, and an empty item never");
+    assert.deepEqual(queue("--ready-only"), ["5\tPlanned", "11\tAlso planned"], "only items with a settled plan");
+    assert.deepEqual(execFileSync("zsh", [popup, "queue", "Work.md"], { cwd: repo, env: { ...env, WTN_SKIP: "Planned\nPlain" }, encoding: "utf8" }).trim().split("\n"), ["11\tAlso planned", "13\tAlso plain", "16\tLost plan"], "the skipped ones left out");
+
+    execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "120", "-y", "30", "cat"], { env });
+    // Its tabs run cat, not a shell that would write into HOME as it goes.
+    execFileSync("tmux", ["-S", socket, "set", "-g", "default-command", "cat"], { env });
+    const out = execFileSync("zsh", [popup, "next", "Work.md", "2"], { cwd: repo, env: { ...env, TMUX: `${socket},1,0` }, encoding: "utf8" }).trim().split("\n").map((row) => row.split("\t"));
+    assert.deepEqual(out.map(([line, , text]) => [line, text]), [["5", "Planned"], ["11", "Also planned"]], "the first two taken, by line");
+    const tabs = execFileSync("tmux", ["-S", socket, "list-windows", "-F", "#{window_id}\t#{@tab_name}\t#{@tab_note}\t#{@autopilot}\t#{window_active}"], { env, encoding: "utf8" }).trim().split("\n").slice(1).map((row) => row.split("\t"));
+    assert.deepEqual(tabs.map(([id, name, note]) => [id, name, note]), out.map(([, window, text]) => [window, text, "Work.md"]), "a tab for each, named after it and linked to the note");
+    assert.ok(tabs.every(([, , , at, active]) => Number(at) > 0 && active === "0"), "each marked as the mode's, in the background");
+  } finally {
+    spawnSync("tmux", ["-S", socket, "kill-server"], { env });
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

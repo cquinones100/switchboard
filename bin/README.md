@@ -258,6 +258,29 @@ full text and what is indented under it (`wtn_item_preview` setting), Tab
 picking several, and opens a tab for each at the end of the
 tab list, named after its item and linked to the note, with `wtn` running in it.
 
+M-p's "Work the note continuously" keeps that going without you picking: from
+a pane in the note's repository, mission control asks which note (the one it
+worked last first), how many of its tabs work at once (3), the most open at
+once (5) and a spend limit for the day (none by default), and the sidebar
+daemon then opens the note's items one at a time in background tabs, each
+with `wtn` as above, whenever fewer than that many work and fewer than the
+most are open. Items whose plan is settled (a `Plan: [[…]]` line, no "needs a
+choice" on it and no `## Decision needed` section in the plan note) go first, then items with no plan, each in the note's order;
+an item whose plan needs a choice is never taken. A tab waiting on you, or
+finished and waiting for your answer, frees its place among those working but
+still counts toward the most open, and a tab queue-and-clean has landed and
+moved back to the main clone leaves the mode, so the next item opens in its
+place. Its tabs say `auto` in the sidebar, and while it is on, mission
+control's Tabs view leads with its line: the note, how many work and are open,
+and the item it takes next. `k` from the top row of tabs (or a click) reaches
+it, and Enter there pauses or resumes it, skips the next item, takes only
+items with a settled plan or those with none too, changes its settings, or
+stops it; M-p's command opens the same menu while it is on. It pauses itself
+while you're away from the Mac, stops opening tabs once the day's Claude spend
+in the Usage view passes its limit, and says so in the notifications when the
+note has nothing left to take or the limit is reached. Settings' "Work a note
+continuously" (`autopilot`) allows it; the mode itself starts off.
+
 `/queue-and-clean` lands it: on a branch with no PR, in a repository whose
 `CLAUDE.md` says it commits straight to its default branch, "Land on main"
 rebases it onto `origin/main`, squashes it into one commit, runs the tests

@@ -4026,3 +4026,142 @@ test("C-d and C-u in the sidebar scroll its list half a screen and move the curs
   await sidebar.sidebarKey(client, { key: "C-d" });
   assert.equal(sidebar.state.cursors.get(session), windows[1], "past the tall tab");
 });
+
+test("working a note continuously keeps 3 tabs working and at most 5 open, a tab waiting on you freeing its slot, one landed leaving the mode, and stops on pause or an empty note", async () => {
+  const dir = path.join(tmp, "autopilot");
+  const repo = path.join(dir, "repo");
+  const notes = path.join(dir, "Notes");
+  fs.mkdirSync(notes, { recursive: true });
+  fs.writeFileSync(path.join(notes, "Work.md"), "# Work\n\n- [ ] One\n");
+  // Changed long enough ago to have settled.
+  fs.utimesSync(path.join(notes, "Work.md"), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env: { ...process.env, ...gitEnv } });
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env: { ...process.env, ...gitEnv } });
+  // A stand-in for wtn-open.zsh: each `next` makes a worktree and a tab
+  // working in it, opened five minutes ago, until `max` items are taken.
+  const stub = path.join(dir, "wtn-open.zsh");
+  fs.writeFileSync(stub, [
+    "zmodload zsh/datetime",
+    "here=${0:A:h}",
+    "[[ $1 == queue ]] && { print -r -- $'1\\tnext thing'; exit 0 }",
+    "print -r -- \"$WTN_SKIP\" > $here/skip",
+    "n=$(( $(cat $here/count 2>/dev/null || print 0) + 1 ))",
+    "(( n > $(cat $here/max) )) && exit 0",
+    "print $n > $here/count",
+    "git worktree add -q \"$PWD/.wt/$n\" -b \"b$n\" >/dev/null 2>&1",
+    "w=$(tmux new-window -d -c \"$PWD/.wt/$n\" -P -F '#{window_id}' cat)",
+    "tmux set-option -w -t $w @autopilot $((EPOCHSECONDS - 300))",
+    "tmux set-option -w -t $w @agent working",
+    "tmux set-option -w -t $w @autopilot_item \"item $n\"",
+    "print -r -- \"$n\"$'\\t'\"$w\"$'\\titem '\"$n\"",
+  ].join("\n"));
+  fs.writeFileSync(path.join(dir, "max"), "99");
+  const saved = { ...process.env };
+  Object.assign(process.env, gitEnv, { TMUX_SIDEBAR_WTN_OPEN: stub, NOTES_DIR: notes });
+  const pilot = sidebar.autopilot({ batch: sidebar.batch, gapMs: 0 });
+  const mine = () => tmux("list-windows", "-a", "-F", "#{window_id}\t#{@autopilot}\t#{@autopilot_in}").split("\n").map((row) => row.split("\t")).filter(([, at]) => at);
+  // Checks until the mode's tabs hold still.
+  const settle = async () => {
+    let was;
+    for (let still = 0; still < 6; ) {
+      pilot.check(sidebar.tabsFrom(await sidebar.snapshot()), { away: false });
+      await wait(150);
+      const now = mine().map((row) => row.join()).join(";");
+      still = now === was ? still + 1 : 0;
+      was = now;
+    }
+    return mine();
+  };
+  try {
+    sidebar.writeAutopilot({ on: true, note: "Work.md", repo, slots: 3, cap: 5, paused: false, said: "" });
+    fs.utimesSync(path.join(notes, "Work.md"), new Date(), new Date());
+    assert.equal((await settle()).length, 0, "nothing taken from a note changed a moment ago, whose item may still be being typed");
+    fs.utimesSync(path.join(notes, "Work.md"), new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    assert.equal((await settle()).length, 3, "three tabs open, one for each slot");
+    const wait1 = mine()[0][0];
+    tmux("set-option", "-w", "-t", wait1, "@agent", "waiting");
+    assert.equal((await settle()).length, 4, "a tab waiting on you frees its slot");
+    tmux("set-option", "-w", "-t", mine()[1][0], "@agent", "done");
+    assert.equal((await settle()).length, 5, "a fifth once another waits");
+    tmux("set-option", "-w", "-t", mine()[2][0], "@agent", "waiting");
+    assert.equal((await settle()).length, 5, "never a sixth: the cap counts the tabs waiting on you");
+    assert.ok(mine().every(([, , inWorktree]) => inWorktree === "1"), "each marked once seen in its worktree");
+    assert.ok(["item 1", "item 2", "item 3", "item 4"].every((item) => fs.readFileSync(path.join(dir, "skip"), "utf8").split("\n").includes(item)), "the items of the tabs still open are never taken again");
+
+    // queue-and-clean's landing moves the pane back to the main clone.
+    tmux("respawn-pane", "-k", "-t", wait1, "-c", repo, "cat");
+    const after = await settle();
+    assert.ok(!after.some(([id]) => id === wait1), "the landed tab leaves the mode");
+    assert.equal(after.length, 5, "and the next item opens in its place");
+    assert.equal(sidebar.readAutopilot().said, "");
+
+    sidebar.writeAutopilot({ paused: true });
+    tmux("set-option", "-w", "-t", after[3][0], "@agent", "waiting");
+    tmux("kill-window", "-t", after[4][0]);
+    assert.equal((await settle()).length, 4, "paused, it opens nothing");
+
+    sidebar.writeAutopilot({ paused: false });
+    fs.writeFileSync(path.join(dir, "max"), "0");
+    assert.equal((await settle()).length, 4, "nothing left in the note: nothing opens");
+    assert.equal(sidebar.readAutopilot().said, "Nothing left to take in Work", "and it says so");
+    const summary = pilot.summary(sidebar.tabsFrom(await sidebar.snapshot()), { away: false });
+    assert.deepEqual([summary.note, summary.open, summary.cap, summary.slots, summary.next], ["Work", 4, 5, 3, "next thing"]);
+  } finally {
+    Object.keys(process.env).filter((key) => !(key in saved)).forEach((key) => delete process.env[key]);
+    Object.assign(process.env, saved);
+    sidebar.writeAutopilot({ on: false });
+    mine().forEach(([id]) => tmux("kill-window", "-t", id));
+  }
+});
+
+test("while a note is worked continuously, mission control's Tabs view leads with its line, which the cursor and a click reach above the cards", async () => {
+  const tabs = sidebar.tabsFrom(await sidebar.snapshot());
+  const autopilot = { note: "Work", busy: 2, open: 4, slots: 3, cap: 5, next: "Next thing", paused: false, away: false, readyOnly: false, skipped: 1, spendLimit: 0 };
+  const mission = sidebar.missionLines({ tabs, sections: [], cols: 120, rows: 30, view: { view: 0, cursor: -1, frame: 0, autopilot }, config });
+  assert.equal(mission.length, 30);
+  mission.forEach((line) => assert.equal(sidebar.width(line), 120, JSON.stringify(line)));
+  const text = mission.map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""));
+  assert.match(text[1], /^ AUTO Work  2 of 3 working · 4 of 5 open · next: Next thing · 1 skipped/);
+  assert.deepEqual(mission.hits.find((h) => h.y === 2), { y: 2, x0: 1, x1: 120, index: -1 }, "a click on it chooses it");
+  assert.ok(mission.hits.filter((h) => h.index >= 0).every((h) => h.y >= 3), "the cards under it");
+  const paused = sidebar.missionLines({ tabs, sections: [], cols: 120, rows: 30, view: { view: 0, cursor: 0, frame: 0, autopilot: { ...autopilot, paused: true, next: "" } }, config });
+  assert.match(paused[1].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ""), /Work  paused · nothing left to take/);
+});
+
+test("k from the top row of tabs reaches the line of the note worked continuously, and Enter there opens its menu, whose Pause pauses it", async () => {
+  sidebar.writeAutopilot({ on: true, note: "Work.md", repo: tmp, slots: 3, cap: 5, paused: false, said: "" });
+  try {
+    sidebar.state.tabs = sidebar.tabsFrom(await sidebar.snapshot());
+    const client = { kind: "mission", socket: { write() {}, end() {} }, view: { view: 0, cursor: 0 }, cols: 120, rows: 30, tmuxClient: "none" };
+    await sidebar.missionKey(client, { key: "k" });
+    assert.equal(client.view.cursor, -1, "on the mode's line");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(client.choose.title, "Working Work");
+    // Skip shows only once the next item has been read, which the daemon may have done.
+    assert.deepEqual(client.choose.choices.map((c) => c.label).filter((label) => !label.startsWith("Skip the next item")), ["Pause: open no more tabs for now", "Take only items with a settled plan", "Change its note, slots, cap or spend limit…", "Stop working the note"]);
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(sidebar.readAutopilot().paused, true);
+    await sidebar.missionKey(client, { key: "j" });
+    assert.equal(client.view.cursor, 0, "j goes back down to the first tab");
+  } finally {
+    sidebar.writeAutopilot({ on: false, paused: false });
+  }
+});
+
+test("a tab of the mode working a note still counts as working while M-d or lazygit stands in for its Claude, from the parked window's state", () => {
+  const repo = path.join(tmp, "autopilot-inplace");
+  const worktree = path.join(repo, ".claude/worktrees/x");
+  fs.mkdirSync(path.join(repo, ".git/worktrees/x"), { recursive: true });
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${path.join(repo, ".git/worktrees/x")}\n`);
+  fs.writeFileSync(path.join(repo, ".git/worktrees/x/commondir"), "../..\n");
+  const since = Date.now() / 1000 - 600;
+  const tab = { id: "@1", state: "idle", path: worktree, panes: [{ pane_id: "%2", pane_current_path: worktree, "@parked_pane": "%1" }], autopilot: { since, inWorktree: true } };
+  const parked = (state) => [{ state, panes: [{ pane_id: "%1" }] }];
+  assert.equal(sidebar.placeOf(tab, repo, Date.now() / 1000, parked("background")).kind, "busy", "its background work counts");
+  assert.equal(sidebar.placeOf(tab, repo, Date.now() / 1000, parked("waiting")).kind, "waiting");
+  const young = { ...tab, panes: [{ pane_id: "%3", pane_current_path: worktree }], autopilot: { since: Date.now() / 1000, inWorktree: true } };
+  assert.equal(sidebar.placeOf({ ...young, state: "idle" }, repo, Date.now() / 1000).kind, "busy", "a tab just opened counts as busy while its Claude starts");
+  assert.equal(sidebar.placeOf({ ...young, state: "waiting" }, repo, Date.now() / 1000).kind, "waiting", "but one waiting on you frees its slot at once");
+});

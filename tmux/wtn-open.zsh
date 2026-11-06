@@ -8,6 +8,25 @@
 # Usage: wtn-open.zsh
 #        wtn-open.zsh items <note file>         prints the note's items, for the tests
 #        wtn-open.zsh item <note file> <line>   prints one item whole, for the preview
+#        wtn-open.zsh queue <note> [--ready-only]          prints the items the mode would take, in order
+#        wtn-open.zsh next <note> <count> [--ready-only]   opens tabs for the first <count> of them
+#
+# queue and next are the sidebar daemon's, for working a note continuously
+# (lib/sidebar/autopilot.js), run in the note's repository: <note> is its path
+# within the notes directory. The order is the items whose plan is settled
+# (a "Plan: [[…]]" line, no "needs a choice" on it and no "## Decision needed"
+# in the plan note, plan_of) first, then those with no plan, or a plan note
+# that isn't there, each in the note's order; an item whose plan needs a choice is never
+# taken, nor one under a parked section, nor one a worktree has, nor one whose
+# first line is a line of WTN_SKIP (the items skipped, and those the daemon
+# opened a moment ago, before wtn has made their branch). --ready-only takes
+# only the first kind. Each line of queue is the item's line number, a tab
+# and its first line; next opens each tab as a pick below does, in the
+# background, marks it @autopilot with the time it opened, and prints its line
+# number, window and first line, tab-separated, and keeps the first line as
+# the tab's @autopilot_item, which the daemon skips while the tab is open, so a
+# tab whose wtn failed before making its branch doesn't have its item taken again. WTN_SESSION names the tmux
+# session to open them in.
 #
 # Both lists are fzf: the notes by title, most recently changed first (never
 # their contents, nor deleted ones); the note's unticked top-level items in its
@@ -23,6 +42,8 @@
 # into each tab's shell, which defines it from ~/.zshrc, with only the item's
 # line number on the command line: the note's path goes in WTN_NOTE, set on the
 # new tab with -e, never typed.
+
+zmodload zsh/datetime
 
 dim=$'\e[38;5;244m' red=$'\e[31m' yellow=$'\e[33m' reset=$'\e[0m'
 
@@ -78,6 +99,73 @@ unclaimed() {
     (( ${+claimed[$note: $text]} )) || print -r -- "$row"
   done
 }
+
+# Whether an item's plan is settled: "settled" when its `Plan: [[<name>]]`
+# links a plan note (found by its file name anywhere in the notes directory
+# but its dot-folders) with no "## Decision needed" section, the heading plans
+# mark an open choice with, "choice" when the plan has one, and nothing when
+# the item has no plan or its plan note isn't there.
+plan_of() {
+  local name=${${(M)1:#*Plan: \[\[*\]\]*}:+${${1#*Plan: \[\[}%%\]\]*}}
+  [[ -n $name ]] || return 0
+  local -a found
+  found=(${NOTES_DIR:-$HOME/Notes}/**/$name.md(N.))
+  (( ${#found} )) || return 0
+  if grep -qiE '^#+[[:space:]]+decisions?[[:space:]]+needed' "${found[1]}"; then print choice; else print settled; fi
+}
+
+# The items the mode would take, in its order (see the top).
+queue() {
+  local file=$1 ready_only=$2 row line text
+  local -a settled unplanned
+  local -A skip
+  for text in ${(f)WTN_SKIP:-}; do skip[$text]=1; done
+  for row in ${(f)"$(unclaimed "$file")"}; do
+    [[ $row == *' (needs a choice)' ]] && continue
+    line=${row%%$'\t'*} text=${row#*$'\t'}
+    (( ${+skip[$text]} )) && continue
+    # An empty item, as Notes makes one when Enter starts the next, is no work.
+    [[ -n ${text//[[:space:]]/} ]] || continue
+    case $(plan_of "$(item "$file" "$line")") in
+      settled) settled+=("$row") ;;
+      choice) ;;
+      *) [[ -z $ready_only ]] && unplanned+=("$row") ;;
+    esac
+  done
+  (( ${#settled} + ${#unplanned} )) && print -rl -- "${settled[@]}" "${unplanned[@]}"
+  return 0
+}
+
+# A tab for one item: in the background, in this repository, named after the
+# item and linked to its note, the note in WTN_NOTE and wtn typed with the
+# item's line alone. Prints the window's id.
+open_tab() {
+  local note=$1 line=$2 name=$3 window
+  window=$(tmux new-window -d ${WTN_SESSION:+-t "$WTN_SESSION:"} -c "${PWD//\#/##}" -e "WTN_NOTE=$note" -n "wtn" -P -F '#{window_id}') || return 1
+  tmux set-option -w -t "$window" @tab_name "${name[1,50]}"
+  tmux set-option -w -t "$window" @tab_note "$note"
+  tmux send-keys -t "$window" "wtn --item $line" Enter
+  print -r -- "$window"
+}
+
+if [[ ${1:-} == (queue|next) ]]; then
+  file=${NOTES_DIR:-$HOME/Notes}/$2
+  [[ -f $file ]] || { print -u2 "No note at $file"; exit 1; }
+  if [[ $1 == queue ]]; then
+    queue "$file" "${(M)3:#--ready-only}"
+    exit
+  fi
+  count=${3:-1}
+  for row in ${(f)"$(queue "$file" "${(M)4:#--ready-only}")"}; do
+    (( count-- > 0 )) || break
+    line=${row%%$'\t'*} text=${row#*$'\t'}
+    window=$(open_tab "$2" "$line" "$text") || { print -u2 "tmux could not open a tab for: $text"; exit 1; }
+    tmux set-option -w -t "$window" @autopilot "$EPOCHSECONDS"
+    tmux set-option -w -t "$window" @autopilot_item "$text"
+    print -r -- "$line"$'\t'"$window"$'\t'"$text"
+  done
+  exit 0
+fi
 
 if [[ ${1:-} == items ]]; then
   unclaimed "$2"
@@ -145,11 +233,7 @@ for row in "${(@f)picked}"; do
   [[ $line == <-> ]] || continue
   name=${${row#*$'\t'}//$'\e'\[[0-9;]#m/}
   name=${name%' (needs a choice)'}
-  window=$(tmux new-window -d -c "${PWD//\#/##}" -e "WTN_NOTE=$note.md" -n "wtn" -P -F '#{window_id}') ||
-    fail "tmux could not open a tab for: $name"
-  tmux set-option -w -t "$window" @tab_name "${name[1,50]}"
-  tmux set-option -w -t "$window" @tab_note "$note.md"
-  tmux send-keys -t "$window" "wtn --item $line" Enter
+  window=$(open_tab "$note.md" "$line" "$name") || fail "tmux could not open a tab for: $name"
   first=${first:-$window}
 done
 [[ -n $first ]] && tmux select-window -t "$first"

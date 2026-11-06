@@ -1486,3 +1486,18 @@ test("Notes reads the toolbar and easy mode settings from tmux, as tmux/settings
     execFileSync("tmux", ["-S", socket, "kill-server"]);
   }
 });
+
+test("a note renamed takes the mode working it continuously along, which keeps its other state", (t) => {
+  const state = fs.mkdtempSync(path.join(tmp, "autopilot-state-"));
+  fs.writeFileSync(path.join(state, "autopilot.json"), JSON.stringify({ on: true, note: "Plans.md", repo: "/r", slots: 3, cap: 5, skipped: [], said: "Can't find the note Plans: set the mode up again from M-p" }, null, 2));
+  process.env.TMUX_SIDEBAR_STATE_DIR = state;
+  t.after(() => delete process.env.TMUX_SIDEBAR_STATE_DIR);
+  lua(`
+    local s = require("notes.store")
+    local plans = s.create("", "Plans")
+    require("notes").retitle(plans, "Weekend plans")
+    io.write("{}")
+  `);
+  const mode = JSON.parse(fs.readFileSync(path.join(state, "autopilot.json"), "utf8"));
+  assert.deepEqual([mode.note, mode.on, mode.repo, mode.slots, mode.cap, mode.said], ["Weekend plans.md", true, "/r", 3, 5, ""]);
+});

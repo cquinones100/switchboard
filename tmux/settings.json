@@ -73,6 +73,13 @@
     "default": true
   },
   {
+    "key": "autopilot",
+    "category": "Sessions",
+    "label": "Work a note continuously",
+    "description": "With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",
