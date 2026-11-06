@@ -3563,7 +3563,7 @@ Agree the plan.
   fs.rmSync(notes, { recursive: true, force: true });
 });
 
-test("a tab with a reminder waits under Reminders with the time left, then needs you once it comes due", async () => {
+test("a tab with a reminder waits under Reminders while nothing else places it, then needs you once it comes due", async () => {
   const window = tmux("new-window", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
   try {
     const later = Math.floor(Date.now() / 1000) + 90 * 60 + 30;
@@ -3586,6 +3586,21 @@ test("a tab with a reminder waits under Reminders with the time left, then needs
     const answered = { ...asking, state: "idle" };
     assert.deepEqual(sidebar.grouped([answered]).map((g) => g.title), ["Reminders"]);
     assert.equal(sidebar.badgeState(answered), "later");
+    assert.deepEqual(sidebar.missionGrid([answered], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Reminders"]);
+    // Working, it is under Working with the working badge, the reminder's
+    // words still beside it; a merged or failing PR keeps its own group too.
+    const busy = { ...tab, state: "working", claude: { sessionId: "s" } };
+    assert.deepEqual(sidebar.grouped([busy]).map((g) => g.title), ["Working"]);
+    assert.deepEqual(sidebar.missionGrid([busy], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Working"]);
+    assert.equal(sidebar.badgeState(busy), "working");
+    assert.match(sidebar.stateWords(busy), /^remind in 1h 3\dm · check the deploy · working/);
+    assert.deepEqual(sidebar.grouped([{ ...answered, merge: "merged" }]).map((g) => g.title), ["Merged"]);
+    assert.deepEqual(sidebar.grouped([{ ...answered, prState: "OPEN", checks: { fail: 1 } }]).map((g) => g.title), ["Build failing"]);
+    // Finished, Needs you, so M-a walks to it.
+    const finished = { ...tab, state: "done", since: 1, claude: { sessionId: "s" } };
+    assert.deepEqual(sidebar.missionGrid([finished], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Needs you"]);
+    assert.equal(sidebar.badgeState(finished), "done");
+    assert.match(sidebar.stateWords(finished), /^remind in 1h 3\dm · check the deploy · finished/);
 
     // Come due, it needs you, first in Needs you with the pinned ones.
     tmux("setw", "-t", window, "@remind_at", String(Math.floor(Date.now() / 1000) - 5));
