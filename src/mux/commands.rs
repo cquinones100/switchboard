@@ -8,6 +8,9 @@
 //!
 //! ```text
 //! list                                   sessions, tabs and panes, as JSON
+//! sources [refresh [view]]               mission control's GitHub and Linear
+//!                                        views as JSON, or asked for now
+//!                                        (src/sources)
 //! new-tab [-s session] [-c dir] [-n name] [-d] [-- command...]
 //!                                        prints the new tab's and pane's ids
 //! split [-t pane] [-L|-R|-U|-D] [-c dir] [-p percent] [-d] [-- command...]
@@ -42,6 +45,7 @@ use super::{Direction, PaneId, TabId};
 /// <name>` sends them here.
 pub const NAMES: &[&str] = &[
     "list",
+    "sources",
     "new-tab",
     "split",
     "send-keys",
@@ -152,6 +156,7 @@ impl Server {
             .filter(|p| self.panes.contains_key(p));
         let result = match name.as_str() {
             "list" => Ok(Reply::ok(format!("{}\n", self.list()))),
+            "sources" => Ok(self.sources_command(rest)),
             "hook" => Ok(self.agent_hook(rest, caller, stdin)),
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
@@ -330,6 +335,7 @@ impl Server {
                             "color": self.tab_color(*id).map(|c| c.hex()),
                             "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
                             "pr": self.tab_pr(*id),
+                            "facts": self.facts.get(id),
                             "current": *id == s.current,
                             "zoomed": tab.zoomed,
                             "options": tab.opts,

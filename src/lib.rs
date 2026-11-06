@@ -19,6 +19,8 @@
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
 //! - `tabs`: what each tab is called and the color it wears.
+//! - `sources`: what the sidebar and mission control know from GitHub and
+//!   Linear, looked up in the background.
 //! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
 //!   pickers and the palette.
 
@@ -35,6 +37,7 @@ pub mod platform;
 pub mod presence;
 pub mod requests;
 pub mod settings;
+pub mod sources;
 pub mod tabs;
 pub mod ui;
 pub mod util;

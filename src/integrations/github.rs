@@ -159,6 +159,39 @@ pub async fn graphql(query: &str, variables: Value, source: &str) -> Result<Valu
     }
 }
 
+/// A GraphQL query that asks about several things at once (a repository
+/// each, a PR each), whose answer may hold `data` for some and `errors` for
+/// others: GitHub answers for the rest when one repository or PR can't be
+/// found, and each error's `path` names the alias it was about. The data and
+/// the errors, so a caller keeps the answers it got; an error only when there
+/// is no data at all.
+pub async fn graphql_partial(
+    query: &str,
+    variables: Value,
+    source: &str,
+) -> Result<(Value, Vec<Value>)> {
+    let body = json!({ "query": query, "variables": variables });
+    let (response, credential) =
+        send("POST", &graphql_url(), Some(&body), "GraphQL", source).await?;
+    check_status(&response, &credential)?;
+    let errors = response
+        .body
+        .get("errors")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    match response.body.get("data") {
+        Some(data) if !data.is_null() => Ok((data.clone(), errors)),
+        _ if !errors.is_empty() => Err(graphql_error(&errors, &response).into()),
+        _ => Err(ServiceError::new(
+            ErrorKind::Failed,
+            SERVICE,
+            "GitHub's GraphQL answer had no data.",
+        )
+        .into()),
+    }
+}
+
 /// A REST call: `path` under the API's address (`/repos/owner/name`), `body`
 /// sent as JSON. The answer's body, `null` for one with none (204).
 pub async fn rest(method: &str, path: &str, body: Option<&Value>, source: &str) -> Result<Value> {

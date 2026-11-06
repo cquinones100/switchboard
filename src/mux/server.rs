@@ -80,6 +80,8 @@ pub enum Event {
     Presence(crate::presence::Presence),
     /// A PR or ticket lookup for the tab names answered (src/tabs).
     TabLookup(crate::tabs::Answer),
+    /// A GitHub, Linear or landing-queue lookup answered (src/sources).
+    Sources(crate::sources::Answer),
     /// The overlays' timers (src/ui).
     Ui(crate::ui::UiEvent),
     Tick,
@@ -217,6 +219,9 @@ pub struct Server {
     pub notices: BTreeMap<String, Vec<crate::items::Item>>,
     /// What each tab is called and the color it wears (src/tabs).
     pub tab_names: crate::tabs::TabNames,
+    /// What GitHub and Linear say for the views, and the lookups behind
+    /// `facts` (src/sources).
+    pub sources: crate::sources::Sources,
     pub(super) next_tab: u32,
     pub(super) next_pane: u32,
     pub quit: bool,
@@ -458,6 +463,7 @@ impl Server {
             facts: crate::facts::Facts::default(),
             notices: BTreeMap::new(),
             tab_names: Default::default(),
+            sources: Default::default(),
             next_tab: 1,
             next_pane: 1,
             quit: false,
@@ -511,11 +517,13 @@ impl Server {
             Event::AgentSeen(tab) => self.agent_seen(tab),
             Event::Presence(p) => self.presence = Some(p),
             Event::TabLookup(answer) => self.tab_lookup(answer),
+            Event::Sources(answer) => self.source_answer(answer),
             Event::Ui(event) => self.ui_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
                 self.refresh_names();
+                self.sources_tick();
                 super::persist::tick(self);
             }
             Event::Quit => self.quit = true,

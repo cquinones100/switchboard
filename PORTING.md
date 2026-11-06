@@ -134,7 +134,10 @@ Each step is a commit (or a few) on the branch, with its tests.
    sidebar, in-place, updates, github_off, linear_off, option-alt).
 5. **Integrations**: GitHub, Linear, calendar, Slack look, meetings, standup and
    todo notes, habits, resources, usage, plugins (executables printing JSON),
-   search, link view, PR and ticket views, the request audit.
+   search, link view, PR and ticket views, the request audit. GitHub and
+   Linear's lookups done (src/sources: every tab's PR facts and landing
+   place, and the PRs, CI, Merge queues, Tickets and Inbox views' data,
+   polled and guarded as the daemon did, paused while away).
 6. **Worktrees and Claude programs**: `wt`/`wtn`/`wtr`/`wtb`, `claude-here`,
    `codex-review`, `shape`, `skill-path`, `land-lock`, `wait-deploy`,
    `watch-note`, the skills' scripts, the skills' text moved off tmux.

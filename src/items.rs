@@ -134,6 +134,10 @@ pub struct ViewData {
     /// Why the last look failed, shown above the items it kept.
     #[serde(default)]
     pub error: Option<String>,
+    /// What to say when it has no items, in place of a bare "nothing" (the
+    /// Merge queues view naming the repositories it looked at).
+    #[serde(default)]
+    pub empty: Option<String>,
     /// For a table: its columns, and a totals row under it.
     #[serde(default)]
     pub columns: Vec<Column>,
