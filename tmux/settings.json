@@ -182,7 +182,7 @@
     "key": "diff_story",
     "category": "Diff",
     "label": "Diff told as a story",
-    "description": "M-d's file list grouped into a few chapters Haiku names from the diff itself, each with a heading and a line on why, read from the change's core to its edges ([c and ]c move between them); off, the files keep the reading order by kind. Sends the diff's text, not only its paths, to Claude",
+    "description": "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading and two or three sentences on what it does and why it is built so, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
     "default": true
   },
   {
@@ -210,7 +210,7 @@
     "key": "diff_story_ahead",
     "category": "Diff",
     "label": "Diff story told ahead",
-    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff to Claude (Haiku) for each new commit",
+    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to three and a half minutes",
     "default": true
   },
   {
@@ -225,6 +225,13 @@
     "category": "Diff",
     "label": "Diff story a page at a time",
     "description": "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they are Vim's own",
+    "default": true
+  },
+  {
+    "key": "diff_story_notes",
+    "category": "Diff",
+    "label": "Diff story notes on changes",
+    "description": "M-d's diff shows Haiku's note over each change worth one, what it does and what to check, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
     "default": true
   },
   {

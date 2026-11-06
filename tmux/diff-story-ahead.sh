@@ -35,9 +35,9 @@ if ! ref=$("$here/diff-base.sh" cached "$top"); then
 fi
 [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || exit 0
 command -v nvim >/dev/null || exit 0
-# At most two and a half minutes, as long as the story's own wait and a bit.
+# At most three and a half minutes, as long as the story's own wait and a bit.
 # Exits 0 once the story is told (or there was none to tell), else not, and
 # then the commit is left untold, to be tried again.
 (cd "$top" && nvim --headless -u "$HOME/.config/nvim/diff.lua" --noplugin --cmd 'let g:diff_ahead = 1' \
-  -c "DiffviewOpen $ref...HEAD" -c "lua vim.defer_fn(function() vim.cmd('cquit 2') end, 150000)" </dev/null >/dev/null 2>&1) || exit 2
+  -c "DiffviewOpen $ref...HEAD" -c "lua vim.defer_fn(function() vim.cmd('cquit 2') end, 210000)" </dev/null >/dev/null 2>&1) || exit 2
 printf '%s\n' "$head" >"$state/$key"

@@ -407,9 +407,9 @@ local function ask_order(view)
   end)
 end
 
--- The story of the view's change (lua/diffstory.lua): its diff, each file's
--- cut short, read by Haiku in the background once the list is known, its
--- chapters then the list's order and headings. Kept by the diff's own text in
+-- The story of the view's change (lua/diffstory.lua): its diff and its commits' messages, the long files'
+-- hunks cut short, read by Haiku in the background once the list is known, its
+-- chapters then the list's order and headings and its notes the diff's. Kept by the diff's own text in
 -- Neovim's cache, so the same diff opens as a story at once, and an edit since
 -- is a new one.
 -- When Haiku can't tell it, the order is the kinds' and Haiku's path-only
@@ -597,6 +597,15 @@ local function ask_story(view)
     settle(view, false)
     return ask_order(view)
   end
+  -- No story for a diff in the middle of a merge conflict: the order
+  -- alone, until the conflicts are resolved.
+  if #view.files.conflicting > 0 then
+    view.want = nil
+    stop_loading(view)
+    forget(view)
+    settle(view, false)
+    return ask_order(view)
+  end
   -- The change as diffview shows it, with git's own a/ and b/ whatever the
   -- config says, which diffstory.split reads, and never the repository's
   -- text converters: a commit against the branch's head, the index (--cached)
@@ -614,9 +623,25 @@ local function ask_story(view)
     if right == RevType.COMMIT then table.insert(args, view.right.commit) end
     table.insert(runs, args)
   end
-  local outputs = {}
+  -- Which run a hunk is from, for its note (draw_notes): a working tree's
+  -- staged changes are the first, its unstaged the second.
+  view.story_runs = #runs
+  -- The commits' messages, for the why of each chapter: those from the left
+  -- side to the right's commit, or to HEAD for the index or working tree;
+  -- none for the working tree against the index.
+  local log = left == RevType.COMMIT and {
+    "git", "-C", top, "log", "--no-color", "--format=%H%x00%s%x00%b%x1e",
+    view.left.commit .. ".." .. (right == RevType.COMMIT and view.right.commit or "HEAD"),
+  }
+  local outputs, raw_commits = {}, ""
   local function each(i, done)
-    if i > #runs then return done({ code = 0, stdout = table.concat(outputs) }) end
+    if i > #runs then
+      if not log then return done({ code = 0 }) end
+      return vim.system(log, { text = true }, function(out)
+        raw_commits = out.code == 0 and out.stdout or ""
+        done({ code = 0 })
+      end)
+    end
     vim.system(runs[i], { text = true }, function(out)
       if out.code ~= 0 then return done(out) end
       table.insert(outputs, out.stdout)
@@ -636,24 +661,35 @@ local function ask_story(view)
         if stat and stat.type == "link" then
           ok, lines = true, { vim.uv.fs_readlink(full) or "" }
         elseif stat and stat.type == "file" then
-          ok, lines = pcall(vim.fn.readfile, full, "", require("diffstory").LINES_PER_FILE)
+          ok, lines = pcall(vim.fn.readfile, full, "", ds.LINES_PER_FILE)
         end
+        -- In the last run, the unstaged changes, with a hunk of its own.
         if ok then
-          diff.stdout = diff.stdout .. "diff --git a/" .. path .. " b/" .. path .. "\nnew file\n" .. table.concat(vim.tbl_map(function(l) return "+" .. l end, lines), "\n") .. "\n"
+          outputs[#outputs] = outputs[#outputs] .. "diff --git a/" .. path .. " b/" .. path .. "\nnew file\n@@ -0,0 +1," .. #lines .. " @@\n" .. table.concat(vim.tbl_map(function(l) return "+" .. l end, lines), "\n") .. "\n"
         end
       end
+      diff.stdout = table.concat(outputs)
       if diff.code ~= 0 then
         stop_loading(view)
         settle(view, false)
         forget(view)
         return ask_order(view)
       end
-      -- Known by the diff itself, so a working tree edited since is a new story.
-      local key = vim.fn.sha256(table.concat({ top, table.concat(paths, "\n"), diff.stdout }, "\0"))
+      local diffs, hunks = ds.split(outputs)
+      local commits = ds.commits(raw_commits)
+      local function parse(text) return ds.parse(text, paths, generated, hunks) end
+      -- Known by the diff itself and its commits' messages, so a working tree
+      -- edited since, or a commit reworded, is a new story.
+      local key = ds.key(top, paths, diff.stdout, commits)
       -- What the view shows now, which an answer asked for before must match.
       if view.want ~= key then forget(view) end
       view.want = key
-      if stories[key] then return give(view, stories[key]) end
+      -- A story is kept parsed against the hunks as they were split into
+      -- runs, so staging every change, which leaves the diff the same but
+      -- moves it to the other run, parses the answer again rather than
+      -- drawing no note.
+      local split_as = key .. ":" .. table.concat(vim.tbl_map(function(output) return #output end, outputs), ",")
+      if stories[split_as] then return give(view, stories[split_as]) end
       -- Haiku couldn't tell this one: not asked again in this Neovim.
       if stories[key] == false then
         stop_loading(view)
@@ -663,25 +699,30 @@ local function ask_story(view)
       local dir = vim.fn.stdpath("cache") .. "/diff-story"
       local file = dir .. "/" .. key .. ".txt"
       local ok, cached = pcall(vim.fn.readfile, file)
-      local made = ok and ds.parse(table.concat(cached, "\n"), paths, generated)
+      local made = ok and parse(table.concat(cached, "\n"))
       if made then
-        stories[key] = made
+        stories[split_as] = made
         return give(view, made)
       end
+      -- Each view waiting parses the answer against its own hunks, since
+      -- staging every change while Haiku answers moves them to another run.
+      view.story_parse, view.story_split = parse, split_as
       start_loading(view)
       if waiting[key] then return table.insert(waiting[key], view) end
       waiting[key] = { view }
       vim.fn.mkdir(dir, "p")
       -- Only to the views still showing this diff; a view asking about a
       -- newer one keeps its spinner until that answer comes.
-      local function finish(told)
+      local function finish(text)
         local views = waiting[key] or {}
         waiting[key] = nil
         progress[key] = nil
-        stories[key] = told or false
+        if not text then stories[key] = false end
         for _, each in ipairs(views) do
           if each.want == key then
             stop_loading(each)
+            local told = text and each.story_parse(text)
+            if told then stories[each.story_split] = told end
             if told then give(each, told) else
               settle(each, false)
               ask_order(each)
@@ -719,7 +760,7 @@ local function ask_story(view)
           "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT,
         }
         vim.list_extend(args, stream and { "--output-format", "stream-json", "--include-partial-messages", "--verbose" } or { "--output-format", "text" })
-        local opts = { stdin = ds.input(entries, ds.split(diff.stdout)), cwd = dir, timeout = 120000 }
+        local opts = { stdin = ds.input(entries, diffs, hunks, commits), cwd = dir, timeout = 180000 }
         local pending, answer = "", nil
         local function read(line)
           local ok, event = pcall(vim.json.decode, line)
@@ -748,13 +789,13 @@ local function ask_story(view)
             saving:close()
             if stream then read(pending) end
             local text = result.code == 0 and (stream and answer or result.stdout) or nil
-            local told = text and ds.parse(text, paths, generated)
+            local told = text and parse(text)
             -- The story kept before its progress goes, so a Neovim following
             -- finds one or the other.
             if told then vim.fn.writefile(vim.split(text, "\n"), file) end
             os.remove(partial)
             owned[partial] = nil
-            finish(told)
+            finish(told and text)
           end)
         end)
       end
@@ -766,9 +807,11 @@ local function ask_story(view)
       if not (stat and os.time() - stat.mtime.sec < 10) then return ask() end
       local following = vim.uv.new_timer()
       following:start(0, 250, vim.schedule_wrap(function()
+        -- The story's answer once kept, when it parses.
         local function kept()
           local read_ok, lines = pcall(vim.fn.readfile, file)
-          return read_ok and ds.parse(table.concat(lines, "\n"), paths, generated)
+          local text = read_ok and table.concat(lines, "\n")
+          return text and parse(text) and text
         end
         local made = kept()
         local now = vim.uv.fs_stat(partial)
@@ -808,6 +851,8 @@ local function story_rows(panel, story)
   end
   return rows
 end
+local SHORT_WHY = 48
+local why_in_bar = false
 local function draw_headings(panel)
   if not (panel.bufid and vim.api.nvim_buf_is_valid(panel.bufid)) then return end
   vim.api.nvim_buf_clear_namespace(panel.bufid, headings, 0, -1)
@@ -817,12 +862,16 @@ local function draw_headings(panel)
   -- virtual lines are drawn after too.
   local info = panel.winid and vim.api.nvim_win_is_valid(panel.winid) and vim.fn.getwininfo(panel.winid)[1]
   local width = info and (info.width - info.textoff) or 28
+  -- A list too narrow for a whole why, which would take a dozen lines
+  -- there, heads each chapter with its first sentence, the whole why in the
+  -- diff's bar.
+  why_in_bar = width < SHORT_WHY
   local rows = story_rows(panel, story)
   local starts = require("diffstory").starts(rows)
   for i, row in ipairs(rows) do
     if starts[i] and row.comp and row.comp.lstart then
       pcall(vim.api.nvim_buf_set_extmark, panel.bufid, headings, row.comp.lstart, 0, {
-        virt_lines = require("diffstory").heading(story, row.chapter, width),
+        virt_lines = require("diffstory").heading(story, row.chapter, width, why_in_bar),
         virt_lines_above = true,
       })
     end
@@ -870,7 +919,7 @@ local chapter_keys = {
 -- the diff_story_pages setting off, or no story told, the keys are Vim's own.
 local pending_page
 local function open_page(page)
-  local files = page.story.chapters[page.index].files
+  local files = page.story.chapters[page.index].touches
   -- A renamed file's old path too, so the page compares it as the whole
   -- diff does rather than as a file added.
   local paths = vim.list_extend({}, files)
@@ -947,26 +996,134 @@ path_bar = function(winid, symbol)
   elseif file then
     local dir, name = file:match("^(.*/)([^/]*)$")
     local escape = function(text) return (text:gsub("%%", "%%%%")) end
-    -- With a story told, the file's chapter before its path.
+    -- With a story told, the file's chapter before its path: on a page,
+    -- the page's, since a file shows on the page of every chapter it has
+    -- a hunk in.
     local story = current_story()
-    local number = story and story.chapter[file]
+    local number = story and (view.page and view.page.index or story.chapter[file])
     local chapter = number and ("%#Comment#" .. number .. "/" .. #story.chapters .. " " .. escape(story.chapters[number].title) .. " · ") or ""
-    vim.wo[winid].winbar = " " .. chapter .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file)
+    -- With the list's headings cut to a sentence, the chapter's whole why
+    -- after the path, cut to the bar's width.
+    local why = ""
+    local whole = number and story.chapters[number].why or ""
+    if why_in_bar and whole ~= "" and require("diffstory").first_sentence(whole) ~= whole then
+      local room = vim.api.nvim_win_get_width(winid) - vim.fn.strdisplaywidth(" " .. (number .. "/" .. #story.chapters .. " " .. story.chapters[number].title .. " · ") .. file .. "   ")
+      local text = vim.fn.strdisplaywidth(whole) <= room and whole or (vim.fn.strcharpart(whole, 0, math.max(room - 1, 0)) .. "…")
+      if room > 10 then why = "   %#Comment#" .. escape(text) end
+    end
+    vim.wo[winid].winbar = " " .. chapter .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file) .. why
   end
 end
+
+-- Each hunk's note over its first line in the diff (lua/diffstory.lua's
+-- note_lines), on the side it changes: the right, or the left for lines
+-- only taken out, with as many blank lines on the other side so both stay
+-- level. A hunk of another chapter than the file's is named so; on a page,
+-- one of another chapter than the page's is also dimmed, since a page can't
+-- leave part of a file out. With the diff_story_notes setting off, none.
+local notes = vim.api.nvim_create_namespace("diff_story_notes")
+local function draw_notes(view)
+  local wins = {}
+  -- The buffers drawn in, cleared when the view closes, since a working
+  -- tree's file is the buffer it is edited in.
+  view.noted = view.noted or {}
+  for _, win in ipairs(view.cur_layout and view.cur_layout.windows or {}) do
+    if win.id and vim.api.nvim_win_is_valid(win.id) then
+      view.noted[vim.api.nvim_win_get_buf(win.id)] = true
+      vim.api.nvim_buf_clear_namespace(vim.api.nvim_win_get_buf(win.id), notes, 0, -1)
+      wins[win.file and win.file.symbol or "b"] = win
+    end
+  end
+  local story, entry = view.story, view.cur_entry
+  if not (vim.g.diff_notes and story and story.hunks and entry and entry.path) then return end
+  local ds = require("diffstory")
+  -- A working tree against the index is told as two runs, its staged
+  -- changes then its unstaged; anything else as one. A page is told the
+  -- whole diff's story, so its runs are the whole diff's.
+  local runs = view.page and view.page.parent.story_runs or view.story_runs
+  local run = runs == 2 and entry.kind ~= "staged" and 2 or 1
+  local home = view.page and view.page.index or story.chapter[entry.path]
+  -- Where a hunk starts on a side: a side it adds nothing to (count 0)
+  -- names the line before.
+  local function start(hunk, side)
+    local first, count = hunk[side == "a" and "old_start" or "new_start"], hunk[side == "a" and "old_count" or "new_count"]
+    return math.max(count == 0 and first + 1 or first, 1), count
+  end
+  local function mark(win, row, opts)
+    local buf = vim.api.nvim_win_get_buf(win.id)
+    pcall(vim.api.nvim_buf_set_extmark, buf, notes, math.min(row, vim.api.nvim_buf_line_count(buf)) - 1, 0, opts)
+  end
+  -- A file whose changes were all staged or unstaged since the story was
+  -- told (on a page, which keeps the whole diff's) has its hunks in the
+  -- other run, at the same lines.
+  local list = story.hunks[entry.path] or {}
+  if not vim.iter(list):any(function(hunk) return hunk.run == run end) then
+    run = list[1] and list[1].run
+  end
+  for _, hunk in ipairs(list) do
+    if hunk.run == run then
+      local side = hunk.new_count == 0 and wins.a and "a" or (wins.b and "b" or "a")
+      local win = wins[side]
+      if win then
+        local info = vim.fn.getwininfo(win.id)[1]
+        local lines = ds.note_lines(story, hunk, home, info and (info.width - info.textoff) or 60)
+        local row = start(hunk, side)
+        if lines then
+          mark(win, row, { virt_lines = lines, virt_lines_above = true })
+          local twin = wins[side == "a" and "b" or "a"]
+          if twin then
+            mark(twin, (start(hunk, side == "a" and "b" or "a")), {
+              virt_lines = vim.tbl_map(function() return { { "", "Normal" } } end, lines),
+              virt_lines_above = true,
+            })
+          end
+        end
+      end
+      -- Dimmed on both sides, each over the lines the hunk spans there.
+      if view.page and hunk.chapter ~= view.page.index then
+        for dim_side, dim_win in pairs(wins) do
+          local first, span = start(hunk, dim_side)
+          if span > 0 then
+            mark(dim_win, first, { end_row = math.min(first + span - 1, vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(dim_win.id))), hl_group = "DiffviewStoryOther", hl_eol = true, priority = 300 })
+          end
+        end
+      end
+    end
+  end
+end
+
 redraw_bars = function(view)
   for _, win in ipairs(view.cur_layout and view.cur_layout.windows or {}) do
     if win.id and vim.api.nvim_win_is_valid(win.id) then path_bar(win.id, win.file and win.file.symbol) end
   end
+  draw_notes(view)
 end
 
--- Whether the diff_story_pages setting is on, as diff_order's is read below.
+-- yS copies the story as Markdown (lua/diffstory.lua's markdown), to share:
+-- each chapter's title, why and files, and each hunk's note as path:line.
+-- Only to the clipboard; M-p has it too, as tmux.conf's palette D.
+local function copy_story()
+  local view = require("diffview.lib").get_current_view()
+  local story = view and (view.page and view.page.story or view.story)
+  if not story then return vim.notify("No story told for this diff yet", vim.log.levels.WARN) end
+  vim.fn.setreg("+", require("diffstory").markdown(story))
+  vim.notify(("Copied the story as Markdown, %d chapters"):format(#story.chapters))
+end
+local share = { "n", "yS", copy_story, { desc = "Copy the story as Markdown" } }
+
+-- Whether the diff_story_notes setting is on, as diff_order's is read below.
+local function notes_on()
+  if not vim.env.TMUX then return true end
+  return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_notes" })) ~= "off"
+end
+
 -- Whether the diff_list_wide setting is on, as diff_order's is read below.
 local function wide_on()
   if not vim.env.TMUX then return true end
   return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_list_wide" })) ~= "off"
 end
 
+-- Whether the diff_story_pages setting is on, as diff_order's is read below.
 local function pages_on()
   if not vim.env.TMUX then return true end
   return vim.trim(vim.fn.system({ "tmux", "show", "-gqv", "@setting_diff_story_pages" })) ~= "off"
@@ -1024,7 +1181,7 @@ local function wrap_set_file(view)
     -- A page of the story (turn_page) opens only its chapter's files, never
     -- another chapter's untracked one, which diffview lists on every page.
     local chapter = {}
-    for _, path in ipairs(self.page and self.page.story.chapters[self.page.index].files or {}) do chapter[path] = true end
+    for _, path in ipairs(self.page and self.page.story.chapters[self.page.index].touches or {}) do chapter[path] = true end
     local ours = function(entry) return not self.page or chapter[entry.path] end
     local stray = self.page and file and file.path and not chapter[file.path]
     if (not self.picked_first or stray) and #files > 0 then
@@ -1106,6 +1263,8 @@ local function minimal_highlights()
   vim.api.nvim_set_hl(0, "DiffviewMinimalDelete", { bg = blend(REMOVED, normal, 0.14) })
   vim.api.nvim_set_hl(0, "DiffviewMinimalDeleteText", { bg = blend(REMOVED, normal, 0.55) })
   vim.api.nvim_set_hl(0, "DiffviewMinimalFiller", { fg = normal, bg = normal })
+  -- On a page of the story, the hunks of another chapter, faint.
+  vim.api.nvim_set_hl(0, "DiffviewStoryOther", { link = "Comment" })
   -- The file list quiet but for the names: the repository's path, its heading
   -- ("Changes (3)", which diffview draws whatever its options) and each
   -- file's +12 −3 faint.
@@ -1152,7 +1311,12 @@ return {
       end,
       view_leave = function() active_story = nil end,
       -- A view closed while its story is being told stops its spinner.
-      view_closed = function(view) stop_loading(view) end,
+      view_closed = function(view)
+        stop_loading(view)
+        for buf in pairs(view.noted or {}) do
+          if vim.api.nvim_buf_is_valid(buf) then vim.api.nvim_buf_clear_namespace(buf, notes, 0, -1) end
+        end
+      end,
       view_opened = function(view)
         -- A page of the story (turn_page), shown its chapter from the whole diff's story.
         view.page = pending_page
@@ -1162,6 +1326,7 @@ return {
         if view.emitter then
           view.emitter:on("file_open_post", function()
             to_first_change(view)
+            draw_notes(view)
             if view.keep_panel and view.panel:is_open() then view.panel:focus() end
             view.keep_panel = false
           end)
@@ -1181,7 +1346,7 @@ return {
                 -- Only the chapter's files: diffview lists every untracked
                 -- file whatever paths it was given.
                 local keep = {}
-                for _, path in ipairs(view.page.story.chapters[view.page.index].files) do keep[path] = true end
+                for _, path in ipairs(view.page.story.chapters[view.page.index].touches) do keep[path] = true end
                 for _, list in ipairs({ view.files.conflicting, view.files.working, view.files.staged }) do
                   for i = #list, 1, -1 do
                     if not keep[list[i].path] then table.remove(list, i) end
@@ -1217,8 +1382,8 @@ return {
       end,
     },
     keymaps = {
-      view = { close, quit, page_keys[1], page_keys[2], unpack(copies) },
-      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], page_keys[1], page_keys[2], widen, unpack(copies) },
+      view = { close, quit, page_keys[1], page_keys[2], share, unpack(copies) },
+      file_panel = { close, escape, quit, commits, scrolls[1], scrolls[2], chapter_keys[1], chapter_keys[2], page_keys[1], page_keys[2], widen, share, unpack(copies) },
       file_history_panel = { close, escape, quit, back, scrolls[1], scrolls[2], unpack(copies) },
     },
   },
@@ -1237,6 +1402,7 @@ return {
     vim.g.diff_pages = vim.g.diff_story and pages_on()
     if vim.g.diff_progress == nil then vim.g.diff_progress = vim.g.diff_story and progress_on() end
     if vim.g.diff_list_wide == nil then vim.g.diff_list_wide = wide_on() end
+    if vim.g.diff_notes == nil then vim.g.diff_notes = vim.g.diff_story and notes_on() end
     if vim.g.diff_order then
       opts.file_panel.listing_style = "list"
       sort_lists()

@@ -20,7 +20,7 @@ after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 const lazy = path.join(os.homedir(), ".local/share/nvim/lazy");
 const ready = fs.existsSync(path.join(lazy, "diffview.nvim")) && fs.existsSync(path.join(lazy, "mini.base16"));
 
-test("Haiku's answer becomes the story: every file once, one it leaves out in Other changes, generated files last, its diff cut short", () => {
+test("Haiku's answer becomes the story: every file once, one it leaves out in Other changes, generated files last, its diff read whole", () => {
   const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
     encoding: "utf8",
     input: `
@@ -31,7 +31,7 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
         {"title": "Show it", "why": "The page shows it, a } and all.", "files": ["src/page.js", "pnpm-lock.yaml"]}
       ]}]]
       local story = ds.parse(answer, { "pnpm-lock.yaml", "src/model.js", "src/model.test.js", "src/page.js", "README.md" }, generated)
-      local diffs = ds.split("diff --git a/src/a.js b/src/a.js\\n@@ -1 +1 @@\\n-x\\n+y\\ndiff --git a/old.js b/new.js\\nrename\\ndiff --cc src/both.js\\n@@@ -1,1 -1,1 +1,5 @@@\\n")
+      local diffs, hunks = ds.split("diff --git a/src/a.js b/src/a.js\\n@@ -1 +1 @@\\n-x\\n+y\\ndiff --git a/old.js b/new.js\\nrename\\ndiff --cc src/both.js\\n@@@ -1,1 -1,1 +1,5 @@@\\n")
       -- A working tree's list: the unstaged changes, then the staged, a
       -- chapter in both, and a file the story doesn't know.
       local rows = {
@@ -44,7 +44,6 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
       local cut = [[{"chapters": [{"title": "Add the \\"pick\\" column", "why": "Says \\"title\\": \\"no\\".", "files": ["a"]}, {"title": "Default it on", "why": "b", "files": ["c"]}, {"title": "Sho]]
       local partial = ds.partial(cut)
       local progress = ds.progress({ text = cut, started = 100 }, { files = 3, additions = 12, deletions = 4 }, "*", 175)
-      ds.LINES_PER_FILE = 2
       io.write(vim.json.encode({
         titles = vim.tbl_map(function(c) return c.title end, story.chapters),
         files = vim.tbl_map(function(c) return c.files end, story.chapters),
@@ -57,7 +56,7 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
         before_conflict = #diffs["new.js"],
         starts = starts,
         jumps = { ds.jump(starts, 0, 1), ds.jump(starts, 2, 1), ds.jump(starts, 4, 1), ds.jump(starts, 6, 1) or 0, ds.jump(starts, 4, -1), ds.jump(starts, 3, -1), ds.jump(starts, 1, -1) or 0 },
-        input = ds.input({ { path = "src/a.js", additions = 1, deletions = 1 } }, diffs),
+        input = ds.input({ { path = "src/a.js", additions = 1, deletions = 1 } }, diffs, hunks),
         partial = partial,
         progress = progress,
       }))
@@ -76,9 +75,74 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
   assert.equal(result.before_conflict, 2, "and not under the file before it");
   assert.deepEqual(result.starts, [true, true, true, false, false, true], "a heading where a chapter starts in each section, a chapter in both headed in both");
   assert.deepEqual(result.jumps, [1, 3, 6, 0, 2, 2, 0], "]c and [c go between the headings as shown, across sections");
-  assert.match(result.input, /^<diff>\n### src\/a\.js \(\+1 -1\)\ndiff --git a\/src\/a\.js b\/src\/a\.js\n@@ -1 \+1 @@\n… 2 more lines\n<\/diff>$/, "each file's diff cut short, inside one block");
+  assert.match(result.input, /^<diff>\n### src\/a\.js \(\+1 -1\)\ndiff --git a\/src\/a\.js b\/src\/a\.js\n\[src\/a\.js#1\] @@ -1 \+1 @@\n-x\n\+y\n<\/diff>$/, "a small file's diff kept whole, its hunk labelled, inside one block");
   assert.deepEqual(result.partial, { titles: ['Add the "pick" column', "Default it on"], started: 3 }, "an answer cut short gives its whole titles, unescaped, and says one more has started");
   assert.deepEqual(result.progress, ["* Telling the change as a story   1:15", "  Read 3 files (+12 −4)", '  ✓ 1. Add the "pick" column', "  ✓ 2. Default it on", "  * 3. …"], "the cover: what is read, each chapter named so far ticked, the one being written spinning");
+});
+
+test("Haiku reads every hunk of a long file and the commits' messages, and its answer by hunk splits a file between chapters with a note on each", () => {
+  const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
+    encoding: "utf8",
+    input: `
+      local ds = require("diffstory")
+      -- A 600-line file in 20 hunks, a small one, and an untracked one.
+      local long = { "diff --git a/src/big.js b/src/big.js", "--- a/src/big.js", "+++ b/src/big.js" }
+      for h = 1, 20 do
+        table.insert(long, ("@@ -%d,30 +%d,30 @@ function f%d()"):format(h * 100, h * 100, h))
+        for i = 1, 30 do table.insert(long, "+" .. string.rep("x", 200) .. i) end
+      end
+      local small = "diff --git a/src/small.js b/src/small.js\\n@@ -1 +1,2 @@\\n-a\\n+b\\n+b2\\n"
+      local staged = table.concat(long, "\\n") .. "\\n" .. small
+      local unstaged = "diff --git a/src/small.js b/src/small.js\\n@@ -5,0 +6,2 @@\\n+c\\n+d\\n"
+      local diffs, hunks = ds.split({ staged, unstaged })
+      local raw = "aaa\\0Add the field\\0Because the API needs it.\\n\\nCo-Authored-By: X <x@y>\\n\\30\\nbbb\\0Fix it\\0" .. string.rep("y", 2000) .. "\\30\\n"
+      local commits = ds.commits(raw)
+      ds.TOTAL_CHARS = 20000
+      local input = ds.input({ { path = "src/big.js", additions = 600, deletions = 0 }, { path = "src/small.js", additions = 3, deletions = 1 } }, diffs, hunks, commits)
+      local answer = vim.json.encode({ chapters = {
+        { title = "Add the field", why = "It adds the field. " .. string.rep("Because the API reads it on every call. ", 20), hunks = { { id = "src/big.js#1", note = "Check the default." }, { id = "src/small.js#2", note = "" } } },
+        { title = "Show it", why = "The page shows it.", hunks = { { id = "src/small.js#1", note = "Renders it." }, "src/big.js#2" } },
+      } })
+      local story = ds.parse(answer, { "src/big.js", "src/small.js" }, function() return false end, hunks)
+      io.write(vim.json.encode({
+        runs = vim.tbl_map(function(h) return { h.id, h.run, h.new_start, h.new_count, h.size } end, hunks["src/small.js"]),
+        big = #hunks["src/big.js"],
+        input = input,
+        commits = commits,
+        keys = { ds.key("/r", { "a" }, "diff", commits), ds.key("/r", { "a" }, "diff", ds.commits("aaa\\0Add it\\0\\30")), ds.key("/r", { "a" }, "diff", commits) },
+        files = vim.tbl_map(function(c) return c.files end, story.chapters),
+        touches = vim.tbl_map(function(c) return c.touches end, story.chapters),
+        notes = vim.tbl_map(function(h) return { h.id, h.chapter, h.note } end, story.hunks["src/big.js"]),
+        why = story.chapters[1].why,
+        short = ds.heading(story, 1, 80, true),
+        other = ds.note_lines(story, story.hunks["src/big.js"][2], 1, 80),
+        plain = ds.note_lines(story, story.hunks["src/big.js"][3], 1, 80) == nil,
+        markdown = ds.markdown(story),
+      }))
+    `,
+  });
+  const result = JSON.parse(out);
+  assert.deepEqual(result.runs, [["src/small.js#1", 1, 1, 2, 3], ["src/small.js#2", 2, 6, 2, 2]], "a file's hunks numbered across the staged and unstaged runs, each knowing its run");
+  assert.equal(result.big, 20);
+  assert.ok(result.input.length <= 20000, `the input stays under TOTAL_CHARS (${result.input.length})`);
+  for (let h = 1; h <= 20; h += 1) assert.ok(result.input.includes(`[src/big.js#${h}] @@ -${h * 100},30`), `hunk ${h}'s header is kept`);
+  assert.match(result.input, /… \d+ more lines in this hunk/, "a long file's hunks cut short, saying so");
+  assert.match(result.input, /\[src\/small\.js#1\] @@ -1 \+1,2 @@\n-a\n\+b/, "a small file kept whole");
+  assert.ok(result.input.startsWith("<commits>\n- Add the field\n  Because the API needs it.\n- Fix it\n"), "the commits' messages first");
+  assert.doesNotMatch(result.commits, /Co-Authored-By/, "trailers left out");
+  assert.ok(result.commits.length < 1600 + 60, "a long body cut to COMMIT_CHARS");
+  assert.notEqual(result.keys[0], result.keys[1], "a reworded commit is a new story");
+  assert.equal(result.keys[0], result.keys[2]);
+  assert.deepEqual(result.files, [["src/big.js"], ["src/small.js"]], "each file in the chapter holding most of its changed lines");
+  assert.deepEqual(result.touches, [["src/big.js", "src/small.js"], ["src/small.js", "src/big.js"]], "and touching every chapter it has a hunk in");
+  assert.deepEqual(result.notes.slice(0, 3), [["src/big.js#1", 1, "Check the default."], ["src/big.js#2", 2, ""], ["src/big.js#3", 1, ""]], "each hunk's chapter and note, one left out in its file's chapter");
+  assert.ok(result.why.length <= 400 && result.why.endsWith("call."), "a long why cut at a sentence's end");
+  assert.equal(result.short.at(-1)[0][0], "  It adds the field. …", "a narrow list heads a chapter with its first sentence");
+  assert.deepEqual(result.other, [[["▎ 2/2 Show it", "Comment"]]], "a hunk of another chapter is named so");
+  assert.equal(result.plain, true, "a hunk of the file's chapter with no note has none");
+  assert.match(result.markdown, /^### 1\. Add the field\n\nIt adds the field\./);
+  assert.match(result.markdown, /- `src\/big\.js`\n  - `src\/big\.js:100` Check the default\./);
+  assert.match(result.markdown, /### 2\. Show it\n\nThe page shows it\.\n\n- `src\/small\.js`\n  - `src\/small\.js:1` Renders it\./);
 });
 
 test("M-d's cover shows each chapter as Haiku names it, then the diff in the story's order", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
@@ -257,6 +321,59 @@ test("M-d's list is told as a story: in its chapters' order, each headed, the ch
   assert.match(result.telling[0], /telling the story/);
   assert.equal(result.spinning, 0, "and stops saying so once the story is known");
   assert.match(fs.readFileSync(given, "utf8"), /<diff>[\s\S]*### src\/model\.js \(\+1 -1\)[\s\S]*\+A/, "Haiku read the diff itself");
+});
+
+test("M-d draws each hunk's note over it in the diff, naming the chapter of a hunk that belongs to another, and Haiku reads the commits", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
+  const repo = path.join(tmp, "notes-repo");
+  const bin = path.join(tmp, "notes-bin");
+  const home = path.join(tmp, "notes-home");
+  [path.join(repo, "src"), bin, home].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  const config = path.join(tmp, "notes-config");
+  fs.mkdirSync(config);
+  fs.symlinkSync(nvimDir, path.join(config, "nvim"));
+  const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  fs.writeFileSync(path.join(repo, "src/a.js"), `${lines.join("\n")}\n`);
+  fs.writeFileSync(path.join(repo, "src/b.js"), "b\n");
+  execFileSync("git", ["-C", repo, "add", "."]);
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qm", "one"]);
+  // Two hunks in a.js, at lines 3 and 17, which with two lines of context start at 1 and 15.
+  fs.writeFileSync(path.join(repo, "src/a.js"), `${lines.map((line, i) => (i === 2 || i === 16 ? `${line} changed` : line)).join("\n")}\n`);
+  fs.writeFileSync(path.join(repo, "src/b.js"), "B\n");
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@e", "-c", "user.name=t", "commit", "-qam", "Change a and b", "-m", "So the page can show them."]);
+  const given = path.join(tmp, "notes-given.txt");
+  const answer = JSON.stringify({ chapters: [
+    { title: "Change a", why: "It changes a.", hunks: [{ id: "src/a.js#1", note: "First change." }] },
+    { title: "Show it", why: "The page shows it.", hunks: [{ id: "src/a.js#2", note: "Second." }, { id: "src/b.js#1", note: "" }] },
+  ] });
+  fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat > '${given}'\nprintf '%s\\n' '${JSON.stringify({ type: "result", result: answer })}'\n`, { mode: 0o755 });
+  const run = spawnSync(
+    "nvim",
+    ["--headless", "-u", path.join(nvimDir, "diff.lua"), "-c", "DiffviewOpen HEAD~1", "-c", `lua
+      vim.wait(8000, function() local v = require("diffview.lib").get_current_view() return v.story ~= nil end, 50)
+      local view = require("diffview.lib").get_current_view()
+      local a = vim.tbl_filter(function(e) return e.path == "src/a.js" end, view.panel:ordered_file_list())[1]
+      view:set_file(a, false)
+      vim.wait(2000, function() return view.cur_entry == a end, 20)
+      vim.wait(300)
+      local ns = vim.api.nvim_create_namespace("diff_story_notes")
+      local sides = {}
+      for _, w in ipairs(view.cur_layout.windows) do
+        local marks = {}
+        for _, m in ipairs(vim.api.nvim_buf_get_extmarks(vim.api.nvim_win_get_buf(w.id), ns, 0, -1, { details = true })) do
+          table.insert(marks, { m[2], m[4].virt_lines and m[4].virt_lines[1][1][1] or "" })
+        end
+        sides[w.file.symbol] = marks
+      end
+      io.write(vim.json.encode(sides))`, "-c", "qa"],
+    { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "notes-cache"), HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "" } },
+  );
+  const result = JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
+  assert.deepEqual(result.b, [[0, "▎ First change."], [14, "▎ 2/2 Show it · Second."]], "each note over its hunk's first line on the right, a hunk of another chapter named so");
+  assert.deepEqual(result.a, [[0, ""], [14, ""]], "with as many blank lines on the left, so both stay level");
+  const read = fs.readFileSync(given, "utf8");
+  assert.match(read, /^<commits>\n- Change a and b\n {2}So the page can show them\.\n<\/commits>/, "Haiku read the commit's message");
+  assert.match(read, /\[src\/a\.js#2\] @@ -15,5 \+15,5 @@/, "and each hunk by its id");
 });
 
 test("in a working tree's list the headings and ]c follow its sections: a chapter in both headed in each, a file in both reached in the right one", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
