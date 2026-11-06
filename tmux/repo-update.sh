@@ -34,6 +34,8 @@
 # The request audit (count-request.sh); counting nothing when it isn't there.
 . "${BASH_SOURCE[0]%/*}/count-request.sh" 2>/dev/null || { count_request() { :; }; count_git_request() { :; }; }
 set -u
+# The menus and the "Press any key to close" boxes (menu.sh).
+. "${BASH_SOURCE[0]%/*}/menu.sh"
 # Its lists look like mission control's boxes (fzf-style.sh).
 export FZF_DEFAULT_OPTS="${FZF_DEFAULT_OPTS:+$FZF_DEFAULT_OPTS }$("${BASH_SOURCE[0]%/*}/fzf-style.sh" 2>/dev/null)"
 
@@ -169,7 +171,7 @@ case "${1:-}" in
     heading() { printf '\n  \033[1m%s new commit%s on GitHub\033[0m, newest first:\n\n' "$behind" "$([ "$behind" = 1 ] || echo s)"; }
     done_() {
       printf '\n  \033[38;5;244mPress any key to close.\033[0m'
-      read -rsn 1
+      menu_any_key
       exit "${1:-0}"
     }
     # A notice that it can't update here comes before every commit, whole, in
@@ -184,7 +186,7 @@ case "${1:-}" in
         heading
         CAP= commits
         printf '\n  \033[38;5;244mPress any key to close.\033[0m'
-        read -rsn 1 && answered
+        menu_any_key && answered
       fi
       exit 0
     }
@@ -194,7 +196,6 @@ case "${1:-}" in
     { [ "$behind" -gt "$SHOWN" ] || [ -n "$cut_short" ]; } && options+=("See all $behind commit$([ "$behind" = 1 ] || echo s)")
     cursor=0
     # A click takes an option too (menu.sh, the menu_mouse setting).
-    . "${BASH_SOURCE[0]%/*}/menu.sh"
     menu_mouse_on
     while :; do
       printf '\033[H\033[2J'
@@ -209,14 +210,17 @@ case "${1:-}" in
       # asked once the keys are drawn, which can scroll the popup.
       start=
       [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} - 1 ))
+      # The cursor past the options is on the close button (menu.sh).
+      MENU_CLOSE_FOCUS=$([ "$cursor" = ${#options[@]} ] && echo 1)
       # A closed input answers nothing: the prompt goes, and asks again later.
       menu_read || { menu_mouse_off; exit 0; }
+      [ -n "$MENU_CLOSE_FOCUS" ] && case $MENU_KEY in enter | space) MENU_KEY=quit ;; esac
       pick=
       case $MENU_KEY in
         j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
         k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
-        tab) cursor=$(( (cursor + 1) % ${#options[@]} )) ;;
-        btab) cursor=$(( (cursor + ${#options[@]} - 1) % ${#options[@]} )) ;;
+        tab) cursor=$(( (cursor + 1) % $(menu_stops ${#options[@]}) )) ;;
+        btab) cursor=$(( (cursor + $(menu_stops ${#options[@]}) - 1) % $(menu_stops ${#options[@]}) )) ;;
         quit) menu_mouse_off; answered; exit 0 ;;
         enter | space) pick=$cursor ;;
         click\ *)
@@ -281,7 +285,7 @@ case "${1:-}" in
       printf '  There is no setup.sh in %s.\n' "$REPO"
     fi
     printf '\n  \033[38;5;244mPress any key to close.\033[0m'
-    read -rsn 1
+    menu_any_key
     ;;
 
   # M-p's "Run a part of Switchboard's setup": the parts setup.sh lists, Tab
@@ -291,7 +295,7 @@ case "${1:-}" in
     ;;
 
   run-setup-part)
-    [ -x "$REPO/setup.sh" ] || { printf '\n  There is no setup.sh in %s.\n\n  Press any key to close.' "$REPO"; read -rsn 1; exit 0; }
+    [ -x "$REPO/setup.sh" ] || { printf '\n  There is no setup.sh in %s.\n\n  Press any key to close.' "$REPO"; menu_any_key; exit 0; }
     picked=$("$REPO/setup.sh" --parts | fzf --multi --delimiter=$'\t' --with-nth=1,2 --layout=reverse --height=100% \
       --prompt='part> ' --header='Enter runs it (Tab picks several), Ctrl-O only checks what it would change' --expect=ctrl-o)
     key=$(head -1 <<<"$picked")
@@ -306,7 +310,7 @@ case "${1:-}" in
       [ -n "${TMUX:-}" ] && tmux source-file ~/.config/tmux/tmux.conf && printf '\n  Reloaded tmux.\n'
     fi
     printf '\n  \033[38;5;244mPress any key to close.\033[0m'
-    read -rsn 1
+    menu_any_key
     ;;
 
   run-setup)
@@ -321,7 +325,7 @@ case "${1:-}" in
     fi
     [ -n "${TMUX:-}" ] && tmux source-file ~/.config/tmux/tmux.conf && printf '\n  Reloaded tmux.\n'
     printf '\n  \033[38;5;244mPress any key to close.\033[0m'
-    read -rsn 1
+    menu_any_key
     ;;
 
   *)

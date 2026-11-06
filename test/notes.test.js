@@ -1392,6 +1392,65 @@ test("the toolbar has a button for each of its Format menu items, a click styles
   assert.match(result.help, /notes_key_help/);
 });
 
+test("in easy mode, the Format menu has a close button in its border's top-right corner, which a click on closes", () => {
+  const { result } = lua(`
+    -- As nvim/init.lua sets it, which every float would take.
+    vim.o.winborder = "rounded"
+    local easy = require("notes.easy")
+    easy.settings = function() return { notes_toolbar = true, easy_keys = true, key_help_line = true } end
+    vim.cmd("Notes")
+    local n = require("notes")
+    local buf = vim.api.nvim_win_get_buf(n.note_win)
+    vim.cmd("stopinsert")
+    n.menu(buf, false)
+    local menu = vim.api.nvim_get_current_win()
+    local button
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if w ~= menu and vim.api.nvim_win_get_config(w).relative == "win" then button = w end
+    end
+    local mpos, bpos = vim.api.nvim_win_get_position(menu), vim.api.nvim_win_get_position(button)
+    local mwidth = vim.api.nvim_win_get_width(menu)
+    local text = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(button), 0, -1, false)[1]
+    local own_border = vim.api.nvim_win_get_config(button).border
+    local press = vim.fn.maparg("<LeftMouse>", "n", false, true).callback
+    -- A click elsewhere goes on as a click.
+    vim.fn.getmousepos = function() return { screenrow = bpos[1] + 2, screencol = bpos[2] + 2 } end
+    local elsewhere = press()
+    vim.fn.getmousepos = function() return { screenrow = bpos[1] + 1, screencol = bpos[2] + 2 } end
+    local on = press()
+    vim.wait(50, function() return false end)
+    -- Tab puts focus on it, and Enter then presses it rather than taking the
+    -- line the cursor is on.
+    n.menu(buf, false)
+    local again = vim.api.nvim_get_current_win()
+    local before = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\\n")
+    vim.fn.maparg("<Tab>", "n", false, true).callback()
+    vim.fn.maparg("<CR>", "n", false, true).callback()
+    local tabbed = { open = vim.api.nvim_win_is_valid(again), same = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\\n") == before }
+    n.menu(buf, false)
+    local spaced = vim.api.nvim_get_current_win()
+    vim.fn.maparg("<Tab>", "n", false, true).callback()
+    vim.fn.maparg("<Space>", "n", false, true).callback()
+    tabbed.space_open = vim.api.nvim_win_is_valid(spaced)
+    io.write(vim.json.encode({
+      tabbed = tabbed, own_border = own_border or "none",
+      text = text, row = bpos[1] - mpos[1], right = mpos[2] + mwidth + 2 - (bpos[2] + 3),
+      elsewhere = elsewhere, on = on, menu_open = vim.api.nvim_win_is_valid(menu), button_open = vim.api.nvim_win_is_valid(button),
+      back = vim.api.nvim_get_current_win() == n.note_win,
+    }))
+  `);
+  assert.equal(result.text, " × ");
+  assert.equal(result.row, 0, "on the border's top edge");
+  assert.ok(result.own_border === "none" || (Array.isArray(result.own_border) && result.own_border.every((c) => c === "")), "with no border of its own, whatever winborder says");
+  assert.equal(result.right, 1, "a cell short of its corner");
+  assert.equal(result.elsewhere, "<LeftMouse>");
+  assert.equal(result.on, "");
+  assert.equal(result.menu_open, false, "a click on it closes the menu");
+  assert.equal(result.button_open, false, "and the button with it");
+  assert.equal(result.back, true);
+  assert.deepEqual(result.tabbed, { open: false, same: true, space_open: false }, "Tab then Enter, or Space, closes it, doing nothing to the note");
+});
+
 test("with the toolbar and easy mode off, a note has no toolbar and Vim's keys alone", () => {
   const { result } = lua(`
     require("notes.easy").settings = function() return { notes_toolbar = false, easy_keys = false, key_help_line = true } end

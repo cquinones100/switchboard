@@ -32,11 +32,14 @@ else
   menu_mouse_on
   row=
   no=
+  onclose=
   tabbed=
   yes_at=$(( (cols - 9) / 2 + 1 ))
   buttons() {
     if [ -n "$no" ]; then
       printf '\r\033[2K%*s  Yes \033[1m› No\033[0m' "$((yes_at - 3))" ""
+    elif [ -n "$onclose" ]; then
+      printf '\r\033[2K%*s  Yes   No' "$((yes_at - 3))" ""
     else
       printf '\r\033[2K%*s\033[1m› Yes\033[0m   No' "$((yes_at - 3))" ""
     fi
@@ -50,16 +53,27 @@ else
 
   # Enter reads as an empty key and confirms too; a closed input does not.
   while :; do
+    # Easy mode's close button (menu.sh) is a Tab stop after No, pressed as no.
+    MENU_CLOSE_FOCUS=$onclose
     menu_read || { menu_mouse_off; exit 0; }
     case $MENU_KEY in
-      enter) [ -n "$no" ] && ans=n || ans=y ;;
+      enter) [ -n "$no$onclose" ] && ans=n || ans=y ;;
       # Space presses the one chosen once Tab has moved there; before, it is
       # any other key, so a stray Space never says yes.
-      space) [ -n "$tabbed" ] && [ -z "$no" ] && ans=y || ans=n ;;
+      space) [ -n "$tabbed" ] && [ -z "$no$onclose" ] && ans=y || ans=n ;;
       none) continue ;;
       tab | btab)
         [ -t 0 ] || continue
-        [ -n "$no" ] && no= || no=1
+        if [ -n "${MENU_CLOSE:-}" ]; then
+          # Yes, No, then the close button, round in either direction.
+          if [ "$MENU_KEY" = tab ]; then
+            if [ -n "$no" ]; then no= onclose=1; elif [ -n "$onclose" ]; then onclose=; else no=1; fi
+          else
+            if [ -n "$no" ]; then no=; elif [ -n "$onclose" ]; then onclose= no=1; else onclose=1; fi
+          fi
+        else
+          [ -n "$no" ] && no= || no=1
+        fi
         tabbed=1
         printf '\033[2B'
         buttons

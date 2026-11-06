@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # What the bash menus in popups share (pr-ready.sh's answer, repo-update.sh's
 # update prompt, confirm.sh's question): clicks while a menu waits, with the
-# menu_mouse setting on, and one read that says what was pressed or clicked.
-# Sourced, not run.
+# menu_mouse setting on, easy mode's close button, and one read that says
+# what was pressed or clicked. Sourced, not run.
 
 # Mouse reporting on (SGR, so a click says its row and column), and off again.
 menu_mouse_on() {
@@ -10,10 +10,51 @@ menu_mouse_on() {
   [ "$(tmux show -gqv @setting_menu_mouse 2>/dev/null)" = off ] && return 0
   printf '\033[?1000h\033[?1006h'
   MENU_MOUSE=1
+  menu_close_on
 }
 menu_mouse_off() {
   [ -n "${MENU_MOUSE:-}" ] && printf '\033[?1000l\033[?1006l'
   MENU_MOUSE=
+}
+
+# Easy mode's close button (the easy_keys setting), as mission control's
+# boxes have one (render.js's CLOSE): " × " at the right end of the popup's
+# top row, a cell short of its edge. MENU_CLOSE is the column it starts at,
+# empty when it isn't drawn; menu_read draws it again before each read, since
+# a menu drawing over the top row can wipe it, and takes a click on it as Esc.
+# It is a Tab stop after a menu's options: MENU_CLOSE_FOCUS=1 draws it in
+# reverse video, as mission control draws focus, and menu_stops counts it.
+menu_close_on() {
+  MENU_CLOSE=
+  [ -t 0 ] && [ "$(tmux show -gqv @setting_easy_keys 2>/dev/null)" = on ] || return 0
+  MENU_CLOSE=$(( $(tput cols 2>/dev/null || echo 0) - 3 ))
+  [ "$MENU_CLOSE" -gt 0 ] || MENU_CLOSE=
+}
+menu_close_draw() {
+  [ -n "${MENU_CLOSE:-}" ] || return 0
+  [ -n "${MENU_BRIGHT:-}" ] || menu_colors
+  printf '\0337\033[1;%dH%s\033[38;5;%s;1m × \033[0m\0338' "$MENU_CLOSE" "$([ "${MENU_CLOSE_FOCUS:-}" = 1 ] && printf '\033[7m')" "$MENU_BRIGHT"
+}
+# How many stops Tab goes round in a menu of <n> options: the options, and
+# the close button after them when it is drawn.
+menu_stops() { echo $(( $1 + ($([ -n "${MENU_CLOSE:-}" ] && echo 1 || echo 0)) )); }
+
+# "Press any key to close": one key or click, the close button drawn while
+# it waits, and the rest of a click read too, so nothing is left for what runs
+# after. Returns 1 at the end of the input, as read does.
+menu_any_key() {
+  local key c status
+  menu_mouse_on
+  menu_close_draw
+  IFS= read -rsn 1 key
+  status=$?
+  # A click is Esc [ < button ; column ; row M, sent at once (macOS's bash
+  # takes no fraction of a second for -t).
+  if [ "$key" = $'\x1b' ] && IFS= read -rsn 1 -t 1 c && [ "$c" = '[' ] && IFS= read -rsn 1 -t 1 c && [ "$c" = '<' ]; then
+    while IFS= read -rsn 1 -t 1 c; do case $c in M | m) break ;; esac; done
+  fi
+  menu_mouse_off
+  return $status
 }
 
 # The row the cursor is on now, from 1, asked of the terminal: where a menu's
@@ -28,10 +69,11 @@ menu_row() {
 # One key or click, into MENU_KEY: j or k (the arrows and the wheel too),
 # tab or btab (Tab and Shift-Tab, which go round the options, as on a webpage),
 # space (which presses the option chosen, as Enter does), enter, quit (Esc or q), "click <row> <col>" for a left click, none for a
-# mouse event that means nothing (a release), else the key itself. Returns 1
-# at the end of the input.
+# mouse event that means nothing (a release), else the key itself; a click on
+# the close button is quit. Returns 1 at the end of the input.
 menu_read() {
   local key c ch seq b x y
+  menu_close_draw
   IFS= read -rsn 1 key || return 1
   case $key in
     '') MENU_KEY=enter; return 0 ;;
@@ -64,7 +106,13 @@ menu_read() {
       # Digits only, since callers do arithmetic with them.
       if [ "$ch" = M ] && [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ ]]; then
         case $b in
-          0) MENU_KEY="click $y $x" ;;
+          0)
+            if [ -n "${MENU_CLOSE:-}" ] && [ "$y" = 1 ] && [ "$x" -ge "$MENU_CLOSE" ] && [ "$x" -le $((MENU_CLOSE + 2)) ]; then
+              MENU_KEY=quit
+            else
+              MENU_KEY="click $y $x"
+            fi
+            ;;
           64) MENU_KEY=k ;;
           65) MENU_KEY=j ;;
         esac

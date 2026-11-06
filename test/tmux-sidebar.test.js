@@ -3592,6 +3592,109 @@ test("a click takes a menu's option, answers a question's Yes or No, and outside
   assert.deepEqual(popup.modal.tags.map((t) => t.tag.option), [1, 2], "the options shown under a long question");
 });
 
+test("in easy mode, every box, popup and mission control itself has a close button in its top-right corner, which a click on closes", async () => {
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  const menu = () => plain(sidebar.chooseModal({ title: "A tab", choices: [{ key: "a", label: "Go there" }], cursor: 0 }, 120, 40));
+  assert.doesNotMatch(menu(), /×/, "none with easy mode off");
+  fs.writeFileSync(settingsFile, JSON.stringify({ easy_keys: true }));
+  require("../lib/settings").reloadSettings();
+  try {
+    assert.match(menu(), /╭─ A tab ─+ × ╮/, "a menu's top edge ends in it");
+    assert.doesNotMatch(plain(sidebar.busyModal({ text: "Opening" }, 0, 120, 40)), /×/, "but not a box that can't be closed");
+    assert.match(sidebar.helpLines("sidebar", 60, 30).map(plain)[0], /^╭─ Keys ─+ × ╮$/, "the sidebar's keys popup too");
+    assert.match(sidebar.helpModal("mission", 120, 40, true), /\x1b\[7m[^╮]* × /, "the keys box's, lit while Tab has put focus on it");
+    assert.match(sidebar.helpLines("sidebar", 60, 30, true)[0], /\x1b\[7m[^╮]* × /, "and the sidebar's keys popup's");
+
+    let closed = 0;
+    const client = { kind: "mission", socket: { write() {}, end: () => closed++ }, view: { view: 0, cursor: 0 }, cols: 100, rows: 30, tmuxClient: "none" };
+    const taken = [];
+    client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act: () => taken.push("first") }], cursor: 0 };
+    sidebar.draw(client);
+    const { y, x0, x1 } = client.modal.close;
+    assert.equal(x1 - x0, 2);
+    await sidebar.missionKey(client, { mouse: { button: 0, x: x0 + 1, y, press: true } });
+    assert.equal(client.choose, undefined, "a click on it closes the menu");
+    assert.deepEqual(taken, [], "taking nothing");
+    client.confirm = { text: "Close it?", yes: () => taken.push("yes") };
+    sidebar.draw(client);
+    await sidebar.missionKey(client, { mouse: { button: 0, x: client.modal.close.x1, y: client.modal.close.y, press: true } });
+    assert.equal(client.confirm, undefined, "and a question, as no");
+    assert.deepEqual(taken, []);
+
+    // A Tab stop after the options, which Enter presses.
+    client.choose = { title: "A tab", choices: [{ key: "a", label: "First", act: () => taken.push("first") }], cursor: 0 };
+    await sidebar.missionKey(client, { key: "Tab" });
+    assert.equal(client.choose.cursor, 1, "Tab goes on from the last option to the close button");
+    assert.match(menu(), /× ╮/);
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(client.choose, undefined, "and Enter on it closes the menu");
+    client.confirm = { text: "Close it?", yes: () => taken.push("yes") };
+    await sidebar.missionKey(client, { key: "Tab" });
+    await sidebar.missionKey(client, { key: "Tab" });
+    assert.equal(client.confirm.onClose, true, "a question's: after Yes and No");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.deepEqual(taken, [], "pressed as no");
+    sidebar.draw(client);
+    await sidebar.missionKey(client, { key: "BTab" });
+    assert.equal(client.focus, "close", "mission control's own: the last of its stops");
+    assert.equal(closed, 0);
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(closed, 1, "Enter on it closes mission control");
+    closed = 0;
+    client.focus = undefined;
+    // A message being typed to a tab: Tab reaches it too, and Enter presses it
+    // rather than sending what was typed.
+    client.answering = { tab: { index: 1, name: "t" }, found: undefined, text: "hi", typing: false };
+    await sidebar.missionKey(client, { key: "Tab" });
+    assert.equal(client.answering.closeFocus, true);
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(client.answering, undefined, "the answer box closes, nothing sent");
+
+    // M-j's picker, typing: Tab past its last row reaches it, and Enter on it
+    // closes the picker; Tab again goes back round to the first row.
+    client.picker = true;
+    client.filter = { text: "", typing: true };
+    client.view = { view: sidebar.viewsFor(client).findIndex((v) => v.title === "Work map") + 1, cursor: 0 };
+    const rows = sidebar.viewsFor(client)[client.view.view - 1].items.length;
+    for (let i = 0; i < Math.max(rows, 1); i++) await sidebar.missionKey(client, { key: "Tab" });
+    assert.equal(client.focus, "close", "past the picker's last row");
+    assert.equal(client.filter.typing, true);
+    await sidebar.missionKey(client, { key: "Tab" });
+    assert.equal(client.focus, undefined);
+    assert.equal(client.view.cursor, 0, "and round to its first");
+    await sidebar.missionKey(client, { key: "BTab" });
+    assert.equal(client.focus, "close", "Shift-Tab before the first row");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(closed, 1, "Enter on it closes the picker");
+    closed = 0;
+    client.picker = false;
+    client.filter = undefined;
+    client.focus = undefined;
+    client.view = { view: 0, cursor: 0 };
+
+    // Mission control itself: the button at the right end of its top bar.
+    sidebar.draw(client);
+    assert.equal(closed, 0);
+    await sidebar.missionKey(client, { mouse: { button: 0, x: 99, y: 1, press: true } });
+    assert.equal(closed, 1, "a click on it closes mission control");
+
+    // A peek, its close button in its frame's top edge.
+    const peek = { kind: "mission", only: true, socket: { write() {}, end: () => closed++ }, view: { view: 0, cursor: 0 }, cols: 80, rows: 24, tmuxClient: "none", peek: { tab: { index: 1, name: "t" }, mode: "screen", screen: "hello" } };
+    sidebar.draw(peek);
+    await sidebar.missionKey(peek, { mouse: { button: 0, x: 78, y: 1, press: true } });
+    assert.equal(peek.peek, undefined);
+    assert.equal(closed, 2, "a peek in a popup of its own closes the popup");
+
+    // Without menu_mouse, a click can't reach it, so it isn't drawn.
+    fs.writeFileSync(settingsFile, JSON.stringify({ easy_keys: true, menu_mouse: false }));
+    require("../lib/settings").reloadSettings();
+    assert.doesNotMatch(menu(), /×/);
+  } finally {
+    fs.rmSync(settingsFile, { force: true });
+    require("../lib/settings").reloadSettings();
+  }
+});
+
 test("every box in mission control is drawn one way: the keys box as a menu is", () => {
   const help = plain(sidebar.helpModal("mission", 120, 40));
   const menu = plain(sidebar.chooseModal({ title: "A tab", choices: [{ key: "a", label: "Go there" }], cursor: 0 }, 120, 40));

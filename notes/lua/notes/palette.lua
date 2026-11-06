@@ -173,7 +173,7 @@ function M.open()
   })
   local fzf = "fzf --ansi --delimiter='\\t' --with-nth=2 --no-sort --layout=reverse --exact --prompt='command> '"
   local cmd = string.format("%s < %s > %s", fzf, vim.fn.shellescape(list), vim.fn.shellescape(chosen))
-  vim.fn.jobstart(cmd, { term = true, on_exit = function(_, code)
+  local job = vim.fn.jobstart(cmd, { term = true, on_exit = function(_, code)
     vim.schedule(function()
       if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
       if vim.api.nvim_buf_is_valid(term) then pcall(vim.api.nvim_buf_delete, term, { force = true }) end
@@ -187,6 +187,7 @@ function M.open()
       command[4](ctx)
     end)
   end })
+  require("notes.easy").close_button(win, function() vim.fn.jobstop(job) end)
   vim.cmd("startinsert")
 end
 

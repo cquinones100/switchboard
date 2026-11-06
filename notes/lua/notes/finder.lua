@@ -59,7 +59,8 @@ function M.open()
       if picked and picked ~= "" then require("notes").open(store.absolute(vim.split(picked, "\t")[1])) end
     end)
   end
-  vim.fn.jobstart(cmd, { term = true, cwd = store.root(), on_exit = on_exit })
+  local job = vim.fn.jobstart(cmd, { term = true, cwd = store.root(), on_exit = on_exit })
+  require("notes.easy").close_button(win, function() vim.fn.jobstop(job) end)
   vim.cmd("startinsert")
 end
 

@@ -418,6 +418,7 @@ function M.help()
   local win = vim.api.nvim_open_win(buf, true, { relative = "editor", style = "minimal", border = "rounded", width = 52, height = #text, row = 3, col = 6 })
   vim.keymap.set("n", "q", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
   vim.keymap.set("n", "<Esc>", function() vim.api.nvim_win_close(win, true) end, { buffer = buf })
+  require("notes.easy").close_button(win, function() pcall(vim.api.nvim_win_close, win, true) end, true)
 end
 
 function M.keys(buf)

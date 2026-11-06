@@ -90,7 +90,7 @@ resolve_in_tab() {
     fi
   done < <(LC_ALL=en_US.UTF-8 tmux list-panes -t "$window" -F $'#{pane_id}\t#{?@sidebar,1,0}\t#{pane_current_command}\t#{pane_tty}')
   printf '\n  %sNo Claude in this tab to resolve them.%s\n' "$yellow" "$reset"
-  read -rsn 1
+  menu_any_key
 }
 
 # The answer's last word: what can be done about it, moved through with j and
@@ -99,7 +99,7 @@ resolve_in_tab() {
 finish() {
   if [ ${#actions[@]} -eq 0 ]; then
     printf "\n  Press any key to close."
-    read -rsn 1
+    menu_any_key
     return
   fi
   local options=("${actions[@]}" "Close") cursor=0 i start= pick
@@ -113,13 +113,16 @@ finish() {
     # Where the first option is, for a click's row: asked once the keys are
     # drawn, which can scroll the popup, the options above them and a blank line.
     [ -n "$start" ] || { [ -t 0 ] && [ -n "${MENU_MOUSE:-}" ] && start=$(( $(menu_row) - ${#options[@]} - 1 )); }
+    # The cursor past the options is on the close button (menu.sh).
+    MENU_CLOSE_FOCUS=$([ "$cursor" = ${#options[@]} ] && echo 1)
     menu_read || { menu_mouse_off; return; }
+    [ -n "$MENU_CLOSE_FOCUS" ] && case $MENU_KEY in enter | space) MENU_KEY=quit ;; esac
     pick=
     case $MENU_KEY in
       j) [ $cursor -lt $((${#options[@]} - 1)) ] && cursor=$((cursor + 1)) ;;
       k) [ $cursor -gt 0 ] && cursor=$((cursor - 1)) ;;
-      tab) cursor=$(( (cursor + 1) % ${#options[@]} )) ;;
-      btab) cursor=$(( (cursor + ${#options[@]} - 1) % ${#options[@]} )) ;;
+      tab) cursor=$(( (cursor + 1) % $(menu_stops ${#options[@]}) )) ;;
+      btab) cursor=$(( (cursor + $(menu_stops ${#options[@]}) - 1) % $(menu_stops ${#options[@]}) )) ;;
       quit) menu_mouse_off; return ;;
       enter | space) pick=$cursor ;;
       click\ *)

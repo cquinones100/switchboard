@@ -1538,8 +1538,15 @@ typing replaces the selection, and Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z
 redoes and Cmd-X cuts, through Switchboard's Ghostty config, which sends
 them as keys tmux passes to Notes alone (Cmd-C stays Ghostty's own copy,
 of text selected with Shift-drag); a line at the bottom names the keys
-that work in the mode you are in (`key_help_line`). Vim's keys keep
-working beside them. Its Paste image (`v`), or Ctrl-V while typing, as
+that work in the mode you are in (`key_help_line`). These boxes, menus and
+popups get a × in their top-right corner that a click closes, as Esc does,
+and that Tab reaches after their options, Enter pressing it:
+mission control's boxes and mission control itself, `M-m`'s, the update
+popup's and `M-w`'s menus, the message and tip boxes, and Notes' Format
+menu, palette, finder and squash boxes (with `menu_mouse` on, since a click
+must reach it). In Notes' palette and finder, whose Tab is fzf's, and the
+message and tip boxes, which any key closes, it is the mouse's alone. The
+fzf lists in popups (`M-p`, `M-t`) close with Esc alone. Vim's keys keep working beside them. Its Paste image (`v`), or Ctrl-V while typing, as
 in Claude Code, puts the image on the clipboard (a screenshot copied with
 Cmd-Ctrl-Shift-4, say) into the note; with no image there, Ctrl-V does what
 it always does (Cmd-V can't: the terminal pastes only text). The image is

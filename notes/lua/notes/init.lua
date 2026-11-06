@@ -330,6 +330,7 @@ function M.menu(buf, visual, typing_col)
     style = "minimal", border = "rounded", title = " Format ", title_pos = "center",
   })
   local function pick(action)
+    if not vim.api.nvim_win_is_valid(win) then return end
     vim.api.nvim_win_close(win, true)
     vim.api.nvim_set_current_win(origin)
     if action then M.run_format(action, visual) end
@@ -346,6 +347,7 @@ function M.menu(buf, visual, typing_col)
   end, opts)
   vim.keymap.set("n", "<Esc>", function() pick(nil) end, opts)
   vim.keymap.set("n", "Q", function() pick(nil) end, opts)
+  require("notes.easy").close_button(win, function() pick(nil) end, true)
 end
 
 local function setup_buffer(buf)

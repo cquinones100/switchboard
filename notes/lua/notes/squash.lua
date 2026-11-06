@@ -143,6 +143,7 @@ function M.confirm(titles, model, yes)
   for _, key in ipairs({ "n", "N", "<Esc>", "q" }) do vim.keymap.set("n", key, function() answer(false) end, opts) end
   -- Leaving the box, by a click elsewhere, is no.
   vim.api.nvim_create_autocmd("WinLeave", { buffer = buf, once = true, callback = function() vim.schedule(function() answer(false, true) end) end })
+  require("notes.easy").close_button(win, function() answer(false) end, true)
 end
 
 -- A box over the notes while a squash runs: a spinner, the notes being merged,
@@ -188,6 +189,12 @@ function M.progress(titles, model, cancel)
     close()
     cancel()
   end, { buffer = buf, nowait = true })
+  -- Its close button cancels, as Esc does.
+  require("notes.easy").close_button(win, function()
+    if closed then return end
+    close()
+    cancel()
+  end, true)
   return close
 end
 

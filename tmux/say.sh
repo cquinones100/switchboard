@@ -27,8 +27,12 @@ if [ "${1:-}" = box ]; then
   printf '\033[?25l\n'
   printf '%s\n' "$SAY_TEXT" | sed 's/^/  /'
   # Any key closes it, or a click, or the time
-  # running out; a closed input waits it out.
+  # running out; a closed input waits it out. In easy mode, a close button
+  # in its top-right corner (menu.sh), over the blank row above the text.
   printf '\033[?1000h\033[?1006h'
+  . "${0%/*}/menu.sh"
+  menu_close_on
+  menu_close_draw
   read -rsn 1 -t "$SAY_SECONDS" || sleep 0
   exit 0
 fi

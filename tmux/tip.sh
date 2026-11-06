@@ -100,6 +100,8 @@ case "${1:-}" in
     # its lines, the footer and the border.
     lines=$(text_of "$tip" | wc -l)
     width=$(( $( { text_of "$tip"; echo "$FOOTER"; } | awk '{ if (length > n) n = length } END { print n }') + 4 ))
+    # Room for easy mode's close button beside its first line (menu.sh).
+    [ "$(tmux show -gqv @setting_easy_keys 2>/dev/null)" = on ] && width=$((width + 4))
     # A client shows one popup at a time: a tip that couldn't open, behind
     # another popup, is left to show another time.
     tmux display-popup -c "$client" -e "TIP_KEY=${TIP_KEY:-}" -E -x R -y 0 -w "$width" -h $(( lines + 4 )) -T '#[bold] tip ' "$0 box $(printf '%q %q' "$tip" "$client")" ||
@@ -131,8 +133,12 @@ case "${1:-}" in
     printf '\033[?25l'
     text_of "$tip" | sed 's/^/ /'
     printf '\n \033[38;5;244m%s\033[0m' "$FOOTER"
-    # A click closes it too, and goes no further.
+    # A click closes it too, and goes no further; in easy mode, a close button
+    # in its top-right corner says so (menu.sh).
     printf '\033[?1000h\033[?1006h'
+    . "${0%/*}/menu.sh"
+    menu_close_on
+    menu_close_draw
     IFS= read -rsn 1 -t "$SHOW_SECONDS" first || exit 0
     # What else the key sent, as an arrow or Alt sends several bytes at once.
     keys=$first

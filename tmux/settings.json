@@ -560,7 +560,7 @@
     "key": "easy_keys",
     "category": "Help",
     "label": "Easy mode",
-    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (through Switchboard's Ghostty config), and the diff gets a row of buttons for its keys; Vim's keys keep working. Takes effect when Notes or the diff next opens",
+    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (through Switchboard's Ghostty config), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update popup's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (fzf lists in popups, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
     "default": false
   },
   {

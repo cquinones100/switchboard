@@ -225,6 +225,72 @@ function M.start()
   end
 end
 
+-- Easy mode's close button: " × " in the top edge of a floating window's
+-- border, at its right end, a cell short of the corner, as mission control's
+-- boxes have one. A click on it calls close, which may be called again by the
+-- window's own click handling and has to do nothing then. For the Format
+-- menu, the palette, Ctrl-F's finder, the list's keys and the squash boxes.
+--
+-- With `tab` (not for fzf's lists, whose Tab is fzf's), it is a Tab stop too:
+-- Tab or Shift-Tab puts focus on it, lit as the toolbar's buttons are under
+-- the mouse, and takes it off again, and Enter presses it while it has
+-- focus, as Space does, else each does what the window's own does. Set up after the
+-- window's own maps, which it wraps.
+function M.close_button(win, close, tab)
+  if not (M.on and M.on.easy_keys and vim.api.nvim_win_is_valid(win)) then return end
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { " × " })
+  -- Placed from the border's outer corner, as a float's own position is, with
+  -- no border of its own, which the config's winborder would give it.
+  local button = vim.api.nvim_open_win(buf, false, {
+    relative = "win", win = win, row = 0, col = vim.api.nvim_win_get_width(win) - 2, width = 3, height = 1,
+    style = "minimal", border = "none", focusable = false, zindex = (vim.api.nvim_win_get_config(win).zindex or 50) + 1,
+  })
+  vim.wo[button].winhighlight = "Normal:SwitchboardButton"
+  -- A press on it, in the window's buffer (a terminal's too, for fzf's
+  -- lists), the click going on as it would anywhere else.
+  vim.keymap.set({ "n", "t" }, "<LeftMouse>", function()
+    if vim.api.nvim_win_is_valid(button) then
+      local pos = vim.fn.getmousepos()
+      local top, left = unpack(vim.api.nvim_win_get_position(button))
+      if pos.screenrow == top + 1 and pos.screencol > left and pos.screencol <= left + 3 then
+        vim.schedule(close)
+        return ""
+      end
+    end
+    return "<LeftMouse>"
+  end, { buffer = vim.api.nvim_win_get_buf(win), expr = true, nowait = true, desc = "Close (easy mode's ×)" })
+  if tab then
+    local target = vim.api.nvim_win_get_buf(win)
+    local focused = false
+    local opts = { buffer = target, nowait = true, silent = true }
+    local function toggle()
+      focused = not focused
+      if vim.api.nvim_win_is_valid(button) then vim.wo[button].winhighlight = focused and "Normal:SwitchboardButtonHover" or "Normal:SwitchboardButton" end
+    end
+    vim.keymap.set("n", "<Tab>", toggle, vim.tbl_extend("force", opts, { desc = "Focus easy mode's ×" }))
+    vim.keymap.set("n", "<S-Tab>", toggle, vim.tbl_extend("force", opts, { desc = "Focus easy mode's ×" }))
+    -- Enter and Space each press it while it has focus, else do what they
+    -- did in the window.
+    for _, key in ipairs({ "<CR>", "<Space>" }) do
+      local own = vim.fn.maparg(key, "n", false, true)
+      vim.keymap.set("n", key, function()
+        if focused then return close() end
+        if own.callback then return own.callback() end
+        if own.rhs then return vim.api.nvim_feedkeys(vim.keycode(own.rhs), own.noremap == 1 and "n" or "m", false) end
+        vim.cmd("normal! " .. vim.keycode(key))
+      end, vim.tbl_extend("force", opts, { desc = own.desc or "Press easy mode's × when it has focus" }))
+    end
+  end
+  vim.api.nvim_create_autocmd("WinClosed", {
+    pattern = tostring(win),
+    once = true,
+    callback = function() if vim.api.nvim_win_is_valid(button) then vim.api.nvim_win_close(button, true) end end,
+  })
+  return button
+end
+
 -- A note's window, as it is set up for a note.
 function M.window(win)
   if not (M.on and M.on.notes_toolbar) then return end
