@@ -30,15 +30,30 @@ serde_json = { version = "1", features = ["preserve_order"] }
 indexmap = { version = "2", features = ["serde"] }
 jiff = "0.2"
 tokio = { version = "1", features = ["rt", "macros", "process", "net", "time", "io-util", "fs", "sync", "signal"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"], optional = true }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# The multiplexer: each pane's PTY and terminal emulator, and the screens
+# drawn into a cell buffer that is sent to each client as what changed.
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the
 # Secret Service (the Keychain's part), notifications, logind's idle, lock and
 # sleep inhibitor.
 zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
+
+[features]
+default = ["net"]
+# HTTPS and WebSockets (GitHub, Linear, Slack, the calendar). Their TLS is the
+# only C the build compiles, so `cargo check --no-default-features --target
+# aarch64-apple-darwin` type-checks every macOS path from Linux.
+net = ["dep:reqwest", "dep:tokio-tungstenite"]
 
 [dev-dependencies]
 
