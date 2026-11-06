@@ -35,9 +35,13 @@ if ! ref=$("$here/diff-base.sh" cached "$top"); then
 fi
 [[ $ref =~ ^[A-Za-z0-9._/-]+$ ]] || exit 0
 command -v nvim >/dev/null || exit 0
-# At most three and a half minutes, as long as the story's own wait and a bit.
+# At most five and a half minutes, as long as the story's own wait and a bit.
 # Exits 0 once the story is told (or there was none to tell), else not, and
-# then the commit is left untold, to be tried again.
-(cd "$top" && nvim --headless -u "$HOME/.config/nvim/diff.lua" --noplugin --cmd 'let g:diff_ahead = 1' \
-  -c "DiffviewOpen $ref...HEAD" -c "lua vim.defer_fn(function() vim.cmd('cquit 2') end, 210000)" </dev/null >/dev/null 2>&1) || exit 2
+# then the commit is left untold, to be tried again, with why on stderr (the
+# last line Neovim wrote there, story-ahead.js's log).
+why=$(cd "$top" && nvim --headless -u "$HOME/.config/nvim/diff.lua" --noplugin --cmd 'let g:diff_ahead = 1' \
+  -c "DiffviewOpen $ref...HEAD" -c "lua vim.defer_fn(function() io.stderr:write('Neovim gave up waiting after 330 seconds\\n') vim.cmd('cquit 2') end, 330000)" </dev/null 2>&1 >/dev/null) || {
+  printf '%s\n' "$why" | grep -v '^[[:space:]]*$' | tail -1 >&2
+  exit 2
+}
 printf '%s\n' "$head" >"$state/$key"

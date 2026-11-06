@@ -80,6 +80,29 @@ test("Haiku's answer becomes the story: every file once, one it leaves out in Ot
   assert.deepEqual(result.progress, ["* Telling the change as a story   1:15", "  Read 3 files (+12 −4)", '  ✓ 1. Add the "pick" column', "  ✓ 2. Default it on", "  * 3. …"], "the cover: what is read, each chapter named so far ticked, the one being written spinning");
 });
 
+test("the cover says about how long the story should take, from the diff's hunks", () => {
+  const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
+    encoding: "utf8",
+    input: `
+      local ds = require("diffstory")
+      local lines = {}
+      for h = 1, 3 do vim.list_extend(lines, { "diff --git a/f" .. h .. ".js b/f" .. h .. ".js", "@@ -1 +1 @@", "-a", "+b", "@@ -9 +9 @@", "-c", "+d" }) end
+      local _, hunks = ds.split(table.concat(lines, "\\n") .. "\\n")
+      io.write(vim.json.encode({
+        count = ds.count(hunks),
+        estimates = { ds.estimate(0), ds.estimate(100), ds.estimate(474) },
+        cover = ds.progress({ text = "", started = 100 }, { files = 3, additions = 6, deletions = 6, estimate = 153 }, "*", 142)[1],
+        before = ds.progress(nil, { files = 3, additions = 6, deletions = 6, estimate = 153 }, "*", 142)[1],
+      }))
+    `,
+  });
+  const result = JSON.parse(out);
+  assert.equal(result.count, 6, "every hunk of every file");
+  assert.deepEqual(result.estimates, [25, 52, 153], "a start and a share per hunk");
+  assert.equal(result.cover, "* Telling the change as a story   0:42 of about 2:33", "the time taken and the time it should take");
+  assert.equal(result.before, "* Telling the change as a story", "nothing timed before the ask starts");
+});
+
 test("Haiku reads every hunk of a long file and the commits' messages, and its answer by hunk splits a file between chapters with a note on each", () => {
   const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
     encoding: "utf8",

@@ -20,6 +20,23 @@ M.COMMIT_CHARS = 1500
 M.COMMITS_CHARS = 12000
 M.WHY_CHARS = 400
 M.MAX_CHAPTERS = 8
+-- How long Haiku takes, roughly: a start, then a share per hunk, whose id
+-- it writes back whatever its note (474 hunks in 130 to 170 seconds, about
+-- as long with no notes asked for).
+M.START_SECONDS = 25
+M.HUNK_SECONDS = 0.27
+
+-- How many hunks the diff has, from split's `hunks`.
+function M.count(hunks)
+  local n = 0
+  for _, list in pairs(hunks or {}) do n = n + #list end
+  return n
+end
+
+-- About how many seconds Haiku will take over a diff of `count` hunks.
+function M.estimate(count)
+  return math.floor(M.START_SECONDS + count * M.HUNK_SECONDS + 0.5)
+end
 -- In the cache key, so a story told by an earlier prompt is told again.
 M.VERSION = 2
 
@@ -397,7 +414,12 @@ end
 function M.progress(p, reading, spin, now)
   local lines = {}
   local elapsed = p and math.max(0, now - p.started) or nil
-  table.insert(lines, spin .. " Telling the change as a story" .. (elapsed and ("   %d:%02d"):format(math.floor(elapsed / 60), elapsed % 60) or ""))
+  local function clock(seconds) return ("%d:%02d"):format(math.floor(seconds / 60), seconds % 60) end
+  -- With the time it should take (reading.estimate), "of about 2:10".
+  local estimate = reading and reading.estimate
+  table.insert(lines, spin .. " Telling the change as a story"
+    .. (elapsed and ("   " .. clock(elapsed)) or "")
+    .. (elapsed and estimate and (" of about " .. clock(estimate)) or ""))
   if reading then
     table.insert(lines, ("  Read %d %s (+%d −%d)"):format(reading.files, reading.files == 1 and "file" or "files", reading.additions, reading.deletions))
   end

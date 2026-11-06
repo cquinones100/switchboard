@@ -418,6 +418,10 @@ end
 -- asked for: each view that opens the same diff gets it, and it is asked
 -- for once.
 local stories, waiting = {}, {}
+-- Why a story couldn't be told, by key: not asked again in this Neovim.
+local failures = {}
+-- How long Haiku has to tell a story, in milliseconds.
+local STORY_TIMEOUT = 300000
 -- The answer so far of each story being told, by key, as this Neovim asks
 -- Haiku or follows another Neovim's ask: { text, started }, for the cover.
 local progress = {}
@@ -497,7 +501,17 @@ local function settle(view, told)
   if view.settled then return end
   view.settled = true
   uncover(view)
-  if vim.g.diff_ahead then vim.schedule(function() vim.cmd(told and "qa!" or "cquit 2") end) end
+  if vim.g.diff_ahead then
+    -- Why on stderr, which diff-story-ahead.sh hands the sidebar daemon.
+    if not told and view.why_none then io.stderr:write(view.why_none .. "\n") end
+    vim.schedule(function() vim.cmd(told and "qa!" or "cquit 2") end)
+  end
+end
+-- No story for this view, and why (view.why_none), which ]p and ]c say
+-- (no_story) and the story told ahead of time logs.
+local function untold(view, why)
+  view.why_none = why
+  settle(view, false)
 end
 local function cover(view)
   vim.defer_fn(function()
@@ -594,7 +608,10 @@ local function ask_story(view)
   end
   local function give(target, made)
     stop_loading(target)
-    if made then settle(target, true) end
+    if made then
+      target.why_none = nil
+      settle(target, true)
+    end
     target.story = made
     if require("diffview.lib").get_current_view() == target then
       active_story = made
@@ -617,6 +634,7 @@ local function ask_story(view)
   if #paths < 2 or #written == 0 then
     view.want = nil
     stop_loading(view)
+    view.why_none = #paths < 2 and "it changes only one file" or "it changes only generated files"
     settle(view, true)
     return forget(view)
   end
@@ -626,7 +644,7 @@ local function ask_story(view)
   local left, right = view.left and view.left.type, view.right and view.right.type
   local claude = claude_command()
   if not claude or not (left == RevType.COMMIT or left == RevType.STAGE) then
-    settle(view, false)
+    untold(view, claude and "only a diff against a commit or the index has one" or "claude isn't installed")
     return ask_order(view)
   end
   -- No story for a diff in the middle of a merge conflict: the order
@@ -635,7 +653,7 @@ local function ask_story(view)
     view.want = nil
     stop_loading(view)
     forget(view)
-    settle(view, false)
+    untold(view, "a merge conflict is unresolved")
     return ask_order(view)
   end
   -- The change as diffview shows it, with git's own a/ and b/ whatever the
@@ -703,11 +721,13 @@ local function ask_story(view)
       diff.stdout = table.concat(outputs)
       if diff.code ~= 0 then
         stop_loading(view)
-        settle(view, false)
+        untold(view, ("git diff failed (exit %d)"):format(diff.code))
         forget(view)
         return ask_order(view)
       end
       local diffs, hunks = ds.split(outputs)
+      -- How long it should take, for the cover.
+      view.reading.estimate = ds.estimate(ds.count(hunks))
       local commits = ds.commits(raw_commits)
       local function parse(text) return ds.parse(text, paths, generated, hunks) end
       -- Known by the diff itself and its commits' messages, so a working tree
@@ -723,9 +743,9 @@ local function ask_story(view)
       local split_as = key .. ":" .. table.concat(vim.tbl_map(function(output) return #output end, outputs), ",")
       if stories[split_as] then return give(view, stories[split_as]) end
       -- Haiku couldn't tell this one: not asked again in this Neovim.
-      if stories[key] == false then
+      if failures[key] then
         stop_loading(view)
-        settle(view, false)
+        untold(view, failures[key])
         return ask_order(view)
       end
       local dir = vim.fn.stdpath("cache") .. "/diff-story"
@@ -745,18 +765,18 @@ local function ask_story(view)
       vim.fn.mkdir(dir, "p")
       -- Only to the views still showing this diff; a view asking about a
       -- newer one keeps its spinner until that answer comes.
-      local function finish(text)
+      local function finish(text, why)
         local views = waiting[key] or {}
         waiting[key] = nil
         progress[key] = nil
-        if not text then stories[key] = false end
+        if not text then failures[key] = why or "Haiku's answer didn't parse as a story" end
         for _, each in ipairs(views) do
           if each.want == key then
             stop_loading(each)
             local told = text and each.story_parse(text)
             if told then stories[each.story_split] = told end
             if told then give(each, told) else
-              settle(each, false)
+              untold(each, failures[key] or "Haiku's answer didn't parse as a story")
               ask_order(each)
             end
           end
@@ -783,17 +803,19 @@ local function ask_story(view)
         save()
         local saving = vim.uv.new_timer()
         saving:start(250, 250, vim.schedule_wrap(save))
-        -- With the diff_story_progress setting, the answer streamed, each
-        -- piece of text added to the answer so far as it comes, the whole
-        -- answer from the final result; else told at the end, as text.
-        local stream = vim.g.diff_progress
+        -- The answer streamed, each piece of text added to the answer so far
+        -- as it comes (shown on the cover with the diff_story_progress
+        -- setting), the whole answer from the final result, else from those
+        -- pieces once the turn has ended: claude -p's last line, the result,
+        -- holds the whole answer again, and a long one loses its end on the
+        -- way through the pipe (a diff of 474 hunks, its last line cut at 63 KB of 69).
         local args = {
           claude, "-p", "--model", "haiku", "--no-session-persistence", "--restricted", "--tools", "",
           "--strict-mcp-config", "--disable-slash-commands", "--system-prompt", ds.PROMPT,
         }
-        vim.list_extend(args, stream and { "--output-format", "stream-json", "--include-partial-messages", "--verbose" } or { "--output-format", "text" })
-        local opts = { stdin = ds.input(entries, diffs, hunks, commits), cwd = dir, timeout = 180000 }
-        local pending, answer = "", nil
+        vim.list_extend(args, { "--output-format", "stream-json", "--include-partial-messages", "--verbose" })
+        local opts = { stdin = ds.input(entries, diffs, hunks, commits), cwd = dir, timeout = STORY_TIMEOUT }
+        local pending, answer, error_text, streamed, ended = "", nil, nil, {}, false
         local function read(line)
           local ok, event = pcall(vim.json.decode, line)
           if not (ok and type(event) == "table") then return end
@@ -802,32 +824,48 @@ local function ask_story(view)
           if event.type == "stream_event" and inner.type == "content_block_delta" and delta.type == "text_delta" and type(delta.text) == "string" then
             local p = progress[key]
             if p then p.text = p.text .. delta.text end
+            table.insert(streamed, delta.text)
+          elseif event.type == "stream_event" and inner.type == "message_delta" and delta.stop_reason == "end_turn" then
+            ended = true
           elseif event.type == "result" then
             answer = event.is_error ~= true and type(event.result) == "string" and event.result or nil
+            if not answer then error_text = type(event.result) == "string" and event.result or "an error" end
           end
         end
-        if stream then
-          opts.stdout = function(_, data)
-            if not data then return end
-            pending = pending .. data
-            for line in pending:gmatch("([^\n]*)\n") do read(line) end
-            pending = pending:match("[^\n]*$")
-          end
+        opts.stdout = function(_, data)
+          if not data then return end
+          pending = pending .. data
+          for line in pending:gmatch("([^\n]*)\n") do read(line) end
+          pending = pending:match("[^\n]*$")
         end
         count_request("diff story")
         vim.system(args, opts, function(result)
           vim.schedule(function()
             saving:stop()
             saving:close()
-            if stream then read(pending) end
-            local text = result.code == 0 and (stream and answer or result.stdout) or nil
+            read(pending)
+            local whole = ended and not error_text and table.concat(streamed)
+            local text = result.code == 0 and (answer or (whole ~= "" and whole or nil)) or nil
             local told = text and parse(text)
+            -- Why not, for the box ]p and ]c show and the story told ahead's log.
+            local function first(s) return vim.trim(vim.split(s or "", "\n")[1] or "") end
+            local why
+            if result.code == 124 then
+              why = ("Haiku took longer than %d seconds"):format(STORY_TIMEOUT / 1000)
+            elseif result.code ~= 0 then
+              local said = first(result.stderr)
+              why = ("claude exited with code %d%s"):format(result.code, said ~= "" and (": " .. said) or "")
+            elseif error_text then
+              why = "Claude answered with an error: " .. first(error_text)
+            elseif not told then
+              why = "Haiku's answer didn't parse as a story"
+            end
             -- The story kept before its progress goes, so a Neovim following
             -- finds one or the other.
             if told then vim.fn.writefile(vim.split(text, "\n"), file) end
             os.remove(partial)
             owned[partial] = nil
-            finish(told and text)
+            finish(told and text, why)
           end)
         end)
       end
@@ -919,13 +957,31 @@ local function headings_after_redraw()
   end
 end
 
+-- Why a view has no story, said in a box (tmux/say.sh) by ]p, [p, ]c and [c
+-- when there is none to move through: still being told, or not told and why.
+local function no_story(view)
+  local text
+  if not vim.g.diff_story then
+    text = "No story for this diff: diff stories are off in Settings (diff_story)."
+  elseif view and (view.loading or not view.settled) then
+    text = "The story is still being told.\n]p and ]c move through its chapters once it is."
+  else
+    text = "No story for this diff: " .. (view and view.why_none or "it couldn't be told") .. ".\nThe list is in the kinds' order."
+  end
+  if vim.env.TMUX then
+    vim.system({ vim.fn.expand("~/.config/tmux/say.sh"), text })
+  else
+    vim.notify(text, vim.log.levels.WARN)
+  end
+end
+
 -- ]c and [c in the list: the next or the previous heading's file, as the
 -- headings are drawn.
 local function chapter_jump(step)
   return function()
     local view = require("diffview.lib").get_current_view()
     local story = view and view.story
-    if not (story and view.panel) then return end
+    if not (story and view.panel) then return no_story(view) end
     local item = view.panel:get_item_at_cursor()
     local rows = story_rows(view.panel, story)
     local at = 0
@@ -989,8 +1045,10 @@ local function turn_page(step, keys)
     local view = require("diffview.lib").get_current_view()
     local page = view and view.page
     local story = page and page.story or (view and view.story)
-    -- Vim's own ]p or [p, which a list or a file not to be changed refuses quietly.
-    if not (vim.g.diff_pages and story) then return pcall(vim.cmd, "normal! " .. vim.v.count1 .. keys) end
+    -- With the diff_story_pages setting off, Vim's own ]p or [p, which a list
+    -- or a file not to be changed refuses quietly; with no story, why not.
+    if not vim.g.diff_pages then return pcall(vim.cmd, "normal! " .. vim.v.count1 .. keys) end
+    if not story then return no_story(view) end
     local index = (page and page.index or 0) + step
     if index > #story.chapters then return end
     if page then vim.cmd("DiffviewClose") end

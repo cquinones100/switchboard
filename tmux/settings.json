@@ -224,7 +224,7 @@
     "key": "diff_story_ahead",
     "category": "Diff",
     "label": "Diff story told ahead",
-    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to three and a half minutes",
+    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to five and a half minutes",
     "default": true
   },
   {
