@@ -14,6 +14,24 @@ fn main() -> ExitCode {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let rest: Vec<String> = args.collect();
+    let command = if called == "switchboard" || called.is_empty() {
+        rest.first().map(String::as_str)
+    } else {
+        Some(called.as_str())
+    };
+    // A command that prints, piped into something that stops reading
+    // (`| head`), ends quietly as other programs do, rather than panicking
+    // on the broken pipe Rust's ignored SIGPIPE turns into an error. Not the
+    // server, the attached client or a hook, which must outlive a peer gone.
+    if !matches!(
+        command,
+        None | Some("server" | "hook" | "slack-relay" | "-s")
+    ) {
+        // SAFETY: setting a signal's disposition back to its default.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
     if called == "switchboard" || called.is_empty() {
         let mut rest = rest.into_iter();
         let name = rest.next();
