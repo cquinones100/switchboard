@@ -126,20 +126,19 @@ test("a tab's own Claude wins its pane over a headless one that names it too", (
   }
 });
 
-test("a Claude in another tmux server, whose pane has the same number, isn't taken for the tab's", () => {
+test("on a tmux server of its own, a pane takes only the Claude session it is marked with, never another server's of the same number", () => {
   const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
-  const panes = (mark, command = "2.1.0") => [{ pane_id: pane, session_name: "test", "@agent_session": mark, pane_current_command: command }];
-  // A plain tmux server beside Switchboard's own numbers its panes from %0 too.
-  fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `mine:@0.${pane}`, entrypoint: "cli" }));
+  const panes = (mark) => [{ pane_id: pane, session_name: "test", "@agent_session": mark, pane_current_command: "2.1.0" }];
+  // A plain tmux server beside Switchboard's own numbers its panes from %0
+  // too, and may name its session the same.
+  fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
+  fs.writeFileSync(path.join(home, ".claude/sessions/121.json"), JSON.stringify({ pid: 121, sessionId: "own", cwd: "/work", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
   try {
-    assert.equal(sidebar.sessionsByPane(panes("")).get(pane), undefined, "a session of another name");
-    fs.writeFileSync(path.join(home, ".claude/sessions/121.json"), JSON.stringify({ pid: 121, sessionId: "own", cwd: "/work", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
-    assert.equal(sidebar.sessionsByPane(panes("")).get(pane).sessionId, "own");
-    // Its session by the same name: the pane's mark from agent-state.sh tells them apart.
-    fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
     assert.equal(sidebar.sessionsByPane(panes("own")).get(pane).sessionId, "own");
-    assert.equal(sidebar.sessionsByPane(panes("", "zsh")).get(pane), undefined, "nor, unmarked, a pane that runs no Claude");
+    assert.equal(sidebar.sessionsByPane(panes("")).get(pane), undefined, "an unmarked pane takes none");
     assert.equal(sidebar.sessionsByPane([]).get(pane), undefined, "nor a pane the server hasn't");
+    fs.rmSync(path.join(home, ".claude/sessions/121.json"));
+    assert.equal(sidebar.sessionsByPane(panes("own")).get(pane), undefined, "nor the other server's in place of its own");
   } finally {
     ["121", "141"].forEach((pid) => fs.rmSync(path.join(home, `.claude/sessions/${pid}.json`), { force: true }));
   }
@@ -2456,8 +2455,6 @@ test("a tab whose transcript can't be read is still listed, and the others with 
   const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
   tmux("set", "-p", "-t", pane, "@agent_state", "done");
   tmux("set", "-p", "-t", pane, "@agent_since", String(Math.floor(Date.now() / 1000)));
-  // Its session, as agent-state.sh marks it when the session starts.
-  tmux("set", "-p", "-t", pane, "@agent_session", "broken");
   // A directory where its transcript should be: reading it throws.
   fs.mkdirSync(path.join(home, ".claude/projects/-work/broken.jsonl"), { recursive: true });
   fs.writeFileSync(path.join(home, ".claude/sessions/131.json"), JSON.stringify({ pid: 131, sessionId: "broken", cwd: "/work", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
@@ -2470,7 +2467,6 @@ test("a tab whose transcript can't be read is still listed, and the others with 
   } finally {
     fs.rmSync(path.join(home, ".claude/sessions/131.json"));
     fs.rmSync(path.join(home, ".claude/projects/-work/broken.jsonl"), { recursive: true });
-    tmux("set", "-pu", "-t", pane, "@agent_session");
   }
 });
 
