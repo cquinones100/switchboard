@@ -152,6 +152,65 @@ test("the landing's phase marks this tab's pane with the step and queue-and-clea
   }
 });
 
+test("the landing queue: waiters take the lock in its order, a take can't jump it, move reorders it, and a waiter whose session is gone is dropped", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "land-queue-test-")));
+  const env = { ...process.env, HOME: tmp, TMUX_SIDEBAR_STATE_DIR: path.join(tmp, "state"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  try {
+    const repo = path.join(tmp, "repo");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+    const sessions = path.join(tmp, ".claude/sessions");
+    fs.mkdirSync(sessions, { recursive: true });
+    fs.mkdirSync(path.join(tmp, "state"));
+    const [one, two, three] = ["one", "two", "three"].map((name) => {
+      const dir = path.join(tmp, name);
+      execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", name, dir], { env });
+      fs.writeFileSync(path.join(sessions, `${name}.json`), JSON.stringify({ sessionId: name, cwd: dir, pid: process.pid }));
+      return dir;
+    });
+    const run = (cwd, ...args) => spawnSync(process.execPath, [lock, ...args], { cwd, env, encoding: "utf8" });
+    const queue = () => run(repo, "queue").stdout.trim().split("\n").map((line) => line.split("\t").slice(0, 2));
+
+    assert.equal(run(one, "take").status, 0);
+    const second = run(two, "take");
+    assert.equal(second.status, 3);
+    assert.match(second.stdout, new RegExp(`held by ${one}`));
+    assert.equal(run(three, "take").status, 3);
+    assert.deepEqual(queue(), [["landing", one], ["2nd", two], ["3rd", three]], "each that was told to wait joined the queue, in order");
+    assert.ok(fs.readFileSync(path.join(tmp, "state/nudge"), "utf8").length > 0, "the sidebar is nudged");
+
+    assert.equal(run(repo, "move", three, "up").status, 0);
+    assert.deepEqual(queue().map(([, p]) => p), [one, three, two], "move up swaps them");
+    assert.equal(run(repo, "move", one, "up").status, 3, "the landing one isn't in the queue to move");
+
+    run(one, "release");
+    const jumped = run(two, "take");
+    assert.equal(jumped.status, 3, "a take behind another waiter waits, with the lock free");
+    assert.match(jumped.stdout, /1 ahead in the landing queue/);
+    assert.equal(spawnSync(process.execPath, [lock, "wait"], { cwd: three, env: { ...env, LAND_LOCK_POLL: "0.1" }, timeout: 5000 }).status, 0, "the first in line takes it");
+    assert.deepEqual(queue(), [["landing", three], ["2nd", two]], "and leaves the queue");
+
+    run(two, "release");
+    assert.deepEqual(queue(), [["landing", three]], "a waiter stopped and released leaves the queue, the lock still the landing one's");
+    assert.equal(run(two, "take").status, 3);
+    assert.equal(run(one, "take").status, 3);
+    assert.deepEqual(queue().map(([, p]) => p), [three, two, one]);
+    assert.equal(run(repo, "move", one, "first").status, 0);
+    assert.deepEqual(queue().map(([, p]) => p), [three, one, two], "first puts it at the head");
+    fs.rmSync(path.join(sessions, "one.json"));
+    assert.deepEqual(queue().map(([, p]) => p), [three, two], "a waiter whose session is gone is dropped");
+
+    // The main clone queued with no session of its own: one in a worktree nested inside it doesn't keep it.
+    const nested = path.join(repo, ".claude/worktrees/nested");
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "nested", nested], { env });
+    fs.writeFileSync(path.join(sessions, "nested.json"), JSON.stringify({ sessionId: "nested", cwd: nested, pid: process.pid }));
+    fs.writeFileSync(path.join(repo, ".git/land.queue"), JSON.stringify([{ path: repo, since: 1 }, { path: two, since: 2 }]));
+    assert.deepEqual(queue().map(([, p]) => p), [three, two], "a session in a nested worktree is that worktree's");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("with an origin, an item's branch starts from origin's default branch as fetched now, leaving out the main clone's unpushed commits, and an origin that can't be fetched stops it", () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-origin-test-")));
   const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };

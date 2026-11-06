@@ -2,16 +2,23 @@
 // The landing lock of queue-and-clean's "Land on the default branch": one
 // worktree of a repository lands on its default branch at a time, so two
 // never rebase onto the same one and push over each other. Each tests and
-// reviews before taking it. It lives in the
-// main clone's git directory, shared by every worktree of it.
+// reviews before taking it. It lives in the main clone's git directory,
+// shared by every worktree of it, and so does the queue of the worktrees waiting for it, which lands them in its order.
 //
 //   land-lock.js take      takes it for this worktree: exit 0 taken (or held
 //                          by this worktree already, so a landing checks it
-//                          still holds it after a wait), 3 held by another,
-//                          which it prints
-//   land-lock.js wait      takes it, waiting as long as another holds it
-//   land-lock.js release   lets it go, when this worktree holds it
+//                          still holds it after a wait), 3 held by another or
+//                          others ahead in the queue, which it prints, this
+//                          worktree joining the queue
+//   land-lock.js wait      takes it, waiting in the queue for its turn
+//   land-lock.js release   lets it go, when this worktree holds it, and takes
+//                          this worktree out of the queue
+//   land-lock.js leave     takes this worktree out of the queue
 //   land-lock.js holder    prints which worktree holds it, nothing when none
+//   land-lock.js queue     prints the holder ("landing") and each waiter by
+//                          its place, one a line: <place>\t<path>\t<since>
+//   land-lock.js move <path> up|down|first
+//                          moves a waiter in the queue
 //   land-lock.js phase [words]
 //                          shows the landing's step in this tab, the pane's
 //                          @agent_phase, its loop marked queue-and-clean's
@@ -22,7 +29,8 @@
 // longer matches its review reviews again and asks again while holding it,
 // which can wait on you for as long as you like, so the lock never expires
 // with time: it is taken over only from a landing that
-// is gone, its worktree removed or no Claude session running in it.
+// is gone, its worktree removed or no Claude session running in it. A waiter
+// gone the same way is dropped from the queue as it is read.
 
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -58,6 +66,17 @@ try {
 }
 const lock = path.join(common, "land.lock");
 const holderFile = path.join(lock, "holder");
+const queueFile = path.join(common, "land.queue");
+const queueLock = path.join(common, "land.queue.lock");
+
+// The sidebar shows the queue (lib/sidebar/landing.js): every change to it
+// or the lock tells the sidebar daemon to look again.
+const nudge = () => {
+  const dir = process.env.TMUX_SIDEBAR_STATE_DIR || path.join(os.homedir(), ".local/state/tmux-sidebar");
+  try {
+    if (fs.existsSync(dir)) fs.appendFileSync(path.join(dir, "nudge"), "\n");
+  } catch {}
+};
 
 const holder = () => {
   try {
@@ -69,36 +88,115 @@ const holder = () => {
 
 const hold = () => fs.writeFileSync(holderFile, JSON.stringify({ path: here, since: Date.now() }));
 
-const gone = (current) => !current || !fs.existsSync(current.path) || liveSessionsIn(current.path).length === 0;
-
-const take = (quiet) => {
-  try {
-    fs.mkdirSync(lock);
-    hold();
-    return 0;
-  } catch (err) {
-    if (err.code !== "EEXIST") throw err;
+// The worktree a directory is in: the nearest one up holding a .git. A
+// session in a worktree nested inside another (the main clone's
+// .claude/worktrees) is that one's, not the outer one's.
+const worktreeOf = (dir) => {
+  for (let at = dir; ; at = path.dirname(at)) {
+    if (fs.existsSync(path.join(at, ".git"))) {
+      try {
+        return fs.realpathSync(at);
+      } catch {
+        return at;
+      }
+    }
+    if (path.dirname(at) === at) return undefined;
   }
-  const current = holder();
-  if (current?.path === here) return 0;
-  if (gone(current)) {
-    hold();
-    return 0;
-  }
-  if (!quiet) console.log(`held by ${current.path} since ${new Date(current.since).toTimeString().slice(0, 5)}`);
-  return 3;
 };
+
+const gone = (current) => !current || !fs.existsSync(current.path) || !liveSessionsIn(current.path).some((session) => worktreeOf(session.cwd) === current.path);
+
+const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// Every change to the queue holds a short mutex, so two worktrees joining at
+// once can't lose one; one left behind by a killed process for over ten
+// seconds is taken over. The queue is written whole and renamed into place.
+const withQueue = (change) => {
+  for (let tries = 0; ; tries++) {
+    try {
+      fs.mkdirSync(queueLock);
+      break;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - fs.statSync(queueLock).mtimeMs > 10_000) fs.rmSync(queueLock, { recursive: true, force: true });
+      } catch {}
+      if (tries > 500) throw new Error("the landing queue stayed locked");
+      sleep(20);
+    }
+  }
+  try {
+    let read = [];
+    try {
+      read = JSON.parse(fs.readFileSync(queueFile, "utf8"));
+    } catch {}
+    const queue = (Array.isArray(read) ? read : []).filter((entry) => entry?.path && !gone(entry));
+    const { queue: next = queue, result } = change(queue);
+    if (JSON.stringify(next) !== JSON.stringify(read)) {
+      const temporary = `${queueFile}.${process.pid}`;
+      fs.writeFileSync(temporary, JSON.stringify(next));
+      fs.renameSync(temporary, queueFile);
+      nudge();
+    }
+    return result;
+  } finally {
+    fs.rmSync(queueLock, { recursive: true, force: true });
+  }
+};
+
+const without = (queue, where) => queue.filter((entry) => entry.path !== where);
+const joined = (queue) => (queue.some((entry) => entry.path === here) ? queue : [...queue, { path: here, since: Date.now() }]);
+
+// Taken only when the lock is free (or its holder gone) and no live waiter is
+// ahead of this worktree in the queue, so a take can't jump the queue.
+const take = (quiet) =>
+  withQueue((queue) => {
+    const current = holder();
+    if (current?.path === here && fs.existsSync(lock)) return { queue: without(queue, here), result: 0 };
+    const mine = queue.findIndex((entry) => entry.path === here);
+    const ahead = mine === -1 ? queue.length : mine;
+    const free = !fs.existsSync(lock) || gone(current);
+    if (free && ahead === 0) {
+      try {
+        fs.mkdirSync(lock);
+      } catch (err) {
+        if (err.code !== "EEXIST") throw err;
+      }
+      hold();
+      nudge();
+      return { queue: without(queue, here), result: 0 };
+    }
+    if (!quiet) {
+      const held = free ? "" : `held by ${current.path} since ${new Date(current.since).toTimeString().slice(0, 5)}`;
+      const waiting = ahead ? `${ahead} ahead in the landing queue` : "";
+      console.log([held, waiting].filter(Boolean).join("; "));
+    }
+    return { queue: joined(queue), result: 3 };
+  });
+
+const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
 
 const main = async () => {
   const command = process.argv[2];
   if (command === "take") process.exit(take());
   if (command === "wait") {
-    const poll = Number(process.env.LAND_LOCK_POLL ?? 15) * 1000;
+    const poll = Number(process.env.LAND_LOCK_POLL ?? 5) * 1000;
     while (take(true) !== 0) await new Promise((resolve) => setTimeout(resolve, poll));
     return;
   }
+  // Every way out of a landing runs release, so it leaves the queue too: a
+  // waiter stopped while its session goes on would otherwise hold up every
+  // worktree behind it.
   if (command === "release") {
-    if (holder()?.path === here) fs.rmSync(lock, { recursive: true, force: true });
+    withQueue((queue) => ({ queue: without(queue, here) }));
+    if (holder()?.path === here) {
+      fs.rmSync(lock, { recursive: true, force: true });
+      nudge();
+    }
+    return;
+  }
+  if (command === "leave") {
+    withQueue((queue) => ({ queue: without(queue, here) }));
     return;
   }
   if (command === "holder") {
@@ -106,7 +204,39 @@ const main = async () => {
     if (current) console.log(current.path);
     return;
   }
-  console.error("usage: land-lock.js take|wait|release|holder|phase [words]");
+  if (command === "queue") {
+    const queue = withQueue((entries) => ({ result: entries }));
+    const current = fs.existsSync(lock) && !gone(holder()) ? holder() : undefined;
+    const lines = [...(current ? [["landing", current.path, current.since]] : []), ...queue.map((entry, at) => [ordinal(at + (current ? 2 : 1)), entry.path, entry.since])];
+    lines.forEach((line) => console.log(line.join("\t")));
+    return;
+  }
+  if (command === "move") {
+    const [, , , target, way] = process.argv;
+    if (!target || !["up", "down", "first"].includes(way)) {
+      console.error("usage: land-lock.js move <path> up|down|first");
+      process.exit(2);
+    }
+    let where = path.resolve(target);
+    try {
+      where = fs.realpathSync(where);
+    } catch {}
+    const moved = withQueue((queue) => {
+      const at = queue.findIndex((entry) => entry.path === where);
+      if (at === -1) return { result: false };
+      const to = way === "first" ? 0 : way === "up" ? Math.max(0, at - 1) : Math.min(queue.length - 1, at + 1);
+      const next = [...queue];
+      const [entry] = next.splice(at, 1);
+      next.splice(to, 0, entry);
+      return { queue: next, result: true };
+    });
+    if (!moved) {
+      console.error(`${where} isn't waiting in the landing queue`);
+      process.exit(3);
+    }
+    return;
+  }
+  console.error("usage: land-lock.js take|wait|release|leave|holder|queue|move|phase [words]");
   process.exit(2);
 };
 

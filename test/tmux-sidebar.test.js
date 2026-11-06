@@ -550,6 +550,62 @@ test("tabs whose PR is in the merge queue or merged get sections of their own, a
   assert.match(text, / ◆ +4 landed/);
 });
 
+test("tabs landing on the default branch or waiting their turn are a Landing group in the landing queue's order, which a waiting tab's menu changes", async () => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(tmp, "landing-")));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const repo = path.join(dir, "repo");
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+  const sessionFiles = [];
+  const [one, two, three] = ["one", "two", "three"].map((name) => {
+    const worktree = path.join(dir, name);
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", name, worktree], { env });
+    const file = path.join(home, ".claude/sessions", `landing-${name}.json`);
+    fs.writeFileSync(file, JSON.stringify({ sessionId: `landing-${name}`, cwd: worktree, pid: process.pid }));
+    sessionFiles.push(file);
+    return worktree;
+  });
+  try {
+    fs.mkdirSync(path.join(repo, ".git/land.lock"));
+    fs.writeFileSync(path.join(repo, ".git/land.lock/holder"), JSON.stringify({ path: one, since: 1 }));
+    fs.writeFileSync(path.join(repo, ".git/land.queue"), JSON.stringify([{ path: three, since: 2 }, { path: two, since: 3 }]));
+    fs.mkdirSync(path.join(two, "sub"));
+    const base = { session: "$1", sessionName: "test", panes: [], sidebars: [], since: undefined, command: "zsh", claude: { sessionId: "s" } };
+    const tabs = [
+      { ...base, id: "@1", index: 1, name: "elsewhere", state: "working", path: dir },
+      { ...base, id: "@2", index: 2, name: "second", state: "working", path: path.join(two, "sub") },
+      { ...base, id: "@3", index: 3, name: "lander", state: "working", path: one },
+      { ...base, id: "@4", index: 4, name: "first", state: "background", background: 1, path: three },
+    ];
+    sidebar.landingOf(tabs);
+    assert.deepEqual(sidebar.grouped(tabs).map((g) => [g.title, g.tabs.map((x) => x.name)]), [
+      ["Working", ["elsewhere"]],
+      ["Landing", ["lander", "first", "second"]],
+    ], "the landing one first, then the queue in order, a tab in a worktree's subdirectory included");
+    assert.equal(sidebar.stateWords(tabs[1]), "working · 3rd in line to land");
+    assert.equal(sidebar.stateWords(tabs[2]), "working · landing");
+
+    const labels = (tab) => sidebar.tabChoices({}, tab).map((c) => c.key);
+    assert.ok(!labels(tabs[2]).some((key) => ["f", "u", "b"].includes(key)), "the landing one can't be moved");
+    assert.ok(!labels(tabs[3]).includes("u") && labels(tabs[3]).includes("b"), "the first in line moves only down");
+    await sidebar.tabChoices({}, tabs[1]).find((c) => c.key === "u").act();
+    const order = JSON.parse(fs.readFileSync(path.join(repo, ".git/land.queue"), "utf8")).map((entry) => entry.path);
+    assert.deepEqual(order, [two, three], "Move up swaps them");
+
+    // Notes moved beside the landing tab and focused: the tab is found by its Claude's directory.
+    const notesFocused = [{ ...tabs[2], landing: undefined, path: home, claude: { sessionId: "landing-one", cwd: one } }];
+    sidebar.landingOf(notesFocused);
+    assert.deepEqual(notesFocused[0].landing, { holding: true, line: 1 }, "focusing Notes beside it keeps its place");
+    // A waiter whose Claude has gone leaves the group before the script reads the queue again.
+    fs.rmSync(sessionFiles[2]);
+    const after = tabs.map((tab) => ({ ...tab, landing: undefined }));
+    sidebar.landingOf(after);
+    assert.deepEqual(after.filter((tab) => tab.landing).map((tab) => [tab.name, tab.landing.line]), [["second", 2], ["lander", 1]]);
+  } finally {
+    sessionFiles.forEach((file) => fs.rmSync(file, { force: true }));
+  }
+});
+
 test("tabs whose open PR has a failing check are a Build failing group of their own, an idle one wearing a red ✗", () => {
   const base = { session: "$1", sessionName: "test", panes: [], sidebars: [], since: undefined, command: "zsh", claude: { sessionId: "s" } };
   const tabs = [

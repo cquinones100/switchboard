@@ -59,6 +59,13 @@
     "default": true
   },
   {
+    "key": "landing_queue",
+    "category": "Sidebar",
+    "label": "Show the landing queue",
+    "description": "Tabs landing on the default branch with queue-and-clean, or waiting their turn, get a Landing group in the sidebar and mission control, in the landing queue's order, which a waiting tab's menu changes; off, they show as Working, and the queue still orders the landings",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",
