@@ -80,7 +80,11 @@ feature that is off which what you did this week would use (the second status
 line, today's todo note). Enter on one offers to do it, "Not now" (back in two
 weeks) or to stop suggesting it. Settings' "Suggestions from how you work"
 (`habits`, under Help) turns the counting and the suggestions off, and
-removes what was counted.
+removes what was counted. `M-p`'s "How you use Switchboard" shows what it has
+counted in a popup: the keys you press most this week and month, the commands
+you pick in `M-p` (with the key that does one, when it has one), how often you
+opened each mission control view, and the suggestions waiting now; `j`/`k`
+scroll, and `q`, Esc or a click close it.
 
 Once set up, tmux keeps the clone up to date: each time it opens, and once an
 hour after that, `tmux/repo-update.sh` checks GitHub, and when `main` there
