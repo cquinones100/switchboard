@@ -845,17 +845,25 @@ test("note-watch's watcher reports an item added to a note once its text settles
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "note-watch-"));
   const note = path.join(dir, "Plan.md");
   fs.writeFileSync(note, "# Plan\n\n- [ ] already here\n- [x] done\n");
-  const watcher = spawn(process.execPath, [path.join(__dirname, "../claude/skills/note-watch/scripts/watch-note.js"), note], { env: { ...process.env, NOTE_WATCH_POLL_MS: "50", NOTE_WATCH_SETTLE_MS: "200" } });
+  // Run through require, so the test knows when it has read the note: the
+  // script reads the items already there before require returns. The times
+  // leave room for a loaded machine: the item settles a second after the
+  // last keystroke, and the test waits for what it reports rather than a set
+  // time.
+  const script = path.join(__dirname, "../claude/skills/note-watch/scripts/watch-note.js");
+  const watcher = spawn(process.execPath, ["-e", `process.argv = [process.argv[0], ${JSON.stringify(script)}, ${JSON.stringify(note)}]; require(${JSON.stringify(script)}); console.error("ready")`], { env: { ...process.env, NOTE_WATCH_POLL_MS: "50", NOTE_WATCH_SETTLE_MS: "1000" } });
   let out = "";
+  let err = "";
   watcher.stdout.on("data", (data) => (out += data));
+  watcher.stderr.on("data", (data) => (err += data));
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   try {
-    await pause(150);
+    for (const end = Date.now() + 10_000; !err.includes("ready") && Date.now() < end; ) await pause(20);
     // Half typed, then whole: only the whole one, once it has stopped changing.
     fs.writeFileSync(note, "# Plan\n\n- [ ] already here\n- [ ] \n- [ ] half\n- [x] done\n");
     await pause(120);
     fs.writeFileSync(note, "# Plan\n\n- [ ] already here\n- [ ] \n- [ ] half typed, now whole\n- [x] done\n");
-    await pause(600);
+    for (const end = Date.now() + 10_000; !out.includes("NEW") && Date.now() < end; ) await pause(20);
     fs.rmSync(note);
     await new Promise((resolve) => watcher.on("exit", resolve));
   } finally {
