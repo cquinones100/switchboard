@@ -550,6 +550,23 @@
     "default": true
   },
   {
+    "key": "tmux_server",
+    "category": "Sessions",
+    "label": "tmux server",
+    "description": "The tmux server Switchboard runs on: tmux's default one, which every tmux you start shares, or one of its own (tmux -L switchboard), so any other tmux you start stays plain tmux. Takes effect when Switchboard next starts there, which Ghostty does, as does tmux -L switchboard new-session -A -s main",
+    "choices": [
+      {
+        "value": "default",
+        "label": "default"
+      },
+      {
+        "value": "switchboard",
+        "label": "its own"
+      }
+    ],
+    "default": "default"
+  },
+  {
     "key": "review_rules",
     "category": "Safety",
     "label": "Rules in reviews",

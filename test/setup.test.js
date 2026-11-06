@@ -100,6 +100,47 @@ test("setup.sh claude merges Switchboard's settings into yours once, keeping you
   }
 });
 
+test("setup.sh tmux_server loads tmux.conf only on Switchboard's own tmux server once the setting names one, and opens Ghostty there, once each way", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-server-")));
+  const env = { ...process.env, HOME: home };
+  delete env.SWITCHBOARD_SETTINGS;
+  const run = (...args) => spawnSync("bash", [script, ...args], { env, encoding: "utf8" });
+  const conf = path.join(home, ".config/tmux/tmux.conf");
+  const ghostty = path.join(home, ".config/ghostty/tmux-server.conf");
+  const settings = path.join(home, ".config/switchboard/settings.json");
+  try {
+    fs.symlinkSync(repo, path.join(home, "switchboard"));
+    fs.mkdirSync(path.join(home, ".config/ghostty"), { recursive: true });
+    fs.mkdirSync(path.dirname(settings), { recursive: true });
+
+    // tmux's default server, as with no setting: Switchboard's tmux.conf, and Ghostty's own command.
+    assert.equal(run("tmux_server").status, 0);
+    assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/tmux.conf"));
+    assert.equal(fs.existsSync(ghostty), false);
+
+    fs.writeFileSync(settings, JSON.stringify({ tmux_server: "switchboard" }));
+    const check = run("--check", "tmux_server");
+    assert.match(check.stdout, /would: link .*\.config\/tmux\/tmux\.conf/);
+    assert.match(check.stdout, /would: make Ghostty open Switchboard's tmux server/);
+    assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/tmux.conf"), "--check changes nothing");
+
+    const first = run("tmux_server");
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/own-server.conf"));
+    assert.match(fs.readFileSync(ghostty, "utf8"), /^command = .*\/tmux -L switchboard new-session -A -s main'$/m);
+    assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n", "a second run changes nothing");
+    assert.doesNotMatch(run("--check", "tmux").stdout, /tmux\.conf/, "and the tmux part, which a pull runs, keeps it");
+
+    fs.writeFileSync(settings, "{}");
+    assert.equal(run("tmux_server").status, 0);
+    assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/tmux.conf"), "back on tmux's default server");
+    assert.equal(fs.existsSync(ghostty), false);
+    assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("setup.sh terminal adds Option as Alt to a Ghostty config of your own once, and leaves one that sets it alone", () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-terminal-")));
   // Ghostty, outside tmux, so nothing reaches Terminal's or iTerm2's preferences.

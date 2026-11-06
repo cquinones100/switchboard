@@ -43,6 +43,8 @@
 # Its settings.json turns off what would duplicate your real workspace or
 # spend money on its own: the Slack look and view, meeting, standup and todo notes, banners,
 # the update check and restoring saved tabs. Turn any back on in its Settings.
+# Its tmux_server setting is tmux's default whatever yours says, since the
+# try's socket is its own already and tmux.conf loads there only so.
 # The relay isn't started. Linked things are yours: an edit made through them
 # (a git config, Neovim's plugins updated from :Lazy) is made to the real one.
 #
@@ -466,7 +468,7 @@ else
   settings=$staged/settings.json
   # An empty file counts as none, which jq would turn into no output at all.
   { [[ -s $settings ]] && cat "$settings" || echo '{}'; } |
-    jq '. + {slack_background: false, view_slack: false, meeting_notes: false, standup_note: false, standup_summary: false, todo_note: false, notifications: false, update_check: "off", auto_restore: false}' >"$settings.tmp" &&
+    jq '. + {slack_background: false, view_slack: false, meeting_notes: false, standup_note: false, standup_summary: false, todo_note: false, notifications: false, update_check: "off", auto_restore: false, tmux_server: "default"}' >"$settings.tmp" &&
     [[ -s $settings.tmp ]] && mv "$settings.tmp" "$settings" || { rm -rf "$staged"; fail "could not turn off the try's own Slack look, notes and update check: is ~/.config/switchboard/settings.json valid JSON?"; }
   mv "$staged" "$home/.config/switchboard"
 fi

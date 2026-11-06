@@ -28,6 +28,26 @@ set this clone's git hooks, every `git pull` links what the pull added (the
 `tmux`, `bin` and `git` parts, and `claude` if you use all of it) and prints
 that list, when there is anything on it.
 
+Switchboard runs on tmux's default server unless you choose otherwise: once
+the configs are linked, `./setup.sh` asks once whether to run it on a tmux
+server of its own, `tmux -L switchboard`, so any other tmux you start (`tmux`
+in a terminal, a script of your own) stays plain tmux, with your
+`~/.tmux.conf` alone. Say yes, or set Settings' "tmux server" (under
+Sessions) to "its own", and `./setup.sh tmux_server` links
+`~/.config/tmux/tmux.conf`, which tmux reads as every server starts, to
+`tmux/own-server.conf`, which loads Switchboard only on the server named
+`switchboard`, and gives Ghostty, with Switchboard's config, the same command
+on that server (`~/.config/ghostty/tmux-server.conf`). Start it yourself with
+`tmux -L switchboard new-session -A -s main`. It takes effect when Switchboard
+next starts there: a Switchboard still running on the default server stays
+there until that server closes, so save its tabs first (`M-b C-s`), and they
+come back on the new server, which restores the last save as it starts and
+saves from then on even while plain tmux servers run, which tmux-continuum
+alone would wait for. Claude Code's hooks leave a Claude session in a plain
+tmux server alone, as they do one outside tmux, and setup, the update and the
+"My tabs" command Claude reads in `claude/switchboard.md` reach Switchboard's
+server from any terminal (`tmux/switchboard-tmux.sh`).
+
 To turn parts of the workspace on or off (banners, the sidebar, the second
 status line, PR and ticket lookups, project colors, the theme, saving pane
 contents, the update check and more), open Settings from `M-p`: mission

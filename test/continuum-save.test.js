@@ -61,3 +61,41 @@ test("continuum-save.sh leaves a server that never saved alone but with --start,
   assert.equal(option("status-right"), job);
   assert.ok(Number(option("@continuum-save-last-timestamp")) >= before, "its first save a save interval from now");
 });
+
+test("continuum-save.sh --started restores the last save and starts the saves once on Switchboard's own server, and only there", async () => {
+  // A server named switchboard, as tmux -L switchboard's socket is, and a
+  // stand-in for resurrect's restore script that counts its runs.
+  const at = path.join(tmp, "sockets/switchboard");
+  fs.mkdirSync(path.dirname(at), { recursive: true });
+  const restored = path.join(tmp, "restored");
+  const restore = path.join(tmp, "restore.sh");
+  fs.writeFileSync(restore, `#!/bin/sh\necho >> '${restored}'\n`, { mode: 0o755 });
+  execFileSync("tmux", ["-S", at, "-f", "/dev/null", "new-session", "-d", "cat"], { env: { ...env, TMUX: "" } });
+  const own = (...args) => spawnSync("tmux", ["-S", at, ...args], { encoding: "utf8", env });
+  const ownEnv = { TMUX: `${at},0,0` };
+  try {
+    own("set", "-g", "status-right", "");
+    own("set", "-g", "@resurrect-restore-script-path", restore);
+    own("set", "-g", "@setting_auto_restore", "on");
+
+    // On tmux's default server it is as with no flag: a server that never saved is left alone.
+    own("set", "-g", "@setting_tmux_server", "default");
+    assert.equal(run(["--started"], ownEnv).status, 2);
+    assert.equal(own("show", "-gqv", "status-right").stdout.trim(), "");
+
+    own("set", "-g", "@setting_tmux_server", "switchboard");
+    const before = Math.floor(Date.now() / 1000);
+    assert.equal(run(["--started"], ownEnv).status, 0);
+    assert.equal(own("show", "-gqv", "status-right").stdout.trim(), job, "the saves start");
+    assert.ok(Number(own("show", "-gqv", "@continuum-save-last-timestamp").stdout) >= before, "the first a save interval from now");
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    assert.equal(fs.readFileSync(restored, "utf8"), "\n", "the last save is restored, after tmux.conf has loaded");
+
+    // A reload of tmux.conf restores nothing again.
+    assert.equal(run(["--started"], ownEnv).status, 0);
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    assert.equal(fs.readFileSync(restored, "utf8"), "\n");
+  } finally {
+    own("kill-server");
+  }
+});

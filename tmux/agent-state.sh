@@ -119,9 +119,21 @@ parked_pane() {
   done
   return 1
 }
+# Switchboard on a tmux server of its own (the tmux_server setting): a Claude
+# session in any other tmux server, which stays plain tmux, is left alone, as
+# one outside tmux is (no states, tips or moved tabs there), and a parked
+# job's tab is looked for in Switchboard's server, the tmux calls below
+# reaching it through TMUX. Read with builtins, starting nothing. Not linked
+# yet (a pull setup hasn't followed), tmux's default server, as before it.
+if ! source "${BASH_SOURCE[0]%/*}/switchboard-tmux.sh" 2>/dev/null; then
+  sb_server() { SB_SERVER=default; }
+  sb_elsewhere() { return 1; }
+fi
+sb_server
 if [ -z "${TMUX_PANE:-}" ]; then
   case "${1:-}" in
     set | notification)
+      [ "$SB_SERVER" = default ] || [ -n "${TMUX:-}" ] || export TMUX="${TMUX_TMPDIR:-/tmp}/tmux-$UID/$SB_SERVER"
       session=$(jq -r '.session_id // empty' <<<"$payload" 2>/dev/null)
       [ -n "$session" ] && TMUX_PANE=$(parked_pane "$session") || exit 0
       ;;
@@ -129,6 +141,7 @@ if [ -z "${TMUX_PANE:-}" ]; then
 fi
 
 [ -n "${TMUX:-}${TMUX_PANE:-}" ] || exit 0
+sb_elsewhere && exit 0
 
 source "${BASH_SOURCE[0]%/*}/claude-pane.sh"
 

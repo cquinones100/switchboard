@@ -110,6 +110,10 @@ export LC_ALL=en_US.UTF-8
 
 prefix=$(tmux show -gv prefix)
 conf=~/.config/tmux/tmux.conf
+# On a tmux server of its own, that is own-server.conf, which loads
+# Switchboard's tmux.conf from beside it.
+link=$(readlink "$conf" 2>/dev/null)
+[[ $link == */own-server.conf ]] && conf=${link%/*}/tmux.conf
 
 # "<keys>\t<description>", with keys as send-keys -K takes them.
 split_note='{ key = $1; $1 = ""; sub(/^ +/, ""); print key "\t" $0 }'

@@ -38,6 +38,9 @@ done
 # the guided setup points at this clone.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$HOME/switchboard"
+# The tmux server Switchboard runs on (sb_server, sb_tmux, sb_tmux_env), from
+# the tmux_server setting, since this can run outside it.
+. "$REPO_DIR/tmux/switchboard-tmux.sh"
 
 # Node comes from nvm, which only an interactive zsh sets up, and the update
 # popup and M-p's setup run this from tmux, whose PATH lacks it: take it from
@@ -58,10 +61,10 @@ esac
 if [[ $OS == macos ]]; then
   LAZYGIT_DIR="$HOME/Library/Application Support/lazygit"
   # Karabiner only exists on macOS.
-  PARTS=(lazygit neovim git claude claude_md skills karabiner tmux autosave config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills karabiner tmux tmux_server autosave config ghostty terminal pgcli bin)
 else
   LAZYGIT_DIR="$HOME/.config/lazygit"
-  PARTS=(lazygit neovim git claude claude_md skills tmux autosave config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills tmux tmux_server autosave config ghostty terminal pgcli bin)
 fi
 
 # ── Parts ───────────────────────────────────────────────────────────────────
@@ -724,7 +727,7 @@ part_config() {
 part_tmux() {
   dir ~/.config/tmux
   part_config
-  put_link "$SRC/tmux/tmux.conf" ~/.config/tmux/tmux.conf
+  tmux_conf_link
   tmux_plugins
   mermaid_ascii
   lib_packages
@@ -736,25 +739,71 @@ part_tmux() {
   $CHECK || "$SRC/tmux/resurrect-tidy.sh"
 }
 
+# Switchboard on a tmux server of its own, with the tmux_server setting on
+# ("switchboard"; settings.sh runs this part when it changes, and the guided
+# setup asks): tmux reads ~/.config/tmux/tmux.conf whenever any tmux server
+# starts, so it is tmux/own-server.conf there, which loads Switchboard's
+# tmux.conf only on the server named switchboard (tmux -L switchboard), and
+# every other tmux you start stays plain tmux. Ghostty, with Switchboard's
+# config, opens it there (ghostty_server). Either way it takes effect the next
+# time Switchboard starts.
+tmux_conf_link() {
+  sb_server
+  if [[ $SB_SERVER == default ]]; then
+    put_link "$SRC/tmux/tmux.conf" ~/.config/tmux/tmux.conf
+  else
+    put_link "$SRC/tmux/own-server.conf" ~/.config/tmux/tmux.conf
+  fi
+}
+# ghostty/config's command, with -L <server> after tmux, in
+# ~/.config/ghostty/tmux-server.conf, which ghostty/config reads after it;
+# none on tmux's default server. Only where Ghostty keeps a config.
+ghostty_server() {
+  local file=~/.config/ghostty/tmux-server.conf want
+  sb_server
+  if [[ $SB_SERVER == default ]]; then
+    [[ -e $file ]] || return 0
+    $CHECK || rm -f "$file" || return 1
+    change "remove $file, so Ghostty opens tmux's default server"
+    return 0
+  fi
+  [[ -d ~/.config/ghostty ]] || return 0
+  want=$(sed -n "s|^\(command = .*/tmux\) new-session|\1 -L $SB_SERVER new-session|p" "$SRC/ghostty/config")
+  [[ -n $want ]] || { echo "$indent  ghostty/config has no tmux command to open Switchboard's server with" >&2; return 1; }
+  want=$(printf '# Written by setup.sh: Switchboard on a tmux server of its own (the tmux_server setting).\n%s' "$want")
+  [[ $(cat "$file" 2>/dev/null) == "$want" ]] && return 0
+  $CHECK || printf '%s\n' "$want" >"$file" || return 1
+  change "make Ghostty open Switchboard's tmux server, $SB_SERVER ($file)"
+}
+part_tmux_server() {
+  dir ~/.config/tmux
+  tmux_conf_link || return 1
+  ghostty_server
+}
+
 # tmux-resurrect's saves, which tmux-continuum makes from a job in
 # status-right: a reload while another tmux server ran (a test's, a try's) used
-# to leave the job out, and the saves stopped. Only inside your tmux, with
-# continuum installed; tmux/continuum-save.sh puts the job back.
+# to leave the job out, and the saves stopped. Only inside your tmux, or with
+# Switchboard on a tmux server of its own, while that runs, from anywhere
+# (sb_tmux_env), with continuum installed; tmux/continuum-save.sh puts the job
+# back.
 part_autosave() {
-  [[ -n ${TMUX:-} && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]] || return 0
+  local at
+  at=$(sb_tmux_env)
+  [[ -n $at && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]] || return 0
   local script="$REPO_DIR/tmux/continuum-save.sh" status saved
-  "$script" --check
+  TMUX=$at "$script" --check
   status=$?
   if (( status == 2 )); then
     echo "  tmux-continuum hasn't saved since tmux started beside another tmux server, which kept it from restoring your tabs too: restore them with M-b C-r if you want them, then run ~/.config/tmux/continuum-save.sh --start" >&2
     return 1
   fi
   if (( status == 1 )); then
-    $CHECK || "$script" || return 1
+    $CHECK || TMUX=$at "$script" || return 1
     change "put tmux-continuum's autosave back in status-right"
     return 0
   fi
-  saved=$(tmux display -p '#{@continuum-save-last-timestamp}')
+  saved=$(TMUX=$at tmux display -p '#{@continuum-save-last-timestamp}')
   if (( $(date +%s) - ${saved:-0} > 300 )); then
     echo "  tmux-continuum's last save is $(( ($(date +%s) - ${saved:-0}) / 60 ))m old though its autosave is in place: tmux draws it from status-right, so the status line has to be on" >&2
     return 1
@@ -764,6 +813,7 @@ part_autosave() {
 part_ghostty() {
   dir ~/.config/ghostty
   put_link "$SRC/ghostty/config" ~/.config/ghostty/config
+  ghostty_server
 }
 
 # Option acting as Alt, which every M- key needs, in the terminals you use:
@@ -927,6 +977,7 @@ about_part() {
     skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path into ~/.local/bin" ;;
     karabiner) echo "link Karabiner's config" ;;
     tmux) echo "link tmux's config and scripts, the plugins and lib's packages" ;;
+    tmux_server) echo "load Switchboard only on the tmux server the tmux_server setting names, and open Ghostty there" ;;
     autosave) echo "put tmux-continuum's autosave back when it is missing" ;;
     config) echo "move your own files into ~/.config/switchboard" ;;
     ghostty) echo "link Ghostty's config" ;;
@@ -1142,10 +1193,46 @@ else
   todo "./setup.sh ${WORKSPACE[*]}"
 fi
 
+# Switchboard on a tmux server of its own (part_tmux_server), so any other tmux
+# you start stays plain tmux: asked once the configs are linked, a no kept in
+# the state folder so it isn't asked again; Settings' tmux server changes it
+# later. Before the saves, which are looked at on the server it names.
+# Never in a try (bin/switchboard-try), whose socket is its own already.
+server_asked=~/.local/state/switchboard/tmux-server-asked
+sb_server
+if [[ -n ${SWITCHBOARD_TRY_OF:-} ]]; then
+  :
+elif [[ $SB_SERVER != default ]]; then
+  if (( $(pending tmux_server) == 0 )); then
+    ok "Switchboard runs on a tmux server of its own: tmux -L $SB_SERVER new-session -A -s main"
+  elif $CHECK; then
+    todo "Switchboard's own tmux server to set up: ./setup.sh tmux_server"
+  else
+    apply tmux_server && ok "set Switchboard up on a tmux server of its own" || todo "./setup.sh tmux_server failed"
+  fi
+elif [[ -e $server_asked || ! -L ~/.config/tmux/tmux.conf ]]; then
+  optional "Switchboard on a tmux server of its own, so any other tmux you start stays plain tmux: Settings' tmux server (M-p, Settings)"
+elif ask "Run Switchboard on a tmux server of its own (tmux -L switchboard), so any other tmux you start stays plain tmux?"; then
+  if "$REPO_DIR/tmux/settings.sh" write tmux_server switchboard && apply tmux_server; then
+    ok "Switchboard runs on a tmux server of its own from when it next starts: tmux -L switchboard new-session -A -s main, or Ghostty with Switchboard's config, opens it there"
+    # Switchboard's config loaded in tmux's default server: it stays there
+    # until that server closes, and its tabs come back on the new one.
+    if [[ -n $(command tmux -L default show -gqv @setting_tmux_server 2>/dev/null) ]]; then
+      todo "move Switchboard to its own tmux server: save its tabs (M-b C-s), close tmux's default server (tmux kill-server), then open Switchboard again, and its tabs come back there"
+    fi
+  else
+    todo "Switchboard on a tmux server of its own: ./setup.sh tmux_server failed"
+  fi
+else
+  $CHECK || { mkdir -p "${server_asked%/*}" && : >"$server_asked"; }
+  optional "Switchboard on a tmux server of its own, so any other tmux you start stays plain tmux: Settings' tmux server (M-p, Settings)"
+fi
+
 # tmux-resurrect's saves, kept by tmux-continuum (part_autosave), only inside
-# tmux and once the plugins are there.
+# tmux, or Switchboard's own tmux server while it runs, and once the plugins
+# are there.
 # What it can't fix is said on stderr, which pending drops.
-if [[ -n ${TMUX:-} && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]]; then
+if [[ -n $(sb_tmux_env) && -z ${SWITCHBOARD_TRY_OF:-} && -x ~/.config/tmux/plugins/tmux-continuum/scripts/continuum_save.sh ]]; then
   why=$( (CHECK=true; part_autosave >/dev/null) 2>&1 )
   if [[ -n $why ]]; then
     todo "${why#  }"
@@ -1392,7 +1479,14 @@ if ! $CHECK && [[ -n $pid ]] && [[ $(ps -p "$pid" -o command= 2>/dev/null) =~ ^[
   [[ -n $(find "$REPO_DIR/lib" "$REPO_DIR/bin/tmux-sidebar" -newer "$pidfile" -print -quit 2>/dev/null) ]]; then
   kill "$pid"
   for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
-  ~/.config/tmux/sidebar.sh start && ok "restarted the sidebar daemon, for its new code"
+  # Started on Switchboard's server, which it binds to through TMUX: with one
+  # of its own, from wherever this runs, and only while that runs (tmux.conf
+  # starts it with the server).
+  sb_server
+  at=$(sb_tmux_env)
+  if [[ $SB_SERVER == default || -n $at ]]; then
+    TMUX=$at ~/.config/tmux/sidebar.sh start && ok "restarted the sidebar daemon, for its new code"
+  fi
 fi
 
 echo ""
@@ -1402,7 +1496,17 @@ if (( problems )); then
   echo "Run ./setup.sh again once they're done."
   exit 1
 fi
-if [[ -n ${TMUX:-} ]]; then
+# tmux takes in what was linked: on Switchboard's own server, from wherever
+# this runs, while that runs.
+sb_server
+if [[ $SB_SERVER != default ]]; then
+  if sb_tmux list-sessions >/dev/null 2>&1; then
+    $CHECK || sb_tmux source-file ~/.config/tmux/tmux.conf
+    echo "Ready."
+  else
+    echo "Ready. Start Switchboard with: tmux -L $SB_SERVER new-session -A -s main"
+  fi
+elif [[ -n ${TMUX:-} ]]; then
   $CHECK || tmux source-file ~/.config/tmux/tmux.conf
   echo "Ready."
 else
