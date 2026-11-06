@@ -86,6 +86,8 @@ pub enum Event {
     Ui(crate::ui::UiEvent),
     /// What the usage views' work off the task found (src/usage).
     Usage(crate::usage::UsageEvent),
+    /// The calendar, Slack and the notes written for you answered (src/day).
+    Day(crate::day::DayEvent),
     Tick,
     Quit,
 }
@@ -244,6 +246,8 @@ pub struct Server {
     /// How the workspace is used: habits, resources, sessions, closed tabs,
     /// plugins (src/usage).
     pub usage: crate::usage::Usage,
+    /// Your day: the calendar, Slack, the notes written for you (src/day).
+    pub day: crate::day::Day,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -479,6 +483,7 @@ impl Server {
             persist: Default::default(),
             ui: Default::default(),
             usage: Default::default(),
+            day: Default::default(),
         }
     }
 
@@ -526,11 +531,13 @@ impl Server {
             Event::Sources(answer) => self.source_answer(answer),
             Event::Ui(event) => self.ui_event(event),
             Event::Usage(event) => self.usage_event(event),
+            Event::Day(event) => self.day_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
                 self.refresh_names();
                 self.sources_tick();
+                self.day_tick();
                 super::persist::tick(self);
                 self.usage_tick();
             }

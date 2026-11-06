@@ -124,6 +124,15 @@ impl Server {
     /// A lookup answered.
     pub fn source_answer(&mut self, answer: Answer) {
         let tabs = self.source_tabs();
+        // The views today's todo note is written from (src/day), told what
+        // they read once each answers.
+        let for_todo = match &answer {
+            Answer::Board { .. } => Some(PRS),
+            Answer::Checks(_) => Some(CI),
+            Answer::Tickets(_) => Some(TICKETS),
+            Answer::Inbox(_) => Some(INBOX),
+            _ => None,
+        };
         match answer {
             Answer::Merges(result) => {
                 self.sources.schedule.done("merges");
@@ -200,8 +209,32 @@ impl Server {
                 self.sources.landing = places;
             }
         }
+        if let Some(name) = for_todo {
+            self.hand_to_todo(name);
+        }
         self.update_facts(&tabs);
         self.redraw_everywhere();
+    }
+
+    /// Gives today's todo note what a view last read: each item as a line,
+    /// and whether the look failed, as the daemon handed todo.js its views.
+    fn hand_to_todo(&mut self, name: &str) {
+        let Some(view) = self.sources.views.get(name) else {
+            return;
+        };
+        let lines = view
+            .items
+            .iter()
+            .map(|i| {
+                if i.detail.is_empty() {
+                    i.title.clone()
+                } else {
+                    format!("{} — {}", i.title, i.detail)
+                }
+            })
+            .collect();
+        let failed = view.error.is_some() || view.setup.is_some();
+        self.day.answered(name, lines, failed);
     }
 
     /// Asks for a view's lookup now, or every lookup with `None`, unless it

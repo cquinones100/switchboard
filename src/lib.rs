@@ -21,6 +21,7 @@
 //! - `tabs`: what each tab is called and the color it wears.
 //! - `sources`: what the sidebar and mission control know from GitHub and
 //!   Linear, looked up in the background.
+//! - `day`: your day: the calendar, Slack, the notes written for you.
 //! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
 //!   pickers and the palette.
 //! - `usage`: how the workspace is used, on this computer alone: habits and
@@ -30,6 +31,7 @@
 pub mod agent;
 pub mod cmd;
 pub mod connector;
+pub mod day;
 pub mod facts;
 pub mod integrations;
 pub mod items;
