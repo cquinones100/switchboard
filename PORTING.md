@@ -118,8 +118,12 @@ Each step is a commit (or a few) on the branch, with its tests.
    mouse, clipboard, detach/attach (tests/mux.rs runs a server in a temporary
    HOME and reads its screen through a test client), and the layout saved and
    restored (`persist`, tests/persist.rs restarts a server in the same home).
-3. **Agent state and tabs**: `switchboard hook`, tab names and accent colors,
-   the status line, notifications, one Claude per tab, reminders, pinned tabs.
+3. **Agent state and tabs** — agent state done (src/agent: `switchboard hook`,
+   the states and their markers and counts in the status line, notifications,
+   one Claude per tab, pinned tabs, M-a/M-c/M-f); left: tab names and accent
+   colors (tab-label.sh, accent-color.sh, window-names.sh, path-facts.sh, the
+   PR prefix and ticket titles), reminders (remind.sh), and the messages and
+   tips agent-state.sh showed, which wait for step 4's message box.
 4. **Sidebar and mission control**: `lib/sidebar/` on the server's model, its
    views, menus and keys; messages, tips, confirm, the palette, Settings.
 5. **Integrations**: GitHub, Linear, calendar, Slack look, meetings, standup and
