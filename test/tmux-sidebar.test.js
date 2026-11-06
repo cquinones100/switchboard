@@ -3515,9 +3515,17 @@ test("a tab with a reminder waits under Reminders with the time left, then needs
     assert.deepEqual(sidebar.missionGrid([tab], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Reminders"]);
     assert.match(sidebar.stateWords(tab), /^remind in 1h 3\dm · check the deploy/);
     assert.match(sidebar.sidebarLines({ tabs: [tab], sections: [], cols: 50, rows: 10, view: { focused: false, cursor: window, frame: 0, here: window } }).lines.join(""), /⏰/);
-    // Put off, a tab waiting on you or finished waits too: you said when.
-    assert.deepEqual(sidebar.grouped([{ ...tab, state: "waiting", claude: { sessionId: "s" } }, { ...tab, id: "@98", state: "done", claude: { sessionId: "s" } }]).map((g) => g.title), ["Reminders"]);
-    assert.deepEqual(sidebar.needsYou([{ ...tab, state: "waiting" }]), []);
+    // Waiting on you or finished, its state wins: Needs you, with the
+    // state's badge and the reminder's words; idle again, back to Reminders.
+    const asking = { ...tab, state: "waiting", claude: { sessionId: "s" } };
+    assert.deepEqual(sidebar.grouped([asking, { ...tab, id: "@98", state: "done", claude: { sessionId: "s" } }]).map((g) => [g.title, g.tabs.length]), [["Needs you", 2]]);
+    assert.deepEqual(sidebar.missionGrid([asking], 100, 20).shelves[0].blocks.map((b) => b.stage.title), ["Needs you"]);
+    assert.deepEqual(sidebar.needsYou([asking]).map((t) => t.id), [window]);
+    assert.equal(sidebar.badgeState(asking), "waiting");
+    assert.match(sidebar.stateWords(asking), /^remind in 1h 3\dm · check the deploy · waiting on you/);
+    const answered = { ...asking, state: "idle" };
+    assert.deepEqual(sidebar.grouped([answered]).map((g) => g.title), ["Reminders"]);
+    assert.equal(sidebar.badgeState(answered), "later");
 
     // Come due, it needs you, first in Needs you with the pinned ones.
     tmux("setw", "-t", window, "@remind_at", String(Math.floor(Date.now() / 1000) - 5));
