@@ -199,12 +199,14 @@ pub struct Server {
     pub panes: HashMap<PaneId, PaneSlot>,
     pub clients: BTreeMap<ClientId, Client>,
     pub bindings: Bindings,
-    next_tab: u32,
-    next_pane: u32,
+    pub(super) next_tab: u32,
+    pub(super) next_pane: u32,
     pub quit: bool,
     /// When a key was last pressed in any client, for telling whether you're
     /// here where the desktop can't say.
     pub last_input: Instant,
+    /// Saving the layout and restoring it (`persist`).
+    pub(super) persist: super::persist::Persist,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -256,6 +258,7 @@ async fn run() -> Result<()> {
     for p in problems {
         eprintln!("keys.json: {p}");
     }
+    super::persist::restore(&mut server);
     loop {
         // A program holding a frame back (synchronized output) that never
         // says it is done gets it shown at its deadline.
@@ -428,6 +431,7 @@ impl Server {
             next_pane: 1,
             quit: false,
             last_input: Instant::now(),
+            persist: Default::default(),
         }
     }
 
@@ -469,7 +473,10 @@ impl Server {
                     self.flush_later(id, input::PASTE_TIMEOUT);
                 }
             }
-            Event::Tick => self.refresh_names(),
+            Event::Tick => {
+                self.refresh_names();
+                super::persist::tick(self);
+            }
             Event::Quit => self.quit = true,
         }
     }
@@ -532,6 +539,7 @@ impl Server {
     }
 
     pub fn shutdown(&mut self) {
+        super::persist::shutdown(self);
         for client in self.clients.values() {
             let _ = client.tx.send(ServerMsg::Exit {
                 message: Some("[the server ended]".into()),
@@ -573,6 +581,19 @@ impl Server {
         rows: u16,
     ) -> Result<PaneId> {
         let id = self.alloc_pane();
+        self.spawn_pane_as(id, tab, cwd, command, cols, rows)
+    }
+
+    /// Starts a pane under an id given to it, as a restore does.
+    pub(super) fn spawn_pane_as(
+        &mut self,
+        id: PaneId,
+        tab: TabId,
+        cwd: Option<PathBuf>,
+        command: Option<Vec<String>>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<PaneId> {
         let env = vec![
             (
                 "SWITCHBOARD".to_string(),
@@ -868,7 +889,7 @@ impl Server {
         }
     }
 
-    fn refresh_name(&mut self, tab_id: TabId) {
+    pub(super) fn refresh_name(&mut self, tab_id: TabId) {
         let Some(tab) = self.tabs.get(&tab_id) else {
             return;
         };
@@ -1641,7 +1662,7 @@ impl Server {
     }
 }
 
-fn new_tab(id: TabId, pane: PaneId) -> Tab {
+pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
     Tab {
         id,
         name: String::new(),

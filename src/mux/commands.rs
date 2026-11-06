@@ -22,6 +22,7 @@
 //! show [-t target] @option
 //! display [-t pane] pane|tab|session|cwd|command|title
 //! list-keys | detach [-s session] | kill-server
+//! save                                   the layout now; prints its file
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -51,6 +52,7 @@ pub const NAMES: &[&str] = &[
     "list-keys",
     "detach",
     "kill-server",
+    "save",
 ];
 
 /// The commands that read their stdin (a Claude Code hook's JSON); no other
@@ -201,6 +203,9 @@ impl Server {
                 self.quit = true;
                 Ok(Reply::ok(""))
             }
+            "save" => super::persist::save_now(self)
+                .map(|file| Reply::ok(format!("{}\n", file.display())))
+                .map_err(|e| e.to_string()),
             other => Err(format!("no command named {other}")),
         };
         result.unwrap_or_else(Reply::fail)

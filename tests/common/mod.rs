@@ -62,36 +62,76 @@ impl TestServer {
         let home = dir.path().join("home");
         let state = dir.path().join("s");
         std::fs::create_dir_all(&home).unwrap();
-        let log = std::fs::File::create(dir.path().join("server.log")).unwrap();
+        let mut server = TestServer {
+            dir,
+            home,
+            state,
+            child: None,
+        };
+        server.launch();
+        server
+    }
+
+    /// Ends the server and starts another in the same home and state, as
+    /// after a restart of the machine.
+    pub fn restart(&mut self) {
+        self.stop();
+        self.launch();
+    }
+
+    /// Starts the server, its output appended to `server.log`, and waits
+    /// for it to listen.
+    fn launch(&mut self) {
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.path().join("server.log"))
+            .unwrap();
         let mut cmd = Command::new(BIN);
         cmd.arg("server")
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
             .stderr(log);
-        Self::env(&mut cmd, &home, &state);
-        let child = cmd.spawn().expect("the server starts");
-        let server = TestServer {
-            dir,
-            home,
-            state,
-            child: Some(child),
-        };
+        Self::env(&mut cmd, &self.home, &self.state);
+        self.child = Some(cmd.spawn().expect("the server starts"));
         let deadline = Instant::now() + Duration::from_secs(10);
-        while UnixStream::connect(server.socket()).is_err() {
+        while UnixStream::connect(self.socket()).is_err() {
             assert!(
                 Instant::now() < deadline,
                 "the server didn't listen: {}",
-                server.log()
+                self.log()
             );
             std::thread::sleep(Duration::from_millis(20));
         }
-        server
+    }
+
+    /// Asks the server to end, then makes sure it has.
+    fn stop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = UnixStream::connect(self.socket()).map(|mut s| {
+                s.write_all(&proto::encode_client(&ClientMsg::Command {
+                    args: vec!["kill-server".into()],
+                    cwd: PathBuf::from("/"),
+                    pane: None,
+                    stdin: None,
+                }))
+            });
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline && child.try_wait().ok().flatten().is_none() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     /// The environment every process of the test runs with: its own home and
-    /// state, a plain shell with a prompt that is easy to find.
+    /// state, a plain shell with a prompt that is easy to find, and the
+    /// home's `bin` first on the PATH, for a test's stand-ins for programs.
     fn env(cmd: &mut Command, home: &Path, state: &Path) {
+        let path = std::env::var("PATH").unwrap_or_default();
         cmd.env("HOME", home)
+            .env("PATH", format!("{}:{path}", home.join("bin").display()))
             .env("SWITCHBOARD_STATE_DIR", state)
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
@@ -166,22 +206,7 @@ impl TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = UnixStream::connect(self.socket()).map(|mut s| {
-                s.write_all(&proto::encode_client(&ClientMsg::Command {
-                    args: vec!["kill-server".into()],
-                    cwd: PathBuf::from("/"),
-                    pane: None,
-                    stdin: None,
-                }))
-            });
-            let deadline = Instant::now() + Duration::from_secs(3);
-            while Instant::now() < deadline && child.try_wait().ok().flatten().is_none() {
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+        self.stop();
     }
 }
 

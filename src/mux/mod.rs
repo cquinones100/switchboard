@@ -15,6 +15,7 @@
 //! - `compose`: drawing a client's screen, sending only what changed.
 //! - `server`: the server task, owning all of it.
 //! - `commands`: what shells, hooks and skills ask of the server.
+//! - `persist`: the layout saved as it changes and restored on start.
 
 pub mod client;
 pub mod commands;
@@ -23,6 +24,7 @@ pub mod input;
 pub mod keys;
 pub mod layout;
 pub mod pane;
+pub mod persist;
 pub mod procinfo;
 pub mod proto;
 pub mod server;
