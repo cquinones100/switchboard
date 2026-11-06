@@ -759,12 +759,16 @@ tmux_conf_link() {
 }
 # ghostty/config's command, with -L <server> after tmux, in
 # ~/.config/ghostty/tmux-server.conf, which ghostty/config reads after it;
-# none on tmux's default server. Only where Ghostty keeps a config.
+# none on tmux's default server. Only where Ghostty keeps a config. A file
+# there that this didn't write (its first line says so) is yours: moved aside
+# to <name>.bak.<time> before one is written, and left alone otherwise.
+GHOSTTY_SERVER_MARK="# Written by setup.sh: Switchboard on a tmux server of its own (the tmux_server setting)."
 ghostty_server() {
-  local file=~/.config/ghostty/tmux-server.conf want
+  local file=~/.config/ghostty/tmux-server.conf want backup ours=false
+  [[ $(head -1 "$file" 2>/dev/null) == "$GHOSTTY_SERVER_MARK" && ! -L $file ]] && ours=true
   sb_server
   if [[ $SB_SERVER == default ]]; then
-    [[ -e $file ]] || return 0
+    $ours || return 0
     $CHECK || rm -f "$file" || return 1
     change "remove $file, so Ghostty opens tmux's default server"
     return 0
@@ -772,8 +776,13 @@ ghostty_server() {
   [[ -d ~/.config/ghostty ]] || return 0
   want=$(sed -n "s|^\(command = .*/tmux\) new-session|\1 -L $SB_SERVER new-session|p" "$SRC/ghostty/config")
   [[ -n $want ]] || { echo "$indent  ghostty/config has no tmux command to open Switchboard's server with" >&2; return 1; }
-  want=$(printf '# Written by setup.sh: Switchboard on a tmux server of its own (the tmux_server setting).\n%s' "$want")
-  [[ $(cat "$file" 2>/dev/null) == "$want" ]] && return 0
+  want=$(printf '%s\n%s' "$GHOSTTY_SERVER_MARK" "$want")
+  $ours && [[ $(cat "$file") == "$want" ]] && return 0
+  if [[ -e $file || -L $file ]] && ! $ours; then
+    backup="$file.bak.$(date +%Y%m%d%H%M%S)"
+    $CHECK || mv "$file" "$backup" || return 1
+    change "move $file aside to $backup"
+  fi
   $CHECK || printf '%s\n' "$want" >"$file" || return 1
   change "make Ghostty open Switchboard's tmux server, $SB_SERVER ($file)"
 }

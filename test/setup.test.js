@@ -140,6 +140,19 @@ test("setup.sh tmux_server loads tmux.conf only on Switchboard's own tmux server
     assert.equal(fs.readlinkSync(conf), path.join(home, "switchboard/tmux/tmux.conf"), "back on tmux's default server");
     assert.equal(fs.existsSync(ghostty), false);
     assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n");
+
+    // A file of yours by that name is never written over or removed: moved
+    // aside before Switchboard's is written, and left alone otherwise.
+    fs.writeFileSync(ghostty, "font-size = 14\n");
+    assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n");
+    assert.equal(fs.readFileSync(ghostty, "utf8"), "font-size = 14\n");
+    fs.writeFileSync(settings, JSON.stringify({ tmux_server: "switchboard" }));
+    assert.match(run("tmux_server").stdout, /move .*tmux-server\.conf aside to .*\.bak\.\d+/);
+    const kept = fs.readdirSync(path.dirname(ghostty)).filter((f) => f.startsWith("tmux-server.conf.bak."));
+    assert.equal(kept.length, 1);
+    assert.equal(fs.readFileSync(path.join(path.dirname(ghostty), kept[0]), "utf8"), "font-size = 14\n");
+    assert.match(fs.readFileSync(ghostty, "utf8"), /-L switchboard/);
+    assert.equal(run("tmux_server").stdout, "tmux_server: up to date\n");
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
