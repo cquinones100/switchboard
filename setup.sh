@@ -991,8 +991,11 @@ ask() {
   [[ -z $answer || $answer == [yY]* ]]
 }
 # What an interactive zsh sees, since tmux starts new tabs from `zsh -i` and
-# nvm is set up only there.
-in_zsh() { zsh -i -c "$1" 2>/dev/null; }
+# nvm is set up only there. +m, as for node above: with job control, zsh -i
+# makes itself the terminal's foreground, and when it ends by running its
+# command in its own place (`node --version`), nothing gives the terminal
+# back, so the next question's read stops setup.sh ("suspended (tty input)").
+in_zsh() { zsh -i +m -c "$1" 2>/dev/null; }
 # How many changes the parts named would make, changing nothing.
 pending() (
   CHECK=true
