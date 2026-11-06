@@ -39,6 +39,10 @@ pub const HISTORY: usize = 10_000;
 const TICK: Duration = Duration::from_secs(2);
 /// Two clicks this close together are a double click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
+/// How often whether you're at the computer is read again.
+const PRESENCE_EVERY: Duration = Duration::from_secs(60);
+/// Idle this long counts as away (the sidebar daemon's AWAY_MS).
+pub const AWAY_MS: f64 = 10.0 * 60_000.0;
 /// Lines the wheel scrolls at a time.
 const WHEEL_LINES: i32 = 3;
 
@@ -72,6 +76,8 @@ pub enum Event {
     /// A tab focused `agent::SEEN_DELAY` ago, to clear what it showed as
     /// finished if it is still in front (src/agent).
     AgentSeen(TabId),
+    /// Whether you're at the computer, as last read (see `away`).
+    Presence(crate::presence::Presence),
     /// A PR or ticket lookup for the tab names answered (src/tabs).
     TabLookup(crate::tabs::Answer),
     /// The overlays' timers (src/ui).
@@ -216,6 +222,10 @@ pub struct Server {
     /// The settings file's modification time when last read, so a change
     /// made in the Settings view or by hand takes effect on the next tick.
     settings_seen: Option<std::time::SystemTime>,
+    /// Whether you're at the computer, read at most every `PRESENCE_EVERY`
+    /// off the server's task (src/presence.rs).
+    presence: Option<crate::presence::Presence>,
+    presence_asked: Option<Instant>,
     /// Saving the layout and restoring it (`persist`).
     pub(super) persist: super::persist::Persist,
     /// What the overlays keep across clients: the tips shown (src/ui).
@@ -448,6 +458,8 @@ impl Server {
             quit: false,
             last_input: Instant::now(),
             settings_seen: None,
+            presence: None,
+            presence_asked: None,
             persist: Default::default(),
             ui: Default::default(),
         }
@@ -492,10 +504,12 @@ impl Server {
                 }
             }
             Event::AgentSeen(tab) => self.agent_seen(tab),
+            Event::Presence(p) => self.presence = Some(p),
             Event::TabLookup(answer) => self.tab_lookup(answer),
             Event::Ui(event) => self.ui_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
+                self.ask_presence();
                 self.refresh_names();
                 super::persist::tick(self);
             }
@@ -546,6 +560,43 @@ impl Server {
                 c.dirty = true;
             }
         }
+    }
+
+    /// Reads whether you're at the computer again, once `PRESENCE_EVERY` has
+    /// passed, off the server's task, as the sidebar daemon checked once a
+    /// minute.
+    fn ask_presence(&mut self) {
+        if self
+            .presence_asked
+            .is_some_and(|at| at.elapsed() < PRESENCE_EVERY)
+        {
+            return;
+        }
+        self.presence_asked = Some(Instant::now());
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let p = crate::presence::read_presence_async().await;
+            let _ = tx.send(Event::Presence(p));
+        });
+    }
+
+    /// Whether you're away, for pausing the lookups that only matter while
+    /// you're here (GitHub, Linear, the calendar feed; `pause_when_away`
+    /// setting): no client attached, the screen locked, or idle `AWAY_MS` by
+    /// the desktop's reckoning, or, where the desktop can't say, by the last
+    /// key pressed in a client.
+    pub fn away(&self) -> bool {
+        if !crate::settings::is_on("pause_when_away") {
+            return false;
+        }
+        if self.clients.is_empty() {
+            return true;
+        }
+        let mut p = self.presence.unwrap_or_default();
+        if p.idle_ms.is_none() {
+            p.idle_ms = Some(self.last_input.elapsed().as_millis() as f64);
+        }
+        crate::presence::away_by(&p, AWAY_MS)
     }
 
     /// The soonest a pane's held frame must be shown.
