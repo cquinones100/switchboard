@@ -70,6 +70,21 @@ pub enum Action {
     FocusSidebar,
     /// Turn the sidebar on or off (the sidebar setting).
     ToggleSidebar,
+    /// A new tab running Claude, in a directory picked from the ones you
+    /// work in (M-t, M-n; src/cmd/work.rs).
+    NewClaudeTab,
+    /// Work on Linear tickets, each in a new tab running `wt` (M-W).
+    WorkOnTickets,
+    /// Work on a branch, new or existing, in a new tab running `wtb` (M-B).
+    WorkOnBranch,
+    /// Work on a pull request in a new tab running `wtpr`.
+    WorkOnPr,
+    /// Work on a note's checklist items, each in a new tab running `wtn`.
+    WorkOnNote,
+    /// Carry on shaping Linear tickets, each in a new tab running `shape`.
+    ContinueShaping,
+    /// Reopen a worktree no tab has open and resume its Claude (M-o).
+    ReviveWorktree,
 }
 
 impl Action {
@@ -78,7 +93,9 @@ impl Action {
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
     /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`,
-    /// `focus-sidebar`, `toggle-sidebar`.
+    /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
+    /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
+    /// `continue-shaping`, `revive-worktree`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -105,6 +122,13 @@ impl Action {
             "reset-tips" => Action::ResetTips,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
+            "new-claude-tab" => Action::NewClaudeTab,
+            "work-on-tickets" => Action::WorkOnTickets,
+            "work-on-branch" => Action::WorkOnBranch,
+            "work-on-pr" => Action::WorkOnPr,
+            "work-on-note" => Action::WorkOnNote,
+            "continue-shaping" => Action::ContinueShaping,
+            "revive-worktree" => Action::ReviveWorktree,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -151,6 +175,13 @@ impl Action {
             Action::ResetTips => "reset-tips".into(),
             Action::FocusSidebar => "focus-sidebar".into(),
             Action::ToggleSidebar => "toggle-sidebar".into(),
+            Action::NewClaudeTab => "new-claude-tab".into(),
+            Action::WorkOnTickets => "work-on-tickets".into(),
+            Action::WorkOnBranch => "work-on-branch".into(),
+            Action::WorkOnPr => "work-on-pr".into(),
+            Action::WorkOnNote => "work-on-note".into(),
+            Action::ContinueShaping => "continue-shaping".into(),
+            Action::ReviveWorktree => "revive-worktree".into(),
         }
     }
 
@@ -194,6 +225,15 @@ impl Action {
             Action::ResetTips => "Show the tips again, each once more".into(),
             Action::FocusSidebar => "Jump into the sidebar, or back out of it".into(),
             Action::ToggleSidebar => "Turn the sidebar on or off".into(),
+            Action::NewClaudeTab => "New tab, running Claude, in a directory you pick".into(),
+            Action::WorkOnTickets => "Start work on tickets in new tabs (wt)".into(),
+            Action::WorkOnBranch => {
+                "Start work on a branch, new or existing, in a new tab (wtb)".into()
+            }
+            Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
+            Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
+            Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
+            Action::ReviveWorktree => "Reopen a worktree with no tab and resume its Claude".into(),
         }
     }
 
@@ -220,6 +260,13 @@ impl Action {
             Action::ResetTips => &["help", "tips"],
             Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
             Action::ToggleSidebar => &["sidebar"],
+            Action::NewClaudeTab => &["tabs", "claude", "new"],
+            Action::WorkOnTickets => &["linear", "ticket", "worktree", "new"],
+            Action::WorkOnBranch => &["git", "branch", "worktree", "new"],
+            Action::WorkOnPr => &["github", "pr", "worktree", "new"],
+            Action::WorkOnNote => &["notes", "worktree", "new"],
+            Action::ContinueShaping => &["linear", "ticket", "shape"],
+            Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
         }
     }
 
@@ -255,7 +302,13 @@ impl Action {
     /// The commands no key is bound to by default, which the palette lists
     /// with none (tmux.conf's `palette` key table).
     pub fn palette_only() -> Vec<Action> {
-        vec![Action::ResetTips, Action::ToggleSidebar]
+        vec![
+            Action::ResetTips,
+            Action::ToggleSidebar,
+            Action::WorkOnPr,
+            Action::WorkOnNote,
+            Action::ContinueShaping,
+        ]
     }
 }
 
@@ -301,8 +354,11 @@ impl Default for Bindings {
         bind("M-S-Right", Resize(Right, 5));
         bind("M-S-Up", Resize(Up, 5));
         bind("M-S-Down", Resize(Down, 5));
-        bind("M-t", NewTab);
-        bind("M-n", NewTab);
+        bind("M-t", NewClaudeTab);
+        bind("M-n", NewClaudeTab);
+        bind("M-W", WorkOnTickets);
+        bind("M-B", WorkOnBranch);
+        bind("M-o", ReviveWorktree);
         bind("M-a", NextNeedsYou);
         bind("M-c", FocusClaude);
         bind("M-f", TogglePin);

@@ -90,6 +90,9 @@ pub enum Event {
     Day(crate::day::DayEvent),
     /// The sidebar's timers (src/sidebar).
     Sidebar(crate::sidebar::SidebarEvent),
+    /// The rest of a key that starts work, back from off the task
+    /// (src/cmd/work.rs).
+    Work(crate::cmd::work::WorkEvent),
     Tick,
     Quit,
 }
@@ -566,6 +569,7 @@ impl Server {
             Event::Usage(event) => self.usage_event(event),
             Event::Day(event) => self.day_event(event),
             Event::Sidebar(event) => self.sidebar_event(event),
+            Event::Work(event) => self.work_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
@@ -1523,6 +1527,13 @@ impl Server {
             Action::TogglePin => self.toggle_pin(current_tab),
             Action::Palette => self.open_palette(id),
             Action::ResetTips => self.reset_tips(),
+            Action::NewClaudeTab
+            | Action::WorkOnTickets
+            | Action::WorkOnBranch
+            | Action::WorkOnPr
+            | Action::WorkOnNote
+            | Action::ContinueShaping
+            | Action::ReviveWorktree => self.work_action(id, action, pane),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }
