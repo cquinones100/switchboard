@@ -3,14 +3,25 @@
 # Usage: confirm.sh "Prompt text" [<pane_id>]
 #        confirm.sh --yes [<pane_id>]   closes it without asking, for M-w with
 #                                       the confirm_close setting off
+#        confirm.sh --run "Prompt text" <command> [<arg>...]
+#                                       runs the command on a yes, in place
+#                                       of closing a pane
 #
 # Without a pane, the one in the global @confirm_pane, which M-w sets just
 # before the popup, since display-popup does not expand #{pane_id} in its
 # command.
 
-prompt="$1"
-target=${2:-$(tmux show -gqv @confirm_pane)}
-[ -n "$target" ] || exit 0
+run=()
+if [ "${1:-}" = --run ]; then
+  prompt=$2
+  shift 2
+  run=("$@")
+  [ ${#run[@]} -gt 0 ] || exit 0
+else
+  prompt="$1"
+  target=${2:-$(tmux show -gqv @confirm_pane)}
+  [ -n "$target" ] || exit 0
+fi
 
 if [ "$prompt" = --yes ]; then
   ans=y
@@ -121,6 +132,7 @@ fi
 
 case "$ans" in
   ""|y|Y)
+    [ ${#run[@]} -gt 0 ] && exec "${run[@]}"
     # A pane standing in for another (pane-in-place.sh) puts it back first, so
     # closing it never leaves that pane parked out of sight.
     parked=$(tmux show -pqv -t "$target" @parked_pane 2>/dev/null)

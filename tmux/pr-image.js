@@ -34,6 +34,7 @@
 // holds what was at the top.
 
 const { execFile, execFileSync } = require("node:child_process");
+const crypto = require("node:crypto");
 // The request audit (lib/requests.js), from Switchboard's clone; nothing counted without it.
 const { count, countRun } = (() => {
   try {
@@ -52,6 +53,181 @@ const MARKED = "https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js";
 const PURIFY = "https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js";
 // How many device pixels to a CSS pixel: two on a Retina screen.
 const DPR = 2;
+// A guess at a 13-point font's cell, when the terminal doesn't say.
+const GUESSED_CELL = { w: 16, h: 34 };
+
+// The caches (the image_cache setting), so a PR or ticket opened again shows
+// at once: what the page loads from the web, by its URL without the query,
+// since GitHub's and Linear's links to a picture carry a token there that
+// changes on every read while the path stays the file's own; and the pages
+// drawn, by the text, the pane's size and the theme. Both on this Mac alone,
+// held to CACHE_LIMIT together, the least recently used going first.
+const cacheRoot = () => path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "switchboard");
+const assetDir = (root) => path.join(root, "assets");
+const pagesDir = (root) => path.join(root, "pr-image", "pages");
+const CACHE_LIMIT = 300 * 1024 * 1024;
+const PAGES_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+const CACHED_TYPES = ["image", "stylesheet", "script"];
+const sha = (text) => crypto.createHash("sha256").update(text).digest("hex");
+// The hosts whose query is a signature rather than part of what the file is:
+// GitHub's private pictures (jwt=) and Linear's uploads. Anywhere else the
+// query is kept, since it may name the picture (/image?id=1).
+const SIGNED_HOSTS = ["private-user-images.githubusercontent.com", "uploads.linear.app"];
+const assetKey = (url) => {
+  const u = new URL(url);
+  return sha(`${u.origin}${u.pathname}${SIGNED_HOSTS.includes(u.hostname) ? "" : u.search}`);
+};
+const touch = (file) => {
+  const now = new Date();
+  try {
+    fs.utimesSync(file, now, now);
+  } catch {}
+};
+// Written beside and renamed into place, so a reader never finds half a file.
+const writeWhole = (file, data) => {
+  const part = `${file}.${process.pid}.part`;
+  fs.writeFileSync(part, data);
+  fs.renameSync(part, file);
+};
+
+// The page's requests answered from the asset cache where it can, the rest
+// let through, counted, and kept once they come back whole.
+const assetCache = (root, countIt) => {
+  const dir = assetDir(root);
+  // Those answered from the cache, which come back as responses too.
+  const answered = new WeakSet();
+  const onRequest = (request) => {
+    const url = request.url();
+    if (!/^https?:/.test(url)) return request.continue();
+    const file = path.join(dir, assetKey(url));
+    try {
+      const { type } = JSON.parse(fs.readFileSync(`${file}.meta`, "utf8"));
+      const body = fs.readFileSync(file);
+      touch(file);
+      answered.add(request);
+      return request.respond({ status: 200, contentType: type, headers: { "Access-Control-Allow-Origin": "*" }, body });
+    } catch {}
+    countIt(new URL(url));
+    return request.continue();
+  };
+  const onResponse = async (response) => {
+    const request = response.request();
+    // Kept under the URL the page asked for, not where it was redirected to
+    // (GitHub's attachments go on to a signed link), which is what is asked next time.
+    const url = request.redirectChain()[0]?.url() ?? request.url();
+    if (answered.has(request) || !/^https?:/.test(url) || response.status() !== 200 || !CACHED_TYPES.includes(request.resourceType())) return;
+    try {
+      const body = await response.buffer();
+      const file = path.join(dir, assetKey(url));
+      fs.mkdirSync(dir, { recursive: true });
+      writeWhole(file, body);
+      writeWhole(`${file}.meta`, JSON.stringify({ type: response.headers()["content-type"] ?? "application/octet-stream" }));
+    } catch {}
+  };
+  return { onRequest, onResponse };
+};
+
+// The text as what it shows: the signed hosts' links without their
+// signature, which GitHub and Linear write anew on every read, so a PR read
+// again unchanged is the same text.
+const SIGNED_LINK = new RegExp(`(https://(?:${SIGNED_HOSTS.map((h) => h.replace(/\./g, "\\.")).join("|")})/[^"'\\s?<>\\\\]*)\\?[^"'\\s<>)\\\\]*`, "g");
+const sameText = (parts) => JSON.stringify(parts).replace(SIGNED_LINK, "$1");
+
+// The pages as drawn for this text at this size, or undefined.
+const pageKey = (parts, view) => sha(JSON.stringify({ parts: sameText(parts), cols: view.cols, rows: view.rows, width: view.width, pageHeight: view.pageHeight, dpr: DPR, theme: "dark" }));
+const cachedPages = (root, parts, view) => {
+  const dir = path.join(pagesDir(root), pageKey(parts, view));
+  try {
+    const shots = JSON.parse(fs.readFileSync(path.join(dir, "rows.json"), "utf8")).map((shot, i) => {
+      const file = path.join(dir, `page-${i + 1}.png`);
+      return { ...shot, file, png: fs.readFileSync(file) };
+    });
+    if (!shots.length) return undefined;
+    touch(dir);
+    return shots;
+  } catch {
+    return undefined;
+  }
+};
+const savePages = (root, parts, view, shots) => {
+  const dir = path.join(pagesDir(root), pageKey(parts, view));
+  if (fs.existsSync(dir)) return;
+  const part = `${dir}.${process.pid}.part`;
+  try {
+    fs.mkdirSync(part, { recursive: true });
+    shots.forEach((shot, i) => fs.writeFileSync(path.join(part, `page-${i + 1}.png`), shot.png));
+    fs.writeFileSync(path.join(part, "rows.json"), JSON.stringify(shots.map(({ rows, from }) => ({ rows, from }))));
+    fs.renameSync(part, dir);
+  } catch {
+    fs.rmSync(part, { recursive: true, force: true });
+  }
+};
+
+// Both caches held to `limit` bytes together, the least recently used (by
+// modification time, touched on each hit) removed first, and page sets older
+// than PAGES_MAX_AGE removed whatever the size. `keep` is the page set on
+// screen, never removed.
+const prune = (root, limit = CACHE_LIMIT, now = Date.now(), keep) => {
+  const entries = [];
+  const sizeOf = (file) => {
+    try {
+      return fs.statSync(file).size;
+    } catch {
+      return 0;
+    }
+  };
+  const list = (dir) => {
+    try {
+      return fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  const assets = assetDir(root);
+  for (const name of list(assets)) {
+    if (name.includes(".")) continue;
+    const file = path.join(assets, name);
+    try {
+      entries.push({ paths: [file, `${file}.meta`], size: sizeOf(file) + sizeOf(`${file}.meta`), time: fs.statSync(file).mtimeMs });
+    } catch {}
+  }
+  const pages = pagesDir(root);
+  for (const name of list(pages)) {
+    if (name.includes(".")) continue;
+    const dir = path.join(pages, name);
+    try {
+      const time = fs.statSync(dir).mtimeMs;
+      if (now - time > PAGES_MAX_AGE && name !== keep) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        continue;
+      }
+      entries.push({ paths: [dir], kept: name === keep, size: list(dir).reduce((sum, f) => sum + sizeOf(path.join(dir, f)), 0), time });
+    } catch {}
+  }
+  let total = entries.reduce((sum, e) => sum + e.size, 0);
+  for (const entry of entries.sort((a, b) => a.time - b.time)) {
+    if (total <= limit) break;
+    if (entry.kept) continue;
+    entry.paths.forEach((p) => fs.rmSync(p, { recursive: true, force: true }));
+    total -= entry.size;
+  }
+};
+
+// The image_cache setting, read once: tmux's copy inside it, else the file.
+const cacheOn = () => {
+  if (process.env.TMUX) {
+    try {
+      return execFileSync("tmux", ["show", "-gqv", "@setting_image_cache"], { encoding: "utf8" }).trim() !== "off";
+    } catch {
+      return true;
+    }
+  }
+  try {
+    return require("../lib/settings").setting("image_cache") !== false;
+  } catch {
+    return true;
+  }
+};
 
 const fail = (message) => {
   process.stdout.write(`\n  \x1b[31m${message}\x1b[0m\n\n  \x1b[38;5;244mPress any key to close.\x1b[0m`);
@@ -168,6 +344,14 @@ const show = (png, cols, rows, file, image) => {
   process.stdout.write(`${out}\x1b[39m`);
 };
 
+// The pane's pages for a cell size and the terminal's columns and rows, the
+// last row left for the footer.
+const viewFor = (cell, columns, lines) => {
+  const cols = Math.min(columns || 80, MARKS.length);
+  const rows = Math.min((lines || 24) - 1, MARKS.length);
+  return { cols, rows, width: Math.max(480, Math.floor((cols * cell.w) / DPR)), pageHeight: Math.max(100, Math.floor((rows * cell.h) / DPR)) };
+};
+
 // The terminal's cell size in device pixels: from tmux inside it, which knows
 // it from the terminal (#{client_cell_width}); outside, from the terminal
 // itself (CSI 16 t, answered as CSI 6 ; h ; w t). Undefined when neither says
@@ -282,9 +466,8 @@ const prPage = async (dir) => {
 const main = async () => {
   const ticket = process.argv[2] === "--ticket" ? process.argv[3] : undefined;
   const dir = path.resolve(ticket ? process.cwd() : process.argv[2] ?? process.cwd());
-  // Taken first, before anything else reads the keyboard. A guess at a
-  // 13-point font when the terminal doesn't say.
-  let cell = (await cellSize()) ?? { w: 16, h: 34 };
+  // Taken first, before anything else reads the keyboard.
+  let cell = (await cellSize()) ?? GUESSED_CELL;
   if (ticket && !/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(ticket)) return fail("That isn't a Linear ticket ID.");
   // The PR or ticket as last read is drawn at once, and read again while it
   // shows: when that has changed, the page is drawn again where it was.
@@ -302,7 +485,8 @@ const main = async () => {
       return "";
     }
   };
-  const cache = path.join(process.env.XDG_CACHE_HOME || path.join(os.homedir(), ".cache"), "switchboard", "pr-image", `${(ticket ? ticket.toUpperCase() : `${gitDir()}:${branch()}`).replace(/\//g, "%")}.json`);
+  const root = cacheRoot();
+  const cache = path.join(root, "pr-image", `${(ticket ? ticket.toUpperCase() : `${gitDir()}:${branch()}`).replace(/\//g, "%")}.json`);
   const fresh = ticket ? ticketPage(ticket.toUpperCase()) : prPage(dir);
   const remember = (parts) => {
     fs.mkdirSync(path.dirname(cache), { recursive: true });
@@ -317,10 +501,9 @@ const main = async () => {
     if (parts.error) return fail(parts.error);
     remember(parts);
   }
-  const lib = puppeteer();
-  if (!lib) return fail("This needs mermaid-cli's puppeteer: pnpm add -g @mermaid-js/mermaid-cli");
+  const caching = cacheOn();
+  if (caching) prune(root);
 
-  process.stdout.write("\r  \x1b[38;5;244mDrawing it…\x1b[0m   ");
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "pr-image-"));
   process.on("exit", () => fs.rmSync(work, { recursive: true, force: true }));
   const file = path.join(work, "pr.html");
@@ -330,21 +513,41 @@ const main = async () => {
   // reading and drawing it all over.
   // No wider or taller than the marks go, since a cell past the last has no
   // mark to say where it is, and that part of the image would never show.
-  const size = () => {
-    const cols = Math.min(process.stdout.columns || 80, MARKS.length);
-    const rows = Math.min((process.stdout.rows || 24) - 1, MARKS.length);
-    return { cols, rows, width: Math.max(480, Math.floor((cols * cell.w) / DPR)), pageHeight: Math.max(100, Math.floor((rows * cell.h) / DPR)) };
-  };
+  const size = () => viewFor(cell, process.stdout.columns, process.stdout.rows);
   let view = size();
-  const browser = await lib.launch({ headless: true });
-  const page = await browser.newPage();
-  // What the page loads from the web (the stylesheet and scripts it names),
-  // counted as each request goes out.
-  page.on("request", (request) => {
-    const to = /^https?:/.test(request.url()) && new URL(request.url());
-    if (to) count(to.hostname, to.protocol === "http:" ? "HTTP" : "HTTPS", "PR as an image: page");
-  });
+  // What the page loads from the web (the stylesheet, scripts and pictures
+  // it names), counted as each request goes out.
+  const countIt = (to) => count(to.hostname, to.protocol === "http:" ? "HTTP" : "HTTPS", "PR as an image: page");
+  // Chrome, started only once something needs drawing: pages the cache
+  // already holds are shown without it.
+  let browser;
+  let page;
+  // Set when something the page loads failed (a picture's server down a
+  // moment): its pages are shown but not kept, so the next open tries again.
+  let incomplete = false;
+  const startBrowser = async () => {
+    const lib = puppeteer();
+    if (!lib) throw new Error("This needs mermaid-cli's puppeteer: pnpm add -g @mermaid-js/mermaid-cli");
+    browser = await lib.launch({ headless: true });
+    page = await browser.newPage();
+    if (caching) {
+      const assets = assetCache(root, countIt);
+      await page.setRequestInterception(true);
+      page.on("request", assets.onRequest);
+      page.on("response", assets.onResponse);
+    } else {
+      page.on("request", (request) => {
+        if (/^https?:/.test(request.url())) countIt(new URL(request.url()));
+      });
+    }
+    page.on("requestfailed", () => (incomplete = true));
+    page.on("response", (response) => {
+      if (response.status() >= 400) incomplete = true;
+    });
+    await load();
+  };
   const load = async () => {
+    incomplete = false;
     fs.writeFileSync(file, pageFor(parts, view.width));
     await page.setViewport({ width: view.width, height: 800, deviceScaleFactor: DPR });
     await page.goto(`file://${file}`, { waitUntil: "networkidle0" });
@@ -353,7 +556,6 @@ const main = async () => {
     const fitStyle = await page.addStyleTag({ content: "/* fit */" });
     await page.evaluate((el) => { el.dataset.fit = "1"; }, fitStyle);
   };
-  await load();
 
   // The pages for the pane as it is now: each ends where a block does, and a
   // diagram taller than a page is drawn smaller, to fit one, so it is never
@@ -430,13 +632,27 @@ const main = async () => {
     }
     if (composer) await composer.close();
     fs.readdirSync(work).filter((f) => f.startsWith("page-") && !f.startsWith(`page-${n}-`)).forEach((f) => fs.rmSync(path.join(work, f), { force: true }));
+    if (caching) {
+      // Held to the limit again with what this drawing added, its pages kept.
+      if (!incomplete) savePages(root, parts, view, shots);
+      prune(root, CACHE_LIMIT, Date.now(), pageKey(parts, view));
+    }
     return shots;
   };
-  let shots = await layOut();
+  let shots = caching ? cachedPages(root, parts, view) : undefined;
+  if (!shots) {
+    process.stdout.write("\r  \x1b[38;5;244mDrawing it…\x1b[0m   ");
+    try {
+      await startBrowser();
+    } catch (err) {
+      return fail(err.message.split("\n")[0]);
+    }
+    shots = await layOut();
+  }
   // For checking the drawing without a terminal: the pages as PNGs, and out.
   if (process.env.PR_IMAGE_DUMP) {
     shots.forEach((shot, i) => fs.writeFileSync(path.join(process.env.PR_IMAGE_DUMP, `page-${i + 1}.png`), shot.png));
-    await browser.close();
+    await browser?.close();
     process.exit(0);
   }
 
@@ -473,10 +689,6 @@ const main = async () => {
       return;
     }
     busy = true;
-    if (reload) {
-      reload = false;
-      await load().catch(() => {});
-    }
     const from = shots[at].from;
     // A new font size changes the cell; tmux knows it. Not cellSize(), whose
     // fallback asks the terminal on the keyboard's input and pauses it.
@@ -490,7 +702,18 @@ const main = async () => {
     process.stdout.write("\x1b[H\x1b[2J");
     footer("Laying it out for the new size…");
     try {
-      shots = await layOut();
+      const known = caching ? cachedPages(root, parts, view) : undefined;
+      if (known) shots = known;
+      else {
+        if (!page) {
+          reload = false;
+          await startBrowser();
+        } else if (reload) {
+          reload = false;
+          await load().catch(() => {});
+        }
+        shots = await layOut();
+      }
     } catch (err) {
       said = err.message.split("\n")[0];
     }
@@ -521,7 +744,7 @@ const main = async () => {
     }
     if (k === "q" || k === "\x03" || k === "\x1b") {
       process.stdout.write("\x1b[2J");
-      browser.close().finally(() => process.exit(0));
+      Promise.resolve(browser?.close()).finally(() => process.exit(0));
       return;
     }
     if (busy) return;
@@ -536,11 +759,16 @@ const main = async () => {
   process.stdin.resume();
   draw();
   const now = await fresh;
-  if (now.error || JSON.stringify(now) === JSON.stringify(parts)) return;
+  if (now.error) return;
+  // Kept even when it shows the same, for its pictures' fresh signatures; drawn
+  // again when it changed, or when a picture failed in the drawing shown.
+  const changed = sameText(now) !== sameText(parts);
   parts = now;
   remember(parts);
+  if (!changed && !incomplete) return;
   reload = true;
   relayout();
 };
 
-main().catch((err) => fail(err.message.split("\n")[0]));
+if (require.main === module) main().catch((err) => fail(err.message.split("\n")[0]));
+else module.exports = { sameText, GUESSED_CELL, viewFor, assetCache, assetKey, cachedPages, savePages, pageKey, prune, assetDir, pagesDir };
