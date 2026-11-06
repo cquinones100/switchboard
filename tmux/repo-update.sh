@@ -245,7 +245,6 @@ case "${1:-}" in
     # and its setup run on undisturbed.
     rm -f "$STATE/update-prompt"
     printf '\033[H\033[2J\n  \033[2mUpdating…\033[0m\n'
-    old=$(git_ rev-parse HEAD)
     if ! out=$(git_ merge --ff-only --quiet origin/main 2>&1); then
       printf '  It could not update:\n\n%s\n' "$(sed 's/^/  /' <<<"$out")"
       done_ 1
@@ -259,12 +258,9 @@ case "${1:-}" in
       "$REPO/setup.sh"
       printf '\n'
     fi
+    # The setup's tmux part has restarted the sidebar daemon when its code
+    # changed.
     if [ -n "${TMUX:-}" ]; then
-      # The sidebar daemon keeps running the code it started with; reloading
-      # tmux.conf starts it again once it has stopped.
-      if [ -n "$(git_ diff --name-only "$old" HEAD -- lib/sidebar bin/tmux-sidebar)" ]; then
-        kill "$(cut -d' ' -f1 ~/.local/state/tmux-sidebar/daemon.pid 2>/dev/null)" 2>/dev/null && sleep 1 && printf '  Restarted the sidebar.\n'
-      fi
       tmux source-file ~/.config/tmux/tmux.conf && printf '  Reloaded tmux.\n'
     fi
     done_

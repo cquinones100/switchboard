@@ -721,6 +721,29 @@ part_config() {
   return $aws
 }
 
+# A sidebar daemon started before its code last changed keeps running the old
+# code, so a pull that adds to it, or a landing that fast-forwards main, shows
+# nothing until it restarts. Its pid file is written as it starts, so a file
+# under ~/switchboard's lib/ or bin/tmux-sidebar newer than it means it is
+# stale. ~/switchboard's rather than this clone's, since that is the code the
+# daemon runs, so a pull in a worktree restarts nothing.
+restart_stale_daemon() {
+  local pidfile=~/.local/state/tmux-sidebar/daemon.pid pid
+  # Read with cut, since the daemon writes its pid with no newline after it,
+  # which read would take as a failure.
+  pid=$(cut -d' ' -f1 "$pidfile" 2>/dev/null)
+  # Only the sidebar daemon itself is stopped, its whole command line node
+  # running bin/tmux-sidebar daemon: a pid left by a daemon that died may name
+  # some other process by now.
+  [[ -n $pid ]] && [[ $(ps -p "$pid" -o command= 2>/dev/null) =~ ^[^\ ]*node\ [^\ ]*/tmux-sidebar\ daemon$ ]] &&
+    [[ -n $(find "$SRC/lib" "$SRC/bin/tmux-sidebar" -newer "$pidfile" -print -quit 2>/dev/null) ]] || return 0
+  change "restart the sidebar daemon, for its new code"
+  $CHECK && return 0
+  kill "$pid"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+  ~/.config/tmux/sidebar.sh start
+}
+
 # Set by the tmux part when it changed something, or when tmux.conf's text
 # differs from what setup last loaded into this tmux server (a pull that only
 # edits it changes no link), so a run of parts reloads tmux.conf once they are
@@ -742,6 +765,7 @@ part_tmux() {
   # Keeps resurrect's saves private and few; it changes nothing once they are.
   local status=0
   $CHECK || "$SRC/tmux/resurrect-tidy.sh" || status=$?
+  restart_stale_daemon
   (( changes > before )) && reload_tmux=true
   [[ -n ${TMUX:-} && $(tmux show-option -gqv @setup_conf_sum) != "$(conf_sum)" ]] && reload_tmux=true
   return $status
@@ -949,7 +973,7 @@ about_part() {
     claude_md) echo "write ~/.claude/CLAUDE.md to import your rules and Switchboard's part" ;;
     skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path into ~/.local/bin" ;;
     karabiner) echo "link Karabiner's config" ;;
-    tmux) echo "link tmux's config and scripts, the plugins and lib's packages" ;;
+    tmux) echo "link tmux's config and scripts, the plugins and lib's packages, and restart a sidebar daemon older than its code" ;;
     autosave) echo "put tmux-continuum's autosave back when it is missing" ;;
     config) echo "move your own files into ~/.config/switchboard" ;;
     ghostty) echo "link Ghostty's config" ;;
@@ -1403,23 +1427,6 @@ if in_zsh 'command -v codex' >/dev/null; then
   ok "Codex (/review-loop's reviewer)"
 else
   optional "Codex, /review-loop's reviewer (Claude reviews without it): npm install -g @openai/codex, then codex login"
-fi
-
-# A sidebar daemon started before its code last changed keeps running the old
-# code, so a pull that adds to it shows nothing until it restarts. Its pid file
-# is written as it starts, so a newer file under lib/ means it is stale.
-pidfile=~/.local/state/tmux-sidebar/daemon.pid
-# Read with cut, since the daemon writes its pid with no newline after it,
-# which read would take as a failure.
-pid=$(cut -d' ' -f1 "$pidfile" 2>/dev/null)
-# Only the sidebar daemon itself is stopped, its whole command line node
-# running bin/tmux-sidebar daemon: a pid left by a daemon that died may name
-# some other process by now.
-if ! $CHECK && [[ -n $pid ]] && [[ $(ps -p "$pid" -o command= 2>/dev/null) =~ ^[^\ ]*node\ [^\ ]*/tmux-sidebar\ daemon$ ]] &&
-  [[ -n $(find "$REPO_DIR/lib" "$REPO_DIR/bin/tmux-sidebar" -newer "$pidfile" -print -quit 2>/dev/null) ]]; then
-  kill "$pid"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
-  ~/.config/tmux/sidebar.sh start && ok "restarted the sidebar daemon, for its new code"
 fi
 
 echo ""

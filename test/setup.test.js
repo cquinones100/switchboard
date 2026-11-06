@@ -8,7 +8,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { spawnSync, execFileSync } = require("node:child_process");
+const { spawn, spawnSync, execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -603,6 +603,50 @@ test("the post-commit hook runs setup.sh tmux bin in ~/switchboard after a commi
     commit("tmux/new.sh");
     assert.equal(fs.readFileSync(ran, "utf8"), "tmux bin\n", "a change to a file there adds nothing to link");
   } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("setup.sh's tmux part restarts a sidebar daemon older than ~/switchboard's sidebar code, once, and only says so with --check", async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-daemon-")));
+  const env = { ...process.env, HOME: home };
+  const state = path.join(home, ".local/state/tmux-sidebar");
+  const started = path.join(home, "started");
+  // restart_stale_daemon alone, with the change reporting it uses, since the
+  // whole tmux part fetches the plugins.
+  const source = fs.readFileSync(script, "utf8");
+  const fn = source.match(/^restart_stale_daemon\(\) \{\n[\s\S]*?\n\}\n/m)[0];
+  const run = (check) =>
+    spawnSync("bash", ["-c", `SRC=$HOME/switchboard CHECK=${check} changes=0\nchange() { echo "$1"; changes=$((changes + 1)); }\n${fn}restart_stale_daemon; echo "changes=$changes"`], { env, encoding: "utf8" });
+  let daemon;
+  try {
+    fs.mkdirSync(path.join(home, "switchboard/lib/sidebar"), { recursive: true });
+    fs.mkdirSync(path.join(home, "switchboard/bin"), { recursive: true });
+    fs.writeFileSync(path.join(home, "switchboard/lib/sidebar/model.js"), "");
+    fs.writeFileSync(path.join(home, "switchboard/bin/tmux-sidebar"), "setInterval(() => {}, 60_000);\n");
+    daemon = spawn(process.execPath, [path.join(home, "switchboard/bin/tmux-sidebar"), "daemon"], { stdio: "ignore" });
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, "daemon.pid"), String(daemon.pid));
+    const old = new Date(Date.now() - 60_000);
+    for (const file of ["lib/sidebar/model.js", "bin/tmux-sidebar"]) fs.utimesSync(path.join(home, "switchboard", file), old, old);
+    fs.mkdirSync(path.join(home, ".config/tmux"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config/tmux/sidebar.sh"), `#!/bin/sh\necho "$1" >> ${JSON.stringify(started)}\n`, { mode: 0o755 });
+
+    assert.equal(run(false).stdout, "changes=0\n", "a daemon newer than its code is left alone");
+
+    // A pull that fast-forwards the sidebar's code.
+    const now = new Date(Date.now() + 5_000);
+    fs.utimesSync(path.join(home, "switchboard/lib/sidebar/model.js"), now, now);
+    assert.equal(run(true).stdout, "restart the sidebar daemon, for its new code\nchanges=1\n");
+    assert.equal(daemon.exitCode ?? daemon.signalCode, null, "--check stops nothing");
+
+    const exited = new Promise((resolve) => daemon.on("exit", resolve));
+    assert.equal(run(false).stdout, "restart the sidebar daemon, for its new code\nchanges=1\n");
+    await exited;
+    assert.equal(fs.readFileSync(started, "utf8"), "start\n", "and starts it again");
+    assert.equal(run(false).stdout, "changes=0\n", "a pid file naming no daemon is left alone");
+  } finally {
+    daemon?.kill();
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
