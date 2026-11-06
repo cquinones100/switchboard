@@ -319,6 +319,10 @@ impl Server {
                             "id": id.to_string(),
                             "index": i + 1,
                             "name": tab.display_name(),
+                            "label": self.tab_label(*id),
+                            "color": self.tab_color(*id).map(|c| c.hex()),
+                            "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
+                            "pr": self.tab_pr(*id),
                             "current": *id == s.current,
                             "zoomed": tab.zoomed,
                             "options": tab.opts,
@@ -509,6 +513,11 @@ impl Server {
                 .unwrap_or_else(|| self.panes.get(&p).and_then(|s| s.opts.get(name)).cloned()),
             // A tab's `@agent` is its panes' most urgent state.
             Target::Tab(t) if name == "@agent" => self.tab_agent(t).map(|a| a.name().to_string()),
+            // What the tab bar shows is worked out by the server (src/tabs).
+            Target::Tab(t) if name == "@tab_label" => Some(self.tab_label(t)),
+            Target::Tab(t) if name == "@tab_path" => {
+                self.tab_path(t).map(|p| p.to_string_lossy().into_owned())
+            }
             Target::Tab(t) => self
                 .tabs
                 .get(&t)

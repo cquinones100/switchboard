@@ -195,6 +195,9 @@ pub struct TabStatus {
     pub current: bool,
     /// Its Claude's state, most urgent of its panes' (src/agent).
     pub agent: Option<State>,
+    /// Its project's accent color (src/tabs), which its number and name are
+    /// drawn in; `None` keeps tmux.conf's own colours.
+    pub color: Option<Color>,
 }
 
 /// The badge a Claude state wears (tmux.conf's `@agent_marker`): a black !
@@ -250,14 +253,17 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
     }
     x = put(buf, x, area, " ", base);
     let mut spans = Vec::new();
+    // Each tab in its project's color, as window-names.sh's
+    // window-status-format and update-colors.sh's current one drew it: the
+    // current tab bold on colour238, the rest on the status line's own.
     for tab in tabs {
         let style = if tab.current {
             Style::new()
                 .bg(colors::CURRENT_BG)
-                .fg(colors::ACCENT)
+                .fg(tab.color.unwrap_or(colors::ACCENT))
                 .add_modifier(Modifier::BOLD)
         } else {
-            base.fg(colors::TAB_FG)
+            base.fg(tab.color.unwrap_or(colors::TAB_FG))
         };
         let start = x;
         x = put(buf, x, area, &format!(" {}:", tab.index), style);
@@ -349,12 +355,14 @@ mod tests {
                     name: "api".into(),
                     current: true,
                     agent: None,
+                    color: None,
                 },
                 TabStatus {
                     index: 2,
                     name: "web".into(),
                     current: false,
                     agent: None,
+                    color: None,
                 },
             ],
         );
@@ -368,6 +376,42 @@ mod tests {
     }
 
     #[test]
+    fn each_tab_is_drawn_in_its_project_s_color() {
+        let mut frame = Frame::new(40, 1);
+        let area = frame.area();
+        let tab = |index: usize, name: &str, color: Option<Color>| TabStatus {
+            index,
+            name: name.into(),
+            current: index == 1,
+            agent: None,
+            color,
+        };
+        let green = Color::Rgb(0x23, 0xef, 0x59);
+        let red = Color::Rgb(0xf4, 0x28, 0x28);
+        draw_status(
+            &mut frame.buf,
+            area,
+            "main",
+            &[
+                tab(1, "api", Some(green)),
+                tab(2, "web", Some(red)),
+                tab(3, "x", None),
+            ],
+        );
+        let line = row(&frame.buf, 0);
+        let at = |text: &str| line.find(text).unwrap() as u16;
+        let api = &frame.buf[(at("api"), 0)];
+        assert_eq!((api.fg, api.bg), (green, colors::CURRENT_BG));
+        assert!(api.modifier.contains(Modifier::BOLD));
+        let web = &frame.buf[(at("web"), 0)];
+        assert_eq!((web.fg, web.bg), (red, colors::STATUS_BG));
+        assert!(!web.modifier.contains(Modifier::BOLD));
+        assert_eq!(frame.buf[(at("2:"), 0)].fg, red);
+        // Unknown yet: tmux.conf's own colour.
+        assert_eq!(frame.buf[(at("x "), 0)].fg, colors::TAB_FG);
+    }
+
+    #[test]
     fn claudes_states_show_as_badges_and_counts() {
         let mut frame = Frame::new(80, 1);
         let area = frame.area();
@@ -376,6 +420,7 @@ mod tests {
             name: name.into(),
             current: index == 1,
             agent,
+            color: None,
         };
         let spans = draw_status(
             &mut frame.buf,

@@ -16,6 +16,7 @@
 //!
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
+//! - `tabs`: what each tab is called and the color it wears.
 
 pub mod agent;
 pub mod cmd;
@@ -28,5 +29,6 @@ pub mod platform;
 pub mod presence;
 pub mod requests;
 pub mod settings;
+pub mod tabs;
 pub mod util;
 pub mod worktree;

@@ -120,10 +120,13 @@ Each step is a commit (or a few) on the branch, with its tests.
    restored (`persist`, tests/persist.rs restarts a server in the same home).
 3. **Agent state and tabs** — agent state done (src/agent: `switchboard hook`,
    the states and their markers and counts in the status line, notifications,
-   one Claude per tab, pinned tabs, M-a/M-c/M-f); left: tab names and accent
-   colors (tab-label.sh, accent-color.sh, window-names.sh, path-facts.sh, the
-   PR prefix and ticket titles), reminders (remind.sh), and the messages and
-   tips agent-state.sh showed, which wait for step 4's message box.
+   one Claude per tab, pinned tabs, M-a/M-c/M-f) and tab names and accent
+   colors done (src/tabs: tab-label.sh, accent-color.sh, window-names.sh,
+   path-facts.sh, the PR prefix and ticket titles, looked up in the
+   background); left: the second status line (tab-status.sh), the session
+   badge and focused border in the tab's color (update-colors.sh), reminders
+   (remind.sh), and the messages and tips agent-state.sh showed, which wait
+   for step 4's message box.
 4. **Sidebar and mission control**: `lib/sidebar/` on the server's model, its
    views, menus and keys; messages, tips, confirm, the palette, Settings.
 5. **Integrations**: GitHub, Linear, calendar, Slack look, meetings, standup and

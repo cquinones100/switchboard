@@ -54,10 +54,17 @@ pub struct TestServer {
     pub home: PathBuf,
     pub state: PathBuf,
     child: Option<Child>,
+    /// More environment for the server, as a test's stand-in services' addresses.
+    extra_env: Vec<(String, String)>,
 }
 
 impl TestServer {
     pub fn start() -> TestServer {
+        TestServer::start_with_env(&[])
+    }
+
+    /// A server whose environment has these variables too.
+    pub fn start_with_env(env: &[(&str, &str)]) -> TestServer {
         let dir = TempDir::new("sbt");
         let home = dir.path().join("home");
         let state = dir.path().join("s");
@@ -67,6 +74,10 @@ impl TestServer {
             home,
             state,
             child: None,
+            extra_env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         };
         server.launch();
         server
@@ -93,6 +104,7 @@ impl TestServer {
             .stdout(log.try_clone().unwrap())
             .stderr(log);
         Self::env(&mut cmd, &self.home, &self.state);
+        cmd.envs(self.extra_env.iter().map(|(k, v)| (k, v)));
         self.child = Some(cmd.spawn().expect("the server starts"));
         let deadline = Instant::now() + Duration::from_secs(10);
         while UnixStream::connect(self.socket()).is_err() {
@@ -324,6 +336,17 @@ impl TestClient {
                 line.trim_end().to_string()
             })
             .collect()
+    }
+
+    /// The colour a cell's text is drawn in, when it is given as red, green
+    /// and blue.
+    pub fn fg_rgb(&mut self, line: usize, col: usize) -> Option<(u8, u8, u8)> {
+        self.pump(Duration::from_millis(20));
+        let cell = &self.term.grid()[Line(line as i32)][Column(col)];
+        match cell.fg {
+            alacritty_terminal::vte::ansi::Color::Spec(c) => Some((c.r, c.g, c.b)),
+            _ => None,
+        }
     }
 
     /// Waits until the screen satisfies `pred`, failing with the screen after `timeout`.

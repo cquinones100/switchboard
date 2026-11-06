@@ -72,6 +72,8 @@ pub enum Event {
     /// A tab focused `agent::SEEN_DELAY` ago, to clear what it showed as
     /// finished if it is still in front (src/agent).
     AgentSeen(TabId),
+    /// A PR or ticket lookup for the tab names answered (src/tabs).
+    TabLookup(crate::tabs::Answer),
     Tick,
     Quit,
 }
@@ -195,7 +197,7 @@ pub struct Client {
 }
 
 pub struct Server {
-    pub(super) tx: mpsc::UnboundedSender<Event>,
+    pub(crate) tx: mpsc::UnboundedSender<Event>,
     pub(super) pane_tx: mpsc::UnboundedSender<PaneEvent>,
     pub sessions: Vec<Session>,
     pub tabs: HashMap<TabId, Tab>,
@@ -204,6 +206,8 @@ pub struct Server {
     pub bindings: Bindings,
     /// What each pane's Claude is doing (src/agent).
     pub agents: crate::agent::Agents,
+    /// What each tab is called and the color it wears (src/tabs).
+    pub tab_names: crate::tabs::TabNames,
     pub(super) next_tab: u32,
     pub(super) next_pane: u32,
     pub quit: bool,
@@ -433,6 +437,7 @@ impl Server {
             clients: BTreeMap::new(),
             bindings: Bindings::default(),
             agents: crate::agent::Agents::default(),
+            tab_names: Default::default(),
             next_tab: 1,
             next_pane: 1,
             quit: false,
@@ -480,6 +485,7 @@ impl Server {
                 }
             }
             Event::AgentSeen(tab) => self.agent_seen(tab),
+            Event::TabLookup(answer) => self.tab_lookup(answer),
             Event::Tick => {
                 self.refresh_names();
                 super::persist::tick(self);
@@ -947,34 +953,15 @@ impl Server {
         }
     }
 
+    /// Names a tab from its pane's directory (src/tabs).
     pub(super) fn refresh_name(&mut self, tab_id: TabId) {
-        let Some(tab) = self.tabs.get(&tab_id) else {
-            return;
-        };
-        let dir = self.panes.get(&tab.active).and_then(|s| s.pane.cwd());
-        let name = dir
-            .map(|d| {
-                if d == paths::home() {
-                    "~".to_string()
-                } else {
-                    d.file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "/".into())
-                }
-            })
-            .unwrap_or_default();
-        let tab = self.tabs.get_mut(&tab_id).expect("checked above");
-        if tab.auto_name != name {
-            tab.auto_name = name;
-            self.dirty_tab(tab_id);
-        }
+        self.name_tab(tab_id);
     }
 
+    /// Names every tab, as window-names.sh did for every window of the
+    /// session: a lookup answered for one directory can rename any of them.
     fn refresh_names(&mut self) {
-        let current: Vec<TabId> = self.sessions.iter().map(|s| s.current).collect();
-        for t in current {
-            self.refresh_name(t);
-        }
+        self.name_all_tabs();
     }
 
     // ── Clients ──────────────────────────────────────────────────────────────
@@ -1687,11 +1674,12 @@ impl Server {
             .iter()
             .enumerate()
             .filter_map(|(i, t)| {
-                self.tabs.get(t).map(|tab| TabStatus {
+                self.tabs.get(t).map(|_| TabStatus {
                     index: i + 1,
-                    name: tab.display_name().to_string(),
+                    name: self.tab_label(*t),
                     current: *t == s.current,
                     agent: self.tab_agent(*t),
+                    color: self.tab_color(*t).map(Into::into),
                 })
             })
             .collect();
