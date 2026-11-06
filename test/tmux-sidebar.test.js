@@ -1929,20 +1929,41 @@ test("the Sessions view lists each Claude session by how full its context is, as
 });
 
 test("the Sessions view starts with today's spend and the rate limits, as the statusline recorded them", () => {
-  // Three draws of one session, the last after a restart, and one of another.
+  // Five draws of one session, the third a dip within the same process and
+  // the last two after restarts, the second costing more than the last draw,
+  // and draws of two others.
   const statusline = path.join(__dirname, "../claude/statusline-command.sh");
   const now = Math.floor(Date.now() / 1000);
+  const sessions = path.join(home, ".claude/sessions");
+  fs.mkdirSync(sessions, { recursive: true });
   [
-    ["spend-a", 1.5],
-    ["spend-a", 2.25],
-    ["spend-a", 0.5],
+    ["spend-a", 1.5, undefined, 100],
+    ["spend-a", 2.25, undefined, 100],
+    ["spend-a", 1, undefined, 100],
+    ["spend-a", 0.5, undefined, 200],
+    ["spend-a", 3, undefined, 300],
+    ["spend-c", 2.5],
+    ["spend-d", 1],
+    ["spend-d", 1.5],
     ["spend-b", 1, { five_hour: { used_percentage: 42.4, resets_at: now + 7_830 }, seven_day: { used_percentage: 85, resets_at: now + 3_030 } }],
-  ].forEach(([session, cost, limits]) =>
+  ].forEach(([session, cost, limits, pid]) => {
+    // Each draw of spend-a runs in the process the one session file names.
+    if (pid) {
+      fs.readdirSync(sessions).forEach((f) => fs.rmSync(path.join(sessions, f)));
+      fs.writeFileSync(path.join(sessions, `${pid}.json`), JSON.stringify({ pid, sessionId: "spend-a" }));
+    }
+    // A record from before the pid was kept, counted many times over, is cut
+    // to the session's cost so far before this draw adds to it.
+    if (session === "spend-c") fs.writeFileSync(path.join(home, ".local/state/tmux-sidebar/usage/spend-spend-c"), `${new Date().toLocaleDateString("sv")}\t50\t2`);
+    // One whose draw costs less than its record, perhaps from another process,
+    // adds nothing then and counts on from that lower cost.
+    const legacyD = path.join(home, ".local/state/tmux-sidebar/usage/spend-spend-d");
+    if (session === "spend-d" && !fs.existsSync(legacyD)) fs.writeFileSync(legacyD, `${new Date().toLocaleDateString("sv")}\t50\t20`);
     execFileSync("bash", [statusline], {
       input: JSON.stringify({ session_id: session, model: { display_name: "Opus" }, workspace: { current_dir: tmp }, context_window: { used_percentage: 5 }, cost: { total_cost_usd: cost }, rate_limits: limits }),
       env: { ...process.env, HOME: home },
-    }),
-  );
+    });
+  });
   const usage = path.join(home, ".local/state/tmux-sidebar/usage");
   const ownDir = path.join(sidebar.STATE_DIR, "usage");
   fs.mkdirSync(ownDir, { recursive: true });
@@ -1952,7 +1973,7 @@ test("the Sessions view starts with today's spend and the rate limits, as the st
 
   // The request rows after them have a test of their own (requests.test.js).
   assert.deepEqual(sidebar.usageItems().slice(0, 3).map((i) => [i.title, i.detail, i.state]), [
-    ["Spent today $3.75", "2 sessions, at API prices", "idle"],
+    ["Spent today $29.75", "4 sessions, at API prices", "idle"],
     ["5-hour limit 42% used", "resets in 2h 10m", "idle"],
     ["Weekly limit 85% used", "resets in 50m", "attention"],
   ]);

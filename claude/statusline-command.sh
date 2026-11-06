@@ -22,20 +22,33 @@ fi
 
 # Spend and rate limits, for the Sessions view's usage rows, which the
 # statusline alone is told: spend/<session> is "<day>\t<spent that day>\t<the
-# session's cost so far>", the day's share kept across days and restarts (a
-# cost lower than the last one is a new process, counted from nothing), and
-# limits is the account's rate_limits, the same for every session.
+# session's cost so far>\t<the Claude process's pid>", the day's share kept
+# across days and restarts, and limits is the account's rate_limits, the same
+# for every session. Within one process the cost the statusline is given dips
+# and recovers, so a lower cost from the same pid adds nothing and keeps the
+# higher one; only a new pid, from the session file naming this session,
+# counts from nothing. A record from before the pid was kept may hold a share
+# counted many times over, so today's is cut to the session's cost so far,
+# and since it can't tell whether this draw comes from the process that wrote
+# it, a lower cost adds nothing and becomes the cost to count on from.
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
 if [[ $session =~ ^[A-Za-z0-9-]+$ && $cost =~ ^[0-9.]+$ ]]; then
   usage_dir=~/.local/state/tmux-sidebar/usage
   spend_file=$usage_dir/spend-$session
   old=$(cat "$spend_file" 2>/dev/null)
-  new=$(printf '%s' "$old" | awk -F'\t' -v today="$(date +%F)" -v cost="$cost" '
-    { day = $1; spent = $2; last = $3 }
+  session_file=$(grep -lF "\"sessionId\":\"$session\"" ~/.claude/sessions/*.json 2>/dev/null | head -1)
+  pid=${session_file##*/}
+  pid=${pid%.json}
+  new=$(printf '%s' "$old" | awk -F'\t' -v today="$(date +%F)" -v cost="$cost" -v pid="$pid" '
+    { day = $1; spent = $2; last = $3; was = $4; fields = NF }
     END {
       if (day != today) spent = 0
-      delta = cost - last; if (delta < 0) delta = cost
-      printf "%s\t%.4f\t%s", today, spent + delta, cost
+      else if (fields == 3 && spent > last) spent = last
+      if (pid == "") pid = was
+      delta = cost - last
+      if (was != "" && pid != was) delta = cost
+      else if (delta < 0) { delta = 0; if (fields != 3) cost = last }
+      printf "%s\t%.4f\t%s\t%s", today, spent + delta, cost, pid
     }')
   if [ "$new" != "$old" ]; then
     mkdir -p "$usage_dir" && printf '%s' "$new" >"$spend_file"
