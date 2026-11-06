@@ -53,6 +53,7 @@ const parts = Object.assign({},
   require("../lib/sidebar/slack"),
   require("../lib/sidebar/slack-look"),
   require("../lib/sidebar/sessions"),
+  require("../lib/sidebar/resources"),
   require("../lib/sidebar/daemon"),
 );
 

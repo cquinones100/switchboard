@@ -284,6 +284,13 @@
     "default": true
   },
   {
+    "key": "view_resources",
+    "category": "Mission control",
+    "label": "Resources",
+    "description": "Mission control's Resources view: the CPU and memory each tab's processes use, heaviest first, read with ps every few seconds only while the view is in front",
+    "default": true
+  },
+  {
     "key": "request_audit",
     "category": "Mission control",
     "label": "Requests in Usage",

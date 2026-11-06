@@ -1692,7 +1692,7 @@ test("/ filters mission control's cards, and X closes every merged tab and remov
   const other = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
   tmux("setw", "-t", other, "@tab_label", "something else");
   const sent = [];
-  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 160, rows: 30, tmuxClient: "none" };
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 180, rows: 30, tmuxClient: "none" };
   try {
     await sidebar.refresh();
     assert.equal(sidebar.state.tabs.find((x) => x.id === landed).merge, "merged");
@@ -2038,6 +2038,30 @@ test("the Sessions view starts with today's spend and the rate limits, as the st
     ["5-hour limit 42% used", "resets in 2h 10m", "idle"],
     ["Weekly limit 85% used", "resets in 50m", "attention"],
   ]);
+});
+
+test("the Resources view counts each tab's processes from its panes down, heaviest first", async () => {
+  const list = sidebar.parsePs([
+    "  100     1   1024   0.5 /bin/zsh",
+    "  101   100 2097152  80.0 /usr/local/bin/node",
+    "  102   101 1048576  40.0 /usr/local/bin/node",
+    "  200     1   2048   0.0 -zsh",
+    "  201   200 204800   0.4 /opt/homebrew/bin/nvim",
+    "  300     1 999999  99.0 /Applications/Other.app/Other",
+  ].join("\n"));
+  const tabs = [
+    { index: 1, name: "light", panes: [{ pane_pid: "200" }] },
+    { index: 2, name: "heavy", panes: [{ pane_pid: "100" }] },
+  ];
+  assert.deepEqual(sidebar.resourceItems(tabs, list).map((i) => [i.title, i.detail, i.state]), [
+    ["All tabs", "CPU 121% · 3.2 GB · 5 processes", "idle"],
+    ["2 heavy", "CPU 121% · 3.0 GB · 3 processes · node ×2 3.0 GB, zsh 1 MB", "attention"],
+    ["1 light", "CPU 0% · 202 MB · 2 processes · nvim 200 MB, zsh 2 MB", "idle"],
+  ]);
+  assert.deepEqual(sidebar.resourceItems(tabs, undefined), [], "nothing before the first look");
+  // The daemon's own snapshot carries each pane's pid for it.
+  const snap = await sidebar.snapshot();
+  assert.ok(snap.panes.every((p) => /^\d+$/.test(p.pane_pid)));
 });
 
 test("tabs in the sidebar are set apart by a rule", async () => {
@@ -2532,13 +2556,13 @@ test("each mission control view but Settings can be turned off in Settings, the 
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_merge_queues: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false }));
+    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_merge_queues: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false, view_resources: false }));
     sidebar.reloadSettings();
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title), ["Settings"]);
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }, { workMap: true }).map((v) => v.title), ["Work map", "Settings"]);
     fs.rmSync(settingsFile);
     sidebar.reloadSettings();
-    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Merge queues", "Tickets", "Inbox", "Sessions", "Usage", "Settings"]);
+    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Merge queues", "Tickets", "Inbox", "Sessions", "Resources", "Usage", "Settings"]);
   } finally {
     fs.rmSync(settingsFile, { force: true });
     sidebar.reloadSettings();
