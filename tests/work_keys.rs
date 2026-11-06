@@ -174,8 +174,13 @@ fn m_o_lists_a_worktree_no_tab_has_open_and_reopens_it_in_a_tab() {
             tree.to_str().unwrap(),
         ],
     );
+    // M-o opens mission control's Work map as a picker of the work no tab
+    // has open, a row each.
     client.send(b"\x1bo");
-    client.wait_text("repo lonely");
+    client.wait_for("the worktree's row", |s| {
+        s.iter()
+            .any(|l| l.contains("lonely") && l.contains("no tab"))
+    });
     client.send(b"\r");
     wait("a tab in the worktree", || {
         tabs(&server).iter().any(|t| {

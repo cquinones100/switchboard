@@ -139,9 +139,14 @@ Each step is a commit (or a few) on the branch, with its tests.
    the sidebar done (src/sidebar: drawn by the server left of the panes, the
    model with its groups and stages, Claude's transcripts read, M-s and its
    keys, the mouse, peeking, M-a's walk through Needs you, and the merged,
-   loop and sidebar tips); left: mission control on the same model, its
-   views, menus and keys, Settings, and the tips whose keys come with later
-   parts (worktree, in-place, updates, github_off, linear_off, option-alt).
+   loop and sidebar tips), and mission control done (src/mission: an overlay
+   over the whole screen on the same model, the cards by stage, every view
+   with its menus, answering a tab, reminders, Settings, the Work map and
+   M-j and M-o's pickers); left: the tips whose keys come with later parts
+   (worktree, in-place, updates, github_off, linear_off, option-alt), and in
+   mission control what waits on later parts (a link read in a pane beside,
+   the diff and lazygit for a tab, the Calendar drawn as a day, the mode
+   that works a note continuously).
 5. **Integrations**: GitHub, Linear, calendar, Slack look, meetings, standup and
    todo notes, habits, resources, usage, plugins (executables printing JSON),
    search, link view, PR and ticket views, the request audit. GitHub and

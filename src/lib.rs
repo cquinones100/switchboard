@@ -26,6 +26,8 @@
 //!   first, and the model mission control shares.
 //! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
 //!   pickers and the palette.
+//! - `mission`: mission control (M-Space), every tab as a card and every
+//!   view beside them, over the whole screen.
 //! - `usage`: how the workspace is used, on this computer alone: habits and
 //!   their suggestions, each tab's CPU and memory, the Claude sessions and
 //!   the day's spend, closed tabs, your own files' settings, plugins.
@@ -37,6 +39,7 @@ pub mod day;
 pub mod facts;
 pub mod integrations;
 pub mod items;
+pub mod mission;
 pub mod mux;
 pub mod net;
 pub mod paths;

@@ -32,7 +32,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::cmd::{worktree_from_note, wt_revive};
+use crate::cmd::worktree_from_note;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
@@ -335,15 +335,6 @@ impl Server {
             })
             .filter_map(|s| s.pane.cwd())
             .collect();
-        if action == Action::ReviveWorktree {
-            let at = here.clone();
-            self.off_task(
-                client,
-                move || wt_revive::rows(&at, &panes),
-                Server::pick_revived,
-            );
-            return;
-        }
         let wanted = match action {
             Action::NewClaudeTab | Action::ContinueShaping => Wanted::Any,
             _ => Wanted::Repo,
@@ -843,40 +834,6 @@ impl Server {
                     .collect();
                 s.front(c, &tabs);
             });
-        });
-    }
-
-    /// M-o: the worktrees no tab has open, in every repository your tabs and
-    /// recent Claude sessions use, the most recently used first, each with
-    /// the last prompt given there (wt-revive's rows); Enter opens a tab in
-    /// one and resumes its Claude with claude-here, as `wtr` does.
-    fn pick_revived(&mut self, client: ClientId, rows: Vec<wt_revive::Row>) {
-        if rows.is_empty() {
-            self.say(Some(client), "Every worktree already has a tab open.");
-            return;
-        }
-        let items = rows
-            .iter()
-            .map(|r| PickItem {
-                text: format!("{}  {}", r.label, r.prompt),
-                key: r.age.clone(),
-                value: r.tree.clone(),
-                ..PickItem::default()
-            })
-            .collect();
-        let picker = Picker::new("Reopen a worktree", items)
-            .named("revive")
-            .prompt("worktree> ");
-        self.pick(client, picker, move |server, client, picked| {
-            let Some(picked) = picked else {
-                return;
-            };
-            let script = worktree::self_command("claude-here");
-            let command = worktree::tab_command(&script, "claude-here", &[]);
-            let dir = PathBuf::from(picked.value);
-            if let Some(tab) = server.work_tab(client, &dir, command, true) {
-                server.front(client, &[tab]);
-            }
         });
     }
 }

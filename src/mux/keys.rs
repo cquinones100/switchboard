@@ -83,8 +83,16 @@ pub enum Action {
     WorkOnNote,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
-    /// Reopen a worktree no tab has open and resume its Claude (M-o).
+    /// Mission control, or closed when it is open (M-Space; src/mission).
+    MissionControl,
+    /// The Work map as a picker of the open tabs (M-j).
+    FindTab,
+    /// The Work map as a picker of the work no tab has open (M-o).
     ReviveWorktree,
+    /// Mission control's Settings view.
+    Settings,
+    /// A reminder on the current tab (remind.sh).
+    RemindTab,
 }
 
 impl Action {
@@ -95,7 +103,9 @@ impl Action {
     /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
-    /// `continue-shaping`, `revive-worktree`.
+    /// `continue-shaping`,
+    /// `focus-sidebar`, `toggle-sidebar`, `mission-control`, `find-tab`,
+    /// `revive-worktree`, `settings`, `remind-tab`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -128,7 +138,11 @@ impl Action {
             "work-on-pr" => Action::WorkOnPr,
             "work-on-note" => Action::WorkOnNote,
             "continue-shaping" => Action::ContinueShaping,
+            "mission-control" => Action::MissionControl,
+            "find-tab" => Action::FindTab,
             "revive-worktree" => Action::ReviveWorktree,
+            "settings" => Action::Settings,
+            "remind-tab" => Action::RemindTab,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -181,7 +195,11 @@ impl Action {
             Action::WorkOnPr => "work-on-pr".into(),
             Action::WorkOnNote => "work-on-note".into(),
             Action::ContinueShaping => "continue-shaping".into(),
+            Action::MissionControl => "mission-control".into(),
+            Action::FindTab => "find-tab".into(),
             Action::ReviveWorktree => "revive-worktree".into(),
+            Action::Settings => "settings".into(),
+            Action::RemindTab => "remind-tab".into(),
         }
     }
 
@@ -233,7 +251,15 @@ impl Action {
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
-            Action::ReviveWorktree => "Reopen a worktree with no tab and resume its Claude".into(),
+            Action::MissionControl => "Open or close mission control".into(),
+            Action::FindTab => "Search and jump to a tab".into(),
+            Action::ReviveWorktree => {
+                "Reopen a worktree with no tab and resume its Claude".into()
+            }
+            Action::Settings => "Settings: turn the workspace's options on and off".into(),
+            Action::RemindTab => {
+                "Remind me about this tab later: it waits under Reminders with the time left, then needs you".into()
+            }
         }
     }
 
@@ -266,7 +292,11 @@ impl Action {
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
+            Action::MissionControl => &["sidebar", "overview", "tabs"],
+            Action::FindTab => &["tabs", "navigate", "find"],
             Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
+            Action::Settings => &["settings", "config", "preferences"],
+            Action::RemindTab => &["tabs", "remind", "todo"],
         }
     }
 
@@ -308,6 +338,8 @@ impl Action {
             Action::WorkOnPr,
             Action::WorkOnNote,
             Action::ContinueShaping,
+            Action::Settings,
+            Action::RemindTab,
         ]
     }
 }
@@ -358,12 +390,14 @@ impl Default for Bindings {
         bind("M-n", NewClaudeTab);
         bind("M-W", WorkOnTickets);
         bind("M-B", WorkOnBranch);
-        bind("M-o", ReviveWorktree);
         bind("M-a", NextNeedsYou);
         bind("M-c", FocusClaude);
         bind("M-f", TogglePin);
         bind("M-p", Palette);
         bind("M-s", FocusSidebar);
+        bind("M-Space", MissionControl);
+        bind("M-j", FindTab);
+        bind("M-o", ReviveWorktree);
         let mut prefix = HashMap::new();
         let mut pbind = |k: &str, a: Action| {
             prefix.insert(key(k), a);
@@ -481,6 +515,11 @@ mod tests {
             Action::ResetTips,
             Action::FocusSidebar,
             Action::ToggleSidebar,
+            Action::MissionControl,
+            Action::FindTab,
+            Action::ReviveWorktree,
+            Action::Settings,
+            Action::RemindTab,
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

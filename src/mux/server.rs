@@ -93,6 +93,8 @@ pub enum Event {
     /// The rest of a key that starts work, back from off the task
     /// (src/cmd/work.rs).
     Work(crate::cmd::work::WorkEvent),
+    /// Mission control's timers and background work (src/mission).
+    Mission(crate::mission::MissionEvent),
     Tick,
     Quit,
 }
@@ -282,6 +284,9 @@ pub struct Server {
     /// session's focus and cursor, where each client's was drawn
     /// (src/sidebar).
     pub sidebar: crate::sidebar::Sidebar,
+    /// Mission control's state across clients: the worktrees the Work map
+    /// lists (src/mission).
+    pub mission: crate::mission::MissionState,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -520,6 +525,7 @@ impl Server {
             usage: Default::default(),
             day: Default::default(),
             sidebar: Default::default(),
+            mission: Default::default(),
         }
     }
 
@@ -570,6 +576,7 @@ impl Server {
             Event::Day(event) => self.day_event(event),
             Event::Sidebar(event) => self.sidebar_event(event),
             Event::Work(event) => self.work_event(event),
+            Event::Mission(event) => self.mission_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
@@ -579,6 +586,7 @@ impl Server {
                 self.sidebar_tick();
                 super::persist::tick(self);
                 self.usage_tick();
+                self.mission_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -1331,7 +1339,11 @@ impl Server {
     }
 
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
-        // An overlay up takes the keys, the mouse and pastes (src/ui).
+        // Mission control takes them while it is the box on top
+        // (src/mission); any other overlay up takes them (src/ui).
+        let Some(parsed) = self.mission_input(id, parsed) else {
+            return;
+        };
         let Some(parsed) = self.overlay_input(id, parsed) else {
             return;
         };
@@ -1532,8 +1544,18 @@ impl Server {
             | Action::WorkOnBranch
             | Action::WorkOnPr
             | Action::WorkOnNote
-            | Action::ContinueShaping
-            | Action::ReviveWorktree => self.work_action(id, action, pane),
+            | Action::ContinueShaping => self.work_action(id, action, pane),
+            Action::MissionControl => self.toggle_mission(id),
+            Action::FindTab => self.open_mission(
+                id,
+                crate::mission::Opening::Picker(crate::mission::Scope::Tabs),
+            ),
+            Action::ReviveWorktree => self.open_mission(
+                id,
+                crate::mission::Opening::Picker(crate::mission::Scope::Untabbed),
+            ),
+            Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
+            Action::RemindTab => self.remind_tab(id, current_tab),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }
@@ -1781,6 +1803,7 @@ impl Server {
     }
 
     fn draw(&mut self, id: ClientId) {
+        self.mission_before_draw(id);
         let Some(c) = self.clients.get(&id) else {
             return;
         };
