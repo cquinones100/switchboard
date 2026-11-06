@@ -899,10 +899,22 @@ test("the Home tab has a line for every tab, finished ones too, written again on
     await relay.refreshDashboard(JSON.parse(JSON.stringify(state)), { heartbeat: true });
     assert.equal(fs.readFileSync(asked, "utf8").split("\n").filter(Boolean).length, 1);
 
-    // Its state changed: written again.
+    // Its state changed: written again, once DOING_EVERY_MS have passed.
     tmux("set", "-p", "-t", window, "@agent_state", "working");
     await relay.refreshDashboard(state, { heartbeat: true });
+    assert.equal(fs.readFileSync(asked, "utf8").split("\n").filter(Boolean).length, 1);
+    state.doing[window].at -= relay.DOING_EVERY_MS;
+    await relay.refreshDashboard(state, { heartbeat: true });
     assert.equal(fs.readFileSync(asked, "utf8").split("\n").filter(Boolean).length, 2);
+
+    // It worked on, looked at again within DOING_EVERY_MS: not written again
+    // until that has passed.
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: "user", timestamp: new Date(Date.now() + 5_000).toISOString(), message: { content: "and the diagram" } })}\n`);
+    await relay.refreshDashboard(state, { heartbeat: true });
+    assert.equal(fs.readFileSync(asked, "utf8").split("\n").filter(Boolean).length, 2);
+    state.doing[window].at -= relay.DOING_EVERY_MS;
+    await relay.refreshDashboard(state, { heartbeat: true });
+    assert.equal(fs.readFileSync(asked, "utf8").split("\n").filter(Boolean).length, 3);
 
     // A closed tab's line goes.
     tmux("kill-window", "-t", window);
