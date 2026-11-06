@@ -6,6 +6,8 @@ argument-hint: "[tomorrow | a date]"
 
 # Today
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path today`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Show the user's day from their Google Calendar as one table, through the Google Calendar connector.
 
 Arguments: none for today, or `tomorrow`, or a date. The rest of this says "today" for whichever day was asked for.

@@ -1697,6 +1697,22 @@ changed the same line, both versions are kept, yours first, and the app says
 so. A note deleted or moved outside the app while open isn't written back
 under its old name.
 
+## skill-path
+
+`skill-path <name> [<dir>]` prints the `SKILL.md` to follow for the skill
+`<name>` in the repository at `<dir>` (the current directory by default): the
+worktree's own `.claude/skills/<name>/SKILL.md`, else the main clone's (a
+branch cut before the repository added the skill has none of its own), else
+your personal `~/.claude/skills/<name>/SKILL.md`. Outside a git repository,
+the personal one. It prints nothing and exits 1 when there is none.
+
+Claude Code runs a personal skill over a project's of the same name, so every
+skill that ships with Switchboard starts by running it and follows the
+repository's copy when there is one, and a skill that hands off to another
+(`queue-and-clean` to `clean-worktree`, `deploy-test`, `resolve-conflicts`,
+`review-loop` and `ci-loop`, `preview-test` to `deploy-test`, `deploy-test` to
+`walkthrough`) reads the file it prints.
+
 ## codex-review
 
 Runs Codex as a skeptical, read-only static reviewer of the current branch and

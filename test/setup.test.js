@@ -325,6 +325,7 @@ test("setup.sh skills links Switchboard's skills, keeping one of your own by the
     assert.ok(!fs.existsSync(path.join(skills, "review-loop")), "--check changes nothing");
     assert.equal(spawnSync("bash", [script, "skills"], { env, encoding: "utf8" }).status, 0);
     shipped.filter((name) => !["wt", "note-watch", "today"].includes(name)).forEach((name) => assert.equal(fs.readlinkSync(path.join(skills, name)), path.join(home, "switchboard/claude/skills", name)));
+    assert.equal(fs.readlinkSync(path.join(home, ".local/bin/skill-path")), path.join(home, "switchboard/bin/skill-path"), "with skill-path, which every skill runs first");
     assert.equal(fs.readFileSync(path.join(skills, "wt/SKILL.md"), "utf8"), "mine\n", "your own is kept");
     assert.equal(fs.readlinkSync(path.join(skills, "note-watch")), path.join(home, "dotfiles/claude/skills/note-watch"), "a link of your own too");
     assert.equal(fs.readlinkSync(path.join(skills, "today")), "../../dotfiles/claude/skills/today", "a relative one as well");
@@ -565,6 +566,7 @@ test("setup.sh claude turns a CLAUDE.md linked into the repo's old claude/CLAUDE
     assert.match(rules, /^# /, "the rules it linked to, from git history");
     assert.doesNotMatch(rules, /^@~\/switchboard\/claude\/switchboard\.md$/m);
     assert.ok(!fs.lstatSync(path.join(home, ".claude/CLAUDE.md")).isSymbolicLink());
+    assert.equal(fs.readlinkSync(path.join(home, ".local/bin/skill-path")), path.join(home, "switchboard/bin/skill-path"), "skill-path comes with the skills, which run it first");
     assert.match(fs.readFileSync(path.join(home, ".claude/CLAUDE.md"), "utf8"), /\n@~\/\.config\/switchboard\/CLAUDE\.md\n@~\/switchboard\/claude\/switchboard\.md\n$/);
     assert.match(spawnSync("bash", [script, "claude"], { env, encoding: "utf8" }).stdout, /claude: up to date/, "a second run changes nothing");
   } finally {

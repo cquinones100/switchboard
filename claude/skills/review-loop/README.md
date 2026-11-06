@@ -17,19 +17,22 @@ done by `codex-review`, a single Node script, so both have to be in place.
    PR title, body, and base branch so Codex never needs GitHub access of its
    own.
 
-2. **Put `codex-review` on your `PATH`.** The source is
+2. **Put `codex-review` and `skill-path` on your `PATH`.** The sources are
    [`bin/codex-review`](https://github.com/cquinones100/switchboard/blob/main/bin/codex-review)
-   in this repository. For example:
+   and [`bin/skill-path`](https://github.com/cquinones100/switchboard/blob/main/bin/skill-path),
+   which the skill runs first to find a repository's own `review-loop`, in
+   this repository. For example:
 
    ```sh
    mkdir -p ~/.local/bin
    curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/bin/codex-review -o ~/.local/bin/codex-review
-   chmod +x ~/.local/bin/codex-review
+   curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/bin/skill-path -o ~/.local/bin/skill-path
+   chmod +x ~/.local/bin/codex-review ~/.local/bin/skill-path
    codex-review --help
    ```
 
    `~/.local/bin` has to be on your `PATH`; the last line fails if it is not.
-   If the skill cannot find the command it stops and says so rather than
+   If the skill cannot find `codex-review` it stops and says so rather than
    reviewing on its own.
 
 3. **Install the skill.** Copy this directory to

@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Clean worktree
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path clean-worktree`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Remove one worktree and its local branch, and nothing else: never the main clone, never the remote branch (GitHub or the repository's settings handle that), and never with `--force`. Run on its own, or from `/queue-and-clean`, which reads this file and follows it (see "From queue-and-clean").
 
 When it is done, the final message is `clean-worktree: success` or `clean-worktree: fail: <reason>` and nothing else, the reason one line, with the error message when a command failed (`clean-worktree: fail: git worktree remove: '<path>' contains modified or untracked files`). The questions in step 2 are still asked, because they pause the work rather than end it.

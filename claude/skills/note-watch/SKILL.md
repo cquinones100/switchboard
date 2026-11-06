@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Note watch
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path note-watch`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 The user keeps a running checklist in a note (the notes app, `bin/notes`) and adds to it while you work. This skill keeps an eye on that note with the Monitor tool, so each item they add reaches you on its own, without them having to say "there are new items". The user starts it on purpose, and it reads only the note they confirm: the notes app keeps a note's text on the Mac, and starting this skill is the user's choice to send that one note to Claude.
 
 Arguments: the note, by title (`Editor Configs Notes`) or path. With none, the note this conversation has been working from, if there is one.

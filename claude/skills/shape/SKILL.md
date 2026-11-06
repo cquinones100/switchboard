@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Shape
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path shape`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Turn a rough idea into a Linear ticket someone can pick up and build: clear on the problem, grounded in the code as it is, honest about scope. The `shape` command in `bin/` starts a session with this skill; it also works in a session that is already running.
 
 Arguments: a description of the problem or idea, or a Linear ticket ID or URL (`ABC-123`, or a link with `/issue/ABC-123/` in it) to work on an existing ticket. Text after a ticket (and after `--continue`, when that is there) is the user's direction for this shaping, such as what to change or look into: keep it in mind throughout, and let it decide between a review loop and shaping where it says which. With neither, ask what the ticket is about. Given a ticket, read it first and then ask what to do with it (see "Given a ticket" below).

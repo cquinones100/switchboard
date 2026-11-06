@@ -7,6 +7,7 @@
     "allow": [
       "Bash(node ~/.claude/skills/*)",
       "Bash(codex-review *)",
+      "Bash(skill-path *)",
       "Bash(slack-relay notify *)",
       "Bash(~/.config/tmux/window-names.sh *)",
       "Bash(tmux show-options *)",

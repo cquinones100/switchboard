@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # wtn
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path wtn`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Hand this tab over to `wtn` for one checklist item of a note: `/wt`'s counterpart for work kept in a note rather than a Linear ticket. This session ends, and in its place `wtn` (`bin/worktree-from-note`) makes a worktree on a branch named after the item (`note/<slug>`), moves the pane's shell into it, and starts a new Claude session there, told the item, its plan, and to land it with `/queue-and-clean` when done: on the default branch in a repository whose `CLAUDE.md` commits straight there, else through a PR.
 
 The conversation does not carry over. The item and its plan are the hand-off.

@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Deploy test
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path deploy-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Wait for a merged PR to reach the site it deploys to, walk through what it changed in Chrome while recording a video, and ask the user to approve what the video shows. Nothing here changes the repository: it needs only the PR and its repo, so it runs from any clone, or from `/queue-and-clean`, which reads this file and follows it (see "From queue-and-clean").
 
 When it is done, the final message is `deploy-test: approved (tested: <video>)`, `deploy-test: approved (not tested: <why>)` or `deploy-test: fail: <reason>`, and nothing else. The questions in "Settling", "Testing in a browser" and "Approval" are still asked, because they pause the work rather than end it.
@@ -46,7 +48,7 @@ It counts a deploy of the merge commit or of any later commit that includes it, 
 
 ## Testing in a browser
 
-Skip this when there is nothing a browser can show, or the test was skipped, and go to "Approval". Otherwise record the test with `/walkthrough`'s recorder: read `~/.claude/skills/walkthrough/SKILL.md` and follow its "Recording" section, with these changes:
+Skip this when there is nothing a browser can show, or the test was skipped, and go to "Approval". Otherwise record the test with `/walkthrough`'s recorder: read the file `skill-path walkthrough` prints and follow its "Recording" section, with these changes:
 
 1. **The steps** go in the session's scratchpad, `<scratchpad>/deploy-test-<number>/steps.js`. Walk through the change as a person would, from the site's home page (`--url` its root) through its own navigation to the feature, then do what the acceptance criteria describe, and `expect` what should be on screen. Keep it under a minute.
 2. **Change nothing real.** This is the deployed site, often production, with real people's data. Look, navigate, open and fill in what you need to, but don't submit what saves, sends, deletes, pays for or emails anything, unless the environment is plainly a test one (staging, a preview) or the user says so when asked. When the feature can only be seen by changing data, ask first, saying what the test would change. A feature behind a flag that is off is something to report, not to turn on. `/walkthrough`'s "Data" doesn't apply: seed nothing.

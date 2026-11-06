@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Walkthrough
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path walkthrough`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Record a video of a feature as someone would show it to a teammate: start where they would start, click through to it, and say what each part shows. The recorder is `scripts/record.js` beside this file, which `/deploy-test` and `/preview-test` use too, so a change to how it records reaches all three; those skills read this file's "Recording" and "Reviewing the video" sections.
 
 When it is done, the final message is `walkthrough: <video>` or `walkthrough: fail: <reason>`, and nothing else. The questions below still get asked, because they pause the work rather than end it.
@@ -18,8 +20,8 @@ Arguments: what to show, in words; a PR number (show what it changes); or a URL 
 Settle the site to record on, and say in a line which, asking when it isn't plain:
 
 - **A local dev server**: the app this repository runs, started as the repository says (its `CLAUDE.md`, `AGENTS.md`, README, or the `run` skill's patterns). Use it when the work isn't deployed yet, or the user says so.
-- **A PR's preview**: settle and wait for it as `~/.claude/skills/preview-test/SKILL.md`'s "Settling" and "Waiting for the preview" say.
-- **The deployed site**: as `~/.claude/skills/deploy-test/SKILL.md`'s "Settling" says, for something already merged and live.
+- **A PR's preview**: settle and wait for it as the "Settling" and "Waiting for the preview" sections of the file `skill-path preview-test` prints say.
+- **The deployed site**: as the "Settling" section of the file `skill-path deploy-test` prints says, for something already merged and live.
 
 Record from the site's home page (`--url` its root), never a deep link to the feature: the video shows how to get there.
 

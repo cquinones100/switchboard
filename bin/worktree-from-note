@@ -253,7 +253,7 @@ const main = () => {
         ? `It links a plan, "${planName}", that isn't in the notes directory: tell me before going on. `
         : "It has no plan: read the code the item touches, and ask me before building anything it leaves open. ") +
     "Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. " +
-    "When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read ~/.claude/skills/queue-and-clean/SKILL.md and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open." +
+    "When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open." +
     (extra ? ` Also, from me for this item: ${extra}` : "");
 
   // Read by the `wtn` shell function: line 1 the worktree path, the rest the prompt.

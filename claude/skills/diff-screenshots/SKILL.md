@@ -6,6 +6,8 @@ argument-hint: "[base ref or PR number] [unified]"
 
 # Diff screenshots
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path diff-screenshots`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Turn a diff into readable images: each changed file rendered by delta with the user's own git config (side-by-side, line numbers), converted to HTML, and screenshotted by Playwright in the system Chrome. The scripts in `scripts/` do the mechanical parts; your job is choosing the diff, writing a good label for each file, and checking the result.
 
 ## 1. Choose the diff and plan it

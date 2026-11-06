@@ -7,7 +7,9 @@ disable-model-invocation: true
 
 # Preview test
 
-Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read `~/.claude/skills/deploy-test/SKILL.md` and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/.claude/skills/walkthrough/scripts/record.js`), with the changes below, waiting with its `~/.claude/skills/deploy-test/scripts/wait-deploy.js`. Nothing here changes the repository or the PR.
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path preview-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
+Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read the file `skill-path deploy-test` prints and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/.claude/skills/walkthrough/scripts/record.js`), with the changes below, waiting with its `~/.claude/skills/deploy-test/scripts/wait-deploy.js`. Nothing here changes the repository or the PR.
 
 When it is done, the final message is `preview-test: approved (tested: <video>)`, `preview-test: approved (not tested: <why>)` or `preview-test: fail: <reason>`, and nothing else.
 

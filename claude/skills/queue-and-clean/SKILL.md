@@ -7,6 +7,8 @@ disable-model-invocation: true
 
 # Queue and clean
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path queue-and-clean`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 Queue this worktree's PR for merge, in the merge queue or with auto-merge, unless it is already queued. Then watch the PR without blocking the conversation. When something the branch can fix stops it merging (a required check fails, it has merge conflicts, or the merge queue drops it), fix it, push, queue it again and go back to watching, as described in "Fixing". When it merges, wait until the merge has deployed, test the feature on the deployed site in a real browser, recording a video of the test, and ask the user to approve it ("Deploy and test"). Once they approve, remove the worktree and its local branch. If it closes without merging, or stops for something you can't fix, leave everything as it is.
 
 When the work is done, the final message is either `queue-and-clean: success` or `queue-and-clean: fail: <reason>` and nothing else: no summary of what was checked or what was removed. `success` means the PR merged, the user approved the test (or chose to clean up without one) and the cleanup finished; if you fixed anything on the way, say what in a few words after it, as `queue-and-clean: success (fixed: <what>)`, for example `queue-and-clean: success (fixed: lint error in api.ts; reran a flaky e2e job)`. What "Deploy and test" and "Closing out" did goes in the same brackets, after anything fixed: `queue-and-clean: success (tested: <video>; ticket ABC-123 done)`. `fail` means the PR could not be queued, closed without merging, failed to deploy, had its test turned down, stopped for something "Fixing" leaves alone or still failed after its last round, or a cleanup command errored, and the reason is one line saying which, with the error message when a command failed (for example `queue-and-clean: fail: git worktree remove: '<path>' contains modified or untracked files`), and what you tried when you tried fixing it. The questions in "Before watching", the merge method question in "Queuing", the questions in "Fixing", the questions and the approval in "Deploy and test", and the questions in clean-worktree's step 2 are still asked, because they pause the work rather than end it.
@@ -22,7 +24,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR;
    gh repo view --json owner,name --jq '.owner.login + " " + .name'
    ```
 
-2. Record the paths the cleanup needs now, while the worktree still exists, as step 1 of `~/switchboard/claude/skills/clean-worktree/SKILL.md` finds them:
+2. Record the paths the cleanup needs now, while the worktree still exists, as step 1 of the file `skill-path clean-worktree` prints finds them:
 
    ```
    git rev-parse --show-toplevel
@@ -41,7 +43,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR;
 4. Settle the ticket and the note now, so finishing up later asks nothing:
    - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
    - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.claude/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. Remember the answer; read the note only at "Closing out".
-   - **The deploy and the test**: settle both as "Settling" in `~/switchboard/claude/skills/deploy-test/SKILL.md` says, so nothing after the merge has to ask.
+   - **The deploy and the test**: settle both as "Settling" in the file `skill-path deploy-test` prints says, so nothing after the merge has to ask.
 
 ## No PR
 
@@ -63,10 +65,10 @@ For a repository that takes its work straight on the default branch, as Switchbo
 
 1. **The note.** Settle it now, as step 4 of "Before watching" says for the note alone: no ticket, deploy or test, since the push is the whole landing. A worktree `/wtn` opened names its note in the prompt it started with.
 2. **Clean tree.** `git status --porcelain` prints nothing, or ask about what is uncommitted as clean-worktree's step 2 would.
-3. **Onto the default branch as it is now** (phase `rebasing`): `git fetch origin <name>`, then note the commit it is at, `base=$(git rev-parse origin/<name>)`, and `git rebase "$base"`. Use that `$base`, never `origin/<name>`, until step 9: `origin/<name>` is shared by every worktree of the repository, so another one's fetch moves it while this one works, which step 9 takes in. On a conflict, resolve it as `/resolve-conflicts` does (read `~/.claude/skills/resolve-conflicts/SKILL.md`, without its push), and stop and ask when the right resolution isn't clear.
+3. **Onto the default branch as it is now** (phase `rebasing`): `git fetch origin <name>`, then note the commit it is at, `base=$(git rev-parse origin/<name>)`, and `git rebase "$base"`. Use that `$base`, never `origin/<name>`, until step 9: `origin/<name>` is shared by every worktree of the repository, so another one's fetch moves it while this one works, which step 9 takes in. On a conflict, resolve it as `/resolve-conflicts` does (read the file `skill-path resolve-conflicts` prints, without its push), and stop and ask when the right resolution isn't clear.
 4. **One commit** (phase `squashing`), squashed as the repository's `CLAUDE.md` says for squashing (Switchboard's: a `backup/pre-<what>` branch first, named for this branch, since other worktrees squash at the same time, one commit whose message describes the feature as it now stands, in prose, the added lines and the message checked for anything identifying): `git reset --soft "$base"` and commit, then check the tree equals the backup's.
 5. **The tests pass before the review** (phase `testing`): run the repository's tests on it, as its `CLAUDE.md` names them. When they fail, fix what the branch broke and fold the fix into the commit, or stop and ask when it isn't the branch's.
-6. **Review it** (phase `reviewing`): read the review loop's `SKILL.md` (the repository's own `.claude/skills/review-loop/SKILL.md`, else `~/.claude/skills/review-loop/SKILL.md`) and follow it on this branch up to its final report, its push question excepted: the push is step 7's. Fold the loop's fix commits into the one commit as its squash steps say, recording the clean review for the squashed commit (`review-loop-clean`: the commit, its base and its `patchId`), and run the tests again when the loop changed anything.
+6. **Review it** (phase `reviewing`): read the file `skill-path review-loop` prints and follow it on this branch up to its final report, its push question excepted: the push is step 7's. Fold the loop's fix commits into the one commit as its squash steps say, recording the clean review for the squashed commit (`review-loop-clean`: the commit, its base and its `patchId`), and run the tests again when the loop changed anything.
 7. **Ask before pushing**, with `AskUserQuestion`: **Push to <name>** or **Not yet**, the commit's subject in the question. The answer covers this change landing as reviewed: steps 8 to 10 push it without asking again only while it stays the same change, and ask again when it doesn't.
 8. **Take the landing lock**: `<lock> take`. It exits 3 when another worktree is landing or others wait ahead of this one, printing which, and puts this worktree in the landing queue: say so in a line, run `<lock> phase waiting for the landing lock`, then `<lock> wait` in the background (`run_in_background`), which takes the lock once this worktree's turn in the queue comes, and go on once it finishes. The sidebar shows the queue under Landing, where the user can move a waiting tab up or down. From here, every way out of this section, a failure included, stops that `wait` if it still runs and runs `<lock> release`, which also takes this worktree out of the queue, before the final line.
 9. **Onto the default branch as it is now, again** (phase `rebasing and testing again`): `git fetch origin <name>`. When `origin/<name>` has moved past this commit's base (`git merge-base --is-ancestor origin/<name> HEAD` fails), `git rebase origin/<name>`, a conflict resolved as in step 3, and run the tests again. When they fail, the change and what landed meanwhile break each other: release the lock, fix it, fold the fix into the commit, and go back to step 5.
@@ -203,7 +205,7 @@ When it exits:
 
 ## Fixing
 
-When the branch is why the PR can't merge (a required check failed, it has merge conflicts, or the merge queue dropped it for one of those), hand it to `/ci-loop`: read the repository's own `.claude/skills/ci-loop/SKILL.md` and follow it for this PR, or `~/switchboard/claude/skills/ci-loop/SKILL.md` when the repository has none, and in either case follow the section "When queue-and-clean runs this" in `~/switchboard/claude/skills/ci-loop/SKILL.md`, which a repository's copy leaves out. It finds the failure, fixes it in this worktree or reruns a failure the branch didn't cause, pushes without force, and watches until the PR's checks pass. Tell it what brought the PR there: the failing checks, the conflicts, or the merge queue's reason for dropping it.
+When the branch is why the PR can't merge (a required check failed, it has merge conflicts, or the merge queue dropped it for one of those), hand it to `/ci-loop`: read the file `skill-path ci-loop` prints and follow it for this PR, and whichever it is, follow the section "When queue-and-clean runs this" in `~/switchboard/claude/skills/ci-loop/SKILL.md`, which a repository's copy leaves out. It finds the failure, fixes it in this worktree or reruns a failure the branch didn't cause, pushes without force, and watches until the PR's checks pass. Tell it what brought the PR there: the failing checks, the conflicts, or the merge queue's reason for dropping it.
 
 When it hands back:
 
@@ -215,14 +217,14 @@ Hand the PR over at most three times in one run, since each requeue can fail aga
 
 ## Deploy and test
 
-After the PR merges, and before anything is removed, follow `~/switchboard/claude/skills/deploy-test/SKILL.md` from "Waiting for the deploy", with what was settled before watching (it is `disable-model-invocation`, so read it rather than invoking it). The worktree stays until the user has approved, so a fix can start from it if the feature isn't right.
+After the PR merges, and before anything is removed, follow the file `skill-path deploy-test` prints from "Waiting for the deploy", with what was settled before watching (it is `disable-model-invocation`, so read it rather than invoking it). The worktree stays until the user has approved, so a fix can start from it if the feature isn't right.
 
 - `deploy-test: approved (…)`: go to "Cleanup", and keep what is in the brackets for the final message.
 - `deploy-test: fail: <reason>`: leave everything as it is, the ticket and the note included, and reply `queue-and-clean: fail: <reason>`.
 
 ## Cleanup
 
-Only after GitHub reports the PR `MERGED` and the user has approved in "Approval", or, with no PR, once "No PR" has found the default branch holding the work. Follow `~/switchboard/claude/skills/clean-worktree/SKILL.md` from step 2, with the paths recorded before watching and the PR's number (with no PR, none, and step 2's check of the commits on GitHub counted as done by "No PR") (it is `disable-model-invocation`, so read it rather than invoking it).
+Only after GitHub reports the PR `MERGED` and the user has approved in "Approval", or, with no PR, once "No PR" has found the default branch holding the work. Follow the file `skill-path clean-worktree` prints from step 2, with the paths recorded before watching and the PR's number (with no PR, none, and step 2's check of the commits on GitHub counted as done by "No PR") (it is `disable-model-invocation`, so read it rather than invoking it).
 
 - `clean-worktree: success`: close out the ticket and the note, as "Closing out" says, then move the tab to the main clone, as "Back to the repository" says. From here on every command needs `git -C <main-clone>` or an absolute path, since the shell's working directory no longer exists.
 - `clean-worktree: fail: <reason>`: reply `queue-and-clean: fail: <reason>`, closing out nothing.

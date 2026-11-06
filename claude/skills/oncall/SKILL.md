@@ -11,6 +11,8 @@ description: >
 
 # On call
 
+This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path oncall`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+
 One invocation is one tick: read what is new in the alert channels, judge each alert, tell the user about what needs them, save state, schedule the next tick. Every tick re-reads this file and the config, so the rules are always the current ones.
 
 It reaches the user through `slack-relay notify`, which posts in slack-relay's DM as the relay's bot. That is the point of it: Slack notifies you of a bot's message, and never of one posted as you, so a self-DM through the Slack connector, or a channel of your own, stays silent on your phone.
