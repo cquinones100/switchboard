@@ -564,6 +564,13 @@
     "default": true
   },
   {
+    "key": "habits",
+    "category": "Help",
+    "label": "Suggestions from how you work",
+    "description": "Count the keys you press, the commands you pick in M-p and the mission control views you open, on this Mac only and never sent anywhere, and suggest in the notifications a view to turn off that you never open, a key for a command you keep picking in M-p, or a feature that is off which what you do would use; off, what was counted is removed",
+    "default": true
+  },
+  {
     "key": "easy_keys",
     "category": "Help",
     "label": "Easy mode",

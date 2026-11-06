@@ -69,6 +69,19 @@ key of its own. Any key closes
 it and still does what it would have done. Tips are in Settings, and "Show
 the tips again" in `M-p` brings them back.
 
+Switchboard sends nothing about how you use it anywhere. It counts, on this
+Mac only, the keys you press, the commands you pick in `M-p` and the mission
+control views you open, a file a day in `~/.local/state/tmux-sidebar/habits/`
+kept 60 days, and suggests from them in the sidebar's notifications: a key
+for a command you picked from `M-p` three times in two weeks, a view you
+haven't opened in 30 days to turn off (and, but for the Calendar and Slack, the lookups it
+makes), and a
+feature that is off which what you did this week would use (the second status
+line, today's todo note). Enter on one offers to do it, "Not now" (back in two
+weeks) or to stop suggesting it. Settings' "Suggestions from how you work"
+(`habits`, under Help) turns the counting and the suggestions off, and
+removes what was counted.
+
 Once set up, tmux keeps the clone up to date: each time it opens, and once an
 hour after that, `tmux/repo-update.sh` checks GitHub, and when `main` there
 has new commits it lists them in a popup, newest first, each with its hash

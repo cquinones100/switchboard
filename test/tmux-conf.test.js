@@ -123,3 +123,19 @@ test("M-arrows move between panes, each listed in M-p, and the Commands button s
   assert.match(off, / conf /, "the rest of the status line stays");
   assert.match(tmux("list-keys", "-T", "root", "MouseDown1Status").stdout, /mouse_status_range.*palette/);
 });
+
+test("every described root key, and M-2 to M-9, counts itself in @used_keys", () => {
+  assert.equal(tmux("set", "-g", "@conf_check", "1").status, 0);
+  assert.equal(tmux("source-file", conf).status, 0);
+  const notes = tmux("list-keys", "-N", "-T", "root").stdout.split("\n").filter(Boolean).map((line) => line.split(/\s+/)[1]);
+  const keys = [...new Set([...notes, "M-2", "M-3", "M-4", "M-5", "M-6", "M-7", "M-8", "M-9"])];
+  assert.ok(keys.length > 30, "the described keys were read");
+  keys.forEach((key) => {
+    const bound = tmux("list-keys", "-T", "root", key).stdout;
+    assert.ok(bound.includes(`set-option -ag @used_keys ${key},`) || bound.includes(`set-option -ag @used_keys "${key},"`) || bound.includes(`set-option -ag @used_keys '${key},'`), `${key} starts with used '${key},'\n${bound}`);
+  });
+  assert.equal(tmux("set", "-gu", "@used_keys").status, 0);
+  tmux("used", "M-Tab,");
+  tmux("used", "M-d,");
+  assert.equal(tmux("show", "-gqv", "@used_keys").stdout.trim(), "M-Tab,M-d,");
+});

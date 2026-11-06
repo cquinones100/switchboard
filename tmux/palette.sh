@@ -154,7 +154,7 @@ rows=$(mktemp)
 trap 'rm -f "$rows"' EXIT
 # Commands tagged #github or #linear are left out while that setting is off
 # (tmux/settings.sh), so the palette offers nothing that would ask it.
-IFS='|' read -r github linear learn < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_palette_learn}')
+IFS='|' read -r github linear learn habits < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_palette_learn}|#{@setting_habits}')
 [ "$learn" = off ] && learned_from="" || learned_from=$queries_file
 bindings | awk -F'\t' -v github="$github" -v linear="$linear" '
     $1 == "M-p" { next }
@@ -198,6 +198,12 @@ if [ -n "$choice" ]; then
   if [ -n "$query" ] && [ -n "$learned_from" ]; then
     { tail -n $((QUERIES_MAX - 1)) "$queries_file" 2>/dev/null; printf '%s\t%s\n' "$query" "$choice"; } > "$queries_file.$$" &&
       mv "$queries_file.$$" "$queries_file"
+  fi
+  # Each pick counted for the habits setting (lib/sidebar/habits.js), on this
+  # Mac only, which suggests a command's own key once it is picked here often.
+  if [ "$habits" != off ]; then
+    habits_dir=${TMUX_SIDEBAR_STATE_DIR:-$HOME/.local/state/tmux-sidebar}/habits
+    mkdir -p "$habits_dir" && printf 'palette\t%s\t1\n' "$choice" >> "$habits_dir/$(date +%F).tsv"
   fi
 fi
 exit 0
