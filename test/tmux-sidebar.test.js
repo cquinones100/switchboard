@@ -1303,15 +1303,18 @@ test("an option taken from a menu shows a box with a spinner until it is done, t
   assert.doesNotMatch(plain(sent.at(-1)), /One moment/);
 });
 
-test("switching mission control's view paints over a cell the terminal shows that tmux doesn't know of", async (t) => {
-  // A terminal of its own for a client of the tests' server: a pane of a
-  // second throwaway server, whose screen is what that terminal shows.
+test("a session's sidebars aren't drawn while mission control is open over it, and catch up when it closes", async (t) => {
+  // A client of the tests' server, for mission control to be open on: a pane
+  // of a second throwaway server is its terminal.
   const outer = path.join(tmp, "outer.sock");
-  const terminal = (...args) => execFileSync("tmux", ["-S", outer, ...args], { encoding: "utf8" }).trimEnd();
   execFileSync("tmux", ["-S", outer, "-f", "/dev/null", "new-session", "-d", "-x", "120", "-y", "30", `env -u TMUX tmux -S ${socket} attach -t test`]);
+  const window = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  const side = tmux("split-window", "-hb", "-d", "-t", window, "-P", "-F", "#{pane_id}");
+  tmux("set", "-p", "-t", side, "@sidebar", "1");
   t.after(() => {
+    tmux("kill-window", "-t", window);
     try {
-      terminal("kill-server");
+      execFileSync("tmux", ["-S", outer, "kill-server"]);
     } catch {}
   });
   let tmuxClient;
@@ -1319,15 +1322,26 @@ test("switching mission control's view paints over a cell the terminal shows tha
     await wait(100);
     tmuxClient = tmux("list-clients", "-F", "#{client_name}").split("\n").find(Boolean);
   }
-  // Written to the client's terminal behind tmux's back, as the stray digits were.
-  fs.writeFileSync(tmux("display", "-p", "-c", tmuxClient, "#{client_tty}"), "\x1b7\x1b[20;4HZ\x1b8");
-  await wait(200);
-  assert.equal(terminal("capture-pane", "-p").split("\n")[19][3], "Z", "the stray cell is there");
-  const client = { kind: "mission", socket: { write() {}, end() {} }, view: { view: 0, cursor: 0 }, cols: 120, rows: 30, tmuxClient };
+  await sidebar.refresh();
+  const written = [];
+  const client = { kind: "sidebar", pane: side, socket: { write: (text) => written.push(text), end() {} } };
+  sidebar.state.clients.add(client);
+  t.after(() => sidebar.state.clients.delete(client));
   sidebar.draw(client);
-  await sidebar.missionKey(client, { key: "]" });
-  await wait(300);
-  assert.notEqual(terminal("capture-pane", "-p").split("\n")[19][3], "Z");
+  const drawn = written.length;
+  assert.ok(drawn > 0, "drawn while nothing covers it");
+
+  const mission = new (require("node:events").EventEmitter)();
+  Object.assign(mission, { setEncoding() {}, write() {}, end() {} });
+  sidebar.accept(mission);
+  mission.emit("data", `mission ${tmuxClient} 120 30\n`);
+  await wait(100);
+  client.last = undefined;
+  sidebar.draw(client);
+  assert.equal(written.length, drawn, "not drawn under mission control");
+
+  mission.emit("close");
+  assert.ok(written.length > drawn, "drawn again once it closes");
 });
 
 test("a Claude started in a tab already running one moves to a tab of its own", async (t) => {

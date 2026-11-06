@@ -221,7 +221,7 @@ and `@agent_since` from `agent-state.sh`. It finds a pane's Claude session from
 the `tmux` field (`main:@27.%28`) in `~/.claude/sessions/<pid>.json`, not from
 `claude-pane.sh`.
 
-Mission control redraws only the lines whose text changed, and tmux sends the terminal only the cells it thinks changed, so a cell the terminal shows that tmux never wrote (stray digits under a short view) stays until something paints the whole client: switching views runs `refresh-client` on mission control's client (`drawnView` in `draw`).
+A session's sidebars and Notifications view aren't drawn while mission control is open over it, and are drawn again when it closes (`underMission` in `draw`): tmux 3.8 sends the cells after a wide character (the ⏰ and 📌 badges) of a line redrawn under a popup two columns to the left and through the popup, so a sidebar redrawn there, as its spinner does, left its tab numbers on mission control's screen.
 
 Moving a sidebar's cursor onto its notifications (or clicking one) brings the session's Notifications window to the front, as moving onto a tab does (`noticesWindow`): a window marked `@notices_window`, made the first time it is wanted, which `state.tabs` leaves out, `window-names.sh` leaves alone and the tab bar shows only while it is in front, holding a `notices` client (`sidebar-pane.zsh notices`, by its pane, so it reconnects) that lists them whole (`noticeItems`, `noticeListLines`) with the session's `noticeCursor`, and, as every window, a sidebar. Enter there opens the chosen one's menu over it (`noticeChoices`, the views' own `itemChoices` and `boardChoices`); Esc goes back to the tab it came from (`noticeFrom`); `notice_list` setting.
 
