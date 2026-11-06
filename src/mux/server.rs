@@ -84,6 +84,8 @@ pub enum Event {
     Sources(crate::sources::Answer),
     /// The overlays' timers (src/ui).
     Ui(crate::ui::UiEvent),
+    /// What the usage views' work off the task found (src/usage).
+    Usage(crate::usage::UsageEvent),
     Tick,
     Quit,
 }
@@ -239,6 +241,9 @@ pub struct Server {
     pub(super) persist: super::persist::Persist,
     /// What the overlays keep across clients: the tips shown (src/ui).
     pub ui: crate::ui::Ui,
+    /// How the workspace is used: habits, resources, sessions, closed tabs,
+    /// plugins (src/usage).
+    pub usage: crate::usage::Usage,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -473,6 +478,7 @@ impl Server {
             presence_asked: None,
             persist: Default::default(),
             ui: Default::default(),
+            usage: Default::default(),
         }
     }
 
@@ -519,12 +525,14 @@ impl Server {
             Event::TabLookup(answer) => self.tab_lookup(answer),
             Event::Sources(answer) => self.source_answer(answer),
             Event::Ui(event) => self.ui_event(event),
+            Event::Usage(event) => self.usage_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.ask_presence();
                 self.refresh_names();
                 self.sources_tick();
                 super::persist::tick(self);
+                self.usage_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -947,6 +955,7 @@ impl Server {
     }
 
     fn remove_tab(&mut self, tab: TabId) {
+        self.tab_closing(tab);
         self.tabs.remove(&tab);
         let Some(si) = self.sessions.iter().position(|s| s.tabs.contains(&tab)) else {
             return;
@@ -1305,6 +1314,8 @@ impl Server {
                 c.prefix = false;
             }
             if let Some(action) = self.bindings.prefix.get(&key).cloned() {
+                let pressed = format!("{} {}", self.bindings.prefix_key.notation(), key.notation());
+                self.count_key(&pressed);
                 self.act(id, action);
             }
             return;
@@ -1316,6 +1327,7 @@ impl Server {
             return;
         }
         if let Some(action) = self.bindings.root.get(&key).cloned() {
+            self.count_key(&key.notation());
             self.act(id, action);
             return;
         }

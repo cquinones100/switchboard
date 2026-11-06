@@ -23,6 +23,9 @@
 //!   Linear, looked up in the background.
 //! - `ui`: the boxes over the workspace: messages, tips, questions, menus,
 //!   pickers and the palette.
+//! - `usage`: how the workspace is used, on this computer alone: habits and
+//!   their suggestions, each tab's CPU and memory, the Claude sessions and
+//!   the day's spend, closed tabs, your own files' settings, plugins.
 
 pub mod agent;
 pub mod cmd;
@@ -40,5 +43,6 @@ pub mod settings;
 pub mod sources;
 pub mod tabs;
 pub mod ui;
+pub mod usage;
 pub mod util;
 pub mod worktree;

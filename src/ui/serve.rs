@@ -423,6 +423,7 @@ impl Server {
                 return;
             };
             palette::remember(&picked.value, &picked.query, learn);
+            server.count_pick(entry);
             server.act(client, entry.action.clone());
             if let Some(key) = entry.keys.first() {
                 server.key_tip_later(client, key);

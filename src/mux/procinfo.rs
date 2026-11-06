@@ -1,7 +1,7 @@
 //! A process's working directory, command name and process group's members,
-//! read from `/proc` on Linux and from the kernel's process info (libc's
-//! `proc_pidinfo`, `proc_listpids`, `sysctl`) on macOS, without starting a
-//! process: the server asks for every pane on every focus change, and the
+//! and every process's CPU time and memory, read from `/proc` on Linux and
+//! from the kernel's process info (libc's `proc_pidinfo`, `proc_listpids`,
+//! `sysctl`) on macOS, without starting a process: the server asks for every pane on every focus change, and the
 //! tmux version's `ps` and `lsof` calls there were what made it sluggish
 //! under a security agent that inspects every process started.
 //!
@@ -58,6 +58,61 @@ pub fn children_of(pid: u32) -> Vec<u32> {
     let mut pids = imp::children_of(pid);
     pids.sort_unstable();
     pids
+}
+
+/// The process group a process is in.
+pub fn group_of(pid: u32) -> Option<u32> {
+    if pid == 0 {
+        return None;
+    }
+    imp::group_of(pid).filter(|&g| g > 0)
+}
+
+/// One process as the Resources view counts it: its parent, its name, the
+/// CPU time it has used so far and the memory it holds now.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProcUsage {
+    pub pid: u32,
+    pub ppid: u32,
+    /// Its command's name, as `ps -o comm` shows it without its path.
+    pub name: String,
+    /// User and system time together, in nanoseconds since it started.
+    pub cpu_ns: u64,
+    /// Resident memory, in bytes: memory two processes share counts in both,
+    /// as ps's `rss` did.
+    pub memory: u64,
+}
+
+/// Every process we may look at, with its CPU time and memory: what the
+/// sidebar daemon's `ps -A -o pid=,ppid=,rss=,%cpu=,comm=` gave, read from the
+/// kernel instead. A few hundred small reads, so it runs off the server's
+/// task. A process another user owns is listed with what can be read of it
+/// (its parent, so the tree under a pane stays whole), and no time or memory.
+pub fn all_usage() -> Vec<ProcUsage> {
+    let mut list = imp::all_usage();
+    list.sort_unstable_by_key(|p| p.pid);
+    list
+}
+
+/// What `/proc/<pid>/stat` says of a process for the Resources view: its
+/// name (between the first `(` and the last `)`), parent, and user and
+/// system time in clock ticks (fields 14 and 15, counting from one).
+#[cfg(any(test, target_os = "linux"))]
+fn parse_stat_usage(stat: &str) -> Option<(String, u32, u64, u64)> {
+    let open = stat.find('(')?;
+    let close = stat.rfind(')')?;
+    let name = stat.get(open + 1..close)?.to_string();
+    let fields: Vec<&str> = stat[close + 1..].split_whitespace().collect();
+    let ppid = fields.get(1)?.parse().ok()?;
+    let utime = fields.get(11)?.parse().ok()?;
+    let stime = fields.get(12)?.parse().ok()?;
+    Some((name, ppid, utime, stime))
+}
+
+/// The resident pages in `/proc/<pid>/statm`, its second field.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_statm_resident(statm: &str) -> Option<u64> {
+    statm.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// The parent and process group of a process, from the fields of
@@ -163,21 +218,59 @@ mod imp {
             .collect()
     }
 
-    /// Every process as (pid, parent, process group). Linux has no list of a
-    /// group's members, so this reads each process's `stat`, a few hundred
-    /// small reads, cheaper than the one process `ps` would have been. A
-    /// process that ends while it is read is left out.
-    fn processes() -> impl Iterator<Item = (u32, u32, u32)> {
+    pub fn group_of(pid: u32) -> Option<u32> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        super::parse_stat(&stat).map(|(_, pgrp)| pgrp)
+    }
+
+    pub fn all_usage() -> Vec<super::ProcUsage> {
+        // SAFETY: sysconf only reads the system's configuration.
+        let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        // SAFETY: as above.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let ns_per_tick = if tick > 0 {
+            1_000_000_000 / tick as u64
+        } else {
+            10_000_000
+        };
+        let page = if page > 0 { page as u64 } else { 4096 };
+        pids()
+            .filter_map(|pid| {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+                let (name, ppid, utime, stime) = super::parse_stat_usage(&stat)?;
+                let resident = fs::read_to_string(format!("/proc/{pid}/statm"))
+                    .ok()
+                    .and_then(|m| super::parse_statm_resident(&m))
+                    .unwrap_or(0);
+                Some(super::ProcUsage {
+                    pid,
+                    ppid,
+                    name,
+                    cpu_ns: (utime + stime) * ns_per_tick,
+                    memory: resident * page,
+                })
+            })
+            .collect()
+    }
+
+    fn pids() -> impl Iterator<Item = u32> {
         fs::read_dir("/proc")
             .into_iter()
             .flatten()
             .flatten()
             .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-            .filter_map(|pid| {
-                let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-                let (ppid, pgrp) = super::parse_stat(&stat)?;
-                Some((pid, ppid, pgrp))
-            })
+    }
+
+    /// Every process as (pid, parent, process group). Linux has no list of a
+    /// group's members, so this reads each process's `stat`, a few hundred
+    /// small reads, cheaper than the one process `ps` would have been. A
+    /// process that ends while it is read is left out.
+    fn processes() -> impl Iterator<Item = (u32, u32, u32)> {
+        pids().filter_map(|pid| {
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let (ppid, pgrp) = super::parse_stat(&stat)?;
+            Some((pid, ppid, pgrp))
+        })
     }
 }
 
@@ -297,6 +390,122 @@ mod imp {
         list_pids(PROC_PPID_ONLY, pid)
     }
 
+    /// The kernel's BSD info on a process: its parent, group and name.
+    fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+        let pid = c_pid(pid)?;
+        // SAFETY: a plain C struct, for which all zeroes is a valid value.
+        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+        let size = size_of::<libc::proc_bsdinfo>() as c_int;
+        // SAFETY: the buffer is the struct the flavor fills, of the size given.
+        let filled = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast::<c_void>(),
+                size,
+            )
+        };
+        (filled == size).then_some(info)
+    }
+
+    pub fn group_of(pid: u32) -> Option<u32> {
+        bsd_info(pid).map(|info| info.pbi_pgid)
+    }
+
+    /// The task's resident memory and CPU time, which the kernel gives only
+    /// for our own processes.
+    fn task_info(pid: u32) -> Option<libc::proc_taskinfo> {
+        let pid = c_pid(pid)?;
+        // SAFETY: a plain C struct, for which all zeroes is a valid value.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = size_of::<libc::proc_taskinfo>() as c_int;
+        // SAFETY: the buffer is the struct the flavor fills, of the size given.
+        let filled = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&raw mut info).cast::<c_void>(),
+                size,
+            )
+        };
+        (filled == size).then_some(info)
+    }
+
+    /// The task's times are in Mach's absolute time units, which are
+    /// nanoseconds on an Intel Mac and 125/3 of one on Apple silicon; the
+    /// timebase says which. (The libc crate marks the call deprecated in
+    /// favor of the mach2 crate, for this one number.)
+    #[allow(deprecated)]
+    fn timebase() -> (u64, u64) {
+        let mut info = libc::mach_timebase_info { numer: 0, denom: 0 };
+        // SAFETY: the out-pointer is the struct the call fills.
+        let ok = unsafe { libc::mach_timebase_info(&raw mut info) };
+        if ok != 0 || info.numer == 0 || info.denom == 0 {
+            return (1, 1);
+        }
+        (info.numer as u64, info.denom as u64)
+    }
+
+    /// A C string in a fixed array, up to its first NUL.
+    fn c_text(chars: &[std::ffi::c_char]) -> String {
+        // SAFETY: c_char and u8 have the same size and layout.
+        let bytes = unsafe { std::slice::from_raw_parts(chars.as_ptr().cast::<u8>(), chars.len()) };
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    }
+
+    pub fn all_usage() -> Vec<super::ProcUsage> {
+        let (numer, denom) = timebase();
+        all_pids()
+            .into_iter()
+            .filter_map(|pid| {
+                let bsd = bsd_info(pid)?;
+                let name = match c_text(&bsd.pbi_name) {
+                    n if n.is_empty() => c_text(&bsd.pbi_comm),
+                    n => n,
+                };
+                let task = task_info(pid);
+                let ticks = task.map_or(0, |t| t.pti_total_user + t.pti_total_system);
+                Some(super::ProcUsage {
+                    pid,
+                    ppid: bsd.pbi_ppid,
+                    name,
+                    cpu_ns: (ticks as u128 * numer as u128 / denom as u128) as u64,
+                    memory: task.map_or(0, |t| t.pti_resident_size),
+                })
+            })
+            .collect()
+    }
+
+    /// Every pid: asked once with no buffer for how many, then filled, with
+    /// room for a few more started between the two calls.
+    fn all_pids() -> Vec<u32> {
+        // SAFETY: a null buffer asks only for the count.
+        let need = unsafe { libc::proc_listallpids(ptr::null_mut(), 0) };
+        if need <= 0 {
+            return Vec::new();
+        }
+        let room = need as usize + 64;
+        let mut pids: Vec<c_int> = vec![0; room];
+        // SAFETY: the buffer holds `room` ints, the size given in bytes.
+        let filled = unsafe {
+            libc::proc_listallpids(
+                pids.as_mut_ptr().cast::<c_void>(),
+                (room * size_of::<c_int>()) as c_int,
+            )
+        };
+        if filled <= 0 {
+            return Vec::new();
+        }
+        pids.truncate((filled as usize).min(room));
+        pids.into_iter()
+            .filter(|&pid| pid > 0)
+            .map(|pid| pid as u32)
+            .collect()
+    }
+
     /// The kernel's list of pids that match a filter: asked once with no
     /// buffer for how much room it needs, then filled. Room for a few more
     /// is added, since a process can start between the two calls.
@@ -348,6 +557,12 @@ mod imp {
     pub fn children_of(_pid: u32) -> Vec<u32> {
         Vec::new()
     }
+    pub fn group_of(_pid: u32) -> Option<u32> {
+        None
+    }
+    pub fn all_usage() -> Vec<super::ProcUsage> {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -361,6 +576,18 @@ mod tests {
         assert_eq!(parse_stat("1 (init) S 0 1 1"), Some((0, 1)));
         assert_eq!(parse_stat("garbage"), None);
         assert_eq!(parse_stat("1 (x) S"), None);
+    }
+
+    #[test]
+    fn usage_is_read_from_stat_and_statm() {
+        let stat = "4242 (my (odd) name) S 17 4240 17 34816 4240 4194304 120 0 3 0 250 50 0 0 20 0";
+        assert_eq!(
+            parse_stat_usage(stat),
+            Some(("my (odd) name".to_string(), 17, 250, 50))
+        );
+        assert_eq!(parse_stat_usage("1 (x) S 0"), None);
+        assert_eq!(parse_statm_resident("1000 256 30 1 0 90 0\n"), Some(256));
+        assert_eq!(parse_statm_resident("1000"), None);
     }
 
     #[test]
@@ -409,6 +636,8 @@ mod tests {
         assert_eq!(args_of(0), None);
         assert!(group_members(0).is_empty());
         assert!(children_of(0).is_empty());
+        assert_eq!(group_of(0), None);
+        assert_eq!(group_of(u32::MAX - 1), None);
         // Past any pid the kernel hands out (Linux's limit is 2^22).
         assert_eq!(cwd_of(u32::MAX - 1), None);
         assert_eq!(command_of(u32::MAX - 1), None);
@@ -521,6 +750,20 @@ mod tests {
             // SAFETY: getpgrp only reads the test's own process group.
             let ours = unsafe { libc::getpgrp() } as u32;
             assert!(!group_members(ours).contains(&pid));
+            assert_eq!(group_of(pid), Some(pid));
+            assert_eq!(group_of(std::process::id()), Some(ours));
+        }
+
+        #[test]
+        fn every_process_is_listed_with_its_parent_and_memory() {
+            let list = all_usage();
+            let me = list
+                .iter()
+                .find(|p| p.pid == std::process::id())
+                .expect("this test's own process");
+            assert!(me.memory > 0, "{me:?}");
+            // SAFETY: getppid only reads the test's own parent.
+            assert_eq!(me.ppid, unsafe { libc::getppid() } as u32);
         }
     }
 }
