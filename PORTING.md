@@ -68,6 +68,13 @@ switchboard <command>     ──┘            ├─ background tasks: GitHub, 
   reporting on; stdin to the socket, the socket to stdout; resizes sent on
   SIGWINCH; the terminal put back however it ends. Starts the server
   (detached, `setsid`) when none answers.
+- **Apps in panes**: what ran in a pane under tmux (glow and less for a PR
+  or ticket, diffview in Neovim, the notes app in Neovim, lazygit) is a
+  program of Switchboard's own run in a pane the same way: `switchboard view`,
+  `switchboard diff`, `switchboard notes`, full-screen programs drawn with
+  ratatui and crossterm. The server stays a multiplexer, opening them in a
+  split or in a pane's place as tmux did, and each app is built and tested
+  on its own.
 - **Commands** (`src/mux/commands.rs`): what scripts and skills used tmux for
   (rename a tab, set a tab's note, send keys to a pane, open a tab, say
   something) is `switchboard <command>` talking to the server.
