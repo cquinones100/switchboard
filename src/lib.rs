@@ -11,9 +11,12 @@
 //! - `presence`: whether you're at the computer.
 //! - `connector`: one call to a Claude connector.
 //! - `worktree`: what the worktree commands share.
+//!
+//! - `mux`: the multiplexer (in place of tmux).
 
 pub mod cmd;
 pub mod connector;
+pub mod mux;
 pub mod paths;
 pub mod platform;
 pub mod presence;
