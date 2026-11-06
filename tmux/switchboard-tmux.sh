@@ -23,6 +23,7 @@
 #
 # Run with arguments, it runs tmux with them on Switchboard's server:
 #   switchboard-tmux.sh list-panes -a -F '...'
+#   switchboard-tmux.sh --name   prints the server's name (own-server.conf)
 
 sb_server() {
   local file=${SWITCHBOARD_SETTINGS:-$HOME/.config/switchboard/settings.json} text="" re='"tmux_server"[[:space:]]*:[[:space:]]*"([^"]*)"'
@@ -61,6 +62,11 @@ sb_elsewhere() {
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  if [ "${1:-}" = --name ]; then
+    sb_server
+    echo "$SB_SERVER"
+    exit 0
+  fi
   sb_tmux "$@"
   exit
 fi
