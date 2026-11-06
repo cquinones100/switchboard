@@ -78,6 +78,14 @@ test("agent-state.sh leaves a Claude in another tmux server alone with Switchboa
   assert.equal(plain("display", "-p", "-t", plainAt.pane, "#{@agent_state}"), "", "a plain tmux server is left as it is");
   working({ TMUX: ownAt.tmux, TMUX_PANE: ownAt.pane });
   assert.equal(own("display", "-p", "-t", ownAt.pane, "#{@agent_state}"), "working", "Switchboard's own is marked");
+  // And its pane with its session, as a session starts, for the sidebar.
+  const started = (extra, session) =>
+    execFileSync("bash", [hook, "set", "clear"], { env: { ...env, ...extra }, input: JSON.stringify({ hook_event_name: "SessionStart", source: "startup", session_id: session }) });
+  started({ TMUX: ownAt.tmux, TMUX_PANE: ownAt.pane }, "ours");
+  assert.equal(own("display", "-p", "-t", ownAt.pane, "#{@agent_session}"), "ours");
+  started({ TMUX: plainAt.tmux, TMUX_PANE: plainAt.pane }, "theirs");
+  assert.equal(plain("display", "-p", "-t", plainAt.pane, "#{@agent_session}"), "");
+  own("set", "-pu", "-t", ownAt.pane, "@agent_session");
 
   // On tmux's default server, as before: whichever server the session is in.
   setting(undefined);
@@ -96,6 +104,8 @@ test("agent-state.sh looks for a parked job's tab on Switchboard's own server", 
     setting("switchboard");
     working({}, "background");
     assert.equal(own("display", "-p", "-t", ownAt.pane, "#{@agent_state}"), "working");
+    execFileSync("bash", [hook, "set", "working"], { env, input: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "go on", session_id: "background" }) });
+    assert.equal(own("display", "-p", "-t", ownAt.pane, "#{@agent_session}"), "", "a parked job's session names no pane, so marks none");
   } finally {
     ["900010", panePid].forEach((pid) => fs.rmSync(path.join(sessions, `${pid}.json`)));
     own("set", "-pu", "-t", ownAt.pane, "@agent_state");

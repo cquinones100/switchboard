@@ -128,12 +128,17 @@ test("a tab's own Claude wins its pane over a headless one that names it too", (
 
 test("a Claude in another tmux server, whose pane has the same number, isn't taken for the tab's", () => {
   const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
+  const panes = (mark) => [{ pane_id: pane, session_name: "test", "@agent_session": mark }];
   // A plain tmux server beside Switchboard's own numbers its panes from %0 too.
   fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `mine:@0.${pane}`, entrypoint: "cli" }));
   try {
-    assert.equal(sidebar.sessionsByPane(new Set(["test"])).get(pane), undefined);
+    assert.equal(sidebar.sessionsByPane(panes("")).get(pane), undefined, "a session of another name");
     fs.writeFileSync(path.join(home, ".claude/sessions/121.json"), JSON.stringify({ pid: 121, sessionId: "own", cwd: "/work", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
-    assert.equal(sidebar.sessionsByPane(new Set(["test"])).get(pane).sessionId, "own");
+    assert.equal(sidebar.sessionsByPane(panes("")).get(pane).sessionId, "own");
+    // Its session by the same name: the pane's mark from agent-state.sh tells them apart.
+    fs.writeFileSync(path.join(home, ".claude/sessions/141.json"), JSON.stringify({ pid: 141, sessionId: "elsewhere", cwd: "/other", tmux: `test:@9.${pane}`, entrypoint: "cli" }));
+    assert.equal(sidebar.sessionsByPane(panes("own")).get(pane).sessionId, "own");
+    assert.equal(sidebar.sessionsByPane([]).get(pane), undefined, "nor a pane the server hasn't");
   } finally {
     ["121", "141"].forEach((pid) => fs.rmSync(path.join(home, `.claude/sessions/${pid}.json`), { force: true }));
   }
