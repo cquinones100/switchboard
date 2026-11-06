@@ -38,6 +38,9 @@ pub mod colors {
 pub struct Frame {
     pub buf: Buffer,
     pub cursor: Option<(u16, u16)>,
+    /// The cursor's shape, as the focused pane's program asked (a bar in
+    /// Neovim's Insert mode).
+    pub cursor_style: Option<cursor::SetCursorStyle>,
 }
 
 impl Frame {
@@ -45,6 +48,7 @@ impl Frame {
         Frame {
             buf: Buffer::empty(Rect::new(0, 0, cols, rows)),
             cursor: None,
+            cursor_style: None,
         }
     }
 
@@ -57,6 +61,7 @@ impl Frame {
 #[derive(Default)]
 pub struct Screen {
     prev: Option<Buffer>,
+    style: Option<cursor::SetCursorStyle>,
 }
 
 impl Screen {
@@ -64,6 +69,7 @@ impl Screen {
     /// anything that may have left the terminal showing something else).
     pub fn invalidate(&mut self) {
         self.prev = None;
+        self.style = None;
     }
 
     /// The bytes that turn the last frame sent into this one.
@@ -86,6 +92,13 @@ impl Screen {
             let _ = backend.draw(diff.into_iter());
         }
         if let Some((x, y)) = frame.cursor {
+            let style = frame
+                .cursor_style
+                .unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
+            if self.style != Some(style) {
+                let _ = queue!(out, style);
+                self.style = Some(style);
+            }
             let _ = queue!(out, cursor::MoveTo(x, y), cursor::Show);
         }
         let _ = out.write_all(b"\x1b[?2026l");

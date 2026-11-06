@@ -257,9 +257,19 @@ async fn run() -> Result<()> {
         eprintln!("keys.json: {p}");
     }
     loop {
+        // A program holding a frame back (synchronized output) that never
+        // says it is done gets it shown at its deadline.
+        let deadline = server.sync_deadline();
+        let held = async move {
+            match deadline {
+                Some(at) => tokio::time::sleep_until(at.into()).await,
+                None => std::future::pending().await,
+            }
+        };
         tokio::select! {
             Some(event) = rx.recv() => server.handle(event),
             Some(event) = pane_rx.recv() => server.pane_event(event),
+            () = held => server.flush_syncs(),
             else => break,
         }
         // Whatever else has come in meanwhile, before drawing once for all of it.
@@ -481,6 +491,38 @@ impl Server {
                 }
                 self.remove_pane(id);
             }
+        }
+    }
+
+    /// The soonest a pane's held frame must be shown.
+    pub fn sync_deadline(&self) -> Option<Instant> {
+        self.panes
+            .values()
+            .filter_map(|s| s.pane.sync_deadline())
+            .min()
+    }
+
+    /// Shows the frames held past their deadline.
+    pub fn flush_syncs(&mut self) {
+        let now = Instant::now();
+        let due: Vec<PaneId> = self
+            .panes
+            .iter()
+            .filter(|(_, s)| s.pane.sync_deadline().is_some_and(|d| d <= now))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in due {
+            let Some(slot) = self.panes.get_mut(&id) else {
+                continue;
+            };
+            let notices = slot.pane.flush_sync();
+            let tab = slot.tab;
+            for notice in notices {
+                if let TermNotice::Clipboard(text) = notice {
+                    self.to_clipboard(None, &text);
+                }
+            }
+            self.dirty_tab(tab);
         }
     }
 
@@ -1491,6 +1533,7 @@ impl Server {
                     focused_rect = Some(rect);
                     if slot.copy.is_none() {
                         cursor = at;
+                        frame.cursor_style = Some(slot.pane.cursor_style());
                     }
                 } else {
                     compose::tint_inactive(&mut frame.buf, rect);
