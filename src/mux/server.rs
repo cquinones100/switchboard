@@ -211,6 +211,10 @@ pub struct Server {
     /// What GitHub and the landing queue say of each tab (src/facts.rs),
     /// written by the sources, read by the sidebar.
     pub facts: crate::facts::Facts,
+    /// The sidebar's notifications, by the source that gave them
+    /// ("calendar", "new-notes", "habits", "autopilot"): each source sets
+    /// its whole list, which the sidebar shows under the tabs.
+    pub notices: BTreeMap<String, Vec<crate::items::Item>>,
     /// What each tab is called and the color it wears (src/tabs).
     pub tab_names: crate::tabs::TabNames,
     pub(super) next_tab: u32,
@@ -452,6 +456,7 @@ impl Server {
             bindings: Bindings::default(),
             agents: crate::agent::Agents::default(),
             facts: crate::facts::Facts::default(),
+            notices: BTreeMap::new(),
             tab_names: Default::default(),
             next_tab: 1,
             next_pane: 1,
@@ -556,6 +561,23 @@ impl Server {
         self.settings_seen = seen;
         crate::settings::reload_settings();
         if !first {
+            for c in self.clients.values_mut() {
+                c.dirty = true;
+            }
+        }
+    }
+
+    /// Sets a source's notifications (an empty list takes them away) and
+    /// draws every client again when they changed.
+    pub fn set_notices(&mut self, source: &str, items: Vec<crate::items::Item>) {
+        let changed =
+            self.notices.get(source).map(Vec::as_slice).unwrap_or(&[]) != items.as_slice();
+        if items.is_empty() {
+            self.notices.remove(source);
+        } else {
+            self.notices.insert(source.to_string(), items);
+        }
+        if changed {
             for c in self.clients.values_mut() {
                 c.dirty = true;
             }
