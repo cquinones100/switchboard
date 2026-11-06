@@ -168,6 +168,60 @@ test("Haiku reads every hunk of a long file and the commits' messages, and its a
   assert.match(result.markdown, /### 2\. Show it\n\nThe page shows it\.\n\n- `src\/small\.js`\n  - `src\/small\.js:1` Renders it\./);
 });
 
+test("An id written without the folders every path shares is the one path ending in it; one two paths end in is dropped; an answer mostly missing says so", () => {
+  const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
+    encoding: "utf8",
+    input: `
+      local ds = require("diffstory")
+      local function file(p, n)
+        local lines = { "diff --git a/" .. p .. " b/" .. p }
+        for h = 1, n do table.insert(lines, ("@@ -%d +%d @@\\n-a\\n+b"):format(h * 10, h * 10)) end
+        return table.concat(lines, "\\n") .. "\\n"
+      end
+      local paths = { "pkgs/web-admin/lib/format.ts", "pkgs/web-admin/app/page.tsx", "pkgs/web-admin/lib/util.ts", "pkgs/api/lib/util.ts", "lib/page.tsx", "pkgs/web-admin/lib/page.tsx" }
+      local _, hunks = ds.split(table.concat(vim.tbl_map(function(p) return file(p, 2) end, paths)))
+      local none = function() return false end
+      local short = ds.parse(vim.json.encode({ chapters = {
+        { title = "Format the dates", why = "", hunks = { { id = "lib/format.ts#1", note = "Check the zone." }, "lib/format.ts#2", "lib/util.ts#1" } },
+        { title = "Show them", why = "", hunks = { { id = "app/page.tsx#2", note = "Renders it." }, "web-admin/app/page.tsx#1", "lib/page.tsx#1", "lib/page.tsx#9" } },
+      } }), vim.list_extend({ "pkgs/web-admin/lib/format.ts" }, paths), none, hunks)
+      local missing = ds.parse(vim.json.encode({ chapters = {
+        { title = "One", why = "", hunks = { "pkgs/web-admin/lib/format.ts#1", "nope.ts#1", "other/thing.ts#1", "x.ts#2" } },
+      } }), paths, none, hunks)
+      local nothing, why = ds.parse(vim.json.encode({ chapters = { { title = "Util", why = "", hunks = { "lib/util.ts#1" } } } }), paths, none, hunks)
+      local _, made_why = ds.parse(vim.json.encode({ chapters = { { title = "Lock", why = "", hunks = { "pkgs/web-admin/lib/util.ts#1" } } } }), paths, function(p) return p:match("util") ~= nil end, hunks)
+      local function where(story, p) return vim.tbl_map(function(h) return { h.chapter, h.note } end, story.hunks[p]) end
+      io.write(vim.json.encode({
+        files = vim.tbl_map(function(c) return { c.title, c.files } end, short.chapters),
+        format = where(short, "pkgs/web-admin/lib/format.ts"),
+        page = where(short, "pkgs/web-admin/app/page.tsx"),
+        exact = where(short, "lib/page.tsx"),
+        nested = where(short, "pkgs/web-admin/lib/page.tsx"),
+        short_missed = short.missed or vim.NIL,
+        missed = missing.missed,
+        nothing = nothing == nil,
+        why = why,
+        made_why = made_why or vim.NIL,
+      }))
+    `,
+  });
+  const result = JSON.parse(out);
+  assert.deepEqual(result.format, [[1, "Check the zone."], [1, ""]], "ids without the shared folder land in their chapter, notes included, a path listed twice (staged and unstaged) still one path");
+  assert.deepEqual(result.page, [[2, ""], [2, "Renders it."]], "a path missing any of its leading folders is found");
+  assert.deepEqual(result.exact, [[2, ""], [2, ""]], "an exact id wins over a path that ends in it");
+  assert.deepEqual(result.nested[0], [3, ""], "a file named only by a path another file has exactly isn't taken");
+  assert.deepEqual(result.files, [
+    ["Format the dates", ["pkgs/web-admin/lib/format.ts"]],
+    ["Show them", ["pkgs/web-admin/app/page.tsx", "lib/page.tsx"]],
+    ["Other changes", ["pkgs/api/lib/util.ts", "pkgs/web-admin/lib/page.tsx", "pkgs/web-admin/lib/util.ts"]],
+  ], "a shortened path two files end in is dropped, not guessed");
+  assert.equal(result.short_missed, null, "an answer whose ids are found says nothing");
+  assert.deepEqual(result.missed, { given: 4, matched: 1 }, "an answer whose ids mostly miss says so");
+  assert.equal(result.nothing, true, "an answer none of whose ids are found is no story");
+  assert.equal(result.why, "Haiku's answer named hunks this diff doesn't have (0 of 1 ids matched)", "and says why");
+  assert.equal(result.made_why, null, "an answer naming only generated files' hunks isn't said to name hunks the diff doesn't have");
+});
+
 test("M-d's cover shows each chapter as Haiku names it, then the diff in the story's order", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
   const repo = path.join(tmp, "stream-repo");
   const bin = path.join(tmp, "stream-bin");

@@ -38,10 +38,13 @@ command -v nvim >/dev/null || exit 0
 # At most five and a half minutes, as long as the story's own wait and a bit.
 # Exits 0 once the story is told (or there was none to tell), else not, and
 # then the commit is left untold, to be tried again, with why on stderr (the
-# last line Neovim wrote there, story-ahead.js's log).
+# last line Neovim wrote there, story-ahead.js's log). A story told with a
+# warning (its answer mostly named hunks the diff doesn't have) exits 0 with
+# the warning on stderr, which the log keeps too.
 why=$(cd "$top" && nvim --headless -u "$HOME/.config/nvim/diff.lua" --noplugin --cmd 'let g:diff_ahead = 1' \
   -c "DiffviewOpen $ref...HEAD" -c "lua vim.defer_fn(function() io.stderr:write('Neovim gave up waiting after 330 seconds\\n') vim.cmd('cquit 2') end, 330000)" </dev/null 2>&1 >/dev/null) || {
   printf '%s\n' "$why" | grep -v '^[[:space:]]*$' | tail -1 >&2
   exit 2
 }
+printf '%s\n' "$why" | grep "^Haiku's answer named hunks" | tail -1 >&2
 printf '%s\n' "$head" >"$state/$key"

@@ -591,6 +591,23 @@ local function cover(view)
   end, 300)
 end
 
+-- A few words in a box (tmux/say.sh), or Neovim's own message outside tmux.
+local function say(text)
+  if vim.env.TMUX then
+    vim.system({ vim.fn.expand("~/.config/tmux/say.sh"), text })
+  else
+    vim.notify(text, vim.log.levels.WARN)
+  end
+end
+
+-- What a story whose answer mostly named hunks this diff doesn't have says,
+-- once for each diff a view shows: in a box, and on stderr in the story told ahead,
+-- which its log keeps.
+local function missed_text(story)
+  local m = story and story.missed
+  return m and ("Haiku's answer named hunks this diff doesn't have (%d of %d ids matched), so the story may be thin"):format(m.matched, m.given)
+end
+
 local function ask_story(view)
   local ds = require("diffstory")
   local entries, paths, untracked = {}, {}, {}
@@ -610,6 +627,11 @@ local function ask_story(view)
     stop_loading(target)
     if made then
       target.why_none = nil
+      local missed = missed_text(made)
+      if missed and target.said_missed ~= target.want then
+        target.said_missed = target.want
+        if vim.g.diff_ahead then io.stderr:write(missed .. "\n") else say(missed .. ".") end
+      end
       settle(target, true)
     end
     target.story = made
@@ -846,7 +868,8 @@ local function ask_story(view)
             read(pending)
             local whole = ended and not error_text and table.concat(streamed)
             local text = result.code == 0 and (answer or (whole ~= "" and whole or nil)) or nil
-            local told = text and parse(text)
+            local told, unfit
+            if text then told, unfit = parse(text) end
             -- Why not, for the box ]p and ]c show and the story told ahead's log.
             local function first(s) return vim.trim(vim.split(s or "", "\n")[1] or "") end
             local why
@@ -858,7 +881,7 @@ local function ask_story(view)
             elseif error_text then
               why = "Claude answered with an error: " .. first(error_text)
             elseif not told then
-              why = "Haiku's answer didn't parse as a story"
+              why = unfit or "Haiku's answer didn't parse as a story"
             end
             -- The story kept before its progress goes, so a Neovim following
             -- finds one or the other.
@@ -968,11 +991,7 @@ local function no_story(view)
   else
     text = "No story for this diff: " .. (view and view.why_none or "it couldn't be told") .. ".\nThe list is in the kinds' order."
   end
-  if vim.env.TMUX then
-    vim.system({ vim.fn.expand("~/.config/tmux/say.sh"), text })
-  else
-    vim.notify(text, vim.log.levels.WARN)
-  end
+  say(text)
 end
 
 -- ]c and [c in the list: the next or the previous heading's file, as the
