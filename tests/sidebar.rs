@@ -276,6 +276,19 @@ fn m_s_and_its_keys_move_between_tabs() {
         !focused(l) && tabs(l)[1]["current"] == true
     });
 
+    // a: the chosen tab answered, as mission control's menu does; a tab
+    // with no Claude says so.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("a");
+    client.wait_text("That tab has no Claude to answer.");
+    client.type_text("x");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("no Claude to answer"))
+    });
+    client.type_text("q");
+    wait_list(&server, "back out", |l| !focused(l));
+
     // A click on a tab's row goes there.
     server.ok(&["new-tab", "-n", "third"]);
     client.wait_text("3:third");

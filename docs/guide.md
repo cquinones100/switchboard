@@ -395,6 +395,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | `/` | find a tab by name: typing narrows the list, the arrows move, Enter goes, Esc clears |
 | `Tab` `S-Tab` | the next or previous row, tabs then notifications, wrapping round (Settings' "Tab moves focus", `tab_focus`; off, `Tab` opens mission control) |
 | `Space` | peek at the chosen tab |
+| `a` | answer the chosen tab's Claude, or send it a message, in mission control's box (see [Answering a tab](#answering-a-tab)) |
 | `n` | to the notifications, or a box saying there are none |
 | `t` | a new tab running Claude, as `M-t` opens one, from the chosen tab, so its directory is first in the list |
 | any other Alt or Ctrl key | goes to the chosen tab and runs there |

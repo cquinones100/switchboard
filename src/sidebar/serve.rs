@@ -57,6 +57,7 @@ const KEYS: &[(&str, &str)] = &[
     ),
     ("M-space", "mission control"),
     ("space", "peek at it"),
+    ("a", "answer it, or send it a message"),
     ("n", "to the notifications, when there are any"),
     ("t", "new tab running Claude there (M-t)"),
     ("M-x C-x", "run that key there"),
@@ -1123,6 +1124,13 @@ impl Server {
             KeyCode::Char(' ') if none => {
                 if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
                     self.sidebar_peek(client, t);
+                }
+            }
+            // Its Claude answered from here, in mission control's box, as
+            // the sidebar's `a` answered the chosen tab in a popup.
+            KeyCode::Char('a') if none => {
+                if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
+                    self.open_answer(client, t, None);
                 }
             }
             KeyCode::Char('n') if none => {
