@@ -56,6 +56,8 @@ miniz_oxide = "0.9"
 # Rust's own inflate) and checked against the SHA-256 published beside it.
 sha2 = "0.11"
 flate2 = "1"
+# `codex-review --patch-id`: git's patch-id worked out here, which is SHA-1.
+sha1 = "0.11"
 tar = { version = "0.4", default-features = false }
 # The notes app (src/notes), in place of the Neovim plugin: a note's text as
 # a rope, whose clones share their pieces, so each undo step keeps the whole

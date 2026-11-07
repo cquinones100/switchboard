@@ -45,7 +45,9 @@
 //! the other as one hash (`patch_id`) and runs no review: the JSON's patchId
 //! is the reviewed range's, which Switchboard's pre-push hook compares with
 //! the range a push adds, so a reviewed commit rebased unchanged onto a newer
-//! main still counts as reviewed.
+//! main still counts as reviewed. The hash is `git patch-id --verbatim`'s,
+//! worked out here (`patch_id_of`), so a git older than 2.39, which hasn't
+//! `--verbatim`, gives it too.
 //!
 //! When Codex isn't there, Claude Code reviews in its place with the same
 //! prompt and schema (`claude_args`), so the JSON is the same either way, its
@@ -267,34 +269,38 @@ fn try_run(program: &str, args: &[&str]) -> Option<String> {
     (output.status.success() && !text.is_empty()).then_some(text)
 }
 
+/// What git's diff is asked for a patch ID: its options fixed, its context
+/// and how it lays out hunks included, so a person's git config
+/// (diff.context=0 would drop the context lines) can't change it between a
+/// review and a push.
+const PATCH_DIFF: &[&str] = &[
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--full-index",
+    "--binary",
+    "--unified=3",
+    "--inter-hunk-context=0",
+    "--diff-algorithm=myers",
+    "--indent-heuristic",
+];
+
 /// The change from one commit to another as one hash, git's patch-id: the
 /// same change made on another base gives the same one, but not a change
 /// whose context lines differ, so a commit rebased past a change next to its
-/// own no longer matches. `--verbatim` keeps whitespace, and the diff's
-/// options are fixed, its context and how it lays out hunks included, so a
-/// person's git config (diff.context=0 would drop the context lines) can't
-/// change it between a review and a push.
+/// own no longer matches. Whitespace is kept (`--verbatim`). The review's
+/// `patchId` and the pre-push hook's check (`codex-review --patch-id`) both
+/// come from here, so they agree whatever git is installed.
 fn patch_id(from: &str, to: &str) -> Result<String, String> {
     let diff = Command::new("git")
-        .args([
-            "-c",
-            "diff.noprefix=false",
-            "-c",
-            "diff.mnemonicPrefix=false",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-renames",
-            "--full-index",
-            "--binary",
-            "--unified=3",
-            "--inter-hunk-context=0",
-            "--diff-algorithm=myers",
-            "--indent-heuristic",
-            from,
-            to,
-        ])
+        .args(PATCH_DIFF)
+        .args([from, to])
         .stdin(Stdio::null())
         .output()
         .map_err(|e| e.to_string())?;
@@ -306,13 +312,169 @@ fn patch_id(from: &str, to: &str) -> Result<String, String> {
             stderr
         });
     }
-    if diff.stdout.is_empty() {
-        return Ok(String::new());
+    Ok(patch_id_of(&diff.stdout, true))
+}
+
+/// What `git patch-id --verbatim` prints first for a diff (or, `verbatim`
+/// false, `git patch-id --stable`), worked out here: git gained `--verbatim`
+/// only in 2.39, and an older one refuses it. A port of git's
+/// builtin/patch-id.c, so a hash recorded by either matches: each file's
+/// lines hashed with SHA-1 (but `index` lines and hunk headers, whose line
+/// numbers move with the base), and the files' hashes summed, so their
+/// order doesn't count; a binary file by the blobs its `index` line names.
+/// Empty when the diff is.
+fn patch_id_of(diff: &[u8], verbatim: bool) -> String {
+    use sha1::{Digest, Sha1};
+
+    // The sum of the files' hashes, as git adds them: byte by byte from
+    // the first, with the carry.
+    fn flush(result: &mut [u8; 20], ctx: &mut Sha1) {
+        let hash = ctx.finalize_reset();
+        let mut carry: u16 = 0;
+        for (sum, byte) in result.iter_mut().zip(hash.iter()) {
+            carry += u16::from(*sum) + u16::from(*byte);
+            *sum = carry as u8;
+            carry >>= 8;
+        }
     }
-    let mut cmd = Command::new("git");
-    cmd.args(["patch-id", "--verbatim"]);
-    let out = util::run_with_input(&mut cmd, &diff.stdout).map_err(|e| e.to_string())?;
-    Ok(out.split(' ').next().unwrap_or("").to_string())
+    // git's own isspace, which leaves out \v and \f.
+    let space = |b: &u8| matches!(b, b' ' | b'\t' | b'\n' | b'\r');
+    let hex = |s: &[u8]| s.len() >= 40 && s[..40].iter().all(u8::is_ascii_hexdigit);
+
+    let mut result = [0u8; 20];
+    let mut ctx = Sha1::new();
+    let mut patchlen = 0usize;
+    let (mut before, mut after) = (-1i64, -1i64);
+    let mut binary = false;
+    let (mut pre, mut post): (&[u8], &[u8]) = (b"", b"");
+    for whole in diff.split_inclusive(|&b| b == b'\n') {
+        // git reads each line as a C string.
+        let line = &whole[..whole.iter().position(|&b| b == 0).unwrap_or(whole.len())];
+        let commit = line
+            .strip_prefix(b"commit ")
+            .or_else(|| line.strip_prefix(b"From "));
+        if commit.is_none() && line.starts_with(b"\\ ") && line.len() > 12 {
+            // "\ No newline at end of file": counted only verbatim.
+            if verbatim {
+                ctx.update(line);
+            }
+            continue;
+        }
+        // A commit's hash begins the next patch, which this isn't asked of.
+        if hex(commit.unwrap_or(line)) {
+            break;
+        }
+        if patchlen == 0 && !line.starts_with(b"diff ") {
+            continue;
+        }
+        if before == -1 {
+            if line.starts_with(b"GIT binary patch") || line.starts_with(b"Binary files") {
+                binary = true;
+                before = 0;
+                ctx.update(pre);
+                ctx.update(post);
+                flush(&mut result, &mut ctx);
+                continue;
+            } else if line.starts_with(b"index ") {
+                // `index <pre>..<post>[ <mode>]`, each kept to the 64
+                // characters git keeps.
+                if let Some(dots) = find(line, b"..") {
+                    let end = find(&line[dots..], b" ")
+                        .map_or(line.len().saturating_sub(1), |at| dots + at);
+                    let first = &line["index ".len()..dots.max("index ".len())];
+                    let second = line.get(dots + 2..end.max(dots + 2)).unwrap_or_default();
+                    pre = &first[..first.len().min(64)];
+                    post = &second[..second.len().min(64)];
+                }
+                continue;
+            } else if line.starts_with(b"--- ") {
+                before = 1;
+                after = 1;
+            } else if !line.first().is_some_and(u8::is_ascii_alphabetic) {
+                break;
+            }
+        }
+        if binary {
+            if line.starts_with(b"diff ") {
+                binary = false;
+                before = -1;
+            }
+            continue;
+        }
+        if before == 0 && after == 0 {
+            if line.starts_with(b"@@ -") {
+                hunk_counts(line, &mut before, &mut after);
+                continue;
+            }
+            if !line.starts_with(b"diff ") {
+                break;
+            }
+            flush(&mut result, &mut ctx);
+            before = -1;
+            after = -1;
+        }
+        match line.first() {
+            Some(b'-') => before -= 1,
+            Some(b'+') => after -= 1,
+            Some(b' ') => {
+                before -= 1;
+                after -= 1;
+            }
+            _ => {}
+        }
+        if verbatim {
+            patchlen += line.len();
+            ctx.update(line);
+        } else {
+            let kept: Vec<u8> = line.iter().copied().filter(|b| !space(b)).collect();
+            patchlen += kept.len();
+            ctx.update(&kept);
+        }
+    }
+    flush(&mut result, &mut ctx);
+    if patchlen == 0 {
+        return String::new();
+    }
+    result.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A hunk header's line counts (`@@ -<at>,<before> +<at>,<after> @@`, a
+/// count left out being 1), as git's scan_hunk_header reads them, stopping
+/// where it stops.
+fn hunk_counts(line: &[u8], before: &mut i64, after: &mut i64) {
+    let digits = |s: &[u8]| s.iter().take_while(|b| b.is_ascii_digit()).count();
+    let number = |s: &[u8]| {
+        s.iter()
+            .take_while(|b| b.is_ascii_digit())
+            .fold(0i64, |n, d| {
+                n.saturating_mul(10).saturating_add(i64::from(d - b'0'))
+            })
+    };
+    let mut q = line.get(4..).unwrap_or_default();
+    let mut n = digits(q);
+    if q.get(n) == Some(&b',') {
+        q = &q[n + 1..];
+        *before = number(q);
+        n = digits(q);
+    } else {
+        *before = 1;
+    }
+    if n == 0 || q.get(n) != Some(&b' ') || q.get(n + 1) != Some(&b'+') {
+        return;
+    }
+    let mut r = q.get(n + 2..).unwrap_or_default();
+    n = digits(r);
+    if r.get(n) == Some(&b',') {
+        r = &r[n + 1..];
+        *after = number(r);
+    } else {
+        *after = 1;
+    }
+}
+
+/// Where `needle` first is in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn repo_root() -> Reviewed<String> {
@@ -1461,6 +1623,133 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The patch ID worked out here is git's own, for each kind of change
+    /// a diff holds: compared with `git patch-id --stable` (the same, with
+    /// whitespace taken out) on any git, and with `--verbatim` where git has
+    /// it. Before 2.39 git read a hunk of one line, and a binary file,
+    /// differently, so those are compared only with a git that has
+    /// `--verbatim`.
+    #[test]
+    fn the_patch_id_is_gits_own() {
+        let dir = std::env::temp_dir().join(format!(
+            "sb-patch-id-{}-{}",
+            std::process::id(),
+            util::now_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str], input: Option<&[u8]>| -> String {
+            let mut cmd = Command::new("git");
+            cmd.current_dir(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(["-c", "commit.gpgsign=false", "-c", "core.autocrlf=false"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1");
+            match input {
+                Some(input) => util::run_with_input(&mut cmd, input).unwrap(),
+                None => {
+                    let out = cmd.stdin(Stdio::null()).output().unwrap();
+                    assert!(out.status.success(), "git {args:?}: {out:?}");
+                    String::from_utf8_lossy(&out.stdout).into_owned()
+                }
+            }
+        };
+        let verbatim = Command::new("git")
+            .args(["patch-id", "--verbatim"])
+            .stdin(Stdio::null())
+            .output()
+            .is_ok_and(|o| o.status.success());
+        let lines = |from: usize, to: usize| -> String {
+            (from..to).map(|n| format!("line {n}\n")).collect()
+        };
+        let write = |name: &str, text: &[u8]| fs::write(dir.join(name), text).unwrap();
+        let commit = |message: &str| -> String {
+            git(&["add", "-A"], None);
+            git(&["commit", "-q", "--allow-empty", "-m", message], None);
+            git(&["rev-parse", "HEAD"], None).trim().to_string()
+        };
+        git(&["init", "-q"], None);
+
+        // Text in files of several lines, which every git reads alike.
+        write("a.txt", lines(0, 40).as_bytes());
+        write("b.txt", lines(0, 5).as_bytes());
+        write("run.sh", b"#!/bin/sh\necho one\necho two\n");
+        let mut commits = vec![commit("start")];
+        write(
+            "a.txt",
+            format!(
+                "{}changed 5\n{}changed 30\n{}",
+                lines(0, 5),
+                lines(6, 30),
+                lines(31, 40)
+            )
+            .as_bytes(),
+        );
+        fs::remove_file(dir.join("b.txt")).unwrap();
+        write("c.txt", lines(0, 4).as_bytes());
+        commits.push(commit("two hunks, a file gone and one new"));
+        write(
+            "a.txt",
+            format!("{}  changed\t5 \n{}", lines(0, 5), lines(6, 39)).as_bytes(),
+        );
+        write("c.txt", b"line 0\nline 1\nline 2\nno newline");
+        commits.push(commit("whitespace, and no newline at the end"));
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        write("d.txt", lines(0, 3).as_bytes());
+        commits.push(commit("a mode changed alone, and a file after it"));
+        let plain = commits.len();
+
+        // What git before 2.39 read differently: a hunk of one line, and
+        // binary files, before and after a text file.
+        write("one.txt", b"one line\n");
+        write("e.bin", b"\x00\x01\x02binary\x00");
+        commits.push(commit("one line, and a binary file"));
+        write("one.txt", b"another line\n");
+        write("e.bin", b"\x00\x01\x02changed\x00");
+        write("f.txt", lines(0, 3).as_bytes());
+        commits.push(commit("both changed, and text after"));
+
+        for to in 1..commits.len() {
+            for from in 0..to {
+                let mut args = PATCH_DIFF.to_vec();
+                args.extend([commits[from].as_str(), commits[to].as_str()]);
+                let diff = git(&args, None);
+                let first = |out: String| out.split(' ').next().unwrap_or("").to_string();
+                if to < plain || verbatim {
+                    let stable = first(git(&["patch-id", "--stable"], Some(diff.as_bytes())));
+                    assert_eq!(
+                        patch_id_of(diff.as_bytes(), false),
+                        stable,
+                        "--stable, {from}..{to}:\n{diff}"
+                    );
+                }
+                if verbatim {
+                    let own = first(git(&["patch-id", "--verbatim"], Some(diff.as_bytes())));
+                    assert_eq!(
+                        patch_id_of(diff.as_bytes(), true),
+                        own,
+                        "--verbatim, {from}..{to}:\n{diff}"
+                    );
+                }
+            }
+        }
+        // No change, no hash; whitespace counts verbatim.
+        assert_eq!(patch_id_of(b"", true), "");
+        let diff = |from: usize, to: usize| {
+            let mut args = PATCH_DIFF.to_vec();
+            args.extend([commits[from].as_str(), commits[to].as_str()]);
+            git(&args, None)
+        };
+        let spaced = diff(1, 2);
+        assert_ne!(
+            patch_id_of(spaced.as_bytes(), true),
+            patch_id_of(spaced.replace('\t', " ").as_bytes(), true)
+        );
+        assert_eq!(patch_id_of(diff(0, 1).as_bytes(), true).len(), 40);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn contributor_text_cannot_close_its_own_fence() {

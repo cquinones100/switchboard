@@ -248,19 +248,8 @@ fn the_reviewer_gets_the_repository_s_rules_as_the_base_has_them_and_your_own() 
 
 #[test]
 fn the_patch_id_names_a_change_whatever_its_base() {
-    // `git patch-id --verbatim`, which the pre-push hook's check depends on,
-    // came in git 2.39; an older git has nothing to check.
-    let verbatim = Command::new("git")
-        .args(["patch-id", "--verbatim"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !verbatim {
-        eprintln!("skipped: this git has no `patch-id --verbatim`");
-        return;
-    }
+    // Worked out by switchboard rather than `git patch-id --verbatim`, so it
+    // works on a git older than 2.39 too (the unit test compares the two).
     let tmp = TempDir::new("cr-patch");
     let home = tmp.path();
     let work = clone(home);
