@@ -501,6 +501,39 @@ fn finish(check: bool, list: List) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The `claude-md` part, as Settings runs it after claude.json changes:
+/// this binary's own `setup claude-md` with its input closed. What it
+/// changed last, in its own words, or why it failed.
+pub fn run_claude_md() -> Result<String, String> {
+    let exe = util::exe().map_err(|e| e.to_string())?;
+    let out = std::process::Command::new(exe)
+        .args(["setup", "claude-md"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    let last = |bytes: &[u8]| {
+        String::from_utf8_lossy(bytes)
+            .lines()
+            .map(str::trim)
+            .rfind(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    };
+    let said = last(&out.stdout);
+    if out.status.success() {
+        // "claude-md: up to date" says nothing worth saying.
+        Ok(if said.ends_with("up to date") {
+            String::new()
+        } else {
+            said
+        })
+    } else {
+        let why = last(&out.stderr);
+        Err(if why.is_empty() { said } else { why })
+    }
+}
+
 // ── A new build ─────────────────────────────────────────────────────────────
 
 /// Where the build whose parts were last put in place is recorded.

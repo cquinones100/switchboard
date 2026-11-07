@@ -1928,10 +1928,12 @@ impl Server {
             "map" => own::Kind::Map,
             "profile" => own::Kind::Profile,
             "file" => own::Kind::File,
+            "rules" => own::Kind::Rules,
             _ => own::Kind::Text,
         };
         let dir = own::own_dir();
         match kind {
+            own::Kind::Rules => self.change_rules(client, dir),
             own::Kind::Profile => {
                 let Some(profiles) = own::chrome_profiles() else {
                     m.note = Some(
@@ -2006,7 +2008,8 @@ impl Server {
                         let Outcome::Picked(p) = outcome else {
                             return;
                         };
-                        let said = match own::write_own(&dir, &file, &key, kind, &p.value, min) {
+                        let saved = own::write_own(&dir, &file, &key, kind, &p.value, min);
+                        let said = match &saved {
                             Ok(()) => format!("Saved {label} in ~/.config/switchboard/{file}"),
                             Err(e) => format!("Not saved: {e}"),
                         };
@@ -2014,11 +2017,100 @@ impl Server {
                             server.sidebar_load();
                         }
                         server.mission.own = None;
-                        server.mission_note(client, said);
+                        // Which file of your rules' repository is read:
+                        // ~/.claude/CLAUDE.md is written again to import it.
+                        if file == "claude.json" && saved.is_ok() {
+                            server.claude_md_setup(client, said);
+                        } else {
+                            server.mission_note(client, said);
+                        }
                     })),
                 );
             }
         }
+    }
+
+    /// Settings' "Your CLAUDE.md": where your rules come from, the local
+    /// file, another file or a git repository, the last two typed in;
+    /// written to claude.json, then setup's claude-md part run (the daemon's
+    /// `claudeMdChoices` and `setClaudeMd`).
+    fn change_rules(&mut self, client: ClientId, dir: PathBuf) {
+        let menu = Menu::new(
+            "Where your CLAUDE.md's rules come from",
+            vec![
+                MenuOption::new("Local file, ~/.config/switchboard/CLAUDE.md"),
+                MenuOption::new("Another file…"),
+                MenuOption::new("A git repository…"),
+            ],
+        );
+        self.choose(client, menu, move |server, client, chose| {
+            let (title, hint, repo) = match chose {
+                Some(0) => {
+                    server.save_rules(client, &dir, None, None);
+                    return;
+                }
+                Some(1) => (
+                    "Your CLAUDE.md: a file",
+                    "The path of the file that holds your rules (~ for your home).",
+                    false,
+                ),
+                Some(2) => (
+                    "Your CLAUDE.md: a repository",
+                    "Its URL, as git clone takes it. Your rules are its CLAUDE.md, at its root or in a folder; it is cloned into ~/.local/share/switchboard/claude-md and pulled each time setup runs.",
+                    true,
+                ),
+                _ => return,
+            };
+            let ask = Ask::new(title, hint);
+            server.open(
+                client,
+                Box::new(ask),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Picked(p) = outcome else {
+                        return;
+                    };
+                    let typed = p.value.trim().to_string();
+                    if typed.is_empty() {
+                        return;
+                    }
+                    if repo {
+                        server.save_rules(client, &dir, Some(&typed), None);
+                    } else {
+                        server.save_rules(client, &dir, None, Some(&typed));
+                    }
+                })),
+            );
+        });
+    }
+
+    fn save_rules(&mut self, client: ClientId, dir: &Path, repo: Option<&str>, path: Option<&str>) {
+        self.mission.own = None;
+        match crate::usage::own::write_rules(dir, repo, path) {
+            Ok(()) => {
+                let (_, words) = crate::usage::own::rules_source(
+                    dir,
+                    &crate::usage::own::read_own(dir, "claude.json").unwrap_or_default(),
+                );
+                self.claude_md_setup(client, format!("Your CLAUDE.md: {words}"));
+            }
+            Err(e) => self.mission_note(client, format!("Not saved: {e}")),
+        }
+    }
+
+    /// Setup's claude-md part, run after claude.json changed, which clones a
+    /// repository named and writes ~/.claude/CLAUDE.md to import the rules;
+    /// `said` is said with what it changed, or why it couldn't finish.
+    fn claude_md_setup(&mut self, client: ClientId, said: String) {
+        self.mission_busy(client, "Writing your CLAUDE.md", None, async move {
+            let result = tokio::task::spawn_blocking(crate::setup::run_claude_md)
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+            Some(match result {
+                Ok(changed) if changed.is_empty() => said,
+                Ok(changed) => format!("{said} ({changed})"),
+                Err(why) => format!("{said}; setup couldn't finish: {why}"),
+            })
+        });
     }
 
     // ── Worktrees ───────────────────────────────────────────────────────────

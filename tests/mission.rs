@@ -206,6 +206,44 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
 }
 
 #[test]
+fn your_claude_md_row_names_where_the_rules_come_from_and_runs_setup() {
+    let (server, mut client) = two_tabs(json!({}));
+    std::fs::write(server.home.join("rules.md"), "Be brief.\n").unwrap();
+    open(&mut client);
+    client.type_text("vsett\r");
+    client.wait_text("INTEGRATIONS");
+    client.type_text("/read with switchboard\r");
+    client.wait_text("local file");
+    // Past its category's heading to the row.
+    client.type_text("j\r");
+    client.wait_text("Where your CLAUDE.md's rules come from");
+    client.type_text("j\r");
+    client.wait_text("Your CLAUDE.md: a file");
+    client.type_text("~/rules.md\r");
+    let file = server.home.join(".config/switchboard/claude.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let saved: Value = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        if saved["path"] == "~/rules.md" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "not written: {saved}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Setup's claude-md part ran: ~/.claude/CLAUDE.md imports the file.
+    let claude_md = server.home.join(".claude/CLAUDE.md");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !std::fs::read_to_string(&claude_md).is_ok_and(|t| t.contains("rules.md")) {
+        assert!(Instant::now() < deadline, "setup didn't write CLAUDE.md");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    client.wait_text("Your CLAUDE.md: ~/rules.md");
+}
+
+#[test]
 fn m_j_picks_an_open_tab_from_the_work_map() {
     let (server, mut client) = two_tabs(json!({}));
     wait_list(&server, "the first tab named", |l| {

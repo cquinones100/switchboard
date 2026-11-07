@@ -33,6 +33,10 @@ pub enum Kind {
     Profile,
     /// The whole file, opened in an editor.
     File,
+    /// Where your CLAUDE.md's rules come from (claude.json's `repo` or
+    /// `path`, else the local file), picked from a menu, the file or
+    /// repository typed in.
+    Rules,
 }
 
 impl Kind {
@@ -44,6 +48,7 @@ impl Kind {
             Kind::Map => "map",
             Kind::Profile => "profile",
             Kind::File => "file",
+            Kind::Rules => "rules",
         }
     }
 }
@@ -100,12 +105,21 @@ pub const OWN_FILES: &[OwnFile] = &[
     OwnFile {
         file: "claude.json",
         category: "Claude Code (claude.json)",
-        rows: &[row(
-            "file",
-            "Rules file in the repo",
-            Kind::Text,
-            "With your rules in a git repository (claude.json's repo), the file in it that holds them (CLAUDE.md when not set); setup writes ~/.claude/CLAUDE.md again when it changes, and the repository is pulled each time setup's claude-md part runs",
-        )],
+        rows: &[
+            Row {
+                key: None,
+                label: "Your CLAUDE.md",
+                kind: Kind::Rules,
+                min: None,
+                detail: "Your own rules, read with Switchboard's part",
+            },
+            row(
+                "file",
+                "Rules file in the repo",
+                Kind::Text,
+                "With your rules in a git repository (claude.json's repo), the file in it that holds them (CLAUDE.md when not set); saving it runs setup's claude-md part, which writes ~/.claude/CLAUDE.md again, and the repository is pulled each time that part runs",
+            ),
+        ],
     },
     OwnFile {
         file: "CLAUDE.md",
@@ -484,6 +498,52 @@ pub fn write_own(
     write().map_err(|e| format!("Couldn't write ~/.config/switchboard/{file}: {e}"))
 }
 
+/// Where your CLAUDE.md's rules come from, as claude.json says: its kind
+/// ("repository", "a file" or "local file", as the Settings row shows it)
+/// and the words that name it. Ported from views.js's `claudeMdSource`.
+pub fn rules_source(dir: &Path, data: &Map<String, Value>) -> (&'static str, String) {
+    let text = |k: &str| {
+        data.get(k)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
+    if let Some(repo) = text("repo") {
+        return ("repository", format!("repo: {repo}"));
+    }
+    if let Some(path) = text("path") {
+        return ("a file", path);
+    }
+    let local = if dir.join("CLAUDE.md").exists() {
+        "~/.config/switchboard/CLAUDE.md"
+    } else {
+        "none yet"
+    };
+    ("local file", local.to_string())
+}
+
+/// Where your rules come from, written to claude.json: a repository, a
+/// file, or (neither) the local file, the other key taken out.
+pub fn write_rules(dir: &Path, repo: Option<&str>, path: Option<&str>) -> Result<(), String> {
+    write_own(
+        dir,
+        "claude.json",
+        "repo",
+        Kind::Text,
+        repo.unwrap_or(""),
+        0,
+    )?;
+    write_own(
+        dir,
+        "claude.json",
+        "path",
+        Kind::Text,
+        path.unwrap_or(""),
+        0,
+    )
+}
+
 /// A row's short value, shown beside it.
 fn short_of(
     kind: Kind,
@@ -568,6 +628,17 @@ fn items_with(dir: &Path, profiles: &Option<Vec<Profile>>) -> Vec<Item> {
                     short_of(r.kind, value, exists, profiles)
                 };
                 let active = !typed.is_empty() || (r.kind == Kind::File && exists);
+                let (detail, short, typed, active) = if r.kind == Kind::Rules && broken.is_none() {
+                    let (kind, words) = rules_source(dir, &data);
+                    (
+                        format!("{}: {words}", r.detail),
+                        kind.to_string(),
+                        words,
+                        true,
+                    )
+                } else {
+                    (detail, short, typed, active)
+                };
                 items.push(
                     Item::new(format!("own:{}:{}", f.file, r.key.unwrap_or("")), r.label)
                         .detail(detail)
@@ -617,6 +688,42 @@ mod tests {
             .iter()
             .find(|i| i.id == id)
             .unwrap_or_else(|| panic!("no {id}"))
+    }
+
+    #[test]
+    fn your_claude_md_row_says_where_the_rules_come_from_and_changing_it_keeps_the_rest() {
+        let dir = temp("rules");
+        let rules = |dir: &Path| {
+            let items = items_with(dir, &None);
+            let r = row(&items, "own:claude.json:");
+            (r.data["value"].clone(), r.detail.clone())
+        };
+        assert_eq!(rules(&dir).0, "local file");
+        assert!(rules(&dir).1.ends_with(": none yet"));
+        fs::write(dir.join("CLAUDE.md"), "mine\n").unwrap();
+        assert!(rules(&dir).1.ends_with(": ~/.config/switchboard/CLAUDE.md"));
+
+        fs::write(
+            dir.join("claude.json"),
+            "{\"path\":\"~/a.md\",\"file\":\"R.md\"}",
+        )
+        .unwrap();
+        write_rules(&dir, Some("https://example.com/r.git"), None).unwrap();
+        let (value, detail) = rules(&dir);
+        assert_eq!(value, "repository");
+        assert!(
+            detail.ends_with(": repo: https://example.com/r.git"),
+            "{detail}"
+        );
+        let data = read_own(&dir, "claude.json").unwrap();
+        assert_eq!(data.get("path"), None);
+        assert_eq!(data["file"], "R.md");
+
+        write_rules(&dir, None, Some("~/b.md")).unwrap();
+        assert_eq!(rules(&dir).0, "a file");
+        write_rules(&dir, None, None).unwrap();
+        assert_eq!(rules(&dir).0, "local file");
+        assert_eq!(read_own(&dir, "claude.json").unwrap().len(), 1);
     }
 
     #[test]
