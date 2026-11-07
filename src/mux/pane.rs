@@ -44,7 +44,7 @@ use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
-use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor, Processor, Rgb};
@@ -57,6 +57,7 @@ use ratatui::style::{Color, Modifier};
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::extkeys::ModifyOtherKeys;
+use super::compose::Links;
 use super::{MouseReporting, PaneEvent, PaneId, PaneModes, TermNotice};
 
 /// What to start in a new pane.
@@ -629,6 +630,52 @@ impl Pane {
         let y = area.y.checked_add(u16::try_from(cursor.line.0).ok()?)?;
         (x >= visible.left() && x < visible.right() && y >= visible.top() && y < visible.bottom())
             .then_some((x, y))
+    }
+
+    /// The hyperlinks (OSC 8) on the screen as `render` drew it into `area`
+    /// of a frame (`frame_area`), each cell's put in `links`, so the frame
+    /// sends them on to the terminal. An address that can't safely go to
+    /// the terminal is left out (`Links::safe`).
+    pub fn put_links(&self, area: Rect, frame_area: Rect, links: &mut Links) {
+        let visible = area.intersection(frame_area);
+        let grid = self.term.grid();
+        let (cols, rows) = (self.term.columns(), self.term.screen_lines());
+        let offset = grid.display_offset() as i32;
+        // The address last seen, kept whole for the cells after it.
+        let mut last: Option<(Hyperlink, Option<Arc<str>>)> = None;
+        for y in visible.top()..visible.bottom() {
+            let row = usize::from(y - area.y);
+            if row >= rows {
+                break;
+            }
+            for x in visible.left()..visible.right() {
+                let col = usize::from(x - area.x);
+                if col >= cols {
+                    break;
+                }
+                let cell = &grid[GridPoint::new(Line(row as i32 - offset), Column(col))];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                let Some(link) = cell.hyperlink() else {
+                    continue;
+                };
+                let uri = match &last {
+                    Some((seen, uri)) if *seen == link => uri.clone(),
+                    _ => {
+                        let uri = Links::safe(link.uri()).then(|| Arc::from(link.uri()));
+                        last = Some((link, uri.clone()));
+                        uri
+                    }
+                };
+                if let Some(uri) = uri {
+                    links.set(x, y, uri);
+                }
+            }
+        }
     }
 
     /// Scrolls the view back (positive) or forward (negative) by lines.
@@ -1448,6 +1495,45 @@ mod tests {
         let sent = String::from_utf8(screen.render(&frame)).unwrap();
         assert!(sent.contains("\u{10EEEE}\u{305}\u{30E}"), "{sent:?}");
         assert!(!sent.contains("\u{30D}"), "only the cell that changed");
+    }
+
+    #[test]
+    fn a_programs_hyperlinks_reach_the_terminal_around_their_text() {
+        let mut run = idle(20, 2);
+        run.pane.process(
+            b"see \x1b]8;;https://example.com/a\x1b\\the page\x1b]8;;\x1b\\ now\r\n\
+              \x1b]8;id=x;https://example.com/b\x07b\x1b]8;;\x07",
+        );
+        let mut screen = crate::mux::compose::Screen::default();
+        let mut frame = crate::mux::compose::Frame::new(20, 2);
+        let area = Rect::new(0, 0, 20, 2);
+        run.pane.render(&mut frame.buf, area, &PaneView::default());
+        run.pane.put_links(area, frame.area(), &mut frame.links);
+        assert_eq!(
+            frame.links.get(4, 0).map(|u| u.to_string()),
+            Some("https://example.com/a".into())
+        );
+        assert_eq!(frame.links.get(3, 0), None, "the space before isn't");
+        assert_eq!(frame.links.get(12, 0), None, "nor the one after");
+        let sent = String::from_utf8(screen.render(&frame)).unwrap();
+        let open = sent
+            .find("\x1b]8;;https://example.com/a\x1b\\")
+            .expect("the link opened");
+        let text = sent.find("the page").expect("its text");
+        let close = sent[text..].find("\x1b]8;;\x1b\\").expect("and closed") + text;
+        assert!(open < text && close < sent.find("now").unwrap(), "{sent:?}");
+        assert!(sent.contains("\x1b]8;;https://example.com/b\x1b\\"));
+
+        // Drawn again with no link there, the same text is sent again
+        // without one.
+        run.pane.process(b"\x1b[1;5Hthe page");
+        run.pane.render(&mut frame.buf, area, &PaneView::default());
+        frame.links = crate::mux::compose::Links::default();
+        run.pane.put_links(area, frame.area(), &mut frame.links);
+        assert_eq!(frame.links.get(4, 0), None);
+        let sent = String::from_utf8(screen.render(&frame)).unwrap();
+        assert!(sent.contains("the page"), "{sent:?}");
+        assert!(!sent.contains("example.com/a"), "{sent:?}");
     }
 
     #[test]

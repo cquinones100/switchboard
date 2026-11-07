@@ -10,8 +10,17 @@
 //! own, and the status line at the bottom with the session's name and the
 //! tabs; theme.sh's light shades in place of the dark ones with the theme
 //! light (src/status/theme.rs).
+//!
+//! A cell a pane's program made part of a hyperlink (OSC 8) carries it in
+//! the frame's `links`, beside the cells, since a ratatui cell can't, and
+//! is sent inside the same OSC 8, so a link in a pane is one in your
+//! terminal too, as tmux passed them on. Anything drawn over such a cell
+//! (a box, mission control) takes its link away (`Frame::cover_links`), so
+//! no box is clickable as the link under it.
 
+use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 
 use crossterm::{cursor, queue};
 use ratatui::backend::{Backend, CrosstermBackend};
@@ -39,6 +48,45 @@ pub mod colors {
     pub const INACTIVE_BG: Color = Color::Indexed(236);
 }
 
+/// The hyperlinks on a frame's cells, by position (sparse, since most
+/// cells have none), each the address a pane's program gave it with OSC 8.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Links(HashMap<(u16, u16), Arc<str>>);
+
+impl Links {
+    pub fn set(&mut self, x: u16, y: u16, uri: Arc<str>) {
+        self.0.insert((x, y), uri);
+    }
+
+    pub fn get(&self, x: u16, y: u16) -> Option<&Arc<str>> {
+        self.0.get(&(x, y))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// No links in `area` (something drawn over it).
+    pub fn clear_area(&mut self, area: Rect) {
+        if !self.0.is_empty() {
+            self.0.retain(|&(x, y), _| {
+                x < area.left() || x >= area.right() || y < area.top() || y >= area.bottom()
+            });
+        }
+    }
+
+    /// An address as it may go to the terminal inside OSC 8: printable
+    /// ASCII alone, so nothing a program wrote can end the sequence and
+    /// write escapes of its own, and not so long a terminal drops it.
+    pub fn safe(uri: &str) -> bool {
+        !uri.is_empty() && uri.len() <= 2048 && uri.bytes().all(|b| (0x21..0x7f).contains(&b))
+    }
+}
+
+/// A symbol nothing draws, put in each linked cell while something is drawn
+/// over the frame, so a cell still holding it afterwards was left alone.
+const UNDER: &str = "\u{10fffe}";
+
 /// One client's frame: what to show, and where the cursor goes (hidden when
 /// `None`).
 pub struct Frame {
@@ -47,6 +95,8 @@ pub struct Frame {
     /// The cursor's shape, as the focused pane's program asked (a bar in
     /// Neovim's Insert mode).
     pub cursor_style: Option<cursor::SetCursorStyle>,
+    /// The cells that are part of a hyperlink.
+    pub links: Links,
 }
 
 impl Frame {
@@ -55,11 +105,40 @@ impl Frame {
             buf: Buffer::empty(Rect::new(0, 0, cols, rows)),
             cursor: None,
             cursor_style: None,
+            links: Links::default(),
         }
     }
 
     pub fn area(&self) -> Rect {
         self.buf.area
+    }
+
+    /// Draws something over the frame (`draw`), each linked cell it draws
+    /// on losing its link; a style alone changed keeps it, since the text
+    /// is still there.
+    pub fn cover_links<R>(&mut self, draw: impl FnOnce(&mut Frame) -> R) -> R {
+        if self.links.is_empty() {
+            return draw(self);
+        }
+        let mut under: Vec<((u16, u16), String)> = Vec::with_capacity(self.links.0.len());
+        for &(x, y) in self.links.0.keys() {
+            if let Some(cell) = self.buf.cell_mut((x, y)) {
+                under.push(((x, y), cell.symbol().to_string()));
+                cell.set_symbol(UNDER);
+            }
+        }
+        let drawn = draw(self);
+        for ((x, y), symbol) in under {
+            match self.buf.cell_mut((x, y)) {
+                Some(cell) if cell.symbol() == UNDER => {
+                    cell.set_symbol(&symbol);
+                }
+                _ => {
+                    self.links.0.remove(&(x, y));
+                }
+            }
+        }
+        drawn
     }
 }
 
@@ -67,6 +146,7 @@ impl Frame {
 #[derive(Default)]
 pub struct Screen {
     prev: Option<Buffer>,
+    prev_links: Links,
     style: Option<cursor::SetCursorStyle>,
 }
 
@@ -75,6 +155,7 @@ impl Screen {
     /// anything that may have left the terminal showing something else).
     pub fn invalidate(&mut self) {
         self.prev = None;
+        self.prev_links = Links::default();
         self.style = None;
     }
 
@@ -88,15 +169,65 @@ impl Screen {
             Some(p) if !full => p,
             _ => {
                 out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
+                self.prev_links = Links::default();
                 Buffer::empty(frame.buf.area)
             }
         };
-        let diff = prev.diff(&frame.buf);
-        {
+        let mut diff = prev.diff(&frame.buf);
+        if frame.links.is_empty() && self.prev_links.is_empty() {
             let mut backend = CrosstermBackend::new(&mut out);
             // Writing into a Vec can't fail.
             let _ = backend.draw(diff.into_iter());
+        } else {
+            // A cell whose link came or went is sent again though its text
+            // is the same, and each run of cells with one link is sent
+            // inside its OSC 8.
+            let sent: std::collections::HashSet<(u16, u16)> =
+                diff.iter().map(|(x, y, _)| (*x, *y)).collect();
+            let mut changed: Vec<(u16, u16)> = frame
+                .links
+                .0
+                .iter()
+                .filter(|(at, uri)| self.prev_links.0.get(*at) != Some(*uri))
+                .map(|(at, _)| *at)
+                .chain(
+                    self.prev_links
+                        .0
+                        .keys()
+                        .filter(|at| !frame.links.0.contains_key(*at))
+                        .copied(),
+                )
+                .filter(|at| !sent.contains(at))
+                .collect();
+            changed.sort_unstable();
+            changed.dedup();
+            for (x, y) in changed {
+                if let Some(cell) = frame.buf.cell((x, y)) {
+                    diff.push((x, y, cell));
+                }
+            }
+            diff.sort_by_key(|(x, y, _)| (*y, *x));
+            let mut rest = diff.as_slice();
+            while let Some(&(x, y, _)) = rest.first() {
+                let link = frame.links.get(x, y);
+                let run = rest
+                    .iter()
+                    .take_while(|(x, y, _)| frame.links.get(*x, *y) == link)
+                    .count();
+                if let Some(uri) = link {
+                    let _ = write!(out, "\x1b]8;;{uri}\x1b\\");
+                }
+                {
+                    let mut backend = CrosstermBackend::new(&mut out);
+                    let _ = backend.draw(rest[..run].iter().copied());
+                }
+                if link.is_some() {
+                    out.extend_from_slice(b"\x1b]8;;\x1b\\");
+                }
+                rest = &rest[run..];
+            }
         }
+        self.prev_links = frame.links.clone();
         if let Some((x, y)) = frame.cursor {
             let style = frame
                 .cursor_style
@@ -521,6 +652,38 @@ mod tests {
             second.contains('x') && !second.contains("hello"),
             "{second:?}"
         );
+    }
+
+    #[test]
+    fn a_box_drawn_over_a_link_takes_it_away_and_a_style_alone_does_not() {
+        let mut frame = Frame::new(10, 2);
+        frame.buf.set_string(0, 0, "link", Style::new());
+        frame.buf.set_string(0, 1, "more", Style::new());
+        let uri: Arc<str> = Arc::from("https://example.com/");
+        for x in 0..4 {
+            frame.links.set(x, 0, uri.clone());
+            frame.links.set(x, 1, uri.clone());
+        }
+        frame.cover_links(|f| {
+            f.buf.set_string(0, 0, "bo", Style::new());
+            f.buf
+                .set_style(Rect::new(0, 1, 10, 1), Style::new().fg(Color::Red));
+        });
+        assert_eq!(row(&frame.buf, 0).trim_end(), "bonk", "the text put back");
+        assert_eq!(frame.links.get(0, 0), None, "under the box");
+        assert_eq!(frame.links.get(2, 0), Some(&uri), "beside it");
+        assert_eq!(frame.links.get(0, 1), Some(&uri), "a style alone");
+        assert_eq!(row(&frame.buf, 1).trim_end(), "more");
+        let sent = String::from_utf8(Screen::default().render(&frame)).unwrap();
+        assert!(
+            sent.contains("\x1b]8;;https://example.com/\x1b\\"),
+            "{sent:?}"
+        );
+
+        assert!(Links::safe("https://example.com/a?b=c;d#e"));
+        assert!(!Links::safe("https://example.com/\x1b]0;x"));
+        assert!(!Links::safe("https://example.com/a b"));
+        assert!(!Links::safe(""));
     }
 
     #[test]

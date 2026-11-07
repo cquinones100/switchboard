@@ -72,6 +72,8 @@ A click focuses a pane. Dragging selects text and copies it when you let go; a d
 
 What you copy goes to the computer's clipboard and to your terminal's (OSC 52), which reaches the computer you are at even over SSH, as long as your terminal lets programs set its clipboard. A program in a pane can copy the same way. One that asks to read the clipboard gets nothing back: the clipboard is yours, not every program's.
 
+A link a program in a pane writes as a hyperlink (OSC 8), as Claude Code, `ls --hyperlink` and the views do, reaches your terminal as one, so it opens as it would outside Switchboard: Cmd-click in most terminals on a Mac, Ctrl-click elsewhere, with Shift too where the pane's program takes the mouse. A box or mission control drawn over it isn't part of the link.
+
 ### Panes and tabs
 
 A tab is split into panes with `M-H`, `M-J`, `M-K` and `M-L`, each opening a shell in the current pane's directory on that side. `M-S-Left`, `M-S-Down`, `M-S-Up` and `M-S-Right` grow the current pane toward that side, five cells at a time, and `M-=` zooms it to the whole tab and back. Resizing your terminal keeps each pane's share of the tab. `M-w` closes a pane, and the last pane closes its tab (see "Closing a busy pane" below).

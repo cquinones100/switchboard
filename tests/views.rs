@@ -4,7 +4,8 @@
 //! pr-view`, and M-v again closes it; M-r where there is no repository says
 //! why it can't open the PR. And `switchboard open-url` opens a link in its
 //! site's Chrome profile, with a stand-in for Chrome writing down what it
-//! was given (test/open-url.test.js's test, with its `open`).
+//! was given (test/open-url.test.js's test, with its `open`). A link a
+//! program in a pane writes as OSC 8 reaches the client as one.
 
 mod common;
 
@@ -287,4 +288,26 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
     );
     let pr = "https://github.com/o/r/pull/12345#linear.app";
     assert_eq!(open(pr), chrome("Default", pr), "else the default profile");
+}
+
+#[test]
+fn a_link_a_program_writes_reaches_the_terminal_as_a_link() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let mut client = server.attach(100, 20);
+    client.wait_text("$");
+    client.type_text(
+        "printf '\\033]8;;https://example.com/osc\\033\\\\%s\\033]8;;\\033\\\\\\n' linked-text\r",
+    );
+    client.wait_for("the link's text", |s| {
+        s.iter()
+            .any(|l| l.ends_with("linked-text") && !l.contains('\''))
+    });
+    let raw = String::from_utf8_lossy(&client.raw).into_owned();
+    let open = raw
+        .rfind("\x1b]8;;https://example.com/osc\x1b\\")
+        .expect("the link sent on as OSC 8");
+    let text = raw[open..].find("linked-text").expect("its text inside") + open;
+    let close = raw[text..].find("\x1b]8;;\x1b\\").expect("then closed") + text;
+    assert!(open < text && text < close);
 }

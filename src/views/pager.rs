@@ -12,9 +12,10 @@
 //!
 //! It draws with escapes of its own rather than through ratatui's cells,
 //! since a link has to reach the terminal as an OSC 8 hyperlink around its
-//! text, which a cell can't carry. Under Switchboard's own multiplexer,
-//! which doesn't pass hyperlinks on, a click on a link opens it from here
-//! (the mouse is taken, as `less --mouse` took it), through `links::open_url`.
+//! text, which a cell can't carry; Switchboard's multiplexer passes it on
+//! (src/mux/compose.rs), so the terminal knows it as a link. A plain click
+//! on one opens it from here too (the mouse is taken, as `less --mouse`
+//! took it), through `links::open_url`.
 //!
 //! Keys: j, k, Down, Up, Enter, e and y a line; Space, f, b, PageDown and
 //! PageUp a screen; d and u half of one; g and G the top and the end; Left

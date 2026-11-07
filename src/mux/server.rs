@@ -1981,7 +1981,7 @@ impl Server {
             None => (Default::default(), None),
         };
         let c = self.clients.get_mut(&id).expect("checked above");
-        c.overlays.draw(&mut frame);
+        frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
         c.dirty = false;
         let bytes = c.screen.render(&frame);
@@ -2029,6 +2029,7 @@ impl Server {
                         dim: false,
                     },
                 );
+                slot.pane.put_links(rect, frame.area(), &mut frame.links);
                 if active {
                     focused_rect = Some(rect);
                     if slot.copy.is_none() {
@@ -2041,6 +2042,9 @@ impl Server {
                 if slot.pane.scrolled() > 0 || slot.copy.is_some() {
                     let label = format!("[{}]", slot.pane.scrolled());
                     let x = rect.right().saturating_sub(label.len() as u16);
+                    frame
+                        .links
+                        .clear_area(Rect::new(x, rect.y, label.len() as u16, 1));
                     compose::put(
                         &mut frame.buf,
                         x,
