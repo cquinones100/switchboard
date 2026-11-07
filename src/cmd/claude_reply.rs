@@ -18,7 +18,8 @@
 //! The tabs come from the server (`switchboard list`). A tab's Claude is the
 //! pane under whose process a Claude Code process runs, one with a session
 //! file in `~/.claude/sessions`, found by walking the pane's process tree,
-//! as the relay walked `ps`'s; its transcript is
+//! as the relay walked `ps`'s, and a conversation it moved into the
+//! background is followed to its job; the transcript is
 //! `~/.claude/projects/*/<session>.jsonl`.
 
 use std::fs::{self, File};
@@ -98,9 +99,9 @@ fn claude_of(tab: &Value) -> Option<(String, String)> {
                 .filter(|s| s.pid == Some(p) && !s.session_id.is_empty())
             {
                 if s.entrypoint.starts_with("sdk") {
-                    headless.get_or_insert((id.clone(), s.session_id.clone()));
+                    headless.get_or_insert((id.clone(), carried_on(&all, s)));
                 } else {
-                    return Some((id, s.session_id.clone()));
+                    return Some((id, carried_on(&all, s)));
                 }
             }
         }
@@ -108,7 +109,29 @@ fn claude_of(tab: &Value) -> Option<(String, String)> {
     headless
 }
 
-/// The transcript of a session: `~/.claude/projects/<any>/<id>.jsonl`.
+/// The session carrying on the conversation `session` shows: one it moved
+/// into the background is followed from its parked Claude (`parkedJobId`)
+/// to the job whose `jobId` matches, link after link, as the relay's
+/// `transcriptFor` followed it, so the reply is the job's, not the parked
+/// Claude's own.
+fn carried_on(all: &[sessions::SessionFile], session: &sessions::SessionFile) -> String {
+    let mut current = session;
+    let mut seen = vec![current.session_id.as_str()];
+    while !current.parked_job_id.is_empty() {
+        let Some(job) = all.iter().find(|o| {
+            o.job_id == current.parked_job_id
+                && !o.session_id.is_empty()
+                && !seen.contains(&o.session_id.as_str())
+        }) else {
+            break;
+        };
+        seen.push(&job.session_id);
+        current = job;
+    }
+    current.session_id.clone()
+}
+
+/// The transcript of a session:`~/.claude/projects/<any>/<id>.jsonl`.
 pub fn transcript_of(session: &str) -> Option<PathBuf> {
     let projects = paths::claude_dir().join("projects");
     fs::read_dir(projects)
@@ -293,5 +316,26 @@ mod tests {
         assert_eq!(id(find_tab(&list, "1", "other")).as_deref(), Some("@5"));
         assert_eq!(id(find_tab(&list, "2", "")).as_deref(), Some("@2"));
         assert_eq!(id(find_tab(&list, "9", "main")), None);
+    }
+
+    #[test]
+    fn a_conversation_moved_to_the_background_is_followed_to_its_job() {
+        let file = |session: &str, job: &str, parked: &str| sessions::SessionFile {
+            pid: Some(1),
+            session_id: session.into(),
+            entrypoint: "cli".into(),
+            job_id: job.into(),
+            parked_job_id: parked.into(),
+        };
+        let all = vec![
+            file("parked", "", "j1"),
+            file("first-job", "j1", "j2"),
+            file("second-job", "j2", ""),
+            file("ring", "j3", "j3"),
+        ];
+        assert_eq!(carried_on(&all, &all[0]), "second-job");
+        assert_eq!(carried_on(&all, &all[2]), "second-job");
+        // Files that name each other in a ring end.
+        assert_eq!(carried_on(&all, &all[3]), "ring");
     }
 }
