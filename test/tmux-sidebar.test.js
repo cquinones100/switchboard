@@ -139,6 +139,45 @@ test("a tab's conversation is found from the session file that names its pane", 
   }
 });
 
+test("the latest reply is the last message Claude wrote text in, whole, even before a prompt it hasn't answered", () => {
+  const lines = [
+    { type: "user", message: { content: "first prompt" } },
+    { type: "assistant", message: { id: "m1", content: [{ type: "text", text: "old reply" }] } },
+    { type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Done. Two things:" }] } },
+    { type: "assistant", message: { id: "m2", content: [{ type: "text", text: "1. one\n2. two" }] } },
+    { type: "assistant", message: { id: "m2", content: [{ type: "tool_use", id: "a", name: "Read", input: {} }] } },
+    { type: "assistant", isSidechain: true, message: { id: "s", content: [{ type: "text", text: "a subagent" }] } },
+    { type: "assistant", isApiErrorMessage: true, message: { id: "e", content: [{ type: "text", text: "API Error" }] } },
+    { type: "assistant", message: { id: "x", model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] } },
+    { type: "user", message: { content: "a new prompt" } },
+  ];
+  assert.equal(sidebar.parseReply(lines.map((l) => JSON.stringify(l)).join("\n")), "Done. Two things:\n\n1. one\n2. two");
+  assert.equal(sidebar.parseReply(JSON.stringify(lines[0])), undefined);
+  const indented = { type: "assistant", message: { id: "m3", content: [{ type: "text", text: "\n    first()\n    second()\n" }] } };
+  assert.equal(sidebar.parseReply(JSON.stringify(indented)), "    first()\n    second()", "a code block's indent is kept");
+});
+
+test("M-y's reader prints the reply of the Claude in a pane, and says by its exit code when there is none", () => {
+  const pane = tmux("display", "-p", "-t", "test:", "#{pane_id}");
+  const read = (target) => {
+    try {
+      return { out: execFileSync("node", [path.join(__dirname, "../lib/claude-reply.js"), target], { env: { ...process.env, HOME: home }, encoding: "utf8" }), code: 0 };
+    } catch (error) {
+      return { code: error.status };
+    }
+  };
+  fs.writeFileSync(path.join(home, ".claude/sessions/112.json"), JSON.stringify({ pid: 112, sessionId: "s2", cwd: "/work", tmux: `test:@9.${pane}` }));
+  try {
+    fs.writeFileSync(path.join(home, ".claude/projects/-work/s2.jsonl"), `${JSON.stringify({ type: "user", message: { content: "fix it" } })}\n`);
+    assert.equal(read(pane).code, 4);
+    fs.appendFileSync(path.join(home, ".claude/projects/-work/s2.jsonl"), `${JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Fixed it." }] } })}\n`);
+    assert.deepEqual(read(pane), { out: "Fixed it.", code: 0 });
+    assert.equal(read("%999999").code, 3);
+  } finally {
+    fs.rmSync(path.join(home, ".claude/sessions/112.json"));
+  }
+});
+
 test("tabs are ordered by what needs you: waiting longest, finished longest ago, working, then the rest", async () => {
   ["two", "three", "four", "five"].forEach(() => tmux("new-window", "-t", "test", "-c", tmp));
   const now = Math.floor(Date.now() / 1000);

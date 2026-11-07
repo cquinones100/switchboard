@@ -45,6 +45,7 @@ tmux new-session -A -s main
 | `M-s` | Into the sidebar and back out |
 | `C-w h` `j` `k` `l` | To the pane on that side, and between Neovim's windows on the way; `M-Left`, `M-Down`, `M-Up` and `M-Right` do the same |
 | `M-c` | Into the pane running Claude in this tab |
+| `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin the tab to the top of Needs you |
 | `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, its changes grouped into chapters that tell the change as a story, from the whole diff and its commit messages, with a note over each change worth one (`yS` copying it as Markdown, `]c` / `[c` between them, `]p` / `[p` a chapter at a time as if each were a commit, each of them saying why when there is no story, `E` narrowing or widening the file list, `ga` asking Haiku a question about the change, which reads the story, the diff and the repository to answer), the story told in the background for each new commit so it opens at once, and while one is being told, each chapter shown as Haiku names it (`t` shows its answer as it comes); `M-p`'s "Clear this tab's diff cache" drops the story, file order and PR base kept for the tab's branch, so the next `M-d` asks again (a story being told right now is kept) |
 

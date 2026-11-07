@@ -879,6 +879,7 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | --- | --- | --- |
 | `M-s` | jump in from any pane, on the tab you are in, and back out | |
 | `M-c` | into the pane running Claude in the tab you are in, from the sidebar or a pane beside it | |
+| `M-y` | copy the latest reply of the Claude in the tab you are in, the last message it wrote text in, read from its session transcript (`tmux/reply-copy.sh`, `lib/claude-reply.js`; the `copy_reply` setting, under Sessions) | |
 | `C-w h` / `C-w l` | move in, on the tab you are in, and back out, as between any panes | |
 | (closing the tab in front) | the cursor lands in the sidebar of the tab that takes its place, to pick the next one | |
 | `M-Space` | open mission control | close it |
