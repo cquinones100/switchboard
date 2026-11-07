@@ -801,6 +801,10 @@ A story is kept in Switchboard's cache (`~/.cache/switchboard/diff-story/`) unde
 
 With Settings' "Diff story told ahead" (`diff_story_ahead`) on, when a tab's branch has a commit whose story isn't told yet, it is told in the background, so `M-d` opens on it at once; an `M-d` opened meanwhile follows that telling on its cover rather than asking again. It tells one branch at a time and each commit once, tries a failed one again after half an hour, and counts the default branch too, whose commits not yet pushed are its diff. It runs only with Files in reading order, Diff told as a story and GitHub on, and Claude Code installed, and sends each new commit's diff and messages to Haiku, a run taking up to five and a half minutes.
 
+### The branch's commits one at a time
+
+`c` goes through the branch's commits one at a time, oldest first, so the branch reads in the order it was written: each commit's own change against the commit before it, in the diff's place, the list headed with "Commit 2 of 5", its hash and its subject. `]p` goes to the next commit and `[p` to the one before; `c`, `q` or `Esc` in the list go back to the whole branch, where you were. A commit has no story of its own, and `ga` asks only about the whole branch. A working tree's changes have no commits to go through.
+
 ### Asking about the change
 
 `ga`, in the list or the diff, asks Haiku a question about the change (Settings' "Ask Claude about the diff", `diff_ask`). A box opens in the middle of the diff to type it in: `Enter` asks, `Shift-Enter` or `Ctrl-j` starts a new line, `Ctrl-u` clears it, and `Esc`, `Ctrl-c`, Cancel or a click outside closes it. The answer streams into a window on the right half, titled with the question, each file Haiku opens named on a line of its own. Haiku is given the story, the diff as the story read it, where your cursor is (the file, the line and its change), and the question, and runs in the repository's top with only the tools to read, search and list files, so it can read the repository to answer and nothing outside it. It keeps no session: each question stands alone. This sends the diff and your question to Claude. `M-p`'s "Ask Claude about the diff (M-d), with its story, reading the repository as needed" presses `ga`, and is listed only while the diff is open.
@@ -858,7 +862,8 @@ These work wherever the cursor is:
 | `zR` `zM` | Open every fold of the file, or fold them again |
 | `Tab`, `Shift-Tab` | Between the list and the diff |
 | `Ctrl-w h` `Ctrl-w l`, `Ctrl-w w` | The pane of the diff to the left or right, or the next one |
-| `]p` `[p` | The next or previous page of the story |
+| `]p` `[p` | The next or previous page of the story, or commit of the branch's |
+| `c` | The branch's commits one at a time, and back to the whole branch |
 | `E` | Widen or narrow the list |
 | `yp` | Copy the cursor's `path:line`, or the lines selected (`path:12-20`) |
 | `yl` | Copy a GitHub link to the cursor's line, or to the lines selected |

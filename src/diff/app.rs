@@ -20,6 +20,12 @@
 //! `ga` asks Haiku a question about the change (ask.rs): a box to type it
 //! in, then a window on the right half with the answer streamed in.
 //!
+//! `c` goes through the branch's commits one at a time, oldest first, as
+//! diffview's `:DiffviewFileHistory --reverse` did: each commit's own diff,
+//! a diff of its own (`History`) drawn in this one's place, `]p` and `[p`
+//! moving to the next commit and the one before, and `c`, `q` or `Esc`
+//! back to the whole branch.
+//!
 //! Asked for (`--working`), it shows the working tree's changes instead,
 //! the changes not staged and those staged in a section each, as
 //! diffview's plain `:DiffviewOpen` listed them (git.rs's `read_working`),
@@ -162,6 +168,28 @@ pub enum Msg {
     },
     /// What a question's answer says, by the question's number.
     Asked(u64, Said),
+    /// What a commit's diff of the history was told, by its number.
+    History(u64, Box<Msg>),
+}
+
+/// What a commit's diff asks of the branch's diff it was opened from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wants {
+    /// The next commit (1) or the one before (-1).
+    Step(i32),
+    /// Back to the whole branch.
+    Leave,
+}
+
+/// The branch's commits one at a time: the commits, oldest first, which is
+/// shown, and its own diff, whose messages come back through
+/// `Msg::History` under its number, so one for a commit left behind is
+/// dropped.
+struct History {
+    commits: Vec<(String, String)>,
+    at: usize,
+    id: u64,
+    app: Box<App>,
 }
 
 /// A file's two sides, read once.
@@ -341,6 +369,16 @@ pub struct App {
     /// Escapes to write after the frame: the clipboard's.
     pub out: Vec<u8>,
     teller: Teller,
+    /// The branch's commits one at a time, while `c` shows them; how many
+    /// commits' diffs have been made, for their numbers.
+    history: Option<History>,
+    histories: u64,
+    /// Set in a commit's diff of the history: what it asks of the diff it
+    /// was opened from, and what its list is headed with (the commit and
+    /// its subject).
+    in_history: bool,
+    wants: Option<Wants>,
+    title: Option<(String, String)>,
 }
 
 /// `fg` mixed over `bg`, `amount` of it.
@@ -398,6 +436,11 @@ impl App {
             answer_rect: None,
             out: Vec::new(),
             teller: Teller::default(),
+            history: None,
+            histories: 0,
+            in_history: false,
+            wants: None,
+            title: None,
         }
     }
 
@@ -423,12 +466,18 @@ impl App {
         if let Some(a) = &self.answer {
             a.asking.stop();
         }
+        if let Some(h) = &mut self.history {
+            h.app.stop();
+        }
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.cols = cols.max(20);
         self.rows = rows.max(5);
         self.lines = None;
+        if let Some(h) = &mut self.history {
+            h.app.resize(cols, rows);
+        }
     }
 
     fn say(&mut self, text: impl Into<String>) {
@@ -443,6 +492,7 @@ impl App {
             || self.message.is_some()
             || self.telling == Telling::Waiting
             || self.answer.as_ref().is_some_and(|a| !a.done)
+            || self.history.as_ref().is_some_and(|h| h.app.ticking())
     }
 
     /// The spinner's next frame, and a message gone once its time is up;
@@ -457,6 +507,9 @@ impl App {
         {
             self.message = None;
             changed = true;
+        }
+        if let Some(h) = &mut self.history {
+            changed |= h.app.tick();
         }
         self.ticking() || changed
     }
@@ -506,6 +559,11 @@ impl App {
                 }
             }
             Msg::Asked(id, said) => self.asked(id, said),
+            Msg::History(id, msg) => {
+                if let Some(h) = self.history.as_mut().filter(|h| h.id == id) {
+                    h.app.event(*msg);
+                }
+            }
         }
     }
 
@@ -1062,6 +1120,15 @@ impl App {
             return Act::Same;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // A commit of the history has the keys, but C-c, which closes the
+        // whole diff.
+        if let Some(h) = &mut self.history {
+            if ctrl && key.code == KeyCode::Char('c') {
+                return Act::Quit;
+            }
+            let act = h.app.key(key);
+            return self.after_history(act);
+        }
         if ctrl && key.code == KeyCode::Char('c') && self.ask_box.is_none() {
             return Act::Quit;
         }
@@ -1085,6 +1152,8 @@ impl App {
         if self.loading.is_some() {
             return match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => Act::Quit,
+                // A commit of the history being read: c goes back too.
+                KeyCode::Char('c') if self.in_history => Act::Quit,
                 _ => Act::Same,
             };
         }
@@ -1143,6 +1212,8 @@ impl App {
                 return Act::Same;
             }
             KeyCode::Char('E') => self.widen(),
+            KeyCode::Char('c') if !ctrl && self.in_history => self.wants = Some(Wants::Leave),
+            KeyCode::Char('c') if !ctrl => self.open_history(),
             KeyCode::Tab => {
                 self.focus = if list { self.main_side() } else { Focus::List };
             }
@@ -1385,7 +1456,10 @@ impl App {
 
     /// Why there is no story to move through, said.
     fn no_story(&mut self) {
-        let text = if !self.opts.story {
+        let text = if self.in_history {
+            "A commit of the history has no story of its own.\nc goes back to the whole branch's."
+                .to_string()
+        } else if !self.opts.story {
             "No story for this diff: diff stories are off in Settings (diff_story).".to_string()
         } else if self.telling == Telling::Waiting {
             "The story is still being told.\n]p and ]c move through its chapters once it is."
@@ -1413,6 +1487,15 @@ impl App {
             rows.push(ListRow::Loading);
         }
         let cols = self.list_width.saturating_sub(2).max(8) as usize;
+        if let Some((_, subject)) = &self.title {
+            for line in crate::ui::draw::wrap(subject, cols) {
+                rows.push(ListRow::Heading(line, StoryLook::Title));
+            }
+            rows.push(ListRow::Heading(
+                "]p [p other commits · c back".into(),
+                StoryLook::Comment,
+            ));
+        }
         let short = self.list_width < SHORT_WHY;
         let starts = self.starts();
         for (k, &i) in self.order.iter().enumerate() {
@@ -1473,6 +1556,10 @@ impl App {
     /// ]p and [p: the story a chapter at a time, as if each were a commit
     /// of its own, [p from the first going back to the whole diff.
     fn turn_page(&mut self, step: i32) {
+        if self.in_history {
+            self.wants = Some(Wants::Step(step));
+            return;
+        }
         if !self.opts.pages {
             return;
         }
@@ -1512,6 +1599,126 @@ impl App {
             .position(|&i| !order::generated(&self.entries()[i].path))
             .unwrap_or(0);
         self.show_at(first);
+    }
+
+    // ── The branch's commits one at a time ─────────────────────────────────
+
+    /// `c`: the branch's commits, oldest first, the first shown.
+    fn open_history(&mut self) {
+        let Some(change) = &self.change else {
+            return;
+        };
+        if change.working() {
+            return self
+                .say("These are the working tree's changes: there are no commits to go through.");
+        }
+        let commits = git::commits_between(&change.top, &change.left, &change.right);
+        self.open_commits(commits);
+    }
+
+    /// The history of these commits (as `open_history` reads them), the
+    /// first shown.
+    fn open_commits(&mut self, commits: Vec<(String, String)>) {
+        if commits.is_empty() {
+            return self.say("No commits on this branch since its base.");
+        }
+        self.show_commit(commits, 0);
+    }
+
+    /// A commit of the history shown: a diff of its own, which reads the
+    /// commit's change off the screen's thread and tells no story (a
+    /// commit is the branch's story a page at a time already).
+    fn show_commit(&mut self, commits: Vec<(String, String)>, at: usize) {
+        let Some(top) = self.change.as_ref().map(|c| c.top.clone()) else {
+            return;
+        };
+        let Some((hash, subject)) = commits.get(at).cloned() else {
+            return;
+        };
+        self.histories += 1;
+        let id = self.histories;
+        let (tx, rx) = channel::<Msg>();
+        let outer = self.tx.clone();
+        std::thread::spawn(move || {
+            for msg in rx {
+                if outer.send(Msg::History(id, Box::new(msg))).is_err() {
+                    break;
+                }
+            }
+        });
+        let opts = Options {
+            story: false,
+            pages: false,
+            progress: false,
+            notes: false,
+            ask: false,
+            haiku: false,
+            ..self.opts
+        };
+        let mut app = App::new(opts, self.cols, self.rows, tx.clone());
+        app.in_history = true;
+        app.list_width = self.list_width;
+        let short: String = hash.chars().take(7).collect();
+        app.title = Some((
+            format!(" Commit {} of {} · {short}", at + 1, commits.len()),
+            subject,
+        ));
+        std::thread::spawn(move || {
+            let read = git::read_commit(&top, &hash)
+                .map(|c| (Box::new(c), None))
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Msg::Loaded(read));
+        });
+        if let Some(mut old) = self.history.take() {
+            old.app.stop();
+        }
+        self.history = Some(History {
+            commits,
+            at,
+            id,
+            app: Box::new(app),
+        });
+    }
+
+    /// What a commit's diff asked for, after a key or a click there: the
+    /// next commit or the one before, or back to the whole branch, as it
+    /// is too when it would have closed.
+    fn after_history(&mut self, act: Act) -> Act {
+        let Some(h) = &mut self.history else {
+            return act;
+        };
+        match h.app.wants.take() {
+            Some(Wants::Step(by)) => {
+                let to = h.at as i64 + i64::from(by);
+                if to >= 0 && (to as usize) < h.commits.len() {
+                    let commits = std::mem::take(&mut h.commits);
+                    self.show_commit(commits, to as usize);
+                } else {
+                    h.app.say(if by > 0 {
+                        "This is the branch's last commit; c goes back to the whole branch."
+                    } else {
+                        "This is the branch's first commit; c goes back to the whole branch."
+                    });
+                }
+                Act::Redraw
+            }
+            Some(Wants::Leave) => {
+                self.leave_history();
+                Act::Redraw
+            }
+            None if act == Act::Quit => {
+                self.leave_history();
+                Act::Redraw
+            }
+            None => act,
+        }
+    }
+
+    /// Back to the whole branch, where it was.
+    fn leave_history(&mut self) {
+        if let Some(mut h) = self.history.take() {
+            h.app.stop();
+        }
     }
 
     // ── Copying ─────────────────────────────────────────────────────────────
@@ -1877,6 +2084,10 @@ impl App {
     // ── The mouse ───────────────────────────────────────────────────────────
 
     pub fn mouse(&mut self, m: MouseEvent) -> Act {
+        if let Some(h) = &mut self.history {
+            let act = h.app.mouse(m);
+            return self.after_history(act);
+        }
         let (x, y) = (m.column, m.row);
         let hit = self
             .buttons
@@ -2494,6 +2705,85 @@ mod tests {
             .find(|l| l.contains("a = 2"))
             .expect("the staged change");
         assert!(row.contains("a = 1"), "HEAD beside the index: {row:?}");
+    }
+
+    #[test]
+    fn c_goes_through_the_branchs_commits_one_at_a_time_and_back() {
+        let mut app = app();
+        let commits = vec![
+            ("a1".repeat(20), "Return two".to_string()),
+            ("b2".repeat(20), "Say so in the README".to_string()),
+        ];
+        app.open_commits(commits);
+        let h = app.history.as_mut().expect("the history");
+        assert_eq!(h.at, 0);
+        h.app.give_text(
+            "P",
+            "src/a.js",
+            Some("function f() {\n  return 1;\n}\n".into()),
+        );
+        h.app.give_text(
+            "C",
+            "src/a.js",
+            Some("function f() {\n  return 2;\n}\n".into()),
+        );
+        h.app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            left: "P".into(),
+            right: "C".into(),
+            entries: vec![entry("src/a.js", 'M', 1, 1)],
+            diff: "diff --git a/src/a.js b/src/a.js\n@@ -2 +2 @@\n-  return 1;\n+  return 2;\n"
+                .into(),
+            ..Change::default()
+        });
+        let shown = screen(&mut app);
+        let names = list(&shown);
+        assert!(names[0].contains("Commit 1 of 2 · a1a1a1a"), "{names:?}");
+        assert!(names.iter().any(|l| l.contains("Return two")), "{names:?}");
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("return 1;") && l.contains("return 2;")),
+            "the commit's own change: {shown:?}"
+        );
+        press(&mut app, "]p");
+        assert_eq!(app.history.as_ref().unwrap().at, 1);
+        let title = app.history.as_ref().unwrap().app.title.clone().unwrap();
+        assert_eq!(title.0, " Commit 2 of 2 · b2b2b2b");
+        assert!(
+            screen(&mut app)
+                .iter()
+                .any(|l| l.contains("Reading the change")),
+            "read off the screen's thread"
+        );
+        // Read, it takes the keys: none after the last commit.
+        app.history.as_mut().unwrap().app.loaded(Change::default());
+        press(&mut app, "]p");
+        assert_eq!(
+            app.history.as_ref().unwrap().at,
+            1,
+            "no commit after the last"
+        );
+        let h = app.history.as_mut().unwrap();
+        assert!(h.app.message.take().unwrap().0.contains("last commit"));
+        press(&mut app, "[p");
+        assert_eq!(app.history.as_ref().unwrap().at, 0);
+        // c goes back to the whole branch, and so does q, rather than close.
+        press(&mut app, "c");
+        assert!(app.history.is_none());
+        assert!(list(&screen(&mut app))[0].contains("Changes (3)"));
+        app.open_commits(vec![("c3".repeat(20), "One".into())]);
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Act::Redraw
+        );
+        assert!(app.history.is_none());
+        app.open_commits(Vec::new());
+        assert!(app.history.is_none());
+        assert_eq!(
+            app.message.as_ref().unwrap().0,
+            "No commits on this branch since its base."
+        );
     }
 
     #[test]

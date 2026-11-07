@@ -9,7 +9,8 @@
 //! takes a pane's place the same way, from M-p's command and from mission
 //! control's menu on a tab, as the diff does from that menu. M-p's
 //! working tree command shows the changes not yet committed, those not
-//! staged (a file git doesn't know yet among them) and those staged.
+//! staged (a file git doesn't know yet among them) and those staged. `c`
+//! in the diff goes through the branch's commits one at a time.
 
 mod common;
 
@@ -389,6 +390,53 @@ fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
     );
     assert_eq!(panes(&server)[0]["options"]["@in_place"], "diff");
     client.send(b"\x1bd");
+    wait_until("the pane back", || {
+        panes(&server)[0]["options"].get("@in_place").is_none()
+    });
+}
+
+#[test]
+fn c_in_the_diff_goes_through_the_branchs_commits_one_at_a_time() {
+    let server = TestServer::start();
+    let dir = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_order": false});
+    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    let work = repository(server.dir.path());
+    std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
+    git(&work, &["commit", "-q", "-am", "Bump b again"]);
+
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    client.send(b"\x1bd");
+    client.wait_text("Changes (2)");
+    client.type_text("c");
+    client.wait_text("Commit 1 of 2");
+    client.wait_text("Change both");
+    let screen = client.wait_text("export const a = 2;");
+    let row = screen.iter().find(|l| l.contains("a = 2;")).unwrap();
+    assert!(
+        row.contains("export const a = 1;"),
+        "the first commit's own change: {row:?}"
+    );
+    client.type_text("]p");
+    client.wait_text("Commit 2 of 2");
+    client.wait_text("Bump b again");
+    let screen = client.wait_text("export const b = 3;");
+    let row = screen.iter().find(|l| l.contains("b = 3;")).unwrap();
+    assert!(
+        row.contains("export const b = 2;"),
+        "the second commit's own change: {row:?}"
+    );
+    client.type_text("c");
+    client.wait_text("Changes (2)");
+    client.type_text("q");
     wait_until("the pane back", || {
         panes(&server)[0]["options"].get("@in_place").is_none()
     });

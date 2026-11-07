@@ -359,6 +359,60 @@ pub fn read_change(top: &Path, base: &str) -> Result<Change> {
         .map_err(|_| anyhow!("{base} and this branch have no commit in common"))?
         .trim()
         .to_string();
+    read_range(top, base, left, right)
+}
+
+/// The commits between a branch's merge base and its head, oldest first,
+/// each its hash and subject, as diffview's history listed them with
+/// `--reverse`.
+pub fn commits_between(top: &Path, left: &str, right: &str) -> Vec<(String, String)> {
+    git(
+        top,
+        &[
+            "log",
+            "--reverse",
+            "--no-color",
+            "--format=%H%x00%s",
+            &format!("{left}..{right}"),
+        ],
+    )
+    .unwrap_or_default()
+    .lines()
+    .filter_map(|l| {
+        let (hash, subject) = l.split_once('\0')?;
+        Some((hash.to_string(), subject.to_string()))
+    })
+    .collect()
+}
+
+/// One commit's own change, against its first parent (the empty tree for
+/// a first commit), as diffview's history showed each.
+pub fn read_commit(top: &Path, commit: &str) -> Result<Change> {
+    if !safe_ref(commit) {
+        bail!("Not a commit: {commit}");
+    }
+    let right = git(
+        top,
+        &["rev-parse", "--verify", &format!("{commit}^{{commit}}")],
+    )
+    .map_err(|_| anyhow!("No commit {commit} here"))?
+    .trim()
+    .to_string();
+    let left = match git(
+        top,
+        &["rev-parse", "--verify", "--quiet", &format!("{right}^")],
+    ) {
+        Ok(parent) => parent.trim().to_string(),
+        Err(_) => git(top, &["hash-object", "-t", "tree", "/dev/null"])?
+            .trim()
+            .to_string(),
+    };
+    read_range(top, &right, left, right.clone())
+}
+
+/// The change from `left` to `right`, what M-d and a commit of the history
+/// both show.
+fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Change> {
     let range = |extra: &[&str]| -> Result<String> {
         let mut args: Vec<&str> = PLAIN.to_vec();
         args.extend_from_slice(extra);

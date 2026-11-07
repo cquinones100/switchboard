@@ -23,6 +23,12 @@ use crate::util;
 impl App {
     /// Draws the whole screen into `buf`; gives where the cursor goes.
     pub fn draw(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
+        // A commit of the history draws itself in this one's place.
+        if let Some(h) = &mut self.history {
+            let cursor = h.app.draw(buf);
+            self.out.append(&mut h.app.out);
+            return cursor;
+        }
         let area = buf.area;
         self.cols = area.width.max(20);
         self.rows = area.height.max(5);
@@ -218,8 +224,11 @@ impl App {
                         .iter()
                         .filter(|&&i| entries.get(i).is_some_and(|e| e.section == *section))
                         .count();
-                    let text = match (self.page, &self.story) {
-                        (Some(p), Some(s)) => format!(" Page {p} of {} ({n})", s.chapters.len()),
+                    let text = match (&self.title, self.page, &self.story) {
+                        (Some((title, _)), _, _) => title.clone(),
+                        (None, Some(p), Some(s)) => {
+                            format!(" Page {p} of {} ({n})", s.chapters.len())
+                        }
                         _ => format!(" {} ({n})", section.heading()),
                     };
                     Self::put(buf, 0, y, w, &text, self.faint());
@@ -380,6 +389,8 @@ impl App {
             if let Some(change) = &self.change {
                 let text = if change.working() {
                     "No changes in the working tree.".to_string()
+                } else if self.title.is_some() {
+                    "This commit changes no files.".to_string()
                 } else {
                     format!("No changes between {} and this branch.", change.base)
                 };
