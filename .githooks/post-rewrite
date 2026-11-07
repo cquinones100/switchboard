@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-
-# After `git pull --rebase`, what post-merge does after a pull. Not after
-# `git commit --amend`, which rewrites only your own commit.
-
-[ "${1:-}" = rebase ] || exit 0
-exec "$(dirname "$0")/post-merge"

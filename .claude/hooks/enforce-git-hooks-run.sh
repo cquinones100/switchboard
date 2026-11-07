@@ -2,8 +2,10 @@
 # Keeps Claude from getting around git hooks: no `git commit --no-verify` (or
 # its short form -n, or an abbreviation git takes, such as --no-veri), and
 # no changing core.hooksPath, which would switch a
-# repository's hooks off. Switchboard relies on its pre-commit hook to keep
-# machine-specific Claude settings out of commits. Reading the setting is fine.
+# repository's hooks off. Switchboard relies on its pre-push hook to keep an
+# unreviewed commit off main. Reading the setting is fine. Registered only in
+# this repository's own .claude/settings.json, so it applies to Claude
+# working here and nowhere else.
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
 if [[ -z "$CMD" ]]; then
