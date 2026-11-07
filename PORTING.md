@@ -203,9 +203,12 @@ Each step is a commit (or a few) on the branch, with its tests.
    away`; its list put away beside another tab; M-w sending it home; Notes
    left alone in a tab it was brought beside going home; each tab's note
    shown through the socket, and a tab with none asked which is its,
-   note-pick.sh's ranking; the sidebar's lines for it). Left, for the
-   server: note tabs (`note-tab.sh`) and the palette's Switchboard commands
-   (the app asks `switchboard press <name>`).
+   note-pick.sh's ranking; the sidebar's lines for it; a note's own tab,
+   note-tab.sh's, a new one's Claude told its note; and `switchboard press
+   <name> [arg]`, which the app's palette asks the workspace's commands
+   through). Left: the palette's "Shape the note's checklist items"
+   (note-shape.sh), which the app asks for as `press shape-note` and the
+   server doesn't have yet.
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.
     `switchboard setup` done (src/setup: the `claude`, `claude-md` and

@@ -325,16 +325,7 @@ impl Server {
             .and_then(|p| self.panes.get(&p))
             .and_then(|s| s.pane.cwd())
             .unwrap_or_else(paths::home);
-        let panes: Vec<PathBuf> = self
-            .panes
-            .values()
-            .filter(|s| {
-                s.opts
-                    .get("@sidebar")
-                    .is_none_or(|v| v.is_empty() || v == "0")
-            })
-            .filter_map(|s| s.pane.cwd())
-            .collect();
+        let panes = self.pane_dirs();
         let wanted = match action {
             Action::NewClaudeTab | Action::ContinueShaping => Wanted::Any,
             _ => Wanted::Repo,
@@ -386,6 +377,50 @@ impl Server {
                 ),
                 Action::ContinueShaping => server.ask_shaping(client, found),
                 _ => {}
+            },
+        );
+    }
+
+    /// Every pane's directory, for the directory list.
+    fn pane_dirs(&self) -> Vec<PathBuf> {
+        self.panes
+            .values()
+            .filter(|s| {
+                s.opts
+                    .get("@sidebar")
+                    .is_none_or(|v| v.is_empty() || v == "0")
+            })
+            .filter_map(|s| s.pane.cwd())
+            .collect()
+    }
+
+    /// Asks which directory, as M-t does, the client's current pane's
+    /// first; `then` is given the one picked or typed. A note's new tab
+    /// (src/notes/serve/tab.rs) asks this way, as new-tab.zsh did for it.
+    pub(crate) fn pick_dir_for(
+        &mut self,
+        client: ClientId,
+        title: &str,
+        then: impl FnOnce(&mut Server, ClientId, PathBuf) + Send + 'static,
+    ) {
+        let here = self
+            .current_pane(client)
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|s| s.pane.cwd())
+            .unwrap_or_else(paths::home);
+        let panes = self.pane_dirs();
+        let title = title.to_string();
+        self.off_task(
+            client,
+            move || Found {
+                dirs: offered(&here, &panes, Wanted::Any),
+                here,
+                clipboard: String::new(),
+            },
+            move |server, client, found| {
+                server.ask_dir(client, &title, found, Wanted::Any, |s, c, dir, _| {
+                    then(s, c, dir)
+                })
             },
         );
     }

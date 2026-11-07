@@ -143,7 +143,7 @@ pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
             "Search notes, Linear, GitHub and Slack",
             "M-S-f",
             "search",
-            Act::Press("search"),
+            Act::Press("search-everything"),
         ),
         command("Quit Notes", "q", "app", Act::Quit),
     ];

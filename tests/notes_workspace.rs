@@ -1,8 +1,9 @@
 //! Notes in the workspace as a person uses it (the tmux version's
 //! test/new-tab.test.js and what notes-open.sh did): M-N opens Notes in a tab
 //! of its own, M-e brings it beside a pane and home again, leaving a pane in
-//! its tab that says where it went, Notes left alone in a tab goes home, and
-//! each tab's note is shown through the app's socket.
+//! its tab that says where it went, Notes left alone in a tab goes home, a
+//! note's tab is opened through the palette's `press`, and each tab's note
+//! is shown through the app's socket.
 //!
 //! The app is a stand-in (`NOTES_OPEN_COMMAND`, as the tmux version's tests
 //! had), and so is its socket: a listener of the test's own at
@@ -258,4 +259,73 @@ fn notes_left_alone_in_a_tab_it_was_brought_beside_goes_home() {
     rig.wait("Notes where it was", |l| {
         tabs(l).len() == 1 && pane_ids(&tabs(l)[0]) == [notes.clone()]
     });
+}
+
+#[test]
+fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
+    let rig = Rig::new();
+    // A stand-in Claude that keeps what it was started with.
+    let bin = rig.server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("$");
+
+    let (code, _, err) = rig.server.run(&["press", "nope"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no action named nope"), "{err}");
+    let (code, _, err) = rig.server.run(&["press", "notes-beside", "Plan.md"]);
+    assert_eq!(code, 1, "{err}");
+
+    // The note's tab: none is linked to it, so which, a new one first.
+    rig.server.ok(&["press", "note-tab", "Plan.md"]);
+    client.wait_text("Which tab is Plan's?");
+    client.type_text("\r");
+    client.wait_text("A tab for Plan");
+    client.type_text("\r");
+    let list = rig.wait("the note's tab, with Notes beside its Claude", |l| {
+        tabs(l).len() == 2
+            && tabs(l)[1]["options"]["@tab_note"] == "Plan.md"
+            && pane_ids(&tabs(l)[1]).len() == 2
+    });
+    assert_eq!(tabs(&list)[1]["options"]["@tab_name"], "Plan");
+    assert_eq!(marked(&list, "@notes_pane").map(|m| m.0), Some(1));
+    // Notes, just started, opens with the tab's note.
+    let meta = std::fs::read_to_string(rig.notes_dir().join(".notes.json")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&meta).unwrap()["last"],
+        "Plan.md"
+    );
+    // Its Claude is told the note, in its system prompt.
+    let args = rig.server.home.join("claude-args");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !args.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in Claude didn't start"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let args = std::fs::read_to_string(&args).unwrap();
+    let mut lines = args.lines();
+    assert_eq!(lines.next(), Some("--append-system-prompt"));
+    let context = lines.next().unwrap();
+    assert!(
+        context.contains("This tab is for the note \"Plan\""),
+        "{context}"
+    );
+    assert!(context.contains("/Plan.md, which Notes shows beside you"));
+
+    // Asked again, it goes to that tab: linked now.
+    client.type_text(&format!("{ALT}1"));
+    rig.wait("the first tab in front", |l| tabs(l)[0]["current"] == true);
+    rig.server.ok(&["press", "note-tab", "Plan.md"]);
+    rig.wait("the note's tab in front", |l| tabs(l)[1]["current"] == true);
+    assert_eq!(tabs(&rig.list()).len(), 2, "no other tab opened");
 }

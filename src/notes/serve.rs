@@ -37,6 +37,14 @@
 //! asked which note is its (`pick`), with the ask_tab_note setting on, until
 //! it is told to keep what is open (`@tab_note_asked`).
 //!
+//! A note's own tab (`tab`): Notes' `t` and M-p's "Open the tab for the note
+//! in Notes" go to the tab linked to the note, or ask which tab is its, a
+//! new one among them.
+//!
+//! The app's palette asks for the workspace's commands by name (`switchboard
+//! press <name> [arg]`, `cmd_press`), as the tmux version's pressed their
+//! keys.
+//!
 //! Requests to the app go through one thread of their own, in order, so a
 //! key never waits on the app answering.
 
@@ -45,14 +53,17 @@ use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
 
 use super::store::{self, Store};
-use crate::mux::server::{ClientId, Event, Server};
+use crate::mux::keys::Action;
+use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{Direction, PaneId, TabId};
 use crate::{paths, settings, util};
 
 pub mod away;
 mod pick;
+mod tab;
 
 pub use pick::rank;
+pub use tab::new_tab_context;
 
 /// What Notes' keys and its palette's commands do in the server, an action
 /// of the multiplexer's (`mux::keys::Action::Notes`).
@@ -62,18 +73,26 @@ pub enum Command {
     Open,
     /// M-e: Notes beside this pane, or back in its own tab.
     Beside,
+    /// The tab for the note Notes shows (or, from `press`, the note named).
+    NoteTab,
     /// Which note is this tab's, asked whatever it has.
     ChooseNote,
 }
 
 impl Command {
-    pub const ALL: [Command; 3] = [Command::Open, Command::Beside, Command::ChooseNote];
+    pub const ALL: [Command; 4] = [
+        Command::Open,
+        Command::Beside,
+        Command::NoteTab,
+        Command::ChooseNote,
+    ];
 
-    /// Its name in keys.json.
+    /// Its name in keys.json, and what the app presses.
     pub fn name(self) -> &'static str {
         match self {
             Command::Open => "notes",
             Command::Beside => "notes-beside",
+            Command::NoteTab => "note-tab",
             Command::ChooseNote => "choose-tab-note",
         }
     }
@@ -87,6 +106,9 @@ impl Command {
         match self {
             Command::Open => "Go to Notes, wherever it is open, or open it in its own tab",
             Command::Beside => "Open Notes in a pane to the right, or put it back in its own tab",
+            Command::NoteTab => {
+                "Open the tab for the note in Notes: the one linked to it, or a new one"
+            }
             Command::ChooseNote => "Choose this tab's note, the one M-e shows beside it",
         }
     }
@@ -96,6 +118,7 @@ impl Command {
         match self {
             Command::Open => &["notes", "navigate"],
             Command::Beside => &["notes", "panes"],
+            Command::NoteTab => &["notes", "tabs", "new"],
             Command::ChooseNote => &["notes", "tabs"],
         }
     }
@@ -194,6 +217,7 @@ impl Server {
                     self.notes_beside(Some(client), here);
                 }
             }
+            Command::NoteTab => self.note_tab(client, None),
             Command::ChooseNote => {
                 if let Some(tab) = pane.and_then(|p| self.panes.get(&p)).map(|s| s.tab) {
                     self.ask_tab_note(tab, Some(client));
@@ -357,6 +381,15 @@ impl Server {
         };
         self.switch_client(client, &session);
         self.focus_pane(pane);
+    }
+
+    /// Shows a client a tab, in whichever session it is.
+    pub(crate) fn go_to_tab(&mut self, client: ClientId, tab: TabId) {
+        let Some(session) = self.session_of_tab(tab).map(|s| s.name.clone()) else {
+            return;
+        };
+        self.switch_client(client, &session);
+        self.select_tab(&session, tab);
     }
 
     /// Makes a tab Notes' own: marked, and named Notes.
@@ -684,6 +717,37 @@ impl Server {
         Some((index, name))
     }
 
+    // ── press ────────────────────────────────────────────────────────────────
+
+    /// `press <name> [arg]`: runs the action named as its key would, in the
+    /// client used last on the caller's session (the app's palette asks
+    /// this); `note-tab` takes the note as `arg`.
+    pub fn cmd_press(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
+        let Some((name, rest)) = args.split_first() else {
+            return Reply::fail("press: which action?");
+        };
+        let arg = rest.first().filter(|a| !a.is_empty()).cloned();
+        let Some(action) = Action::parse(name) else {
+            return Reply::fail(format!("press: no action named {name}"));
+        };
+        if arg.is_some() && action != Action::Notes(Command::NoteTab) {
+            return Reply::fail(format!("press: {name} takes nothing more"));
+        }
+        let client = caller
+            .and_then(|p| self.pane_tab(p))
+            .and_then(|t| self.session_of_tab(t))
+            .and_then(|s| self.latest_client_of(&s.name))
+            .or_else(|| self.latest_client());
+        let Some(client) = client else {
+            return Reply::fail("press: no client is attached to press it in");
+        };
+        match action {
+            Action::Notes(Command::NoteTab) => self.note_tab(client, arg),
+            action => self.act(client, action),
+        }
+        Reply::ok("")
+    }
+
     /// The directory a pane is in, for a picker that offers it first.
     pub(crate) fn dir_of(&self, pane: PaneId) -> Option<PathBuf> {
         self.panes.get(&pane).and_then(|s| s.pane.cwd())
@@ -701,7 +765,7 @@ mod tests {
         }
         assert_eq!(Command::Open.key(), Some("M-N"));
         assert_eq!(Command::Beside.key(), Some("M-e"));
-        assert_eq!(Command::ChooseNote.key(), None);
+        assert_eq!(Command::NoteTab.key(), None);
     }
 
     #[test]

@@ -39,6 +39,10 @@
 //!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
 //!                                        stdin (src/agent)
+//! press <action> [arg]                   an action run as its key would be,
+//!                                        by its name in keys.json; the notes
+//!                                        app's palette asks this
+//!                                        (src/notes/serve.rs)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -73,6 +77,7 @@ pub const NAMES: &[&str] = &[
     "save",
     "say",
     "tip",
+    "press",
 ];
 
 /// The commands that read their stdin (a Claude Code hook's JSON); no other
@@ -232,6 +237,7 @@ impl Server {
             }
             "say" => Ok(self.cmd_say(rest, caller)),
             "tip" => Ok(self.cmd_tip(rest, caller)),
+            "press" => Ok(self.cmd_press(rest, caller)),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| e.to_string()),

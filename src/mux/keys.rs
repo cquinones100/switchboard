@@ -128,7 +128,7 @@ impl Action {
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`), updates'
     /// (`update-switchboard`, `run-setup`), and Notes' (`notes`,
-    /// `notes-beside`, `choose-tab-note`).
+    /// `notes-beside`, `note-tab`, `choose-tab-note`).
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -620,7 +620,7 @@ mod tests {
             Action::Diff(crate::diff::Command::Diff),
             Action::Diff(crate::diff::Command::Ask),
             Action::Notes(crate::notes::serve::Command::Beside),
-            Action::Notes(crate::notes::serve::Command::ChooseNote),
+            Action::Notes(crate::notes::serve::Command::NoteTab),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }
