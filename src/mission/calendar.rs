@@ -454,6 +454,51 @@ pub fn day(view: &View, look: &Look) -> (Vec<Line>, Vec<HitBox>) {
     (lines, hits)
 }
 
+/// `h` and `l` in the Calendar view (daemon.js's `besideStep`): the event
+/// beside the chosen one, among those sharing its time (they overlap it),
+/// in the order they sit side by side (by start, the longer first, as the
+/// lanes are laid out); for an all-day event, along the all-day ones. The
+/// cursor stays where it is past either end. `j` and `k` still walk every
+/// event.
+pub fn beside(items: &[crate::items::Item], cursor: usize, by: isize, tz: &TimeZone) -> usize {
+    let event =
+        |i: usize| -> Option<CalEvent> { serde_json::from_value(items.get(i)?.data.clone()).ok() };
+    let Some(chosen) = event(cursor) else {
+        return cursor;
+    };
+    let span = |e: &CalEvent| -> Option<(i64, i64)> {
+        Some((e.starts(tz)?.as_millisecond(), e.ends(tz)?.as_millisecond()))
+    };
+    let mine = span(&chosen);
+    let mut near: Vec<(usize, Option<(i64, i64)>)> = (0..items.len())
+        .filter_map(|i| {
+            let e = event(i)?;
+            let s = span(&e);
+            let with = if chosen.all_day {
+                e.all_day
+            } else {
+                !e.all_day
+                    && matches!((s, mine), (Some((a, b)), Some((from, to))) if a < to && b > from)
+            };
+            with.then_some((i, s))
+        })
+        .collect();
+    if !chosen.all_day {
+        near.sort_by_key(|(i, s)| {
+            let (a, b) = s.unwrap_or((0, 0));
+            (a, std::cmp::Reverse(b), *i)
+        });
+    }
+    let Some(here) = near.iter().position(|(i, _)| *i == cursor) else {
+        return cursor;
+    };
+    let to = here as isize + by;
+    if to < 0 {
+        return cursor;
+    }
+    near.get(to as usize).map_or(cursor, |(i, _)| *i)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,6 +554,30 @@ mod tests {
             theme: &Theme::DARK,
             top_row: 1,
         }
+    }
+
+    #[test]
+    fn h_and_l_move_between_events_side_by_side_and_along_the_all_day_ones() {
+        // lib/sidebar's "h and l in the Calendar view move between events
+        // that share their time".
+        let tz = tz();
+        let all_day = |t: &str| Item::new(t, t).data(json!({ "title": t, "allDay": true }));
+        let items = vec![
+            all_day("Offsite"),
+            all_day("Holiday"),
+            event("Standup", (9, 0), (9, 30), "going"),
+            event("Review", (9, 0), (10, 0), "going"),
+            event("Coffee", (9, 15), (9, 45), "going"),
+            event("Lunch", (12, 0), (13, 0), "going"),
+        ];
+        // At nine: Review (the longer) first, then Standup, then Coffee.
+        assert_eq!(beside(&items, 3, 1, &tz), 2);
+        assert_eq!(beside(&items, 2, 1, &tz), 4);
+        assert_eq!(beside(&items, 4, 1, &tz), 4, "the last stays");
+        assert_eq!(beside(&items, 3, -1, &tz), 3, "the first stays");
+        assert_eq!(beside(&items, 5, 1, &tz), 5, "nothing beside lunch");
+        assert_eq!(beside(&items, 0, 1, &tz), 1, "along the all-day ones");
+        assert_eq!(beside(&items, 1, 1, &tz), 1);
     }
 
     #[test]

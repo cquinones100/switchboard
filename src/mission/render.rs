@@ -1125,6 +1125,7 @@ fn hints(m: &Mission, view: Option<&View>) -> String {
     };
     match view.id {
         ViewId::Settings => format!("jk move  ↵ change  / search  {next}  ? keys  esc close"),
+        ViewId::Calendar => format!("jk event  hl beside  ↵ actions  {next}  ? keys  esc close"),
         ViewId::Prs | ViewId::Tickets => {
             format!("hl column  jk move  ↵ what to do with it  {next}  ? keys  esc close")
         }

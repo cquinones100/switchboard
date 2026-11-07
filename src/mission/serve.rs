@@ -59,7 +59,10 @@ const REANSWER_AFTER: Duration = Duration::from_millis(400);
 
 /// Mission control's keys, for `?` (render.js's `HELP.mission`).
 const KEYS: &[(&str, &str)] = &[
-    ("h j k l", "choose a card or row"),
+    (
+        "h j k l",
+        "choose a card or row; in the Calendar, h l move between events side by side",
+    ),
     ("g G", "first, last"),
     (
         "↵",
@@ -2480,11 +2483,16 @@ fn row_step(m: &Mission, by: isize) -> isize {
 }
 
 /// h and l: in the tabs the card before or after; on a board the next
-/// column with items in it, at the same row as far as it reaches.
+/// column with items in it, at the same row as far as it reaches; in the
+/// Calendar the event beside the chosen one.
 fn side_step(m: &Mission, by: isize) -> isize {
     let Some(view) = m.current() else {
         return m.cursor + by;
     };
+    if view.id == ViewId::Calendar {
+        let at = m.cursor.max(0) as usize;
+        return super::calendar::beside(&view.data.items, at, by, &m.snap.tz) as isize;
+    }
     let Some(columns) = view.columns() else {
         return m.cursor;
     };

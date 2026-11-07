@@ -449,7 +449,7 @@ Mission control's own keys only move about; everything that acts on what is chos
 
 | Key | In mission control |
 | --- | --- |
-| `h` `j` `k` `l` (arrows) | move between cards or rows; `j` `k` move a row of cards keeping the column, and on a board `h` `l` move between its columns |
+| `h` `j` `k` `l` (arrows) | move between cards or rows; `j` `k` move a row of cards keeping the column, on a board `h` `l` move between its columns, and in the Calendar between events side by side |
 | `g` `G` | the first or last |
 | `1`–`9` | choose that tab |
 | `]` `[` | the next or previous view |
@@ -548,7 +548,7 @@ paste it and press `Ctrl-D`. It is stored as the GitHub token is (see "When a vi
 
 Without the address, the view shows the day the `/today` skill last saved, which reads your calendar through Claude's Google Calendar connector (connected with `/mcp` in Claude Code); run `/today` once in any Claude tab to start. A day saved before today, or over 45 minutes ago, is marked out of date, and while no tab named Calendar runs Claude, mission control opens one in the background, in your home directory, running `/loop 30m /today`, at most every ten minutes. If the feed can't be read for 15 minutes (no network, Google down, the address revoked), the view falls back to `/today`'s day in the same way, and goes back to the feed once it reads again. Settings' "Calendar" (`view_calendar`).
 
-Enter on an event offers to join its call, open it in Google Calendar, read each ticket and pull request its description links to in a pane beside the one you were in, and answer an invitation: yes, maybe or no, through Claude's Google Calendar connector, as Google's own buttons answer it, so the organizer is told. Answering needs the feed, since only its events carry their Google ID (Settings' "RSVP from the Calendar", `calendar_rsvp`).
+`j` and `k` walk every event in turn, and `h` and `l` move between those side by side at the same time, or along the all-day ones. Enter on an event offers to join its call, open it in Google Calendar, read each ticket and pull request its description links to in a pane beside the one you were in, and answer an invitation: yes, maybe or no, through Claude's Google Calendar connector, as Google's own buttons answer it, so the organizer is told. Answering needs the feed, since only its events carry their Google ID (Settings' "RSVP from the Calendar", `calendar_rsvp`).
 
 What changed on today's calendar since you last looked (an event added, moved, renamed or gone) is in the sidebar's notifications ("Calendar: Standup moved to 3pm", or "2 calendar changes", each one in the Notifications window). A key pressed with the Calendar view in front and unfiltered, or dismissing one, takes the day as seen and clears them. They need the Calendar view on (Settings' "Calendar changes", `calendar_changes`).
 
