@@ -8,7 +8,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 
 ## Requirements
 
-- Linux on x86_64, or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
+- Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
 - [Claude Code](https://claude.com/claude-code), which the tabs run, and git.
 - A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty.
 
