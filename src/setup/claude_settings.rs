@@ -294,6 +294,21 @@ fn held_by_link(target: &Path) -> Option<Vec<u8>> {
 }
 
 /// The part.
+/// Whether `~/.claude/statusline-command.sh` is a script of your own: a
+/// file, or a link anywhere but into a clone's `claude/`, where the tmux
+/// version's setup linked its own. Missing, it is no one's.
+fn own_statusline_script() -> bool {
+    let script = paths::claude_dir().join("statusline-command.sh");
+    if is_link(&script) {
+        return fs::read_link(&script).is_ok_and(|target| {
+            !target
+                .to_string_lossy()
+                .ends_with("/claude/statusline-command.sh")
+        });
+    }
+    script.exists()
+}
+
 pub fn run(r: &mut Report) -> Result<()> {
     let file = settings_file();
     let shown = home_tilde(&file);
@@ -326,7 +341,15 @@ pub fn run(r: &mut Report) -> Result<()> {
         Err(e) => bail!("{shown} can't be read: {e}"),
     };
     let way = super::way::current();
-    let merged = merge(&current, &ours(), way);
+    let mut merged = merge(&current, &ours(), way);
+    // A statusline-command.sh of your own stays yours: Claude Code's
+    // /statusline writes its script under that name, which only the tmux
+    // version's had as a link into its clone.
+    if own_statusline_script()
+        && let Some(own) = current.get("statusLine")
+    {
+        merged.insert("statusLine".into(), own.clone());
+    }
     if merged == current {
         return Ok(());
     }

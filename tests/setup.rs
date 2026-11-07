@@ -201,6 +201,38 @@ fn product() -> Value {
 }
 
 #[test]
+fn a_statusline_script_of_your_own_stays_and_the_tmux_version_s_gives_way() {
+    let h = Home::new("setup-statusline");
+    let file = h.path(".claude/settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    // The command Claude Code's /statusline writes, as the tmux version's
+    // setup did too.
+    let command = "bash \"$HOME/.claude/statusline-command.sh\"";
+    let settings = json!({ "statusLine": { "type": "command", "command": command } });
+    fs::write(&file, settings.to_string()).unwrap();
+
+    // A script of your own, as /statusline makes it: kept.
+    let script = h.path(".claude/statusline-command.sh");
+    fs::write(&script, "#!/bin/bash\necho mine\n").unwrap();
+    ok(&h.run(&["setup", "claude"]));
+    let merged: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(merged["statusLine"]["command"], command, "yours stays");
+    assert!(
+        merged["permissions"]["allow"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()),
+        "the permissions are still added: {merged}"
+    );
+
+    // The tmux version's, a link into its clone: Switchboard's takes its place.
+    fs::remove_file(&script).unwrap();
+    std::os::unix::fs::symlink("/gone/switchboard/claude/statusline-command.sh", &script).unwrap();
+    ok(&h.run(&["setup", "claude"]));
+    let merged: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
+}
+
+#[test]
 fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_your_own() {
     let h = Home::new("setup-claude");
     // The old way, which adds the hooks too.
