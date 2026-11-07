@@ -364,6 +364,17 @@ fn claude_code(check: bool, list: &mut List) {
             "switchboard on your PATH: Claude Code's hooks and statusline run it by name, so put the binary (or a link to it) in a folder on your PATH",
         );
     }
+    // The one program beside Claude Code the workspace expects, which
+    // install.sh doesn't check, as the tmux version's did.
+    if util::which("git").is_some() {
+        list.ok("git, for the worktree commands, M-d's diff and the tabs' branches");
+    } else {
+        list.todo(if platform::NAME == "macOS" {
+            "git, which the worktree commands, M-d's diff and the tabs' branches need: xcode-select --install"
+        } else {
+            "git, which the worktree commands, M-d's diff and the tabs' branches need: install it with your package manager"
+        });
+    }
     if util::which("claude").is_none() {
         list.optional(
             "Claude Code, which every tab here runs, for tab states, the sidebar's sessions and M-a: curl -fsSL https://claude.ai/install.sh | bash",

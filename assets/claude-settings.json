@@ -6,6 +6,7 @@
   "permissions": {
     "allow": [
       "Bash(node ~/.claude/skills/*)",
+      "Bash(switchboard codex-review)",
       "Bash(switchboard codex-review *)",
       "Bash(switchboard skill-path *)",
       "Bash(switchboard slack-relay notify *)",

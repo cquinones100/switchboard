@@ -764,7 +764,7 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     let second = ok(&h.run(&["setup"]));
     assert!(!second.contains("[Y/n]"), "{second}");
     let claude = second.split("\n\n").next().unwrap();
-    assert_eq!(claude.matches('✓').count(), 4, "{second}");
+    assert_eq!(claude.matches('✓').count(), 5, "{second}");
     assert_eq!(snapshot(&h.home), before, "nothing changed");
     for part in ["claude", "claude-md", "skills"] {
         assert_eq!(
