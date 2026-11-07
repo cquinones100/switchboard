@@ -1346,6 +1346,20 @@ impl Server {
 
     /// A look at a tab without going there; Enter in it goes there.
     fn sidebar_peek(&mut self, client: ClientId, tab: TabId) {
+        self.open_peek(client, tab, None, false);
+    }
+
+    /// A look at a tab, from the sidebar or mission control (`mission`,
+    /// whose Enter goes there as its menus do): its last turn, or its screen
+    /// with `SCROLLBACK` lines above it, on `mode` when given. Its `r` asks
+    /// for a new look at the screen, which is read again here.
+    pub(crate) fn open_peek(
+        &mut self,
+        client: ClientId,
+        tab: TabId,
+        mode: Option<super::peek::Mode>,
+        mission: bool,
+    ) {
         let Some(session) = self.session_of_tab(tab).map(|s| s.name.clone()) else {
             return;
         };
@@ -1359,23 +1373,31 @@ impl Server {
         let pane = model.claude_pane.or(model.active);
         let screen = pane
             .and_then(|p| self.panes.get(&p))
-            .map(|slot| slot.pane.text(slot.pane.size().1 as usize))
+            .map(|slot| slot.pane.text(super::peek::SCROLLBACK))
             .unwrap_or_default();
         let turn = model.claude.as_ref().and(model.turn.clone());
-        let peek = Peek::new(
+        let mut peek = Peek::new(
             format!("{} {}", model.index, model.name),
             turn,
             model.state.busy(),
             screen,
         );
+        if let Some(mode) = mode {
+            peek = peek.mode(mode);
+        }
         self.open(
             client,
             Box::new(peek),
-            Some(Box::new(move |server: &mut Server, _client, outcome| {
-                if outcome == Outcome::Yes {
-                    server.sidebar_go(&session, tab);
-                }
-            })),
+            Some(Box::new(
+                move |server: &mut Server, client, outcome| match outcome {
+                    Outcome::Yes if mission => server.mission_go(client, tab),
+                    Outcome::Yes => server.sidebar_go(&session, tab),
+                    Outcome::No => {
+                        server.open_peek(client, tab, Some(super::peek::Mode::Screen), mission)
+                    }
+                    _ => {}
+                },
+            )),
         );
     }
 

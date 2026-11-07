@@ -401,7 +401,7 @@ A click on a tab goes there, a right click peeks at it, and the wheel moves the 
 
 ### Peeking
 
-A peek shows a tab without going there, in a box over most of the screen: its last turn in full (your prompt, all of Claude's reply, and the tool call it waits on), or, for a tab with no Claude, its screen. `s` switches between the turn and the screen, `j` `k` scroll (`Space` a page, `g` `G` the ends), Enter goes to the tab, and `Esc`, `q` or `h` close it. `Space` in the sidebar, a right click on a tab, and "Peek at its last turn" in a tab's menu in mission control open it.
+A peek shows a tab without going there, in a box over most of the screen: its last turn in full (your prompt, all of Claude's reply, and the tool call it waits on), or, for a tab with no Claude, its screen with 200 lines of what scrolled off above it. `s` switches between the turn and the screen, `r` reads the screen again, `j` `k` scroll (`C-d` `C-u` half the box, `g` `G` the ends), Enter goes to the tab, and `Esc`, `q`, `C-c` or `Space` close it, so `Space` in the sidebar opens and closes it; with easy mode's ×, Tab moves onto it and Enter presses it. `Space` in the sidebar, a right click on a tab, and "Peek at its last turn" in a tab's menu in mission control open it.
 
 ### What needs you, one tab at a time
 

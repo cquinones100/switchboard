@@ -2,8 +2,12 @@
 //! on a tab), in a box over most of the screen, as render.js's `peekLines`
 //! drew it in a popup of its own: the tab's last turn in full (your prompt,
 //! all of Claude's reply, and the tool call it waits on), or its screen.
-//! j and k scroll it, s switches between the two, Enter goes to the tab and
-//! Esc or q closes it. Mission control's Space opens the same box.
+//! j and k scroll it (C-d and C-u half the box), s switches between the
+//! two, r captures the screen again (the box closes with `Outcome::No`,
+//! which its opener takes as asking for a new look), Enter goes to the tab,
+//! and Esc, q, C-c or Space close it, so Space in the sidebar opens and
+//! closes it; with easy mode's ×, Tab moves onto it and Enter presses it.
+//! Mission control's Space opens the same box.
 
 use ratatui::buffer::Buffer;
 use ratatui::style::{Color, Modifier, Style};
@@ -11,9 +15,13 @@ use ratatui::text::Span;
 
 use super::claude::Turn;
 use super::text;
-use crate::mux::input::{Key, KeyCode, Mouse};
+use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
 use crate::ui::{Look, Outcome, Overlay, Step};
+
+/// How much of a pane's scrollback a peek at its screen holds, above the
+/// screen itself (`capture-pane -S -200`).
+pub const SCROLLBACK: usize = 200;
 
 /// What a peek shows: the last turn, or the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +41,8 @@ pub struct Peek {
     scroll: Option<usize>,
     room: usize,
     most: usize,
+    /// Tab has moved onto easy mode's ×, which Enter presses.
+    close_focus: bool,
     drawn: Option<Drawn>,
 }
 
@@ -53,8 +63,15 @@ impl Peek {
             scroll: None,
             room: 10,
             most: 0,
+            close_focus: false,
             drawn: None,
         }
+    }
+
+    /// Opens on `mode` rather than the one it chose.
+    pub fn mode(mut self, mode: Mode) -> Peek {
+        self.mode = mode;
+        self
     }
 
     /// Its body, wrapped to `cols`.
@@ -166,7 +183,7 @@ impl Overlay for Peek {
             }
         );
         let keys = format!(
-            "jk scroll  s {}  ↵ go to tab  esc back",
+            "jk scroll  s {}  r capture again  ↵ go to tab  esc back",
             if self.mode == Mode::Screen {
                 "last turn"
             } else {
@@ -175,6 +192,7 @@ impl Overlay for Peek {
         );
         let mut spec = BoxSpec::new(&title, &lines);
         spec.keys = Some(&keys);
+        spec.close_lit = self.close_focus;
         spec.place = Place::Share {
             cols_pct: 90,
             rows_pct: 85,
@@ -182,12 +200,26 @@ impl Overlay for Peek {
         self.drawn = Some(draw::draw_box(buf, &spec, look));
     }
 
-    fn key(&mut self, key: Key, _look: &Look) -> Step {
+    fn key(&mut self, key: Key, look: &Look) -> Step {
+        // Tab puts the focus on easy mode's ×, and Enter or Space presses it.
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) && look.close {
+            self.close_focus = !self.close_focus;
+            return Step::Redraw;
+        }
+        let pressed = matches!(key.code, KeyCode::Enter | KeyCode::Char(' '));
+        if std::mem::take(&mut self.close_focus) && pressed {
+            return Step::Close(Outcome::Dismissed);
+        }
+        let half = (self.room / 2).max(1);
+        let ctrl = key.mods == Mods::CTRL;
         match key.code {
+            KeyCode::Char('d') if ctrl => self.scroll_to(self.at() + half),
+            KeyCode::Char('u') if ctrl => self.scroll_to(self.at().saturating_sub(half)),
+            KeyCode::Char('c') if ctrl => Step::Close(Outcome::Dismissed),
             KeyCode::Char('j') | KeyCode::Down => self.scroll_to(self.at() + 1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_to(self.at().saturating_sub(1)),
-            KeyCode::Char(' ') | KeyCode::PageDown => self.scroll_to(self.at() + self.room),
-            KeyCode::PageUp => self.scroll_to(self.at().saturating_sub(self.room)),
+            KeyCode::PageDown => self.scroll_to(self.at() + half),
+            KeyCode::PageUp => self.scroll_to(self.at().saturating_sub(half)),
             KeyCode::Char('g') | KeyCode::Home => self.scroll_to(0),
             KeyCode::Char('G') | KeyCode::End => self.scroll_to(self.most),
             KeyCode::Char('s') => {
@@ -198,10 +230,10 @@ impl Overlay for Peek {
                 self.scroll = None;
                 Step::Redraw
             }
+            // The screen read again, for a new look.
+            KeyCode::Char('r') if self.mode == Mode::Screen => Step::Close(Outcome::No),
             KeyCode::Enter => Step::Close(Outcome::Yes),
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') => {
-                Step::Close(Outcome::Dismissed)
-            }
+            KeyCode::Esc | KeyCode::Char('q' | 'h' | ' ') => Step::Close(Outcome::Dismissed),
             _ => Step::Same,
         }
     }
@@ -263,5 +295,32 @@ mod tests {
         );
         let shell = Peek::new("1 sh".into(), None, false, "$".into());
         assert_eq!(shell.mode, Mode::Screen);
+    }
+
+    #[test]
+    fn space_closes_it_r_looks_again_and_easy_modes_close_button_is_a_tab_stop() {
+        let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+        let mut peek = Peek::new("1 sh".into(), None, false, lines.join("\n"));
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        peek.draw(&mut buf, &look);
+        let bottom = peek.at();
+        let ctrl = |c| Key::new(KeyCode::Char(c), Mods::CTRL);
+        assert_eq!(peek.key(ctrl('u'), &look), Step::Redraw);
+        assert_eq!(bottom - peek.at(), peek.room / 2, "half the box up");
+        assert_eq!(peek.key(key('r'), &look), Step::Close(Outcome::No));
+        assert_eq!(peek.key(key(' '), &look), Step::Close(Outcome::Dismissed));
+        assert_eq!(peek.key(ctrl('c'), &look), Step::Close(Outcome::Dismissed));
+        let easy = Look {
+            close: true,
+            ..Look::default()
+        };
+        let tab = Key::new(KeyCode::Tab, Mods::NONE);
+        assert_eq!(peek.key(tab, &easy), Step::Redraw);
+        assert_eq!(
+            peek.key(Key::new(KeyCode::Enter, Mods::NONE), &easy),
+            Step::Close(Outcome::Dismissed),
+            "Enter presses the ×, not going to the tab"
+        );
     }
 }

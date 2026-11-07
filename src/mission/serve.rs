@@ -1696,30 +1696,7 @@ impl Server {
 
     /// A look at a tab without going there; Enter in it goes there.
     fn mission_peek(&mut self, client: ClientId, tab: TabId) {
-        let Some(model) = self.sidebar_all_tabs().into_iter().find(|t| t.id == tab) else {
-            return;
-        };
-        let pane = model.claude_pane.or(model.active);
-        let screen = pane
-            .and_then(|p| self.panes.get(&p))
-            .map(|slot| slot.pane.text(slot.pane.size().1 as usize))
-            .unwrap_or_default();
-        let turn = model.claude.as_ref().and(model.turn.clone());
-        let peek = crate::sidebar::peek::Peek::new(
-            format!("{} {}", model.index, model.name),
-            turn,
-            model.state.busy(),
-            screen,
-        );
-        self.open(
-            client,
-            Box::new(peek),
-            Some(Box::new(move |server: &mut Server, client, outcome| {
-                if outcome == Outcome::Yes {
-                    server.mission_go(client, tab);
-                }
-            })),
-        );
+        self.open_peek(client, tab, None, true);
     }
 
     /// A tab's name typed in; empty names it after its directory again.
