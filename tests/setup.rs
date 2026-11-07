@@ -1196,6 +1196,12 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
         "# Mine\n- be brief\n\n@~/.local/share/switchboard/switchboard.md\n"
     );
     assert!(h.path(".claude/skills/wt/SKILL.md").is_file());
+    // A file of yours in one of Switchboard's skill folders, and the
+    // packages one installed for itself.
+    fs::write(h.path(".claude/skills/wt/notes.md"), "mine\n").unwrap();
+    let modules = h.path(".claude/skills/walkthrough/scripts/node_modules/x");
+    fs::create_dir_all(&modules).unwrap();
+    fs::write(modules.join("index.js"), "").unwrap();
 
     // On: Switchboard moves into its plugin, and only Switchboard's parts.
     // The tabs open now have the old environment, which it says how to
@@ -1219,8 +1225,22 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
     assert!(allow.contains(&json!("Bash(switchboard tabs)")));
     assert_eq!(read(&h.path(".claude/CLAUDE.md")), "# Mine\n- be brief\n");
     assert!(!h.path(".local/share/switchboard/switchboard.md").exists());
-    assert_eq!(skills_left(), ["today"]);
+    // Switchboard's skills out, packages and all, but a folder holding a
+    // file of yours, which stays with it, said.
+    assert_eq!(skills_left(), ["today", "wt"]);
     assert_eq!(read(&h.path(".claude/skills/today/SKILL.md")), "mine\n");
+    assert!(
+        on.contains(
+            "leave ~/.claude/skills/wt for the files in it Switchboard didn't write (notes.md)"
+        ),
+        "{on}"
+    );
+    let wt: Vec<_> = fs::read_dir(h.path(".claude/skills/wt"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert_eq!(wt, ["notes.md"]);
     assert!(
         h.path(".local/share/switchboard/plugin/skills/wt/SKILL.md")
             .is_file()
@@ -1249,6 +1269,11 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
         "# Mine\n- be brief\n\n@~/.local/share/switchboard/switchboard.md\n"
     );
     assert!(h.path(".claude/skills/wt/.switchboard-skill").is_file());
+    assert_eq!(
+        read(&h.path(".claude/skills/wt/notes.md")),
+        "mine\n",
+        "Switchboard's wt written beside yours"
+    );
     assert_eq!(read(&h.path(".claude/skills/today/SKILL.md")), "mine\n");
     let before = snapshot(&h.path(".claude"));
     ok(&h.run(&["setup", "--move"]));

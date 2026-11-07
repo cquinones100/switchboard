@@ -10,9 +10,13 @@
 //! only by the Claude sessions in Switchboard's panes, so Claude elsewhere
 //! has your own skills and none of Switchboard's. A copy left in
 //! `~/.claude/skills` would take the skill's bare name (`/wt`) everywhere,
-//! the plugin's too, so the part removes each one Switchboard put there,
-//! with whatever the skill made for itself beside its files (`npm ci`'s
-//! `node_modules`).
+//! the plugin's too, so the part removes each one Switchboard put there:
+//! the files its list names, the list, and what the skill installed for
+//! itself beside them (`npm ci`'s `node_modules`), and the folder once
+//! nothing else is in it. A file you added there is yours, so the folder is
+//! left with it, which the part says; without a SKILL.md it is no skill
+//! Claude Code runs, and the old way writes Switchboard's into it again
+//! beside your files.
 //!
 //! The old way, each is written into `~/.claude/skills`, where Claude Code
 //! finds a personal skill, as a folder of its own, written out again
@@ -33,7 +37,7 @@
 //! scripts there, since a repository's own copy of a skill, written for the
 //! tmux version, runs them by those names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -79,6 +83,10 @@ enum Found {
     Ours(Vec<String>),
     /// A link into a Switchboard clone's skills, as setup.sh made.
     Linked,
+    /// A folder with neither the list nor a SKILL.md: what was left of one
+    /// of Switchboard's taken out with files of yours in it, which isn't a
+    /// skill. The old way writes Switchboard's into it, beside them.
+    Left,
     /// Yours: kept.
     Own,
 }
@@ -102,8 +110,121 @@ fn found(name: &str) -> Found {
                 .map(str::to_string)
                 .collect(),
         ),
+        _ if dest.is_dir() && !exists(&dest.join("SKILL.md")) => Found::Left,
         _ => Found::Own,
     }
+}
+
+/// Whether a path from a skill's list stays inside its folder.
+fn inside(rel: &str) -> bool {
+    !rel.split('/')
+        .any(|p| p == ".." || p == "." || p.is_empty())
+}
+
+/// The folders within a skill's folder that hold a file its list names,
+/// where the packages a skill installs for itself go (`npm ci`'s
+/// `node_modules` beside its `package.json`): `""` for the folder itself.
+fn listed_dirs(list: &[String]) -> Vec<String> {
+    let mut dirs: Vec<String> = list
+        .iter()
+        .filter(|rel| inside(rel))
+        .map(|rel| rel.rsplit_once('/').map_or("", |(dir, _)| dir).to_string())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+/// What is in a skill folder Switchboard wrote that taking it out leaves:
+/// every file but the ones its list names, the list itself, and the
+/// packages beside them. Their paths within it, in order.
+fn yours_in(dest: &Path, list: &[String]) -> Vec<String> {
+    let packages: Vec<String> = listed_dirs(list)
+        .iter()
+        .map(|d| {
+            if d.is_empty() {
+                "node_modules".to_string()
+            } else {
+                format!("{d}/node_modules")
+            }
+        })
+        .collect();
+    let mut yours = Vec::new();
+    let mut stack = vec![String::new()];
+    while let Some(rel_dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(dest.join(&rel_dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let rel = if rel_dir.is_empty() {
+                name
+            } else {
+                format!("{rel_dir}/{name}")
+            };
+            // A link is a file here, never followed.
+            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+            if is_dir {
+                if !packages.contains(&rel) {
+                    stack.push(rel);
+                }
+            } else if rel != MANIFEST && !list.contains(&rel) {
+                yours.push(rel);
+            }
+        }
+    }
+    yours.sort();
+    yours
+}
+
+/// A skill folder Switchboard wrote taken out of `~/.claude/skills`: the
+/// files its list names, the packages beside them and the list, then every
+/// folder that leaves empty, the skill's own too. What is left is yours
+/// (`yours_in`), kept in the folder.
+fn take_out(dest: &Path, list: &[String]) -> Result<()> {
+    for rel in list.iter().filter(|rel| inside(rel)) {
+        let file = dest.join(rel);
+        if file.is_dir() && !is_link(&file) {
+            continue;
+        }
+        match fs::remove_file(&file) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+    }
+    let dirs = listed_dirs(list);
+    for dir in &dirs {
+        let modules = dest.join(dir).join("node_modules");
+        if is_link(&modules) {
+            fs::remove_file(&modules)?;
+        } else if modules.is_dir() {
+            fs::remove_dir_all(&modules)?;
+        }
+    }
+    match fs::remove_file(dest.join(MANIFEST)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    // The folders left empty, deepest first, up to the skill's own.
+    let mut empty: BTreeSet<PathBuf> = BTreeSet::new();
+    for dir in dirs.iter().filter(|d| !d.is_empty()) {
+        let mut at = dest.join(dir);
+        while at != dest && at.starts_with(dest) {
+            empty.insert(at.clone());
+            match at.parent() {
+                Some(p) => at = p.to_path_buf(),
+                None => break,
+            }
+        }
+    }
+    let mut empty: Vec<PathBuf> = empty.into_iter().collect();
+    empty.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+    empty.push(dest.to_path_buf());
+    for dir in &empty {
+        // One still holding something of yours stays.
+        let _ = fs::remove_dir(dir);
+    }
+    Ok(())
 }
 
 /// Whether `~/.claude/skills/<name>` links into a Switchboard clone, known by
@@ -165,7 +286,7 @@ pub fn switchboard_s(name: &str) -> bool {
         Found::Ours(_) | Found::Linked => true,
         Found::Own => fs::read_to_string(skills_dir().join(name).join("SKILL.md"))
             .is_ok_and(|text| text.contains(&format!("skill-path {name}`"))),
-        Found::Nothing => false,
+        Found::Nothing | Found::Left => false,
     }
 }
 
@@ -187,6 +308,8 @@ pub fn run(r: &mut Report) -> Result<()> {
     let way = super::way::current();
     let mut done = Vec::new();
     let mut failed = Vec::new();
+    // The folders taken out but for files of yours, with those files.
+    let mut left: Vec<(PathBuf, Vec<String>)> = Vec::new();
     if way == Way::Old && !r.check {
         fs::create_dir_all(&dir)?;
     }
@@ -195,10 +318,20 @@ pub fn run(r: &mut Report) -> Result<()> {
         let result = match way {
             Way::Old => write_skill(r, &dest, name, &files),
             Way::Plugin => match found(name) {
-                Found::Ours(_) if !r.check => fs::remove_dir_all(&dest).map_err(Into::into),
+                Found::Ours(list) => {
+                    let yours = yours_in(&dest, &list);
+                    if !yours.is_empty() {
+                        left.push((dest.clone(), yours));
+                    }
+                    if r.check {
+                        Ok(())
+                    } else {
+                        take_out(&dest, &list)
+                    }
+                }
                 Found::Linked if !r.check => fs::remove_file(&dest).map_err(Into::into),
-                Found::Ours(_) | Found::Linked => Ok(()),
-                Found::Nothing | Found::Own => continue,
+                Found::Linked => Ok(()),
+                Found::Nothing | Found::Left | Found::Own => continue,
             },
         };
         match result {
@@ -211,6 +344,13 @@ pub fn run(r: &mut Report) -> Result<()> {
             "take Switchboard's skills out of {} ({}): its plugin carries them for the Claude in its panes",
             home_tilde(&dir),
             done.join(" ")
+        ));
+    }
+    for (folder, yours) in left {
+        r.change(format!(
+            "leave {} for the files in it Switchboard didn't write ({}): without its SKILL.md, Claude Code takes it for no skill",
+            home_tilde(&folder),
+            yours.join(", ")
         ));
     }
     if let Err(e) = link_commands(r) {
@@ -284,6 +424,10 @@ fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(&str, &[u8])])
         }
         Found::Nothing => {
             r.change(format!("write {shown}"));
+            (Vec::new(), true)
+        }
+        Found::Left => {
+            r.change(format!("write {shown}, beside the files of yours in it"));
             (Vec::new(), true)
         }
         Found::Ours(list) => (list, false),
@@ -371,5 +515,59 @@ mod tests {
         }
         assert!(shipped_file("note-watch/pick-note.md").is_some());
         assert!(shipped_file("walkthrough/scripts/record.js").is_some());
+    }
+
+    #[test]
+    fn taking_a_skill_out_removes_only_what_switchboard_wrote_and_its_packages() {
+        let dest = std::env::temp_dir().join(format!("sb-skill-out-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        let write = |rel: &str| {
+            let file = dest.join(rel);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "x").unwrap();
+        };
+        let list: Vec<String> = ["SKILL.md", "scripts/record.js", "scripts/package.json"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for rel in &list {
+            write(rel);
+        }
+        write(MANIFEST);
+        write("scripts/node_modules/x/index.js");
+
+        // Only Switchboard's: the folder goes whole.
+        assert!(yours_in(&dest, &list).is_empty());
+        take_out(&dest, &list).unwrap();
+        assert!(!dest.exists());
+
+        // With files of yours: they stay, the folder with them.
+        for rel in &list {
+            write(rel);
+        }
+        write(MANIFEST);
+        write("scripts/node_modules/x/index.js");
+        write("notes.md");
+        write("mine/plan.md");
+        assert_eq!(yours_in(&dest, &list), ["mine/plan.md", "notes.md"]);
+        take_out(&dest, &list).unwrap();
+        assert!(dest.join("notes.md").is_file());
+        assert!(dest.join("mine/plan.md").is_file());
+        assert!(!dest.join("SKILL.md").exists());
+        assert!(!dest.join(MANIFEST).exists());
+        assert!(!dest.join("scripts").exists(), "left empty, so gone");
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn a_list_s_path_outside_its_folder_is_never_followed() {
+        assert!(inside("scripts/record.js"));
+        assert!(!inside("../other/SKILL.md"));
+        assert!(!inside("a//b"));
+        assert!(!inside("./x"));
+        assert_eq!(
+            listed_dirs(&["SKILL.md".into(), "scripts/a.js".into(), "../x".into()]),
+            ["", "scripts"]
+        );
     }
 }
