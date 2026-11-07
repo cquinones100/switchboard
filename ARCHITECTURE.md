@@ -147,5 +147,4 @@ What the tmux version did that the binary doesn't yet, so a part that brings one
 Decisions left to the maintainer before the rewrite is merged:
 
 - **The release repository.** `src/update/release.rs`'s `REPO`, `install.sh`'s `REPO` and the line in its opening comment, and README's install line and clone URL all name the repository the rewrite was made in. They change together, to the repository it lands in.
-- **The modifier on Linux.** Every key is Alt, as on a Mac with Option as Alt. Whether Linux, where desktops and terminals take some Alt keys for themselves, gets a choice (a `modifier` setting, Alt by default, was proposed) is undecided.
 - **The review loop over the branch** (`/review-loop`, Claude reviewing where Codex isn't installed), offered before the PR.
