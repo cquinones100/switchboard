@@ -15,6 +15,11 @@
 // it prints one, and a skill handing off to another reads the file it prints,
 // since Claude Code itself runs a personal skill over a project's of the same
 // name.
+//
+// In a worktree of someone else's PR (wtpr --untrusted, switchboard.untrusted
+// in its own config), the worktree's own copy is passed over: its skills are
+// the PR author's, and a review-loop of theirs would rewrite the review of
+// their change.
 
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
@@ -38,7 +43,8 @@ function git(...args) {
 const roots = [];
 const top = git("rev-parse", "--show-toplevel");
 if (top) {
-  roots.push(top);
+  if (git("config", "--get", "switchboard.untrusted") !== "true") roots.push(top);
+  else process.stderr.write(`skill-path: ${top} holds an untrusted PR, so its own skills are passed over\n`);
   const common = git("rev-parse", "--path-format=absolute", "--git-common-dir");
   if (common) roots.push(path.dirname(common));
 }

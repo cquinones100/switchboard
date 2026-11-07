@@ -145,7 +145,7 @@ test("post-checkout copies the main clone's lib packages into a new worktree wit
     fs.writeFileSync(path.join(clone, "lib/node_modules/ical.js/package.json"), "{}\n");
     fs.writeFileSync(path.join(clone, "lib/package-lock.json"), "{}\n");
     fs.writeFileSync(path.join(clone, ".gitignore"), "node_modules/\n");
-    // The hook committed, and core.hooksPath relative, as setup.sh git sets it, so git runs the new worktree's copy.
+    // The hook committed, and core.hooksPath relative, as setup.sh git set it before it was made absolute, so git runs the new worktree's copy.
     fs.mkdirSync(path.join(clone, ".githooks"));
     fs.copyFileSync(path.join(repo, ".githooks/post-checkout"), path.join(clone, ".githooks/post-checkout"));
     git("add", ".");
@@ -207,4 +207,32 @@ test("this repository's push guard blocks git push --no-verify, however it is sp
   assert.equal(commitGuard("git config --get core.hooksPath").status, 0, "reading it is fine");
   assert.equal(commitGuard("/usr/bin/git config core.hooksPath /dev/null").status, 2, "git by its path");
   assert.equal(commitGuard("/usr/bin/git commit -n -m x").status, 2);
+});
+
+test("with core.hooksPath absolute, as setup.sh git sets it, a new worktree runs the clone's hooks, never its branch's", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "hooks-abs-")));
+  const env = { ...process.env, HOME: tmp, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const clone = path.join(tmp, "clone");
+  const git = (...args) => execFileSync("git", ["-C", clone, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const hook = (marker) => `#!/bin/sh\ntouch ${JSON.stringify(path.join(tmp, marker))}\n`;
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", clone], { env });
+    fs.mkdirSync(path.join(clone, ".githooks"));
+    fs.writeFileSync(path.join(clone, ".githooks/post-checkout"), hook("ours"), { mode: 0o755 });
+    git("add", ".");
+    git("commit", "-q", "-m", "first");
+    // A branch, as a fork's PR may be, whose own hook would run anything.
+    git("checkout", "-q", "-b", "theirs");
+    fs.writeFileSync(path.join(clone, ".githooks/post-checkout"), hook("theirs"), { mode: 0o755 });
+    git("commit", "-q", "-am", "their hook");
+    git("checkout", "-q", "main");
+    fs.rmSync(path.join(tmp, "ours"), { force: true });
+    git("config", "core.hooksPath", path.join(clone, ".githooks"));
+
+    git("worktree", "add", "-q", path.join(tmp, "work"), "theirs");
+    assert.ok(fs.existsSync(path.join(tmp, "ours")), "the clone's hook ran");
+    assert.ok(!fs.existsSync(path.join(tmp, "theirs")), "the branch's never did");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

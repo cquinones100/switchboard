@@ -253,6 +253,9 @@ const main = () => {
   if (existing && existing !== worktreePath) console.error("Branch is already checked out elsewhere, using that.");
 
   const finalPath = existing ?? worktreePath;
+  // Never a worktree of someone else's PR (lib/untrusted.js).
+  const untrusted = require("../lib/untrusted");
+  if (existing && untrusted.isUntrusted(existing)) fail(untrusted.refusal(existing));
   console.error(`Worktree: ${finalPath}`);
 
   if (!existing) createWorktree(worktreePath, branch, root);

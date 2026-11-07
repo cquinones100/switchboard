@@ -98,3 +98,7 @@ Settings (`M-p`) keeps what you change there in the same folder, as `settings.js
 | `test/` | `node --test test/*.test.js`, against a throwaway tmux and a temporary home |
 
 [bin/README.md](bin/README.md) describes every script and feature in full.
+
+## Contributing
+
+Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's Mac: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (setup, hooks, Claude's settings and skills, packages) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard-try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `pr-risk` and `switchboard-try --sealed` in [bin/README.md](bin/README.md).

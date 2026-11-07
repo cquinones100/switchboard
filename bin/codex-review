@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
+// codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
 //
 // Runs Codex as a skeptical, read-only static reviewer of the current branch and
 // prints its findings as JSON on stdout. Built to be called from a Claude Code
@@ -13,6 +13,13 @@
 // concerns, run no checks. The PR description is fetched with `gh` and pasted
 // into the prompt so Codex never needs GitHub access of its own.
 //
+//   -C <dir>          review the repository at <dir> rather than the one
+//                     you are in: a worktree of someone else's PR, reviewed
+//                     from your main clone so no Claude session ever starts
+//                     in it (wtpr --untrusted, /review-pr)
+//   --pr <n|url>      the PR whose description goes in the prompt, when the
+//                     branch's name doesn't lead gh to it (an untrusted
+//                     review worktree's pr-review/<n>)
 //   --base <ref>      base to diff against; defaults to the PR's base (the
 //                     remote copy, since that defines what the PR contains),
 //                     then origin's default branch. A ref that exists as given,
@@ -145,10 +152,12 @@ const SCHEMA = {
 
 const usage = () => {
   console.error(
-    "Usage: codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]\n" +
+    "Usage: codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]\n" +
       "       codex-review --patch-id <from> <to>\n\n" +
       "Runs Codex (or Claude, when Codex isn't available) as a skeptical, read-only static\n" +
       "reviewer of the current branch and prints its findings as JSON.\n\n" +
+      "  -C <dir>           review the repository at <dir>\n" +
+      "  --pr <number|url>  the PR to read the description of, when the branch doesn't lead to it\n" +
       "  --base <ref>       base to diff against (default: the PR's remote base, else origin's default)\n" +
       "  --notes <file>     disputed findings and accepted known gaps, each with a reason\n" +
       "  --include-low      report low-severity findings too\n" +
@@ -166,7 +175,7 @@ const usage = () => {
 // that undo the sandbox, so the one Codex option with a legitimate reason to
 // vary, the model, is exposed on its own.
 const parseArgs = (argv) => {
-  const opts = { base: null, notes: null, includeLow: false, noRules: false, dryRun: false, model: null, reviewer: null };
+  const opts = { dir: null, pr: null, base: null, notes: null, includeLow: false, noRules: false, dryRun: false, model: null, reviewer: null };
   const own = argv;
   const takeValue = (flag, i) => {
     if (i + 1 >= own.length) {
@@ -176,8 +185,16 @@ const parseArgs = (argv) => {
     return own[i + 1];
   };
   own.forEach((arg, i) => {
-    if (["--base", "--notes", "--model", "--reviewer"].includes(own[i - 1])) return;
-    if (arg === "--base") opts.base = takeValue(arg, i);
+    if (["-C", "--pr", "--base", "--notes", "--model", "--reviewer"].includes(own[i - 1])) return;
+    if (arg === "-C") opts.dir = takeValue(arg, i);
+    else if (arg === "--pr") {
+      opts.pr = takeValue(arg, i);
+      if (!/^(\d+|https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+)$/.test(opts.pr)) {
+        console.error(`--pr must be a PR number or URL, got: ${opts.pr}`);
+        usage();
+      }
+    }
+    else if (arg === "--base") opts.base = takeValue(arg, i);
     else if (arg === "--notes") opts.notes = takeValue(arg, i);
     else if (arg === "--model") {
       opts.model = takeValue(arg, i);
@@ -264,9 +281,9 @@ const ensureClean = () => {
 // still review, we just say so in the prompt and fall back to origin's default.
 // Only gh's own "no pull requests found" counts as absence; an auth or network
 // failure must not quietly turn into a review against the wrong base.
-const pullRequest = () => {
+const pullRequest = (ref) => {
   countRun("gh", "GitHub", "GraphQL", "codex-review: the PR");
-  const result = spawnSync("gh", ["pr", "view", "--json", "number,title,body,url,baseRefName,isCrossRepository"], {
+  const result = spawnSync("gh", ["pr", "view", ...(ref ? [ref] : []), "--json", "number,title,body,url,baseRefName,isCrossRepository"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -527,7 +544,7 @@ ${rules}
 Branch: ${branch} at ${head}
 Base: ${base} (merge base ${mergeBase})
 
-${diffPath ? `The change under review is exactly \`git diff ${mergeBase}..${head}\`, saved in ${diffPath}, and the commits that make it up are listed below. You cannot run commands: read the diff, and the repository's files, which are at ${head}, with your tools.` : `The change under review is exactly \`git diff ${mergeBase}..${head}\`, and the commits that make it up are \`git log ${mergeBase}..${head}\`. Use those SHAs rather than HEAD so the scope stays fixed.`} Read the surrounding code as much as you need to judge the change, but only report problems the branch introduces or fails to address while claiming to. Pre-existing issues in untouched code are out of scope unless the change makes them worse.
+${diffPath ? `The change under review is exactly \`git diff ${mergeBase}..${head}\`, saved in ${diffPath}, and the commits that make it up are listed below. You cannot run commands: read the diff, and the repository's files, which are at ${head}, with your tools.` : `The change under review is exactly \`git diff --text --no-textconv --no-ext-diff ${mergeBase}..${head}\` (as text, since the branch's .gitattributes could mark a changed file binary and hide its lines), and the commits that make it up are \`git log ${mergeBase}..${head}\`. Use those SHAs rather than HEAD so the scope stays fixed.`} Read the surrounding code as much as you need to judge the change, but only report problems the branch introduces or fails to address while claiming to. Pre-existing issues in untouched code are out of scope unless the change makes them worse.
 
 ## Commits
 
@@ -589,13 +606,20 @@ const main = () => {
   // Resolved before the chdir below so a relative --notes path means what the
   // caller meant, not the same name at the repo root.
   const notesPath = opts.notes ? path.resolve(opts.notes) : null;
+  if (opts.dir) {
+    try {
+      process.chdir(opts.dir);
+    } catch {
+      fail(`no directory ${opts.dir}`);
+    }
+  }
   const root = repoRoot();
   process.chdir(root);
   const branch = currentBranch();
   if (!opts.dryRun) ensureClean();
   const head = git("rev-parse", "HEAD");
 
-  const pr = pullRequest();
+  const pr = pullRequest(opts.pr);
   if (pr && pr.isCrossRepository && !opts.base) {
     fail(`the PR comes from a different repository than it targets, so origin/${pr.baseRefName} may not be its real base.\n  Pass --base <remote>/<branch> for the repository the PR targets.`);
   }
@@ -711,7 +735,9 @@ const main = () => {
       console.log(prompt);
       return;
     }
-    if (reviewer === "claude") fs.writeFileSync(diffPath, git("diff", `${mergeBase}..${head}`));
+    // As text, whatever the branch's .gitattributes say: a -diff there would
+    // show a changed file as binary and hide its lines.
+    if (reviewer === "claude") fs.writeFileSync(diffPath, git("diff", "--text", "--no-textconv", "--no-ext-diff", `${mergeBase}..${head}`));
 
     const verbose = process.env.CODEX_REVIEW_VERBOSE === "1";
     const result = spawnSync(reviewer, args, {

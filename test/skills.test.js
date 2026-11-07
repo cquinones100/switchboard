@@ -68,6 +68,11 @@ test("skill-path finds the worktree's copy, then the main clone's, then the pers
 
     const own = skill(worktree);
     assert.equal(run(worktree).stdout.trim(), own, "the worktree's own first");
+
+    // A worktree of someone else's PR, as wtpr --untrusted marks it: its own copy is the PR author's.
+    execFileSync("git", ["-C", repo, "config", "extensions.worktreeConfig", "true"], { env });
+    execFileSync("git", ["-C", worktree, "config", "--worktree", "switchboard.untrusted", "true"], { env });
+    assert.equal(run(worktree).stdout.trim(), main, "an untrusted worktree's own copy passed over");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

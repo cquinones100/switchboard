@@ -557,6 +557,8 @@ say, and, on someone else's PR, pushing nothing unless asked; the
 ```
 wtpr 123
 wtpr https://github.com/owner/repo/pull/123
+wtpr --untrusted 123       a worktree that runs none of its code (a fork's PR's default)
+wtpr --trusted 123         a fork's PR as your own
 ```
 
 The M-p palette's "Start work on a PR in a new tab (wtpr)" (`tmux/wtpr-open.zsh`)
@@ -583,7 +585,24 @@ directories.
 
 With the `wtpr_prompt` setting off, claude opens with no prompt and you say what you want when you get there.
 
-A PR from a fork is set up as `gh pr checkout` sets one up: the fork is added
+A PR from a fork is someone else's code, so it opens **untrusted** unless you
+pass `--trusted` (any PR can be opened so with `--untrusted`): in
+`~/.cache/switchboard/pr-review/<owner>-<repo>/<n>`, outside the clone, on a local branch
+`pr-review/<n>` made from the commits GitHub keeps for it, with no remote added.
+Git's hooks are off for that worktree alone (`core.hooksPath` `/dev/null` and
+`switchboard.untrusted` in its own worktree config, which no file in it can
+change), so no git command there runs the PR's hooks or yours; no settings are
+linked in, no packages installed, and your shell stays where it is, with no
+Claude started, since its `CLAUDE.md`, `.claude/settings.json` and skills are
+the PR's author's. It prints the author and how long they have been on GitHub,
+the PR's size and `pr-risk`'s list of what in it runs without being asked,
+then how to go on: `/review-pr <n>` from your main clone, or `pr-risk`,
+`codex-review -C` and `switchboard-try --sealed` by hand. Run again, it moves
+the worktree to the PR's newest commit. `claude-here`, `wtr`, `wtb`, `wt-revive`,
+the Work map and the Slack relay leave such a worktree alone
+(`lib/untrusted.js`), and `skill-path` passes over its skills.
+
+A PR from a fork opened `--trusted` (a collaborator's you know) is set up as `gh pr checkout` sets one up: the fork is added
 as a remote named after its owner (or a remote already pointing at it is
 used), its branch is fetched from there onto a local branch named
 `<owner>-<branch>`, since a fork's PR often comes from its `main`, and that
@@ -1883,6 +1902,7 @@ pushed ones from there.
 ```
 codex-review                       review the branch against its PR's base (on main: the unpushed commits)
 codex-review --base upstream/main  diff against a different base, used as given when the ref exists
+codex-review -C <dir> --pr <n> --base origin/main  review an untrusted PR's worktree from your main clone, with its description
 codex-review --notes notes.md      disputed findings and accepted known gaps, each with a reason
 codex-review --include-low         report low-severity findings too
 codex-review --no-rules            leave your rules and the repository's out of the prompt
@@ -2027,6 +2047,8 @@ switchboard-try --detached start its tmux with no client and print how to drive 
 switchboard-try --clean    stop its tmux and sidebar daemon and remove its home
                            (name a removed worktree by the path it had)
 switchboard-try --clean-all  the same for every try of yours
+switchboard-try --sealed [<path>]   someone else's code, in a sandbox that holds nothing of yours
+switchboard-try --sealed <path> --run /bin/sh -c 'node --test test/*.test.js'   a command in it, the PR's tests here
 ```
 
 It tries only a worktree of your own `~/switchboard` clone, or a directory
@@ -2062,3 +2084,66 @@ real workspace or cost money on its own: the Slack look and view, meeting, stand
 notes, banners, the update check and restoring saved tabs; Settings turns them
 back on. A change made through a linked thing (a git config, Neovim's plugins
 updated from `:Lazy`) is made to your real one.
+
+### Sealed
+
+`--sealed` is for someone else's code, a PR `wtpr --untrusted` checked out,
+which the open try refuses: the try's setup, its tmux server and everything
+tmux starts run under a macOS sandbox (`sandbox-exec`, its rules written into
+the script and given on each run, never read from a file the try could
+change). Inside it nothing can read your home but the worktree, its git
+directory and node's folder; write anywhere but the try's home and `/tmp` (not
+the worktree, your tmux's or Claude's folders there, another try's home, or
+your per-user temporary folder); reach the network; connect to any socket but
+its own (your tmux server, ssh-agent, the Notes app's and every Neovim's,
+which take commands from whoever connects); signal any process of yours
+outside it; or ask the Keychain, the clipboard
+or Launch Services (so no `open`). `--run`, for the tests, may also listen on and reach
+localhost and the sockets in a folder made as the tests make theirs under
+`/tmp`. Since the try's code can change anything in its home, nothing outside
+the sandbox writes there once it has run: a try still running is only attached
+to, and any other is removed and made again from nothing. Its
+environment is made from nothing, so no token or `SSH_AUTH_SOCK` comes along.
+Nothing of yours is linked: the home has a fresh `~/.config/switchboard` whose
+settings turn off every feature that reaches a service or Claude, an empty
+`~/.claude` (Claude isn't signed in there), `~/Notes` with a few made-up
+notes, and `~/code` with two made-up repositories, one with a branch to see in
+`M-d`. tmux's plugins and Neovim's are copied in, since nothing may fetch them.
+lib's Node packages are copied from your clone when the worktree's lockfile
+is the same; when it isn't, only `--npm-ci` installs them, from its
+`package.json` and lockfile alone (never its `.npmrc`) with install scripts
+off, once you have read the lockfile, and only when every package in it comes
+from the npm registry with its checksum (a git or file dependency is prepared
+by running its own scripts whatever `--ignore-scripts` says), and package.json
+asks only for registry versions the lockfile holds, npm run with no environment
+of yours (no SSH agent, no .npmrc). Every tmux client of it runs in the sandbox too, the Ghostty
+window's and `--detached`'s prefix (its rules kept in
+`~/.cache/switchboard/sealed/`, which nothing in the try can write), since its
+tmux.conf could have an attached client run a command (`detach-client -E`). `--run` runs a command there from the worktree, the PR's tests
+for one. `ps`, being setuid, can't run in it, so the Resources view and the
+tests that call `ps` fail there whatever the code. It runs a worktree
+`wtpr --untrusted` made, one of your own, or one listed in `trusted-dirs`.
+
+## pr-risk
+
+The first look at someone else's PR: what it changes that runs without being
+asked, each file with its added lines, read from git alone (no hook, external
+diff or textconv), so nothing of the PR's runs.
+
+```
+pr-risk <worktree> <base>          the report
+pr-risk --files <worktree> <base>  the files alone, a line each
+pr-risk --json <worktree> <base>   all of it as JSON
+```
+
+It lists, under a heading each, what runs on setup and every pull (`setup.sh`,
+`install.sh`, `.githooks/`), what a Claude session loads or runs (`.claude/`,
+`CLAUDE.md`, `AGENTS.md`, `claude/hooks/`, Claude's settings files,
+`claude/switchboard.md`, the skills), what runs as tmux loads (`tmux.conf`,
+`plugins.txt`, and each `tmux/` script the PR's tmux.conf runs outside a
+binding, and the sidebar daemon it starts with lib/'s modules), packages (`package.json`, lockfiles, `.npmrc`) and `bin/`; then
+every added line in any file that fetches, evaluates, decodes, runs
+AppleScript, asks the Keychain, reads gh's token or SSH keys, or opens a
+socket, and the hosts the PR names that the base names nowhere. `wtpr
+--untrusted` prints its file list, and `/review-pr` (a skill of this
+repository's own, not installed for others) reads all of it first.

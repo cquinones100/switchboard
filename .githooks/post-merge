@@ -13,7 +13,10 @@
 
 set -u
 
-repo=$(git rev-parse --show-toplevel) || exit 0
+# The clone this hook is in, which setup.sh git points core.hooksPath at by
+# its full path, never the worktree the pull ran in: a worktree's setup.sh is
+# its branch's, which may be someone else's.
+repo=$(cd "$(dirname "$0")/.." && pwd) || exit 0
 [ -x "$repo/setup.sh" ] || exit 0
 
 parts=(tmux bin git)

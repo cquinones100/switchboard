@@ -126,11 +126,16 @@ part_neovim() {
 # holds a machine's identity and paths, which have no place in a public repo.
 # This repo's own hooks, such as the one that keeps machine-specific Claude
 # settings out of commits, are set on this clone only, so other repositories
-# keep theirs.
+# keep theirs. The path is absolute, this clone's own .githooks, so a
+# worktree runs these hooks, never the ones its branch carries: relative, git
+# read it from each worktree's top, and a fork's PR checked out there ran its
+# own. A clone set up with the relative path is moved to it.
 part_git() {
-  [[ $(git -C "$SRC" config core.hooksPath) == .githooks ]] && return 0
-  $CHECK || git -C "$SRC" config core.hooksPath .githooks || return 1
-  change "set this clone's core.hooksPath to .githooks"
+  local hooks
+  hooks="$(cd "$SRC" 2>/dev/null && pwd -P)/.githooks" || return 1
+  [[ $(git -C "$SRC" config core.hooksPath) == "$hooks" ]] && return 0
+  $CHECK || git -C "$SRC" config core.hooksPath "$hooks" || return 1
+  change "set this clone's core.hooksPath to $hooks"
 }
 
 # Switchboard's part of Claude Code's settings, claude/switchboard-settings.json

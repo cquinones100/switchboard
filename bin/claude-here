@@ -392,6 +392,13 @@ const chooseSession = async (sessions) => {
 
 const main = async () => {
   const targetDir = resolveTargetDir();
+  // Never in a worktree of someone else's PR, whose project settings and
+  // hooks would load (lib/untrusted.js).
+  const untrusted = require(path.join(__dirname, "../lib/untrusted"));
+  if (untrusted.isUntrusted(targetDir)) {
+    console.error(untrusted.refusal(printable(targetDir)));
+    process.exit(1);
+  }
   status(`searching for claude sessions in ${printable(targetDir)}`);
 
   const projectsDir = path.join(os.homedir(), ".claude", "projects");

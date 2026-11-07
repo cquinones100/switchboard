@@ -254,6 +254,10 @@ const main = async () => {
   const chosen =
     present.length === 1 ? present[0] : await chooseWorktree(present, root);
 
+  // Never a worktree of someone else's PR (lib/untrusted.js).
+  const untrusted = require("../lib/untrusted");
+  if (untrusted.isUntrusted(chosen.path)) fail(untrusted.refusal(chosen.path));
+
   console.error(`Target:   ${target.label}`);
   if (chosen.branch) console.error(`Branch:   ${chosen.branch}`);
   console.error(`Worktree: ${chosen.path}`);

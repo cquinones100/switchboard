@@ -700,3 +700,21 @@ test("setup.sh's zsh checks leave the terminal to setup.sh, so the question afte
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("setup.sh git points core.hooksPath at the clone's own .githooks by its full path, moving a relative one, once", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-git-")));
+  const clone = path.join(home, "switchboard");
+  const env = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: "/dev/null" };
+  const hooksPath = () => execFileSync("git", ["-C", clone, "config", "core.hooksPath"], { env, encoding: "utf8" }).trim();
+  try {
+    execFileSync("git", ["init", "-q", clone], { env });
+    execFileSync("git", ["-C", clone, "config", "core.hooksPath", ".githooks"], { env });
+    const first = spawnSync("bash", [script, "git"], { env, encoding: "utf8" });
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(hooksPath(), path.join(clone, ".githooks"), "absolute, so a worktree runs the clone's hooks rather than its branch's");
+    const again = spawnSync("bash", [script, "git"], { env, encoding: "utf8" });
+    assert.equal(again.stdout, "git: up to date\n");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

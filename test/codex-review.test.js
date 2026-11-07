@@ -38,6 +38,16 @@ test("codex-review on main with no PR reviews the commits not yet on origin, and
 
     // A pushed commit, named as the base by hand.
     const pushed = spawnSync(script, ["--dry-run", "--reviewer", "claude", "--base", "HEAD~1"], { cwd: work, env, encoding: "utf8" });
+    // From another directory, as a PR's untrusted worktree is reviewed from your main clone.
+    const elsewhere = spawnSync(script, ["-C", work, "--dry-run", "--reviewer", "claude", "--base", "HEAD~1"], { cwd: tmp, env, encoding: "utf8" });
+    assert.equal(elsewhere.status, 0, elsewhere.stderr);
+    assert.match(elsewhere.stdout, /Not pushed yet/);
+
+    // The PR named, as an untrusted review worktree's branch doesn't lead gh to it.
+    fs.writeFileSync(path.join(tmp, "bin", "gh"), `#!/bin/sh\n[ "$3" = 5 ] && { echo '{"number":5,"title":"Their fix","body":"What it does","url":"https://github.com/o/r/pull/5","baseRefName":"main","isCrossRepository":true}'; exit 0; }\necho 'no pull requests found' >&2\nexit 1\n`, { mode: 0o755 });
+    const named = spawnSync(script, ["-C", work, "--pr", "5", "--dry-run", "--reviewer", "claude", "--base", "HEAD~1"], { cwd: tmp, env, encoding: "utf8" });
+    assert.equal(named.status, 0, named.stderr);
+    assert.match(named.stdout, /What it does/, "its description in the prompt");
     assert.equal(pushed.status, 0, pushed.stderr);
     assert.match(pushed.stdout, /Not pushed yet/);
   } finally {

@@ -1,0 +1,210 @@
+#!/usr/bin/env node
+
+// pr-risk [--files | --json] <worktree> <base>
+//
+// The first look at someone else's PR: what it changes that runs without
+// being asked, each file with its added lines, before any of it is read
+// closely or run. It reads git only (the diff from <base>'s merge base to the
+// worktree's HEAD, with no hooks, external diff or textconv, and as text
+// whatever the PR's .gitattributes say, so a -diff there hides nothing), so it
+// runs nothing of the PR's.
+//
+//   setup      setup.sh, install.sh, sync.sh and .githooks/, which run on
+//              setup and on every pull
+//   claude     what a Claude session loads or runs: .claude/, CLAUDE.md,
+//              AGENTS.md, claude/hooks/, claude/settings*.json,
+//              claude/switchboard-settings.json, claude/switchboard.md and
+//              the skills
+//   tmux       tmux/tmux.conf, tmux/plugins.txt, every tmux/ script the
+//              PR's tmux.conf runs as it loads (any line but a binding: hooks,
+//              the status line's #() jobs, run-shell), and the sidebar
+//              daemon it starts with everything it loads (bin/tmux-sidebar,
+//              lib/'s modules)
+//   packages   package.json, lockfiles and .npmrc anywhere: a new or changed
+//              dependency, or an install script
+//   bin        bin/, which setup links onto your PATH
+//
+// Then every added line, in any file, that fetches, decodes, evaluates, talks
+// to the Keychain or reaches for credentials (curl, wget, eval, base64,
+// osascript, security, gh auth token, .ssh, Keychains, /dev/tcp, nc), and the
+// host names the PR adds that the base names nowhere.
+//
+//   --files   the risky files alone, a line each: "<kind>  <status> <path>"
+//   --json    { files: [{ kind, status, path, added }], hits: [{ file, line,
+//             what, text }], hosts: [] }
+
+const { execFileSync } = require("node:child_process");
+
+const args = process.argv.slice(2);
+const filesOnly = args.includes("--files");
+const json = args.includes("--json");
+const [worktree, base] = args.filter((arg) => !arg.startsWith("--"));
+if (!worktree || !base) {
+  console.error("Usage: pr-risk [--files | --json] <worktree> <base>");
+  process.exit(2);
+}
+
+// No hook of the PR's or yours, no external diff or textconv (which config
+// alone could name), paths printed as they are.
+const git = (...rest) =>
+  execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.quotePath=false", "-c", "diff.noprefix=false", "-C", worktree, ...rest], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1 << 28,
+  });
+
+let mergeBase;
+try {
+  mergeBase = git("merge-base", base, "HEAD").trim();
+} catch (err) {
+  console.error(`pr-risk: no merge base of ${base} and HEAD in ${worktree}: ${err.stderr?.trim() || err.message}`);
+  process.exit(1);
+}
+
+// The tmux/ scripts a tmux.conf runs as it loads: every line but a binding's,
+// continuation lines joined first.
+const loadScripts = (conf) => {
+  const lines = conf.replace(/\\\n/g, " ").split("\n").map((line) => line.trim());
+  const names = new Set(["tmux.conf", "plugins.txt"]);
+  for (const line of lines) {
+    if (/^(bind|bind-key|unbind|unbind-key)\b/.test(line) || line.startsWith("#")) continue;
+    for (const m of line.matchAll(/(?:~\/\.config\/tmux|\$HOME\/\.config\/tmux|tmux)\/([\w.-]+\.(?:sh|zsh|js))/g)) names.add(m[1]);
+  }
+  return names;
+};
+const tmuxConf = (() => {
+  try {
+    return git("show", "HEAD:tmux/tmux.conf");
+  } catch {
+    return "";
+  }
+})();
+const tmuxAtLoad = loadScripts(tmuxConf);
+
+const kindOf = (file) => {
+  if (/^(setup\.sh|install\.sh|sync\.sh)$/.test(file) || file.startsWith(".githooks/")) return "setup";
+  if (
+    file.startsWith(".claude/") ||
+    /(^|\/)(CLAUDE|AGENTS)\.md$/.test(file) ||
+    file.startsWith("claude/hooks/") ||
+    file.startsWith("claude/skills/") ||
+    /^claude\/(settings[^/]*\.json|switchboard-settings\.json|switchboard\.md)$/.test(file)
+  )
+    return "claude";
+  if (file.startsWith("tmux/") && !file.slice(5).includes("/") && tmuxAtLoad.has(file.slice(5))) return "tmux";
+  // The sidebar daemon tmux.conf starts, and everything it loads.
+  if (file === "bin/tmux-sidebar" || (file.startsWith("lib/") && /\.(js|json)$/.test(file) && !/(^|\/)(package|package-lock)\.json$/.test(file))) return "tmux";
+  if (/(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|\.npmrc)$/.test(file)) return "packages";
+  if (file.startsWith("bin/") && !file.endsWith(".md")) return "bin";
+  return null;
+};
+
+const PATTERNS = [
+  ["fetches", /\b(curl|wget)\b/],
+  ["evaluates", /\beval\b/],
+  ["decodes", /\bbase64\b/],
+  ["runs AppleScript", /\bosascript\b/],
+  ["asks the Keychain", /\bsecurity\s+(find|dump|add|delete|unlock|export|import|set)-?\w*/],
+  ["reads gh's token", /\bgh\s+auth\s+token\b/],
+  ["reaches for SSH keys", /\.ssh\//],
+  ["reaches for the Keychain", /Keychains/],
+  ["opens a socket", /\/dev\/(tcp|udp)\/|\bnc\s+-/],
+];
+const HOST = /\bhttps?:\/\/([a-z0-9.-]+\.[a-z]{2,})(?::\d+)?/gi;
+
+// The diff's added lines, by file, with their line numbers.
+const status = new Map(
+  git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--name-status", "--no-renames", mergeBase, "HEAD")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [code, ...rest] = line.split("\t");
+      return [rest.join("\t"), code];
+    }),
+);
+const added = new Map([...status.keys()].map((file) => [file, []]));
+let file = null;
+let at = 0;
+// A +++ line names the file only in the header before a file's first hunk:
+// inside one it is an added line beginning ++.
+let inHeader = false;
+for (const line of git("diff", "--no-color", "--no-ext-diff", "--no-textconv", "--text", "--no-renames", "-U0", mergeBase, "HEAD").split("\n")) {
+  if (line.startsWith("diff --git ")) {
+    inHeader = true;
+    file = null;
+    continue;
+  }
+  if (inHeader && line.startsWith("+++ ")) {
+    file = line === "+++ /dev/null" ? null : line.slice(6);
+    continue;
+  }
+  const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)/);
+  if (hunk) {
+    inHeader = false;
+    at = Number(hunk[1]);
+    continue;
+  }
+  if (file && line.startsWith("+")) {
+    added.get(file)?.push({ line: at, text: line.slice(1) });
+    at += 1;
+  }
+}
+
+const files = [...status]
+  .map(([path, code]) => ({ kind: kindOf(path), status: code, path, added: added.get(path) ?? [] }))
+  .filter((f) => f.kind);
+
+const hits = [];
+const hosts = new Set();
+for (const [path, lines] of added) {
+  for (const { line, text } of lines) {
+    for (const [what, re] of PATTERNS) if (re.test(text)) hits.push({ file: path, line, what, text: text.trim() });
+    for (const m of text.matchAll(HOST)) hosts.add(m[1].toLowerCase());
+  }
+}
+// A host counts as new when the base names it nowhere.
+const newHosts = [...hosts].filter((host) => {
+  try {
+    git("grep", "-q", "-F", "-i", host, mergeBase, "--");
+    return false;
+  } catch {
+    return true;
+  }
+}).sort();
+
+if (json) {
+  console.log(JSON.stringify({ base, mergeBase, files, hits, hosts: newHosts }, null, 2));
+  process.exit(0);
+}
+if (filesOnly) {
+  for (const f of files) console.log(`${f.kind.padEnd(9)} ${f.status} ${f.path}`);
+  process.exit(0);
+}
+
+const KINDS = {
+  setup: "Runs on setup and on every pull",
+  claude: "Loaded or run by a Claude session",
+  tmux: "Runs as tmux loads",
+  packages: "Packages (dependencies, install scripts)",
+  bin: "Linked onto your PATH",
+};
+const SHOWN = 40;
+const out = [];
+for (const [kind, title] of Object.entries(KINDS)) {
+  const these = files.filter((f) => f.kind === kind);
+  if (!these.length) continue;
+  out.push(`## ${title}`, "");
+  for (const f of these) {
+    out.push(`${f.status} ${f.path}${f.added.length ? ` (+${f.added.length})` : ""}`);
+    for (const { line, text } of f.added.slice(0, SHOWN)) out.push(`  ${String(line).padStart(5)}  ${text}`);
+    if (f.added.length > SHOWN) out.push(`  … ${f.added.length - SHOWN} more added lines`);
+  }
+  out.push("");
+}
+if (hits.length) {
+  out.push("## Added lines to read first", "");
+  for (const h of hits) out.push(`${h.file}:${h.line}  ${h.what}: ${h.text}`);
+  out.push("");
+}
+if (newHosts.length) out.push("## Hosts the base names nowhere", "", ...newHosts, "");
+console.log(out.length ? out.join("\n").trimEnd() : `None of the files listed above changed between ${base} and HEAD, and no added line matched the patterns above; the rest of the change still needs reading.`);

@@ -30,6 +30,7 @@ const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { inReviewDir } = require("../lib/untrusted");
 
 const PROJECTS = path.join(os.homedir(), ".claude/projects");
 const CACHE_FILE = path.join(os.homedir(), ".cache/wt-revive/index.json");
@@ -225,6 +226,8 @@ const worktreesOf = (repo) =>
     .split("\n\n")
     .map((block) => block.split("\n"))
     .filter((lines) => lines[0]?.startsWith("worktree ") && !lines.some((line) => /^(prunable|bare)\b/.test(line)))
+    // Never someone else's PR, which no Claude may be started in.
+    .filter((lines) => !inReviewDir(lines[0].slice("worktree ".length)))
     .map((lines) => ({
       tree: lines[0].slice("worktree ".length),
       branch: lines.includes("detached")

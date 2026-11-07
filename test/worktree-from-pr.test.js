@@ -101,7 +101,7 @@ test("a PR URL from another repository opens in a clone of that one found among 
   }
 });
 
-test("a fork's PR opens on <owner>-<branch>, tracking the fork's branch from a remote named after its owner", () => {
+test("a fork's PR opened --trusted opens on <owner>-<branch>, tracking the fork's branch from a remote named after its owner", () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtpr-test-")));
   const env = { ...process.env, HOME: tmp, GIT_CONFIG_GLOBAL: path.join(tmp, "gitconfig"), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e", PATH: `${path.join(tmp, "bin")}:${process.env.PATH}` };
   const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -127,13 +127,103 @@ test("a fork's PR opens on <owner>-<branch>, tracking the fork's branch from a r
     fs.writeFileSync(path.join(tmp, "bin/gh"), `#!/bin/sh\necho '${JSON.stringify({ number: 9, title: "Fix", author: { login: "alice" }, headRefName: "main", headRepository: { name: "widgets" }, headRepositoryOwner: { login: "alice" }, isCrossRepository: true, maintainerCanModify: true, state: "OPEN", url: "https://github.com/acme/widgets/pull/9" })}'\n`, { mode: 0o755 });
 
     const cdFile = path.join(tmp, "cd");
-    execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "9"], { cwd: clone, env, stdio: ["ignore", "ignore", "pipe"] });
+    execFileSync(process.execPath, [script, "--no-claude", "--trusted", "--cd-file", cdFile, "9"], { cwd: clone, env, stdio: ["ignore", "ignore", "pipe"] });
     const worktree = fs.readFileSync(cdFile, "utf8").split("\n")[0];
     assert.match(fs.readFileSync(cdFile, "utf8").split("\n")[1], /It's alice's PR, so don't push to it unless I ask\.$/, "someone else's PR isn't pushed to unasked");
     assert.equal(git(clone, "config", "remote.alice.url"), "git@github.com:alice/widgets.git", "the fork added as a remote, over SSH as origin is");
     assert.equal(git(worktree, "rev-parse", "HEAD"), last, "at the fork's commit");
     assert.equal(git(worktree, "branch", "--show-current"), "alice-main", "on a branch that leaves your main alone");
     assert.equal(git(worktree, "rev-parse", "--abbrev-ref", "@{upstream}"), "alice/main", "tracking the fork's branch, so a push updates the PR");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a fork's PR opens untrusted by default: outside the clone, its hooks never run, nothing linked, no remote added, and no Claude", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtpr-test-")));
+  const env = { ...process.env, HOME: tmp, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e", PATH: `${path.join(tmp, "bin")}:${process.env.PATH}` };
+  const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const ran = path.join(tmp, "ran");
+  const hook = `#!/bin/sh\necho "$0" >> ${JSON.stringify(ran)}\n`;
+  try {
+    const origin = path.join(tmp, "origin.git");
+    const clone = path.join(tmp, "clone");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env });
+    execFileSync("git", ["clone", "-q", origin, clone], { env, stdio: "ignore" });
+    // Your clone's hooks, by their full path, as setup.sh git sets them.
+    fs.mkdirSync(path.join(clone, ".githooks"));
+    for (const name of ["post-checkout", "post-merge", "post-commit", "pre-commit"]) fs.writeFileSync(path.join(clone, ".githooks", name), hook, { mode: 0o755 });
+    git(clone, "add", ".");
+    git(clone, "commit", "-q", "-m", "start");
+    git(clone, "push", "-q", "origin", "main");
+    git(clone, "config", "core.hooksPath", path.join(clone, ".githooks"));
+    fs.mkdirSync(path.join(clone, ".claude"));
+    fs.writeFileSync(path.join(clone, ".claude/settings.local.json"), "{}");
+    // The fork's commit, kept by GitHub under refs/pull/9/head, with hooks of its own.
+    git(clone, "checkout", "-q", "-b", "theirs");
+    for (const name of ["post-checkout", "post-merge", "post-commit", "pre-commit"]) fs.writeFileSync(path.join(clone, ".githooks", name), hook.replace("$0", "theirs $0"), { mode: 0o755 });
+    // And a filter of yours their .gitattributes chooses, which a checkout would run.
+    fs.writeFileSync(path.join(clone, ".gitattributes"), "*.txt filter=mine\n");
+    fs.writeFileSync(path.join(clone, "f.txt"), "theirs\n");
+    git(clone, "add", ".gitattributes", "f.txt");
+    git(clone, "commit", "-q", "--no-verify", "-am", "their hooks");
+    git(clone, "config", "filter.mine.smudge", `echo filter >> ${JSON.stringify(ran)}; cat`);
+    const last = git(clone, "rev-parse", "HEAD");
+    git(clone, "push", "-q", "--no-verify", "origin", "theirs");
+    git(origin, "update-ref", "refs/pull/9/head", last);
+    git(origin, "branch", "-q", "-D", "theirs");
+    git(clone, "checkout", "-q", "main");
+    git(clone, "branch", "-q", "-D", "theirs");
+    fs.rmSync(ran, { force: true });
+
+    fs.mkdirSync(path.join(tmp, "bin"));
+    fs.writeFileSync(path.join(tmp, "bin/gh"), `#!/bin/sh\n[ "$1" = api ] && { echo 2015-01-01T00:00:00Z; exit 0; }\ncase "$5" in *baseRefName*) ;; *) echo '{}'; exit 0 ;; esac\necho '${JSON.stringify({ number: 9, title: "Fix", author: { login: "alice" }, headRefName: "main", baseRefName: "main", headRepository: { name: "widgets" }, headRepositoryOwner: { login: "alice" }, isCrossRepository: true, maintainerCanModify: true, state: "OPEN", changedFiles: 4, additions: 4, deletions: 4, url: "https://github.com/acme/widgets/pull/9" })}'\n`, { mode: 0o755 });
+
+    const cdFile = path.join(tmp, "cd");
+    let status = 0;
+    let stderr = "";
+    try {
+      execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "9"], { cwd: clone, env, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] });
+    } catch (err) {
+      status = err.status;
+      stderr = err.stderr;
+    }
+    assert.equal(status, 3, "which the wtpr function reads as nothing to go into");
+    assert.ok(!fs.existsSync(cdFile) || !fs.readFileSync(cdFile, "utf8"), "and no directory or prompt handed to it");
+    const worktree = path.join(tmp, ".cache/switchboard/pr-review", path.basename(clone), "9");
+    assert.equal(git(worktree, "rev-parse", "HEAD"), last, "at the PR's commit");
+    assert.equal(git(worktree, "branch", "--show-current"), "pr-review/9");
+    assert.equal(git(worktree, "config", "core.hooksPath"), "/dev/null", "hooks off for that worktree");
+    assert.equal(git(clone, "config", "core.hooksPath"), path.join(clone, ".githooks"), "and still on in your clone");
+    assert.equal(git(worktree, "config", "switchboard.untrusted"), "true");
+    assert.equal(git(worktree, "config", "core.fsmonitor"), "false", "and no file-system monitor command");
+    assert.ok(!fs.existsSync(path.join(worktree, ".claude/settings.local.json")), "nothing linked");
+    assert.equal(git(clone, "remote"), "origin", "no remote added for the fork");
+    assert.match(stderr, /Author: {3}alice \(on GitHub \d+ years\)/);
+    assert.match(stderr, /\.githooks\/post-checkout/, "pr-risk lists the hooks it changes");
+
+    fs.writeFileSync(path.join(worktree, "g.txt"), "x\n");
+    git(worktree, "add", "g.txt");
+    git(worktree, "commit", "-q", "-m", "a commit there");
+    execFileSync("git", ["-C", worktree, "merge", "-q", "--no-edit", "--no-ff", "main"], { env, stdio: "ignore" });
+    assert.ok(!fs.existsSync(ran), "no hook or filter ran, theirs or yours, on checkout, commit or merge");
+
+    // Run again from another worktree of the same clone, it reuses the review worktree.
+    git(worktree, "reset", "-q", "--hard", last);
+    git(clone, "worktree", "add", "-q", "-b", "other", path.join(tmp, "other"));
+    let again = 0;
+    try {
+      execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "9"], { cwd: path.join(tmp, "other"), env, encoding: "utf8", stdio: ["ignore", "ignore", "pipe"] });
+    } catch (err) {
+      again = err.status;
+      assert.match(err.stderr, /moved to the PR's newest commit/, err.stderr);
+    }
+    assert.equal(again, 3);
+
+    // Claude is never started there, and nothing lists it as work to reopen.
+    const here = require("node:child_process").spawnSync(process.execPath, [path.join(__dirname, "../bin/claude-here"), "--print"], { cwd: worktree, env, encoding: "utf8" });
+    assert.equal(here.status, 1);
+    assert.match(here.stderr, /Claude isn't started there/);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

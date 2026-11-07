@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # switchboard-try [--print | --detached] [<worktree>]
+# switchboard-try --sealed [--npm-ci] [--print | --detached] [<worktree>]
+# switchboard-try --sealed [<worktree>] --run <command>...
 # switchboard-try --clean [<worktree>]
 # switchboard-try --clean-all
 #
@@ -46,6 +48,41 @@
 # The relay isn't started. Linked things are yours: an edit made through them
 # (a git config, Neovim's plugins updated from :Lazy) is made to the real one.
 #
+# --sealed tries someone else's code (a fork's PR, from wtpr --untrusted)
+# in a home that holds nothing of yours, under a macOS sandbox
+# (sandbox-exec) that every process of the try runs in, its setup.sh, tmux
+# server and everything tmux starts:
+#
+#   it can't  read your home or your per-user temporary folder (only the
+#             try's home, the worktree, its git directory and node's folder);
+#             write anywhere but the try's home and /tmp (not the worktree,
+#             its git directory, your tmux's or Claude's folders there, nor
+#             another try's home); reach the network; connect to any socket
+#             but its own (with --run, also localhost and those in a folder
+#             made as the tests make theirs); signal a process of yours
+#             outside it; or ask the Keychain, the
+#             clipboard or Launch Services (so no `open`)
+#
+# Nothing outside the sandbox writes in a home whose try has run: a try still
+# running is only attached to, any other removed and made again from nothing.
+#   fresh     ~/.config/switchboard with a settings.json turning off every
+#             feature that reaches a service or Claude, ~/.claude, ~/Notes
+#             with a few made-up notes, ~/code with two made-up repositories
+#             (one with a branch, for M-d)
+#   copied    tmux's plugins and Neovim's (lazy.nvim's folder), so nothing
+#             needs fetching; lib's Node packages from your clone when the
+#             worktree's lockfile is the same, else, with --npm-ci only (once
+#             you have read the lockfile), installed with install scripts off
+#             from its package.json and lockfile alone, never its .npmrc
+#
+# Its environment is made from nothing (no tokens, no SSH_AUTH_SOCK), and
+# Claude Code isn't signed in there, so anything needing Claude or a service
+# is left to the review. It runs only a worktree wtpr --untrusted made, one of
+# your own, or one listed in trusted-dirs. --run runs a command in it (the
+# tests: --run /bin/sh -c 'node --test test/*.test.js', the glob expanded
+# in the worktree) from the worktree, and exits with
+# its status.
+#
 # --clean stops its tmux server and sidebar daemon and removes the home, for a
 # worktree already removed too, by the path it had; --clean-all does it for
 # every try of yours.
@@ -56,32 +93,73 @@ print=false
 detached=false
 clean=false
 clean_all=false
+sealed=false
+npm_ci=false
+run=()
 target=
-for arg in "$@"; do
-  case $arg in
+while (($#)); do
+  case $1 in
     --print) print=true ;;
     --detached) detached=true ;;
     --clean) clean=true ;;
     --clean-all) clean_all=true ;;
-    -h|--help) sed -n '2,4p' "$0" | sed 's/^# //'; exit 0 ;;
-    -*) echo "switchboard-try: unknown option $arg" >&2; exit 1 ;;
-    *) target=$arg ;;
+    --sealed) sealed=true ;;
+    --npm-ci) npm_ci=true ;;
+    # Everything after it is the command, run in the sealed home.
+    --run) shift; run=("$@"); (($#)) || { echo "switchboard-try: --run needs a command" >&2; exit 1; }; break ;;
+    -h|--help) sed -n '2,6p' "$0" | sed 's/^# //'; exit 0 ;;
+    -*) echo "switchboard-try: unknown option $1" >&2; exit 1 ;;
+    *) target=$1 ;;
   esac
+  shift
 done
+((${#run[@]})) && ! $sealed && { echo "switchboard-try: --run works only with --sealed" >&2; exit 1; }
+$npm_ci && ! $sealed && { echo "switchboard-try: --npm-ci works only with --sealed" >&2; exit 1; }
 
 fail() { echo "switchboard-try: $1" >&2; exit 1; }
 # The try's home for a worktree's path.
 home_of() { echo "/tmp/sb-$(printf '%s' "$1" | shasum | cut -c1-8)"; }
 
 # Stops the try in home $1, its tmux server and sidebar daemon, and removes it.
+# Whether the try in home $1 has its tmux socket where it should be, no link
+# on the way: a sealed try's code can write in its home, and a link there to
+# your own server's socket would have kill-server or attach reach yours.
+socket_ok() {
+  local socket=$1/t/tmux-$(id -u)/default
+  [[ -S $socket && $(realpath "$socket" 2>/dev/null) == "$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")/t/tmux-$(id -u)/default" ]]
+}
+
+# A tmux command client of the try in home $1 (the rest are its arguments),
+# in a sandbox that lets it do nothing but reach that socket: whatever
+# answers there may be the try's code rather than tmux, and a server can tell
+# a client to run a command, read it a file, or hear the client's environment,
+# so it gets no environment of yours and reads nothing of your home.
+try_client() {
+  local home=$1 home_real tmux_real
+  shift
+  home_real=$(cd "$home" 2>/dev/null && pwd -P) || return 1
+  tmux_real=$(realpath "$(command -v tmux)") || return 1
+  env -i PATH=/usr/bin:/bin LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 /usr/bin/sandbox-exec -p "(version 1)
+(allow default)
+(deny file-read-data (subpath \"$(cd ~ && pwd -P)\") (subpath \"$(cd "$(getconf DARWIN_USER_DIR)/.." 2>/dev/null && pwd -P)\"))
+(deny process-exec*)
+(allow process-exec (literal \"$tmux_real\"))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/dev\"))
+(deny network*)
+(allow network-outbound (remote unix-socket (subpath \"$home_real\")))
+(deny signal)" "$tmux_real" -S "$home/t/tmux-$(id -u)/default" "$@"
+}
+
 clean_try() {
   local home=$1 pid daemon
-  env -u TMUX -u TMUX_PANE tmux -S "$home/t/tmux-$(id -u)/default" kill-server 2>/dev/null
+  socket_ok "$home" && try_client "$home" kill-server 2>/dev/null
   pid=$(cut -d' ' -f1 "$home/.local/state/tmux-sidebar/daemon.pid" 2>/dev/null)
   # Only while it still runs this try's sidebar daemon: a pid left by one that
   # died may name some other process of yours by now, your real daemon too.
   daemon="^[^ ]*node (/private)?$home/\.local/bin/tmux-sidebar daemon$"
   [[ -n $pid && $(ps -p "$pid" -o command= 2>/dev/null) =~ $daemon ]] && kill "$pid" 2>/dev/null
+  rm -f "$HOME/.cache/switchboard/sealed/$(basename "$home").sb"
   rm -rf "$home" && echo "Removed $home and stopped its tmux."
 }
 
@@ -149,12 +227,18 @@ if $trusted; then
     trusted=false
   fi
 fi
+# A worktree of your clone wtpr --untrusted made (its own config, which no
+# file in the worktree can set) holds someone else's code by design, and is
+# tried only sealed.
+untrusted=false
+$trusted && [[ $(git -C "$wt" config --get switchboard.untrusted 2>/dev/null) == true ]] && untrusted=true
+$untrusted && ! $sealed && fail "$wt holds a PR wtpr --untrusted set up, whose code runs only sealed: switchboard-try --sealed"
 # A worktree of your clone may still hold someone else's code: one wtpr or
 # gh pr checkout made from a fork's PR. Its commits not on origin's branches
 # must be your own: found on no other remote's ref (a fork's, or origin's pr/
 # refs), and written and committed under your git email, since a PR fetched
 # straight to a local branch, or a fork's ref pruned since, leaves no ref.
-if $trusted; then
+if $trusted && ! $untrusted; then
   # Ref names have no spaces, so the lists are split on words (macOS's bash 3.2
   # has no mapfile).
   # Origin's branches only: wtpr's pr/ refs, and wherever a fetch refspec of
@@ -188,6 +272,212 @@ if ! $trusted; then
   $trusted || fail "$wt isn't a worktree of your ~/switchboard clone; list it in ~/.config/switchboard/trusted-dirs to try it"
 fi
 home=$(home_of "$wt")
+# A sealed home and an open one are never the same home made over: the open
+# one links your files, and the sealed one is told apart by its .sealed.
+if [[ -d $home ]] && { $sealed && [[ ! -e $home/.sealed ]] || ! $sealed && [[ -e $home/.sealed ]]; }; then
+  fail "$home was made $($sealed && echo without || echo with) --sealed; run switchboard-try --clean $(printf '%q' "$wt") first"
+fi
+if $sealed; then
+  command -v sandbox-exec >/dev/null || fail "--sealed needs macOS's sandbox-exec"
+  tmux_bin=$(command -v tmux) || fail "tmux isn't on your PATH"
+  node_bin=$(command -v node) || fail "node isn't on your PATH"
+  node_bin=$(realpath "$node_bin")
+  node_prefix=$(cd "$(dirname "$node_bin")/.." && pwd -P)
+  wt_real=$(cd "$wt" && pwd -P)
+  git_common=$(cd "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)" && pwd -P)
+  main_clone=$(cd "$git_common/.." && pwd -P)
+  real_home=$(cd "$real" && pwd -P)
+  uid=$(id -u)
+  socket=$home/t/tmux-$uid/default
+  # The home is the try's code's to change, so nothing outside the sandbox
+  # writes in one it has run in: a try still running is only attached to (or
+  # --run in), and any other is removed (rm never follows a link) and made
+  # again from nothing.
+  running=false
+  socket_ok "$home" && try_client "$home" has-session -t try 2>/dev/null && running=true
+  if ! $running; then
+  [[ -e $home || -L $home ]] && clean_try "$home" >/dev/null
+  mkdir "$home" && chmod 700 "$home" || fail "could not make $home"
+  touch "$home/.sealed"
+  mkdir -p "$home"/{.config/switchboard,.local/bin,.local/share,.local/state,.claude,tmp,code,Notes} "${socket%/*}"
+  chmod 700 "${socket%/*}"
+  ln -sfn "$wt" "$home/switchboard"
+
+  # Every feature that reaches a service or Claude, off: a PR's code ignoring
+  # them still meets the sandbox's network rule, but the try then shows what
+  # works without them rather than a screen of errors.
+  [[ -s $home/.config/switchboard/settings.json ]] || cat >"$home/.config/switchboard/settings.json" <<'JSON'
+{
+  "github": false, "linear": false, "notifications": false, "link_view_docs": false,
+  "chrome_profiles": false, "standup_note": false, "standup_summary": false, "todo_note": false,
+  "meeting_notes": false, "search_everything": false, "search_slack": false, "diff_order": false,
+  "diff_story": false, "diff_story_ahead": false, "diff_ask": false, "diff_story_notes": false,
+  "slack_background": false, "view_slack": false, "view_calendar": false, "calendar_rsvp": false,
+  "calendar_changes": false, "next_meeting": false, "tab_lookups": false, "haiku_summaries": false,
+  "update_check": "off", "auto_restore": false
+}
+JSON
+  # A few made-up notes and repositories, so Notes, the sidebar and M-d have
+  # something to show.
+  if [[ ! -e $home/Notes/Getting\ started.md ]]; then
+    printf '# Getting started\n\nA made-up note in a sealed try.\n\n- [ ] Open the sidebar with M-s\n- [ ] Open mission control with M-Space\n\n- [x] Start the try\n' >"$home/Notes/Getting started.md"
+    printf '# Groceries\n\n- [ ] Coffee\n- [ ] Lemons\n- [ ] Bread\n' >"$home/Notes/Groceries.md"
+  fi
+  made_up() {
+    local repo=$home/code/$1
+    [[ -d $repo/.git ]] && return 0
+    local g=(git -C "$repo" -c user.name=Try -c user.email=try@example.com -c core.hooksPath=/dev/null -c commit.gpgsign=false)
+    # An origin of its own, in the try's home, so M-d finds main as the base.
+    local origin=$home/code/.origin/$1.git
+    mkdir -p "$repo" && git init -q -b main "$repo" && git init -q --bare -b main "$origin" &&
+      printf '# %s\n\nA made-up repository.\n' "$1" >"$repo/README.md" &&
+      printf 'export const hello = (name) => `Hello, ${name}`;\n' >"$repo/index.js" &&
+      "${g[@]}" add -A && "${g[@]}" commit -qm "Start $1" &&
+      "${g[@]}" remote add origin "$origin" && "${g[@]}" push -q -u origin main 2>/dev/null &&
+      "${g[@]}" remote set-head origin main &&
+      "${g[@]}" checkout -qb feature/greeting &&
+      printf 'export const hello = (name) => `Hello, ${name}!`;\nexport const bye = (name) => `Bye, ${name}`;\n' >"$repo/index.js" &&
+      "${g[@]}" commit -qam "Say goodbye too" || echo "switchboard-try: could not make the made-up repository $1" >&2
+  }
+  made_up acme-api
+  made_up acme-web
+  # What nothing in the try may fetch: tmux's plugins and Neovim's, copied (a
+  # clone on APFS, so it costs nothing).
+  if [[ ! -e $home/.config/tmux/plugins && -d $real/.config/tmux/plugins ]]; then
+    mkdir -p "$home/.config/tmux" && cp -RLc "$real/.config/tmux/plugins" "$home/.config/tmux/plugins" 2>/dev/null ||
+      cp -RL "$real/.config/tmux/plugins" "$home/.config/tmux/plugins"
+  fi
+  if [[ ! -e $home/.local/share/nvim/lazy && -d $real/.local/share/nvim/lazy ]]; then
+    mkdir -p "$home/.local/share/nvim" && cp -Rc "$real/.local/share/nvim/lazy" "$home/.local/share/nvim/lazy" 2>/dev/null ||
+      cp -R "$real/.local/share/nvim/lazy" "$home/.local/share/nvim/lazy"
+  fi
+  # lib's packages, which the sidebar daemon needs, put in the worktree
+  # before the sandbox makes it read-only: your clone's when the lockfile is
+  # the same, else installed only when asked, from the package.json and
+  # lockfile alone (no .npmrc of the PR's, which can run its code) with
+  # install scripts off.
+  # Only into the worktree's own lib folder: one the PR made a link would
+  # take the copy anywhere.
+  if [[ -L $wt/lib || $(cd "$wt/lib" 2>/dev/null && pwd -P) != "$wt_real/lib" ]]; then
+    echo "switchboard-try: the worktree's lib isn't a folder of its own, so lib's packages aren't installed" >&2
+  elif [[ -e $wt/lib/node_modules || -L $wt/lib/node_modules ]]; then
+    :
+  else
+    if [[ -d $main_clone/lib/node_modules ]] && cmp -s "$wt/lib/package-lock.json" "$main_clone/lib/package-lock.json"; then
+      cp -Rc "$main_clone/lib/node_modules" "$wt/lib/" 2>/dev/null || cp -R "$main_clone/lib/node_modules" "$wt/lib/"
+    elif $npm_ci && ! odd=$(node -e '
+      // Only packages from the npm registry, each with its checksum: a git,
+      // file or link dependency is prepared by running its own scripts,
+      // whatever --ignore-scripts says, outside the sandbox.
+      const lock = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const odd = Object.entries(lock.packages ?? {}).filter(([at, p]) => at && !(typeof p.resolved === "string" && p.resolved.startsWith("https://registry.npmjs.org/") && p.integrity));
+      // And package.json asking only for registry versions the lockfile has,
+      // since npm reads it before the lockfile.
+      const pkg = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
+      for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+        for (const [name, spec] of Object.entries(pkg[field] ?? {})) {
+          if (typeof spec !== "string" || /[:/]/.test(spec) || !lock.packages?.["node_modules/" + name]) odd.push([name + "@" + spec]);
+        }
+      }
+      if (!lock.packages || odd.length) { console.log(odd.map(([at]) => at).slice(0, 5).join(", ") || "a lockfile with no packages list"); process.exit(1); }
+    ' "$wt/lib/package-lock.json" "$wt/lib/package.json" 2>&1); then
+      echo "switchboard-try: lib/package-lock.json has packages from outside the npm registry, or without a checksum ($odd), which npm would prepare by running their scripts; lib's packages aren't installed" >&2
+    elif $npm_ci; then
+      stage=$(mktemp -d) && cp "$wt/lib/package.json" "$wt/lib/package-lock.json" "$stage/" &&
+        (cd "$stage" && mkdir home && env -i PATH="$PATH" HOME="$stage/home" npm ci --ignore-scripts --no-audit --no-fund) && mv "$stage/node_modules" "$wt/lib/" ||
+        echo "switchboard-try: npm ci in lib failed; the sidebar won't start" >&2
+      rm -rf "$stage"
+    else
+      echo "switchboard-try: lib/package-lock.json differs from your clone's, so lib's packages aren't installed and the sidebar won't start; read its change, then run again with --npm-ci" >&2
+    fi
+  fi
+
+  fi
+  home_real=$(cd "$home" && pwd -P)
+
+  # The sandbox's rules: SBPL, the last matching rule winning. Paths are real
+  # ones (/private/tmp, not /tmp), as the kernel checks them.
+  q() { printf '"%s"' "$1"; }
+  # SBPL's regexes have no {n}, so repeats are written out.
+  tries='#"^/private/tmp/sb-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f](/|$)"'
+  # Your per-user temporary and cache folders, where every Neovim you run
+  # listens on a socket of its own.
+  user_dir=$(cd "$(getconf DARWIN_USER_DIR)/.." 2>/dev/null && pwd -P)
+  # A unix socket is reached by connecting, which the file rules don't cover,
+  # so none is but the try's own: the Notes app's and every Neovim's take
+  # commands from whoever connects. --run, for the tests, also reaches those
+  # in a folder made the way the tests make theirs (mkdtemp under /tmp: a
+  # name, a dash and six characters), and localhost, where some serve a page.
+  if ((${#run[@]})); then
+    run_sockets="(allow network-outbound (remote unix-socket (path-regex #\"^/private/tmp/[A-Za-z][A-Za-z-]*-[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]/\")))"
+    run_ip="(allow network-outbound (remote ip \"localhost:*\")) (allow network-bind network-inbound (local ip \"localhost:*\"))"
+  else
+    run_sockets= run_ip=
+  fi
+  launchd='#"^/private/tmp/com\.apple\.launchd\."'
+  profile="(version 1)
+(allow default)
+(deny file-read-data ${user_dir:+(subpath $(q "$user_dir")) }(subpath $(q "$real_home")) (subpath \"/private/tmp/claude-$uid\") (subpath \"/private/tmp/tmux-$uid\") (regex $tries) (regex $launchd))
+(deny file-write* (subpath \"/\"))
+(allow file-write* (subpath \"/private/tmp\") (subpath \"/dev\"))
+(deny file-write* (subpath \"/private/tmp/claude-$uid\") (subpath \"/private/tmp/tmux-$uid\") (regex $tries) (regex $launchd) (subpath $(q "$real_home")) (subpath $(q "$wt_real")) (subpath $(q "$git_common")))
+(allow file-read-data (subpath $(q "$wt_real")) (subpath $(q "$git_common")) (subpath $(q "$node_prefix")))
+(allow file-read-data file-write* (subpath $(q "$home_real")))
+(deny network-outbound (remote ip) (remote unix-socket))
+(deny network-inbound (local ip))
+(deny network-bind (local ip))
+$run_ip
+$run_sockets
+(allow network-outbound (remote unix-socket (subpath $(q "$home_real"))))
+(deny signal)
+(allow signal (target same-sandbox))
+(deny mach-lookup (global-name \"com.apple.SecurityServer\") (global-name \"com.apple.securityd.xpc\") (global-name \"com.apple.pasteboard.1\") (global-name \"com.apple.coreservices.launchservicesd\"))"
+  # git itself rather than /usr/bin's shim, which would write xcrun's cache to
+  # your temporary folder, which the sandbox closes.
+  git_bin=$(xcrun -f git 2>/dev/null) || git_bin=$(command -v git)
+  sealed_path="$home/.local/bin:$(dirname "$git_bin"):$(dirname "$node_bin"):$(dirname "$tmux_bin"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  in_sandbox=(env -i HOME="$home" USER="$USER" LOGNAME="$USER" SHELL=/bin/zsh PATH="$sealed_path" TERM="${TERM:-xterm-256color}"
+    LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TMPDIR="$home/tmp" TMUX_TMPDIR="$home/t" SWITCHBOARD_SEALED=1
+    /usr/bin/sandbox-exec -p "$profile")
+
+  # The worktree's own setup, inside the sandbox, the parts that ask nothing:
+  # not git, whose config is your clone's.
+  if ! $running; then
+  echo "Setting up $home from $wt, sealed…"
+  (cd "$wt" && "${in_sandbox[@]}" "$wt/setup.sh" tmux bin claude neovim lazygit) 2>&1 | sed 's/^/  /'
+  (( ${PIPESTATUS[0]} == 0 )) || echo "switchboard-try: setup.sh reported a failure above (a fetch the sandbox refused, say); starting anyway." >&2
+  fi
+
+  if ((${#run[@]})); then
+    cd "$wt" && exec "${in_sandbox[@]}" "${run[@]}"
+  fi
+  # Every tmux client of the try runs in the sandbox too: the try's tmux.conf
+  # can have an attached client run a command of its choosing (detach-client
+  # -E), which would run as the client does. Its rules are kept in your cache,
+  # which nothing in the try can write, for the commands printed here.
+  profile_file=$real_home/.cache/switchboard/sealed/$(basename "$home").sb
+  mkdir -p "${profile_file%/*}" && printf '%s\n' "$profile" >"$profile_file" || fail "could not write $profile_file"
+  try_tmux="env -i HOME=$(printf '%q' "$home") USER=$(printf '%q' "$USER") PATH=$(printf '%q' "$sealed_path") TERM=\"\${TERM:-xterm-256color}\" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TMPDIR=$(printf '%q' "$home/tmp") /usr/bin/sandbox-exec -f $(printf '%q' "$profile_file") $(printf '%q' "$tmux_bin") -S $(printf '%q' "$socket")"
+  if ! $running; then
+    (cd "$wt" && "${in_sandbox[@]}" "$tmux_bin" -S "$socket" -f "$home/.config/tmux/tmux.conf" new -d -s try -x 200 -y 50 -c "$home/code/acme-api") ||
+      fail "could not start its tmux server"
+  fi
+  attach="exec $try_tmux attach -t try"
+  if $detached; then
+    echo "Its tmux is running sealed, with no client. Drive and read it with:"
+    echo "  $try_tmux send-keys -t try ..."
+    echo "  $try_tmux capture-pane -p -t try"
+    exit 0
+  fi
+  if $print; then
+    echo "$attach"
+    exit 0
+  fi
+  open -na Ghostty --args --title="Switchboard try (sealed): ${wt##*/}" -e /bin/zsh -c "$attach" ||
+    { echo "Could not open Ghostty. In another terminal, run:"; echo "$attach"; }
+  echo "Opened $wt's Switchboard, sealed, in a new Ghostty window. switchboard-try --clean $(printf '%q' "$wt") removes it."
+  exit 0
+fi
 # SWITCHBOARD_TRY_OF, given to its setup and tmux, has setup.sh leave alone a
 # file of your real home it reaches through a linked folder, rather than move
 # it into the try, should the worktree's setup come to move one later.
