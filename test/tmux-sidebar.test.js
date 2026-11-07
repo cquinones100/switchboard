@@ -634,12 +634,100 @@ test("tabs landing on the default branch or waiting their turn are a Landing gro
     // Notes moved beside the landing tab and focused: the tab is found by its Claude's directory.
     const notesFocused = [{ ...tabs[2], landing: undefined, path: home, claude: { sessionId: "landing-one", cwd: one } }];
     sidebar.landingOf(notesFocused);
-    assert.deepEqual(notesFocused[0].landing, { holding: true, line: 1 }, "focusing Notes beside it keeps its place");
+    assert.deepEqual(notesFocused[0].landing, { method: "direct", holding: true, line: 1 }, "focusing Notes beside it keeps its place");
     // A waiter whose Claude has gone leaves the group before the script reads the queue again.
     fs.rmSync(sessionFiles[2]);
     const after = tabs.map((tab) => ({ ...tab, landing: undefined }));
     sidebar.landingOf(after);
     assert.deepEqual(after.filter((tab) => tab.landing).map((tab) => [tab.name, tab.landing.line]), [["second", 2], ["lander", 1]]);
+  } finally {
+    sessionFiles.forEach((file) => fs.rmSync(file, { force: true }));
+  }
+});
+
+test("the Landing view shows each repository's landing queue and merge queue as sections in queue order, only while something lands, and a row's menu moves a waiter", async (t) => {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(tmp, "landview-")));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const repo = path.join(dir, "direct");
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+  const merging = path.join(dir, "merging");
+  execFileSync("git", ["init", "-q", "-b", "main", merging], { env });
+  execFileSync("git", ["-C", merging, "remote", "add", "origin", "git@github.com:acme/merging.git"], { env });
+  const sessionFiles = [];
+  const [one, two, three] = ["one", "two", "three"].map((name) => {
+    const worktree = path.join(dir, name);
+    execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", name, worktree], { env });
+    const file = path.join(home, ".claude/sessions", `landview-${name}.json`);
+    fs.writeFileSync(file, JSON.stringify({ sessionId: `landview-${name}`, cwd: worktree, pid: process.pid }));
+    sessionFiles.push(file);
+    return worktree;
+  });
+  const byRepo = { "acme/merging": { url: "https://github.com/acme/merging/queue/main", entries: [
+    { position: 2, state: "AWAITING_CHECKS", enqueuedAt: "2026-11-03T10:00:00Z", pullRequest: { number: 7, title: "Mine", url: "https://github.com/acme/merging/pull/7", author: { login: "me" } } },
+    { position: 1, state: "MERGEABLE", enqueuedAt: "2026-11-03T09:00:00Z", pullRequest: { number: 6, title: "Theirs", url: "https://github.com/acme/merging/pull/6", author: { login: "someone" } } },
+  ] } };
+  try {
+    const base = { session: "$1", sessionName: "test", panes: [], sidebars: [], since: undefined, command: "zsh", claude: { sessionId: "s" } };
+    const tabs = [
+      { ...base, id: "@1", index: 1, name: "lander", state: "working", path: one, phase: "pushing" },
+      { ...base, id: "@2", index: 2, name: "waiter", state: "working", path: two },
+      { ...base, id: "@3", index: 3, name: "queued pr", state: "idle", path: merging, pr: "7", merge: "queued", position: 2 },
+    ];
+    assert.equal(sidebar.landingView(tabs, sidebar.landingOf(tabs, byRepo.none)), undefined, "nothing landing, no view");
+    assert.equal(sidebar.landingView(tabs, [], { keep: true }).empty, "Nothing is landing now.", "kept while in front, it says so");
+    assert.equal(sidebar.landingView(tabs, [], { error: "gh isn't signed in" }).error, "gh isn't signed in", "shown while GitHub can't be asked, saying why");
+    // Leaving a Landing view kept with nothing landing: the client's place is settled in the list without it.
+    const stateTabs = sidebar.state.tabs;
+    const stateLanding = sidebar.state.landing;
+    Object.assign(sidebar.state, { tabs: [], landing: [] });
+    t.after(() => Object.assign(sidebar.state, { tabs: stateTabs, landing: stateLanding }));
+    const client = { view: { view: 0, cursor: 0 }, viewTitle: "Landing" };
+    const kept = sidebar.viewsFor(client).map((v) => v.title);
+    const at = kept.indexOf("Landing");
+    assert.ok(at > 0, "kept while in front");
+    client.view.view = at + 2;
+    client.focus = { view: at + 2 };
+    client.viewTitles = kept.join("\n");
+    const next = kept[at + 1];
+    const settled = sidebar.settleView(client);
+    assert.equal(settled[client.view.view - 1].title, next, "the view moved to is the one acted on");
+    assert.equal(settled[client.focus.view - 1].title, next, "and the one Tab's focus is on");
+    assert.ok(!settled.some((v) => v.title === "Landing"), "and Landing is gone once left");
+
+    fs.mkdirSync(path.join(repo, ".git/land.lock"));
+    fs.writeFileSync(path.join(repo, ".git/land.lock/holder"), JSON.stringify({ path: one, since: 1 }));
+    fs.writeFileSync(path.join(repo, ".git/land.queue"), JSON.stringify([{ path: two, since: 2 }, { path: three, since: 3 }]));
+    const repos = sidebar.landingOf(tabs, byRepo);
+    const view = sidebar.landingView(tabs, repos);
+    assert.deepEqual(view.items.map((i) => [i.title, i.state]), [
+      ["direct · straight to the default branch", "idle"],
+      ["1. lander", "active"],
+      ["2. waiter", "idle"],
+      ["3. three", "idle"],
+      ["acme/merging · merge queue", "idle"],
+      ["1. #6 Theirs", "idle"],
+      ["2. #7 Mine", "active"],
+    ], "a section per repository, in queue order, a worktree no tab has by its folder");
+    assert.equal(view.items[1].detail, "landing · pushing · tab 1");
+    assert.equal(view.items[3].detail, "waiting · no tab");
+    assert.deepEqual(tabs[2].landing, { method: "pr", line: 2, holding: false }, "a tab whose PR is queued has its place");
+    assert.equal(sidebar.stateWords(tabs[2]), "2nd in line to merge");
+    const merged = [{ ...tabs[2], landing: undefined, merge: "merged" }];
+    sidebar.landingOf(merged, byRepo);
+    assert.equal(merged[0].landing, undefined, "a PR since merged isn't landing, whatever the queue said last");
+    assert.deepEqual(sidebar.grouped(tabs).map((g) => [g.title, g.tabs.map((x) => x.name)]), [["Landing", ["lander", "waiter", "queued pr"]]], "landing either way is one group");
+    assert.ok(sidebar.builtInViews({ tabs, landing: repos }).map((v) => v.title).join(",").includes("CI,Landing"), "after CI");
+    assert.ok(!sidebar.builtInViews({ tabs, landing: [] }).some((v) => v.title === "Landing"));
+
+    const tabsBefore = sidebar.state.tabs;
+    sidebar.state.tabs = tabs;
+    t.after(() => (sidebar.state.tabs = tabsBefore));
+    const choices = sidebar.itemChoices({}, view, view.items[3]).map((c) => c.key);
+    assert.deepEqual(choices, ["f", "u", "x", "y"], "the last in line moves up or out, and has no tab to go to");
+    await sidebar.itemChoices({}, view, view.items[3]).find((c) => c.key === "u").act();
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(repo, ".git/land.queue"), "utf8")).map((e) => e.path), [three, two], "Move it up reorders the landing queue");
+    assert.ok(!sidebar.itemChoices({}, view, view.items[1]).some((c) => ["f", "u", "b", "x"].includes(c.key)), "the landing one stays where it is");
   } finally {
     sessionFiles.forEach((file) => fs.rmSync(file, { force: true }));
   }
@@ -710,7 +798,7 @@ test("the PR board searches for merged PRs only every ten minutes, keeping the l
   assert.match(fs.readFileSync(asked, "utf8"), /is:merged/, "ten minutes on, merged again");
 });
 
-test("the Merge queues view lists each repository's queue in order, marking a tab's PR, and says when there is none", async (t) => {
+test("the merge queues are each repository's in order, marking a tab's PR, and a repository GitHub fails to answer for keeps its last answer", async (t) => {
   const repo = path.join(tmp, "queue-repo");
   fs.mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q", repo]);
@@ -732,26 +820,22 @@ test("the Merge queues view lists each repository's queue in order, marking a ta
   t.after(() => (process.env.PATH = path0));
   const tabs = [{ id: "@3", index: 3, path: repo, pr: "41" }, { id: "@4", index: 4, path: other }];
   await sidebar.fetchQueues(tabs, () => {});
-  const view = sidebar.queuesView(tabs);
-  assert.deepEqual(view.items.map((i) => [i.title, i.detail, i.state]), [
+  const items = sidebar.queueItems(sidebar.queues.byRepo, tabs);
+  assert.deepEqual(items.map((i) => [i.title, i.detail, i.state]), [
     ["1. #40 Theirs", "queued · awaiting checks · merges in ~2m · someone", "idle"],
     ["2. #41 Mine", "queued · can't merge · merges in ~10m · me · tab 3", "attention"],
   ]);
-  assert.equal(view.items[1].queue.queueUrl, "https://github.com/acme/queued/queue/main");
-  assert.deepEqual(sidebar.queuesView([]).items.map((i) => i.queue.tab), [undefined, undefined], "the tab is matched as it is drawn");
+  assert.equal(items[1].queue.queueUrl, "https://github.com/acme/queued/queue/main");
+  assert.deepEqual(sidebar.queueItems(sidebar.queues.byRepo, []).map((i) => i.queue.tab), [undefined, undefined], "the tab is matched as it is drawn");
   fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: null }, errors: [{ path: ["r1"], message: "Something went wrong" }] })}'\nexit 1\n`, { mode: 0o755 });
   await sidebar.fetchQueues(tabs, () => {});
-  assert.equal(sidebar.queuesView(tabs).items.length, 2, "a repository GitHub failed to answer for keeps its last answer");
-  assert.equal(sidebar.queuesView(tabs).error, undefined);
-  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: { mergeQueue: { url: "u", entries: { nodes: [] } } } } })}'\n`, { mode: 0o755 });
-  await sidebar.fetchQueues(tabs, () => {});
-  assert.equal(sidebar.queuesView(tabs).empty, "Nothing in the merge queue of acme/queued.");
-  fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: { mergeQueue: null } } })}'\n`, { mode: 0o755 });
-  await sidebar.fetchQueues(tabs, () => {});
-  assert.match(sidebar.queuesView(tabs).empty, /None of the repositories your tabs are in uses a merge queue/);
+  assert.equal(sidebar.queueItems(sidebar.queues.byRepo, tabs).length, 2, "a repository GitHub failed to answer for keeps its last answer");
+  assert.equal(sidebar.queuesError(), undefined);
+  sidebar.queues.byRepo = {};
   fs.writeFileSync(path.join(bin, "gh"), `#!/bin/sh\necho '${JSON.stringify({ data: { r0: { mergeQueue: null }, r1: null }, errors: [{ path: ["r1"], message: "Something went wrong" }] })}'\nexit 1\n`, { mode: 0o755 });
   await sidebar.fetchQueues(tabs, () => {});
-  assert.equal(sidebar.queuesView(tabs).error, "GitHub couldn't say what is in the merge queue of acme/queued.", "with nothing from before, it says so");
+  assert.equal(sidebar.queuesError(), "GitHub couldn't say what is in the merge queue of acme/queued.", "with nothing from before, it says so");
+  Object.assign(sidebar.queues, { byRepo: {}, error: undefined, unanswered: [] });
 });
 
 test("the tabs' PRs are asked about in one query, a gone worktree's by its branch, and only real names reach it", async (t) => {
@@ -2716,13 +2800,13 @@ test("each mission control view but Settings can be turned off in Settings, the 
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_merge_queues: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false, view_resources: false }));
+    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_landing: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false, view_resources: false }));
     sidebar.reloadSettings();
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title), ["Settings"]);
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }, { workMap: true }).map((v) => v.title), ["Work map", "Settings"]);
     fs.rmSync(settingsFile);
     sidebar.reloadSettings();
-    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Merge queues", "Tickets", "Inbox", "Sessions", "Resources", "Usage", "Settings"]);
+    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Tickets", "Inbox", "Sessions", "Resources", "Usage", "Settings"]);
   } finally {
     fs.rmSync(settingsFile, { force: true });
     sidebar.reloadSettings();

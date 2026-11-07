@@ -10,7 +10,8 @@
 //                          still holds it after a wait), 3 held by another or
 //                          others ahead in the queue, which it prints, this
 //                          worktree joining the queue
-//   land-lock.js wait      takes it, waiting in the queue for its turn
+//   land-lock.js wait      takes it, waiting in the queue for its turn; exit 4
+//                          when taken out of the queue meanwhile
 //   land-lock.js release   lets it go, when this worktree holds it, and takes
 //                          this worktree out of the queue
 //   land-lock.js leave     takes this worktree out of the queue
@@ -179,10 +180,18 @@ const ordinal = (n) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st
 const main = async () => {
   const command = process.argv[2];
   if (command === "take") process.exit(take());
+  // A waiter taken out of the queue by someone else (mission control's
+  // Landing view) stops, exit 4, rather than joining again at the back.
   if (command === "wait") {
     const poll = Number(process.env.LAND_LOCK_POLL ?? 5) * 1000;
-    while (take(true) !== 0) await new Promise((resolve) => setTimeout(resolve, poll));
-    return;
+    for (let waited = false; ; waited = true) {
+      if (waited && !withQueue((queue) => ({ result: queue.some((entry) => entry.path === here) }))) {
+        console.log("taken out of the landing queue");
+        process.exit(4);
+      }
+      if (take(true) === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, poll));
+    }
   }
   // Every way out of a landing runs release, so it leaves the queue too: a
   // waiter stopped while its session goes on would otherwise hold up every

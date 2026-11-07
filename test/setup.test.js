@@ -574,6 +574,32 @@ test("setup.sh claude turns a CLAUDE.md linked into the repo's old claude/CLAUDE
   }
 });
 
+test("setup.sh claude adds this clone's repository to repos.json once, landing straight on its default branch, and leaves an entry that is there alone", (t) => {
+  const origin = spawnSync("git", ["-C", repo, "remote", "get-url", "origin"], { encoding: "utf8" }).stdout.trim();
+  const name = /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/.exec(origin)?.[1];
+  if (!name) return t.skip("this clone's origin isn't on GitHub");
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-repos-")));
+  const env = { ...process.env, HOME: home };
+  const file = path.join(home, ".config/switchboard/repos.json");
+  try {
+    fs.symlinkSync(repo, path.join(home, "switchboard"));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ "acme/other": { landing: "pr" } }));
+    const first = spawnSync("bash", [script, "claude"], { env, encoding: "utf8" });
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, new RegExp(`add ${name} to .*repos\\.json`));
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { "acme/other": { landing: "pr" }, [name]: { landing: "direct", test: "node --test test/*.test.js", squash: true, review: "review-loop", beforePush: "" } }, "added beside what was there");
+    assert.equal(fs.readlinkSync(path.join(home, ".local/bin/landing")), path.join(home, "switchboard/bin/landing"), "landing comes with the skills, which ask it");
+    assert.match(spawnSync("bash", [script, "claude"], { env, encoding: "utf8" }).stdout, /claude: up to date/, "a second run changes nothing");
+
+    fs.writeFileSync(file, JSON.stringify({ [name]: { landing: "pr" } }));
+    spawnSync("bash", [script, "claude"], { env, encoding: "utf8" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { [name]: { landing: "pr" } }, "an entry of yours is never changed");
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("the post-commit hook runs setup.sh tmux bin in ~/switchboard after a commit adds a file under tmux/ or bin/", () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "setup-commit-")));
   const clone = path.join(home, "switchboard");

@@ -1,0 +1,34 @@
+#!/usr/bin/env node
+
+// landing [--json] [--refresh] [<dir>]
+//
+// How the repository at <dir> (default the current directory) lands its
+// work: `pr` (through a pull request) or `direct` (straight on its default
+// branch) on the first line, then, on the second, a direct landing's steps
+// as JSON: { test, squash, review, beforePush }, with where the answer came
+// from (source: repos.json, github, claude-md, default, cached or offline)
+// and why. --json prints both as one object. --refresh asks GitHub and
+// Claude again rather than taking the answer kept from the last day.
+//
+// The setting is ~/.config/switchboard/repos.json's entry for the
+// repository, else the default lib/repos.js works out (see there).
+// queue-and-clean asks it which way to land, and how.
+
+const { landingFor } = require("../lib/repos");
+
+const args = process.argv.slice(2);
+const json = args.includes("--json");
+const refresh = args.includes("--refresh");
+const dir = args.find((a) => !a.startsWith("--")) ?? process.cwd();
+
+landingFor(dir, { refresh }).then(
+  (answer) => {
+    const rest = { ...answer.steps, source: answer.source, why: answer.why, repo: answer.repo ?? null };
+    if (json) console.log(JSON.stringify({ landing: answer.landing, ...rest }));
+    else console.log(`${answer.landing}\n${JSON.stringify(rest)}`);
+  },
+  (err) => {
+    console.error(`landing: ${err.message}`);
+    process.exit(1);
+  },
+);

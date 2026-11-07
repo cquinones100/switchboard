@@ -369,6 +369,30 @@ claude_md_now() {
   fi
 }
 
+# Switchboard's own entry in ~/.config/switchboard/repos.json (lib/repos.js):
+# this clone's repository lands straight on its default branch, tested,
+# squashed and reviewed, as its CLAUDE.md says. Added when the file has no
+# entry for it, never changing one that is there; a clone whose origin isn't
+# on GitHub adds none.
+repos_json() {
+  local file=~/.config/switchboard/repos.json repo current
+  repo=$(git -C "$SRC" remote get-url origin 2>/dev/null | sed -nE 's#^.*github\.com[:/]([^/]+/[^/]+)$#\1#p')
+  repo=${repo%.git}
+  [[ -n $repo ]] || return 0
+  if [[ -e $file ]]; then
+    current=$(jq -e 'if type == "object" then . else error("not an object") end' "$file" 2>/dev/null) || { echo "$indent  $file isn't a JSON object; left alone" >&2; return 1; }
+  else
+    current={}
+  fi
+  jq -e --arg r "$repo" 'has($r)' <<<"$current" >/dev/null && return 0
+  if ! $CHECK; then
+    mkdir -p "${file%/*}" || return 1
+    [[ -e $file ]] && { cp "$file" "$file.bak" || return 1; }
+    jq --arg r "$repo" '.[$r] = {landing: "direct", test: "node --test test/*.test.js", squash: true, review: "review-loop", beforePush: ""}' <<<"$current" >"$file.tmp" && mv "$file.tmp" "$file" || return 1
+  fi
+  change "add $repo to $file, landing straight on its default branch"
+}
+
 # The CLAUDE.md step alone, as mission control's Settings runs it when you
 # change where your rules come from.
 part_claude_md() { claude_md; }
@@ -377,6 +401,7 @@ part_claude() {
   dir ~/.claude
   claude_md || return 1
   claude_settings || return 1
+  repos_json || return 1
   put_link "$SRC/claude/statusline-command.sh" ~/.claude/statusline-command.sh
   put_link "$SRC/claude/otel-headers.sh" ~/.claude/otel-headers.sh
   put_link "$SRC/claude/commands" ~/.claude/commands
@@ -394,6 +419,7 @@ part_claude() {
   dir ~/.local/bin
   put_link "$SRC/bin/skill-path" ~/.local/bin/skill-path
   put_link "$SRC/bin/apply-actions" ~/.local/bin/apply-actions
+  put_link "$SRC/bin/landing" ~/.local/bin/landing
   dir ~/.claude/hooks
   for hook in "$SRC"/claude/hooks/*; do
     put_link "$hook" ~/.claude/hooks/
@@ -415,10 +441,12 @@ part_skills() {
     own_skill "${skill##*/}" || put_link "$skill" ~/.claude/skills/"${skill##*/}" || failed+=("${skill##*/}")
   done
   # Every skill runs skill-path first, so it comes with them, bin or not, and
-  # so does apply-actions, which queue-and-clean runs after a landing.
+  # so do apply-actions, which queue-and-clean runs after a landing, and
+  # landing, which it asks how a repository lands.
   dir ~/.local/bin
   put_link "$SRC/bin/skill-path" ~/.local/bin/skill-path || failed+=("skill-path")
   put_link "$SRC/bin/apply-actions" ~/.local/bin/apply-actions || failed+=("apply-actions")
+  put_link "$SRC/bin/landing" ~/.local/bin/landing || failed+=("landing")
   (( ${#failed[@]} == 0 )) && return 0
   echo "  could not link these skills into ~/.claude/skills: ${failed[*]}" >&2
   return 1
@@ -974,7 +1002,7 @@ about_part() {
     git) echo "use this clone's git hooks" ;;
     claude) echo "link this repo's whole Claude Code setup in place of yours" ;;
     claude_md) echo "write ~/.claude/CLAUDE.md to import your rules and Switchboard's part" ;;
-    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path and apply-actions into ~/.local/bin" ;;
+    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path, apply-actions and landing into ~/.local/bin" ;;
     karabiner) echo "link Karabiner's config" ;;
     tmux) echo "link tmux's config and scripts, the plugins and lib's packages, and restart a sidebar daemon older than its code" ;;
     autosave) echo "put tmux-continuum's autosave back when it is missing" ;;

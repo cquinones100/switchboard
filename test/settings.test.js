@@ -114,3 +114,12 @@ test("a settings file that can't be read is never written over, and each write k
     delete require.cache[require.resolve("../lib/settings")];
   }
 });
+
+test("a setting saved under its old name is read as its new one once, then dropped: Merge queues off is the Landing view off", () => {
+  fs.writeFileSync(file, JSON.stringify({ view_merge_queues: false, tips: false }));
+  execFileSync(process.execPath, ["-e", "require(process.argv[1]).migrateSettings()", path.join(repo, "lib/settings.js")], { env });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { tips: false, view_landing: false });
+  fs.writeFileSync(file, JSON.stringify({ view_merge_queues: true }));
+  execFileSync(process.execPath, ["-e", "require(process.argv[1]).migrateSettings()", path.join(repo, "lib/settings.js")], { env });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {}, "on, the default, it is only dropped");
+});

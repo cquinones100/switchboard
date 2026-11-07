@@ -35,6 +35,7 @@ test("an item of a note gets a worktree on note/<its slug>, the prompt holding t
     assert.match(text, /<item>\n- \[ \] Copy Claude's last reply \(with a key!\)\n  - from the transcript\n\n  Plan: \[\[Plan - Copy the reply\]\]\n<\/item>/, "the item and what is indented under it, as written, across a blank line");
     assert.ok(text.includes(path.join(tmp, "Notes/Plans/Plan - Copy the reply.md")), "its plan named by its file, found in a folder");
     assert.match(text, /\/queue-and-clean/, "told how to land it");
+    assert.match(text, /as `landing` says for the repository/, "as bin/landing says for the repository");
     assert.match(text, /from me for this item: start small$/, "with the text added");
 
     execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "--note", "Work Notes.md", "--item", "3"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
@@ -199,6 +200,18 @@ test("the landing queue: waiters take the lock in its order, a take can't jump i
     assert.deepEqual(queue().map(([, p]) => p), [three, one, two], "first puts it at the head");
     fs.rmSync(path.join(sessions, "one.json"));
     assert.deepEqual(queue().map(([, p]) => p), [three, two], "a waiter whose session is gone is dropped");
+
+    // A waiter taken out of the queue from elsewhere (the Landing view) stops waiting.
+    const waiting = spawnSync(process.execPath, ["-e", `
+      const { spawn, spawnSync } = require("node:child_process");
+      const child = spawn(process.execPath, [${JSON.stringify(lock)}, "wait"], { cwd: ${JSON.stringify(two)}, stdio: ["ignore", "pipe", "ignore"] });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      setTimeout(() => spawnSync(process.execPath, [${JSON.stringify(lock)}, "leave"], { cwd: ${JSON.stringify(two)} }), 300);
+      child.on("close", (code) => { console.log(code + " " + out.trim()); });
+    `], { env: { ...env, LAND_LOCK_POLL: "0.1" }, encoding: "utf8", timeout: 5000 });
+    assert.equal(waiting.stdout.trim(), "4 taken out of the landing queue", "wait exits 4 rather than joining again");
+    assert.deepEqual(queue().map(([, p]) => p), [three], "and stays out");
 
     // The main clone queued with no session of its own: one in a worktree nested inside it doesn't keep it.
     const nested = path.join(repo, ".claude/worktrees/nested");
