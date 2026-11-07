@@ -16,8 +16,11 @@
 //!                                        -E puts it at the end of the tabs
 //! split [-t pane] [-L|-R|-U|-D] [-c dir] [-p percent] [-d] [-- command...]
 //!                                        prints the new pane's id
-//! send-keys [-t pane] [-l] key...        keys by name (Enter, C-c, M-x), or
-//!                                        with -l, text typed as it is
+//! send-keys [-t pane] [-l|-p] key...     keys by name (Enter, C-c, M-x), or
+//!                                        with -l, text typed as it is, or
+//!                                        with -p, text pasted (bracketed
+//!                                        when the pane asks), as tmux's
+//!                                        paste-buffer -p
 //! capture-pane [-t pane] [-S lines]      the screen (and that much history)
 //! select-pane -t pane | select-tab -t tab
 //! kill-pane [-t pane] | kill-tab [-t tab]
@@ -330,6 +333,15 @@ impl Server {
                                     "rows": rows,
                                     "options": slot.opts,
                                     "agent": self.agent_json(p),
+                                    // The Claude session in front on it, as
+                                    // the sidebar last read it (the relay's).
+                                    "claude": self.sidebar.panes.get(&p).and_then(|r| {
+                                        let s = r.session.as_ref()?;
+                                        Some(json!({
+                                            "session": s.session_id,
+                                            "transcript": r.transcript,
+                                        }))
+                                    }),
                                 }))
                             })
                             .collect();
@@ -337,6 +349,7 @@ impl Server {
                             "id": id.to_string(),
                             "index": i + 1,
                             "name": tab.display_name(),
+                            "own": self.tab_own_name(*id),
                             "label": self.tab_label(*id),
                             "color": self.tab_color(*id).map(|c| c.hex()),
                             "path": self.tab_path(*id).map(|p| p.to_string_lossy().into_owned()),
@@ -445,7 +458,9 @@ impl Server {
         let slot = self.panes.get_mut(&pane).ok_or("the pane is gone")?;
         let mut bytes = Vec::new();
         for word in &a.rest {
-            if a.has('l') {
+            if a.has('p') {
+                bytes.extend(super::input::encode_paste(word, &slot.pane.modes()));
+            } else if a.has('l') {
                 bytes.extend_from_slice(word.as_bytes());
             } else {
                 match Key::parse(word) {

@@ -50,6 +50,8 @@ pulldown-cmark = { version = "0.13", default-features = false }
 htmd = "0.5"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
 similar = "3.2.1"
+# The Slack relay's tall screenshots, cut into slices: PNG's zlib, in Rust.
+miniz_oxide = "0.9"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

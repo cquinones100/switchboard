@@ -40,6 +40,8 @@
 //!   hooks, statusline and permissions, your CLAUDE.md, and the skills.
 //! - `diff`: M-d's diff in a pane's place, told as a story, with questions
 //!   about it answered.
+//! - `relay`: the Slack relay, a Slack app talking to you in its DM about
+//!   your tabs while you are away.
 
 pub mod agent;
 pub mod cmd;
@@ -56,6 +58,7 @@ pub mod net;
 pub mod paths;
 pub mod platform;
 pub mod presence;
+pub mod relay;
 pub mod requests;
 pub mod settings;
 pub mod setup;

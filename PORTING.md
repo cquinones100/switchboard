@@ -168,7 +168,12 @@ Each step is a commit (or a few) on the branch, with its tests.
 6. **Worktrees and Claude programs**: `wt`/`wtn`/`wtr`/`wtb`, `claude-here`,
    `codex-review`, `shape`, `skill-path`, `land-lock`, `wait-deploy`,
    `watch-note`, the skills' scripts, the skills' text moved off tmux.
-7. **The Slack relay**.
+7. **The Slack relay** — done (src/relay: `switchboard slack-relay` and its
+   commands, Socket Mode and the Web API with the owner-only rules, the
+   tabs read and typed into through the server, follow-ups, alerts, stuck
+   tabs, milestones, home threads, the Home tab and tab screens, buttons and
+   forms, images both ways, notices, the offline note, the watchdog; M-S
+   and the palette's stop).
 8. **The diff viewer**, with its story, pages and ask — done (src/diff:
    `switchboard diff` in a pane's place, the pane parked behind it and
    given back when it ends, with M-p's side and full; M-d against the PR's

@@ -193,7 +193,7 @@ pub enum Answer {
 }
 
 /// Your answer as one of the options: its number, or the start of its text.
-fn chosen_option(options: &[PromptOption], text: &str) -> Option<PromptOption> {
+pub fn chosen_option(options: &[PromptOption], text: &str) -> Option<PromptOption> {
     if !text.is_empty() && text.len() <= 2 && text.chars().all(|c| c.is_ascii_digit()) {
         let n: u32 = text.parse().ok()?;
         return options.iter().find(|o| o.n == n).cloned();

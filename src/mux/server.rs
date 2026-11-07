@@ -1585,6 +1585,8 @@ impl Server {
             Action::RemindTab => self.remind_tab(id, current_tab),
             Action::View(command) => self.view_command(id, command),
             Action::Diff(command) => self.diff_command(id, command),
+            Action::SlackRelay => self.slack_relay(true),
+            Action::StopSlackRelay => self.slack_relay(false),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

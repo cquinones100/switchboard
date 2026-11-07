@@ -104,6 +104,10 @@ pub enum Action {
     /// What the diff does: M-d, and the palette's commands for a tool in a
     /// pane's place and for the diff open in it (src/diff).
     Diff(crate::diff::Command),
+    /// The Slack relay in a tab of its own, or its tab (M-S; src/relay).
+    SlackRelay,
+    /// Stop the Slack relay.
+    StopSlackRelay,
 }
 
 impl Action {
@@ -149,6 +153,8 @@ impl Action {
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
             "toggle-theme" => Action::ToggleTheme,
+            "slack-relay" => Action::SlackRelay,
+            "stop-slack-relay" => Action::StopSlackRelay,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
             "new-claude-tab" => Action::NewClaudeTab,
@@ -222,6 +228,8 @@ impl Action {
             Action::RemindTab => "remind-tab".into(),
             Action::View(command) => command.name().into(),
             Action::Diff(command) => command.name().into(),
+            Action::SlackRelay => "slack-relay".into(),
+            Action::StopSlackRelay => "stop-slack-relay".into(),
         }
     }
 
@@ -285,6 +293,8 @@ impl Action {
             }
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),
+            Action::SlackRelay => "Open the Slack relay in its own tab".into(),
+            Action::StopSlackRelay => "Stop the Slack relay".into(),
         }
     }
 
@@ -325,6 +335,7 @@ impl Action {
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
+            Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
         }
     }
 
@@ -377,6 +388,7 @@ impl Action {
             Action::ContinueShaping,
             Action::Settings,
             Action::RemindTab,
+            Action::StopSlackRelay,
         ]
         .into_iter()
         .chain(views)
@@ -437,6 +449,7 @@ impl Default for Bindings {
         bind("M-p", Palette);
         bind("M-s", FocusSidebar);
         bind("M-Space", MissionControl);
+        bind("M-S", SlackRelay);
         bind("M-j", FindTab);
         bind("M-o", ReviveWorktree);
         for command in crate::views::Command::ALL {

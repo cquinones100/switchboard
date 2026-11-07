@@ -2417,6 +2417,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "libc",
+ "miniz_oxide",
  "nucleo-matcher",
  "portable-pty",
  "pulldown-cmark",
