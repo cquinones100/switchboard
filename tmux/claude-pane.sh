@@ -1,5 +1,5 @@
-# Sourced by agent-state.sh and tab-status.sh, which both need to know whether
-# a pane runs Claude Code. bin/slack-relay asks the same thing in
+# Sourced by agent-state.sh, tab-status.sh and pr-ready.sh, which need to know
+# whether a pane runs Claude Code. bin/slack-relay asks the same thing in
 # lib/slack-relay/tabs.js, so a change here belongs there too.
 #
 # tmux reports Claude Code's executable by its name, which is its version
@@ -27,4 +27,16 @@ claude_pid() {
     fi
   done
   return 1
+}
+
+# claude_type <pane> <text>: types the text into Claude Code's prompt. With
+# Claude Code's vim mode, the prompt can sit in Normal mode (its mode line, at
+# the screen's foot, reading -- NORMAL --), where the first letters typed are
+# taken as vim commands until one starts Insert mode, so `i` goes first there.
+# typeIntoClaude in lib/sidebar/tmux.js does the same for the sidebar daemon.
+claude_type() {
+  if tmux capture-pane -p -t "$1" | awk 'NF' | tail -n 3 | grep -q -- '-- NORMAL --'; then
+    tmux send-keys -t "$1" i
+  fi
+  tmux send-keys -t "$1" -l "$2"
 }

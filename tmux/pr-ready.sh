@@ -85,7 +85,7 @@ resolve_in_tab() {
   while IFS=$'\t' read -r pane sidebar command tty; do
     [ "$sidebar" = 1 ] && continue
     if claude_pid "$command" "$tty" >/dev/null; then
-      tmux send-keys -t "$pane" -l '/resolve-conflicts' && tmux select-pane -t "$pane"
+      claude_type "$pane" '/resolve-conflicts' && tmux select-pane -t "$pane"
       return 0
     fi
   done < <(LC_ALL=en_US.UTF-8 tmux list-panes -t "$window" -F $'#{pane_id}\t#{?@sidebar,1,0}\t#{pane_current_command}\t#{pane_tty}')

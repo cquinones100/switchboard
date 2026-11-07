@@ -4673,3 +4673,19 @@ test("the note menu of working a note continuously lists the notes holding an un
     else process.env.NOTES_DIR = was;
   }
 });
+
+test("typing into Claude's prompt presses i first while its vim mode line says -- NORMAL --, in the daemon and in claude-pane.sh", async (t) => {
+  const prompt = (mode) => tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{pane_id}", `printf '%s\\n' '❯' '-- ${mode} --'; stty -icanon; cat`);
+  const normal = prompt("NORMAL");
+  const insert = prompt("INSERT");
+  const shell = prompt("NORMAL");
+  t.after(() => [normal, insert, shell].forEach((p) => tmux("kill-pane", "-t", p)));
+  await wait(200);
+  await sidebar.typeIntoClaude(normal, "/ci-loop", { enter: false });
+  await sidebar.typeIntoClaude(insert, "/ci-loop", { enter: false });
+  execFileSync("bash", ["-c", `. "$1"; claude_type "$2" /resolve-conflicts`, "-", path.join(__dirname, "../tmux/claude-pane.sh"), shell]);
+  assert.ok(await until(() => tmux("capture-pane", "-p", "-t", normal).includes("i/ci-loop")), "i before the text in Normal mode");
+  assert.ok(await until(() => tmux("capture-pane", "-p", "-t", shell).includes("i/resolve-conflicts")), "claude_type presses i in Normal mode too");
+  assert.ok(await until(() => tmux("capture-pane", "-p", "-t", insert).includes("/ci-loop")));
+  assert.doesNotMatch(tmux("capture-pane", "-p", "-t", insert), /i\/ci-loop/, "nothing before the text in Insert mode");
+});
