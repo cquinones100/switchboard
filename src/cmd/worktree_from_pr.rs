@@ -339,6 +339,8 @@ fn create_worktree(path: &Path, c: &Checkout, root: &Path, number: u64) -> Resul
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run asks the services whatever Settings says.
+    crate::integrations::run_by_you();
     let given = match Given::parse(&args, &[]) {
         Ok(g) => g,
         Err(_) => return worktree::fail("--cd-file requires a path"),

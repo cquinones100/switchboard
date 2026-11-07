@@ -1285,6 +1285,8 @@ fn signalled() -> Option<ExitCode> {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run asks the services whatever Settings says.
+    crate::integrations::run_by_you();
     if args.first().map(String::as_str) == Some("--patch-id") {
         if args.len() != 3 {
             return usage();

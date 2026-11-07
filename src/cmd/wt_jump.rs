@@ -356,6 +356,8 @@ fn render(rows: &[Pane], current_tab: &str) -> Vec<String> {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run asks the services whatever Settings says.
+    crate::integrations::run_by_you();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         return usage();
     }

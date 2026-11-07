@@ -2,8 +2,14 @@
 //! GitHub (`github`) and Linear (`linear`). Each finds its credentials the
 //! way a person already keeps them, refuses outright while its setting
 //! (`github`, `linear`) is off, so turning a service off in Settings means
-//! nothing asks it, and turns its failures into `net::ServiceError`s a view
-//! can explain.
+//! the workspace asks it nothing by itself, and turns its failures into
+//! `net::ServiceError`s a view can explain.
+//!
+//! The settings are about what the workspace does on its own: its lookups,
+//! views and keys. A program you run yourself (`codex-review`, `wt`, `wtpr`,
+//! `wait-deploy`, `wt-jump`, `worktree-done`) asks the service whatever they
+//! say, as the tmux version's scripts did through gh and curl, which never
+//! read them; such a program calls `run_by_you` first.
 //!
 //! What both share is here: the settings check, and a stored secret read off
 //! the async runtime and kept a while, since reading the Keychain is a
@@ -13,15 +19,26 @@ pub mod github;
 pub mod linear;
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
 use crate::net::{ErrorKind, ServiceError};
 use crate::{platform, settings, util};
 
-/// Fails with `ErrorKind::Off` while the on/off setting `key` is off.
+// Set for the whole of a program someone runs themselves, never in the server.
+static RUN_BY_YOU: AtomicBool = AtomicBool::new(false);
+
+/// Marks this process as a program someone runs themselves, whose requests
+/// the `github` and `linear` settings don't stop.
+pub fn run_by_you() {
+    RUN_BY_YOU.store(true, Ordering::Relaxed);
+}
+
+/// Fails with `ErrorKind::Off` while the on/off setting `key` is off, unless
+/// this is a program someone runs themselves (`run_by_you`).
 pub(crate) fn ensure_on(key: &str, service: &str) -> Result<()> {
-    if settings::is_on(key) {
+    if RUN_BY_YOU.load(Ordering::Relaxed) || settings::is_on(key) {
         return Ok(());
     }
     Err(ServiceError::new(

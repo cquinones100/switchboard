@@ -46,6 +46,8 @@ It counts a deploy of the merge commit or of any later commit that includes it, 
 - `failed <url>`: every deploy that includes the merge failed. Reply `deploy-test: fail: deploy failed: <url>`.
 - `timeout`: nothing deployed it in 45 minutes. Ask whether to keep waiting (run it again), test what is live anyway, or stop, replying `deploy-test: fail: no deploy after 45 minutes`.
 
+It prints nothing and exits 1 when GitHub can't be asked at all (no token, or one it refuses), saying why on stderr: tell the user what it said and stop, replying `deploy-test: fail: <its reason>`.
+
 ## Testing in a browser
 
 Skip this when there is nothing a browser can show, or the test was skipped, and go to "Approval". Otherwise record the test with `/walkthrough`'s recorder: read the file `switchboard skill-path walkthrough` prints and follow its "Recording" section, with these changes:

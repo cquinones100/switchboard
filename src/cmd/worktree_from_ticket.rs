@@ -174,6 +174,8 @@ pub fn prompt_for(issue: &Issue, extra: &str) -> String {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run asks the services whatever Settings says.
+    crate::integrations::run_by_you();
     let given = match Given::parse(&args, &["--prompt"]) {
         Ok(g) => g,
         Err(flag) if flag == "--prompt" => return worktree::fail("--prompt requires text"),

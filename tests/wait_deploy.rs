@@ -168,6 +168,49 @@ fn a_workflow_named_as_it_shows_is_found_and_its_failure_said() {
 }
 
 #[test]
+fn github_turned_off_in_settings_is_asked_still_and_a_refusal_ends_it_at_once() {
+    let fake = Fake::start(|path, _| match path {
+        "/repos/o/r/deployments?environment=prod&per_page=15" => {
+            (200, json!([{ "id": 2, "sha": "merged" }]))
+        }
+        "/repos/o/r/compare/merged...merged" => (200, json!({ "status": "identical" })),
+        "/repos/o/r/deployments/2/statuses?per_page=1" => (200, json!([{ "state": "success" }])),
+        _ => (401, json!({ "message": "Bad credentials" })),
+    });
+    let home = TempDir::new("wait-deploy-off");
+    let settings = home.path().join("settings.json");
+    std::fs::write(&settings, "{\"github\": false}").unwrap();
+    let run = |repo: &str| {
+        Command::new(BIN)
+            .args(["wait-deploy", "--repo", repo, "--sha", "merged"])
+            .args(["--environment", "prod", "--timeout", "5"])
+            .env("HOME", home.path())
+            .env("GH_TOKEN", "test-token")
+            .env("SWITCHBOARD_GITHUB_API", &fake.url)
+            .env("SWITCHBOARD_SETTINGS", &settings)
+            .env("WAIT_DEPLOY_POLL_SECS", "0.05")
+            .env_remove("GITHUB_TOKEN")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    // A program you run asks GitHub whatever Settings says, as gh did.
+    let out = run("o/r");
+    assert_eq!(said(&out), "deployed merged -\n");
+    // A token GitHub refuses won't mend by waiting: said at once, exit 1.
+    let started = std::time::Instant::now();
+    let refused = run("o/other");
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(said(&refused), "");
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("refused the token"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+}
+
+#[test]
 fn nothing_settling_in_time_is_a_timeout_and_a_failed_request_is_retried() {
     let asked = Arc::new(AtomicUsize::new(0));
     let count = asked.clone();

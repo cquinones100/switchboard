@@ -9,7 +9,8 @@
 //! is kept ten minutes and forgotten once Linear refuses it. It is sent as
 //! `Authorization: <key>`, as Linear takes a personal API key.
 //!
-//! Every call refuses while the `linear` setting is off, and is counted in
+//! Every call refuses while the `linear` setting is off (but in a program
+//! you run yourself, `super::run_by_you`), and is counted in
 //! the request audit under Linear, as "GraphQL".
 
 use std::sync::LazyLock;

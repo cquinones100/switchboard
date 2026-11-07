@@ -17,7 +17,9 @@
 //! deploy workflow on the base branch. A deploy counts when its commit is the
 //! merge commit or comes after it, since a merge queue or a quick second
 //! merge often deploys a later commit that includes this one. A failed
-//! request is retried on the next round rather than read as an answer.
+//! request is retried on the next round rather than read as an answer, but
+//! one GitHub refuses (no token, or one it won't take) ends it with the
+//! reason on stderr and exit 1, since waiting won't mend it.
 //!
 //! GitHub is asked over its REST API (src/integrations/github.rs) where the
 //! Node version ran `gh api` and `gh run list`. `gh run list --workflow` took
@@ -56,6 +58,8 @@ struct Watch {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // A program you run asks the services whatever Settings says.
+    crate::integrations::run_by_you();
     let arg = |name: &str| {
         let flag = format!("--{name}");
         args.iter()
@@ -94,10 +98,19 @@ pub fn main(args: Vec<String>) -> ExitCode {
     let timeout = Duration::from_secs_f64(timeout_minutes * 60.0);
     let started = Instant::now();
     loop {
-        // A network blip or a rate limit: try again next round.
-        if let Ok(Some(answer)) = util::block_on(watch.look()) {
-            println!("{answer}");
-            return ExitCode::SUCCESS;
+        match util::block_on(watch.look()) {
+            Ok(Some(answer)) => {
+                println!("{answer}");
+                return ExitCode::SUCCESS;
+            }
+            // No token, or one GitHub refuses, won't mend by waiting, so
+            // it is said at once rather than spending the whole timeout.
+            Err(e) if refused(&e) => {
+                eprintln!("wait-deploy: {e}");
+                return ExitCode::FAILURE;
+            }
+            // A network blip or a rate limit: try again next round.
+            _ => {}
         }
         if started.elapsed() > timeout {
             println!("timeout");
@@ -105,6 +118,15 @@ pub fn main(args: Vec<String>) -> ExitCode {
         }
         std::thread::sleep(poll);
     }
+}
+
+/// Whether a failed look is GitHub refusing to be asked at all, which the
+/// next round would meet again.
+fn refused(e: &anyhow::Error) -> bool {
+    matches!(
+        net::kind_of(e),
+        Some(ErrorKind::Off | ErrorKind::NoCredentials | ErrorKind::Unauthorized)
+    )
 }
 
 /// A query parameter's value, percent-encoded as `encodeURIComponent` does.

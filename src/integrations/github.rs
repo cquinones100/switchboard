@@ -9,7 +9,8 @@
 //! secret `github-token`. What gh or the secret gave is kept ten minutes,
 //! since each look is a process, and forgotten as soon as GitHub refuses it.
 //!
-//! Every call refuses while the `github` setting is off, and is counted in
+//! Every call refuses while the `github` setting is off (but in a program
+//! you run yourself, `super::run_by_you`), and is counted in
 //! the request audit under GitHub, as "GraphQL" or "REST".
 
 use std::fmt;

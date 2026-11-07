@@ -48,7 +48,7 @@ Shared by every part:
 | `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, opening a file or link |
 | `presence` | Whether you're at the computer |
 | `connector` | One call to a Claude connector through a headless Haiku |
-| `integrations` | GitHub and Linear over their APIs, refused while their setting is off |
+| `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for where gh looked (`gh repo set-default`, else upstream when origin is a fork) |
 | `worktree` | What the worktree commands share |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
 
