@@ -322,6 +322,46 @@ impl Layout {
             .map(|(id, ..)| id)
     }
 
+    /// Where moving past the edge toward `dir` from `from` comes round to,
+    /// as tmux's select-pane wrapped: a pane on the far side of the tab
+    /// level with `from`, the one beside most of it (the topmost or leftmost
+    /// of equals); `None` when `from` is on the far side itself.
+    pub fn wrap(&self, area: Rect, from: PaneId, dir: Direction) -> Option<PaneId> {
+        let placed = self.place(area);
+        let at = placed.rect(from)?;
+        let live: Vec<&(PaneId, Rect)> = placed
+            .panes
+            .iter()
+            .filter(|(_, r)| r.width > 0 && r.height > 0)
+            .collect();
+        // How far toward the far side each pane's edge there is: going
+        // right, the far side is the left one.
+        let edge = |r: &Rect| -> i64 {
+            match dir {
+                Direction::Right => -i64::from(r.x),
+                Direction::Left => i64::from(r.right()),
+                Direction::Down => -i64::from(r.y),
+                Direction::Up => i64::from(r.bottom()),
+            }
+        };
+        let far = live.iter().map(|(_, r)| edge(r)).max()?;
+        let along = |r: &Rect| match dir {
+            Direction::Left | Direction::Right => (i64::from(r.y), i64::from(r.bottom())),
+            Direction::Up | Direction::Down => (i64::from(r.x), i64::from(r.right())),
+        };
+        let (start, end) = along(&at);
+        live.into_iter()
+            .filter(|(id, r)| *id != from && edge(r) == far)
+            .filter_map(|(id, r)| {
+                let (s, e) = along(r);
+                let beside = overlap(start, end, s, e);
+                let reaching = overlap(start - 1, end + 1, s, e);
+                (reaching > 0).then_some((*id, beside, reaching, s))
+            })
+            .max_by_key(|&(_, beside, reaching, s)| (beside, reaching, std::cmp::Reverse(s)))
+            .map(|(id, ..)| id)
+    }
+
     /// Grows `pane` by `cells` toward `dir`, taking from its neighbor there;
     /// false when it has no edge that way.
     ///
@@ -597,6 +637,26 @@ impl Layout {
 #[cfg(test)]
 mod border_tests {
     use super::*;
+
+    #[test]
+    fn moving_past_an_edge_comes_round_to_the_far_side() {
+        let (a, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+        // a | b, with c under b.
+        let mut layout = Layout::new(a);
+        layout.split(a, b, Direction::Right, None);
+        layout.split(b, c, Direction::Down, None);
+        let area = Rect::new(0, 0, 41, 21);
+        assert_eq!(layout.wrap(area, b, Direction::Right), Some(a));
+        assert_eq!(layout.wrap(area, c, Direction::Right), Some(a));
+        assert_eq!(layout.wrap(area, a, Direction::Left), Some(b));
+        assert_eq!(layout.wrap(area, c, Direction::Down), Some(b));
+        assert_eq!(layout.wrap(area, b, Direction::Up), Some(c));
+        assert_eq!(
+            layout.wrap(area, a, Direction::Up),
+            None,
+            "a reaches top to bottom, so there is nothing to come round to"
+        );
+    }
 
     #[test]
     fn a_line_between_panes_is_found_with_the_panes_either_side() {

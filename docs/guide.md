@@ -113,7 +113,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 
 | Key | What it does |
 |---|---|
-| `M-Left` `M-Down` `M-Up` `M-Right` | Move to the pane on that side; `M-Left` from the leftmost pane goes into the sidebar |
+| `M-Left` `M-Down` `M-Up` `M-Right` | Move to the pane on that side, coming round to the far side past an edge, as tmux did; `M-Left` from the leftmost pane, and `M-Right` from the rightmost, go into the sidebar, the leftmost of all |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to the left, below, above or to the right |
 | `M-w` | Close the pane, asking first when a program runs in it |
 | `M-=` | Zoom the pane in or out |

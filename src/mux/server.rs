@@ -1648,10 +1648,17 @@ impl Server {
                 else {
                     return;
                 };
+                // Past the edge, round to the far side, as tmux's
+                // select-pane wrapped: the sidebar is the leftmost, so left
+                // from the left edge and right from the right one reach it.
+                let sidebar = s.sidebar > 0 && !tab.zoomed;
+                let side_ways = matches!(dir, super::Direction::Left | super::Direction::Right);
                 if let Some(next) = tab.layout.neighbor(s.main_area(), pane, dir) {
                     self.focus_pane(next);
-                } else if dir == super::Direction::Left && !tab.zoomed {
+                } else if sidebar && side_ways {
                     self.sidebar_from_left(id);
+                } else if let Some(next) = tab.layout.wrap(s.main_area(), pane, dir) {
+                    self.focus_pane(next);
                 }
             }
             Action::PrevTab | Action::NextTab => {

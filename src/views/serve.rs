@@ -334,6 +334,16 @@ impl Server {
                         }
                         opened.map_err(|e| e.to_string())
                     }
+                    // In gh-open.sh's words rather than GitHub's.
+                    Err(e) if net::kind_of(&e) == Some(&ErrorKind::NotFound) => {
+                        let at = github::repo_of(&dir)
+                            .await
+                            .map(|r| format!("github.com/{r}"))
+                            .unwrap_or_else(|_| "the remote".into());
+                        Err(format!(
+                            "GitHub has no repository at {at},\nor you can't see it with the token Switchboard signs in with."
+                        ))
+                    }
                     Err(e) => Err(e.to_string()),
                 }
             };
