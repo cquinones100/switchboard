@@ -573,3 +573,38 @@ fn copy_mode_selects_with_the_keyboard_and_copies_through_the_clipboard() {
     client.type_text("q");
     client.wait_for("copy mode left", |s| !s.iter().any(|l| l.contains("[0]")));
 }
+
+#[test]
+fn a_panes_program_is_told_the_terminals_own_cell() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // A program that asks its window's size in pixels once told to.
+    let script = r#"read -r go; printf '\033[14t'; IFS= read -rs -d t reply; echo "px:${reply#*[}"; sleep 30"#;
+    server.ok(&["new-tab", "-n", "ask", "--", "bash", "-c", script]);
+    client.wait_for("the tab open", |_| {
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 2
+    });
+    // A terminal with cells 10 pixels wide and 20 high says so as it resizes.
+    client.resize_pixels(100, 30, 1000, 600);
+    client.type_text("go\r");
+    let shown = client.wait_text("px:4;");
+    let line = shown.iter().find(|l| l.contains("px:4;")).unwrap();
+    let said: Vec<u64> = line
+        .split("px:4;")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .map(|n| n.trim().parse().unwrap())
+        .collect();
+    let pane = &server.list()["sessions"][0]["tabs"][1]["panes"][0];
+    let (cols, rows) = (
+        pane["cols"].as_u64().unwrap(),
+        pane["rows"].as_u64().unwrap(),
+    );
+    assert_eq!(said, vec![rows * 20, cols * 10], "{line}");
+}

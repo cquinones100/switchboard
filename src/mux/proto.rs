@@ -37,18 +37,28 @@ const HEADER: usize = 5;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMsg {
     /// The first message of a terminal attaching: the session to attach to
-    /// (made when it isn't there), the terminal's size and what it is.
+    /// (made when it isn't there), the terminal's size and what it is. The
+    /// window's size in pixels, where the terminal says it (0 where not, or
+    /// from a client a version behind), gives the cell's (src/mux/terminal.rs).
     Attach {
         session: Option<String>,
         cols: u16,
         rows: u16,
         term: String,
+        #[serde(default)]
+        xpixel: u16,
+        #[serde(default)]
+        ypixel: u16,
     },
     /// Bytes typed.
     Input(Vec<u8>),
     Resize {
         cols: u16,
         rows: u16,
+        #[serde(default)]
+        xpixel: u16,
+        #[serde(default)]
+        ypixel: u16,
     },
     /// The client is leaving; the server keeps everything running.
     Detach,
@@ -280,16 +290,25 @@ mod tests {
                 cols: 211,
                 rows: 58,
                 term: "xterm-ghostty".into(),
+                xpixel: 3376,
+                ypixel: 2088,
             },
             ClientMsg::Attach {
                 session: None,
                 cols: 0,
                 rows: u16::MAX,
                 term: String::new(),
+                xpixel: 0,
+                ypixel: 0,
             },
             ClientMsg::Input(b"\x1b[A\x00\xffhi".to_vec()),
             ClientMsg::Input(Vec::new()),
-            ClientMsg::Resize { cols: 80, rows: 24 },
+            ClientMsg::Resize {
+                cols: 80,
+                rows: 24,
+                xpixel: 640,
+                ypixel: 384,
+            },
             ClientMsg::Detach,
             ClientMsg::Command {
                 args: vec!["hook".into(), "Stop".into(), "with space".into()],
@@ -518,6 +537,22 @@ mod tests {
     }
 
     #[test]
+    fn a_size_from_a_client_a_version_behind_has_no_pixels() {
+        let payload = b"{\"Resize\":{\"cols\":80,\"rows\":24}}";
+        let mut bytes = header(TAG_JSON, payload.len() as u32);
+        bytes.extend_from_slice(payload);
+        assert_eq!(
+            read_client(&mut Cursor::new(bytes)).unwrap(),
+            Some(ClientMsg::Resize {
+                cols: 80,
+                rows: 24,
+                xpixel: 0,
+                ypixel: 0
+            })
+        );
+    }
+
+    #[test]
     fn json_that_is_not_a_message_is_refused() {
         for payload in [
             &b"{not json"[..],
@@ -613,7 +648,12 @@ mod tests {
         use tokio::io::AsyncWriteExt;
 
         let (mut a, mut b) = tokio::io::duplex(64);
-        let bytes = encode_client(&ClientMsg::Resize { cols: 1, rows: 2 });
+        let bytes = encode_client(&ClientMsg::Resize {
+            cols: 1,
+            rows: 2,
+            xpixel: 0,
+            ypixel: 0,
+        });
         a.write_all(&bytes[..bytes.len() - 2]).await.unwrap();
         drop(a);
         let err = read_client_async(&mut b).await.unwrap_err();

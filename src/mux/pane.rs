@@ -155,11 +155,10 @@ pub enum SelectKind {
 }
 
 /// The size a cell is taken to be, in pixels, for programs that ask (a
-/// window's size in pixels, `CSI 14 t`, or the PTY's): there is no font
-/// here to measure, so a common one stands in, enough for a program that
-/// divides one by the other to find the grid.
-const CELL_WIDTH: u16 = 8;
-const CELL_HEIGHT: u16 = 16;
+/// window's size in pixels, `CSI 14 t`, or the PTY's), until a client's
+/// terminal says its own (`set_cell`): a common one stands in, enough for
+/// a program that divides one by the other to find the grid.
+pub const CELL: (u16, u16) = (8, 16);
 
 /// Bytes read from the PTY at a time.
 const READ_SIZE: usize = 64 * 1024;
@@ -200,6 +199,9 @@ pub struct Pane {
     /// The modifyOtherKeys level the program set, watched for in its output
     /// when it may ask for extended keys (`extkeys`).
     other_keys: Option<ModifyOtherKeys>,
+    /// A cell's width and height in pixels, as the terminal attached last
+    /// said (src/mux/terminal.rs), else `CELL`.
+    cell: (u16, u16),
 }
 
 /// Collects what the emulator reports while it reads, for `process` to
@@ -270,12 +272,12 @@ fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
     (cols.max(2), rows.max(1))
 }
 
-fn pty_size(cols: u16, rows: u16) -> PtySize {
+fn pty_size(cols: u16, rows: u16, cell: (u16, u16)) -> PtySize {
     PtySize {
         rows,
         cols,
-        pixel_width: cols.saturating_mul(CELL_WIDTH),
-        pixel_height: rows.saturating_mul(CELL_HEIGHT),
+        pixel_width: cols.saturating_mul(cell.0),
+        pixel_height: rows.saturating_mul(cell.1),
     }
 }
 
@@ -295,7 +297,7 @@ impl Pane {
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
 
         let pair = native_pty_system()
-            .openpty(pty_size(cols, rows))
+            .openpty(pty_size(cols, rows, CELL))
             .context("opening a terminal for the pane")?;
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -385,6 +387,7 @@ impl Pane {
             anchor_side: Side::Left,
             graphics: None,
             other_keys: spec.extended_keys.then(ModifyOtherKeys::default),
+            cell: CELL,
         })
     }
 
@@ -481,8 +484,8 @@ impl Pane {
                     self.reply(format(WindowSize {
                         num_lines: rows as u16,
                         num_cols: cols as u16,
-                        cell_width: CELL_WIDTH,
-                        cell_height: CELL_HEIGHT,
+                        cell_width: self.cell.0,
+                        cell_height: self.cell.1,
                     }));
                 }
                 _ => {}
@@ -536,7 +539,20 @@ impl Pane {
         });
         // The program learns of it by SIGWINCH; a terminal that is gone
         // has no program left to tell.
-        let _ = self.master.resize(pty_size(cols, rows));
+        let _ = self.master.resize(pty_size(cols, rows, self.cell));
+    }
+
+    /// The cell's size in pixels, as the terminal said it: the PTY's
+    /// window in pixels follows, which the program learns of by SIGWINCH,
+    /// and `CSI 14 t` is answered with it. A no-op when it is the same.
+    pub fn set_cell(&mut self, cell: (u16, u16)) {
+        if cell == self.cell || cell.0 == 0 || cell.1 == 0 {
+            return;
+        }
+        self.cell = cell;
+        let _ = self
+            .master
+            .resize(pty_size(self.cols, self.rows, self.cell));
     }
 
     /// (columns, rows).

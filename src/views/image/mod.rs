@@ -137,15 +137,15 @@ async fn fetch(asked: &Asked) -> Result<Parts, String> {
     }
 }
 
-/// The terminal's cell in device pixels. The workspace gives its panes a
-/// stand-in cell of 8 by 16 (src/mux/pane.rs), having no font to measure,
-/// and pr-image.js guessed a 13-point font on a Retina screen when the
-/// terminal didn't say; a cell under 12 pixels wide is taken as that
-/// stand-in and doubled, so a page is laid out about as wide as the text
-/// around it.
+/// The terminal's cell in device pixels. The workspace gives its panes the
+/// cell the attached terminal says it has (src/mux/terminal.rs), and a
+/// stand-in of 8 by 16 where it doesn't say, as a terminal that doesn't is
+/// taken to have too (`images::cell_size`); pr-image.js guessed a 13-point
+/// font on a Retina screen when the terminal didn't say, so that stand-in
+/// is doubled, and a page is laid out about as wide as the text around it.
 fn cell() -> (u32, u32) {
     let (w, h) = images::cell_size();
-    if w < 12 { (w * 2, h * 2) } else { (w, h) }
+    if (w, h) == (8, 16) { (16, 32) } else { (w, h) }
 }
 
 /// A kitty graphics command, wrapped for tmux when the view runs inside it.

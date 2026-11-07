@@ -61,6 +61,9 @@ pub enum Event {
     },
     Input(ClientId, Vec<u8>),
     Resize(ClientId, u16, u16),
+    /// A cell's width and height in pixels, from a terminal's window size
+    /// when it said its pixels (src/mux/terminal.rs).
+    Cell(u16, u16),
     /// A client left or its connection ended.
     Gone(ClientId),
     /// A command from a shell or a hook, answered on `reply`.
@@ -332,6 +335,9 @@ pub struct Server {
     pub extras: crate::extras::Extras,
     /// Working a note continuously (src/autopilot).
     pub autopilot: crate::autopilot::Autopilot,
+    /// What the terminal attached last says of itself: its cell's size
+    /// (src/mux/terminal.rs).
+    pub terminal: super::terminal::Terminal,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -468,6 +474,8 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             cols,
             rows,
             term: _,
+            xpixel,
+            ypixel,
         } => {
             let id = ClientId(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed));
             let (otx, mut orx) = mpsc::unbounded_channel::<ServerMsg>();
@@ -483,6 +491,9 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             {
                 return;
             }
+            if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
+                let _ = tx.send(Event::Cell(w, h));
+            }
             let writer = tokio::spawn(async move {
                 while let Some(msg) = orx.recv().await {
                     let exit = matches!(msg, ServerMsg::Exit { .. });
@@ -497,8 +508,16 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     Ok(Some(ClientMsg::Input(bytes))) => {
                         let _ = tx.send(Event::Input(id, bytes));
                     }
-                    Ok(Some(ClientMsg::Resize { cols, rows })) => {
+                    Ok(Some(ClientMsg::Resize {
+                        cols,
+                        rows,
+                        xpixel,
+                        ypixel,
+                    })) => {
                         let _ = tx.send(Event::Resize(id, cols, rows));
+                        if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
+                            let _ = tx.send(Event::Cell(w, h));
+                        }
                     }
                     Ok(Some(ClientMsg::Detach)) | Ok(None) | Err(_) => break,
                     Ok(Some(_)) => {}
@@ -578,6 +597,7 @@ impl Server {
             status: Default::default(),
             update: Default::default(),
             extras: Default::default(),
+            terminal: Default::default(),
             autopilot: Default::default(),
         }
     }
@@ -593,6 +613,7 @@ impl Server {
             } => self.attach(id, session, cols, rows, tx),
             Event::Input(id, bytes) => self.input(id, &bytes),
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
+            Event::Cell(w, h) => self.terminal_cell((w, h)),
             Event::Gone(id) => {
                 self.clients.remove(&id);
             }
@@ -915,7 +936,11 @@ impl Server {
             scrollback: HISTORY,
             extended_keys: crate::settings::is_on("extended_keys"),
         };
-        Pane::spawn(spec, self.pane_tx.clone())
+        let mut pane = Pane::spawn(spec, self.pane_tx.clone())?;
+        if let Some(cell) = self.terminal.cell {
+            pane.set_cell(cell);
+        }
+        Ok(pane)
     }
 
     /// Makes a session with one tab, unless it is there.

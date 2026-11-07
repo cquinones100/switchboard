@@ -65,6 +65,29 @@ const READ_SIZE: usize = 4096;
 /// The size assumed when the terminal won't say.
 const DEFAULT_SIZE: (u16, u16) = (80, 24);
 
+/// A terminal's size: its columns and rows, and its window in pixels where
+/// it says (0 where not), which gives the server the cell's size
+/// (src/mux/terminal.rs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Size {
+    cols: u16,
+    rows: u16,
+    xpixel: u16,
+    ypixel: u16,
+}
+
+impl Size {
+    #[cfg(test)]
+    fn cells(cols: u16, rows: u16) -> Size {
+        Size {
+            cols,
+            rows,
+            xpixel: 0,
+            ypixel: 0,
+        }
+    }
+}
+
 /// The signals the client catches: a resize, and those that would end it
 /// with the terminal still raw.
 const CAUGHT: [libc::c_int; 5] = [
@@ -139,25 +162,22 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
     // in between is still sent and a signal still puts the terminal back.
     let (signals, signal_pipe) =
         Signals::install().context("couldn't set up the signal handlers")?;
-    let (cols, rows) = window_size(libc::STDOUT_FILENO);
+    let size = measure(libc::STDOUT_FILENO);
     let term = std::env::var("TERM").unwrap_or_default();
     let keys = crate::settings::is_on("extended_keys");
     let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO, keys)
         .context("couldn't set up the terminal")?;
     let hello = ClientMsg::Attach {
         session,
-        cols,
-        rows,
+        cols: size.cols,
+        rows: size.rows,
         term,
+        xpixel: size.xpixel,
+        ypixel: size.ypixel,
     };
-    let end = run(
-        stream,
-        libc::STDIN_FILENO,
-        hello,
-        signal_pipe,
-        (cols, rows),
-        || window_size(libc::STDOUT_FILENO),
-    );
+    let end = run(stream, libc::STDIN_FILENO, hello, signal_pipe, size, || {
+        measure(libc::STDOUT_FILENO)
+    });
     drop(terminal);
     drop(signals);
     match end {
@@ -183,8 +203,8 @@ fn run(
     input: RawFd,
     hello: ClientMsg,
     signals: File,
-    size: (u16, u16),
-    measure: impl Fn() -> (u16, u16) + Send + 'static,
+    size: Size,
+    measure: impl Fn() -> Size + Send + 'static,
 ) -> End {
     let (Ok(writer), Ok(reader)) = (stream.try_clone(), stream.try_clone()) else {
         return End::ServerGone;
@@ -275,9 +295,9 @@ fn pump_output<R: Read>(mut sock: R, mut write: impl FnMut(&[u8]) -> io::Result<
 /// once the attachment is over.
 fn pump_signals<R: Read, W: Write>(
     mut pipe: R,
-    measure: impl Fn() -> (u16, u16),
+    measure: impl Fn() -> Size,
     sock: &Mutex<W>,
-    mut last: (u16, u16),
+    mut last: Size,
 ) -> Option<End> {
     let mut buf = [0u8; 64];
     loop {
@@ -293,8 +313,13 @@ fn pump_signals<R: Read, W: Write>(
         }
         let now = measure();
         if now != last {
-            let (cols, rows) = now;
-            if send(sock, &ClientMsg::Resize { cols, rows }).is_err() {
+            let resize = ClientMsg::Resize {
+                cols: now.cols,
+                rows: now.rows,
+                xpixel: now.xpixel,
+                ypixel: now.ypixel,
+            };
+            if send(sock, &resize).is_err() {
                 return Some(End::ServerGone);
             }
             last = now;
@@ -325,12 +350,30 @@ fn window_size(fd: RawFd) -> (u16, u16) {
     size_of(fd).unwrap_or(DEFAULT_SIZE)
 }
 
-fn size_of(fd: RawFd) -> Option<(u16, u16)> {
+/// The size in cells, as `window_size`, with the window's pixels, 0 when
+/// the terminal doesn't say them.
+fn measure(fd: RawFd) -> Size {
+    let (cols, rows) = window_size(fd);
+    let (xpixel, ypixel) = winsize(fd).map_or((0, 0), |ws| (ws.ws_xpixel, ws.ws_ypixel));
+    Size {
+        cols,
+        rows,
+        xpixel,
+        ypixel,
+    }
+}
+
+fn winsize(fd: RawFd) -> Option<libc::winsize> {
     // SAFETY: TIOCGWINSZ fills the winsize it is given.
     let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
     if unsafe { libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) } != 0 {
         return None;
     }
+    Some(ws)
+}
+
+fn size_of(fd: RawFd) -> Option<(u16, u16)> {
+    let ws = winsize(fd)?;
     (ws.ws_col > 0 && ws.ws_row > 0).then_some((ws.ws_col, ws.ws_row))
 }
 
@@ -795,25 +838,36 @@ mod tests {
 
     #[test]
     fn resizes_are_sent_once_for_each_new_size() {
-        let sizes = Mutex::new(vec![(100, 30), (100, 30), (120, 40)]);
+        let sizes = Mutex::new(vec![
+            Size::cells(100, 30),
+            Size::cells(100, 30),
+            Size::cells(120, 40),
+        ]);
         let measure = || sizes.lock().unwrap().remove(0);
         let winch = libc::SIGWINCH as u8;
         // Two resizes read together are one measurement; the second batch
         // finds the size unchanged; the third has a new one.
         let pipe = ChunkedReader(vec![vec![winch, winch], vec![winch], vec![winch]]);
         let sock = Mutex::new(Vec::new());
-        assert_eq!(pump_signals(pipe, measure, &sock, (80, 24)), None);
+        assert_eq!(
+            pump_signals(pipe, measure, &sock, Size::cells(80, 24)),
+            None
+        );
         let sent = frames(&sock.into_inner().unwrap());
         assert_eq!(
             sent,
             vec![
                 ClientMsg::Resize {
                     cols: 100,
-                    rows: 30
+                    rows: 30,
+                    xpixel: 0,
+                    ypixel: 0
                 },
                 ClientMsg::Resize {
                     cols: 120,
-                    rows: 40
+                    rows: 40,
+                    xpixel: 0,
+                    ypixel: 0
                 },
             ]
         );
@@ -823,7 +877,7 @@ mod tests {
     fn a_signal_to_end_ends_the_attachment() {
         let pipe = ChunkedReader(vec![vec![libc::SIGWINCH as u8, libc::SIGTERM as u8]]);
         let sock = Mutex::new(Vec::new());
-        let end = pump_signals(pipe, || (80, 24), &sock, (80, 24));
+        let end = pump_signals(pipe, || Size::cells(80, 24), &sock, Size::cells(80, 24));
         assert_eq!(end, Some(End::Signal(libc::SIGTERM)));
         assert!(sock.into_inner().unwrap().is_empty());
     }
@@ -955,6 +1009,8 @@ mod tests {
             cols: 80,
             rows: 24,
             term: "xterm-256color".into(),
+            xpixel: 0,
+            ypixel: 0,
         }
     }
 
@@ -969,7 +1025,7 @@ mod tests {
         let (client, server) = UnixStream::pair().unwrap();
         let mut server = FakeServer(server);
         let (signal_read, signal_write) = signal_pipe().unwrap();
-        let size = Arc::new(Mutex::new((80u16, 24u16)));
+        let size = Arc::new(Mutex::new(Size::cells(80, 24)));
         let measured = Arc::clone(&size);
         let running = std::thread::spawn(move || {
             run(
@@ -977,7 +1033,7 @@ mod tests {
                 fd,
                 hello(),
                 File::from(signal_read),
-                (80, 24),
+                Size::cells(80, 24),
                 move || *measured.lock().unwrap(),
             )
         });
@@ -989,13 +1045,21 @@ mod tests {
         server.send(&ServerMsg::Output(b"\x1b[Hscreen".to_vec()));
         assert_eq!(pty.read_until(b"screen"), b"\x1b[Hscreen");
 
-        *size.lock().unwrap() = (100, 50);
+        // The window's pixels go with its size, for the cell's.
+        *size.lock().unwrap() = Size {
+            cols: 100,
+            rows: 50,
+            xpixel: 1600,
+            ypixel: 1700,
+        };
         write_fd(signal_write.as_raw_fd(), &[libc::SIGWINCH as u8]).unwrap();
         assert_eq!(
             server.next(),
             Some(ClientMsg::Resize {
                 cols: 100,
-                rows: 50
+                rows: 50,
+                xpixel: 1600,
+                ypixel: 1700
             })
         );
 
@@ -1026,8 +1090,8 @@ mod tests {
                 fd,
                 hello(),
                 File::from(signal_read),
-                (80, 24),
-                || (80, 24),
+                Size::cells(80, 24),
+                || Size::cells(80, 24),
             )
         });
         assert_eq!(server.next(), Some(hello()));
@@ -1054,8 +1118,8 @@ mod tests {
                 fd,
                 hello(),
                 File::from(signal_read),
-                (80, 24),
-                || (80, 24),
+                Size::cells(80, 24),
+                || Size::cells(80, 24),
             )
         });
         assert_eq!(server.next(), Some(hello()));

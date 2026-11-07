@@ -256,6 +256,8 @@ impl TestClient {
                 cols,
                 rows,
                 term: "xterm-256color".into(),
+                xpixel: 0,
+                ypixel: 0,
             }))
             .unwrap();
         let mut reader = stream.try_clone().unwrap();
@@ -293,9 +295,19 @@ impl TestClient {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.resize_pixels(cols, rows, 0, 0);
+    }
+
+    /// A resize from a terminal that says its window's size in pixels too.
+    pub fn resize_pixels(&mut self, cols: u16, rows: u16, xpixel: u16, ypixel: u16) {
         self.term.resize(Size(cols as usize, rows as usize));
         self.stream
-            .write_all(&proto::encode_client(&ClientMsg::Resize { cols, rows }))
+            .write_all(&proto::encode_client(&ClientMsg::Resize {
+                cols,
+                rows,
+                xpixel,
+                ypixel,
+            }))
             .unwrap();
     }
 

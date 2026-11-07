@@ -42,7 +42,7 @@ Several terminals can attach at once. Terminals on the same session show the sam
 
 ### What a pane carries
 
-A pane runs your login shell (`$SHELL`) unless something asked for another program. Its environment carries `SWITCHBOARD`, the server's socket, and `SWITCHBOARD_PANE`, the pane's id (`%12`), which is how `switchboard <command>` and Claude Code's hooks know which server and which pane they run in. `TERM` is `xterm-256color` and `COLORTERM` is `truecolor`. A pane's id stays the same for as long as the pane exists, across restarts too, so a pane named in a note or a script is the same pane after one.
+A pane runs your login shell (`$SHELL`) unless something asked for another program. Its environment carries `SWITCHBOARD`, the server's socket, and `SWITCHBOARD_PANE`, the pane's id (`%12`), which is how `switchboard <command>` and Claude Code's hooks know which server and which pane they run in. `TERM` is `xterm-256color` and `COLORTERM` is `truecolor`. A program that asks its window's size in pixels is told your terminal's, as its cell's size times the pane's (where your terminal says its own; 8 by 16 pixels a cell where it doesn't), so pictures in Notes and the PR as an image are drawn at their own size. A pane's id stays the same for as long as the pane exists, across restarts too, so a pane named in a note or a script is the same pane after one.
 
 A pane closes when its program ends. The colors a program asks for by name are your terminal's own, so your terminal's theme applies inside every pane; the panes without the focus are drawn on a slightly different background, and the lines around the focused pane take its tab's color.
 
