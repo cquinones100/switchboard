@@ -1,0 +1,181 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "switchboard statusline"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(node ~/.claude/skills/*)",
+      "Bash(switchboard codex-review *)",
+      "Bash(switchboard skill-path *)",
+      "Bash(switchboard slack-relay notify *)",
+      "Bash(switchboard tabs)",
+      "Bash(switchboard show *)",
+      "Bash(switchboard set *)",
+      "Bash(switchboard setting *)",
+      "Bash(switchboard respawn *)",
+      "Bash(switchboard land-lock *)",
+      "Bash(switchboard wait-deploy *)",
+      "Bash(switchboard watch-note *)",
+      "Bash(switchboard today-save)",
+      "Bash(switchboard today-save *)",
+      "Bash(switchboard slack-updates-save)",
+      "Bash(switchboard slack-updates-save *)",
+      "Bash(git status)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git fetch)",
+      "Bash(git fetch *)",
+      "Bash(git rev-parse *)",
+      "Bash(git worktree list*)",
+      "Bash(git branch --show-current)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr diff*)",
+      "Bash(gh run view *)",
+      "Bash(gh run list*)",
+      "mcp__claude_ai_Slack__slack_read_channel",
+      "mcp__claude_ai_Slack__slack_read_thread",
+      "mcp__claude_ai_Slack__slack_search_public",
+      "mcp__claude_ai_Slack__slack_search_public_and_private",
+      "mcp__claude_ai_Slack__slack_search_channels",
+      "mcp__claude_ai_Slack__slack_search_users",
+      "mcp__claude_ai_Slack__slack_read_user_profile",
+      "mcp__claude_ai_Google_Calendar__list_events",
+      "mcp__claude_ai_Linear__get_issue",
+      "mcp__claude_ai_Linear__list_issues",
+      "mcp__claude_ai_Linear__list_comments",
+      "mcp__claude_ai_Linear__get_team",
+      "mcp__claude_ai_Linear__list_teams",
+      "mcp__claude_ai_Linear__list_issue_statuses",
+      "mcp__claude_ai_Linear__get_user"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Bash(git pull)",
+      "Bash(git pull *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PreToolUse"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook Notification"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PostToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PermissionRequest"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook Stop"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PreCompact"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook PostCompact"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook SessionStart"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "switchboard hook SessionEnd"
+          }
+        ]
+      }
+    ]
+  }
+}

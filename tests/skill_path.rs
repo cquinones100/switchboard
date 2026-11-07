@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 use common::{BIN, TempDir};
 
 fn skills_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("claude/skills")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills")
 }
 
 /// Every skill's name and SKILL.md text.
@@ -44,7 +44,7 @@ fn every_skill_opens_by_running_skill_path_with_its_own_name() {
     assert!(!all.is_empty());
     for (name, text) in all {
         let opening = format!(
-            "This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path {name}`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here."
+            "This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path {name}`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here."
         );
         let rest = after_title(&text)
             .unwrap_or_else(|| panic!("{name} starts with its frontmatter and title"));
@@ -59,8 +59,7 @@ fn every_skill_opens_by_running_skill_path_with_its_own_name() {
 fn no_skill_names_another_skill_s_skill_md_by_a_fixed_path_but_the_exceptions() {
     // Hand-offs that need Switchboard's own text rather than the
     // repository's copy.
-    let exceptions =
-        ["`~/switchboard/claude/skills/ci-loop/SKILL.md`, which a repository's copy leaves out"];
+    let exceptions = ["`~/.claude/skills/ci-loop/SKILL.md`, which a repository's copy leaves out"];
     let fixed = regex::Regex::new(r"[^\s`(]*skills/[a-z-]+/SKILL\.md").unwrap();
     for (name, mut text) in skills() {
         for exception in exceptions {
@@ -168,4 +167,29 @@ fn skill_path_finds_the_worktree_s_copy_then_the_main_clone_s_then_the_personal_
         .output()
         .unwrap();
     assert_eq!(usage.status.code(), Some(2));
+}
+
+#[test]
+fn every_switchboard_command_a_skill_names_is_one_the_binary_has_and_none_names_tmux() {
+    let known = |name: &str| {
+        switchboard::cmd::COMMANDS.iter().any(|c| c.name == name)
+            || switchboard::mux::commands::NAMES.contains(&name)
+    };
+    let named =
+        regex::Regex::new(r"`switchboard ([a-z][a-z-]*)|^ *switchboard ([a-z][a-z-]*)").unwrap();
+    let part =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/switchboard.md"))
+            .unwrap();
+    let mut texts = skills();
+    texts.push(("switchboard.md".into(), part));
+    for (name, text) in texts {
+        for line in text.lines() {
+            for found in named.captures_iter(line) {
+                let command = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
+                assert!(known(command), "{name} names switchboard {command}");
+            }
+        }
+        assert!(!text.contains("tmux "), "{name} still names tmux");
+        assert!(!text.contains("TMUX"), "{name} still reads TMUX");
+    }
 }
