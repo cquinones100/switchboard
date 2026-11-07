@@ -974,7 +974,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Operators, with a count, a motion or a text object | `d` `c` `y` `>` `<` `g~` `gu` `gU`, doubled for whole lines (`dd`, `cc`, `yy`, `>>`, `<<`, `g~~`, `guu`, `gUU`) |
 | Text objects, after `i` or `a` | `w` `W`, `"` `'` `` ` ``, `(` `)` `b`, `[` `]`, `{` `}` `B`, `<` `>`, `p` |
 | Changes | `x` `X` `s` `S` `C` `D` `Y` `p` `P` `J` `gJ` `r` `~`; `.` repeats the last change |
-| Undo | `u`, Ctrl-R |
+| Undo | `u`, Ctrl-R; each note keeps its history, and its folds, while the app runs, going to another note and back included, a change made to its file meanwhile one more step to undo |
 | Search | `/` `?` `n` `N` `*` `#` |
 | Scrolling | Ctrl-D Ctrl-U, PageDown PageUp, Ctrl-E Ctrl-Y, `zz` `zt` `zb` |
 | Folds | `za` `zo` `zc` `zM` `zR` |

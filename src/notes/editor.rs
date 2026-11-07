@@ -67,6 +67,15 @@ struct Snap {
     col: usize,
 }
 
+/// A note's history and folds while another is open (`Editor::put_away`).
+#[derive(Clone, Debug)]
+pub struct Kept {
+    undo: Vec<Snap>,
+    redo: Vec<Snap>,
+    folds: Folds,
+    text: Text,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Motion {
     Left,
@@ -247,6 +256,39 @@ impl Editor {
             height: 20,
             easy: false,
             out: Vec::new(),
+        }
+    }
+
+    /// Takes the open note's undo and redo history and its folds out, with
+    /// the text they end at, to be put back when it opens again (`take_back`),
+    /// as Neovim kept a buffer per note; a change under way ends here.
+    pub fn put_away(&mut self) -> Kept {
+        if let Some(group) = self.group.take()
+            && group.text != self.doc.text
+        {
+            self.undo.push(group);
+        }
+        Kept {
+            undo: std::mem::take(&mut self.undo),
+            redo: std::mem::take(&mut self.redo),
+            folds: std::mem::take(&mut self.folds),
+            text: self.doc.text.clone(),
+        }
+    }
+
+    /// A note's text put in with the history and folds it was left with:
+    /// a change made to its file meanwhile is one more step to undo, as
+    /// Neovim's buffer took a file changed under it.
+    pub fn take_back(&mut self, text: Text, kept: Kept) {
+        self.load(kept.text);
+        self.undo = kept.undo;
+        self.redo = kept.redo;
+        self.folds = kept.folds;
+        if text != self.doc.text {
+            let before = self.doc.text.lines();
+            self.change(|doc| doc.text = text);
+            let after = self.doc.text.lines();
+            self.folds.follow(&before, &after);
         }
     }
 

@@ -356,6 +356,9 @@ pub struct App {
     squash_cancelled: bool,
     tx: Sender<Msg>,
     cursors: HashMap<PathBuf, (usize, usize, usize)>,
+    /// Each note left while the app runs: its undo history and folds, put
+    /// back when it opens again.
+    kept: HashMap<PathBuf, super::editor::Kept>,
     titles: HashSet<String>,
     pub quit: bool,
     pub locked_by: Option<i64>,
@@ -434,6 +437,7 @@ impl App {
             squash_cancelled: false,
             tx,
             cursors: HashMap::new(),
+            kept: HashMap::new(),
             titles: HashSet::new(),
             quit: false,
             locked_by: None,
@@ -521,7 +525,15 @@ impl App {
             self.say(format!("notes: can't read {}", self.store.relative(path)));
             return;
         };
-        self.editor.load(Text::from_file(&text));
+        if let Some(o) = &self.open {
+            let left = o.path.clone();
+            let kept = self.editor.put_away();
+            self.kept.insert(left, kept);
+        }
+        match self.kept.remove(path) {
+            Some(kept) => self.editor.take_back(Text::from_file(&text), kept),
+            None => self.editor.load(Text::from_file(&text)),
+        }
         self.open = Some(Open {
             path: path.to_path_buf(),
             base: Some(text.clone()),
@@ -700,6 +712,9 @@ impl App {
         if let Some(c) = self.cursors.remove(from) {
             self.cursors.insert(to.to_path_buf(), c);
         }
+        if let Some(k) = self.kept.remove(from) {
+            self.kept.insert(to.to_path_buf(), k);
+        }
     }
 
     /// A folder renamed: the open note and the marks under it follow.
@@ -716,11 +731,16 @@ impl App {
         {
             o.path = n;
         }
+        rekey(&mut self.cursors, &follow);
+        rekey(&mut self.kept, &follow);
     }
 
     /// A note going (deleted, squashed): saved, and the note window shows
     /// the next one in the list, or none.
     fn forget(&mut self, path: &Path) {
+        // Its history goes with it, so a note made later by its name starts
+        // with none.
+        self.kept.remove(path);
         if self.current_path() != Some(path) {
             return;
         }
@@ -2422,6 +2442,20 @@ impl App {
         match b.item.and_then(menu::by_label) {
             None => self.push(Box::<FormatMenu>::default(), Then::Format(from)),
             Some(item) => self.run_format(item.act, from),
+        }
+    }
+}
+
+/// A map by note moved to the notes' new paths, where `follow` gives one.
+fn rekey<V>(map: &mut HashMap<PathBuf, V>, follow: &dyn Fn(&Path) -> Option<PathBuf>) {
+    let moved: Vec<PathBuf> = map
+        .keys()
+        .filter(|p| follow(p).is_some())
+        .cloned()
+        .collect();
+    for from in moved {
+        if let (Some(v), Some(to)) = (map.remove(&from), follow(&from)) {
+            map.insert(to, v);
         }
     }
 }

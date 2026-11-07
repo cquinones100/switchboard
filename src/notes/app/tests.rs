@@ -498,6 +498,42 @@ fn the_wheel_scrolls_a_note_and_the_list_past_where_their_cursors_were() {
 }
 
 #[test]
+fn a_note_keeps_its_undo_history_and_folds_while_another_is_open() {
+    let (_dir, mut store) = temp("undo");
+    let first = store.create("", Some("Alpha"));
+    write(&first, "# Alpha\n\n## Part\nunder it\n\nbody\n");
+    let second = store.create("", Some("Beta"));
+    write(&second, "# Beta\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&first, false, false);
+    keys(&mut app, "Goadded<Esc>");
+    keys(&mut app, "ggjjza");
+    let folds = app.editor.folds.clone();
+    assert_ne!(folds, Default::default(), "a section folded");
+    app.open_note(&second, false, false);
+    app.open_note(&first, false, false);
+    assert_eq!(app.editor.folds, folds, "still folded");
+    keys(&mut app, "u");
+    assert!(
+        !lines(&app).contains(&"added".to_string()),
+        "u undoes what was typed before: {:?}",
+        lines(&app)
+    );
+    // A change made to its file meanwhile is a step of its own to undo.
+    app.open_note(&second, false, false);
+    write(&first, "# Alpha\n\nfrom outside\n");
+    app.open_note(&first, false, false);
+    assert!(lines(&app).contains(&"from outside".to_string()));
+    keys(&mut app, "u");
+    assert!(
+        lines(&app).contains(&"## Part".to_string()),
+        "{:?}",
+        lines(&app)
+    );
+}
+
+#[test]
 fn only_one_app_opens_the_notes_and_another_says_so() {
     let (dir, store) = temp("locked");
     // Held by a live process: the test runner's parent.
