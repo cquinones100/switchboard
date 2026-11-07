@@ -349,8 +349,10 @@ impl Server {
     // ── Tips ─────────────────────────────────────────────────────────────────
 
     /// Shows a tip on a client (the one used last when `None`), unless it
-    /// has been shown, the tips setting is off, or a tip is up there already,
-    /// in which case it is left for another time. Gives whether it showed.
+    /// has been shown, the tips setting is off, or a box is up there already
+    /// (a tip, a message, a menu, mission control), in which case it is left
+    /// for another time, as tip.sh's tip that couldn't open behind another
+    /// popup was. Gives whether it showed.
     pub fn tip(&mut self, name: &str, client: Option<ClientId>) -> bool {
         self.show_tip(name, None, client)
     }
@@ -371,7 +373,7 @@ impl Server {
         else {
             return false;
         };
-        if self.clients[&id].overlays.kinds().contains(&"tip") {
+        if !self.clients[&id].overlays.kinds().is_empty() {
             return false;
         }
         self.tip_seen(name);

@@ -295,9 +295,10 @@ impl Server {
                     outcome,
                     Outcome::Chose(NOT_NOW) | Outcome::Dismissed
                 ));
-                // How updates also arrive, once (tip.sh's `updates`).
-                s.tip("updates", Some(c));
             }
+            // How updates also arrive, once, whichever the answer
+            // (tip.sh's `updates`, after any prompt answered).
+            s.tip("updates", Some(c));
         });
         self.open(client, Box::new(UpdateBox(menu)), Some(then));
     }

@@ -1553,9 +1553,9 @@ impl Server {
             if let Some(c) = self.clients.get_mut(&id) {
                 c.prefix = false;
             }
+            // Not counted for the habits, as tmux.conf's `used` alias was
+            // on the root table's keys alone.
             if let Some(action) = self.bindings.prefix.get(&key).cloned() {
-                let pressed = format!("{} {}", self.bindings.prefix_key.notation(), key.notation());
-                self.count_key(&pressed);
                 self.act(id, action);
             }
             return;
@@ -1575,7 +1575,11 @@ impl Server {
         if fate == crate::extras::KeyFate::Bindings
             && let Some(action) = self.bindings.root.get(&key).cloned()
         {
-            self.count_key(&key.notation());
+            // C-w, pressed all the time in shells and editors, isn't one of
+            // the habits' keys, as tmux.conf counted it nowhere.
+            if action != Action::Extra(crate::extras::Command::PaneNav) {
+                self.count_key(&key.notation());
+            }
             self.act(id, action);
             return;
         }
@@ -1686,14 +1690,14 @@ impl Server {
                     .and_then(|p| self.panes.get(&p))
                     .and_then(|s| s.pane.cwd());
                 if let Err(e) = self.new_tab(&session, cwd, None, None, false) {
-                    eprintln!("new tab: {e}");
+                    self.say(Some(id), &format!("Couldn't open a tab: {e}"));
                 }
             }
             Action::Split(dir) => {
                 if let Some(p) = pane
                     && let Err(e) = self.split(p, dir, None, None, None, false)
                 {
-                    eprintln!("split: {e}");
+                    self.say(Some(id), &format!("Couldn't split the pane: {e}"));
                 }
             }
             Action::ClosePane => {
@@ -1970,6 +1974,23 @@ impl Server {
             return;
         };
         let status_row = c.rows.saturating_sub(crate::status::lines());
+        // The wheel over the status line goes to the tab before or after,
+        // as tmux's WheelUpStatus and WheelDownStatus did.
+        if m.row >= status_row
+            && m.kind == MouseKind::Press
+            && matches!(m.button, MouseButton::WheelUp | MouseButton::WheelDown)
+        {
+            let next = m.button == MouseButton::WheelDown;
+            self.act(
+                id,
+                if next {
+                    Action::NextTab
+                } else {
+                    Action::PrevTab
+                },
+            );
+            return;
+        }
         if m.row >= status_row && m.kind == MouseKind::Press && m.button == MouseButton::Left {
             // The tabs' row: the ⌘ Commands button opens the palette, a tab
             // is gone to; the second status line takes no clicks.

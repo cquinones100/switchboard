@@ -245,7 +245,13 @@ impl Server {
                     return;
                 };
                 let Some(n) = super::tab_number(&p.value) else {
-                    server.say(Some(client), &format!("Not a tab number: {}", p.value));
+                    // 0 is a number, of no tab, as tab-goto.sh said.
+                    let said = if p.value.trim() == "0" {
+                        "There is no tab 0.".to_string()
+                    } else {
+                        format!("Not a tab number: {}", p.value)
+                    };
+                    server.say(Some(client), &said);
                     return;
                 };
                 let count = server

@@ -213,10 +213,13 @@ impl Overlay for Tip {
         Step::Pass
     }
 
-    /// A click closes it, and goes no further.
+    /// A click or the wheel closes it, and goes no further, as tip.sh closed
+    /// on any mouse report.
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
         match draw::gesture(&mouse) {
-            Gesture::Click => Step::Close(Outcome::Dismissed),
+            Gesture::Click | Gesture::WheelUp | Gesture::WheelDown => {
+                Step::Close(Outcome::Dismissed)
+            }
             Gesture::Move if look.hover => {
                 let over = self
                     .drawn

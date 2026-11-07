@@ -77,7 +77,7 @@ Each pane keeps 10,000 lines of history. The wheel scrolls back through it, and 
 
 While a pane is scrolled back, its top-right corner shows how many lines back it is (`[120]`), and other keys do nothing. A key in the wheel's scrolling brings up copy mode's cursor, and it then stays until `q`. A paste takes it back to the bottom and goes to the program.
 
-A click focuses a pane. Dragging selects text and copies it when you let go; a double click selects a word, a triple click a line, and Alt-drag selects a rectangle. A program that asks for the mouse, such as an editor, gets the clicks, drags and wheel instead. In a full-screen program that doesn't take the mouse, the wheel sends it arrow keys. Dragging the line between two panes moves it, resizing them. A click on a tab in the status line goes to it.
+A click focuses a pane. Dragging selects text and copies it when you let go; a double click selects a word, a triple click a line, and Alt-drag selects a rectangle. A program that asks for the mouse, such as an editor, gets the clicks, drags and wheel instead. In a full-screen program that doesn't take the mouse, the wheel sends it arrow keys. Dragging the line between two panes moves it, resizing them. A click on a tab in the status line goes to it, and the wheel over the status line goes to the tab before or after.
 
 What you copy goes to the computer's clipboard and to your terminal's (OSC 52), which reaches the computer you are at even over SSH, as long as your terminal lets programs set its clipboard. A program in a pane can copy the same way. One that asks to read the clipboard gets nothing back: the clipboard is yours, not every program's.
 
@@ -296,7 +296,7 @@ A tip is a small box in the top-right corner that teaches a key at the moment it
 - A tab's PR first merges: `/queue-and-clean`.
 - A tab first loops in the background: where mission control shows it.
 - A tool first takes a pane's place, as `M-d` does: how to get the pane back.
-- You turn down the first update offered: where to look for updates.
+- You answer the first update offered: where to look for updates.
 - You press a key of GitHub or Linear while that service is off: how to turn it back on.
 - You pick a command from `M-p` that has a key of its own: the key.
 - Claude first starts in a worktree (`.claude/worktrees/`), with GitHub on: `M-v`, `M-d` and `M-m` for its PR.
@@ -304,7 +304,7 @@ A tip is a small box in the top-right corner that teaches a key at the moment it
 
 Mission control's first opening says how to get around it in its own footer instead.
 
-Any key closes a tip and then does what it would have done, so nothing you type is lost; a click closes it and goes no further. Left alone, it goes after eight seconds. A tip that comes while another is up waits for its next chance. Doing what a tip teaches (pressing `M-a`) counts as having seen it. The tips shown are listed in `~/.local/state/switchboard/tips`. `M-p`'s "Show the tips again" shows each once more, and Settings' "Tips" (`tips`) turns them off.
+Any key closes a tip and then does what it would have done, so nothing you type is lost; a click or the wheel closes it and goes no further. Left alone, it goes after eight seconds. A tip that comes while another box is up (another tip, a message, a menu, mission control) waits for its next chance. Doing what a tip teaches (pressing `M-a`) counts as having seen it. The tips shown are listed in `~/.local/state/switchboard/tips`. `M-p`'s "Show the tips again" shows each once more, and Settings' "Tips" (`tips`) turns them off.
 
 ### Menus and questions
 
@@ -598,7 +598,7 @@ Each note written for you (a meeting's, the standup, today's todo) is in the sid
 
 ### Suggestions from how you work
 
-Switchboard sends nothing about how you use it anywhere. With Settings' "Suggestions from how you work" (`habits`) on, it counts on this computer the keys you press, the commands you pick in `M-p` (a command with a key counting as that key pressed) and the mission control views you bring to the front, written once a minute to a file a day in `~/.local/state/switchboard/habits/` and kept 60 days. From the counts it suggests, in the sidebar's notifications:
+Switchboard sends nothing about how you use it anywhere. With Settings' "Suggestions from how you work" (`habits`) on, it counts on this computer the keys you press (the ones pressed alone, but `C-w`), the commands you pick in `M-p` (a command with a key counting as that key pressed) and the mission control views you bring to the front, written once a minute to a file a day in `~/.local/state/switchboard/habits/` and kept 60 days. From the counts it suggests, in the sidebar's notifications:
 
 - a key, for a command you picked from `M-p` three times in 14 days;
 - turning off a view you haven't opened in 30 days (once 30 days are counted), which for the views that ask GitHub or Linear also stops what they look up;

@@ -316,9 +316,12 @@ impl Action {
             Direction::Down => "down",
         };
         match self {
-            Action::SelectPane(Direction::Left) => "Move to the pane on the left".into(),
-            Action::SelectPane(Direction::Right) => "Move to the pane on the right".into(),
-            Action::SelectPane(d) => format!("Move to the pane {}", side(d)),
+            Action::SelectPane(Direction::Left) => "Move to the pane on the left (as C-w h)".into(),
+            Action::SelectPane(Direction::Right) => {
+                "Move to the pane on the right (as C-w l)".into()
+            }
+            Action::SelectPane(Direction::Up) => "Move to the pane above (as C-w k)".into(),
+            Action::SelectPane(Direction::Down) => "Move to the pane below (as C-w j)".into(),
             Action::PrevTab => "Previous tab".into(),
             Action::NextTab => "Next tab".into(),
             Action::LastTab => "Go back to the previous tab".into(),
@@ -369,7 +372,7 @@ impl Action {
             }
             Action::Settings => "Settings: turn the workspace's options on and off".into(),
             Action::RemindTab => {
-                "Remind me about this tab later: it waits under Reminders with the time left, then needs you".into()
+                "Remind me about this tab later, as Slack does: it waits under Reminders with the time left, then needs you".into()
             }
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),

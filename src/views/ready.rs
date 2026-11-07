@@ -630,12 +630,29 @@ impl Overlay for ReadyBox {
         let last = choices.len() - 1;
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => Step::Close(Outcome::Dismissed),
-            KeyCode::Char('j') | KeyCode::Down | KeyCode::Tab => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.cursor = (self.cursor + 1).min(last);
                 Step::Redraw
             }
-            KeyCode::Char('k') | KeyCode::Up | KeyCode::BackTab => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.cursor = self.cursor.saturating_sub(1);
+                Step::Redraw
+            }
+            // Tab and Shift-Tab go round, as menu.sh's stops did.
+            KeyCode::Tab => {
+                self.cursor = if self.cursor >= last {
+                    0
+                } else {
+                    self.cursor + 1
+                };
+                Step::Redraw
+            }
+            KeyCode::BackTab => {
+                self.cursor = if self.cursor == 0 {
+                    last
+                } else {
+                    self.cursor - 1
+                };
                 Step::Redraw
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
