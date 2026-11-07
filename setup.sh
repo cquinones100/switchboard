@@ -393,6 +393,7 @@ part_claude() {
   done
   dir ~/.local/bin
   put_link "$SRC/bin/skill-path" ~/.local/bin/skill-path
+  put_link "$SRC/bin/apply-actions" ~/.local/bin/apply-actions
   dir ~/.claude/hooks
   for hook in "$SRC"/claude/hooks/*; do
     put_link "$hook" ~/.claude/hooks/
@@ -413,9 +414,11 @@ part_skills() {
     skill=${skill%/}
     own_skill "${skill##*/}" || put_link "$skill" ~/.claude/skills/"${skill##*/}" || failed+=("${skill##*/}")
   done
-  # Every skill runs skill-path first, so it comes with them, bin or not.
+  # Every skill runs skill-path first, so it comes with them, bin or not, and
+  # so does apply-actions, which queue-and-clean runs after a landing.
   dir ~/.local/bin
   put_link "$SRC/bin/skill-path" ~/.local/bin/skill-path || failed+=("skill-path")
+  put_link "$SRC/bin/apply-actions" ~/.local/bin/apply-actions || failed+=("apply-actions")
   (( ${#failed[@]} == 0 )) && return 0
   echo "  could not link these skills into ~/.claude/skills: ${failed[*]}" >&2
   return 1
@@ -971,7 +974,7 @@ about_part() {
     git) echo "use this clone's git hooks" ;;
     claude) echo "link this repo's whole Claude Code setup in place of yours" ;;
     claude_md) echo "write ~/.claude/CLAUDE.md to import your rules and Switchboard's part" ;;
-    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path into ~/.local/bin" ;;
+    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path and apply-actions into ~/.local/bin" ;;
     karabiner) echo "link Karabiner's config" ;;
     tmux) echo "link tmux's config and scripts, the plugins and lib's packages, and restart a sidebar daemon older than its code" ;;
     autosave) echo "put tmux-continuum's autosave back when it is missing" ;;

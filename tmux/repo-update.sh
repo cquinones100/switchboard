@@ -261,7 +261,7 @@ case "${1:-}" in
     # The setup's tmux part has restarted the sidebar daemon when its code
     # changed.
     if [ -n "${TMUX:-}" ]; then
-      tmux source-file ~/.config/tmux/tmux.conf && printf '  Reloaded tmux.\n'
+      ~/.config/tmux/apply.sh reload && printf '  Reloaded tmux.\n'
     fi
     done_
     ;;

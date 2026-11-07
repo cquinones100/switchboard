@@ -305,6 +305,42 @@ waiting tab offers Land it next, Move it up and Move it down
 (`landing_queue` setting). `land-lock.js queue` prints it, and
 `land-lock.js move <worktree> up|down|first` reorders it.
 
+Once the main clone has the landed change (after a PR's merge too, which
+fast-forwards it first when it has the base branch checked out), it asks
+which of what the change needs to take effect to do, each named with the file
+that calls for it, and does the ones you pick: restart the sidebar daemon or
+the Slack relay, reload tmux.conf, run a setup part, install packages, run
+new migrations. What only you can do (reload Ghostty's config, reopen M-d's
+diff or the Notes app) it names in the question. The list comes from
+`apply-actions`, below; the note's item's `Done:` line says what was applied
+or when it takes effect. Settings' "Offer to apply a landed change"
+(`apply_after_landing`) turns it off.
+
+## apply-actions
+
+`apply-actions <repo> <from> <to>` prints what the change from `<from>` to
+`<to>`, checked out in `<repo>`, needs to take effect on this Mac, one action
+per line: `<key>\t<label>\t<why>\t<command>`, an empty command being
+something only you can do. Each is listed once however many files call for
+it, and nothing when the change needs nothing. In Switchboard: a change to
+`lib/`'s packages installs them (`npm ci`), `lib/sidebar/`
+and the modules the daemon loads restart it, as does `tmux/settings.json` (`tmux/apply.sh sidebar`, which
+the update popup runs too), `tmux.conf` and what it runs as it loads reload
+tmux (`apply.sh reload`), the Slack relay's code restarts it while it runs
+(`apply.sh relay`), `tmux/sidebar-pane.zsh` restarts the sidebar panes
+(`apply.sh panes`), `nvim/lazy-lock.json` restores Neovim's plugins (`:Lazy restore`),
+`nvim/` and `notes/` ask you to reopen M-d's diff or the
+Notes app while one is open, `ghostty/` to reload Ghostty's config, and a
+part `setup.sh --check` has left to do whose files changed runs that part. In
+another repository, the `apply` list of its entry in
+`~/.config/switchboard/repos.json`, keyed by its origin's `owner/name`, each
+`{ "paths": ["db/**"], "label": "Reload the dev server", "command": "…" }`
+run in the clone (only one in `trusted-dirs`, below); without one, a changed lockfile installs with its package
+manager (where packages are installed), new migration files run the package's
+migrate script (`db:migrate`, `migrate`…), both only in a clone listed in
+`~/.config/switchboard/trusted-dirs` and named for you to run elsewhere, and
+a changed `.env.example` asks you to copy what's new. `setup.sh skills` links it beside `skill-path`.
+
 ## shape
 
 The step before `wt`: shapes a Linear ticket with Claude, from a rough idea or

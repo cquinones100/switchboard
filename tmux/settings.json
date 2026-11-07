@@ -550,6 +550,13 @@
     "default": true
   },
   {
+    "key": "apply_after_landing",
+    "category": "Sessions",
+    "label": "Offer to apply a landed change",
+    "description": "After queue-and-clean lands work, it lists what the change needs to take effect (a restart, a reload, an install, a migration) and offers to do it",
+    "default": true
+  },
+  {
     "key": "auto_restore",
     "category": "Sessions",
     "label": "Restore on start",
