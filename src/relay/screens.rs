@@ -276,11 +276,21 @@ pub fn skill_screen(cx: &Relay, tab: &Tab, from: &str, chosen: Option<&str>, arg
     const GROUPS: &[(&str, &str)] = &[
         ("frequent", "Frequently used"),
         ("yours", "Yours"),
+        ("switchboard", "Switchboard"),
         ("project", "This project"),
         ("claude", "Claude Code"),
         ("session", "Plugins and built-in"),
     ];
-    let skills = skills_for(&cx.paths, tab.cwd.as_deref(), tab.transcript.as_deref());
+    // Switchboard's own, from its plugin while the panes load it; the old
+    // way they are in ~/.claude/skills, with yours.
+    let plugin = (crate::settings::setting(crate::setup::way::SETTING) != Some(Value::Bool(false)))
+        .then_some(cx.paths.plugin_dir.as_path());
+    let skills = skills_for(
+        &cx.paths,
+        tab.cwd.as_deref(),
+        tab.transcript.as_deref(),
+        plugin,
+    );
     let shown: Vec<_> = skills.iter().take(MAX_SKILLS).collect();
     let cut = skills.len() > shown.len();
     let option = |s: &super::skills::Skill| {

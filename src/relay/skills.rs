@@ -12,15 +12,19 @@
 //!   session starts, then any added since;
 //! - skills only you can invoke, which that list leaves out, from the skill
 //!   and command folders Claude Code reads: yours in ~/.claude, and the
-//!   project's in .claude in the tab's directory and the directories above.
+//!   project's in .claude in the tab's directory and the directories above;
+//! - Switchboard's, from its plugin (src/setup/plugin.rs) while Settings
+//!   loads it as one, by their bare names, or `switchboard:<name>` where a
+//!   skill of yours or the project's has the bare one, as Claude Code names
+//!   them. The old way (src/setup/way.rs) they are in ~/.claude, with yours.
 //!
 //! A Slack menu holds at most 100 options, and a project can have more
 //! skills than that, so each says where it came from: the ones you use
-//! most first, then yours, then the project's, then Claude Code's own that
-//! finish without asking anything (`BUILT_IN`; one that opens a picker
-//! would wait on a key Slack can't press), then everything else the session
-//! lists, which is where a long list is cut. The form has a field for a
-//! name the menu left out.
+//! most first, then yours, then Switchboard's, then the project's, then
+//! Claude Code's own that finish without asking anything (`BUILT_IN`; one
+//! that opens a picker would wait on a key Slack can't press), then
+//! everything else the session lists, which is where a long list is cut.
+//! The form has a field for a name the menu left out.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +40,14 @@ pub static SKILL_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\w.-]+(?::[\w.-]+)?$").expect("a regex"));
 /// A Slack menu holds at most 100 options.
 pub const MAX_SKILLS: usize = 100;
-pub const SOURCES: &[&str] = &["frequent", "yours", "project", "claude", "session"];
+pub const SOURCES: &[&str] = &[
+    "frequent",
+    "yours",
+    "switchboard",
+    "project",
+    "claude",
+    "session",
+];
 
 /// Claude Code's own commands worth running from Slack: (name,
 /// description, argument hint).
@@ -143,8 +154,14 @@ pub struct Skill {
 }
 
 /// What a tab can run: the ones you use most, most used first, then yours,
-/// the project's and the rest, each sorted by name.
-pub fn skills_for(paths: &Paths, dir: Option<&Path>, transcript: Option<&Path>) -> Vec<Skill> {
+/// Switchboard's (from `plugin`, its plugin's directory, while the tab's
+/// Claude loads it), the project's and the rest, each sorted by name.
+pub fn skills_for(
+    paths: &Paths,
+    dir: Option<&Path>,
+    transcript: Option<&Path>,
+    plugin: Option<&Path>,
+) -> Vec<Skill> {
     let mut found: Vec<Skill> = Vec::new();
     let mut add = |name: &str, description: &str, source: &str, hint: &str| {
         if !SKILL_NAME.is_match(name) {
@@ -163,6 +180,9 @@ pub fn skills_for(paths: &Paths, dir: Option<&Path>, transcript: Option<&Path>) 
             Some(_) => {}
         }
     };
+    // The names yours and the project's take, which Switchboard's then
+    // can't.
+    let mut taken: Vec<String> = Vec::new();
     let mut folders = vec![(paths.claude_dir.clone(), "yours")];
     if let Some(dir) = dir {
         folders.extend(
@@ -182,12 +202,9 @@ pub fn skills_for(paths: &Paths, dir: Option<&Path>, transcript: Option<&Path>) 
                 continue;
             }
             let (description, hint) = describe(&file);
-            add(
-                &entry.file_name().to_string_lossy(),
-                &description,
-                source,
-                &hint,
-            );
+            let name = entry.file_name().to_string_lossy().into_owned();
+            add(&name, &description, source, &hint);
+            taken.push(name);
         }
         let mut commands: Vec<_> = std::fs::read_dir(folder.join("commands"))
             .map(|r| r.flatten().collect())
@@ -200,6 +217,34 @@ pub fn skills_for(paths: &Paths, dir: Option<&Path>, transcript: Option<&Path>) 
             };
             let (description, hint) = describe(&entry.path());
             add(name, &description, source, &hint);
+            taken.push(name.to_string());
+        }
+    }
+    // Switchboard's, by the bare name unless yours or the project's has it.
+    let mut bare = Vec::new();
+    if let Some(plugin) = plugin {
+        let mut skills: Vec<_> = std::fs::read_dir(plugin.join("skills"))
+            .map(|r| r.flatten().collect())
+            .unwrap_or_default();
+        skills.sort_by_key(|e| e.file_name());
+        for entry in skills {
+            let file = entry.path().join("SKILL.md");
+            if !file.exists() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let (description, hint) = describe(&file);
+            if taken.contains(&name) {
+                add(
+                    &format!("{}:{name}", crate::setup::plugin::NAME),
+                    &description,
+                    "switchboard",
+                    &hint,
+                );
+            } else {
+                add(&name, &description, "switchboard", &hint);
+                bare.push(name);
+            }
         }
     }
     // The session's list has no argument hints; only the files do.
@@ -208,6 +253,15 @@ pub fn skills_for(paths: &Paths, dir: Option<&Path>, transcript: Option<&Path>) 
         add(name, description, "claude", hint);
     }
     for (name, description) in &listed {
+        // The session names the plugin's skills with its name before them,
+        // listed above by the bare one.
+        if name
+            .strip_prefix(crate::setup::plugin::NAME)
+            .and_then(|rest| rest.strip_prefix(':'))
+            .is_some_and(|b| bare.iter().any(|n| n == b))
+        {
+            continue;
+        }
         add(name, description, "session", "");
     }
     let scores = usage_scores(paths);
@@ -346,18 +400,54 @@ mod tests {
             json!({ "skillUsage": { "review-loop": { "usageCount": 9, "lastUsedAt": util::now_ms() } } }).to_string(),
         )
         .unwrap();
-        let skills = skills_for(&paths, Some(&project), Some(&transcript));
+        // Switchboard's plugin: a shape, whose bare name is yours, and a wt,
+        // which the session lists by the plugin's name.
+        for name in ["shape", "wt"] {
+            let dir = paths.plugin_dir.join("skills").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Switchboard's {name}\n---\n"),
+            )
+            .unwrap();
+        }
+        let mut lines = std::fs::read_to_string(&transcript).unwrap();
+        lines.push('\n');
+        lines.push_str(&listing(
+            false,
+            "- switchboard:wt (plugin): Switchboard's wt",
+        ));
+        std::fs::write(&transcript, lines).unwrap();
+        let without = skills_for(&paths, Some(&project), Some(&transcript), None);
+        assert!(
+            without
+                .iter()
+                .any(|s| s.name == "switchboard:wt" && s.source == "session"),
+            "without the plugin's files, as the session lists it"
+        );
+        let skills = skills_for(
+            &paths,
+            Some(&project),
+            Some(&transcript),
+            Some(&paths.plugin_dir),
+        );
         let summary: Vec<(&str, &str)> = skills
             .iter()
             .map(|s| (s.name.as_str(), s.source.as_str()))
             .collect();
         assert_eq!(
-            &summary[..3],
+            &summary[..5],
             &[
                 ("review-loop", "frequent"),
                 ("shape", "yours"),
+                ("switchboard:shape", "switchboard"),
+                ("wt", "switchboard"),
                 ("deploy", "project")
             ]
+        );
+        assert!(
+            !summary.iter().any(|(n, _)| *n == "switchboard:wt"),
+            "listed once, by the bare name"
         );
         assert!(summary.contains(&("compact", "claude")));
         assert!(summary.contains(&("added", "session")));

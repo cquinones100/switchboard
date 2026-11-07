@@ -48,6 +48,8 @@ pub struct Paths {
     pub state_dir: PathBuf,
     /// `~/.claude`.
     pub claude_dir: PathBuf,
+    /// Switchboard's plugin for Claude Code, `~/.local/share/switchboard/plugin`.
+    pub plugin_dir: PathBuf,
     /// Where the statusline writes each session's context use
     /// (`context/<session>`): Switchboard's state directory, then where
     /// claude/statusline-command.sh wrote it for the sidebar daemon.
@@ -61,6 +63,7 @@ impl Paths {
             home: home.to_path_buf(),
             state_dir: home.join(STATE_NAME),
             claude_dir: home.join(".claude"),
+            plugin_dir: home.join(crate::paths::PLUGIN),
             context_dirs: vec![
                 switchboard_state.join("context"),
                 home.join(".local/state/tmux-sidebar/context"),
