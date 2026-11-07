@@ -18,8 +18,9 @@
 //! allowed: a command can have the terminal read any file of yours, so
 //! never any program's.
 //!
-//! Ghostty sends Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X, as Switchboard's
-//! config sets it, as Ctrl+Alt+Shift keys (CSI u), which no binding takes:
+//! Ghostty sends Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X, with the keybinds
+//! docs/guide.md gives (the tmux version's Ghostty config set them), as
+//! Ctrl+Alt+Shift keys (CSI u), which no binding takes:
 //! they reach the pane only while it is marked `@notes_cmd_keys`, as they
 //! came, and are dropped anywhere else, so no other program reads them as
 //! Ctrl keys.

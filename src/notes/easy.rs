@@ -6,9 +6,9 @@
 //! Cmd-Shift-Z redoes and Cmd-X cuts, with a line naming the keys at the
 //! bottom (key_help_line). Vim's keys keep working beside them.
 //!
-//! Switchboard's Ghostty config sends the Cmd keys as Ctrl+Alt+Shift ones
-//! (CSI u), which the workspace passes only to a pane Notes marks
-//! `@notes_cmd_keys` while it runs in easy mode.
+//! Ghostty, given the keybinds docs/guide.md lists, sends the Cmd keys as
+//! Ctrl+Alt+Shift ones (CSI u), which the workspace passes only to a pane
+//! Notes marks `@notes_cmd_keys` while it runs in easy mode.
 
 use ratatui::layout::Rect;
 
