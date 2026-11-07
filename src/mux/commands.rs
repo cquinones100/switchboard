@@ -372,6 +372,10 @@ impl Server {
                                     "rows": rows,
                                     "options": slot.opts,
                                     "agent": self.agent_json(p),
+                                    // Whether it runs Claude, its session
+                                    // file written yet or not, as the
+                                    // sidebar last read it.
+                                    "runs_claude": self.sidebar.panes.get(&p).is_some_and(|r| r.claude),
                                     // The Claude session in front on it, as
                                     // the sidebar last read it (the relay's).
                                     "claude": self.sidebar.panes.get(&p).and_then(|r| {

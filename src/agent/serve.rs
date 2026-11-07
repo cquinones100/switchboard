@@ -159,12 +159,12 @@ impl Server {
             .unwrap_or_default()
     }
 
-    /// Whether a pane runs Claude: a process in front on its terminal has a
-    /// session file (tmux/claude-pane.sh).
+    /// Whether a pane runs Claude, by its program's name or a session file
+    /// in front (tmux/claude-pane.sh, `sessions::pane_runs_claude`).
     pub fn runs_claude(&self, pane: PaneId) -> bool {
-        self.panes.get(&pane).is_some_and(|slot| {
-            sessions::runs_claude(&sessions::sessions_dir(), &slot.pane.foreground_pids())
-        })
+        self.panes
+            .get(&pane)
+            .is_some_and(|slot| sessions::pane_runs_claude(&sessions::sessions_dir(), &slot.pane))
     }
 
     /// A tab's state, as its status line badge shows it.

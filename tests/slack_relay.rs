@@ -9,7 +9,8 @@
 //!
 //! As in tests/agent.rs, a pane counts as running Claude when a process in
 //! front on its terminal has a session file, so the tests write one for the
-//! pane's own process.
+//! pane's own process, or when its program is named as Claude Code's is,
+//! which one test runs a stand-in for.
 
 mod common;
 
@@ -167,6 +168,57 @@ fn the_relay_reads_and_types_into_tabs_through_the_server() {
 
     mux.kill_tab(&tab).unwrap();
     assert!(!mux.windows().unwrap().iter().any(|w| w.id == tab));
+}
+
+#[test]
+fn a_claude_with_no_session_file_yet_still_counts() {
+    // Claude Code asks whether to trust a folder before it writes its
+    // session file; a program named as its executable is counts as Claude
+    // already, so the relay can alert on that question and answer it.
+    let server = TestServer::start();
+    settings(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\necho 'Do you trust the files in this folder?'\nwhile :; do sleep 1; done\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let opened = server.ok(&[
+        "new-tab",
+        "-d",
+        "-n",
+        "trust",
+        "--",
+        claude.to_str().unwrap(),
+    ]);
+    let tab = opened.split_whitespace().next().unwrap().to_string();
+    let other = server.ok(&["new-tab", "-d", "-n", "plain", "--", "cat"]);
+    let plain = other.split_whitespace().next().unwrap().to_string();
+    let mux = Server {
+        socket: server.socket(),
+    };
+    let window = wait("the tab counted as Claude", || {
+        mux.windows()?
+            .into_iter()
+            .find(|w| w.id == tab && w.panes.first().is_some_and(|p| p.claude))
+    });
+    assert!(window.panes[0].transcript.is_none(), "no session yet");
+    let cat = mux
+        .windows()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == plain)
+        .unwrap();
+    assert!(!cat.panes[0].claude);
+    assert_eq!(cat.panes[0].command, "cat");
+    mux.kill_tab(&tab).unwrap();
+    mux.kill_tab(&plain).unwrap();
 }
 
 #[test]

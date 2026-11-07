@@ -60,6 +60,10 @@ pub struct PaneRead {
     /// last did anything.
     pub said_at: Option<i64>,
     pub command: Option<String>,
+    /// Whether it runs Claude (`agent::sessions`): a session in front, or
+    /// a program named as Claude Code is, which may not have written its
+    /// session file yet (stopped at the folder trust question).
+    pub claude: bool,
 }
 
 /// A session's sidebar while it is looked at: whether it has the focus,

@@ -186,9 +186,24 @@ pub fn claude_pane(cx: &Relay, id: &str) -> Result<String, String> {
         return Ok(t.pane);
     }
     let windows = cx.mux.windows().unwrap_or_default();
-    match windows.iter().find(|w| w.id == id) {
-        None => Err("That tab no longer exists.".into()),
-        Some(_) => Err("That tab isn't running Claude, so nothing was sent.".into()),
+    let Some(window) = windows.iter().find(|w| w.id == id) else {
+        return Err("That tab no longer exists.".into());
+    };
+    // What the tab's active pane runs, as tmux's `pane_current_command`
+    // for the window named it.
+    let command = window
+        .panes
+        .iter()
+        .find(|p| p.active)
+        .or(window.panes.first())
+        .map(|p| p.command.as_str())
+        .unwrap_or("");
+    if command.is_empty() {
+        Err("That tab isn't running Claude, so nothing was sent.".into())
+    } else {
+        Err(format!(
+            "That tab is running {command}, not Claude, so nothing was sent."
+        ))
     }
 }
 

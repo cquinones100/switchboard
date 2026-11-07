@@ -8,6 +8,16 @@
 //!
 //! They are a handful of small files, read whole each time, as
 //! agent-state.sh's `jq` over them was; a file that isn't JSON is passed over.
+//!
+//! Whether a pane runs Claude is decided here for the whole workspace
+//! (`pane_runs_claude`, and `named_like_claude` for a caller that has
+//! already looked for the session file): a process in front with a session
+//! file, or a program in front named as Claude Code's executable is. The
+//! name counts on its own, as lib/slack-relay/tabs.js counted it, because
+//! Claude Code asks whether to trust a folder before it writes its session
+//! file, and a Claude stopped at that question still has to be alerted on
+//! and answered. What needs the session itself (its transcript, its state)
+//! still waits for the file.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -109,13 +119,61 @@ pub fn parked_chain(sessions: &[SessionFile], session_id: &str) -> Vec<u32> {
     pids
 }
 
-/// Whether any of these processes (a pane's foreground) is Claude: has a
-/// session file in `dir`. Checked this way rather than by the program's name,
-/// since Claude started from a Node script runs as its child and reads as
-/// `node`, and any program could be named like a version.
+/// Whether any of these processes (a pane's foreground) has a session file
+/// in `dir`: certainly Claude, since only Claude Code writes there, and the
+/// one way to tell Claude started from a Node script, which runs as its
+/// child and reads as `node`.
 pub fn runs_claude(dir: &Path, pids: &[u32]) -> bool {
     pids.iter()
         .any(|pid| dir.join(format!("{pid}.json")).is_file())
+}
+
+/// Whether a pane runs Claude: its program in front is named as Claude
+/// Code's executable is, or a process in front has a session file. The name
+/// is looked at first, since it is one small read where the session file
+/// needs every process in the group found.
+pub fn pane_runs_claude(dir: &Path, pane: &crate::mux::pane::Pane) -> bool {
+    named_like_claude(pane) || runs_claude(dir, &pane.foreground_pids())
+}
+
+/// Whether the program in front on a pane is named as Claude Code's
+/// executable is, before (or without) its session file.
+pub fn named_like_claude(pane: &crate::mux::pane::Pane) -> bool {
+    let Some(front) = pane.foreground_pgid() else {
+        return false;
+    };
+    crate::mux::procinfo::command_of(front)
+        .is_some_and(|command| is_claude_name(&command, || crate::mux::procinfo::args_of(front)))
+}
+
+/// Whether a program is Claude Code by its name: the executable is named
+/// after its version (`2.1.285`) where the kernel names a process after the
+/// file it ran, `claude` where it names it after the link that was run
+/// (Linux) or Claude Code renamed itself, and `node` when an npm install's
+/// script runs it, its script then being Claude Code's (`claude`, or a file
+/// in `@anthropic-ai/claude-code`). Only the script is looked at, never the
+/// arguments after it, so `node app.js claude` is no Claude.
+pub fn is_claude_name(command: &str, args: impl FnOnce() -> Option<Vec<String>>) -> bool {
+    let parts: Vec<&str> = command.split('.').collect();
+    let version = parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    if version || command == "claude" {
+        return true;
+    }
+    if command != "node" {
+        return false;
+    }
+    let Some(args) = args() else {
+        return false;
+    };
+    let Some(script) = args.iter().skip(1).find(|a| !a.starts_with('-')) else {
+        return false;
+    };
+    let script = Path::new(script);
+    script.file_name().is_some_and(|name| name == "claude")
+        || script.components().any(|c| c.as_os_str() == "claude-code")
 }
 
 #[cfg(test)]
@@ -171,6 +229,34 @@ mod tests {
         // Files naming each other in a ring end after five links.
         let ring = vec![file(1, "x", "cli", "a", "b"), file(2, "y", "cli", "b", "a")];
         assert_eq!(parked_chain(&ring, "x").len(), 5);
+    }
+
+    #[test]
+    fn claude_code_is_known_by_its_name_before_its_session_file() {
+        let none = || None;
+        assert!(is_claude_name("2.1.285", none));
+        assert!(is_claude_name("claude", none));
+        assert!(!is_claude_name("zsh", none));
+        assert!(!is_claude_name("2.1", none));
+        assert!(!is_claude_name("1.2.x", none));
+        assert!(!is_claude_name("node", none));
+        let args = |a: &[&str]| {
+            let a: Vec<String> = a.iter().map(|s| s.to_string()).collect();
+            move || Some(a)
+        };
+        assert!(is_claude_name(
+            "node",
+            args(&[
+                "node",
+                "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+            ])
+        ));
+        assert!(is_claude_name(
+            "node",
+            args(&["node", "--no-warnings", "/home/me/.npm/bin/claude"])
+        ));
+        assert!(!is_claude_name("node", args(&["node", "app.js", "claude"])));
+        assert!(!is_claude_name("node", args(&["node"])));
     }
 
     #[test]

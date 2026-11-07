@@ -178,6 +178,8 @@ impl Server {
             let mut read = PaneRead {
                 session: claude::session_of(&sessions, &in_front),
                 command: slot.pane.foreground_command(),
+                claude: !in_front.is_empty()
+                    || crate::agent::sessions::named_like_claude(&slot.pane),
                 ..PaneRead::default()
             };
             if let Some(session) = &read.session
@@ -312,6 +314,12 @@ impl Server {
                 .iter()
                 .copied()
                 .find(|p| read_of(*p).is_some_and(|r| r.session.is_some()))
+                .or_else(|| {
+                    panes
+                        .iter()
+                        .copied()
+                        .find(|p| read_of(*p).is_some_and(|r| r.claude))
+                })
         });
         let read = claude_pane.and_then(read_of);
         let session = read.and_then(|r| r.session.clone());

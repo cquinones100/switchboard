@@ -36,10 +36,17 @@ pub struct PaneInfo {
     pub state: String,
     /// When that state began, in seconds, or empty.
     pub since: String,
-    /// Whether Claude runs in front on it.
+    /// Whether Claude runs in front on it, its session file written yet or
+    /// not: a Claude asking whether to trust its folder has none, and still
+    /// has to be alerted on and answered.
     pub claude: bool,
     pub transcript: Option<PathBuf>,
     pub cwd: Option<PathBuf>,
+    /// The program in front (tmux's `pane_current_command`), for saying
+    /// what a tab runs that isn't Claude.
+    pub command: String,
+    /// The tab's active pane.
+    pub active: bool,
 }
 
 /// One tab, with its panes in order.
@@ -282,12 +289,15 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                         pid: p.get("pid").map(crate::util::js_string).unwrap_or_default(),
                         state: state.to_string(),
                         since,
-                        claude: claude.is_some(),
+                        claude: claude.is_some()
+                            || p.get("runs_claude") == Some(&Value::Bool(true)),
                         transcript: claude
                             .and_then(|c| c.get("transcript"))
                             .and_then(Value::as_str)
                             .map(PathBuf::from),
                         cwd: p.get("cwd").and_then(Value::as_str).map(PathBuf::from),
+                        command: text(p, "command"),
+                        active: p.get("active") == Some(&Value::Bool(true)),
                     }
                 })
                 .collect();
@@ -330,9 +340,14 @@ mod tests {
                     "id": "@1", "index": 1, "name": "work", "label": "#12 ABC-1: Fix it", "current": true,
                     "options": { "@loop_tab": "1", "@claude_pane": "%2", "@tab_name": "mine" },
                     "panes": [
-                        { "id": "%1", "pid": 100, "cwd": "/w", "agent": null, "claude": null },
+                        { "id": "%1", "pid": 100, "cwd": "/w", "agent": null, "claude": null,
+                          "command": "zsh", "active": true },
                         { "id": "%2", "pid": 200, "agent": { "state": "waiting", "since": 1700 },
-                          "claude": { "session": "s1", "transcript": "/t/s1.jsonl" } }
+                          "claude": { "session": "s1", "transcript": "/t/s1.jsonl" } },
+                        // Claude asking whether to trust its folder, before
+                        // its session file is written.
+                        { "id": "%3", "pid": 300, "agent": null, "claude": null,
+                          "runs_claude": true, "command": "claude" }
                     ]
                 }, {
                     "id": "@2", "index": 2, "name": "relay", "label": "", "current": false,
@@ -352,6 +367,12 @@ mod tests {
         assert_eq!(t.recorded.as_deref(), Some("%2"));
         assert_eq!(t.panes[0].state, "idle");
         assert!(!t.panes[0].claude);
+        assert_eq!(
+            (t.panes[0].command.as_str(), t.panes[0].active),
+            ("zsh", true)
+        );
+        assert!(t.panes[1].claude && !t.panes[1].active);
+        assert!(t.panes[2].claude && t.panes[2].transcript.is_none());
         assert_eq!(t.panes[1].pid, "200");
         assert_eq!(
             (t.panes[1].state.as_str(), t.panes[1].since.as_str()),
