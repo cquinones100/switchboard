@@ -110,7 +110,7 @@ pub fn cached_base(dir: &Path) -> Option<String> {
 }
 
 /// The base asked for: the ref to compare with, and whether it was fetched
-/// just now (else it is as last fetched).
+/// just now or has nowhere to be fetched from (else it is as last fetched).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Base {
     pub base: String,
@@ -163,8 +163,13 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
     if base.is_empty() || !safe_ref(&base) {
         base = default_base(dir).into();
     }
-    crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
-    let fetched = git(dir, &["fetch", "--quiet", "origin", &base]).is_ok();
+    // A repository with no origin has nothing to fetch, its own branch as
+    // fresh as it gets, so nothing is asked and nothing said.
+    let origin = git(dir, &["config", "--get", "remote.origin.url"]).is_ok();
+    let fetched = !origin || {
+        crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
+        git(dir, &["fetch", "--quiet", "origin", &base]).is_ok()
+    };
     // A repository with no origin compares with its own branch.
     let mut found = format!("origin/{base}");
     if !verifies(dir, &found) {
