@@ -37,4 +37,4 @@ switchboard set @tab_name 'Review loop: settings page layout'
 
 # Skills
 
-- When a skill exists both in the repository (`.claude/skills/<name>/`, in the worktree or its main clone) and as my personal one or Switchboard's (`/switchboard:<name>`), use the repository's: read its SKILL.md and follow it instead. `switchboard skill-path <name>` prints which copy to follow, the repository's or the personal one, and a skill handing off to another reads the file it prints.
+- When a skill exists both in the repository (`.claude/skills/<name>/`, in the worktree or its main clone) and as my personal one or Switchboard's (`/switchboard:<name>`), use the repository's: read its SKILL.md and follow it instead. `switchboard skill-path <name>` prints which copy to follow (the repository's, else my personal one, else Switchboard's), and a skill handing off to another reads the file it prints.

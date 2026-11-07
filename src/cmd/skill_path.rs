@@ -6,14 +6,18 @@
 //!
 //! The worktree's own `.claude/skills/<name>/SKILL.md` comes first, then its
 //! main clone's (a branch cut before the repository added the skill has none
-//! of its own), then the personal one, `~/.claude/skills/<name>/SKILL.md`.
-//! Outside a git repository, the personal one. It prints nothing and exits 1
-//! when there is none.
+//! of its own), then the personal one, `~/.claude/skills/<name>/SKILL.md`
+//! (Switchboard's own the old way, src/setup/way.rs, or one of yours), then
+//! Switchboard's plugin's, `~/.local/share/switchboard/plugin/skills/<name>/
+//! SKILL.md` (src/setup/plugin.rs). Outside a git repository, the personal
+//! one, then the plugin's. It prints nothing and exits 1 when there is none.
 //!
 //! Every Switchboard skill runs it first and follows the repository's copy
 //! when it prints one, and a skill handing off to another reads the file it
-//! prints, since Claude Code itself runs a personal skill over a project's
-//! of the same name.
+//! prints, since Claude Code itself may run Switchboard's copy where a
+//! project has its own: a personal skill over a project's of the same name,
+//! and the plugin's whenever it is asked for by its plugin's name
+//! (`/switchboard:<name>`) or a hand-off names it.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -85,5 +89,11 @@ pub fn find(name: &str, dir: &Path) -> Option<PathBuf> {
     roots
         .into_iter()
         .map(|root| root.join(".claude/skills").join(name).join("SKILL.md"))
+        .chain(std::iter::once(
+            paths::plugin_dir()
+                .join("skills")
+                .join(name)
+                .join("SKILL.md"),
+        ))
         .find(|file| file.exists())
 }

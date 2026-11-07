@@ -70,7 +70,7 @@ fn no_skill_names_another_skill_s_skill_md_by_a_fixed_path() {
 }
 
 #[test]
-fn skill_path_finds_the_worktree_s_copy_then_the_main_clone_s_then_the_personal_one() {
+fn skill_path_finds_the_repository_s_copy_then_the_personal_one_then_the_plugin_s() {
     let tmp = TempDir::new("skill-path");
     let home = tmp.path();
     let git = |args: &[&str]| {
@@ -130,6 +130,18 @@ fn skill_path_finds_the_worktree_s_copy_then_the_main_clone_s_then_the_personal_
     let none = run(&worktree);
     assert_eq!(none.status.code(), Some(1), "none anywhere");
     assert!(none.stdout.is_empty());
+
+    // Switchboard's plugin's, when there is no other.
+    let file = home.join(".local/share/switchboard/plugin/skills/demo/SKILL.md");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "# demo\n").unwrap();
+    let plugin = file.to_string_lossy().into_owned();
+    assert_eq!(
+        out(&worktree),
+        plugin,
+        "the plugin's when nothing else has it"
+    );
+    assert_eq!(out(&outside), plugin, "outside a repository too");
 
     let personal = skill(home);
     assert_eq!(
