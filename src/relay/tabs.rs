@@ -942,9 +942,17 @@ pub async fn press(cx: &Relay, pane: &str, presses: Vec<Press>) {
 /// Your message goes in as one paste, then Enter sends it once the paste
 /// has landed: typed key by key, each line break reached Claude Code as a
 /// keypress, and Enter sent at once can reach it before it has taken the
-/// paste in, leaving the text unsent in its input box.
+/// paste in, leaving the text unsent in its input box. A prompt in vim's
+/// Normal mode gets `i` first (`answer::into_prompt`), as the server's
+/// `type_into_claude` gives it.
 pub async fn type_into(cx: &Relay, pane: &str, text: &str) {
-    press(cx, pane, answer::message_presses(text)).await;
+    let screen = cx.mux.capture(pane, 0).unwrap_or_default();
+    press(
+        cx,
+        pane,
+        answer::into_prompt(&screen, answer::message_presses(text)),
+    )
+    .await;
 }
 
 /// The screen once it has changed from `before`, after an answer, or as it

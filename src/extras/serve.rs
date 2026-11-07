@@ -416,9 +416,12 @@ impl Server {
         let Some(pane) = model.claude_pane.or(model.active) else {
             return;
         };
-        if let Some(slot) = self.panes.get_mut(&pane) {
-            let bytes = input::encode_paste(reply, &slot.pane.modes());
-            let _ = slot.pane.write(&bytes);
+        let paste = vec![crate::mission::answer::Press::Paste(reply.to_string())];
+        if model.claude_pane.is_some() {
+            // Into Claude's prompt, `i` first in vim's Normal mode.
+            self.type_into_claude(pane, paste);
+        } else {
+            self.press(pane, paste);
         }
         self.select_tab(&model.session, tab);
         self.focus_pane(pane);

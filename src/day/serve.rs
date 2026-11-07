@@ -293,7 +293,7 @@ impl Server {
             crate::mux::input::Mods::NONE,
         );
         use crate::mission::answer::Press;
-        self.press(
+        self.type_into_claude(
             pane,
             vec![
                 Press::Text("/slack-updates".into()),

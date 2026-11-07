@@ -300,6 +300,39 @@ fn m_s_and_its_keys_move_between_tabs() {
 }
 
 #[test]
+fn a_message_to_a_claude_whose_prompt_is_in_vim_s_normal_mode_presses_i_first() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    // A stand-in Claude: its prompt's vim mode line at its foot, and what
+    // it is sent shown as it comes.
+    server.ok(&[
+        "new-tab",
+        "-n",
+        "vim-mode",
+        "--",
+        "sh",
+        "-c",
+        "printf '%s\\n' '>' '  -- NORMAL --'; stty -icanon -echo; exec cat",
+    ]);
+    client.wait_text("-- NORMAL --");
+    let pid = tabs(&server.list())[1]["panes"][0]["pid"].as_u64().unwrap();
+    session_file(&server.home, pid, json!({"sessionId": "s-vim"}));
+    wait_list(&server, "the pane read as Claude's", |l| {
+        tabs(l)[1]["panes"][0]["runs_claude"] == true
+    });
+    // a in the sidebar: no question showing, so a message, typed in Insert
+    // mode.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("a");
+    client.wait_text("No question showing");
+    client.type_text("go on\r");
+    client.wait_text("igo on");
+}
+
+#[test]
 fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
     let server = TestServer::start();
     settings(&server, json!({}));

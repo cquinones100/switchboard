@@ -569,9 +569,12 @@ impl Server {
             .unwrap_or_default();
         match panes.into_iter().find(|p| self.runs_claude(*p)) {
             Some(pane) => {
-                if let Some(slot) = self.panes.get_mut(&pane) {
-                    let _ = slot.pane.write(b"/resolve-conflicts");
-                }
+                self.type_into_claude(
+                    pane,
+                    vec![crate::mission::answer::Press::Text(
+                        "/resolve-conflicts".into(),
+                    )],
+                );
                 self.focus_pane(pane);
             }
             None => self.say(Some(client), "No Claude in this tab to resolve them."),

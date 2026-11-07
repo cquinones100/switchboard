@@ -1451,7 +1451,7 @@ impl Server {
                 self.mission_new_tab(client, &dir, Some(work.command()), None);
             }
             Do::TypeInto { tab, pane, text } => {
-                self.press(
+                self.type_into_claude(
                     pane,
                     vec![
                         Press::Text(text),
@@ -1809,6 +1809,23 @@ impl Server {
         }
     }
 
+    /// Types into the prompt of the Claude in `pane`: `i` first while its
+    /// screen shows the prompt in vim's Normal mode (`answer::into_prompt`),
+    /// so what is typed arrives whole. Everything that types a command or a
+    /// message into a tab's Claude goes through here (M-m's
+    /// /resolve-conflicts, the Slack tab's /slack-updates, a CI loop
+    /// started from mission control, a message answering a tab, a reply
+    /// sent to another tab); the relay does the same through its own
+    /// `tabs::type_into`.
+    pub(crate) fn type_into_claude(&mut self, pane: PaneId, presses: Vec<Press>) {
+        let screen = self
+            .panes
+            .get(&pane)
+            .map(|slot| slot.pane.text(0))
+            .unwrap_or_default();
+        self.press(pane, answer::into_prompt(&screen, presses));
+    }
+
     /// Presses keys and text in a pane, a paste given a moment to land
     /// before what follows it.
     pub(crate) fn press(&mut self, pane: PaneId, presses: Vec<Press>) {
@@ -1909,7 +1926,7 @@ impl Server {
                 self.open_answer(client, tab, Some("Nothing to send.".into()))
             }
             None => {
-                self.press(pane, answer::message_presses(reply));
+                self.type_into_claude(pane, answer::message_presses(reply));
                 self.mission_note(client, "Sent.");
             }
         }

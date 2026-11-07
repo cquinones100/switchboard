@@ -147,6 +147,25 @@ fn a_reply_under_an_alert_goes_to_the_alerts_tab_as_one_paste() {
 }
 
 #[test]
+fn a_message_to_a_prompt_in_vim_s_normal_mode_presses_i_first() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    rig.set_screen(&tab, "╭──╮\n│ >│\n╰──╯\n  -- NORMAL --\n");
+    rig.block_on(handle(&rig.cx, message(&now_ts(2), "go on", Some(&thread))))
+        .unwrap();
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [
+            format!("{pane} type i"),
+            format!("{pane} paste go on"),
+            format!("{pane} key Enter")
+        ],
+        "Insert mode first, so the message arrives whole"
+    );
+}
+
+#[test]
 fn unrecognised_messages_ones_naming_a_tab_and_old_ones_are_not_typed_anywhere() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");

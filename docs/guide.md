@@ -99,6 +99,8 @@ A tab shows the most urgent of its panes' states, waiting before done before wor
 
 "done" clears once the tab has been in front for a second, so passing over a tab, as moving the sidebar's cursor does, leaves the mark. Settings' "Finished tabs clear" (`done_clears`) can keep it instead until you next prompt that session ("on prompt"; "when seen" is the default).
 
+Whatever the workspace types into a tab's Claude (`M-m`'s `/resolve-conflicts`, the Slack tab's `/slack-updates`, a CI loop started from mission control, a message answering a tab from mission control, the sidebar or the Slack relay, a reply sent from another tab) presses `i` first when Claude Code's vim mode has left the prompt in Normal mode (its mode line reading `-- NORMAL --`), where the first letters typed would otherwise be taken as vim commands and what is typed would arrive cut off.
+
 `M-a` goes to the next tab that needs you: pinned tabs and reminders that have come due first, then the ones waiting on you, then the finished ones, and last the sidebar's notifications while there are any (Settings' "M-a goes to notifications", `needs_notices`). Pressed again, it goes on to the next, wrapping round, so pressing it repeatedly visits each one. It says "Nothing needs you." when nothing does. `M-c` goes to the pane running Claude in the current tab.
 
 `M-f` pins the tab: it goes to the top of Needs you, ahead of everything else there, whatever Claude is doing in it, and stays there until you press `M-f` in it again, since visiting it doesn't clear it.

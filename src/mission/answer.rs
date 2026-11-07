@@ -5,7 +5,10 @@
 //! `optionsIn`, `answerFor`, `answerSaid` and `answerPrompt`), kept here as
 //! plain functions of the screen's text so the relay can share them when it
 //! comes over. A tab showing no prompt takes what you type as a message,
-//! pasted and sent with Enter.
+//! pasted and sent with Enter. Anything typed into Claude's prompt, here or
+//! elsewhere, gets `i` first while the screen shows the prompt in vim's
+//! Normal mode (`into_prompt`, tmux/claude-pane.sh's `claude_type` and
+//! lib/sidebar/tmux.js's `typeIntoClaude`).
 //!
 //! `AnswerBox` is the box over mission control (render.js's `answerModal`):
 //! the question, its options numbered, and a line to type in. A number
@@ -341,6 +344,33 @@ pub fn message_presses(text: &str) -> Vec<Press> {
         Press::Settle,
         Press::Key(Key::new(KeyCode::Enter, Mods::NONE)),
     ]
+}
+
+/// Whether Claude Code's prompt, on this screen, is in vim's Normal mode:
+/// with Claude Code's vim mode on, its mode line at the screen's foot reads
+/// `-- NORMAL --` there (claude-pane.sh's `claude_type`, tmux.js's
+/// `typeIntoClaude`). The last three lines with anything on them are read.
+pub fn normal_mode(screen: &str) -> bool {
+    screen
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(3)
+        .any(|l| l.contains("-- NORMAL --"))
+}
+
+/// What typing `presses` into Claude Code's prompt takes on this screen:
+/// `i` first in vim's Normal mode, where the first letters typed would be
+/// taken as vim commands until one started Insert mode, cutting off the
+/// front of what is typed.
+pub fn into_prompt(screen: &str, presses: Vec<Press>) -> Vec<Press> {
+    if normal_mode(screen) {
+        std::iter::once(Press::Text("i".into()))
+            .chain(presses)
+            .collect()
+    } else {
+        presses
+    }
 }
 
 // ── The box ─────────────────────────────────────────────────────────────────
@@ -729,5 +759,22 @@ Which colors?
             b.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
             Step::Close(Outcome::Picked(p)) if p.value == "hi there"
         ));
+    }
+
+    #[test]
+    fn typing_into_a_prompt_in_vim_s_normal_mode_presses_i_first() {
+        let typed = vec![Press::Text("/ci-loop".into())];
+        let normal = "╭───╮\n│ > │\n╰───╯\n  -- NORMAL --\n\n";
+        assert!(normal_mode(normal));
+        assert_eq!(
+            into_prompt(normal, typed.clone()),
+            vec![Press::Text("i".into()), Press::Text("/ci-loop".into())]
+        );
+        let insert = "╭───╮\n│ > │\n╰───╯\n  -- INSERT --\n";
+        assert_eq!(into_prompt(insert, typed.clone()), typed);
+        assert_eq!(into_prompt("> \n  ? for shortcuts", typed.clone()), typed);
+        // Only at the screen's foot: Claude's reply quoting it is no mode line.
+        let quoted = "Vim shows -- NORMAL -- there.\n\n> \n─────\n  ? for shortcuts\n  model";
+        assert!(!normal_mode(quoted));
     }
 }
