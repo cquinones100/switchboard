@@ -2,8 +2,8 @@
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
 //! tab's Claude, M-f to pin a tab), M-s into the sidebar and the views'
-//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views) and M-d (src/diff), under
-//! the same keys, with
+//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
+//! M-N and M-e (src/notes/serve.rs), under the same keys, with
 //! the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
 //! adds to or changes them:
 //!
@@ -110,6 +110,9 @@ pub enum Action {
     StopSlackRelay,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
+    /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
+    /// (src/notes/serve.rs).
+    Notes(crate::notes::serve::Command),
 }
 
 impl Action {
@@ -123,8 +126,9 @@ impl Action {
     /// `continue-shaping`, `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
-    /// `search-everything`, `read-link`, `open-link-being-read`), and
-    /// updates' (`update-switchboard`, `run-setup`).
+    /// `search-everything`, `read-link`, `open-link-being-read`), updates'
+    /// (`update-switchboard`, `run-setup`), and Notes' (`notes`,
+    /// `notes-beside`, `choose-tab-note`).
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -141,6 +145,9 @@ impl Action {
         }
         if let Some(command) = crate::diff::Command::parse(name) {
             return Some(Action::Diff(command));
+        }
+        if let Some(command) = crate::notes::serve::Command::parse(name) {
+            return Some(Action::Notes(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -237,6 +244,7 @@ impl Action {
             Action::SlackRelay => "slack-relay".into(),
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
+            Action::Notes(command) => command.name().into(),
         }
     }
 
@@ -303,6 +311,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
+            Action::Notes(command) => command.about().into(),
         }
     }
 
@@ -345,6 +354,7 @@ impl Action {
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
+            Action::Notes(command) => command.tags(),
         }
     }
 
@@ -388,6 +398,10 @@ impl Action {
             .into_iter()
             .filter(|c| c.key().is_none())
             .map(Action::Diff);
+        let notes = crate::notes::serve::Command::ALL
+            .into_iter()
+            .filter(|c| c.key().is_none())
+            .map(Action::Notes);
         [
             Action::ResetTips,
             Action::ToggleTheme,
@@ -402,6 +416,7 @@ impl Action {
         .into_iter()
         .chain(views)
         .chain(diff)
+        .chain(notes)
         .chain(crate::update::Command::ALL.map(Action::Update))
         .collect()
     }
@@ -470,6 +485,11 @@ impl Default for Bindings {
         for command in crate::diff::Command::ALL {
             if let Some(k) = command.key() {
                 bind(k, Diff(command));
+            }
+        }
+        for command in crate::notes::serve::Command::ALL {
+            if let Some(k) = command.key() {
+                bind(k, Notes(command));
             }
         }
         let mut prefix = HashMap::new();
@@ -599,6 +619,8 @@ mod tests {
             Action::View(crate::views::Command::OpenLinkRead),
             Action::Diff(crate::diff::Command::Diff),
             Action::Diff(crate::diff::Command::Ask),
+            Action::Notes(crate::notes::serve::Command::Beside),
+            Action::Notes(crate::notes::serve::Command::ChooseNote),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

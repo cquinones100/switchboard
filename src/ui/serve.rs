@@ -451,6 +451,11 @@ impl Server {
     /// is off. The pane is the one M-w was pressed in, whatever has the
     /// focus by the time it is answered.
     pub fn close_pane(&mut self, client: ClientId, pane: PaneId) {
+        // Notes beside a pane goes back to its own tab instead (notes-open.sh
+        // away, src/notes/serve.rs).
+        if self.notes_close(pane) {
+            return;
+        }
         let running = self.running(pane);
         if running.is_none() || !setting_on("confirm_close") {
             self.kill_pane(pane);

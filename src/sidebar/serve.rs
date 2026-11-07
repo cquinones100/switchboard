@@ -366,6 +366,19 @@ impl Server {
         t.autopilot = opt("@autopilot")
             .and_then(|v| v.trim().parse::<f64>().ok())
             .is_some_and(|n| n != 0.0);
+        // Notes beside this tab's work, or, on Notes' own tab while it is
+        // away, where it went (model.js's notesHere, notesAway, notesOwner).
+        let marked = |p: &PaneId, name: &str| {
+            self.panes
+                .get(p)
+                .and_then(|slot| slot.opts.get(name))
+                .is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        t.notes_here = panes.len() > 1 && panes.iter().any(|p| marked(p, "@notes_pane"));
+        t.notes_away = panes.iter().any(|p| marked(p, "@notes_placeholder"));
+        if t.notes_away {
+            t.notes_owner = self.notes_owner(&s.name);
+        }
         t.background = work.count;
         t.monitors = work.monitors.clone();
         t.tab_loop = work

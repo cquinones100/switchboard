@@ -29,6 +29,9 @@
 //! - `squash`: notes merged by Claude (squash.lua).
 //! - `socket`: the socket the workspace shows a tab's note through.
 //! - `app`: the program on the screen (init.lua).
+//! - `serve`: Notes in the workspace, on the server: M-N, M-e, a note's
+//!   tab, a tab's note, the palette's commands (notes-open.sh and the rest),
+//!   and `away`, what Notes' tab shows while it is beside another.
 
 use std::process::ExitCode;
 
@@ -42,6 +45,7 @@ pub mod images;
 pub mod menu;
 pub mod palette;
 pub mod render;
+pub mod serve;
 pub mod sidebar;
 pub mod socket;
 pub mod squash;
@@ -53,7 +57,9 @@ pub mod text;
 use store::Store;
 
 /// `switchboard notes`: the app; `switchboard notes open <note>`, `sidebar
-/// on|off` and `shown` ask the running one, as tmux/notes-open.sh did.
+/// on|off` and `shown` ask the running one, as tmux/notes-open.sh did;
+/// `away` is what the server runs in Notes' tab while it is beside another
+/// (serve/away.rs).
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut args = args.into_iter();
     match args.next().as_deref() {
@@ -67,6 +73,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             _ => usage(),
         },
         Some("shown") => ask("shown"),
+        Some("away") => serve::away::main(),
         Some("-h" | "--help") => {
             usage();
             ExitCode::SUCCESS

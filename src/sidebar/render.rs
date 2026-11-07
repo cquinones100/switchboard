@@ -401,6 +401,9 @@ pub fn sidebar_lines(
                 .collect();
             parts.extend(pr);
             parts.extend(failing.clone());
+            if tab.notes_here {
+                parts.push("✎ Notes here".into());
+            }
             if tab.autopilot {
                 parts.push("auto".into());
             }

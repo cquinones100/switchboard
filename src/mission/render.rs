@@ -364,6 +364,9 @@ fn card_body(
     facts.extend(tab.pr.map(|p| format!("#{p}")));
     facts.extend(model::pr_facts(tab));
     facts.extend(tab.claude.as_ref().and_then(|c| c.name.clone()));
+    if tab.notes_here {
+        facts.push("✎ Notes here".into());
+    }
     let facts: Vec<String> = facts.into_iter().filter(|f| !f.is_empty()).collect();
     body.push(vec![Span::styled(facts.join(" · "), fg(color))]);
     let turn = tab.claude.as_ref().and(tab.turn.as_ref());

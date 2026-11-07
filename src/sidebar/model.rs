@@ -115,6 +115,14 @@ pub struct TabModel {
     pub remind_note: Option<String>,
     /// Opened by the mode that works a note continuously (`@autopilot`).
     pub autopilot: bool,
+    /// The one Notes, brought beside this tab's pane with M-e rather than
+    /// in a tab of its own (src/notes/serve.rs).
+    pub notes_here: bool,
+    /// The Notes tab while Notes is beside another tab's pane: the pane
+    /// standing in for it there (`switchboard notes away`).
+    pub notes_away: bool,
+    /// Which tab has Notes then, its number and name, for that tab's line.
+    pub notes_owner: Option<(usize, String)>,
     /// Background tasks running.
     pub background: usize,
     /// The Monitor watches running, by description.
@@ -172,6 +180,9 @@ impl TabModel {
             remind_at: None,
             remind_note: None,
             autopilot: false,
+            notes_here: false,
+            notes_away: false,
+            notes_owner: None,
             background: 0,
             monitors: Vec::new(),
             tab_loop: None,
@@ -805,6 +816,13 @@ pub fn state_words(tab: &TabModel, r: &Rules) -> String {
 }
 
 fn state_only(tab: &TabModel, r: &Rules) -> String {
+    // The Notes tab while Notes is beside another: where it went.
+    if tab.notes_away {
+        return match &tab.notes_owner {
+            Some((index, name)) => format!("Notes is beside tab {index} · {name}"),
+            None => "Notes isn't open".into(),
+        };
+    }
     let now = r.now_secs();
     let since = text::ago(tab.since, now);
     let merge = joined([landing_words(tab), merge_words(tab)]);
@@ -973,6 +991,17 @@ pub(crate) mod tests {
 
     fn v(names: &[&str]) -> Vec<String> {
         names.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_notes_tab_says_where_notes_went() {
+        let r = rules();
+        let mut notes = tab(1, "Notes", TabState::Idle);
+        notes.notes_away = true;
+        notes.notes_owner = Some((3, "api".into()));
+        assert_eq!(state_words(&notes, &r), "Notes is beside tab 3 · api");
+        notes.notes_owner = None;
+        assert_eq!(state_words(&notes, &r), "Notes isn't open");
     }
 
     #[test]

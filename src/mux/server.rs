@@ -99,6 +99,9 @@ pub enum Event {
     Views(crate::views::ViewsEvent),
     /// A look for a new release answered (src/update).
     Update(crate::update::UpdateEvent),
+    /// The rest of what a Notes key does, back from off the task
+    /// (src/notes/serve.rs).
+    Notes(crate::notes::serve::NotesEvent),
     Tick,
     Quit,
 }
@@ -600,6 +603,7 @@ impl Server {
             Event::Mission(event) => self.mission_event(event),
             Event::Views(event) => self.views_event(event),
             Event::Update(event) => self.update_event(event),
+            Event::Notes(event) => self.notes_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.status_tick();
@@ -968,6 +972,12 @@ impl Server {
     /// makes it current, as tmux's `break-pane` did; gives the new tab. The
     /// pane goes on running as it was.
     pub fn break_pane(&mut self, pane: PaneId) -> Result<TabId> {
+        self.break_pane_to(pane, true)
+    }
+
+    /// `break_pane`, the new tab made current only with `select` (tmux's
+    /// `break-pane -d` without it).
+    pub fn break_pane_to(&mut self, pane: PaneId, select: bool) -> Result<TabId> {
         let from = self
             .panes
             .get(&pane)
@@ -1010,8 +1020,41 @@ impl Server {
         }
         self.relayout(from);
         self.refresh_name(from);
-        self.select_tab(&session, id);
+        if select {
+            self.select_tab(&session, id);
+        } else {
+            self.relayout(id);
+            self.refresh_name(id);
+            self.dirty_session(&session);
+        }
         Ok(id)
+    }
+
+    /// Takes a pane out of its tab without ending its program, for putting
+    /// it in another (tmux's `join-pane` took a pane from its window so):
+    /// the tab's focus moves to another of its panes, and the tab goes when
+    /// the pane was its last. Gives the tab it was in.
+    pub fn take_out(&mut self, pane: PaneId) -> Option<TabId> {
+        let from = self.panes.get(&pane)?.tab;
+        let tab = self.tabs.get_mut(&from)?;
+        if !tab.layout.remove(pane) {
+            self.remove_tab(from);
+            return Some(from);
+        }
+        if tab.active == pane {
+            tab.active = tab
+                .last_pane
+                .filter(|p| *p != pane && tab.layout.contains(*p))
+                .unwrap_or_else(|| tab.layout.panes()[0]);
+        }
+        if tab.last_pane == Some(pane) {
+            tab.last_pane = None;
+        }
+        tab.zoomed = false;
+        self.relayout(from);
+        self.refresh_name(from);
+        self.dirty_tab(from);
+        Some(from)
     }
 
     /// Ends a pane's program and takes it out (its tab too, when it was the last).
@@ -1049,6 +1092,9 @@ impl Server {
             tab.zoomed = false;
             self.relayout(tab_id);
             self.dirty_tab(tab_id);
+            // Notes left alone in a tab it was brought beside goes home
+            // (src/notes/serve.rs).
+            self.notes_orphan(tab_id);
         } else {
             self.remove_tab(tab_id);
         }
@@ -1629,6 +1675,7 @@ impl Server {
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
+            Action::Notes(command) => self.notes_command(id, command, pane),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

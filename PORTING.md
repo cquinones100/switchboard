@@ -197,9 +197,14 @@ Each step is a commit (or a few) on the branch, with its tests.
    to a pane marked `@notes_cmd_keys`, and kitty's graphics commands from
    the notes pane, or one marked `@allow_passthrough`, on to the terminal,
    the placeholders' marks and colours kept through the emulator and the
-   frame). Left, for the server: M-N and M-e (Notes in a tab of its own or
-   beside one, the list put away there), note tabs and picking a tab's note
-   (`note-tab.sh`, `note-pick.sh`), and the palette's Switchboard commands
+   frame), and Notes in the workspace (src/notes/serve.rs: M-N to Notes, or
+   Notes in a tab of its own; M-e beside the pane you are in and home
+   again, a pane left in its tab saying where it went, `switchboard notes
+   away`; its list put away beside another tab; M-w sending it home; Notes
+   left alone in a tab it was brought beside going home; each tab's note
+   shown through the socket, and a tab with none asked which is its,
+   note-pick.sh's ranking; the sidebar's lines for it). Left, for the
+   server: note tabs (`note-tab.sh`) and the palette's Switchboard commands
    (the app asks `switchboard press <name>`).
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.
