@@ -507,15 +507,19 @@ fn ensure_clean() -> Reviewed<()> {
 // ── The pull request ────────────────────────────────────────────────────────
 
 /// The PR for the branch, which carries both the description and the branch
-/// it targets. Without one the review still runs, the prompt saying so and
-/// the base falling back to origin's default. Only a repository GitHub
-/// doesn't have counts as having none; a failure to ask must not quietly
-/// turn into a review against the wrong base.
+/// it targets, looked for in the repository gh would ask (`github::repo_of`:
+/// the one `gh repo set-default` named, else the project an `upstream`
+/// remote names when origin is a fork). Without one the review still runs,
+/// the prompt saying so and the base falling back to origin's default. Only
+/// a repository GitHub doesn't have counts as having none; a failure to ask
+/// must not quietly turn into a review against the wrong base.
 fn pull_request(root: &Path) -> Reviewed<Option<PrDetails>> {
     let source = "codex-review: the PR";
     let found = util::block_on(async {
         let repo = match github::repo_of(root).await {
             Ok(repo) => repo,
+            // GitHub couldn't be asked whether origin is a fork.
+            Err(e) if crate::net::kind_of(&e).is_some() => return Err(e),
             // Not on GitHub: there is no PR to find.
             Err(_) => return Ok(None),
         };
@@ -1336,16 +1340,12 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     }
     let head = git(&["rev-parse", "HEAD"])?;
 
+    // A PR from a fork (yours, in a fork's clone) is reviewed against the
+    // copy of its base on the remote that points at the repository it
+    // targets (`resolve_base`), which fails when no remote does, so it needs
+    // no `--base` of its own, where the Node version, comparing with origin,
+    // refused one.
     let pr = pull_request(&root_path)?;
-    if let Some(pr) = &pr
-        && pr.is_cross_repository
-        && opts.base.is_none()
-    {
-        return fail(format!(
-            "the PR comes from a different repository than it targets, so origin/{} may not be its real base.\n  Pass --base <remote>/<branch> for the repository the PR targets.",
-            pr.base_ref_name
-        ));
-    }
     let base_name = match &opts.base {
         Some(base) => base.clone(),
         None => default_base(pr.as_ref())?,

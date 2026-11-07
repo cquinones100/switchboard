@@ -461,7 +461,12 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The GitHub repository `dir` belongs to, from its `origin` remote.
+/// The GitHub repository `dir`'s pull requests are in, picked as `gh`
+/// picked the repository it asked: the one `gh repo set-default` named (git's
+/// `remote.<name>.gh-resolved`), else an `upstream` remote when there is one
+/// and `origin` is a fork, else `origin`. In a fork's clone, where origin is
+/// your fork and upstream the project, that is the project, where PRs from
+/// your fork are opened.
 pub async fn repo_of(dir: &Path) -> Result<Repo> {
     if git(dir, &["rev-parse", "--git-dir"]).await.is_err() {
         return Err(anyhow!(
@@ -469,10 +474,90 @@ pub async fn repo_of(dir: &Path) -> Result<Repo> {
             crate::paths::tilde(dir)
         ));
     }
+    let resolved = git(
+        dir,
+        &["config", "--get-regexp", r"^remote\..*\.gh-resolved$"],
+    )
+    .await
+    .unwrap_or_default();
+    if let Some((remote, value)) = set_default(&resolved) {
+        if value != "base"
+            && let Some(repo) = parse_name_with_owner(&value)
+        {
+            return Ok(repo);
+        }
+        if let Some(repo) = remote_repo(dir, &remote).await {
+            return Ok(repo);
+        }
+    }
     let url = git(dir, &["remote", "get-url", "origin"])
         .await
         .map_err(|_| anyhow!("This repository has no origin remote."))?;
-    parse_remote(&url).ok_or_else(|| anyhow!("This repository's origin isn't on GitHub: {url}"))
+    let origin = parse_remote(&url)
+        .ok_or_else(|| anyhow!("This repository's origin isn't on GitHub: {url}"))?;
+    match remote_repo(dir, "upstream").await {
+        Some(upstream) if upstream != origin && is_fork(&origin).await? => Ok(upstream),
+        _ => Ok(origin),
+    }
+}
+
+// The remote `gh repo set-default` marked, and what it wrote there: `base`,
+// or (as older gh wrote it) the repository itself, `owner/name`.
+fn set_default(config: &str) -> Option<(String, String)> {
+    config.lines().find_map(|line| {
+        let (key, value) = line.split_once(' ')?;
+        let remote = key.strip_prefix("remote.")?.strip_suffix(".gh-resolved")?;
+        let value = value.trim();
+        (!remote.is_empty() && !value.is_empty()).then(|| (remote.to_string(), value.to_string()))
+    })
+}
+
+fn parse_name_with_owner(text: &str) -> Option<Repo> {
+    let (owner, name) = text.split_once('/')?;
+    (PART.is_match(owner) && PART.is_match(name) && !name.contains('/')).then(|| Repo {
+        owner: owner.to_string(),
+        name: name.to_string(),
+    })
+}
+
+// The GitHub repository a remote's URL names.
+async fn remote_repo(dir: &Path, remote: &str) -> Option<Repo> {
+    let url = git(dir, &["remote", "get-url", remote]).await.ok()?;
+    parse_remote(&url)
+}
+
+// Whether GitHub has the repository as a fork, kept an hour, since a fork
+// stays one and the tab names ask on every look.
+static FORKS: LazyLock<std::sync::Mutex<std::collections::HashMap<Repo, (bool, i64)>>> =
+    LazyLock::new(Default::default);
+
+const FORK_KEEP_MS: i64 = 60 * 60 * 1000;
+
+async fn is_fork(repo: &Repo) -> Result<bool> {
+    let known = FORKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(repo)
+        .filter(|(_, at)| util::now_ms() - at < FORK_KEEP_MS)
+        .map(|(fork, _)| *fork);
+    if let Some(fork) = known {
+        return Ok(fork);
+    }
+    let data = graphql(
+        "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { isFork } }",
+        json!({ "owner": repo.owner, "name": repo.name }),
+        "the repository's PRs: is origin a fork",
+    )
+    .await?;
+    let fork = data
+        .pointer("/repository/isFork")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    FORKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(repo.clone(), (fork, util::now_ms()));
+    Ok(fork)
 }
 
 /// The repository's default branch, as GitHub has it.
@@ -518,6 +603,8 @@ pub struct PullRequest {
 struct Node {
     #[serde(flatten)]
     pr: PullRequest,
+    #[serde(default)]
+    is_cross_repository: Option<bool>,
     head_repository_owner: Option<Login>,
 }
 
@@ -543,11 +630,13 @@ pub fn pr_number_from_dir(dir: &Path) -> Option<u64> {
 /// The pull request for the branch checked out in `dir`, or `None` when the
 /// branch has none (or `dir` is on no branch). As `tmux/window-pr.sh`: a
 /// merged or closed PR still counts, since the work in the tab is the same
-/// work it was before it merged, though an open one is taken first; a `wtpr`
-/// directory's number is looked up by that number; and a branch that tracks
-/// a branch of another name (a fork's PR, checked out as `<owner>-<branch>`)
-/// is looked up by the branch it tracks, from that fork's owner, as `gh pr
-/// view` found it.
+/// work it was before it merged, though an open one is taken first; and a
+/// `wtpr` directory's number is looked up by that number. Otherwise only a
+/// PR from where the branch is pushed counts, as `gh pr view` matched one:
+/// the repository its remote names (your fork, in a fork's clone; a fork's
+/// PR checked out as `<owner>-<branch>`, looked up by the branch it tracks),
+/// else the PR's own repository. A stranger's PR that happens to have the
+/// same head branch (`main`, `patch-1`) is never the branch's.
 pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullRequest>> {
     let repo = repo_of(dir).await?;
     if let Some(number) = pr_number_from_dir(dir) {
@@ -563,16 +652,19 @@ pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullReques
         .await
         .unwrap_or_default();
     let tracked = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-    let (head, owner, fork) = if !tracked.is_empty() && tracked != branch {
-        (tracked.to_string(), fork_owner(dir, &branch).await, true)
+    let head = if tracked.is_empty() {
+        branch.clone()
     } else {
-        (branch.clone(), Some(repo.owner.clone()), false)
+        tracked.to_string()
     };
+    let owner = pushed_to(dir, &branch)
+        .await
+        .unwrap_or_else(|| repo.owner.clone());
     let data = graphql(
         &format!(
             "query($owner: String!, $name: String!, $head: String!) {{ repository(owner: $owner, name: $name) {{ \
              pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
-             nodes {{ {FIELDS} headRepositoryOwner {{ login }} }} }} }} }}"
+             nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }} }} }}"
         ),
         json!({ "owner": repo.owner, "name": repo.name, "head": head }),
         source,
@@ -588,18 +680,17 @@ pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullReques
                 .collect()
         })
         .unwrap_or_default();
-    // A fork whose owner can't be read from its remote is matched as any
-    // other branch, by its name alone.
-    let require_owner = fork && owner.is_some();
-    Ok(choose(nodes, owner.as_deref(), require_owner))
+    Ok(choose(nodes, &owner, &repo.owner))
 }
 
-// The owner of the fork a branch tracks: its remote's URL (the remote may be
-// a URL itself, as `gh pr checkout` sets it).
-async fn fork_owner(dir: &Path, branch: &str) -> Option<String> {
+// The owner of the repository a branch is pushed to: its remote's URL (the
+// remote may be a URL itself, as `gh pr checkout` sets it). `None` for a
+// branch with no remote, or one not on GitHub.
+async fn pushed_to(dir: &Path, branch: &str) -> Option<String> {
     let remote = git(dir, &["config", &format!("branch.{branch}.remote")])
         .await
-        .ok()?;
+        .ok()
+        .filter(|r| !r.is_empty())?;
     let url = match git(dir, &["remote", "get-url", &remote]).await {
         Ok(url) => url,
         Err(_) => remote,
@@ -607,20 +698,23 @@ async fn fork_owner(dir: &Path, branch: &str) -> Option<String> {
     parse_remote(&url).map(|r| r.owner)
 }
 
-// The PR to show among those on the head branch, newest first: one from the
-// expected owner (any, when none is, as `gh pr list --head` matched; for a
-// fork's, only its own), an open one before the rest.
-fn choose(nodes: Vec<Node>, owner: Option<&str>, require_owner: bool) -> Option<PullRequest> {
-    let owned = |n: &Node| match (owner, &n.head_repository_owner) {
-        (Some(want), Some(have)) => have.login.eq_ignore_ascii_case(want),
-        _ => false,
+// The PR to show among those on the head branch, newest first: one whose
+// head is in `owner`'s repository, as `gh pr view` matched the head's
+// `owner:branch` (just the branch, from a PR within the repository itself,
+// when `owner` is `base_owner`), an open one before the rest.
+fn choose(nodes: Vec<Node>, owner: &str, base_owner: &str) -> Option<PullRequest> {
+    let within = owner.eq_ignore_ascii_case(base_owner);
+    let matches = |n: &&Node| {
+        let from_owner = n
+            .head_repository_owner
+            .as_ref()
+            .is_some_and(|have| have.login.eq_ignore_ascii_case(owner));
+        match n.is_cross_repository {
+            Some(cross) => from_owner && cross != within,
+            None => from_owner,
+        }
     };
-    let mine: Vec<&Node> = nodes.iter().filter(|n| owned(n)).collect();
-    let pool: Vec<&Node> = if !mine.is_empty() || require_owner {
-        mine
-    } else {
-        nodes.iter().collect()
-    };
+    let pool: Vec<&Node> = nodes.iter().filter(matches).collect();
     pool.iter()
         .find(|n| n.pr.state == "OPEN")
         .or_else(|| pool.first())
@@ -741,6 +835,7 @@ mod tests {
                 base_ref_name: "main".into(),
                 head_ref_name: "b".into(),
             },
+            is_cross_repository: Some(!owner.eq_ignore_ascii_case("acme")),
             head_repository_owner: Some(Login {
                 login: owner.into(),
             }),
@@ -750,32 +845,43 @@ mod tests {
     #[test]
     fn an_open_pr_is_taken_before_a_newer_closed_one() {
         let nodes = vec![node(9, "CLOSED", "acme"), node(5, "OPEN", "acme")];
-        assert_eq!(
-            choose(nodes, Some("acme"), false).map(|p| p.number),
-            Some(5)
-        );
+        assert_eq!(choose(nodes, "acme", "acme").map(|p| p.number), Some(5));
         let nodes = vec![node(9, "MERGED", "acme"), node(5, "CLOSED", "acme")];
-        assert_eq!(
-            choose(nodes, Some("acme"), false).map(|p| p.number),
-            Some(9)
-        );
+        assert_eq!(choose(nodes, "acme", "acme").map(|p| p.number), Some(9));
     }
 
     #[test]
     fn the_owner_decides_between_same_named_branches() {
         let nodes = vec![node(9, "OPEN", "someone"), node(5, "OPEN", "Acme")];
-        assert_eq!(
-            choose(nodes, Some("acme"), false).map(|p| p.number),
-            Some(5)
-        );
-        // None from the owner: any, as `gh pr list --head` matched them.
+        assert_eq!(choose(nodes, "acme", "acme").map(|p| p.number), Some(5));
+        // A stranger's PR from their own `main` is never the branch's.
         let nodes = vec![node(9, "OPEN", "someone")];
+        assert_eq!(choose(nodes, "acme", "acme"), None);
+        // A branch pushed to a fork takes only the fork's own.
+        let nodes = vec![node(9, "OPEN", "someone"), node(7, "OPEN", "fork")];
+        assert_eq!(choose(nodes, "fork", "acme").map(|p| p.number), Some(7));
+        // Nor, pushed to the repository itself, a PR from another of the
+        // owner's repositories.
+        let mut other = node(4, "OPEN", "acme");
+        other.is_cross_repository = Some(true);
+        assert_eq!(choose(vec![other], "acme", "acme"), None);
+    }
+
+    #[test]
+    fn set_default_is_read_from_git_config() {
         assert_eq!(
-            choose(nodes, Some("acme"), false).map(|p| p.number),
-            Some(9)
+            set_default("remote.upstream.gh-resolved base\n"),
+            Some(("upstream".into(), "base".into()))
         );
-        // A fork's branch takes only the fork's own.
-        let nodes = vec![node(9, "OPEN", "someone")];
-        assert_eq!(choose(nodes, Some("fork"), true), None);
+        assert_eq!(
+            set_default("remote.origin.gh-resolved acme/widgets"),
+            Some(("origin".into(), "acme/widgets".into()))
+        );
+        assert_eq!(set_default(""), None);
+        assert_eq!(
+            parse_name_with_owner("acme/widgets"),
+            repo("acme", "widgets")
+        );
+        assert_eq!(parse_name_with_owner("base"), None);
     }
 }

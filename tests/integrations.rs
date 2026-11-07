@@ -528,6 +528,77 @@ fn a_fork_s_pr_is_found_by_the_branch_it_tracks() {
 }
 
 #[test]
+fn a_stranger_s_pr_from_the_same_branch_name_is_not_the_branch_s() {
+    let env = Env::new("stranger");
+    set("GH_TOKEN", "tok-9");
+    let dir = env.repo("widgets", "git@github.com:acme/widgets.git", "main");
+    let mut stranger = pr_node(30, "OPEN", "someone", "main");
+    stranger["isCrossRepository"] = json!(true);
+    let fake = Fake::start(vec![answer(
+        200,
+        json!({ "data": { "repository": { "pullRequests": { "nodes": [stranger] } } } }),
+    )]);
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    assert_eq!(
+        util::block_on(github::pr_for_branch(&dir, "test")).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_fork_s_clone_looks_in_the_project_upstream_names() {
+    let env = Env::new("upstream");
+    set("GH_TOKEN", "tok-10");
+    let dir = env.repo("widgets", "git@github.com:me/widgets.git", "feature");
+    env.git(
+        &dir,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    env.git(&dir, &["config", "branch.feature.remote", "origin"]);
+    env.git(
+        &dir,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+    let mut mine = pr_node(41, "OPEN", "me", "feature");
+    mine["isCrossRepository"] = json!(true);
+    let fake = Fake::start(vec![
+        answer(200, json!({ "data": { "repository": { "isFork": true } } })),
+        answer(
+            200,
+            json!({ "data": { "repository": { "pullRequests": { "nodes": [mine] } } } }),
+        ),
+    ]);
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let pr = util::block_on(github::pr_for_branch(&dir, "test"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pr.number, 41);
+    let seen = fake.seen();
+    assert_eq!(
+        seen[0].body["variables"],
+        json!({ "owner": "me", "name": "widgets" })
+    );
+    assert_eq!(seen[1].body["variables"]["owner"], "acme");
+    // `gh repo set-default` wins over both, with no question asked.
+    env.git(&dir, &["config", "remote.origin.gh-resolved", "base"]);
+    assert_eq!(
+        util::block_on(github::repo_of(&dir)).unwrap().to_string(),
+        "me/widgets"
+    );
+}
+
+#[test]
 fn a_wtpr_directory_is_looked_up_by_its_number() {
     let env = Env::new("wtpr");
     set("GH_TOKEN", "tok-8");

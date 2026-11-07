@@ -135,6 +135,32 @@ fn same_repo(a: &Repo, b: &str) -> bool {
     a.to_string().eq_ignore_ascii_case(b)
 }
 
+/// The remote of a clone that points at `owner/name` (upstream, in a fork's
+/// clone), by its URL as configured.
+fn remote_for(root: &Path, repo: &str) -> Option<String> {
+    worktree::remotes(root).into_iter().find(|remote| {
+        worktree::git_at(root, &["config", "--get", &format!("remote.{remote}.url")])
+            .ok()
+            .and_then(|url| github::parse_remote(&url))
+            .is_some_and(|r| same_repo(&r, repo))
+    })
+}
+
+/// The repository a bare PR number is a PR of: the one gh would ask
+/// (`github::repo_of`: `gh repo set-default`'s, else upstream's when origin
+/// is a fork, else origin's), else the first remote's on GitHub.
+fn numbered_repo(root: &Path) -> Result<Repo, String> {
+    match util::block_on(github::repo_of(root)) {
+        Ok(repo) => Ok(repo),
+        Err(e) if crate::net::kind_of(&e).is_some() => Err(format!(
+            "could not work out which repository the PR is in: {e}"
+        )),
+        Err(_) => {
+            remote_repo(root).ok_or_else(|| "this repository's remote isn't on GitHub".to_string())
+        }
+    }
+}
+
 /// A clone of `owner/name` among the repositories you work in: every open
 /// pane's (when a Switchboard server answers), every one a Claude session
 /// ran in lately (as wt-revive's cache has them), and the directories right
@@ -189,7 +215,7 @@ fn find_clone(repo: &str) -> Option<PathBuf> {
             continue;
         }
         if let Some(root) = worktree::repo_root_of(&dir)
-            && remote_repo(&root).is_some_and(|r| same_repo(&r, repo))
+            && remote_for(&root, repo).is_some()
         {
             return Some(root);
         }
@@ -200,10 +226,13 @@ fn find_clone(repo: &str) -> Option<PathBuf> {
 /// The remote a fork's PR is fetched from: one already pointing at the fork,
 /// else one added, named after its owner (or `<owner>-<name>` when that is
 /// taken), in the protocol the base remote uses. `None` when the fork is
-/// gone.
-fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Option<String> {
-    let name = pr.head_repository.as_deref()?;
-    let owner = pr.head_owner.as_deref()?;
+/// gone; an error when git won't add the remote, as the Node version ended
+/// there rather than fetch from a remote that isn't there.
+fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Result<Option<String>, String> {
+    let (Some(name), Some(owner)) = (pr.head_repository.as_deref(), pr.head_owner.as_deref())
+    else {
+        return Ok(None);
+    };
     let repo = format!("{owner}/{name}");
     let url_of = |remote: &str| {
         worktree::git_at(root, &["config", "--get", &format!("remote.{remote}.url")])
@@ -214,7 +243,7 @@ fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Option<String> {
         .iter()
         .find(|r| worktree::github_slug(&url_of(r)).is_some_and(|s| s.eq_ignore_ascii_case(&repo)))
     {
-        return Some(existing.clone());
+        return Ok(Some(existing.clone()));
     }
     let remote = if remotes.iter().any(|r| r == owner) {
         format!("{owner}-{name}")
@@ -227,9 +256,11 @@ fn fork_remote(pr: &PrDetails, base: &str, root: &Path) -> Option<String> {
     } else {
         format!("https://github.com/{repo}.git")
     };
-    worktree::git_ok(root, &["remote", "add", &remote, &url]);
+    if !worktree::git_ok(root, &["remote", "add", &remote, &url]) {
+        return Err(format!("could not add the fork's remote {remote} ({url})"));
+    }
     eprintln!("Remote:   added {remote} ({url})");
-    Some(remote)
+    Ok(Some(remote))
 }
 
 /// A `--single-branch` clone (which `--depth` implies) fetches only the
@@ -381,8 +412,9 @@ fn run(given: &Given, target: &str, input: &str) -> Result<ExitCode, String> {
     // The worktree is made in a clone of the PR's repository: the one you
     // are in, or, for a URL naming another repository (or given from
     // outside any), a clone of that one found among those you work in, which
-    // the `wtpr` function then cd's into. A bare number is a PR of the
-    // repository you are in.
+    // the `wtpr` function then cd's into. A clone with any remote pointing at
+    // it counts (a fork's clone, whose upstream is the project). A bare
+    // number is a PR of the repository you are in, as gh picked it.
     let here = std::env::current_dir()
         .ok()
         .and_then(|d| worktree::repo_root_of(&d));
@@ -390,8 +422,7 @@ fn run(given: &Given, target: &str, input: &str) -> Result<ExitCode, String> {
     if let Some(named) = &named
         && !here
             .as_deref()
-            .and_then(remote_repo)
-            .is_some_and(|r| same_repo(&r, named))
+            .is_some_and(|here| remote_for(here, named).is_some())
     {
         root = find_clone(named);
         let Some(found) = &root else {
@@ -412,9 +443,9 @@ fn run(given: &Given, target: &str, input: &str) -> Result<ExitCode, String> {
             owner: owner.into(),
             name: name.into(),
         },
-        None => remote_repo(&root).ok_or_else(|| {
-            format!("could not read pull request {input}: this repository's remote isn't on GitHub")
-        })?,
+        None => {
+            numbered_repo(&root).map_err(|e| format!("could not read pull request {input}: {e}"))?
+        }
     };
     let wanted = settings::setting("wtpr_prompt") != Some(serde_json::Value::Bool(false));
     let (pr, me) = util::block_on(async {
@@ -485,11 +516,16 @@ fn run(given: &Given, target: &str, input: &str) -> Result<ExitCode, String> {
     let finished = existing.clone().unwrap_or_else(|| path.clone());
     eprintln!("Worktree: {}", finished.display());
     if existing.is_none() {
-        let Some(base) = worktree::default_remote(&root) else {
+        // The PR's own branch, and refs/pull/<n>/head, are on the remote
+        // that points at the PR's repository, which in a fork's clone is
+        // upstream rather than origin.
+        let Some(base) =
+            remote_for(&root, &repo.to_string()).or_else(|| worktree::default_remote(&root))
+        else {
             return Err("repository has no remotes".into());
         };
         let remote = if fork {
-            fork_remote(&pr, &base, &root)
+            fork_remote(&pr, &base, &root)?
         } else {
             Some(base.clone())
         };
