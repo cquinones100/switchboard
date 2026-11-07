@@ -457,14 +457,18 @@ fn plugin_offered(check: bool, list: &mut List) {
 /// The way Switchboard reaches Claude Code: a Claude Code too old for the
 /// plugin, or managed settings that keep it from loading one, said, and an
 /// install an earlier version made in `~/.claude`, whose owner hasn't
-/// chosen, asked once whether to move into the plugin.
+/// chosen, asked once whether to move into the plugin: one with the setting
+/// at its default, or one a new build's first run kept the old way until
+/// asked (`way::keep_unasked`), once the plugin can load.
 fn way_offered(check: bool, list: &mut List) -> Way {
     let (way, why) = way::settle(check);
     if let Some(why) = why {
         list.optional(&why);
         return Way::Old;
     }
-    if way == Way::Plugin && way::old_install() && !way::chosen() {
+    let unasked = (way == Way::Plugin && way::old_install() && !way::chosen())
+        || (way::unasked() && way::blocked().is_none());
+    if unasked {
         if check {
             way::set(Way::Old);
             list.not_now(
@@ -473,10 +477,25 @@ fn way_offered(check: bool, list: &mut List) -> Way {
             );
             return Way::Old;
         }
+        // A no changes what a new pane names only when the setting was on;
+        // a yes always may (an earlier build's workspace names no plugin),
+        // so it always says how the tabs open take it.
+        let was_on = way::plugin_on();
         if ask(
             check,
             "Load Switchboard as a plugin in its panes? Its hooks, skills and instructions move out of ~/.claude, so Claude elsewhere has only your own; Settings' \"Load Switchboard as a plugin\" moves them back.",
         ) {
+            // Kept the old way until asked, the setting is off; at its
+            // default, it is on already.
+            if let Err(e) = way::choose(Way::Plugin, false)
+                && !way::plugin_on()
+            {
+                way::set(Way::Old);
+                list.todo(format!(
+                    "your answer, kept in Settings' \"Load Switchboard as a plugin\": {e:#}"
+                ));
+                return Way::Old;
+            }
             list.ok(&format!(
                 "Switchboard loads as a plugin in its panes; {}",
                 way::OPEN_TABS
@@ -485,10 +504,12 @@ fn way_offered(check: bool, list: &mut List) -> Way {
         }
         return match way::choose(Way::Old, false) {
             Ok(()) => {
-                list.optional(&format!(
-                    "Switchboard stays in ~/.claude, for every Claude of yours: Settings' \"Load Switchboard as a plugin\" moves it into the plugin; {}",
-                    way::OPEN_TABS
-                ));
+                let stays = "Switchboard stays in ~/.claude, for every Claude of yours: Settings' \"Load Switchboard as a plugin\" moves it into the plugin";
+                list.optional(&if was_on {
+                    format!("{stays}; {}", way::OPEN_TABS)
+                } else {
+                    stays.to_string()
+                });
                 Way::Old
             }
             Err(e) => {
@@ -818,6 +839,9 @@ pub fn run_move() -> Result<String, String> {
 /// yours is added; back into `~/.claude`, all three put it there, as the
 /// old way's whole setup did.
 fn move_over() -> ExitCode {
+    // The setting changed by you: a choice, which an install kept the old
+    // way until asked needn't be asked again.
+    way::asked();
     let (way, why) = way::settle(false);
     let mut report = Report::new(false);
     let mut failed = Vec::new();
@@ -914,9 +938,9 @@ pub fn refresh() {
 /// gets only Switchboard's part written again (or, as a plugin, its import
 /// taken out), with no pull of your rules' repository, which the update
 /// look does. Nothing is moved quietly: an install an earlier version made
-/// in `~/.claude` whose owner hasn't chosen is kept the old way, recorded in
-/// the setting, so the panes don't load the plugin on top of its hooks, and
-/// the guided setup asks.
+/// in `~/.claude` whose owner hasn't chosen is kept the old way, the setting
+/// off so the panes don't load the plugin on top of its hooks, and noted as
+/// unasked (`way::keep_unasked`), so the guided setup still asks.
 pub fn refresh_now() {
     let file = build_file();
     let mark = build_mark();
@@ -927,7 +951,7 @@ pub fn refresh_now() {
     report.silent = true;
     let mut worked = plugin::run(&mut report).is_ok();
     if way::old_install() && !way::chosen() {
-        worked &= way::choose(Way::Old, false).is_ok();
+        worked &= way::keep_unasked().is_ok();
     }
     let (way, _) = way::settle(false);
     if claude_settings::set_up() {

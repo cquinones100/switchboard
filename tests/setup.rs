@@ -1023,7 +1023,12 @@ fn a_new_build_writes_the_plugin_and_keeps_an_earlier_install_the_old_way_moving
     assert_eq!(
         h.saved()["claude_plugin"],
         json!(false),
-        "the old way recorded, so the panes don't load the plugin on top of the hooks"
+        "the old way kept, so the panes don't load the plugin on top of the hooks"
+    );
+    assert!(
+        h.path(".local/state/switchboard/claude-plugin-unasked")
+            .is_file(),
+        "noted as not asked, so the guided setup still asks"
     );
     assert_eq!(
         read(&h.path(".claude/settings.json")),
@@ -1082,6 +1087,68 @@ fn the_guided_setup_asks_an_earlier_install_once_whether_to_load_switchboard_as_
     assert!(!h.path(".claude/skills/wt").exists());
     let after = ok(&h.run(&["setup"]));
     assert!(!after.contains("[Y/n]"), "{after}");
+}
+
+#[test]
+fn the_guided_setup_still_asks_an_earlier_install_a_new_build_kept_the_old_way() {
+    let h = Home::new("setup-unasked");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    earlier_install(&h);
+    let unasked = h.path(".local/state/switchboard/claude-plugin-unasked");
+    const ASKED: &str = "Load Switchboard as a plugin in its panes?";
+    const OPEN_TABS: &str = "a tab open now takes the change";
+
+    // A new build's first run keeps the old way, noting no one was asked.
+    ok(&h.run(&["setup", "--refresh"]));
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert!(unasked.is_file());
+    let installed = snapshot(&h.path(".claude"));
+
+    // --check says the guided setup would ask, and changes nothing.
+    let check = ok(&h.run(&["setup", "--check"]));
+    assert!(check.contains("loading Switchboard as a plugin"), "{check}");
+    assert!(unasked.is_file());
+
+    // A closed input says no: the old way, as it was, and asked once.
+    let no = ok(&h.run(&["setup"]));
+    assert!(no.contains(ASKED), "{no}");
+    assert!(
+        !no.contains(OPEN_TABS),
+        "nothing changed for the panes: {no}"
+    );
+    assert!(!unasked.exists());
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert_eq!(snapshot(&h.path(".claude")), installed);
+    let again = ok(&h.run(&["setup"]));
+    assert!(!again.contains(ASKED), "{again}");
+
+    // Kept unasked by another new build, then yes: moved, the setting on.
+    h.settings(json!({}));
+    fs::write(
+        h.path(".local/share/switchboard/setup-build"),
+        "0.0.1 (old)\n",
+    )
+    .unwrap();
+    ok(&h.run(&["setup", "--refresh"]));
+    assert!(unasked.is_file());
+    let yes = ok(&h.run_with(&["setup"], "y\n"));
+    assert!(
+        yes.contains(&format!(
+            "✓ Switchboard loads as a plugin in its panes; {OPEN_TABS}"
+        )),
+        "{yes}"
+    );
+    assert!(yes.ends_with("Ready.\n"), "{yes}");
+    assert!(!unasked.exists());
+    assert_eq!(h.saved(), json!({}));
+    assert!(!read(&h.path(".claude/settings.json")).contains("switchboard hook"));
+    assert!(!h.path(".claude/skills/wt").exists());
+    assert!(!ok(&h.run(&["setup"])).contains(ASKED));
+
+    // Changing the setting yourself is a choice too.
+    fs::write(&unasked, "").unwrap();
+    ok(&h.run(&["setting", "claude_plugin", "off"]));
+    assert!(!unasked.exists());
 }
 
 #[test]

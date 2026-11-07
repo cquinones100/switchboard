@@ -13,8 +13,13 @@
 //!
 //! - An install an earlier version made (Switchboard's hooks, skills or
 //!   import in `~/.claude`) whose owner hasn't chosen is asked about once by
-//!   the guided setup; a new build's first run moves nothing quietly and
-//!   records the old way for it (`claude_plugin: false`).
+//!   the guided setup. A new build's first run moves nothing quietly: it
+//!   keeps the old way for it until then (`keep_unasked`), the setting off
+//!   so the panes don't load the plugin on top of its hooks, and
+//!   `claude-plugin-unasked` in the state directory saying no one has
+//!   chosen, so the guided setup still asks. A yes or no there, or any
+//!   move (`super::move_over`, after the setting changes), is a choice, and
+//!   takes the marker away (`choose`).
 //! - Claude Code older than 2.1.280 can't load the plugin, so setup keeps
 //!   the old way with it whatever the setting says, and turns the setting
 //!   off, saying why, rather than leave the panes naming a plugin that a
@@ -27,7 +32,7 @@
 //!   plugin directory refuses to start, so every pane's would. Setup keeps
 //!   the old way there too, turning the setting off and saying why.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -35,7 +40,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde_json::Value;
 
 use super::{claude_md, claude_settings, plugin, skills};
-use crate::{platform, settings, util};
+use crate::{paths, platform, settings, util};
 
 /// The setting.
 pub const SETTING: &str = "claude_plugin";
@@ -175,34 +180,70 @@ pub fn set(way: Way) {
     );
 }
 
-/// The way chosen, written to the setting (unless `check`, which writes
-/// nothing) and this run's from now on.
-pub fn choose(way: Way, check: bool) -> anyhow::Result<()> {
-    set(way);
-    if check {
-        return Ok(());
-    }
+/// The setting written for `way`.
+fn record(way: Way) -> anyhow::Result<()> {
     settings::write_setting(SETTING, Value::Bool(way == Way::Plugin))?;
     settings::reload_settings();
     Ok(())
 }
 
+/// The way chosen, written to the setting (unless `check`, which writes
+/// nothing) and this run's from now on: a choice, so an install kept the
+/// old way unasked has been asked.
+pub fn choose(way: Way, check: bool) -> anyhow::Result<()> {
+    set(way);
+    if check {
+        return Ok(());
+    }
+    record(way)?;
+    asked();
+    Ok(())
+}
+
+/// Where `keep_unasked` notes that no one has chosen.
+fn unasked_file() -> PathBuf {
+    paths::state_dir().join("claude-plugin-unasked")
+}
+
+/// Whether a new build's first run kept an earlier install the old way
+/// without asking, and the guided setup hasn't asked since.
+pub fn unasked() -> bool {
+    unasked_file().exists()
+}
+
+/// An install an earlier version made, whose owner hasn't chosen, kept the
+/// old way until the guided setup asks: the setting off, so the panes don't
+/// load the plugin on top of its hooks, and the note that no one has chosen.
+pub fn keep_unasked() -> anyhow::Result<()> {
+    set(Way::Old);
+    record(Way::Old)?;
+    util::write_atomic(
+        unasked_file(),
+        "Switchboard kept an earlier install's hooks, skills and instructions in ~/.claude without asking; switchboard setup asks whether to load it as a plugin instead.\n",
+    )?;
+    Ok(())
+}
+
+/// The note that no one has chosen taken away, once someone has.
+pub fn asked() {
+    let _ = std::fs::remove_file(unasked_file());
+}
+
 /// The way for a run that changes things: the setting's, unless Claude Code
 /// can't load the plugin here (`blocked`), when the setting is turned off
-/// (but with `check`) and why is given to say.
+/// (but with `check`) and why is given to say. Not a choice of yours, so an
+/// install kept the old way unasked is still asked once that changes.
 pub fn settle(check: bool) -> (Way, Option<String>) {
     let way = current();
     let why = match blocked() {
-        Some(blocked) if plugin_on() => Some(match choose(Way::Old, check) {
-            Err(e) => {
-                return (
-                    Way::Old,
-                    Some(blocked.why(&format!("; the setting couldn't be turned off: {e:#}"))),
-                );
-            }
-            Ok(()) if check => blocked.why(""),
-            Ok(()) => blocked.why(" and the setting is off"),
-        }),
+        Some(blocked) if plugin_on() => {
+            let off = if check { Ok(()) } else { record(Way::Old) };
+            Some(match off {
+                Err(e) => blocked.why(&format!("; the setting couldn't be turned off: {e:#}")),
+                Ok(()) if check => blocked.why(""),
+                Ok(()) => blocked.why(" and the setting is off"),
+            })
+        }
         _ => None,
     };
     set(way);
