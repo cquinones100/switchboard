@@ -83,6 +83,25 @@ impl TestServer {
         server
     }
 
+    /// A server with no state directory of its own, as yours runs: its
+    /// state in its home's `~/.local/state/switchboard` (the variable set
+    /// empty, which counts as not set).
+    pub fn start_in_home() -> TestServer {
+        let dir = TempDir::new("sbt");
+        let home = dir.path().join("home");
+        let state = home.join(".local/state/switchboard");
+        std::fs::create_dir_all(&home).unwrap();
+        let mut server = TestServer {
+            dir,
+            home,
+            state,
+            child: None,
+            extra_env: vec![("SWITCHBOARD_STATE_DIR".into(), String::new())],
+        };
+        server.launch();
+        server
+    }
+
     /// Ends the server and starts another in the same home and state, as
     /// after a restart of the machine.
     pub fn restart(&mut self) {

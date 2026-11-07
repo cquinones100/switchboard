@@ -514,9 +514,21 @@ fn plugin_dirs_in_a_pane(server: &TestServer) -> String {
 
 #[test]
 fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
-    let server = TestServer::start();
+    // A server with a state directory of its own (a test's, or a worktree's
+    // build run by hand) shares your home, so it leaves the plugin your
+    // workspace's panes load as it is, though its panes name it.
+    let own = TestServer::start();
+    let plugin = own.home.join(".local/share/switchboard/plugin");
+    assert_eq!(
+        plugin_dirs_in_a_pane(&own),
+        format!("dirs=[{}]", plugin.display())
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!plugin.exists(), "not written: {}", own.log());
+
+    // Yours writes it as it starts.
+    let server = TestServer::start_in_home();
     let plugin = server.home.join(".local/share/switchboard/plugin");
-    // Written as the server started.
     let deadline = Instant::now() + Duration::from_secs(10);
     while !plugin.join(".claude-plugin/plugin.json").is_file() {
         assert!(Instant::now() < deadline, "no plugin: {}", server.log());

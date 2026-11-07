@@ -388,12 +388,17 @@ async fn run() -> Result<()> {
     });
     // Switchboard's plugin, which Claude in the panes loads, as this build
     // has it: off the server's task, and before the restored panes' Claude
-    // sessions take the time a shell and Claude take to start.
-    tokio::task::spawn_blocking(|| {
-        if let Err(e) = crate::setup::plugin::write_quietly() {
-            eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
-        }
-    });
+    // sessions take the time a shell and Claude take to start. Not by a
+    // server with a state directory of its own (a test's, or a worktree's
+    // build run by hand), which shares your home: there it would write over
+    // the plugin every pane of your workspace loads.
+    if !crate::setup::state_of_its_own() {
+        tokio::task::spawn_blocking(|| {
+            if let Err(e) = crate::setup::plugin::write_quietly() {
+                eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
+            }
+        });
+    }
     let mut server = Server::new(tx, pane_tx);
     let (bindings, problems) = Bindings::load();
     server.bindings = bindings;

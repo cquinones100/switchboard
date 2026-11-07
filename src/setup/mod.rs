@@ -919,13 +919,20 @@ fn build_mark() -> String {
     format!("{} {hash:016x}", crate::update::version_line())
 }
 
+/// Whether this run has a state directory of its own
+/// (`SWITCHBOARD_STATE_DIR`: a test's, or a worktree's build run by hand),
+/// which shares your home, so what it wrote of Switchboard's parts there
+/// would be its version in place of the one your workspace runs. Such a run
+/// writes none of them by itself: neither `refresh` nor its server's start.
+pub fn state_of_its_own() -> bool {
+    std::env::var_os("SWITCHBOARD_STATE_DIR").is_some_and(|d| !d.is_empty())
+}
+
 /// The first run of a new build: the plugin written and the parts already
 /// set up brought up to date, quietly, as `switchboard` attaches. Not in a
-/// run with a state directory of its own (a try of a worktree's build, or a
-/// test's), which shares your home and would put its version of the skills
-/// in it.
+/// run with a state directory of its own (`state_of_its_own`).
 pub fn refresh() {
-    if std::env::var_os("SWITCHBOARD_STATE_DIR").is_some() {
+    if state_of_its_own() {
         return;
     }
     refresh_now();
