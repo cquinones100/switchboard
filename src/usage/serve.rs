@@ -325,25 +325,38 @@ impl Server {
 
     /// Every tab with its number in its session, the sessions in order.
     fn usage_tab_list(&self) -> Vec<(TabId, usize)> {
+        // The Notifications window is no tab (src/sidebar/notices.rs).
         self.sessions
             .iter()
             .flat_map(|s| s.tabs.iter().enumerate().map(|(i, t)| (*t, i + 1)))
+            .filter(|(t, _)| !self.is_notices_tab(*t))
             .collect()
     }
 
-    /// The tabs running Claude, for Sessions.
+    /// The tabs running Claude, for Sessions, each quiet while the sidebar
+    /// has it idle or finished (sessions.js read the tab's state), so one
+    /// looping in the background or stopped on an API error isn't.
     fn usage_claude_tabs(&self) -> Vec<ClaudeTab> {
+        use crate::sidebar::model::TabState;
+        let states: HashMap<TabId, TabState> = self
+            .sidebar_all_tabs()
+            .into_iter()
+            .map(|t| (t.id, t.state))
+            .collect();
         self.usage_tab_list()
             .into_iter()
             .filter_map(|(tab, index)| {
                 let panes = self.tabs.get(&tab)?.layout.panes();
                 let claude = panes.iter().find_map(|p| self.usage.claudes.get(p))?;
-                let state = self.tab_agent(tab);
+                let quiet = match states.get(&tab) {
+                    Some(state) => matches!(state, TabState::Idle | TabState::Done),
+                    None => matches!(self.tab_agent(tab), None | Some(agent::State::Done)),
+                };
                 Some(ClaudeTab {
                     tab,
                     index,
                     name: self.tab_label(tab),
-                    quiet: matches!(state, None | Some(agent::State::Done)),
+                    quiet,
                     claude: claude.clone(),
                 })
             })

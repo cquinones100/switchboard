@@ -161,7 +161,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "hosts",
                 "Chrome profiles",
                 Kind::Map,
-                "The Chrome profile each site's links open in (site=Profile 2, the profile's folder as chrome://version names it); any other site opens in the default profile",
+                "The Chrome profile each site's links open in (site=Profile 2, the profile's folder as chrome://version names it), awsapps.com for the palette's AWS login; any other site opens in the default profile",
             ),
             row(
                 "default",

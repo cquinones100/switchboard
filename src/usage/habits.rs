@@ -311,7 +311,12 @@ pub const TRIES: &[Try] = &[
     },
     Try {
         key: "todo_note",
-        keys: &["M-N", "M-e", "@palette note-pick", "@palette note-tab"],
+        keys: &[
+            "M-N",
+            "M-e",
+            "@palette choose-tab-note",
+            "@palette note-tab",
+        ],
         times: 10,
         title: "Turn on today's todo note?",
         body: |n| {
@@ -763,7 +768,7 @@ mod tests {
             &[
                 ("key\tM-N", 6),
                 ("key\tM-e", 3),
-                ("palette\t@palette note-pick", 1),
+                ("palette\t@palette choose-tab-note", 1),
             ],
             &value,
         );

@@ -85,9 +85,19 @@ pub struct Claude {
     pub started_at: Option<i64>,
 }
 
-/// The interactive sessions' files (a headless `claude -p`'s are left out,
-/// since a tab's session is its own Claude's), by pid.
-pub fn session_files(dir: &Path) -> Vec<Claude> {
+/// A session file as far as these views need it: the session, whether it
+/// is a headless Claude's, and the background job it is, or it parked a
+/// conversation in.
+struct SessionFile {
+    claude: Claude,
+    headless: bool,
+    job_id: String,
+    parked_job_id: String,
+}
+
+/// Every session file in `dir`, a headless `claude -p`'s and a background
+/// job's included.
+fn read_files(dir: &Path) -> Vec<SessionFile> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -96,45 +106,90 @@ pub fn session_files(dir: &Path) -> Vec<Claude> {
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| util::read_json(e.path()))
         .filter_map(|v| {
-            let entry = v.get("entrypoint").and_then(Value::as_str).unwrap_or("");
-            if entry.starts_with("sdk") {
-                return None;
-            }
+            let text = |key: &str| v.get(key).and_then(Value::as_str).unwrap_or("").to_string();
             let pid = match v.get("pid") {
                 Some(Value::Number(n)) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
                 Some(Value::String(s)) => s.trim().parse().ok(),
                 _ => None,
-            }?;
-            let session_id = v.get("sessionId").and_then(Value::as_str)?.to_string();
+            }
+            .unwrap_or(0);
+            let session_id = text("sessionId");
             if session_id.is_empty() {
                 return None;
             }
-            Some(Claude {
-                pid,
-                session_id,
-                cwd: v.get("cwd").and_then(Value::as_str).map(PathBuf::from),
-                started_at: v.get("startedAt").and_then(Value::as_f64).map(|t| t as i64),
+            Some(SessionFile {
+                claude: Claude {
+                    pid,
+                    session_id,
+                    cwd: v.get("cwd").and_then(Value::as_str).map(PathBuf::from),
+                    started_at: v.get("startedAt").and_then(Value::as_f64).map(|t| t as i64),
+                },
+                headless: text("entrypoint").starts_with("sdk"),
+                job_id: text("jobId"),
+                parked_job_id: text("parkedJobId"),
             })
         })
         .collect()
 }
 
+/// The interactive sessions' files (a headless `claude -p`'s are left out,
+/// since a tab's session is its own Claude's), by pid.
+pub fn session_files(dir: &Path) -> Vec<Claude> {
+    read_files(dir)
+        .into_iter()
+        .filter(|f| !f.headless && f.claude.pid != 0)
+        .map(|f| f.claude)
+        .collect()
+}
+
+/// The conversation a session file's pane shows: its own, or, once it has
+/// moved the conversation into the background, the job carrying it on
+/// (the job's `jobId` is its `parkedJobId`, and a job may park one in
+/// turn), as claude.js's `sessionsByPane` followed it. The pid stays the
+/// pane's own process.
+fn followed(all: &[SessionFile], front: &SessionFile) -> Claude {
+    let mut current = front;
+    let mut seen = vec![front.claude.session_id.as_str()];
+    while !current.parked_job_id.is_empty() {
+        let Some(job) = all.iter().find(|o| {
+            o.job_id == current.parked_job_id && !seen.contains(&o.claude.session_id.as_str())
+        }) else {
+            break;
+        };
+        seen.push(&job.claude.session_id);
+        current = job;
+    }
+    Claude {
+        pid: front.claude.pid,
+        session_id: current.claude.session_id.clone(),
+        cwd: current
+            .claude
+            .cwd
+            .clone()
+            .or_else(|| front.claude.cwd.clone()),
+        started_at: current.claude.started_at.or(front.claude.started_at),
+    }
+}
+
 /// Which pane each running session is in: its process leads the group in
 /// front on the pane's terminal, or is a member of it (Claude started by
-/// `claude-here` runs as a child of a Node script). `panes` gives each pane's
+/// `claude-here` runs as a child of a Node script); a conversation moved
+/// into the background is followed to its job. `panes` gives each pane's
 /// group in front. Blocking: a file per session and a read per pid.
 pub fn claudes(panes: &[(PaneId, u32)], dir: &Path) -> HashMap<PaneId, Claude> {
     let by_group: HashMap<u32, PaneId> = panes.iter().map(|(p, g)| (*g, *p)).collect();
+    let all = read_files(dir);
     let mut found: HashMap<PaneId, Claude> = HashMap::new();
-    for claude in session_files(dir) {
+    for front in all.iter().filter(|f| !f.headless && f.claude.pid != 0) {
+        let pid = front.claude.pid;
         let pane = by_group
-            .get(&claude.pid)
-            .or_else(|| procinfo::group_of(claude.pid).and_then(|g| by_group.get(&g)));
+            .get(&pid)
+            .or_else(|| procinfo::group_of(pid).and_then(|g| by_group.get(&g)));
         if let Some(pane) = pane {
             // A process that leads the group wins over one inside it.
-            let leads = by_group.contains_key(&claude.pid);
+            let leads = by_group.contains_key(&pid);
             if leads || !found.contains_key(pane) {
-                found.insert(*pane, claude);
+                found.insert(*pane, followed(&all, front));
             }
         }
     }
@@ -648,6 +703,25 @@ mod tests {
         assert_eq!(found.len(), 1, "a headless Claude is no tab's");
         assert_eq!(found[&PaneId(1)].session_id, "abc-1");
         assert_eq!(found[&PaneId(1)].started_at, Some(1000));
+        // Moved into the background, the conversation is the job's.
+        fs::write(
+            dir.join("4242.json"),
+            json!({ "pid": 4242, "sessionId": "abc-1", "cwd": "/w", "startedAt": 1000,
+                    "parkedJobId": "job-7" })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("5000.json"),
+            json!({ "pid": 5000, "sessionId": "abc-2", "cwd": "/w", "startedAt": 2000,
+                    "jobId": "job-7", "entrypoint": "sdk-cli" })
+            .to_string(),
+        )
+        .unwrap();
+        let found = claudes(&[(PaneId(1), 4242)], &dir);
+        assert_eq!(found[&PaneId(1)].session_id, "abc-2");
+        assert_eq!(found[&PaneId(1)].started_at, Some(2000));
+        assert_eq!(found[&PaneId(1)].pid, 4242, "the pane's own process");
         let _ = fs::remove_dir_all(&dir);
     }
 }
