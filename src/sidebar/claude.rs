@@ -557,10 +557,16 @@ impl Seen {
             .unwrap_or(Value::String(String::new()));
         let text = content.to_string();
         let parts: Vec<Value> = content.as_array().cloned().unwrap_or_default();
-        // A loop's skill starting: typed as /<skill>, or run by the Skill tool.
+        // A loop's skill starting: typed as /<skill> (or with Switchboard's
+        // plugin's name, /switchboard:<skill>), or run by the Skill tool.
         for l in &LOOPS {
             if kind == "user"
-                && text.contains(&format!("<command-name>/{}</command-name>", l.skill))
+                && (text.contains(&format!("<command-name>/{}</command-name>", l.skill))
+                    || text.contains(&format!(
+                        "<command-name>/{}:{}</command-name>",
+                        crate::setup::plugin::NAME,
+                        l.skill
+                    )))
             {
                 self.loop_at.insert(l.kind, at);
             }
@@ -573,7 +579,9 @@ impl Seen {
             let field = |k: &str| input.and_then(|i| i.get(k));
             if ptype == "tool_use" {
                 if name == "Skill"
-                    && let Some(l) = LOOPS.iter().find(|l| str_of(field("skill")) == l.skill)
+                    && let Some(l) = LOOPS
+                        .iter()
+                        .find(|l| crate::setup::plugin::bare(str_of(field("skill"))) == l.skill)
                 {
                     self.loop_at.insert(l.kind, at);
                 }
@@ -1396,7 +1404,9 @@ mod tests {
         );
         let ci = "checks=$(gh pr checks 12 --json name,bucket)";
         t.add(&[end("r2a"), end("r2b")]);
-        t.add(&[json!({"type": "user", "timestamp": at(3_000), "message": {"content": "<command-name>/ci-loop</command-name>"}})]);
+        // Typed with Switchboard's plugin's name, as it is when a skill of
+        // yours has the bare one.
+        t.add(&[json!({"type": "user", "timestamp": at(3_000), "message": {"content": "<command-name>/switchboard:ci-loop</command-name>"}})]);
         t.add(&run("u5", "ci1", ci, 2_500));
         t.add(&[end("ci1")]);
         t.add(&run("u6", "ci2", ci, 1_000));

@@ -486,10 +486,10 @@ pub fn calendar_view(look: &Look) -> ViewData {
 }
 
 /// Whether a tab named `name` keeps the calendar: the Calendar tab with
-/// Claude in it.
+/// Claude in it, or one looping /today (or /switchboard:today).
 pub fn keeps_calendar(name: &str, runs_claude: bool, loop_prompt: Option<&str>) -> bool {
     (name == "Calendar" && runs_claude)
-        || loop_prompt.is_some_and(|p| p == "/today" || p.starts_with("/today "))
+        || loop_prompt.is_some_and(|p| crate::setup::plugin::runs(p, "today"))
 }
 
 // ── The next meeting ────────────────────────────────────────────────────────

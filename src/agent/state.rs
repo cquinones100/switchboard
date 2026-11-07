@@ -198,7 +198,9 @@ impl Hook {
                 .map(|p| slash_command(&p))
                 .unwrap_or_default()
         } else if tool == "Skill" {
-            field("skill").unwrap_or_default()
+            field("skill")
+                .map(|s| crate::setup::plugin::bare(&s).to_string())
+                .unwrap_or_default()
         } else {
             String::new()
         };
@@ -248,12 +250,14 @@ impl Hook {
 }
 
 /// The skill a prompt starts with (`/review-loop now` gives `review-loop`),
-/// as `^\s*/([a-z-]+)` captured it.
+/// as `^\s*/([a-z-]+)` captured it, Switchboard's plugin's name before it
+/// left out (`/switchboard:review-loop`, src/setup/plugin.rs).
 fn slash_command(prompt: &str) -> String {
     let Some(rest) = prompt.trim_start().strip_prefix('/') else {
         return String::new();
     };
-    rest.chars()
+    crate::setup::plugin::bare(rest)
+        .chars()
         .take_while(|c| c.is_ascii_lowercase() || *c == '-')
         .collect()
 }
@@ -703,6 +707,21 @@ mod tests {
         let agent = a.get(P).unwrap();
         assert_eq!(agent.loop_name.as_deref(), Some("queue"));
         assert_eq!(agent.activity.as_deref(), Some("/queue-and-clean"));
+        // Named with Switchboard's plugin's name, typed or by the tool.
+        on(
+            &mut a,
+            "UserPromptSubmit",
+            json!({"prompt": "/switchboard:review-loop all"}),
+            108,
+        );
+        assert_eq!(a.get(P).unwrap().loop_name.as_deref(), Some("review"));
+        on(
+            &mut a,
+            "PreToolUse",
+            json!({"tool_name": "Skill", "tool_input": {"skill": "switchboard:ci-loop"}}),
+            109,
+        );
+        assert_eq!(a.get(P).unwrap().loop_name.as_deref(), Some("ci"));
     }
 
     #[test]

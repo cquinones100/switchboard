@@ -358,10 +358,10 @@ pub fn stale(data: Option<&Saved>, now: i64) -> bool {
 }
 
 /// Whether a tab keeps the Slack view: the Slack tab with Claude in it, or
-/// one looping /slack-updates.
+/// one looping /slack-updates (or /switchboard:slack-updates).
 pub fn keeps_slack(name: &str, runs_claude: bool, loop_prompt: Option<&str>) -> bool {
     (name == "Slack" && runs_claude)
-        || loop_prompt.is_some_and(|p| p == "/slack-updates" || p.starts_with("/slack-updates "))
+        || loop_prompt.is_some_and(|p| crate::setup::plugin::runs(p, "slack-updates"))
 }
 
 // ── Saving a look (the skill's scripts/save.js) ─────────────────────────────
