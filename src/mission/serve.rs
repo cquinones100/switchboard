@@ -90,6 +90,30 @@ pub fn open_link(url: &str) -> anyhow::Result<()> {
     crate::links::open_url(url)
 }
 
+/// How long "Open it…" waits for the browser to come to the front, and,
+/// where the app in front can't be told (Linux), how long it holds anyway.
+const OPEN_WAIT: Duration = Duration::from_secs(8);
+const OPEN_HOLD: Duration = Duration::from_secs(1);
+
+/// Opens a link, then waits until another app comes to the front (the
+/// browser, or any you go to meanwhile, which leaves mission control out of
+/// sight anyway), at most `OPEN_WAIT`, so the busy box lasts until the page
+/// shows, as daemon.js's `openUrl` waited on `frontApp`; where the app in
+/// front can't be told, a moment. Blocking.
+fn open_and_wait(url: &str) -> anyhow::Result<()> {
+    let before = crate::platform::front_app();
+    open_link(url)?;
+    let Some(before) = before else {
+        std::thread::sleep(OPEN_HOLD);
+        return Ok(());
+    };
+    let until = Instant::now() + OPEN_WAIT;
+    while Instant::now() < until && crate::platform::front_app().as_deref() == Some(&*before) {
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
 /// What mission control opens on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Opening {
@@ -1390,7 +1414,7 @@ impl Server {
             Do::CloseMerged(list) => self.close_merged(client, list),
             Do::Open(url) => {
                 self.mission_busy(client, label, None, async move {
-                    let opened = tokio::task::spawn_blocking(move || open_link(&url)).await;
+                    let opened = tokio::task::spawn_blocking(move || open_and_wait(&url)).await;
                     match opened {
                         Ok(Ok(())) => None,
                         Ok(Err(e)) => Some(format!("Couldn't open it: {e}")),
@@ -1628,7 +1652,7 @@ impl Server {
                         if !yes {
                             return;
                         }
-                        server.mission_busy_with(client, "Closing it", async move {
+                        server.mission_busy_with(client, "Working on it", async move {
                             match crate::sources::tickets::close_ticket(&issue, &state).await {
                                 Ok(true) => (
                                     Some(format!("Moved {ticket} to {name}.")),
@@ -2212,33 +2236,38 @@ impl Server {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        self.mission_busy(client, "Removing it", Some(After::Worktrees), async move {
-            tokio::task::spawn_blocking(move || {
-                let Some((_, common)) = crate::sources::landing::git_of(&dir) else {
-                    return Some(format!("Kept {name}: not a git worktree."));
-                };
-                let main = common.parent().map(Path::to_path_buf).unwrap_or(common);
-                match util::output_of(
-                    std::process::Command::new("git")
-                        .arg("-C")
-                        .arg(&main)
-                        .args(["worktree", "remove"])
-                        .arg(&dir),
-                ) {
-                    Ok(_) => Some(format!("Removed {name}.")),
-                    Err(e) => {
-                        let why = e.to_string();
-                        let why = why.split_once(": ").map_or(why.as_str(), |(_, w)| w);
-                        Some(format!(
-                            "Kept {name}: {}",
-                            why.trim_start_matches("fatal: ")
-                        ))
+        self.mission_busy(
+            client,
+            "Working on it",
+            Some(After::Worktrees),
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    let Some((_, common)) = crate::sources::landing::git_of(&dir) else {
+                        return Some(format!("Kept {name}: not a git worktree."));
+                    };
+                    let main = common.parent().map(Path::to_path_buf).unwrap_or(common);
+                    match util::output_of(
+                        std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(&main)
+                            .args(["worktree", "remove"])
+                            .arg(&dir),
+                    ) {
+                        Ok(_) => Some(format!("Removed {name}.")),
+                        Err(e) => {
+                            let why = e.to_string();
+                            let why = why.split_once(": ").map_or(why.as_str(), |(_, w)| w);
+                            Some(format!(
+                                "Kept {name}: {}",
+                                why.trim_start_matches("fatal: ")
+                            ))
+                        }
                     }
-                }
-            })
-            .await
-            .unwrap_or(None)
-        });
+                })
+                .await
+                .unwrap_or(None)
+            },
+        );
     }
 
     /// Every merged tab closed and its worktree removed, asked first: one
@@ -2269,45 +2298,50 @@ impl Server {
                 for t in &list {
                     server.kill_tab(*t);
                 }
-                server.mission_busy(client, "Closing them", Some(After::Worktrees), async move {
-                    let kept = tokio::task::spawn_blocking(move || {
-                        let mut kept = Vec::new();
-                        for path in paths {
-                            let text = path.to_string_lossy().into_owned();
-                            let Some((main, _)) = text.split_once("/.claude/worktrees/") else {
-                                continue;
-                            };
-                            let mut git = std::process::Command::new("git");
-                            git.arg("-C").arg(main).arg("worktree");
-                            if path.exists() {
-                                git.arg("remove").arg(&path);
-                            } else {
-                                git.arg("prune");
+                server.mission_busy(
+                    client,
+                    "Working on it",
+                    Some(After::Worktrees),
+                    async move {
+                        let kept = tokio::task::spawn_blocking(move || {
+                            let mut kept = Vec::new();
+                            for path in paths {
+                                let text = path.to_string_lossy().into_owned();
+                                let Some((main, _)) = text.split_once("/.claude/worktrees/") else {
+                                    continue;
+                                };
+                                let mut git = std::process::Command::new("git");
+                                git.arg("-C").arg(main).arg("worktree");
+                                if path.exists() {
+                                    git.arg("remove").arg(&path);
+                                } else {
+                                    git.arg("prune");
+                                }
+                                if util::output_of(&mut git).is_err() {
+                                    kept.push(
+                                        path.file_name()
+                                            .map(|f| f.to_string_lossy().into_owned())
+                                            .unwrap_or_default(),
+                                    );
+                                }
                             }
-                            if util::output_of(&mut git).is_err() {
-                                kept.push(
-                                    path.file_name()
-                                        .map(|f| f.to_string_lossy().into_owned())
-                                        .unwrap_or_default(),
-                                );
-                            }
+                            kept
+                        })
+                        .await
+                        .unwrap_or_default();
+                        let mut said =
+                            format!("Closed {n} merged tab{}", if n == 1 { "" } else { "s" });
+                        if !kept.is_empty() {
+                            said.push_str(&format!(
+                                "; kept the worktree{} with uncommitted changes: {}",
+                                if kept.len() == 1 { "" } else { "s" },
+                                kept.join(", ")
+                            ));
                         }
-                        kept
-                    })
-                    .await
-                    .unwrap_or_default();
-                    let mut said =
-                        format!("Closed {n} merged tab{}", if n == 1 { "" } else { "s" });
-                    if !kept.is_empty() {
-                        said.push_str(&format!(
-                            "; kept the worktree{} with uncommitted changes: {}",
-                            if kept.len() == 1 { "" } else { "s" },
-                            kept.join(", ")
-                        ));
-                    }
-                    said.push('.');
-                    Some(said)
-                });
+                        said.push('.');
+                        Some(said)
+                    },
+                );
             },
         );
     }

@@ -468,7 +468,7 @@ A click on a view's name goes to that view, a click on the filter starts typing 
 
 ### Menus
 
-Enter on a card or row opens a menu of what can be done with it, its usual action first, so Enter twice does it. `j` `k` move, Enter or Space takes the chosen option and a number takes that option; its options have no letters of their own, as the tmux version's had none, so a letter never acts ahead of moving. Esc or `q` goes back. With Settings' "Click in menus" (`menu_mouse`) on, a click takes an option and a click outside closes the menu. An option that takes a moment (opening a link, asking Linear, removing a worktree) shows a box with a spinner until it is done, and what it did is said at the bottom of the screen.
+Enter on a card or row opens a menu of what can be done with it, its usual action first, so Enter twice does it. `j` `k` move, Enter or Space takes the chosen option and a number takes that option; its options have no letters of their own, as the tmux version's had none, so a letter never acts ahead of moving. Esc or `q` goes back. With Settings' "Click in menus" (`menu_mouse`) on, a click takes an option and a click outside closes the menu. An option that takes a moment (opening a link, asking Linear, removing a worktree) shows a box with a spinner until it is done (a link until the browser comes to the front, up to eight seconds, or a moment on Linux, where that can't be told), and what it did is said at the bottom of the screen.
 
 On a tab, the menu offers:
 
