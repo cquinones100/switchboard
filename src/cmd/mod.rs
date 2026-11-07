@@ -8,6 +8,7 @@
 
 use std::process::ExitCode;
 
+pub mod apply_actions;
 pub mod aws_login;
 pub mod claude_context;
 pub mod claude_here;
@@ -194,6 +195,16 @@ pub const COMMANDS: &[Command] = &[
         name: "land-lock",
         run: land_lock::main,
         about: "The landing lock and queue",
+    },
+    Command {
+        name: "apply-actions",
+        run: apply_actions::main,
+        about: "What a landed change needs to take effect here, one action a line",
+    },
+    Command {
+        name: "apply",
+        run: apply_actions::apply_main,
+        about: "Put a change to Switchboard into effect: install (build the clone and put it in place) or relay (restart it)",
     },
     Command {
         name: "wait-deploy",

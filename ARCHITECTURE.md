@@ -51,6 +51,7 @@ Shared by every part:
 | `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for where gh looked (`gh repo set-default`, else upstream when origin is a fork) |
 | `worktree` | What the worktree commands share |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
+| `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name` |
 
 The workspace:
 
@@ -75,7 +76,7 @@ The workspace:
 | `setup` | `switchboard setup`: Switchboard's plugin for Claude Code (its hooks, skills and instructions), or the same in `~/.claude` the old way, and which way (`way`); Claude Code's statusline and permissions; your CLAUDE.md; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
 | `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab and naming a new one, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
-| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `wait-deploy` and the rest) |
+| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `apply-actions`, `wait-deploy` and the rest) |
 
 `src/lib.rs` lists them with a line each, and every module opens with a comment saying what it is and why it works as it does.
 
@@ -83,7 +84,7 @@ The workspace:
 
 | What | Where |
 | --- | --- |
-| Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
+| Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `repos.json`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
 | State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), setup's note that an earlier install kept in `~/.claude` hasn't been asked about the plugin yet (`claude-plugin-unasked`), and the statusline's `context/` and `usage/` |
 | The Slack relay's state | `~/.local/state/slack-relay/`, where the Node relay kept it |
 | Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies, what the PR and ticket image views load and draw (`assets/`, `pr-image/pages/`, held to 300 MB together), the PRs and ticket titles the tabs show (`tab-names.json`); `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |

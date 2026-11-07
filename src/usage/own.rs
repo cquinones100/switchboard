@@ -274,6 +274,14 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "repos.json",
+        category: "Your files",
+        rows: &[whole(
+            "Repositories",
+            "Each repository's own settings by its origin's owner/name, such as the apply list of what a landed change needs to take effect",
+        )],
+    },
+    OwnFile {
         file: "trusted-dirs",
         category: "Your files",
         rows: &[whole(
