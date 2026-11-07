@@ -2376,7 +2376,11 @@ fn open_link(url: String) {
 
 /// The terminal as the app wants it while it runs, and put back however it
 /// ends: raw, on the alternate screen, clicks, drags and the wheel reported
-/// (every movement too with the hover on), pastes bracketed and focus told.
+/// (every movement too with the hover on), pastes bracketed and focus told,
+/// and keys told apart (the kitty keyboard protocol's flag 1, and
+/// modifyOtherKeys where the terminal knows only that), as Neovim asked for
+/// them, so Ctrl-Shift-P reaches the app as itself rather than as Ctrl-P.
+/// In a pane the workspace sends keys so only while the app asks.
 struct Term;
 
 impl Term {
@@ -2384,7 +2388,7 @@ impl Term {
         crossterm::terminal::enable_raw_mode()?;
         let mut out = std::io::stdout();
         out.write_all(
-            b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004h",
+            b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[?1004h\x1b[>4;2m\x1b[>1u",
         )?;
         if motion {
             out.write_all(b"\x1b[?1003h")?;
@@ -2398,7 +2402,7 @@ impl Drop for Term {
     fn drop(&mut self) {
         let mut out = std::io::stdout();
         let _ = out.write_all(
-            b"\x1b[?1004l\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[2 q\x1b[?25h\x1b[?1049l",
+            b"\x1b[<u\x1b[>4m\x1b[?1004l\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[2 q\x1b[?25h\x1b[?1049l",
         );
         let _ = out.flush();
         let _ = crossterm::terminal::disable_raw_mode();

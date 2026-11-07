@@ -26,6 +26,12 @@
 //! palette indexes, so your own terminal's colors apply, and the program's
 //! default colors are your terminal's default; only a color the program
 //! set itself (OSC 4, 10, 11) is drawn as the color it set.
+//!
+//! What is sent to the program follows the modes it set (`modes`), keys
+//! among them: in the CSI u form when it asked for keys told apart, through
+//! the kitty keyboard protocol (which the emulator keeps) or modifyOtherKeys
+//! (which `extkeys` watches the output for), the old bytes otherwise, as
+//! tmux's `extended-keys on` gave them.
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
@@ -50,6 +56,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::extkeys::ModifyOtherKeys;
 use super::{MouseReporting, PaneEvent, PaneId, PaneModes, TermNotice};
 
 /// What to start in a new pane.
@@ -67,6 +74,10 @@ pub struct PaneSpawn {
     pub rows: u16,
     /// Lines of scrollback kept.
     pub scrollback: usize,
+    /// Whether the program may ask for keys the old forms can't tell apart
+    /// (the kitty keyboard protocol, modifyOtherKeys) and get them so: the
+    /// `extended_keys` setting.
+    pub extended_keys: bool,
 }
 
 /// How a pane is drawn this time.
@@ -129,6 +140,9 @@ pub struct Pane {
     /// Picking kitty's graphics commands out of the output, while the pane
     /// is allowed to send them on (`pass_graphics`).
     graphics: Option<super::passthrough::Scanner>,
+    /// The modifyOtherKeys level the program set, watched for in its output
+    /// when it may ask for extended keys (`extkeys`).
+    other_keys: Option<ModifyOtherKeys>,
 }
 
 /// Collects what the emulator reports while it reads, for `process` to
@@ -175,6 +189,22 @@ impl Dimensions for Size {
     fn columns(&self) -> usize {
         self.cols
     }
+}
+
+/// The kitty keyboard protocol's flags as the protocol numbers them, from
+/// the emulator's modes.
+fn kitty_flags(mode: TermMode) -> u8 {
+    [
+        (TermMode::DISAMBIGUATE_ESC_CODES, 1),
+        (TermMode::REPORT_EVENT_TYPES, 2),
+        (TermMode::REPORT_ALTERNATE_KEYS, 4),
+        (TermMode::REPORT_ALL_KEYS_AS_ESC, 8),
+        (TermMode::REPORT_ASSOCIATED_TEXT, 16),
+    ]
+    .iter()
+    .filter(|(flag, _)| mode.contains(*flag))
+    .map(|(_, bit)| bit)
+    .sum()
 }
 
 /// The emulator needs two columns and a line at least; a pane squeezed
@@ -269,6 +299,9 @@ impl Pane {
             // asks for it is answered, with nothing: the clipboard is
             // yours, not every program's.
             osc52: Osc52::CopyPaste,
+            // The emulator keeps the kitty keyboard protocol's flags a
+            // program sets, and answers its query for them, only when told to.
+            kitty_keyboard: spec.extended_keys,
             ..Config::default()
         };
         let size = Size {
@@ -294,6 +327,7 @@ impl Pane {
             exited: None,
             anchor_side: Side::Left,
             graphics: None,
+            other_keys: spec.extended_keys.then(ModifyOtherKeys::default),
         })
     }
 
@@ -341,6 +375,9 @@ impl Pane {
                 .collect(),
             None => Vec::new(),
         };
+        if let Some(keys) = &mut self.other_keys {
+            keys.feed(bytes);
+        }
         if self.sync_deadline().is_some_and(|at| at <= Instant::now()) {
             self.parser.stop_sync(&mut self.term);
         }
@@ -472,6 +509,8 @@ impl Pane {
             mouse_utf8: mode.contains(TermMode::UTF8_MOUSE),
             alt_screen: mode.contains(TermMode::ALT_SCREEN),
             alternate_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+            kitty_keys: kitty_flags(mode),
+            modify_other_keys: self.other_keys.as_ref().map_or(0, ModifyOtherKeys::level),
         }
     }
 
@@ -1659,6 +1698,61 @@ mod tests {
         run.pane.process(b"\x1b[?1003l\x1b[?1007l");
         assert_eq!(run.pane.modes().mouse, MouseReporting::Off);
         assert!(!run.pane.modes().alternate_scroll);
+    }
+
+    #[test]
+    fn keys_told_apart_follow_what_the_program_asked() {
+        let home = scratch("keys");
+        let spawn = |extended_keys| {
+            let (tx, _rx) = unbounded_channel();
+            Pane::spawn(
+                PaneSpawn {
+                    command: Some(vec!["sleep".into(), "30".into()]),
+                    env: vec![("HOME".into(), home.display().to_string())],
+                    cols: 20,
+                    rows: 4,
+                    extended_keys,
+                    ..PaneSpawn::default()
+                },
+                tx,
+            )
+            .expect("spawn")
+        };
+        use crate::mux::input::{Key, encode_key};
+        let ctrl_shift_p = Key::parse("C-S-p").unwrap();
+        let sent = |pane: &Pane| encode_key(&ctrl_shift_p, &pane.modes());
+
+        let mut pane = spawn(true);
+        assert_eq!(
+            (pane.modes().kitty_keys, pane.modes().modify_other_keys),
+            (0, 0)
+        );
+        assert_eq!(sent(&pane), b"\x10", "a shell gets Ctrl-P's byte");
+        // Neovim's way and Notes' first: the kitty protocol, pushed and popped.
+        pane.process(b"\x1b[>1u");
+        assert_eq!(pane.modes().kitty_keys, 1);
+        assert_eq!(sent(&pane), b"\x1b[112;6u");
+        pane.process(b"\x1b[<u");
+        assert_eq!(pane.modes().kitty_keys, 0);
+        // Then modifyOtherKeys, which the emulator doesn't keep itself.
+        pane.process(b"\x1b[>4;2m");
+        assert_eq!(pane.modes().modify_other_keys, 2);
+        assert_eq!(sent(&pane), b"\x1b[112;6u");
+        pane.process(b"\x1b[>4;0m");
+        assert_eq!(pane.modes().modify_other_keys, 0);
+        assert_eq!(sent(&pane), b"\x10");
+        pane.kill();
+
+        // With the setting off, a program asking is a plain terminal's.
+        let mut plain = spawn(false);
+        plain.process(b"\x1b[>1u\x1b[>4;2m");
+        assert_eq!(
+            (plain.modes().kitty_keys, plain.modes().modify_other_keys),
+            (0, 0)
+        );
+        assert_eq!(sent(&plain), b"\x10");
+        plain.kill();
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

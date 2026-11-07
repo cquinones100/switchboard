@@ -886,6 +886,7 @@ impl Server {
             cols: cols.max(1),
             rows: rows.max(1),
             scrollback: HISTORY,
+            extended_keys: crate::settings::is_on("extended_keys"),
         };
         Pane::spawn(spec, self.pane_tx.clone())
     }
@@ -1499,7 +1500,9 @@ impl Server {
                 }
             }
             Input::Unknown => {
-                if let Some(slot) = self.current_pane(id).and_then(|p| self.panes.get_mut(&p)) {
+                if let Some(slot) = self.current_pane(id).and_then(|p| self.panes.get_mut(&p))
+                    && input::passes_unknown(&parsed.raw, &slot.pane.modes())
+                {
                     let _ = slot.pane.write(&parsed.raw);
                 }
             }

@@ -163,6 +163,12 @@ On a Mac, every `M-` key needs the terminal to send Option as Alt; otherwise Opt
 
 On Linux, terminals send Alt this way already. Where Option doesn't act as Alt, the first of `˙` `∆` `˚` `¬` (what Option+h, j, k and l type) brings a tip saying so, once; each still reaches the pane.
 
+### Keys told apart
+
+An old terminal sends some keys as the same bytes: Ctrl-Shift-P as Ctrl-P, Shift-Enter as Enter, Ctrl-I as Tab. So, as tmux's `extended-keys on` did, Switchboard asks your terminal to send such keys as keys of their own, through the kitty keyboard protocol or xterm's modifyOtherKeys, whichever it knows (Ghostty, kitty, WezTerm, Alacritty, foot, iTerm2 and xterm each know one), and gives back what it asked for when it lets go of the terminal. A terminal that knows neither sends the keys as before.
+
+A program in a pane gets a key so only when it asked for keys told apart the same way, as Notes, Neovim, Helix and fish do: Ctrl-Shift-P reaches Notes as Ctrl-Shift-P, which opens its palette, while a shell, which asked for nothing, still gets Ctrl-P's byte. Settings' "Extended keys" (`extended_keys`, Help) turned off asks the terminal for nothing, and every program gets the keys a plain terminal sends; it takes effect when a terminal next attaches, and in panes opened after.
+
 ### Changing the keys
 
 `~/.config/switchboard/keys.json` adds keys, changes them or takes them away, over the defaults above. It has up to three parts: `prefix-key`, the key that starts the prefix; `root`, keys pressed alone; and `prefix`, keys pressed after the prefix. Each key names an action, or `null` to unbind it:
@@ -1692,6 +1698,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Key help line (`key_help_line`) | on | With Easy mode on, a line at the bottom of Notes and M-d's diff naming the keys that work there |
 | Alt-arrows move between panes (`pane_arrows`) | on | M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do in Vim; off, they reach the pane |
 | C-w then h, j, k or l moves between panes (`ctrl_w_panes`) | on | C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt |
+| Extended keys (`extended_keys`) | on | Your terminal is asked to tell keys such as Ctrl-Shift-P from Ctrl-P and Shift-Enter from Enter, and a program that asks for them (Notes, Neovim) gets them so, while the rest get the keys as before; off, every key reaches every program as a plain terminal sends it. Takes effect when a terminal next attaches and for panes opened after |
 
 ### Updates
 

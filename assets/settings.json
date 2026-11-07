@@ -634,6 +634,13 @@
     "default": true
   },
   {
+    "key": "extended_keys",
+    "category": "Help",
+    "label": "Extended keys",
+    "description": "Your terminal is asked to tell keys such as Ctrl-Shift-P from Ctrl-P and Shift-Enter from Enter, as tmux's extended-keys did, and a program that asks for them (Notes, Neovim, the kitty keyboard protocol's) gets them so, while the rest get the keys as before; off, every key reaches every program as a plain terminal sends it. Takes effect when a terminal next attaches and for panes opened after",
+    "default": true
+  },
+  {
     "key": "update_check",
     "category": "Updates",
     "label": "Update check",

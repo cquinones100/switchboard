@@ -1,5 +1,6 @@
 //! The attached terminal: raw mode, the alternate screen, mouse, focus and
-//! paste reporting on; what is typed goes to the server, what the server
+//! paste reporting on, and keys told apart (Ctrl-Shift-P from Ctrl-P) where
+//! the terminal can; what is typed goes to the server, what the server
 //! draws goes to the terminal; a resize is sent as it happens. However it
 //! ends (detached, the server gone, a signal), the terminal is put back as
 //! it was.
@@ -46,6 +47,18 @@ const ENTER: &[u8] = b"\x1b[?1049h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x
 /// cursor, colors) with it, then back to the normal screen.
 const LEAVE: &[u8] = b"\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1004l\x1b[?2004l\x1b[?25h\x1b[0m\x1b[?1049l";
 
+/// Asked of the terminal after `ENTER` while the `extended_keys` setting is
+/// on, as tmux's `extended-keys on` asked it: xterm's modifyOtherKeys at
+/// level 2, and the kitty keyboard protocol's flag that tells keys apart,
+/// pushed onto its stack for the alternate screen. A terminal that knows
+/// both uses kitty's; one that knows neither ignores them, and the keys
+/// come as before. Either way the server reads every form (`input`).
+const KEYS_ON: &[u8] = b"\x1b[>4;2m\x1b[>1u";
+
+/// What `KEYS_ON` asked taken back: the flags popped off the alternate
+/// screen's stack (so before `LEAVE` leaves it), modifyOtherKeys reset.
+const KEYS_OFF: &[u8] = b"\x1b[<u\x1b[>4m";
+
 /// How much is read from the terminal at once.
 const READ_SIZE: usize = 4096;
 
@@ -69,6 +82,8 @@ struct Attached {
     input: RawFd,
     output: RawFd,
     saved: libc::termios,
+    /// Whether `KEYS_ON` was asked, so `KEYS_OFF` takes it back.
+    keys: bool,
 }
 
 static ATTACHED: Mutex<Option<Attached>> = Mutex::new(None);
@@ -126,7 +141,8 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
         Signals::install().context("couldn't set up the signal handlers")?;
     let (cols, rows) = window_size(libc::STDOUT_FILENO);
     let term = std::env::var("TERM").unwrap_or_default();
-    let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO)
+    let keys = crate::settings::is_on("extended_keys");
+    let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO, keys)
         .context("couldn't set up the terminal")?;
     let hello = ClientMsg::Attach {
         session,
@@ -336,8 +352,9 @@ struct Terminal;
 
 impl Terminal {
     /// Saves `input`'s settings, makes it raw and turns the modes in `ENTER`
-    /// on through `output`. Any failure on the way puts back what was done.
-    fn enter(input: RawFd, output: RawFd) -> io::Result<Terminal> {
+    /// on through `output`, and with `keys` asks for `KEYS_ON`. Any failure
+    /// on the way puts back what was done.
+    fn enter(input: RawFd, output: RawFd, keys: bool) -> io::Result<Terminal> {
         // SAFETY: tcgetattr fills the termios it is given.
         let mut saved: libc::termios = unsafe { std::mem::zeroed() };
         if unsafe { libc::tcgetattr(input, &mut saved) } != 0 {
@@ -355,6 +372,7 @@ impl Terminal {
             input,
             output,
             saved,
+            keys,
         });
         let terminal = Terminal;
         // SAFETY: tcsetattr reads the termios it is given.
@@ -362,6 +380,9 @@ impl Terminal {
             return Err(io::Error::last_os_error());
         }
         write_screen(ENTER)?;
+        if keys {
+            write_screen(KEYS_ON)?;
+        }
         Ok(terminal)
     }
 }
@@ -381,6 +402,9 @@ fn restore_terminal() {
     };
     // A terminal that has gone (its window closed) can't be put back, and
     // there is no one to tell.
+    if term.keys {
+        let _ = write_fd(term.output, KEYS_OFF);
+    }
     let _ = write_fd(term.output, LEAVE);
     // SAFETY: tcsetattr reads the termios it is given.
     unsafe { libc::tcsetattr(term.input, libc::TCSANOW, &term.saved) };
@@ -858,7 +882,7 @@ mod tests {
         assert_ne!(before.c_lflag & libc::ICANON, 0, "a new pty is cooked");
         let fd = pty.slave.as_raw_fd();
 
-        let terminal = Terminal::enter(fd, fd).unwrap();
+        let terminal = Terminal::enter(fd, fd, false).unwrap();
         assert_eq!(pty.read_until(ENTER), ENTER);
         let raw = pty.settings();
         assert_eq!(raw.c_lflag & (libc::ICANON | libc::ECHO | libc::ISIG), 0);
@@ -878,11 +902,24 @@ mod tests {
     }
 
     #[test]
+    fn extended_keys_are_asked_for_on_the_alternate_screen_and_taken_back_there() {
+        let _lock = terminal_lock();
+        let pty = Pty::open();
+        let fd = pty.slave.as_raw_fd();
+        let terminal = Terminal::enter(fd, fd, true).unwrap();
+        let on = [ENTER, KEYS_ON].concat();
+        assert_eq!(pty.read_until(&on), on);
+        drop(terminal);
+        let off = [KEYS_OFF, LEAVE].concat();
+        assert_eq!(pty.read_until(&off), off);
+    }
+
+    #[test]
     fn a_terminal_that_is_not_one_is_refused() {
         let _lock = terminal_lock();
         let tmp = TempDir::new();
         let file = File::create(tmp.path().join("not-a-tty")).unwrap();
-        assert!(Terminal::enter(file.as_raw_fd(), file.as_raw_fd()).is_err());
+        assert!(Terminal::enter(file.as_raw_fd(), file.as_raw_fd(), false).is_err());
         assert!(ATTACHED.lock().unwrap().is_none());
     }
 
@@ -926,7 +963,7 @@ mod tests {
         let _lock = terminal_lock();
         let pty = Pty::open();
         let fd = pty.slave.as_raw_fd();
-        let terminal = Terminal::enter(fd, fd).unwrap();
+        let terminal = Terminal::enter(fd, fd, false).unwrap();
         pty.read_until(ENTER);
 
         let (client, server) = UnixStream::pair().unwrap();
@@ -978,7 +1015,7 @@ mod tests {
         let _lock = terminal_lock();
         let pty = Pty::open();
         let fd = pty.slave.as_raw_fd();
-        let terminal = Terminal::enter(fd, fd).unwrap();
+        let terminal = Terminal::enter(fd, fd, false).unwrap();
 
         let (client, server) = UnixStream::pair().unwrap();
         let mut server = FakeServer(server);
@@ -1006,7 +1043,7 @@ mod tests {
         let _lock = terminal_lock();
         let pty = Pty::open();
         let fd = pty.slave.as_raw_fd();
-        let terminal = Terminal::enter(fd, fd).unwrap();
+        let terminal = Terminal::enter(fd, fd, false).unwrap();
 
         let (client, server) = UnixStream::pair().unwrap();
         let mut server = FakeServer(server);

@@ -8,6 +8,7 @@
 //! - `client`: the attached terminal: raw mode in, the drawn screen out.
 //! - `input`: the bytes a terminal sends, as keys, mouse and paste, and keys
 //!   encoded again for a pane in the modes its program asked for.
+//! - `extkeys`: xterm's modifyOtherKeys as a pane's program sets it.
 //! - `pane`: one pane's PTY and terminal emulator, drawn into a cell buffer.
 //! - `procinfo`: a pane's processes: their directory and command.
 //! - `layout`: a tab's panes as a tree of splits.
@@ -23,6 +24,7 @@
 pub mod client;
 pub mod commands;
 pub mod compose;
+pub mod extkeys;
 pub mod input;
 pub mod keys;
 pub mod layout;
@@ -128,6 +130,14 @@ pub struct PaneModes {
     /// The wheel sends arrow keys on the alternate screen (alacritty's
     /// ALTERNATE_SCROLL, 1007), for programs that don't take the mouse.
     pub alternate_scroll: bool,
+    /// The kitty keyboard protocol's flags the program set (`CSI > 1 u`
+    /// and the rest): 1 has keys the old forms can't tell apart sent as
+    /// CSI u, 8 every key, 16 with the text it types. 0 when it set none.
+    pub kitty_keys: u8,
+    /// xterm's modifyOtherKeys level the program set (`CSI > 4 ; 2 m`): 1
+    /// has the keys the old forms lose a modifier of sent as CSI u, 2 every
+    /// key with Ctrl or Alt. 0 when it set none.
+    pub modify_other_keys: u8,
 }
 
 /// What a pane's terminal emulator reports to the server after it has read

@@ -331,3 +331,37 @@ fn the_cmd_keys_reach_only_a_pane_marked_for_them() {
     client.type_text("marked\r");
     client.wait_text("^[[115;8umarked");
 }
+
+#[test]
+fn ctrl_shift_p_reaches_a_program_that_asked_for_it_and_a_shell_gets_ctrl_p() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // Ctrl-Shift-P as a terminal sends it under the kitty keyboard protocol,
+    // and under modifyOtherKeys, to a program that asked for neither: the
+    // byte Ctrl-P types, from both.
+    let pane = first_pane(&server);
+    server.ok(&["send-keys", "-t", &pane, "-l", "cat -v"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.type_text("\x1b[112;6u\x1b[27;6;112~plain\r");
+    client.wait_text("^P^Pplain");
+
+    // A program that asks for keys told apart, either way, gets it whole.
+    for (ask, said) in [("\\033[>1u", "kitty"), ("\\033[>4;2m", "xterm")] {
+        let script = format!("printf '{ask}ready-{said}\\n'; exec cat -v");
+        server.ok(&["new-tab", "-n", said, "--", "sh", "-c", &script]);
+        client.wait_text(&format!("ready-{said}"));
+        client.type_text("\x1b[112;6u");
+        client.type_text(&format!("{said}\r"));
+        client.wait_text(&format!("^[[112;6u{said}"));
+    }
+
+    // Notes asks for them, and opens its palette on Ctrl-Shift-P.
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] a thing\n").unwrap();
+    server.ok(&["new-tab", "-n", "notes", "--", common::BIN, "notes"]);
+    client.wait_text("Plan");
+    client.type_text("\x1b[112;6u");
+    client.wait_text("command>");
+}

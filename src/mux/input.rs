@@ -24,8 +24,17 @@
 //! go as it stands, so a terminal that never ends one can't swallow every key
 //! typed after it.
 //!
+//! The client asks your terminal for keys told apart (`client::KEYS_ON`), as
+//! tmux's `extended-keys on` did, so Ctrl-Shift-P can come as the kitty
+//! keyboard protocol's `CSI 112;6u` or modifyOtherKeys' `CSI 27;6;112~`
+//! rather than Ctrl-P's byte; both are read as the same key, and bindings
+//! match it whichever form it came in.
+//!
 //! Encoding goes the other way, as xterm sends keys, mouse and paste to a
-//! program, in the modes the pane's program set (`PaneModes`).
+//! program, in the modes the pane's program set (`PaneModes`): a key in the
+//! CSI u form only to a program that asked for keys told apart, through the
+//! kitty protocol or modifyOtherKeys, so Notes gets Ctrl-Shift-P while a
+//! shell still gets Ctrl-P's byte for it.
 
 use std::time::{Duration, Instant};
 
@@ -1012,9 +1021,14 @@ fn mouse(code: u32, x: u32, y: u32, form: Form, held: &mut Option<MouseButton>) 
     }))
 }
 
-/// The bytes a key is sent to a pane as, in its modes.
+/// The bytes a key is sent to a pane as, in its modes: in the CSI u form
+/// when its program asked for keys told apart and this is one it wants so
+/// (`extended`), else as a terminal has always sent it.
 pub fn encode_key(key: &Key, modes: &PaneModes) -> Vec<u8> {
     let key = key.normalized();
+    if let Some(bytes) = extended(&key, modes) {
+        return bytes;
+    }
     let mods = key.mods;
     let mut out = Vec::new();
     // The keys sent as a byte or two: Alt is an ESC in front.
@@ -1060,6 +1074,102 @@ pub fn encode_key(key: &Key, modes: &PaneModes) -> Vec<u8> {
         KeyCode::F(_) => {}
     }
     out
+}
+
+/// A key (normalized) as `CSI <code> ; <modifiers> u`, when its pane's
+/// program asked for that form and wants this key in it; `None` to send it
+/// the old way. The cursor, editing and function keys are left out: their
+/// old forms carry every modifier already.
+///
+/// Under the kitty keyboard protocol (any of its flags), as its spec has a
+/// terminal send them: Escape and Shift-Tab, any key with Ctrl or Alt, and
+/// Enter, Tab and Backspace with any modifier, those three alone keeping
+/// their bytes so a shell left in the mode still runs a command; with its
+/// flag 8 every key, and the text it types after when flag 16 asks. Under
+/// modifyOtherKeys level 2, every key with a modifier but Shift with a
+/// character, which only types it; under level 1, only the keys whose old
+/// bytes lose a modifier (`lossy`).
+fn extended(key: &Key, modes: &PaneModes) -> Option<Vec<u8>> {
+    let (kitty, level) = (modes.kitty_keys, modes.modify_other_keys);
+    if kitty == 0 && level == 0 {
+        return None;
+    }
+    let mods = key.mods;
+    let (code, mods) = match key.code {
+        // A capital as its key with Shift, as kitty names a key.
+        KeyCode::Char(c) => match single(c.to_lowercase()).filter(|_| c.is_uppercase()) {
+            Some(lower) => (u32::from(lower), mods.union(Mods::SHIFT)),
+            None => (u32::from(c), mods),
+        },
+        KeyCode::Enter => (13, mods),
+        KeyCode::Tab => (9, mods),
+        KeyCode::BackTab => (9, mods.union(Mods::SHIFT)),
+        KeyCode::Backspace => (127, mods),
+        KeyCode::Esc => (27, mods),
+        _ => return None,
+    };
+    let types_text = matches!(key.code, KeyCode::Char(_)) && !key.mods.ctrl && !key.mods.alt;
+    let wanted = if kitty & 8 != 0 {
+        true
+    } else if kitty != 0 {
+        !types_text && (!key.mods.is_empty() || matches!(key.code, KeyCode::Esc | KeyCode::BackTab))
+    } else if level >= 2 {
+        !types_text && !key.mods.is_empty()
+    } else {
+        lossy(key)
+    };
+    if !wanted {
+        return None;
+    }
+    let param = mods.param();
+    let text = match key.code {
+        KeyCode::Char(c) if types_text && kitty & 16 != 0 => Some(u32::from(c)),
+        _ => None,
+    };
+    Some(
+        match (param, text) {
+            (_, Some(text)) => format!("\x1b[{code};{param};{text}u"),
+            (1, None) => format!("\x1b[{code}u"),
+            (_, None) => format!("\x1b[{code};{param}u"),
+        }
+        .into_bytes(),
+    )
+}
+
+/// Whether a key's old bytes lose one of its modifiers, so a program that
+/// asked modifyOtherKeys level 1 gets it as CSI u: Ctrl with a character
+/// it doesn't change, or with Shift (C-S-p is C-p's byte); Enter, Escape
+/// and Backspace with Ctrl or Shift; Tab and Shift-Tab with Ctrl. The well
+/// known ones (C-i is Tab's byte, C-[ Escape's) stay as they are.
+fn lossy(key: &Key) -> bool {
+    let m = key.mods;
+    match key.code {
+        KeyCode::Char(c) => m.ctrl && (m.shift || ctrl_byte(c).is_none()),
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Backspace => m.ctrl || m.shift,
+        KeyCode::Tab | KeyCode::BackTab => m.ctrl,
+        _ => false,
+    }
+}
+
+/// Whether a sequence the parser didn't understand is passed to a pane as
+/// it came. A key in the CSI u or modifyOtherKeys form that has no name
+/// here (F13 and on, the media keys) reaches only a program that asked
+/// for keys in such a form; any other would type it as text.
+pub fn passes_unknown(raw: &[u8], modes: &PaneModes) -> bool {
+    let Some(body) = raw.strip_prefix(b"\x1b[") else {
+        return true;
+    };
+    let key_form = match body.split_last() {
+        Some((b'u', params)) => {
+            params.first().is_some_and(u8::is_ascii_digit)
+                && params
+                    .iter()
+                    .all(|b| b.is_ascii_digit() || b":;".contains(b))
+        }
+        Some((b'~', params)) => params.starts_with(b"27;"),
+        _ => false,
+    };
+    !key_form || modes.kitty_keys != 0 || modes.modify_other_keys != 0
 }
 
 /// The byte Ctrl with a character sends, as xterm sends it; `None` for a
@@ -2257,6 +2367,157 @@ mod tests {
         ] {
             let bytes = encode_key(&k(text), &normal);
             assert_eq!(names(&bytes), [text], "{text} sent as {bytes:?}");
+        }
+    }
+
+    fn kitty(flags: u8) -> PaneModes {
+        PaneModes {
+            kitty_keys: flags,
+            ..PaneModes::default()
+        }
+    }
+
+    fn other_keys(level: u8) -> PaneModes {
+        PaneModes {
+            modify_other_keys: level,
+            ..PaneModes::default()
+        }
+    }
+
+    #[test]
+    fn keys_go_as_csi_u_only_to_a_program_that_asked_for_them() {
+        // (key, a shell's bytes, kitty's flag 1, modifyOtherKeys 2, and 1)
+        for (text, shell, flag_1, level_2, level_1) in [
+            (
+                "C-S-p",
+                &b"\x10"[..],
+                &b"\x1b[112;6u"[..],
+                &b"\x1b[112;6u"[..],
+                &b"\x1b[112;6u"[..],
+            ),
+            ("C-p", b"\x10", b"\x1b[112;5u", b"\x1b[112;5u", b"\x10"),
+            ("C-i", b"\t", b"\x1b[105;5u", b"\x1b[105;5u", b"\t"),
+            ("C-1", b"1", b"\x1b[49;5u", b"\x1b[49;5u", b"\x1b[49;5u"),
+            ("M-j", b"\x1bj", b"\x1b[106;3u", b"\x1b[106;3u", b"\x1bj"),
+            ("M-J", b"\x1bJ", b"\x1b[106;4u", b"\x1b[106;4u", b"\x1bJ"),
+            ("C-Space", b"\x00", b"\x1b[32;5u", b"\x1b[32;5u", b"\x00"),
+            ("a", b"a", b"a", b"a", b"a"),
+            ("A", b"A", b"A", b"A", b"A"),
+            ("S-1", b"1", b"1", b"1", b"1"),
+            ("Enter", b"\r", b"\r", b"\r", b"\r"),
+            (
+                "S-Enter",
+                b"\r",
+                b"\x1b[13;2u",
+                b"\x1b[13;2u",
+                b"\x1b[13;2u",
+            ),
+            (
+                "M-Enter",
+                b"\x1b\r",
+                b"\x1b[13;3u",
+                b"\x1b[13;3u",
+                b"\x1b\r",
+            ),
+            ("Tab", b"\t", b"\t", b"\t", b"\t"),
+            ("BTab", b"\x1b[Z", b"\x1b[9;2u", b"\x1b[Z", b"\x1b[Z"),
+            ("C-Tab", b"\t", b"\x1b[9;5u", b"\x1b[9;5u", b"\x1b[9;5u"),
+            ("BSpace", b"\x7f", b"\x7f", b"\x7f", b"\x7f"),
+            (
+                "C-BSpace",
+                b"\x08",
+                b"\x1b[127;5u",
+                b"\x1b[127;5u",
+                b"\x1b[127;5u",
+            ),
+            ("Escape", b"\x1b", b"\x1b[27u", b"\x1b", b"\x1b"),
+            (
+                "M-Escape",
+                b"\x1b\x1b",
+                b"\x1b[27;3u",
+                b"\x1b[27;3u",
+                b"\x1b\x1b",
+            ),
+            ("Up", b"\x1b[A", b"\x1b[A", b"\x1b[A", b"\x1b[A"),
+            (
+                "C-Up",
+                b"\x1b[1;5A",
+                b"\x1b[1;5A",
+                b"\x1b[1;5A",
+                b"\x1b[1;5A",
+            ),
+            ("F5", b"\x1b[15~", b"\x1b[15~", b"\x1b[15~", b"\x1b[15~"),
+        ] {
+            let key = k(text);
+            assert_eq!(encode_key(&key, &PaneModes::default()), shell, "{text}");
+            assert_eq!(encode_key(&key, &kitty(1)), flag_1, "{text} (kitty)");
+            assert_eq!(encode_key(&key, &other_keys(2)), level_2, "{text} (2)");
+            assert_eq!(encode_key(&key, &other_keys(1)), level_1, "{text} (1)");
+            // The kitty protocol wins where a program asked for both.
+            let both = PaneModes {
+                kitty_keys: 1,
+                modify_other_keys: 2,
+                ..PaneModes::default()
+            };
+            assert_eq!(encode_key(&key, &both), flag_1, "{text} (both)");
+        }
+    }
+
+    #[test]
+    fn every_key_goes_as_csi_u_when_kitty_s_flag_8_asks() {
+        for (text, flags, want) in [
+            ("a", 8 | 1, &b"\x1b[97u"[..]),
+            ("A", 8 | 1, b"\x1b[97;2u"),
+            ("A", 8 | 16 | 1, b"\x1b[97;2;65u"),
+            ("a", 8 | 16, b"\x1b[97;1;97u"),
+            ("C-a", 8 | 16, b"\x1b[97;5u"),
+            ("Enter", 8, b"\x1b[13u"),
+            ("BSpace", 8, b"\x1b[127u"),
+            ("Up", 8, b"\x1b[A"),
+        ] {
+            assert_eq!(
+                encode_key(&k(text), &kitty(flags)),
+                want,
+                "{text} ({flags})"
+            );
+        }
+    }
+
+    #[test]
+    fn keys_sent_as_csi_u_read_back_as_themselves() {
+        for modes in [kitty(1), kitty(8), other_keys(1), other_keys(2)] {
+            for text in [
+                "C-S-p", "C-p", "C-1", "M-j", "M-J", "C-Space", "a", "A", "S-Enter", "M-Enter",
+                "BTab", "M-BTab", "C-Tab", "C-BSpace", "Escape", "M-Escape", "C-M-S-s", "Enter",
+                "Tab", "BSpace",
+            ] {
+                let bytes = encode_key(&k(text), &modes);
+                assert_eq!(
+                    names(&bytes),
+                    [text],
+                    "{text} sent as {bytes:?} ({modes:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_with_no_name_here_reaches_only_a_program_that_asked_for_its_form() {
+        let f13 = b"\x1b[57376u";
+        let modify = b"\x1b[27;5;57376~";
+        for raw in [&f13[..], &modify[..]] {
+            assert!(!passes_unknown(raw, &PaneModes::default()), "{raw:?}");
+            assert!(passes_unknown(raw, &kitty(1)), "{raw:?}");
+            assert!(passes_unknown(raw, &other_keys(1)), "{raw:?}");
+        }
+        // Anything else not understood passes as before.
+        for raw in [
+            &b"\x1b[?1u"[..],
+            b"\x1b]11;rgb:0/0/0\x07",
+            b"\x1b[u",
+            b"\x1b[99~",
+        ] {
+            assert!(passes_unknown(raw, &PaneModes::default()), "{raw:?}");
         }
     }
 
