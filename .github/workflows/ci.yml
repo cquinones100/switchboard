@@ -63,7 +63,9 @@ jobs:
       - name: Clippy without the net feature
         run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
       - name: Tests
-        run: cargo test --locked
+        # Every test binary runs whatever one before it failed, so a run
+        # names every failure rather than the first binary's.
+        run: cargo test --locked --no-fail-fast
 
   intel-mac:
     name: Build (macOS x86_64)
