@@ -2598,3 +2598,1153 @@ fn an_alert_whose_line_in_the_main_dm_failed_while_away_is_sent_again() {
     assert!(lines[0].body.ends_with("is **waiting on you**."));
     assert!(rig.cx.state.borrow().reported.contains_key(&tab));
 }
+
+/// A finished turn's hook event for a transcript.
+fn done_event(time: i64, transcript: &std::path::Path, last: &str) -> super::followups::Event {
+    super::followups::Event {
+        event: "done".into(),
+        time,
+        transcript: Some(transcript.to_string_lossy().into_owned()),
+        last: Some(last.into()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn a_turn_says_how_full_its_context_is_and_past_90_its_thread_is_told_once() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_focused(&tab, true);
+    rig.at_computer();
+    let transcript = rig.transcript(
+        &tab,
+        "nearly-full",
+        &[json!({ "type": "user", "message": { "content": "check the build" } })],
+    );
+    let context = rig.cx.paths.context_dirs[0].join("nearly-full");
+    std::fs::create_dir_all(context.parent().unwrap()).unwrap();
+    let now = util::now_secs();
+    let turn = |time: i64, last: &str| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(
+            &rig.cx,
+            &tabs,
+            &[done_event(time, &transcript, last)],
+        ));
+    };
+    let warnings = |rig: &Rig| {
+        rig.posts()
+            .into_iter()
+            .filter(|p| p.body.contains("of its context"))
+            .collect::<Vec<_>>()
+    };
+    std::fs::write(&context, "92\tOpus 5.5 (1M context)").unwrap();
+    turn(now, "The build passes.");
+    let finished = rig
+        .posts()
+        .into_iter()
+        .find(|p| p.body.contains("has finished"))
+        .unwrap();
+    assert!(
+        finished
+            .body
+            .ends_with("_92% context used · Opus 5.5 (1M context)_"),
+        "{}",
+        finished.body
+    );
+    let warned = warnings(&rig);
+    assert_eq!(warned.len(), 1);
+    assert!(warned[0].body.contains("has used **92%** of its context"));
+    let home = rig.cx.state.borrow().homes[&tab].ts.clone();
+    assert_eq!(warned[0].thread.as_deref(), Some(home.as_str()));
+    assert_eq!(warned[0].buttons[0]["text"]["text"], "Compact");
+    assert!(
+        warned[0].buttons[0]["value"]
+            .as_str()
+            .unwrap()
+            .contains(r#""skill":"compact""#)
+    );
+    std::fs::write(&context, "95\tOpus 5.5 (1M context)").unwrap();
+    turn(now + 1, "Still passing.");
+    assert_eq!(warnings(&rig).len(), 1, "not again while it stays above");
+    std::fs::write(&context, "30\tOpus 5.5 (1M context)").unwrap();
+    turn(now + 2, "Compacted.");
+    std::fs::write(&context, "91\tOpus 5.5 (1M context)").unwrap();
+    turn(now + 3, "Full again.");
+    assert_eq!(
+        warnings(&rig).len(),
+        2,
+        "again once it has dropped below and passed it again"
+    );
+}
+
+#[test]
+fn a_turn_you_asked_for_from_slack_is_posted_once_not_also_alerted() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let transcript = rig.transcript(&tab, "asked", &[
+        json!({ "type": "user", "message": { "content": "how does it work" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Like this." }] } }),
+    ]);
+    let now = util::now_secs();
+    // Working when the pass begins, as the look before it saw it.
+    rig.set_state(&tab, "working", &(now - 30).to_string());
+    let home = "1791500000.000300";
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.into(), home.into());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.into(),
+                pid: "1".into(),
+                ..Home::default()
+            },
+        );
+        state.following.insert(
+            tab.clone(),
+            Follow {
+                taken: true,
+                broadcast: true,
+                ..follow(Some(home), index, "how does it work")
+            },
+        );
+    }
+    let before = tabs::claude_tabs(&rig.cx);
+    // Then the turn ends: the hook's event, and the tab marked done.
+    let mut events = vec![done_event(now, &transcript, "Like this.")];
+    rig.set_state(&tab, "done", &now.to_string());
+    rig.block_on(follow_ups(&rig.cx, &before, &mut events));
+    for _ in 0..2 {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &events));
+    }
+    let posts = rig.posts();
+    assert_eq!(
+        posts.len(),
+        1,
+        "{:?}",
+        posts
+            .iter()
+            .map(|p| p.body.lines().next())
+            .collect::<Vec<_>>()
+    );
+    assert!(posts[0].body.contains("is done:"));
+}
+
+#[test]
+fn a_turn_in_a_tab_you_arent_looking_at_is_posted_once() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let transcript = rig.transcript(
+        &tab,
+        "elsewhere",
+        &[json!({ "type": "user", "message": { "content": "run it" } })],
+    );
+    let time = util::now_secs();
+    // The hook's event lands while the tab still says working...
+    rig.set_state(&tab, "working", "");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(
+        &rig.cx,
+        &tabs_now,
+        &[done_event(time, &transcript, "Ran it.")],
+    ));
+    // ...then the tab is marked done.
+    rig.set_state(&tab, "done", &time.to_string());
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    assert_eq!(
+        rig.posts()
+            .iter()
+            .filter(|p| p.body.contains("has finished"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn the_answer_to_a_request_from_the_main_dm_goes_to_the_main_dm_too() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let transcript = rig.transcript(&tab, "homed", &[
+        json!({ "type": "user", "message": { "content": "ship it" } }),
+        json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "Shipped." }] } }),
+    ]);
+    rig.events(&[
+        json!({ "event": "done", "time": util::now_secs(), "transcript_path": transcript }),
+    ]);
+    let home = rig.ts_ago(60, 100);
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.clone(), home.clone());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.clone(),
+                pid: "1".into(),
+                ..Home::default()
+            },
+        );
+        state.following.insert(
+            tab.clone(),
+            Follow {
+                broadcast: true,
+                ..follow(Some(&home), index, "ship it")
+            },
+        );
+    }
+    ticks(&rig);
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 1, "no extra line");
+    assert_eq!(
+        posts[0].body,
+        format!("🤖 tab {index}, work is done:\n> ship it\n\nShipped.")
+    );
+    assert_eq!(posts[0].thread.as_deref(), Some(home.as_str()));
+    assert!(posts[0].broadcast);
+}
+
+#[test]
+fn a_waiting_tabs_notice_carries_its_options_and_one_answer_clears_the_rest() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    let run = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+    };
+    run(&rig);
+    let posts = rig.posts();
+    let alert_post = posts
+        .iter()
+        .find(|p| p.body.contains("is **waiting on you**. Reply here"))
+        .unwrap()
+        .clone();
+    let notice = posts.iter().find(|p| p.broadcast).unwrap().clone();
+    let names: Vec<&str> = notice
+        .buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["1. Yes", "2. No"],
+        "the notice in the main DM has the buttons too"
+    );
+    // Tapped on the notice: typed, and the alert in the thread loses its
+    // buttons.
+    let yes: Value = serde_json::from_str(notice.buttons[0]["value"].as_str().unwrap()).unwrap();
+    let press = super::slack::Press {
+        value: yes,
+        message: Some(super::slack::Pressed {
+            ts: notice.ts.clone(),
+            thread_ts: notice.thread.clone(),
+            text: notice.body.clone(),
+        }),
+        ..Default::default()
+    };
+    rig.block_on(super::presses::handle_press(&rig.cx, press))
+        .unwrap();
+    assert!(rig.screen(&tab).ends_with("\n1"));
+    let updates = rig.calls("chat.update");
+    let cleared = updates
+        .iter()
+        .rfind(|u| u["ts"] == alert_post.ts.as_str())
+        .unwrap();
+    assert!(
+        cleared["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_Answered: 1. Yes_")
+    );
+    assert_eq!(
+        cleared["blocks"].as_array().unwrap().len(),
+        1,
+        "no buttons left on the alert"
+    );
+    let chose = updates
+        .iter()
+        .find(|u| u["ts"] == notice.ts.as_str())
+        .unwrap();
+    assert!(
+        chose["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_Chose **1. Yes**._")
+    );
+    // The next prompt is answered at the computer: its buttons go.
+    rig.set_screen(&tab, "Allow rm -rf dist?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500300");
+    rig.cx.state.borrow_mut().following.clear();
+    run(&rig);
+    let second = rig.posts().into_iter().rfind(|p| !p.broadcast).unwrap().ts;
+    rig.set_state(&tab, "working", "1791500310");
+    run(&rig);
+    let gone = rig
+        .calls("chat.update")
+        .into_iter()
+        .rfind(|u| u["ts"] == second.as_str())
+        .unwrap();
+    assert!(
+        gone["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("_This prompt is no longer showing._")
+    );
+    assert_eq!(gone["blocks"].as_array().unwrap().len(), 1);
+    assert!(!rig.cx.state.borrow().choices.contains_key(&tab));
+}
+
+#[test]
+fn a_waiting_tabs_options_are_on_its_home_tab_row_and_a_tap_there_answers_it() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    rig.block_on(refresh_dashboard(
+        &rig.cx,
+        Refresh {
+            quick: true,
+            opened: true,
+            ..Refresh::default()
+        },
+    ))
+    .unwrap();
+    let views = rig.calls("views.publish");
+    let row = views.last().unwrap()["view"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| {
+            b["type"] == "actions"
+                && serde_json::from_str::<Value>(b["elements"][0]["value"].as_str().unwrap_or(""))
+                    .is_ok_and(|v| v["w"] == tab.as_str())
+        })
+        .unwrap()
+        .clone();
+    let names: Vec<&str> = row["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Open", "1. Yes", "2. No"]);
+    let yes: Value = serde_json::from_str(row["elements"][1]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(yes["a"], "home-opt");
+    let dm = rig.cx.state.borrow().dm();
+    let press = |value: &Value| {
+        let raw = json!({
+            "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+            "container": { "type": "view", "view_id": "VHOME" }, "view": { "id": "VHOME", "type": "home" },
+            "actions": [{ "value": value.to_string() }],
+        });
+        press_from(&dm, &raw, |_| {}).unwrap()
+    };
+    // For an earlier wait: nothing pressed, and the Home tab drawn again.
+    let drawn = rig.calls("views.publish").len();
+    let mut earlier = yes.clone();
+    earlier["s"] = json!("1791500100");
+    rig.block_on(super::presses::handle_press(&rig.cx, press(&earlier)))
+        .unwrap();
+    assert!(!rig.screen(&tab).ends_with('1'));
+    assert_eq!(rig.calls("views.publish").len(), drawn + 1);
+    rig.block_on(super::presses::handle_press(&rig.cx, press(&yes)))
+        .unwrap();
+    assert!(rig.screen(&tab).ends_with("\n1"));
+    let home = rig.cx.state.borrow().homes[&tab].ts.clone();
+    assert!(
+        rig.posts()
+            .iter()
+            .any(|p| p.thread.as_deref() == Some(home.as_str())
+                && p.body == "🤖 _From the Home tab:_ chose **1. Yes**")
+    );
+}
+
+#[test]
+fn a_tabs_thread_header_follows_its_name_and_state_and_says_when_it_has_ended() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let home = "1791500000.000300";
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.into(), home.into());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.into(),
+                pid: t.pid.clone(),
+                label: format!("{index}, work"),
+                shown: super::homes::header_key(&t),
+            },
+        );
+    }
+    let refresh = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(super::homes::refresh_homes(&rig.cx, &tabs));
+    };
+    refresh(&rig);
+    assert!(rig.calls("chat.update").is_empty(), "unchanged");
+    rig.mux
+        .windows
+        .borrow_mut()
+        .iter_mut()
+        .find(|(w, _)| w.id == tab)
+        .unwrap()
+        .0
+        .name = "ABC-214: Make the thing".into();
+    refresh(&rig);
+    let updated = rig.calls("chat.update")[0].clone();
+    assert_eq!(updated["ts"], home);
+    assert!(updated["text"].as_str().unwrap().starts_with(&format!(
+        "🤖 **Tab {index}, ABC-214: Make the thing**\n⚪ Idle\n\nThis is its thread"
+    )));
+    let names: Vec<&str> = updated["blocks"][1]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Progress", "Skill", "Rename", "Close"]);
+    // A new state: the header says so, and since when.
+    rig.set_state(&tab, "waiting", &util::now_secs().to_string());
+    refresh(&rig);
+    let text = rig.calls("chat.update").last().unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(text.contains("\n🔴 **Waiting on you** since "), "{text}");
+    // The tab now runs another session: the old thread is marked closed.
+    rig.cx.state.borrow_mut().homes.get_mut(&tab).unwrap().pid = "999999".into();
+    refresh(&rig);
+    let closed = rig.calls("chat.update").last().unwrap().clone();
+    assert!(closed["text"].as_str().unwrap().starts_with("🤖 ~~Tab "));
+    assert!(closed["text"].as_str().unwrap().contains("⚫ Closed at "));
+    let buttons = closed["blocks"][1]["elements"].as_array().unwrap();
+    let names: Vec<&str> = buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Delete thread"], "only the offer to delete it");
+    assert!(buttons[0].get("confirm").is_some(), "which Slack confirms");
+    let state = rig.cx.state.borrow();
+    assert!(!state.homes.contains_key(&tab));
+    assert!(
+        state.closed_homes.contains_key(home),
+        "recorded as a thread that may be deleted"
+    );
+}
+
+#[test]
+fn a_threads_link_opens_at_its_newest_message_yours_or_the_relays() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let home = "1791500000.000300";
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.dm.as_mut().unwrap().url = Some("https://example.slack.com/".into());
+        state.threads.insert(home.into(), home.into());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.into(),
+                pid: "1".into(),
+                ..Home::default()
+            },
+        );
+    }
+    let link_to = |ts: &str| {
+        format!(
+            "[open](https://example.slack.com/archives/D1/p{}?thread_ts={home}&cid=D1)",
+            ts.replace('.', "")
+        )
+    };
+    // Nothing newer known: the thread's own first message.
+    assert_eq!(
+        super::homes::thread_link(&rig.cx, home, "open"),
+        link_to(home)
+    );
+    // The relay posts in it, in two parts: the last part is the newest.
+    let text: Vec<String> = (0..600).map(|i| format!("line {i}")).collect();
+    rig.block_on(super::post::post(
+        &rig.cx,
+        &text.join("\n"),
+        Some(home),
+        super::post::PostOpts::default(),
+    ))
+    .unwrap();
+    let last = rig.posts().last().unwrap().ts.clone();
+    assert!(rig.posts().len() >= 2);
+    assert_eq!(
+        super::homes::thread_link(&rig.cx, home, "open"),
+        link_to(&last)
+    );
+    // Then you reply there, and that is the newest.
+    let secs: i64 = last.split('.').next().unwrap().parse().unwrap();
+    let reply = format!("{}.000100", secs + 5);
+    rig.block_on(async {
+        run::process_messages(&rig.cx, vec![message(&reply, "status", Some(home))]);
+    });
+    let newest = rig.posts().last().unwrap().ts.clone();
+    let newest = if newest.parse::<f64>().unwrap() > reply.parse::<f64>().unwrap() {
+        newest
+    } else {
+        reply.clone()
+    };
+    assert_eq!(
+        super::homes::thread_link(&rig.cx, home, "open"),
+        link_to(&newest)
+    );
+    assert!(
+        rig.cx.state.borrow().latest[home].parse::<f64>().unwrap() >= reply.parse::<f64>().unwrap(),
+        "your reply counts"
+    );
+}
+
+#[test]
+fn no_stuck_notes_in_the_first_ten_minutes_after_the_computer_wakes() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "working", "");
+    // Nothing since the computer went to sleep, hours ago.
+    let slept = jiff::Timestamp::from_millisecond(util::now_ms() - 5 * 60 * 60_000)
+        .unwrap()
+        .to_string();
+    rig.transcript(
+        &tab,
+        "slept",
+        &[json!({ "type": "user", "timestamp": slept, "message": { "content": "long job" } })],
+    );
+    let run = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(super::stuck::stuck_tabs(&rig.cx, &tabs));
+    };
+    rig.cx.life.borrow_mut().woke_at = util::now_ms() - 60_000;
+    run(&rig);
+    assert!(rig.posts().is_empty(), "it just woke up");
+    rig.cx.life.borrow_mut().woke_at = util::now_ms() - super::stuck::STUCK_MS - 1_000;
+    run(&rig);
+    assert!(
+        rig.posts().iter().any(|p| p.body.contains("may be stuck")),
+        "ten minutes after waking, it is"
+    );
+}
+
+#[test]
+fn the_watchdog_doesnt_restart_a_relay_that_refused_to_start() {
+    let rig = Rig::new();
+    let w = run::Watch {
+        command: vec!["sh".into(), "-c".into(), "exit 3".into()],
+        delays: vec![10],
+        paths: rig.cx.paths.clone(),
+    };
+    let downs = std::cell::Cell::new(0);
+    let code = rig.block_on(run::watch(w, |_| async { downs.set(downs.get() + 1) }));
+    assert_eq!(code, 3);
+    assert_eq!(downs.get(), 0);
+}
+
+#[test]
+fn a_tabs_screen_you_have_closed_is_forgotten_without_an_error_in_the_log() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let pid = rig.pid_of(&tab);
+    rig.block_on(super::presses::handle_press(
+        &rig.cx,
+        super::slack::Press {
+            value: json!({ "a": "open", "w": tab, "p": pid }),
+            view: Some(super::slack::ViewRef {
+                id: "VHOME".into(),
+                ..Default::default()
+            }),
+            trigger_id: Some("TR0".into()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(super::screens::open_screens(&rig.cx), 1);
+    super::mux::Mux::kill_tab(&rig.mux, &tab).unwrap();
+    rig.slack.answers.borrow_mut().insert(
+        "views.update".into(),
+        Box::new(|_| Err(anyhow::anyhow!("views.update: not_found"))),
+    );
+    rig.block_on(super::screens::refresh_screens(&rig.cx, &[]));
+    assert_eq!(super::screens::open_screens(&rig.cx), 0);
+    let logged = util::read_text(rig.cx.paths.log_file()).unwrap_or_default();
+    assert!(!logged.contains("screen update failed"), "{logged}");
+}
+
+#[test]
+fn answering_one_of_several_questions_posts_the_next_and_ticks_and_submit_press_the_right_keys() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    rig.set_screen(
+        &tab,
+        "←  ☐ Color  ☐ Toppings  ✔ Submit  →\nColor?\n❯ 1. Red\n  2. Blue\n  3. Type something.\n────────────\n  4. Chat about this\n",
+    );
+    rig.set_state(&tab, "waiting", "1791500300");
+    let linked = rig.ts_ago(30, 500);
+    rig.cx.state.borrow_mut().alerts.insert(
+        linked.clone(),
+        Target {
+            window: tab.clone(),
+            index,
+            name: "work".into(),
+            thread: None,
+        },
+    );
+    let last = |rig: &Rig| rig.posts().last().unwrap().clone();
+    // Red is picked, and Claude Code shows the second question in the same
+    // wait, drawn before the relay's first look after its settle.
+    let toppings = "←  ☒ Color  ☐ Toppings  ✔ Submit  →\nToppings?\n❯ 1. [ ] Cheese\n  2. [ ] Olives\n  3. [ ] Type something\n     Submit\n────────────\n  4. Chat about this\n";
+    rig.block_on(async {
+        let mux = rig.mux.clone();
+        let id = tab.clone();
+        tokio::task::spawn_local(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut windows = mux.windows.borrow_mut();
+            let (_, panes) = windows.iter_mut().find(|(w, _)| w.id == id).unwrap();
+            panes[0].screen = toppings.into();
+        });
+        handle(&rig.cx, message(&now_ts(710), "1", Some(&linked))).await
+    })
+    .unwrap();
+    let next = last(&rig);
+    assert!(
+        next.body.starts_with(&format!(
+            "🤖 Chose 1. Red in tab {index}, work. It's asking next:\n\n**Toppings?**\n1. ☐ Cheese"
+        )),
+        "{}",
+        next.body
+    );
+    let names: Vec<&str> = next
+        .buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "1. ☐ Cheese",
+            "2. ☐ Olives",
+            "4. Chat about this",
+            "Submit choices"
+        ]
+    );
+    assert!(
+        !rig.cx.state.borrow().following.contains_key(&tab),
+        "still waiting on you, so not followed yet"
+    );
+    // Two ticks at once, then your own answer typed into the free row,
+    // reached with the arrow keys from the first row, then Submit, three
+    // rows down.
+    rig.block_on(handle(&rig.cx, message(&now_ts(711), "1 2", Some(&linked))))
+        .unwrap();
+    assert!(
+        last(&rig)
+            .body
+            .starts_with("🤖 Ticked 1. Cheese, ticked 2. Olives in tab")
+    );
+    rig.set_screen(&tab, toppings);
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(712), "anchovies", Some(&linked)),
+    ))
+    .unwrap();
+    rig.set_screen(&tab, toppings);
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(713), "submit", Some(&linked)),
+    ))
+    .unwrap();
+    let sent: Vec<String> = rig
+        .mux
+        .sent
+        .borrow()
+        .iter()
+        .filter_map(|s| s.strip_prefix(&format!("{pane} ")).map(str::to_string))
+        .collect();
+    let joined = sent.join(" | ");
+    assert!(
+        joined.contains("type 1 | type 2"),
+        "both numbers pressed: {joined}"
+    );
+    assert!(
+        joined.contains("key Down | key Down | paste anchovies"),
+        "{joined}"
+    );
+    assert!(
+        joined.ends_with("key Down | key Down | key Down | key Enter"),
+        "down to Submit, then Enter: {joined}"
+    );
+    assert!(
+        last(&rig)
+            .body
+            .starts_with("🤖 Submitted your choices in tab")
+    );
+}
+
+#[test]
+fn rename_on_a_thread_header_opens_the_form_there_and_says_the_result_in_the_thread() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let index = rig.index_of(&tab);
+    let pid = rig.pid_of(&tab);
+    let home = now_ts(800);
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(home.clone(), home.clone());
+        state.alerts.insert(
+            home.clone(),
+            Target {
+                window: tab.clone(),
+                index,
+                name: "x".into(),
+                thread: None,
+            },
+        );
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.clone(),
+                pid: pid.clone(),
+                ..Home::default()
+            },
+        );
+    }
+    rig.slack.answers.borrow_mut().insert(
+        "views.open".into(),
+        Box::new(|_| Ok(json!({ "ok": true, "view": { "id": "VREN" } }))),
+    );
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    let rename = super::buttons::header_buttons(&t)
+        .into_iter()
+        .find(|b| b.text == "Rename")
+        .unwrap();
+    let dm = rig.cx.state.borrow().dm();
+    let raw = json!({
+        "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR7",
+        "container": { "channel_id": "D1", "message_ts": home }, "message": { "ts": home, "text": "🤖 Tab" },
+        "actions": [{ "value": rename.value.unwrap().to_string() }],
+    });
+    let p = press_from(&dm, &raw, |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    let form = rig.calls("views.open")[0]["view"].clone();
+    assert_eq!(form["callback_id"], "rename");
+    let meta: Value = serde_json::from_str(form["private_metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["from"], "thread");
+    let mut view = form.clone();
+    view["id"] = json!("VREN");
+    view["root_view_id"] = json!("VREN");
+    view["state"] = json!({ "values": { "name": { "name": { "value": "deploy check" } } } });
+    let save = json!({ "type": "view_submission", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "view": view });
+    let submitted = submission_from(&dm, &save, |_| {}).unwrap();
+    rig.block_on(super::screens::handle_submission(&rig.cx, &submitted))
+        .unwrap();
+    assert_eq!(tabs::tab(&rig.cx, &tab).unwrap().own_name, "deploy check");
+    assert!(rig.posts().iter().any(|p| {
+        p.thread.as_deref() == Some(home.as_str())
+            && p.body
+                .contains(&format!("Renamed **tab {index}** to **deploy check**"))
+    }));
+    assert!(
+        rig.calls("views.update").is_empty(),
+        "no screen under it to draw again"
+    );
+}
+
+#[test]
+fn skill_under_a_finished_turn_opens_a_menu_of_the_tabs_skills_and_run_types_it() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let pid = rig.pid_of(&tab);
+    rig.transcript(&tab, "runner", &[json!({
+        "type": "attachment",
+        "attachment": { "type": "skill_listing", "isInitial": true, "names": ["review-loop"], "content": "- review-loop: Review the branch" },
+    })]);
+    let thread = now_ts(500);
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.threads.insert(thread.clone(), thread.clone());
+        state.alerts.insert(
+            thread.clone(),
+            Target {
+                window: tab.clone(),
+                index: 1,
+                name: "x".into(),
+                thread: None,
+            },
+        );
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: thread.clone(),
+                pid: pid.clone(),
+                ..Home::default()
+            },
+        );
+    }
+    rig.slack.answers.borrow_mut().insert(
+        "views.open".into(),
+        Box::new(|_| Ok(json!({ "ok": true, "view": { "id": "VSKILL" } }))),
+    );
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    let skill = super::buttons::turn_buttons(&t)
+        .into_iter()
+        .find(|b| b.text == "Skill")
+        .unwrap();
+    let dm = rig.cx.state.borrow().dm();
+    let raw = json!({
+        "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR9",
+        "container": { "channel_id": "D1", "message_ts": "1.2" }, "message": { "ts": "1.2", "thread_ts": thread, "text": "🤖 done" },
+        "actions": [{ "value": skill.value.unwrap().to_string() }],
+    });
+    let p = press_from(&dm, &raw, |_| {}).unwrap();
+    rig.block_on(super::presses::handle_press(&rig.cx, p))
+        .unwrap();
+    let opened = rig.calls("views.open")[0].clone();
+    assert_eq!(opened["trigger_id"], "TR9");
+    let form = opened["view"].clone();
+    assert_eq!(form["callback_id"], "skill");
+    let groups: Vec<(String, Vec<String>)> = form["blocks"][0]["element"]["option_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| {
+            (
+                g["label"]["text"].as_str().unwrap().to_string(),
+                g["options"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|o| o["value"].as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    let review = groups
+        .iter()
+        .find(|(_, values)| values.iter().any(|v| v == "review-loop"))
+        .expect("the session's skill is listed");
+    assert!(!review.0.is_empty());
+    assert!(
+        groups
+            .iter()
+            .any(|(_, values)| values.iter().any(|v| v == "compact")),
+        "Claude Code's own commands are offered"
+    );
+    assert!(
+        !form["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["block_id"] == "typed"),
+        "everything fits in the menu"
+    );
+    let run = |skill: &str, args: &str, user: &str| {
+        let mut view = form.clone();
+        view["id"] = json!("VSKILL");
+        view["root_view_id"] = json!("VSKILL");
+        view["state"] = json!({ "values": {
+            "skill": { "skill": { "type": "static_select", "selected_option": { "value": skill } } },
+            "args": { "args": { "value": args } },
+        } });
+        json!({ "type": "view_submission", "user": { "id": user, "team_id": "T1" }, "team": { "id": "T1" }, "view": view })
+    };
+    assert!(
+        submission_from(&dm, &run("review-loop", "", "U2"), |_| {}).is_none(),
+        "only yours"
+    );
+    // Not a skill name: nothing typed.
+    let bad = submission_from(&dm, &run("rm -rf /", "", "U1"), |_| {});
+    if let Some(bad) = bad {
+        let _ = rig.block_on(super::screens::handle_submission(&rig.cx, &bad));
+    }
+    assert!(!rig.posts().iter().any(|p| p.body.contains("Skill:")));
+    let good = submission_from(&dm, &run("review-loop", "ABC-12", "U1"), |_| {}).unwrap();
+    rig.block_on(super::screens::handle_submission(&rig.cx, &good))
+        .unwrap();
+    assert!(
+        rig.mux
+            .sent
+            .borrow()
+            .iter()
+            .any(|s| s.starts_with(&format!("{pane} ")) && s.contains("/review-loop ABC-12")),
+        "typed as you would at the keyboard: {:?}",
+        rig.mux.sent.borrow()
+    );
+    assert!(
+        rig.posts()
+            .iter()
+            .any(|p| p.thread.as_deref() == Some(thread.as_str())
+                && p.body == "🤖 _Skill:_ `/review-loop ABC-12`"),
+        "said in its thread"
+    );
+    assert!(
+        rig.calls("views.update").is_empty(),
+        "opened from the thread, so no screen to draw again"
+    );
+}
+
+#[test]
+fn a_skill_menu_with_more_skills_than_it_holds_cuts_the_rest_and_takes_any_name() {
+    let rig = Rig::new();
+    let many = rig.root.join("many-skills");
+    for i in 0..super::skills::MAX_SKILLS + 5 {
+        let dir = many.join(format!(".claude/skills/s{i:03}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\ndescription: x\n---\n").unwrap();
+    }
+    let (tab, _) = super::mux::Mux::new_tab(&rig.mux, &many, None, None).unwrap();
+    rig.mux
+        .windows
+        .borrow_mut()
+        .iter_mut()
+        .find(|(w, _)| w.id == tab)
+        .unwrap()
+        .1[0]
+        .info
+        .claude = true;
+    let t = tabs::tab(&rig.cx, &tab).unwrap();
+    let big = super::screens::skill_screen(&rig.cx, &t, "screen", None, "");
+    let listed: usize = big["blocks"][0]["element"]["option_groups"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["options"].as_array().unwrap().len())
+        .sum();
+    assert_eq!(listed, super::skills::MAX_SKILLS);
+    let typed = big["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["block_id"] == "typed")
+        .expect("a field for any other name");
+    let label = typed["label"]["text"].as_str().unwrap();
+    assert!(
+        label.starts_with("Or another skill (") && label.ends_with(" more aren't in the menu)"),
+        "{label}"
+    );
+    assert_eq!(big["blocks"][0]["optional"], true, "either one will do");
+}
+
+#[test]
+fn a_tabs_screen_shows_a_waiting_prompts_options_and_is_drawn_again_when_the_tab_changes() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let pid = rig.pid_of(&tab);
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    let home = now_ts(400);
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.dm.as_mut().unwrap().url = Some("https://example.slack.com/".into());
+        state.threads.insert(home.clone(), home.clone());
+        state.homes.insert(
+            tab.clone(),
+            Home {
+                ts: home.clone(),
+                pid: pid.clone(),
+                ..Home::default()
+            },
+        );
+    }
+    rig.slack.answers.borrow_mut().insert(
+        "views.open".into(),
+        Box::new(|_| Ok(json!({ "ok": true, "view": { "id": "VTAB" } }))),
+    );
+    rig.block_on(super::presses::handle_press(
+        &rig.cx,
+        super::slack::Press {
+            value: json!({ "a": "open", "w": tab, "p": pid }),
+            view: Some(super::slack::ViewRef {
+                id: "VHOME".into(),
+                ..Default::default()
+            }),
+            trigger_id: Some("TR0".into()),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    let screen = rig.calls("views.open")[0]["view"].clone();
+    assert_eq!(
+        screen["notify_on_close"], true,
+        "Slack says when it is closed"
+    );
+    let choices = screen["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "actions")
+        .unwrap()["elements"]
+        .clone();
+    let names: Vec<&str> = choices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["1. Yes", "2. No"]);
+    let yes: Value = serde_json::from_str(choices[0]["value"].as_str().unwrap()).unwrap();
+    assert_eq!(yes["a"], "screen-opt");
+    let dm = rig.cx.state.borrow().dm();
+    let press = |value: &Value| {
+        let raw = json!({
+            "type": "block_actions", "user": { "id": "U1", "team_id": "T1" }, "team": { "id": "T1" }, "trigger_id": "TR1",
+            "container": { "type": "view", "view_id": "VTAB" }, "view": { "id": "VTAB", "type": "modal" },
+            "actions": [{ "value": value.to_string() }],
+        });
+        press_from(&dm, &raw, |_| {}).expect("yours, from the screen")
+    };
+    let last_said = |rig: &Rig| {
+        rig.calls("views.update").last().unwrap()["view"]["blocks"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["text"]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // Made for an earlier wait: refused, nothing pressed.
+    let mut earlier = yes.clone();
+    earlier["s"] = json!("1791500100");
+    rig.block_on(super::presses::handle_press(&rig.cx, press(&earlier)))
+        .unwrap();
+    assert!(last_said(&rig).contains("That choice isn't showing any more"));
+    assert!(!rig.screen(&tab).ends_with('1'));
+    rig.block_on(super::presses::handle_press(&rig.cx, press(&yes)))
+        .unwrap();
+    assert!(
+        rig.screen(&tab).ends_with("\n1"),
+        "only the number, as a reply would be"
+    );
+    assert!(
+        rig.posts()
+            .iter()
+            .any(|p| p.thread.as_deref() == Some(home.as_str())
+                && p.body == "🤖 _From the Home tab:_ chose **1. Yes**"),
+        "said in its thread"
+    );
+    assert!(
+        last_said(&rig).starts_with("Chose *1. Yes*. What happens next goes in <https:"),
+        "{}",
+        last_said(&rig)
+    );
+    // Nothing changed: not drawn again. Its state changed: drawn again,
+    // without the options.
+    let drawn = rig.calls("views.update").len();
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(super::screens::refresh_screens(&rig.cx, &tabs_now));
+    assert_eq!(rig.calls("views.update").len(), drawn);
+    rig.set_state(&tab, "working", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(super::screens::refresh_screens(&rig.cx, &tabs_now));
+    let redrawn = rig.calls("views.update").last().unwrap().clone();
+    assert_eq!(redrawn["view_id"], "VTAB");
+    assert!(
+        redrawn["view"]["blocks"][0]["text"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("🔵 working")
+    );
+    // Closed in Slack: no longer drawn.
+    super::screens::forget_screen(&rig.cx, "VTAB");
+    rig.set_state(&tab, "done", "1791500400");
+    let drawn = rig.calls("views.update").len();
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(super::screens::refresh_screens(&rig.cx, &tabs_now));
+    assert_eq!(rig.calls("views.update").len(), drawn);
+}
+
+/// A video attached to a reply under a tab's alert, as Slack hands it over.
+fn video_message(rig: &Rig, thread: &str, id: &str, name: &str, bytes: Vec<u8>) -> Message {
+    let url = format!("https://files.slack.com/files-pri/T1-{id}/download/{name}");
+    let size = bytes.len();
+    rig.slack.downloads.borrow_mut().insert(url.clone(), bytes);
+    let dm = rig.cx.state.borrow().dm();
+    let event = json!({
+        "type": "message", "subtype": "file_share", "channel": "D1", "user": "U1", "client_msg_id": "c1",
+        "ts": now_ts(41), "thread_ts": thread, "text": "it flickers here",
+        "files": [{ "id": id, "name": name, "mimetype": "video/mp4", "size": size, "url_private_download": url }],
+    });
+    super::slack::message_from(&dm, &event, Some("T1"), |_| {}).unwrap()
+}
+
+#[test]
+fn a_video_you_attach_is_typed_into_the_tab_by_its_path_and_then_its_stills_in_order() {
+    if util::which("ffmpeg").is_none() || util::which("ffprobe").is_none() {
+        eprintln!("skipped: needs ffmpeg");
+        return;
+    }
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    // A real three-second video, made by ffmpeg.
+    let recording = rig.root.join("recording.mp4");
+    let made = std::process::Command::new("ffmpeg")
+        .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+        .arg("testsrc=duration=3:size=1920x1080:rate=30")
+        .args(["-pix_fmt", "yuv420p"])
+        .arg(&recording)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let m = video_message(
+        &rig,
+        &thread,
+        "F0REC",
+        "flicker.mp4",
+        std::fs::read(&recording).unwrap(),
+    );
+    rig.block_on(handle(&rig.cx, m)).unwrap();
+    let saved = rig.cx.paths.files_dir().join("F0REC-flicker.mp4");
+    let stills: Vec<std::path::PathBuf> = (1..=super::files::FRAMES)
+        .map(|i| std::path::PathBuf::from(format!("{}-frame-{i:02}.jpg", saved.display())))
+        .collect();
+    for still in &stills {
+        assert!(still.exists(), "{} was taken", still.display());
+    }
+    assert_eq!(
+        image::image_dimensions(&stills[0]).unwrap().0,
+        1280,
+        "scaled down to be read, not kept full size"
+    );
+    let expected = format!(
+        "it flickers here [Video: {}] Stills from it, in order: [Image: {}] [Image: {}]",
+        saved.display(),
+        stills[0].display(),
+        stills[1].display()
+    );
+    assert!(rig.screen(&tab).contains(&expected), "{}", rig.screen(&tab));
+    assert!(!rig.posts().iter().any(|p| p.body.contains("take stills")));
+}
+
+#[test]
+fn a_file_that_only_claims_to_be_a_video_gets_no_stills_and_you_are_told() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    // An MP4's first bytes, so it is taken as one, and nothing a player
+    // could read after them.
+    let mut bytes = b"\0\0\0\x18ftypmp42".to_vec();
+    bytes.extend_from_slice(b"not a video");
+    let m = video_message(&rig, &thread, "F0BAD", "bad.mp4", bytes);
+    rig.block_on(handle(&rig.cx, m)).unwrap();
+    let saved = rig.cx.paths.files_dir().join("F0BAD-bad.mp4");
+    assert!(
+        rig.screen(&tab)
+            .contains(&format!("[Video: {}]", saved.display()))
+    );
+    assert!(rig.posts().iter().any(|p| {
+        p.body
+            .contains("couldn't take stills from bad.mp4, so the tab gets only its path")
+    }));
+}

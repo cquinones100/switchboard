@@ -276,6 +276,103 @@ fn start_opens_the_relays_tab_once_and_the_rest_say_it_isnt_running() {
     server.ok(&["kill-tab", "-t", &tab]);
 }
 
+/// The tabs marked as the relay's, by id, with their first pane's process.
+fn relay_tabs(server: &TestServer) -> Vec<(String, String)> {
+    server.list()["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["tabs"].as_array().unwrap().clone())
+        .filter(|t| t["options"]["@slack_relay"] == "1")
+        .map(|t| {
+            (
+                t["id"].as_str().unwrap().to_string(),
+                t["panes"][0]["pid"].to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn start_from_outside_the_workspace_opens_the_relays_tab_in_the_running_server() {
+    // No SWITCHBOARD in the environment, as from a terminal of its own or
+    // ssh: the server is found by the state directory, the test's own.
+    let server = TestServer::start();
+    settings(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let out = Command::new(common::BIN)
+        .args(["slack-relay", "start"])
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .env_remove("TMUX")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", server.log());
+    let tabs = relay_tabs(&server);
+    assert_eq!(tabs.len(), 1, "the relay's tab");
+    let list = server.list();
+    let tab = list["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == tabs[0].0.as_str())
+        .unwrap();
+    assert!(
+        tab["label"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Slack relay")
+            || tab["name"] == "Slack relay",
+        "{tab}"
+    );
+    server.ok(&["kill-tab", "-t", &tabs[0].0]);
+}
+
+#[test]
+fn start_runs_the_relay_again_in_its_tab_when_the_one_there_has_stopped() {
+    let server = TestServer::start();
+    settings(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // The relay's tab, left at a program (cat stands in) by a relay that
+    // stopped.
+    let opened = server.ok(&["new-tab", "-d", "-n", "relay", "--", "cat"]);
+    let tab = opened.split_whitespace().next().unwrap().to_string();
+    server.ok(&["set", "-t", &tab, "@slack_relay", "1"]);
+    let pid = || {
+        relay_tabs(&server)
+            .into_iter()
+            .find(|(id, _)| *id == tab)
+            .map(|(_, pid)| pid)
+            .unwrap()
+    };
+    let before = pid();
+    let lock = server.home.join(".local/state/slack-relay/relay.lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    // A live relay holds the lock: its tab is only gone to.
+    std::fs::write(&lock, format!("{} slack-relay\n", std::process::id())).unwrap();
+    assert_eq!(relay(&server, &["start"]).0, 0);
+    assert_eq!(pid(), before);
+    // A stale lock: the relay is started again in the same tab.
+    std::fs::write(&lock, "999999 slack-relay\n").unwrap();
+    assert_eq!(relay(&server, &["start"]).0, 0, "{}", server.log());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pid() == before {
+        assert!(
+            Instant::now() < deadline,
+            "the tab's program wasn't started again"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(relay_tabs(&server).len(), 1, "no second relay tab");
+    let _ = std::fs::remove_file(&lock);
+    server.ok(&["kill-tab", "-t", &tab]);
+}
+
 #[test]
 fn start_without_a_server_says_so() {
     let dir = common::TempDir::new("sbr");
