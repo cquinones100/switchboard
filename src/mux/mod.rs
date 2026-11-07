@@ -1,7 +1,7 @@
 //! The multiplexer: what tmux did for Switchboard, done by Switchboard. A
 //! server owns every pane (a PTY and a terminal emulator), lays them out in
 //! tabs, and draws each attached client's screen; clients send it the keys
-//! pressed and show what it draws. PORTING.md has the whole picture.
+//! pressed and show what it draws. ARCHITECTURE.md has the whole picture.
 //!
 //! - `proto`: the messages between clients and the server, and their framing.
 //! - `socket`: where the server listens, connecting to it, starting it.

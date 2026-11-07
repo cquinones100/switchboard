@@ -1,6 +1,7 @@
 //! Switchboard, as one library the `switchboard` binary runs and the tests
 //! call into. Each part says at its top where it came from in the tmux and
-//! Node version, so its history can be followed back. PORTING.md has the plan.
+//! Node version, so its history can be followed back. ARCHITECTURE.md has
+//! the whole picture.
 //!
 //! Shared by every part:
 //! - `paths`: where things are, through `~` and the clone.

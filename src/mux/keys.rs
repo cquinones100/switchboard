@@ -11,9 +11,9 @@
 //! { "root": { "M-g": "new-tab", "M-w": null }, "prefix": { "y": "copy-mode" } }
 //! ```
 //!
-//! A binding names an action, as `switchboard help-keys` lists them, or
-//! `null` to unbind. Each action is one of `Action`'s, written as it is
-//! parsed by `Action::parse`.
+//! A binding names an action, as docs/guide.md lists them, or `null` to
+//! unbind. Each action is one of `Action`'s, written as it is parsed by
+//! `Action::parse`.
 //!
 //! Each action has a description and tags (`Action::note`), as tmux.conf
 //! gave every binding one with `bind -N "Split pane to the left #panes
