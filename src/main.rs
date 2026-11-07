@@ -1,7 +1,7 @@
 //! `switchboard`: every program Switchboard has, in one binary. Run as
-//! `switchboard <command>`, or through a link named after the command
-//! (`bin/wt-jump` links here), it runs that command; alone, it starts the
-//! workspace or attaches to it.
+//! `switchboard <command>`, or through a link named after the command (a
+//! `wt-jump` linked to the binary), it runs that command; alone, it starts
+//! the workspace or attaches to it.
 
 use std::path::Path;
 use std::process::ExitCode;

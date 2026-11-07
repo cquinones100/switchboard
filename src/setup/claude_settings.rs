@@ -12,18 +12,20 @@
 //! own; its permissions are added to yours. So running it again changes
 //! nothing, and a copy of the file before is left beside it. A settings file
 //! that is a link into a clone's `claude/settings.json`, as the whole setup
-//! once made it, becomes your own file with what it held first. Claude Code
+//! once made it, becomes your own file with what it held first (from the
+//! clone's history, once a pull has removed the file). Claude Code
 //! reads no settings file after yours, so this is the user layer for Claude:
 //! your own settings are the file itself.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Result, bail};
 use serde_json::{Map, Value};
 
 use super::{Report, home_tilde, is_link, stamp};
-use crate::{paths, util};
+use crate::{paths, util, worktree};
 
 /// Switchboard's part, as compiled in.
 pub const ASSET: &str = include_str!("../../assets/claude-settings.json");
@@ -153,16 +155,52 @@ pub fn merge(current: &Map<String, Value>, ours: &Value) -> Map<String, Value> {
     out
 }
 
+/// What a link into a clone's `claude/settings.json` held: the file it leads
+/// to, else, in a clone pulled since the repository dropped that file, the
+/// file from git, the commit before the one that removed it, as `claude_md`
+/// finds a clone's old rules.
+fn held_by_link(target: &Path) -> Option<Vec<u8>> {
+    fs::read(target).ok().or_else(|| {
+        let repo = target.parent()?.parent()?;
+        let removed = worktree::git_at(
+            repo,
+            &[
+                "log",
+                "-1",
+                "--format=%H",
+                "--diff-filter=D",
+                "--",
+                "claude/settings.json",
+            ],
+        )
+        .ok()
+        .filter(|h| !h.is_empty())?;
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
+            .arg(repo)
+            .args(["show", &format!("{removed}^:claude/settings.json")]);
+        util::run_command(&mut cmd).ok().map(String::into_bytes)
+    })
+}
+
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
     let file = settings_file();
     let shown = home_tilde(&file);
     if is_link(&file)
-        && fs::read_link(&file)
-            .is_ok_and(|t| t.to_string_lossy().ends_with("/claude/settings.json"))
+        && let Ok(target) = fs::read_link(&file)
+        && target.to_string_lossy().ends_with("/claude/settings.json")
     {
         if !r.check {
-            let held = fs::read(&file)?;
+            let target = file
+                .parent()
+                .map_or(target.clone(), |dir| dir.join(&target));
+            let Some(held) = held_by_link(&target) else {
+                bail!(
+                    "{shown} links to {}, which isn't there and can't be found in its clone's history; left alone",
+                    target.display()
+                );
+            };
             fs::remove_file(&file)?;
             util::write_atomic(&file, held)?;
         }

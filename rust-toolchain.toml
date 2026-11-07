@@ -1,5 +1,6 @@
-# The Rust that builds Switchboard (setup.sh's `rust` part installs it with
-# rustup, into your home, and builds with it). Bumped with each stable release.
+# The Rust that builds Switchboard: `rustup toolchain install` in the clone
+# installs it, as CI does, and cargo here builds with it. Bumped with each
+# stable release.
 [toolchain]
 channel = "1.99.1"
 profile = "minimal"

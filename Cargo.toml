@@ -3,12 +3,12 @@ name = "switchboard"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.99"
-description = "A terminal workspace for working with coding agents: the sidebar daemon, mission control, the Slack relay and the worktree scripts, as one binary"
+description = "A terminal workspace for working with coding agents: its own multiplexer, with the sidebar, mission control, the diff, notes and the Slack relay built in, as one binary"
 publish = false
 default-run = "switchboard"
 
-# One binary for every program: bin/<name> links to it, and it runs the
-# program its name (or its first argument, as `switchboard <name>`) says.
+# One binary for every program: it runs the program its first argument
+# names (`switchboard <name>`), or the one a link to it is named after.
 [[bin]]
 name = "switchboard"
 path = "src/main.rs"
@@ -91,7 +91,8 @@ debug = "line-tables-only"
 debug = false
 
 [profile.release]
-# Small and quick to start, since tmux runs some of these on every focus.
+# Small and quick to start, since Claude Code's hooks run it before and
+# after every tool call.
 opt-level = 3
 lto = "thin"
 codegen-units = 16

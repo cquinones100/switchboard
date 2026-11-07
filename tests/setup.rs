@@ -250,6 +250,28 @@ fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_
     assert_eq!(own["model"], "opus");
     assert_eq!(own["statusLine"]["command"], "switchboard statusline");
 
+    // Linked into a clone pulled since the repository dropped the file, it
+    // is taken from the clone's history, as it was before the removal.
+    let old = h.path("old-clone");
+    h.init(&old, "main");
+    let o = old.to_str().unwrap();
+    fs::create_dir_all(old.join("claude")).unwrap();
+    fs::write(old.join("claude/settings.json"), "{\"model\":\"haiku\"}\n").unwrap();
+    h.git(&["-C", o, "add", "claude/settings.json"]);
+    h.git(&["-C", o, "commit", "-q", "-m", "settings"]);
+    h.git(&["-C", o, "rm", "-q", "claude/settings.json"]);
+    h.git(&["-C", o, "commit", "-q", "-m", "removed"]);
+    fs::remove_file(&file).unwrap();
+    std::os::unix::fs::symlink(old.join("claude/settings.json"), &file).unwrap();
+    let dangling = ok(&h.run(&["setup", "claude"]));
+    assert!(
+        dangling.contains("make ~/.claude/settings.json your own"),
+        "{dangling}"
+    );
+    let own: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(own["model"], "haiku");
+    assert_eq!(own["statusLine"]["command"], "switchboard statusline");
+
     // A file that isn't JSON is left alone, and said.
     fs::write(&file, "{ not json").unwrap();
     let bad = h.run(&["setup", "claude"]);
@@ -865,64 +887,6 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
     odd["session_id"] = json!("../x");
     statusline(&h, &odd, true);
     assert!(!state.join("x").exists() && !state.join("context/../x").exists());
-}
-
-/// claude/statusline-command.sh, run with bash as Claude Code ran it, when
-/// bash, jq and shasum are there: the same line and the same files.
-#[test]
-fn the_same_line_and_files_as_statusline_command_sh() {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("claude/statusline-command.sh");
-    let have = |p: &str| Command::new(p).arg("--version").output().is_ok();
-    if !script.exists() || !have("bash") || !have("jq") || !have("shasum") {
-        eprintln!("skipped: the script, bash, jq or shasum missing");
-        return;
-    }
-    let h = Home::new("statusline-sh");
-    let repo = h.path("app");
-    h.init(&repo, "eng-42-fix");
-    h.git(&[
-        "-C",
-        repo.to_str().unwrap(),
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "start",
-    ]);
-    let payload = json!({
-        "session_id": "sess-2",
-        "model": { "display_name": "Sonnet" },
-        "workspace": { "current_dir": repo.to_string_lossy() },
-        "context_window": { "used_percentage": 64 },
-        "cost": { "total_cost_usd": 0.5 },
-        "rate_limits": { "seven_day": { "used_percentage": 12.5 } }
-    });
-    for in_workspace in [false, true] {
-        let ours = statusline(&h, &payload, in_workspace);
-        let mut cmd = h.command("bash");
-        cmd.arg(&script).env_remove("TMUX");
-        if in_workspace {
-            cmd.env("TMUX", "/tmp/tmux,1,0");
-        }
-        let mut child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.to_string().as_bytes())
-            .unwrap();
-        let theirs = ok(&child.wait_with_output().unwrap());
-        assert_eq!(ours, theirs, "in the workspace: {in_workspace}");
-    }
-    let old = h.path(".local/state/tmux-sidebar");
-    let new = h.path(".local/state/switchboard");
-    for file in ["context/sess-2", "usage/spend-sess-2", "usage/limits"] {
-        assert_eq!(read(&new.join(file)), read(&old.join(file)), "{file}");
-    }
 }
 
 // ── What the skills ask of the server ───────────────────────────────────────

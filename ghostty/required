@@ -1,4 +1,0 @@
-# What Switchboard needs from Ghostty, for someone who keeps their own Ghostty
-# config: setup.sh's terminal step adds a config-file line reading this file
-# to it. Option acts as Alt, which every M- key needs.
-macos-option-as-alt = true

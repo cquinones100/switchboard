@@ -208,7 +208,6 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 mod tests {
     use super::super::git::tests::{Scratch, git, repo};
     use super::*;
-    use std::process::Command;
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -270,7 +269,7 @@ mod tests {
     #[test]
     fn colors_are_pinned() {
         // Worked out by tmux/accent-color.sh, so a change to the hash or the
-        // steps shows up here even where bash can't run.
+        // steps shows up here.
         for (key, hex) in PINNED {
             assert_eq!(accent_color(key).hex(), *hex, "{key}");
         }
@@ -295,75 +294,53 @@ mod tests {
         ("f", "f42828"),
     ];
 
-    /// Runs tmux/accent-color.sh with bash, as tmux did, for its color or
-    /// (with `--name`) its name; `None` without bash, git or shasum.
-    fn script(dir: &Path, name: bool) -> Option<String> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut cmd = Command::new("bash");
-        cmd.arg(root.join("tmux/accent-color.sh"));
-        if name {
-            cmd.arg("--name");
-        }
-        // No tmux on the PATH the script sees, so the accent_colors setting
-        // reads as on, whatever server the machine runs.
-        let out = cmd
-            .arg(dir)
-            .env("PATH", "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin")
-            .env_remove("TMUX")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .output()
-            .ok()?;
-        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        (out.status.success() && !text.is_empty()).then_some(text)
-    }
-
-    fn have(program: &str) -> bool {
-        Command::new(program).arg("--version").output().is_ok()
-    }
-
+    /// Real directories, read through git's own files, take the keys and
+    /// names accent-color.sh gave them, and the colors pinned above.
     #[test]
-    fn the_same_color_and_name_as_accent_color_sh() {
-        if !have("bash") || !have("git") || !have("shasum") {
-            eprintln!("skipped: bash, git or shasum missing");
+    fn real_directories_take_their_keys_names_and_colors() {
+        let scratch = Scratch::new("color");
+        let main = scratch.0.join("switchboard");
+        if !repo(&main) {
+            eprintln!("skipped: no git");
             return;
         }
-        let scratch = Scratch::new("color");
-        let plain = scratch.0.join("plain-dir");
+        let plain = scratch.0.join("app");
         std::fs::create_dir_all(&plain).unwrap();
-        let app = scratch.0.join("app");
-        assert!(repo(&app));
-        let mut dirs = vec![plain.clone(), app.clone()];
-        let feature = scratch.0.join("web");
-        assert!(repo(&feature));
-        assert!(git(&feature, &["checkout", "-q", "-b", "eng-42-fix-login"]));
-        dirs.push(feature.clone());
-        let sub = feature.join("src");
+        let web = scratch.0.join("web");
+        assert!(repo(&web));
+        assert!(git(&web, &["checkout", "-q", "-b", "eng-42-fix-login"]));
+        let sub = web.join("src");
         std::fs::create_dir_all(&sub).unwrap();
-        dirs.push(sub);
-        let wt = scratch.0.join("web-eng-7");
+        let wt = scratch.0.join("eng-7");
         assert!(git(
-            &feature,
+            &web,
             &["worktree", "add", "-q", "-b", "eng-7", wt.to_str().unwrap()]
         ));
-        dirs.push(wt);
-        let detached = scratch.0.join("loose");
+        let detached = scratch.0.join("api");
         assert!(repo(&detached));
         assert!(git(&detached, &["checkout", "-q", "--detach"]));
-        dirs.push(detached);
-        for dir in &dirs {
-            let Some(color) = script(dir, false) else {
-                eprintln!("skipped: accent-color.sh didn't run");
-                return;
-            };
-            assert_eq!(accent_color_of(dir).hex(), color, "{}", dir.display());
-            let name = script(dir, true).unwrap_or_default();
+        for (dir, key, name) in [
+            (&main, "switchboard | branch:main", "switchboard"),
+            (&plain, "app", "app"),
+            (
+                &web,
+                "web | branch:eng-42-fix-login",
+                "web:eng-42-fix-login",
+            ),
+            (
+                &sub,
+                "src | branch:eng-42-fix-login",
+                "src:eng-42-fix-login",
+            ),
+            (&wt, "eng-7 | worktree:eng-7", "eng-7"),
+            (&detached, "api | branch:HEAD", "api:HEAD"),
+        ] {
+            assert_eq!(color_key_of(dir), key, "{}", dir.display());
+            if let Some((_, hex)) = PINNED.iter().find(|(k, _)| *k == key) {
+                assert_eq!(accent_color_of(dir).hex(), *hex, "{key}");
+            }
             let place = super::super::git::locate(dir);
-            assert_eq!(
-                window_name(&dir_name(dir), place.as_ref()),
-                name,
-                "{}",
-                dir.display()
-            );
+            assert_eq!(window_name(&dir_name(dir), place.as_ref()), name, "{key}");
         }
     }
 }
