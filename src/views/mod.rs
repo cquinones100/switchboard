@@ -16,6 +16,8 @@
 //! - `pager`: less's part: keys, search, resize, links.
 //! - `pr`: the branch's PR (pr-view.sh, pr-view.js's `prepare`).
 //! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`).
+//! - `image`: the PR or ticket as GitHub draws it, as pictures in a pane's
+//!   place (pr-image.js).
 //! - `page`: what a link holds (link-view.sh's `show`, lib/link-view.js).
 //! - `search`: search everything's sources (lib/search.js).
 //! - `ready`: whether the PR can merge (pr-ready.sh).
@@ -24,6 +26,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+pub mod image;
 pub mod markdown;
 pub mod mermaid;
 pub mod page;

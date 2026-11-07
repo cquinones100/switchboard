@@ -272,7 +272,7 @@ impl Server {
     }
 
     /// The ticket a tab's work is on: its branch's, else its name's.
-    fn ticket_here(&self, tab: TabId, dir: &std::path::Path) -> Option<String> {
+    pub(super) fn ticket_here(&self, tab: TabId, dir: &std::path::Path) -> Option<String> {
         ticket::id_for_dir(dir).or_else(|| {
             let t = self.tabs.get(&tab)?;
             t.opts

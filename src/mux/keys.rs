@@ -94,6 +94,11 @@ pub enum Action {
     /// Shape a new Linear ticket from an idea typed in (note-shape.sh's
     /// `prompt`).
     ShapeNewTicket,
+    /// The branch's PR description as GitHub draws it, as images in place
+    /// of the pane (pr-image.js; src/views/image).
+    PrImage,
+    /// The branch's Linear ticket drawn the same way.
+    TicketImage,
     /// Mission control, or closed when it is open (M-Space; src/mission).
     MissionControl,
     /// The Work map as a picker of the open tabs (M-j).
@@ -129,8 +134,8 @@ impl Action {
     /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
-    /// `continue-shaping`, `shape-note`, `shape-new-ticket`,
-    /// `mission-control`, `find-tab`,
+    /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
+    /// `ticket-image`, `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`), updates'
@@ -185,6 +190,8 @@ impl Action {
             "continue-shaping" => Action::ContinueShaping,
             "shape-note" => Action::ShapeNote,
             "shape-new-ticket" => Action::ShapeNewTicket,
+            "pr-image" => Action::PrImage,
+            "ticket-image" => Action::TicketImage,
             "mission-control" => Action::MissionControl,
             "find-tab" => Action::FindTab,
             "revive-worktree" => Action::ReviveWorktree,
@@ -245,6 +252,8 @@ impl Action {
             Action::ContinueShaping => "continue-shaping".into(),
             Action::ShapeNote => "shape-note".into(),
             Action::ShapeNewTicket => "shape-new-ticket".into(),
+            Action::PrImage => "pr-image".into(),
+            Action::TicketImage => "ticket-image".into(),
             Action::MissionControl => "mission-control".into(),
             Action::FindTab => "find-tab".into(),
             Action::ReviveWorktree => "revive-worktree".into(),
@@ -312,6 +321,12 @@ impl Action {
             Action::ShapeNewTicket => {
                 "Shape a new Linear ticket from what you type, in a new tab".into()
             }
+            Action::PrImage => {
+                "View the branch's PR description as an image, as GitHub draws it, in place of this pane".into()
+            }
+            Action::TicketImage => {
+                "View the branch's Linear ticket as an image, as the PR image shows a PR, in place of this pane".into()
+            }
             Action::MissionControl => "Open or close mission control".into(),
             Action::FindTab => "Search and jump to a tab".into(),
             Action::ReviveWorktree => {
@@ -362,6 +377,8 @@ impl Action {
             Action::ContinueShaping => &["linear", "ticket", "shape"],
             Action::ShapeNote => &["notes", "linear", "shape"],
             Action::ShapeNewTicket => &["linear", "ticket", "shape"],
+            Action::PrImage => &["github", "pr", "panes"],
+            Action::TicketImage => &["linear", "ticket", "panes"],
             Action::MissionControl => &["sidebar", "overview", "tabs"],
             Action::FindTab => &["tabs", "navigate", "find"],
             Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
@@ -428,6 +445,8 @@ impl Action {
             Action::ContinueShaping,
             Action::ShapeNote,
             Action::ShapeNewTicket,
+            Action::PrImage,
+            Action::TicketImage,
             Action::Settings,
             Action::RemindTab,
             Action::StopSlackRelay,
@@ -636,6 +655,8 @@ mod tests {
             Action::RemindTab,
             Action::ShapeNote,
             Action::ShapeNewTicket,
+            Action::PrImage,
+            Action::TicketImage,
             Action::View(crate::views::Command::PrView),
             Action::View(crate::views::Command::OpenLinkRead),
             Action::Diff(crate::diff::Command::Diff),

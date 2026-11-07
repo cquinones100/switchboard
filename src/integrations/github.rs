@@ -118,12 +118,31 @@ async fn send(
     protocol: &str,
     source: &str,
 ) -> Result<(Response, Credential)> {
+    send_accepting(
+        method,
+        url,
+        body,
+        protocol,
+        source,
+        "application/vnd.github+json",
+    )
+    .await
+}
+
+async fn send_accepting(
+    method: &str,
+    url: &str,
+    body: Option<&Value>,
+    protocol: &str,
+    source: &str,
+    accept: &str,
+) -> Result<(Response, Credential)> {
     ensure_on("github", SERVICE)?;
     let credential = credential().await?;
     let auth = format!("Bearer {}", credential.value);
     let headers = [
         ("Authorization", auth.as_str()),
-        ("Accept", "application/vnd.github+json"),
+        ("Accept", accept),
         ("X-GitHub-Api-Version", "2022-11-28"),
     ];
     let audit = Audit {
@@ -197,6 +216,24 @@ pub async fn graphql_partial(
 pub async fn rest(method: &str, path: &str, body: Option<&Value>, source: &str) -> Result<Value> {
     let url = format!("{}/{}", api_url(), path.trim_start_matches('/'));
     let (response, credential) = send(method, &url, body, "REST", source).await?;
+    check_status(&response, &credential)?;
+    Ok(response.body)
+}
+
+/// A REST GET whose answer carries GitHub's rendered HTML beside the
+/// Markdown (`body_html`, for the PR image view), as `gh api -H "Accept:
+/// application/vnd.github.full+json"` read it.
+pub async fn rest_rendered(path: &str, source: &str) -> Result<Value> {
+    let url = format!("{}/{}", api_url(), path.trim_start_matches('/'));
+    let (response, credential) = send_accepting(
+        "GET",
+        &url,
+        None,
+        "REST",
+        source,
+        "application/vnd.github.full+json",
+    )
+    .await?;
     check_status(&response, &credential)?;
     Ok(response.body)
 }

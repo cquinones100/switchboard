@@ -3,8 +3,8 @@
 //! after a program runs it too, so `wt-jump` and the rest keep their names.
 //! What used to be a program run inside tmux is part of the workspace now
 //! (the sidebar, search), or a program of its own the workspace runs in a
-//! pane (`view`, `pr-view`, `ticket-view`, `link-view`, src/views; `diff`,
-//! src/diff; `notes`, src/notes).
+//! pane (`view`, `pr-view`, `ticket-view`, `link-view`, `pr-image`,
+//! src/views; `diff`, src/diff; `notes`, src/notes).
 
 use std::process::ExitCode;
 
@@ -221,6 +221,11 @@ pub const COMMANDS: &[Command] = &[
         name: "link-view",
         run: crate::views::link_view_main,
         about: "What a link holds, read in the terminal",
+    },
+    Command {
+        name: "pr-image",
+        run: crate::views::image::main,
+        about: "The branch's PR description (or --ticket <ID>) as GitHub draws it, as pictures (M-p runs it in a pane's place)",
     },
     Command {
         name: "diff",

@@ -1661,6 +1661,8 @@ impl Server {
             | Action::ContinueShaping => self.work_action(id, action, pane),
             Action::ShapeNote => self.shape_note(id, false),
             Action::ShapeNewTicket => self.shape_note(id, true),
+            Action::PrImage => self.image_view(id, false),
+            Action::TicketImage => self.image_view(id, true),
             Action::MissionControl => self.toggle_mission(id),
             Action::FindTab => self.open_mission(
                 id,
