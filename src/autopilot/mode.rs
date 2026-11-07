@@ -159,17 +159,38 @@ pub fn note_title(note: &str) -> String {
 }
 
 /// The notes to pick from, by their paths within the notes directory with
-/// ".md": the one the mode last worked first, then the most recently
-/// changed, leaving out deleted ones and every other dot-folder. Reads the
-/// whole directory, so it is called off the server's task.
-pub fn note_choices(notes: &Path, last: &str) -> Vec<String> {
+/// ".md", those holding an unticked item (`open`) apart from the rest, so
+/// the menu lists the ones with work in them and keeps the others behind
+/// "More notes…" (autopilot.js's `noteChoices`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NoteChoices {
+    pub open: Vec<String>,
+    pub rest: Vec<String>,
+}
+
+/// The notes to pick from, each list the one the mode last worked first,
+/// then the most recently changed, leaving out deleted ones and every other
+/// dot-folder. Reads the whole directory and every note in it, so it is
+/// called off the server's task.
+pub fn note_choices(notes: &Path, last: &str) -> NoteChoices {
     let last = last.strip_suffix(".md").unwrap_or(last);
     let mut names = crate::cmd::worktree_from_note::notes_newest_first(notes);
     if let Some(at) = names.iter().position(|n| n == last) {
         let found = names.remove(at);
         names.insert(0, found);
     }
-    names.into_iter().map(|n| format!("{n}.md")).collect()
+    let mut choices = NoteChoices::default();
+    for name in names {
+        let note = format!("{name}.md");
+        let open = std::fs::read_to_string(notes.join(&note))
+            .is_ok_and(|text| text.lines().any(|l| l.trim_start().starts_with("- [ ] ")));
+        if open {
+            choices.open.push(note);
+        } else {
+            choices.rest.push(note);
+        }
+    }
+    choices
 }
 
 #[cfg(test)]
@@ -226,9 +247,16 @@ mod tests {
         let dir = temp("choices");
         fs::create_dir_all(dir.join("Work")).unwrap();
         fs::create_dir_all(dir.join(".trash")).unwrap();
-        for (name, ago) in [("Old.md", 300), ("Work/New.md", 10), (".trash/Gone.md", 0)] {
+        for (name, ago, text) in [
+            ("Old.md", 300, "# x\n"),
+            ("Work/New.md", 10, "# x\n"),
+            (".trash/Gone.md", 0, "- [ ] gone\n"),
+            ("Ticked.md", 200, "# x\n- [x] done\n"),
+            ("Todo.md", 100, "# x\n- [x] done\n  - [ ] under it\n"),
+            ("Plan.md", 400, "# x\n- [ ] first\n"),
+        ] {
             let file = dir.join(name);
-            fs::write(&file, "# x\n").unwrap();
+            fs::write(&file, text).unwrap();
             let at = std::time::SystemTime::now() - std::time::Duration::from_secs(ago);
             fs::File::options()
                 .write(true)
@@ -237,8 +265,21 @@ mod tests {
                 .set_modified(at)
                 .unwrap();
         }
-        assert_eq!(note_choices(&dir, ""), vec!["Work/New.md", "Old.md"]);
-        assert_eq!(note_choices(&dir, "Old.md"), vec!["Old.md", "Work/New.md"]);
+        let v = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            note_choices(&dir, ""),
+            NoteChoices {
+                open: v(&["Todo.md", "Plan.md"]),
+                rest: v(&["Work/New.md", "Ticked.md", "Old.md"]),
+            },
+            "those holding an unticked item apart, each newest first"
+        );
+        let last = note_choices(&dir, "Old.md");
+        assert_eq!(last.rest, v(&["Old.md", "Work/New.md", "Ticked.md"]));
+        assert_eq!(
+            note_choices(&dir, "Plan.md").open,
+            v(&["Plan.md", "Todo.md"])
+        );
         assert_eq!(note_title("Work/Plan's Notes.md"), "Plan's Notes");
         let _ = fs::remove_dir_all(&dir);
     }

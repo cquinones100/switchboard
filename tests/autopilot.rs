@@ -61,6 +61,8 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     let notes = TempDir::new("sbn");
     let note = notes.path().join("Work.md");
     std::fs::write(&note, "# Work\n\n- [ ] First thing\n- [ ] Second thing\n").unwrap();
+    // A note with nothing left to tick, behind "More notes…".
+    std::fs::write(notes.path().join("Done.md"), "# Done\n\n- [x] All of it\n").unwrap();
     // Changed long enough ago to have settled.
     std::fs::File::options()
         .write(true)
@@ -100,7 +102,16 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     client.type_text("continuously");
     client.wait_text("Work the note continuously");
     client.type_text("\r");
-    client.wait_text("Work which note continuously?");
+    let screen = client.wait_text("More notes…");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Work which note continuously?"))
+    );
+    assert!(
+        !screen.iter().any(|l| l.contains("Done")),
+        "a note with nothing unticked is behind More notes…"
+    );
     client.type_text("\r");
     client.wait_text("Tabs working at once");
     client.type_text("\r");

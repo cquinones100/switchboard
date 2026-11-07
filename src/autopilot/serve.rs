@@ -4,8 +4,9 @@
 //! in the server task.
 //!
 //! M-p's "Work the note continuously" opens mission control on its tabs,
-//! then, with the mode off, asks which note (the one last worked first,
-//! then the newest), how many of its tabs work at once, the most open and a
+//! then, with the mode off, asks which note (those holding an unticked
+//! item, the one last worked first, then the newest, the rest behind "More
+//! notes…"), how many of its tabs work at once, the most open and a
 //! spend limit, each typed in a box with what it was before, Enter keeping
 //! it; the repository is the main clone of the pane it was asked from. With
 //! the mode on, it opens the line's menu instead.
@@ -115,25 +116,54 @@ impl Server {
         self.off_task(
             client,
             move || mode::note_choices(&notes, &last),
-            move |server, client, names| {
-                if names.is_empty() {
+            move |server, client, notes| {
+                if notes.open.is_empty() && notes.rest.is_empty() {
                     server.mission_note(client, "No notes to work");
                     return;
                 }
-                let items = names
-                    .iter()
-                    .map(|n| PickItem::new(n.strip_suffix(".md").unwrap_or(n), n.clone()))
-                    .collect();
-                let picker = Picker::new("Work which note continuously?", items)
-                    .named("notes")
-                    .prompt("note> ");
-                server.pick(client, picker, move |server, client, picked| {
-                    if let Some(p) = picked {
-                        server.autopilot_ask_counts(client, repo, p.value, was);
-                    }
-                });
+                server.autopilot_pick_note(client, repo, was, notes);
             },
         );
+    }
+
+    /// Which note: those holding an unticked item, the rest behind "More
+    /// notes…", so the list stays short; with none of them, the rest at
+    /// once.
+    fn autopilot_pick_note(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        was: Mode,
+        notes: mode::NoteChoices,
+    ) {
+        let (shown, rest) = if notes.open.is_empty() {
+            (notes.rest, Vec::new())
+        } else {
+            (notes.open, notes.rest)
+        };
+        // A note's value is its path, never empty.
+        const MORE: &str = "";
+        let mut items: Vec<PickItem> = shown
+            .iter()
+            .map(|n| PickItem::new(n.strip_suffix(".md").unwrap_or(n), n.clone()))
+            .collect();
+        if !rest.is_empty() {
+            items.push(PickItem::new("More notes…", MORE));
+        }
+        let picker = Picker::new("Work which note continuously?", items)
+            .named("notes")
+            .prompt("note> ");
+        self.pick(client, picker, move |server, client, picked| match picked {
+            Some(p) if p.value == MORE => {
+                let rest = mode::NoteChoices {
+                    open: Vec::new(),
+                    rest,
+                };
+                server.autopilot_pick_note(client, repo, was, rest);
+            }
+            Some(p) => server.autopilot_ask_counts(client, repo, p.value, was),
+            None => {}
+        });
     }
 
     /// The setup's slots and cap, each typed in starting from what it was.
