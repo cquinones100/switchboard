@@ -179,7 +179,7 @@ pub struct Memory {
 /// message; while you're at the computer, as a line that waits until you're
 /// away.
 pub async fn ping(cx: &Cx, tab: &Tab, line: &str, broadcast: bool) -> anyhow::Result<()> {
-    let home = home_of(cx, tab).await;
+    let home = home_of(cx, tab).await?;
     let target = Target {
         window: tab.id.clone(),
         index: tab.index,
@@ -212,7 +212,7 @@ pub async fn ping(cx: &Cx, tab: &Tab, line: &str, broadcast: bool) -> anyhow::Re
             "wait",
             Box::new(|_| true),
         )
-        .await;
+        .await?;
     }
     Ok(())
 }

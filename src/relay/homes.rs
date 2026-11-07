@@ -72,17 +72,22 @@ pub fn header_key(tab: &Tab) -> String {
 }
 
 /// A tab's home thread, started if it has none yet: one per tab, however
-/// many messages ask for it at once. `None` for a tab that has closed.
-pub async fn home_of(cx: &Cx, tab: &Tab) -> Option<String> {
+/// many messages ask for it at once. `None` for a tab that has closed, and
+/// an error when Slack refused to start the thread, which fails what asked
+/// for it (an alert then cleared to go out again on the next tick, as
+/// homes.js's rejected promise did) rather than sending it to the top level.
+pub async fn home_of(cx: &Cx, tab: &Tab) -> anyhow::Result<Option<String>> {
     // Its Claude pane's process, as the tabs report it now.
-    let pid = super::tabs::tab(cx, &tab.id).map(|t| t.pid)?;
+    let Some(pid) = super::tabs::tab(cx, &tab.id).map(|t| t.pid) else {
+        return Ok(None);
+    };
     {
         let state = cx.state.borrow();
         if let Some(home) = state.homes.get(&tab.id)
             && home.pid == pid
             && state.threads.contains_key(&home.ts)
         {
-            return Some(home.ts.clone());
+            return Ok(Some(home.ts.clone()));
         }
     }
     let existing = cx.homing.borrow().get(&tab.id).cloned();
@@ -90,7 +95,7 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> Option<String> {
         Some(making) => making,
         None => {
             let (cx2, tab2) = (cx.clone(), tab.clone());
-            let fut: LocalBoxFuture<'static, Option<String>> = Box::pin(async move {
+            let fut: LocalBoxFuture<'static, Result<String, String>> = Box::pin(async move {
                 let made = post(
                     &cx2,
                     &home_text(&tab2),
@@ -102,8 +107,9 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> Option<String> {
                 let ts = match made {
                     Ok(ts) => ts,
                     Err(e) => {
-                        cx2.log(&format!("starting tab {}'s thread failed: {e}", tab2.index));
-                        return None;
+                        let why = format!("starting tab {}'s thread failed: {e}", tab2.index);
+                        cx2.log(&why);
+                        return Err(why);
                     }
                 };
                 {
@@ -128,7 +134,7 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> Option<String> {
                     );
                 }
                 cx2.save();
-                Some(ts)
+                Ok(ts)
             });
             let shared = fut.shared();
             cx.homing
@@ -137,7 +143,7 @@ pub async fn home_of(cx: &Cx, tab: &Tab) -> Option<String> {
             shared
         }
     };
-    making.await
+    making.await.map(Some).map_err(anyhow::Error::msg)
 }
 
 pub fn is_home(cx: &Relay, ts: &str) -> bool {

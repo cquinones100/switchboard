@@ -451,7 +451,7 @@ pub async fn for_tab(
     }
     let conversation = match thread {
         Some(t) => Some(t.to_string()),
-        None => match home_of(cx, tab).await {
+        None => match home_of(cx, tab).await? {
             Some(home) => Some(home),
             None => request.map(str::to_string),
         },

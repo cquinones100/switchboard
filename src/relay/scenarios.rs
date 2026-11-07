@@ -2471,3 +2471,72 @@ fn stop_in_the_dm_marks_the_welcome_stopped_and_ends_the_run() {
             .starts_with("⚪ The relay stopped")
     );
 }
+
+#[test]
+fn an_alert_whose_thread_couldnt_be_started_goes_out_on_the_next_tick() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "waiting", "100");
+    rig.set_screen(&tab, "Allow this edit? 1. Yes 2. No\n");
+    let run = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+    };
+    rig.slack.answers.borrow_mut().insert(
+        "chat.postMessage".into(),
+        Box::new(|_| Err(anyhow::anyhow!("chat.postMessage: ratelimited"))),
+    );
+    run(&rig);
+    assert!(
+        !rig.cx.state.borrow().reported.contains_key(&tab),
+        "not reported, so the next tick tries again"
+    );
+    assert!(rig.cx.state.borrow().homes.is_empty());
+    rig.slack.answers.borrow_mut().clear();
+    rig.slack.calls.borrow_mut().clear();
+    run(&rig);
+    let posts = rig.posts();
+    assert!(posts[0].body.contains("This is its thread"));
+    assert!(posts[1].body.contains("is **waiting on you**"));
+    assert_eq!(
+        posts[1].thread.as_ref(),
+        Some(&posts[0].ts),
+        "in the thread, never at the top level"
+    );
+}
+
+#[test]
+fn an_alert_whose_line_in_the_main_dm_failed_while_away_is_sent_again() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_state(&tab, "waiting", "100");
+    rig.set_screen(&tab, "Allow this edit? 1. Yes 2. No\n");
+    let run = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+    };
+    // Only the line also sent to the main DM fails.
+    let posted = rig.slack.clone();
+    rig.slack.answers.borrow_mut().insert(
+        "chat.postMessage".into(),
+        Box::new(move |params| {
+            if params["reply_broadcast"] == true {
+                return Err(anyhow::anyhow!("chat.postMessage: fatal_error"));
+            }
+            let n = posted.posted_ts.borrow().len();
+            let ts = format!("{}.{n:06}", util::now_secs());
+            posted.posted_ts.borrow_mut().push(ts.clone());
+            Ok(json!({ "ok": true, "ts": ts }))
+        }),
+    );
+    run(&rig);
+    assert!(!rig.cx.state.borrow().reported.contains_key(&tab));
+    rig.slack.answers.borrow_mut().clear();
+    rig.slack.calls.borrow_mut().clear();
+    rig.slack.posted_ts.borrow_mut().clear();
+    run(&rig);
+    let lines: Vec<_> = rig.posts().into_iter().filter(|p| p.broadcast).collect();
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].body.ends_with("is **waiting on you**."));
+    assert!(rig.cx.state.borrow().reported.contains_key(&tab));
+}

@@ -134,7 +134,8 @@ pub type Cx = Rc<Relay>;
 pub type Settings = Box<dyn Fn(&str) -> Option<Value>>;
 
 /// A tab's home thread being started, which every ask for it waits on.
-pub type Homing = Shared<LocalBoxFuture<'static, Option<String>>>;
+/// It gives the thread, or why Slack refused to start it.
+pub type Homing = Shared<LocalBoxFuture<'static, Result<String, String>>>;
 
 /// What the parts keep in memory between ticks, each as the module that
 /// owns it describes.

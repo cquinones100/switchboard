@@ -590,7 +590,7 @@ pub async fn redraw(cx: &Cx, view: &str, meta: &Value, note: Option<&str>) {
 
 /// The tab's thread, made if it has none yet, and linked to the tab.
 async fn thread_for(cx: &Cx, tab: &Tab) -> Option<String> {
-    let home = home_of(cx, tab).await?;
+    let home = home_of(cx, tab).await.ok().flatten()?;
     let mut state = cx.state.borrow_mut();
     state.watch_thread(&home, util::now_ms());
     state

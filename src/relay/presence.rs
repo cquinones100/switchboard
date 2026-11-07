@@ -93,13 +93,13 @@ impl Default for Presence {
     }
 }
 
-/// Sends a notice now when you're away, else holds it.
-pub async fn deliver(cx: &Relay, send: Held) {
+/// Sends a notice now when you're away, else holds it. One sent now that
+/// fails fails its caller, as presence.js's `deliver` returned the send, so
+/// an alert is cleared to go out again on the next tick; one held that
+/// fails later is only logged.
+pub async fn deliver(cx: &Relay, send: Held) -> anyhow::Result<()> {
     if cx.presence.away() {
-        if let Err(e) = send.await {
-            cx.log(&format!("held message failed: {e}"));
-        }
-        return;
+        return send.await;
     }
     let held = {
         let mut held = cx.presence.held.borrow_mut();
@@ -107,6 +107,7 @@ pub async fn deliver(cx: &Relay, send: Held) {
         held.len()
     };
     cx.log(&format!("at the computer: holding a notice ({held} held)"));
+    Ok(())
 }
 
 /// Sends what is held, in order, one flush at a time.

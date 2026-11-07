@@ -46,7 +46,7 @@ pub async fn notify(
     buttons: Vec<Button>,
     kind: &'static str,
     still: Box<dyn Fn(&Relay) -> bool>,
-) {
+) -> anyhow::Result<()> {
     let cx2 = cx.clone();
     let send: LocalBoxFuture<'static, anyhow::Result<()>> = Box::pin(async move {
         let live = !buttons.is_empty() && still(&cx2);
@@ -68,7 +68,7 @@ pub async fn notify(
         cx2.save();
         Ok(())
     });
-    super::presence::deliver(cx, send).await;
+    super::presence::deliver(cx, send).await
 }
 
 /// A prompt that is no longer showing (answered at the computer, or the
@@ -238,7 +238,7 @@ async fn alert(cx: &Cx, due: Due) {
     };
     let transcript = due.transcript.clone().or_else(|| tab.transcript.clone());
     let result: anyhow::Result<()> = async {
-        let home = home_of(cx, tab).await;
+        let home = home_of(cx, tab).await?;
         let target = Target {
             window: tab.id.clone(),
             index: tab.index,
@@ -301,7 +301,7 @@ async fn alert(cx: &Cx, due: Due) {
                 "wait",
                 still,
             )
-            .await;
+            .await?;
         }
         cx.log(&format!(
             "alert: {} {}",
@@ -373,7 +373,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
             .reported
             .insert(tab.id.clone(), key.clone());
         let result: anyhow::Result<()> = async {
-            let home = home_of(cx, tab).await;
+            let home = home_of(cx, tab).await?;
             let target = Target {
                 window: tab.id.clone(),
                 index: tab.index,
@@ -426,7 +426,7 @@ async fn dialogs(cx: &Cx, tabs: &[Tab]) {
                 "dialog",
                 Box::new(move |cx: &Relay| cx.state.borrow().reported.get(&id) == Some(&wanted)),
             )
-            .await;
+            .await?;
             cx.log(&format!("alert: {} dialog", label(tab.index, &tab.name)));
             Ok(())
         }

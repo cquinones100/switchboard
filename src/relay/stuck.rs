@@ -75,7 +75,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
         };
         let name = label(tab.index, &tab.name);
         let result: anyhow::Result<()> = async {
-            let home = home_of(cx, tab).await;
+            let home = home_of(cx, tab).await?;
             let target = Target {
                 window: tab.id.clone(),
                 index: tab.index,
@@ -100,7 +100,7 @@ pub async fn stuck_tabs(cx: &Cx, tabs: &[Tab]) {
                 "wait",
                 Box::new(|_| true),
             )
-            .await;
+            .await?;
             cx.log(&format!("stuck: {name}"));
             Ok(())
         }
