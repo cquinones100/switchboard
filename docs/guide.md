@@ -250,7 +250,7 @@ Settings' "Theme" (`theme`) draws the status line, the lines between panes, the 
 
 The commands you picked last come first, the newest at the top, then the rest by description. As you type, a command you picked before after typing the same words comes first, then one picked after longer words that start with what you typed, so `sha` finds what you picked after typing `shape`. What you typed before each pick is kept, the last 300, in `~/.local/state/switchboard/palette/`, readable only by you; Settings' "Learn from what you pick" (`palette_learn`) turns that off. After you pick a command that has a key of its own, a tip names the key, once for each key.
 
-While GitHub or Linear is off in Settings, the commands tagged `#github` or `#linear` leave the palette, and `M-v`, `M-r` and `M-m` (GitHub) or `M-i` and `M-l` (Linear) do nothing but say so, with a tip the first time. The diff's own commands, copying its story and asking Claude about it, are listed only while the pane has the diff open (asking only with Settings' "Ask Claude about the diff" on), and the two that show the pane a tool stands in for beside it, or the tool alone again, only while a tool stands in the pane's place.
+While GitHub or Linear is off in Settings, the commands tagged `#github` or `#linear` leave the palette, and every key bound to one (`M-v`, `M-r` and `M-m` for GitHub, `M-i`, `M-l` and `M-W` for Linear, and any you give one in `keys.json`) does nothing but show a tip saying the service is off, the first time, and nothing after. The diff's own commands, copying its story and asking Claude about it, are listed only while the pane has the diff open (asking only with Settings' "Ask Claude about the diff" on), and the two that show the pane a tool stands in for beside it, or the tool alone again, only while a tool stands in the pane's place.
 
 `M-p`'s "Shape a note's checklist items as Linear tickets" picks a note (the one open in Notes first, then the newest), then its items (every one chosen to begin with; Enter on a row leaves it out or puts it back, and the first row shapes what is chosen), then the repository, and opens a background tab running `/shape` for each item, its details and numbered sub-items with it. "Shape a new Linear ticket from what you type, in a new tab" does the same for one idea typed in. Both need Linear (the `linear` setting). `M-p`'s "View the branch's PR description as an image" draws the description as GitHub does, in place of the pane.
 
@@ -688,7 +688,7 @@ The wheel scrolls three lines at a time.
 
 `M-l` opens the branch's Linear ticket, found as `M-i` finds it. With your workspace written in `linear.json` (below), the ticket's address is made from it at once; without, Linear is asked where the ticket is. A box says when there is no ticket in the branch or tab name, when Linear has no such ticket, or why Linear couldn't be asked.
 
-With GitHub turned off in Settings (Integrations, `github`), `M-v`, `M-r`, `M-m` and "Open the repository in the browser" do nothing but say so, with a tip the first time; with Linear off (`linear`), `M-i` and `M-l` do the same.
+With GitHub turned off in Settings (Integrations, `github`), `M-v`, `M-r`, `M-m` and "Open the repository in the browser" do nothing but show a tip saying so, the first time; with Linear off (`linear`), `M-i` and `M-l` do the same.
 
 ### Whether the PR can merge
 

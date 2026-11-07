@@ -19,7 +19,8 @@
 //! done is said in a box (`say`), as gh-open.sh's box said why, since a key
 //! that does nothing reads as broken. A key of a service turned off in
 //! Settings shows its tip (`github_off`, `linear_off`) the first time, as
-//! settings.sh's binding did, and says so after.
+//! settings.sh's binding did, and nothing after (`Server::act` checks
+//! every action's tags first).
 
 use std::path::PathBuf;
 
@@ -154,18 +155,10 @@ impl Server {
         }
     }
 
+    /// A key of a service turned off in Settings: its tip the first time,
+    /// and nothing after, as the bindings settings.sh gave such keys did.
     pub(crate) fn service_off(&mut self, client: ClientId, service: &str) {
-        if !self.tip(&format!("{service}_off"), Some(client)) {
-            let name = if service == "github" {
-                "GitHub"
-            } else {
-                "Linear"
-            };
-            self.say(
-                Some(client),
-                &format!("{name} is off in Settings, so its keys do nothing until it is on again."),
-            );
-        }
+        self.tip(&format!("{service}_off"), Some(client));
     }
 
     /// The pane a key acts on, its tab, and its directory.

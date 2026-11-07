@@ -45,7 +45,13 @@ pub fn read_seen() -> BTreeSet<String> {
 /// `text_of`, word for word; a tip whose key isn't ported yet still says it,
 /// since its trigger comes with the key.
 pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
-    let palette = "M-p";
+    // M-p, and the Commands button that opens it too while the
+    // palette_button setting shows it: the key first, the click after.
+    let palette = if crate::settings::is_on("palette_button") {
+        "M-p (or click ⌘ Commands)"
+    } else {
+        "M-p"
+    };
     let lines: Vec<String> = match name {
         "waiting" => vec![
             "A tab is waiting on you.".into(),

@@ -605,15 +605,7 @@ impl Server {
             (PR_TOOL, "github")
         };
         if !settings::is_on(service) {
-            if !self.tip(&format!("{service}_off"), Some(client)) {
-                let name = if ticket { "Linear" } else { "GitHub" };
-                self.say(
-                    Some(client),
-                    &format!(
-                        "{name} is off in Settings, so its keys do nothing until it is on again."
-                    ),
-                );
-            }
+            self.service_off(client, service);
             return;
         }
         let Some(pane) = self.current_pane(client) else {

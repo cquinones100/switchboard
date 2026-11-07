@@ -203,12 +203,7 @@ impl Server {
     /// new Linear ticket" (`typed` true).
     pub fn shape_note(&mut self, client: ClientId, typed: bool) {
         if !settings::is_on("linear") {
-            if !self.tip("linear_off", Some(client)) {
-                self.say(
-                    Some(client),
-                    "Linear is off in Settings, so its keys do nothing until it is on again.",
-                );
-            }
+            self.service_off(client, "linear");
             return;
         }
         if typed {
