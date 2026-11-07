@@ -149,7 +149,7 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
             // older than that means it isn't.
             "text": match stopped_at {
                 Some(at) => format!("⚪ The relay stopped at {}, so this is out of date until it starts again.", time(at)),
-                None => format!("🟢 Your Mac checked in <!date^{}^{{ago}}|at {}>.", now / 1000, time(now)),
+                None => format!("🟢 Your computer checked in <!date^{}^{{ago}}|at {}>.", now / 1000, time(now)),
             },
         },
     });

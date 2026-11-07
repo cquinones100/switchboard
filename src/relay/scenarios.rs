@@ -1931,7 +1931,7 @@ fn an_offline_note_stays_scheduled_ahead_and_is_renewed_said_back_or_cancelled()
         first["text"]
             .as_str()
             .unwrap()
-            .contains("**The relay is offline.** Your Mac last checked in at ")
+            .contains("**The relay is offline.** Your computer last checked in at ")
     );
     assert_eq!(
         rig.cx.state.borrow().offline_note.as_ref().unwrap().id,

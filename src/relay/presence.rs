@@ -93,7 +93,7 @@ pub async fn deliver(cx: &Relay, send: Held) {
         held.push_back(send);
         held.len()
     };
-    cx.log(&format!("at the Mac: holding a notice ({held} held)"));
+    cx.log(&format!("at the computer: holding a notice ({held} held)"));
 }
 
 /// Sends what is held, in order, one flush at a time.
@@ -127,7 +127,7 @@ pub async fn from_slack(cx: &Relay) {
         return;
     }
     if util::now_ms() >= cx.presence.slack_until.get() {
-        cx.log("away: you wrote from Slack, not the Mac");
+        cx.log("away: you wrote from Slack, not the computer");
     }
     cx.presence.slack_until.set(util::now_ms() + SLACK_AWAY_MS);
     flush(cx).await;
@@ -160,7 +160,7 @@ pub async fn check(cx: &Relay) {
         cx.log(&if now {
             format!("away ({why})")
         } else {
-            format!("at the Mac ({why})")
+            format!("at the computer ({why})")
         });
     }
     if now {

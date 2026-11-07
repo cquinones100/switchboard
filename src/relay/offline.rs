@@ -22,7 +22,7 @@ pub const RENEW_MS: u64 = 2 * 60_000;
 
 pub fn offline_text(since: i64) -> String {
     format!(
-        "🤖 ⚠️ **The relay is offline.** Your Mac last checked in at {}, so it may be off, asleep or without internet. I'll say when it's back.",
+        "🤖 ⚠️ **The relay is offline.** Your computer last checked in at {}, so it may be off, asleep or without internet. I'll say when it's back.",
         clock(since)
     )
 }
