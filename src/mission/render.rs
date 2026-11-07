@@ -1297,6 +1297,24 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
     } else {
         lines.push(head.line(cols, None));
     }
+    // While a note is worked continuously, its line leads the tabs, where
+    // the cursor's -1 is (src/autopilot).
+    if let (None, Some(pilot)) = (view, &snap.pilot) {
+        hits.push(HitBox {
+            y: lines.len() as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(-1),
+        });
+        let lit = m.hover == Some(Spot::Index(-1));
+        lines.push(crate::autopilot::line::line(
+            pilot,
+            cols,
+            m.cursor == -1,
+            lit,
+            theme,
+        ));
+    }
     let body = rows.saturating_sub(1 + lines.len());
     match view {
         None => {
@@ -1376,6 +1394,7 @@ mod tests {
             close: false,
             now_secs: rules().now_secs(),
             frame: 0,
+            pilot: None,
         };
         m
     }
@@ -1541,6 +1560,57 @@ mod tests {
         assert!(
             text.iter().any(|l| l.contains("/work")),
             "a card with no Claude shows its directory"
+        );
+    }
+
+    // test/tmux-sidebar.test.js's "while a note is worked continuously,
+    // mission control's Tabs view leads with its line, which the cursor and
+    // a click reach above the cards".
+    #[test]
+    fn the_note_worked_continuously_leads_the_tabs_above_the_cards() {
+        let mut m = mission(vec![tab(1, "one"), tab(2, "two")], Vec::new());
+        m.snap.pilot = Some(crate::autopilot::Summary {
+            note: "Work".into(),
+            busy: 2,
+            open: 4,
+            slots: 3,
+            cap: 5,
+            next: "Next thing".into(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 1,
+            spend_limit: 0.0,
+        });
+        m.cursor = -1;
+        let (lines, hits) = screen(&m, 120, 30);
+        assert_eq!(lines.len(), 30);
+        for l in &lines {
+            assert_eq!(width(&l.text()), 120, "{:?}", l.text());
+        }
+        let text = texts(&lines);
+        assert!(
+            text[1].starts_with(
+                " AUTO Work  2 of 3 working · 4 of 5 open · next: Next thing · 1 skipped"
+            ),
+            "{}",
+            text[1]
+        );
+        assert_eq!(lines[1].fill, Some(Theme::DARK.highlight), "chosen");
+        assert!(
+            hits.contains(&HitBox {
+                y: 1,
+                x0: 0,
+                x1: 119,
+                spot: Spot::Index(-1)
+            }),
+            "a click on it chooses it"
+        );
+        assert!(
+            hits.iter()
+                .filter(|h| matches!(h.spot, Spot::Index(i) if i >= 0))
+                .all(|h| h.y >= 2),
+            "the cards under it"
         );
     }
 

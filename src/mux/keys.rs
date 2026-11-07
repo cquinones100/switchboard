@@ -127,6 +127,8 @@ pub enum Action {
     /// The rest of tmux.conf's keys and M-p's commands: M-0, C-w, renaming
     /// the tab, mission control on a view and the rest (src/extras).
     Extra(crate::extras::Command),
+    /// Working a note continuously (src/autopilot).
+    Autopilot(crate::autopilot::Command),
 }
 
 impl Action {
@@ -147,7 +149,8 @@ impl Action {
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,
     /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,
-    /// `open-pr-number`, `open-ticket-id`, `aws-login`).
+    /// `open-pr-number`, `open-ticket-id`, `aws-login`), and
+    /// `work-note-continuously`.
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -170,6 +173,9 @@ impl Action {
         }
         if let Some(command) = crate::extras::Command::parse(name) {
             return Some(Action::Extra(command));
+        }
+        if let Some(command) = crate::autopilot::Command::parse(name) {
+            return Some(Action::Autopilot(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -276,6 +282,7 @@ impl Action {
             Action::Update(command) => command.name().into(),
             Action::Notes(command) => command.name().into(),
             Action::Extra(command) => command.name(),
+            Action::Autopilot(command) => command.name().into(),
         }
     }
 
@@ -354,6 +361,7 @@ impl Action {
             Action::Update(command) => command.about().into(),
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about().into(),
+            Action::Autopilot(command) => command.about().into(),
         }
     }
 
@@ -402,6 +410,7 @@ impl Action {
             Action::Update(command) => command.tags(),
             Action::Notes(command) => command.tags(),
             Action::Extra(command) => command.tags(),
+            Action::Autopilot(command) => command.tags(),
         }
     }
 
@@ -475,6 +484,7 @@ impl Action {
         .chain(notes)
         .chain(extras)
         .chain(crate::update::Command::ALL.map(Action::Update))
+        .chain(crate::autopilot::Command::ALL.map(Action::Autopilot))
         .collect()
     }
 }
@@ -691,6 +701,7 @@ mod tests {
             Action::Extra(crate::extras::Command::Mission(
                 crate::extras::MissionView::Queues,
             )),
+            Action::Autopilot(crate::autopilot::Command::WorkNote),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

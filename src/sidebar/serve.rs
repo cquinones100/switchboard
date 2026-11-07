@@ -1231,11 +1231,16 @@ impl Server {
     }
 
     /// A notification, chosen: where its item goes (a tab, a link, a
-    /// directory for a new tab), or, with nowhere to go, its words said.
+    /// directory for a new tab; the mode working a note to mission control's
+    /// tabs, where its line is), or, with nowhere to go, its words said.
     fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
         let Owner::Notice { source, id } = owner else {
             return;
         };
+        if source == "autopilot" {
+            self.open_mission(client, crate::mission::Opening::Tabs);
+            return;
+        }
         let Some(item) = self
             .notices
             .get(source)

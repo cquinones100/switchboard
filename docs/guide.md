@@ -183,13 +183,13 @@ The actions, by the names the file uses:
 
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
-- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `continue-shaping`, `send-reply`, `update-main`.
+- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `pr-ready`, `search-everything`, `read-link`, `open-link-being-read`.
 - The diff: `diff`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
 
-These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one.
+These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one.
 
 ## Tabs and the status line
 
@@ -353,11 +353,12 @@ The notifications sit at the bottom of the sidebar, under a double yellow rule a
 - the next meeting, as it is about to start ("Standup in 3m · ↵ joins");
 - each change to today's calendar since you last looked at it;
 - each note written for you, until you open it in Notes;
+- what working a note continuously has to say: that it stopped for the day's spend, or the note has nothing left;
 - a suggestion from how you work.
 
-"Your day" and "How you use it", below, say more of each.
+"Your day", "How you use it" and "Working a note continuously", below, say more of each.
 
-Moving past the last tab with `j`, `n` in the sidebar, or a click puts the cursor on them. Enter or a click does what one leads to: a meeting joins its call, a Slack message or an Inbox notification opens in the browser, and one with nowhere to go shows its words in a box. Dismissing one, marking it read and a suggestion's choices are in its menu in mission control's Notifications view. Settings' "Notifications" (`sidebar_notifications`) turns the block, and that view, off.
+Moving past the last tab with `j`, `n` in the sidebar, or a click puts the cursor on them. Enter or a click does what one leads to: a meeting joins its call, a Slack message or an Inbox notification opens in the browser, working a note continuously opens mission control on its line, and one with nowhere to go shows its words in a box. Dismissing one, marking it read and a suggestion's choices are in its menu in mission control's Notifications view. Settings' "Notifications" (`sidebar_notifications`) turns the block, and that view, off.
 
 ### Into the sidebar and its keys
 
@@ -421,7 +422,7 @@ A peek shows a tab without going there, in a box over most of the screen: its la
 
 ### The cards
 
-The cards are grouped in stages, finer than the sidebar's groups: Needs you, Build failing, Working, Monitoring, Review loop, CI loop, Queue-and-clean, Loops, In merge queue, Landing, Testing Deploy, Merged, Idle, Reminders, then Other. A tab running a loop is in that loop's stage, from the moment you ask for it, while Claude works between its rounds too; a tab whose pull request is in the merge queue, landing or merged is in that stage even while it runs a loop; and a tab with a failing build that runs `/ci-loop` stays under CI loop while the loop is at work. Each stage is a box in the stage's color, titled on its top edge, packed side by side so the screen fills: a stage that doesn't fit in the room left on a row starts the next, and one too big for a row takes several rows of cards.
+The cards are grouped in stages, finer than the sidebar's groups: Needs you, Build failing, Working, Monitoring, Review loop, CI loop, Queue-and-clean, Loops, In merge queue, Landing, Testing Deploy, Merged, Idle, Reminders, then Other. A tab running a loop is in that loop's stage, from the moment you ask for it, while Claude works between its rounds too; a tab whose pull request is in the merge queue, landing or merged is in that stage even while it runs a loop; and a tab with a failing build that runs `/ci-loop` stays under CI loop while the loop is at work. Each stage is a box in the stage's color, titled on its top edge, packed side by side so the screen fills: a stage that doesn't fit in the room left on a row starts the next, and one too big for a row takes several rows of cards. While a note is worked continuously, a line above the cards says so ("Working a note continuously", under Worktrees).
 
 A card's top edge carries the tab's badge, number and name. Inside are what it is doing, its pull request's number, checks, review and size ("#12 · ✓12 ✗1 ⏳3 · approved · +340 −80"), and the session's name; then your last prompt, the end of Claude's last reply, and, when it waits on a permission prompt or a question, what it is asking. A tab with no Claude shows its directory.
 
@@ -501,7 +502,7 @@ A view that is on is always there to go to, and before what it reads from is set
 
 GitHub and Linear are asked every 15 seconds, and the PR board every 30, with Settings' "Look often" (`poll_fast`) on; off, every tab's pull request and the merge queues are asked every minute and the rest every two minutes. The merged column of the PR board is asked for only every ten minutes. A lookup still waiting on its answer when the next is due is skipped rather than started twice. Going to the Inbox, CI or Merge queues view asks again at once, and so does `M-m`, for the views that show pull requests, so they agree with what it says.
 
-While you are away (no terminal attached, the screen locked, or the computer idle for 10 minutes; where the desktop can't say, 10 minutes since a key was pressed in Switchboard) the GitHub and Linear lookups, the calendar feed and the Slack look pause, and all ask again when you are back. Settings' "Pause lookups while away" (`pause_when_away`) off keeps them going.
+While you are away (no terminal attached, the screen locked, or the computer idle for 10 minutes; where the desktop can't say, 10 minutes since a key was pressed in Switchboard) the GitHub and Linear lookups, the calendar feed and the Slack look pause, and all ask again when you are back; working a note continuously opens no tabs meanwhile. Settings' "Pause lookups while away" (`pause_when_away`) off keeps them going.
 
 ### Finding a tab or a worktree
 
@@ -1117,6 +1118,7 @@ Run again on the same work, a command reopens it: the worktree is reused if it i
 | `M-B` | Start work on a branch, new or existing, in a new tab (`wtb`) |
 | `M-p`, "Start work on a PR in a new tab (wtpr)" | A PR, in a new tab running `wtpr` |
 | `M-p`, "Start work on a note's checklist items in new tabs (wtn)" | A note's items, a tab each running `wtn` |
+| `M-p`, "Work the note continuously" | A note's items, a few tabs at a time, the next opened as each lands (below) |
 | `M-p`, "Continue shaping Linear tickets, each in a new tab" | Tickets, a tab each running `shape --continue` |
 | `M-o` | Reopen a worktree with no tab and resume its Claude |
 | `M-j` | Search and jump to a tab |
@@ -1131,6 +1133,14 @@ Each of the first six asks which directory first, in a list: the one you are in,
 - "Continue shaping Linear tickets" asks for the tickets, then the directory, which must be in a repository so `shape` has code to read.
 
 `M-p`'s "Shape the note's checklist items" opens a tab running `/shape` for each unticked checklist item of a note you pick.
+
+### Working a note continuously
+
+`M-p`'s "Work the note continuously", asked from a pane in the note's repository (a worktree of it will do), keeps tabs working through a note's checklist unattended. It opens mission control on its tabs and asks which note, the one it last worked first, then the newest; how many of its tabs work at once (3); the most of them open at once, those waiting on you included (5); and a spend limit in dollars, empty for none. Each box starts with what it was last time, so Enter keeps it. From then on Switchboard opens the note's next item whenever fewer than that many of its tabs work and fewer than the most are open, one at a time and a few seconds apart, in the background, in the session you used last: a tab running `wtn`, named after the item and linked to the note, as "Start work on a note's checklist items" opens one, in the repository's main clone. The items are taken in this order: those whose `Plan: [[…]]` links a plan note with no "## Decision needed" first, then those with no plan, each in the note's order; never one whose plan needs a choice, one under a section for parked work, one a worktree already works on, or one you skipped.
+
+Only the tabs it opened count, each marked `auto` in the sidebar. A tab waiting on you (a question, a turn ended) frees its slot but still counts toward the most open, as does one whose `wtn` failed and never reached its worktree; a tab `/queue-and-clean` has landed, back in the main clone, leaves the mode, and the next item opens in its place. What marks them is kept with the tabs, so it carries on after a restart. It opens nothing while you're away (with Settings' "Pause lookups while away" on), once today's Claude spend in the Usage view passes its limit, or while the note changed in the last minute, since an item being typed is saved as it is typed. It says so in the notifications when it stops for the spend, when the note has nothing left to take, or when the note is gone; its notification's menu goes to its line, or puts it away.
+
+While it is on, its line leads mission control's Tabs view, above the cards: `AUTO`, the note, how many of its tabs work and are open against those counts, the item it takes next, and how many are skipped. `k` from the first row of cards, a click or Tab reaches it, and Enter there opens its menu: pause it (and resume), skip the next item (and take the skipped ones again), take only items with a settled plan (and those without one too), change its note, counts or spend limit, or stop it; the tabs open carry on either way. "Work the note continuously" opens the same menu while it is on. What it keeps is in `~/.local/state/switchboard/autopilot.json`, and Notes takes a renamed or moved note along. Settings' "Work a note continuously" (`autopilot`) off allows none of it.
 
 ### `wt`: a Linear ticket
 
@@ -1582,7 +1592,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 
 | Setting | Default | What it does |
 |---|---|---|
-| Work a note continuously (`autopilot`) | on | With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there |
+| Work a note continuously (`autopilot`) | on | With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go |
 | wtpr asks where the PR stands (`wtpr_prompt`) | on | Claude, started in a PR's worktree by wtpr (or mission control's "work on it in a new tab"), first reads the PR, its review threads, failing checks and ticket and says where it stands and what it would do next, changing nothing until you say; off, it starts with no prompt |
 | Save what panes show (`save_contents`) | on | Keep each pane's screen in the layout saves, to show again after a restart; it can hold secrets |
 | Restore on start (`auto_restore`) | on | Bring back the last saved tabs and panes, each Claude resumed, when the server starts with none open |
@@ -1617,7 +1627,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Usage (`usage`) | on | Mission control's Usage view: today's Claude spend and how much of the rate limits is used |
 | RSVP from the Calendar (`calendar_rsvp`) | on | Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector |
 | Slack without a tab (`slack_background`) | on | Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of a Slack tab looping /slack-updates |
-| Pause lookups while away (`pause_when_away`) | on | Stop asking GitHub, Linear and the calendar for mission control's views while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return |
+| Pause lookups while away (`pause_when_away`) | on | Stop asking GitHub, Linear and the calendar for mission control's views, and working a note continuously from opening tabs, while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return |
 | Look often (`poll_fast`) | on | Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes |
 | PR board (`pr_board`) | on | Mission control's PRs view, which asks GitHub about your pull requests every two minutes |
 | Ticket board (`ticket_board`) | on | Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes |

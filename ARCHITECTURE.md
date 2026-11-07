@@ -70,6 +70,7 @@ The workspace:
 | `views` | Reading beside your work: the PR description, the ticket, a link, search everything, whether a PR can merge |
 | `diff` | `M-d`'s diff in a pane's place, told as a story, with questions about it answered |
 | `notes` | The notes app, and Notes in the workspace |
+| `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
 | `setup` | `switchboard setup`: Claude Code's hooks, statusline, permissions, CLAUDE.md and skills |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
@@ -83,7 +84,7 @@ The workspace:
 | What | Where |
 | --- | --- |
 | Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
-| State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, and the statusline's `context/` and `usage/` |
+| State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), and the statusline's `context/` and `usage/` |
 | The Slack relay's state | `~/.local/state/slack-relay/`, where the Node relay kept it |
 | Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies |
 | Claude Code | `~/.claude/settings.json` (merged into, never linked), `~/.claude/CLAUDE.md`, `~/.claude/skills/` |
@@ -128,13 +129,14 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (hooks, statusline, skills) and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
+| `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
 | `bin/*` Node programs, `lib/` | `src/cmd/`, `src/integrations/`, `src/relay/`, ... |
 
 ### Not ported
 
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
-- **Commands**: "Work the note continuously" (the mode itself; the sidebar reads only the `auto` mark on its tabs, and its `autopilot` setting is listed). Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
+- **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
 - **Reading beside your work**: the notes pane's links in "Read a link", the pickers that open, copy or show a pane's links, images and videos, mission control's "Read it here", and OSC 8 links passed through to the terminal. Only the diff stands in a pane's place; lazygit there, and the diff and lazygit from a tab's menu, are gone.
 - **The diff**: a branch's commits one at a time (diffview's `c`), visual-mode ranges for `yp` and `yl`, and a working tree's changes, which `M-d` never showed.
 - **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now), a new note's notification opening the note and a calendar change's opening the Calendar view, the Calendar drawn as a day, plugins' counts in the sidebar, the CI menu's failing log (the logs are kept), and the second status line's push count.

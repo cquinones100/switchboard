@@ -96,6 +96,8 @@ pub enum Do {
         source: String,
         item: Box<Item>,
     },
+    /// What working a note continuously offers (src/autopilot).
+    Autopilot(crate::autopilot::Act),
 }
 
 /// One option: the key that takes it at once, its label, and what it does.
@@ -622,6 +624,12 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
                     },
                 )
             })
+            .collect();
+    }
+    if source == "autopilot" {
+        return crate::autopilot::line::notice_choices()
+            .into_iter()
+            .map(|(key, label, act)| choice(key, label, Do::Autopilot(act)))
             .collect();
     }
     let mut own = item.clone();

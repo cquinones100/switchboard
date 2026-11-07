@@ -112,6 +112,9 @@ pub struct Snapshot {
     pub now_secs: i64,
     /// The spinner's frame.
     pub frame: usize,
+    /// The line of the note worked continuously, leading the tabs while
+    /// the mode is on (src/autopilot); the cursor's -1 is on it.
+    pub pilot: Option<crate::autopilot::Summary>,
 }
 
 impl Default for Snapshot {
@@ -130,6 +133,7 @@ impl Default for Snapshot {
             close: false,
             now_secs: 0,
             frame: 0,
+            pilot: None,
         }
     }
 }

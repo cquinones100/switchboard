@@ -102,6 +102,8 @@ pub enum Event {
     /// The rest of what a Notes key does, back from off the task
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::NotesEvent),
+    /// What working a note continuously found off the task (src/autopilot).
+    Autopilot(crate::autopilot::AutopilotEvent),
     Tick,
     Quit,
 }
@@ -308,6 +310,8 @@ pub struct Server {
     pub update: crate::update::Updates,
     /// The clients waiting on C-w's next key (src/extras).
     pub extras: crate::extras::Extras,
+    /// Working a note continuously (src/autopilot).
+    pub autopilot: crate::autopilot::Autopilot,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -553,6 +557,7 @@ impl Server {
             status: Default::default(),
             update: Default::default(),
             extras: Default::default(),
+            autopilot: Default::default(),
         }
     }
 
@@ -607,6 +612,7 @@ impl Server {
             Event::Views(event) => self.views_event(event),
             Event::Update(event) => self.update_event(event),
             Event::Notes(event) => self.notes_event(event),
+            Event::Autopilot(event) => self.autopilot_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.status_tick();
@@ -620,6 +626,7 @@ impl Server {
                 self.mission_tick();
                 self.diff_tick();
                 self.update_tick();
+                self.autopilot_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -1705,6 +1712,7 @@ impl Server {
             Action::Update(command) => self.update_command(id, command),
             Action::Notes(command) => self.notes_command(id, command, pane),
             Action::Extra(command) => self.extras_command(id, command, pane),
+            Action::Autopilot(command) => self.autopilot_command(id, command, pane),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

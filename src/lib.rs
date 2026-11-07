@@ -51,8 +51,11 @@
 //!   tab, mission control on a view, the habits report, a reply sent to
 //!   another tab, setup checked, the loop tabs, a PR or ticket by number,
 //!   the AWS login, M-0 and `C-w` between panes.
+//! - `autopilot`: working a note's checklist continuously, a tab opened for
+//!   each item as the last lands.
 
 pub mod agent;
+pub mod autopilot;
 pub mod cmd;
 pub mod connector;
 pub mod day;

@@ -322,6 +322,12 @@ impl Server {
             close: settings::is_on("easy_keys") && settings::is_on("menu_mouse"),
             now_secs: now.div_euclid(1000),
             frame: (now as u64 / SPINNER_MS) as usize,
+            // Not in M-j's and M-o's pickers.
+            pilot: m
+                .scope
+                .is_none()
+                .then(|| self.autopilot_summary())
+                .flatten(),
         };
         m.size = (cols, rows);
         if m.view > m.snap.views.len() {
@@ -331,7 +337,7 @@ impl Server {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
         } as isize;
-        m.cursor = m.cursor.min(count - 1).max(0);
+        m.cursor = m.cursor.min(count - 1).max(floor(&m));
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
         let title = now_view
@@ -1078,6 +1084,10 @@ impl Server {
     /// plugin's item opening).
     fn mission_enter(&mut self, client: ClientId, m: &mut Mission) {
         let Some(view) = m.current().cloned() else {
+            if m.cursor < 0 && m.snap.pilot.is_some() {
+                self.autopilot_menu(client);
+                return;
+            }
             let order = m.order();
             let Some(tab) = usize::try_from(m.cursor)
                 .ok()
@@ -1398,6 +1408,7 @@ impl Server {
                 self.day_dismiss(&source, &item);
                 self.mission_note(client, "Dismissed.");
             }
+            Do::Autopilot(act) => self.autopilot_act(client, act),
         }
     }
 
@@ -2149,10 +2160,20 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
 
 // ── Moving about ────────────────────────────────────────────────────────────
 
+/// The first place the cursor can be: -1, the line of the note worked
+/// continuously, while it leads the tabs (src/autopilot); else 0.
+fn floor(m: &Mission) -> isize {
+    if m.view == 0 && m.snap.pilot.is_some() {
+        -1
+    } else {
+        0
+    }
+}
+
 /// The cursor to `to`, kept within the view; moving takes the focus Tab
 /// gave a view's name or the filter back to the items.
 fn move_to(m: &mut Mission, to: isize, count: isize) {
-    m.cursor = to.min(count - 1).max(0);
+    m.cursor = to.min(count - 1).max(floor(m));
     if m.focus.is_some() {
         m.focus = Some(Focus::Item);
     }
@@ -2173,6 +2194,14 @@ fn row_step(m: &Mission, by: isize) -> isize {
         cols,
         super::render::card_width(cols, m.snap.card),
     );
+    // The line of the note worked continuously, above the first row: j goes
+    // down to the first card, and k from the first row up to it.
+    if m.cursor < 0 {
+        return match g.rows.first().and_then(|r| r.first()) {
+            Some(&first) if by > 0 => first as isize,
+            _ => m.cursor,
+        };
+    }
     let cursor = m.cursor.max(0) as usize;
     let holding: Vec<usize> = g
         .rows
@@ -2189,7 +2218,7 @@ fn row_step(m: &Mission, by: isize) -> isize {
         return m.cursor;
     };
     let Some(next) = at.checked_add_signed(by).and_then(|i| g.rows.get(i)) else {
-        return m.cursor;
+        return if by < 0 && floor(m) < 0 { -1 } else { m.cursor };
     };
     let column = g.rows[at].iter().position(|c| *c == cursor).unwrap_or(0);
     next[column.min(next.len() - 1)] as isize
@@ -2276,7 +2305,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     if !board {
         stops.push(Stop::Filter);
     }
-    stops.extend((0..count as isize).map(Stop::Item));
+    stops.extend((floor(m)..count as isize).map(Stop::Item));
     if m.snap.close {
         stops.push(Stop::Close);
     }
@@ -2434,6 +2463,38 @@ mod tests {
         m.cursor = 4;
         assert_eq!(row_step(&m, -1), 1);
         assert_eq!(row_step(&m, 1), 4, "nothing below the last row");
+        m.cursor = 1;
+        assert_eq!(row_step(&m, -1), 1, "nothing above the first row");
+    }
+
+    // test/tmux-sidebar.test.js's "k from the top row of tabs reaches the
+    // line of the note worked continuously", and Tab stops on it too.
+    #[test]
+    fn k_from_the_first_row_reaches_the_line_of_the_note_worked_continuously() {
+        let mut m = mission(5, Vec::new());
+        m.snap.pilot = Some(crate::autopilot::Summary {
+            note: "Work".into(),
+            busy: 0,
+            open: 0,
+            slots: 3,
+            cap: 5,
+            next: String::new(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 0,
+            spend_limit: 0.0,
+        });
+        m.cursor = 1;
+        let to = row_step(&m, -1);
+        move_to(&mut m, to, 5);
+        assert_eq!(m.cursor, -1, "on the mode's line");
+        let to = row_step(&m, 1);
+        move_to(&mut m, to, 5);
+        assert_eq!(m.cursor, 0, "j goes back down to the first tab");
+        m.focus = Some(Focus::Filter);
+        move_focus(&mut m, 1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), -1), "a Tab stop");
     }
 
     #[test]
