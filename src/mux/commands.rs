@@ -497,7 +497,7 @@ impl Server {
                 }
             }
         }
-        slot.pane.scroll_to_bottom();
+        slot.pane.copy_end();
         slot.copy = None;
         slot.pane.write(&bytes).map_err(|e| e.to_string())?;
         Ok(Reply::ok(""))

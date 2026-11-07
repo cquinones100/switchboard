@@ -56,17 +56,26 @@ With Settings' "Save what panes show" (`save_contents`) on, each save also keeps
 
 ### Scrollback, the mouse and the clipboard
 
-Each pane keeps 10,000 lines of history. The wheel scrolls back through it, and scrolling down to the bottom ends it; `M-b [` scrolls back with the keyboard, using Vim's keys:
+Each pane keeps 10,000 lines of history. The wheel scrolls back through it, and scrolling down to the bottom ends it; `M-b [` is copy mode, which moves through it and selects with the keyboard, using Vim's keys as tmux's copy mode did. A cursor of its own comes up where the program's cursor is, and the view scrolls to keep it in sight:
 
 | Key | What it does |
 |---|---|
-| `k` `j`, `Up` `Down` | A line up or down |
-| `C-u` `C-d` | Half a screen up or down |
-| `C-b` `C-f`, `PageUp` `PageDown` | A screen up or down |
+| `h` `j` `k` `l`, the arrows | The cursor a cell or a line |
+| `w` `b` `e` (`W` `B` `E`) | The next word, the word before, the end of the word (words between blanks) |
+| `0` `$` `^` | The start of the line, its end, its first character |
 | `g` `G` | The top of the history, the bottom |
-| `q`, `Esc` | Back to the bottom, and out |
+| `H` `M` `L` | The top, middle and bottom of the screen |
+| `C-u` `C-d` | Half a screen up or down, the cursor with it |
+| `C-b` `C-f`, `PageUp` `PageDown` | A screen up or down |
+| `C-y` `C-e` | The view a line up or down, the cursor staying |
+| `v` or `Space`, `V`, `C-v` | Select from the cursor: characters, whole lines, a rectangle; the same key again takes the selection away |
+| `y` or `Enter` | Copy the selection, and out |
+| `/` `?` | Search down or up, for text or a regular expression typed in a box (a capital makes case count) |
+| `n` `N` | The next match the same way, the other way |
+| `Esc` | Take the selection away; with none, out |
+| `q` | Back to the bottom, and out |
 
-While a pane is scrolled back, its top-right corner shows how many lines back it is (`[120]`), the keys above move through the history, and other keys do nothing. A paste takes it back to the bottom and goes to the program.
+While a pane is scrolled back, its top-right corner shows how many lines back it is (`[120]`), and other keys do nothing. A key in the wheel's scrolling brings up copy mode's cursor, and it then stays until `q`. A paste takes it back to the bottom and goes to the program.
 
 A click focuses a pane. Dragging selects text and copies it when you let go; a double click selects a word, a triple click a line, and Alt-drag selects a rectangle. A program that asks for the mouse, such as an editor, gets the clicks, drags and wheel instead. In a full-screen program that doesn't take the mouse, the wheel sends it arrow keys. A click on a tab in the status line goes to it.
 
@@ -141,7 +150,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 | Key | What it does |
 |---|---|
 | `M-b d` | Detach, leaving everything running |
-| `M-b [` | Scroll back through the pane's history |
+| `M-b [` | Copy mode: scroll back through the pane's history, select and copy with the keyboard |
 | `M-b c` | New tab, a shell in the current pane's directory |
 | `M-b x` | Close the pane |
 | `M-b z` | Zoom the pane in or out |

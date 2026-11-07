@@ -43,11 +43,15 @@ use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+use alacritty_terminal::index::{
+    Boundary, Column, Direction as SearchWay, Line, Point as GridPoint, Side,
+};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags, Hyperlink};
 use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Osc52, Term, TermMode};
+use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor, Processor, Rgb};
 use anyhow::{Context, Result};
 use crossterm::cursor::SetCursorStyle;
@@ -112,6 +116,42 @@ fn end_line(current: &mut String, found: &mut Linked, out: &mut Vec<(String, Lin
         range.start < range.end
     });
     out.push((std::mem::take(current), std::mem::take(found)));
+}
+
+/// A move of copy mode's cursor, as tmux's copy-mode-vi bound them: h j k
+/// l, w b e (and W B E for words between blanks), 0 $ ^, g G, H M L, and
+/// the view scrolled with the cursor by C-u C-d C-b C-f (`Scroll`, lines
+/// back into the history when positive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Motion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordNext,
+    WordBack,
+    WordEnd,
+    BigWordNext,
+    BigWordBack,
+    BigWordEnd,
+    LineStart,
+    LineEnd,
+    FirstChar,
+    Top,
+    Bottom,
+    ScreenTop,
+    ScreenMiddle,
+    ScreenBottom,
+    Scroll(i32),
+}
+
+/// What copy mode selects: characters (v), whole lines (V), or a rectangle
+/// (C-v).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectKind {
+    Chars,
+    Lines,
+    Block,
 }
 
 /// The size a cell is taken to be, in pixels, for programs that ask (a
@@ -824,6 +864,152 @@ impl Pane {
         self.term
             .selection_to_string()
             .filter(|text| !text.is_empty())
+    }
+
+    // ── Copy mode's cursor ──────────────────────────────────────────────────
+
+    /// Copy mode's cursor comes up, where the program's cursor is (at the
+    /// top of the view when that is scrolled out of sight), as tmux's copy
+    /// mode put its own cursor there. The emulator's vi mode is that cursor:
+    /// it moves through the history, scrolling the view to keep in sight,
+    /// and drags a selection's moving end with it.
+    pub fn copy_begin(&mut self) {
+        if !self.copying() {
+            self.term.toggle_vi_mode();
+        }
+    }
+
+    /// Copy mode ends: its cursor and selection go, and the view goes back
+    /// to the live screen.
+    pub fn copy_end(&mut self) {
+        if self.copying() {
+            self.term.toggle_vi_mode();
+        }
+        self.term.selection = None;
+        self.term.scroll_display(Scroll::Bottom);
+    }
+
+    /// Whether copy mode's cursor is up.
+    pub fn copying(&self) -> bool {
+        self.term.mode().contains(TermMode::VI)
+    }
+
+    /// Moves copy mode's cursor, the view scrolling to keep it in sight.
+    pub fn copy_move(&mut self, motion: Motion) {
+        if !self.copying() {
+            return;
+        }
+        let vi = match motion {
+            Motion::Left => ViMotion::Left,
+            Motion::Right => ViMotion::Right,
+            Motion::Up => ViMotion::Up,
+            Motion::Down => ViMotion::Down,
+            Motion::WordNext => ViMotion::SemanticRight,
+            Motion::WordBack => ViMotion::SemanticLeft,
+            Motion::WordEnd => ViMotion::SemanticRightEnd,
+            Motion::BigWordNext => ViMotion::WordRight,
+            Motion::BigWordBack => ViMotion::WordLeft,
+            Motion::BigWordEnd => ViMotion::WordRightEnd,
+            Motion::LineStart => ViMotion::First,
+            Motion::LineEnd => ViMotion::Last,
+            Motion::FirstChar => ViMotion::FirstOccupied,
+            Motion::ScreenTop => ViMotion::High,
+            Motion::ScreenMiddle => ViMotion::Middle,
+            Motion::ScreenBottom => ViMotion::Low,
+            Motion::Top => {
+                let top = GridPoint::new(self.term.topmost_line(), Column(0));
+                self.term.vi_goto_point(top);
+                return;
+            }
+            Motion::Bottom => {
+                let bottom = GridPoint::new(self.term.bottommost_line(), Column(0));
+                self.term.vi_goto_point(bottom);
+                return;
+            }
+            Motion::Scroll(lines) => {
+                // The view and the cursor move together, so the cursor keeps
+                // its row on the screen, as tmux's halfpage-up and page-up.
+                let cursor = self.term.vi_mode_cursor.scroll(&self.term, lines);
+                self.term.scroll_display(Scroll::Delta(lines));
+                self.term.vi_goto_point(cursor.point);
+                return;
+            }
+        };
+        self.term.vi_motion(vi);
+    }
+
+    /// Starts a selection of `kind` at copy mode's cursor, which then drags
+    /// its other end; the same kind again takes it away, and another kind
+    /// changes it, as v, V and C-v do in tmux's copy-mode-vi.
+    pub fn copy_select(&mut self, kind: SelectKind) {
+        if !self.copying() {
+            return;
+        }
+        let ty = match kind {
+            SelectKind::Chars => SelectionType::Simple,
+            SelectKind::Lines => SelectionType::Lines,
+            SelectKind::Block => SelectionType::Block,
+        };
+        match self.term.selection.as_mut() {
+            Some(s) if s.ty == ty => self.term.selection = None,
+            Some(s) => {
+                s.ty = ty;
+                s.include_all();
+            }
+            None => {
+                let mut s = Selection::new(ty, self.term.vi_mode_cursor.point, Side::Left);
+                s.include_all();
+                self.anchor_side = Side::Left;
+                self.term.selection = Some(s);
+            }
+        }
+    }
+
+    /// Where copy mode's cursor is on the screen as now shown (column, row
+    /// from its top left), when it is up and in sight.
+    pub fn copy_cursor(&self) -> Option<(u16, u16)> {
+        if !self.copying() {
+            return None;
+        }
+        let point = self.term.vi_mode_cursor.point;
+        let row = point.line.0 + self.term.grid().display_offset() as i32;
+        if row < 0 || row >= self.term.screen_lines() as i32 {
+            return None;
+        }
+        Some((u16::try_from(point.column.0).ok()?, row as u16))
+    }
+
+    /// Moves copy mode's cursor to the next match of `pattern` after it
+    /// (`forward`) or before it, round the history's ends when there is none
+    /// that way, as tmux's search-forward and search-backward did. Smart
+    /// case: a pattern with no capital matches either case. A pattern that
+    /// isn't a regular expression is looked for as it is written. Gives
+    /// whether there was a match.
+    pub fn copy_search(&mut self, pattern: &str, forward: bool) -> bool {
+        if !self.copying() || pattern.is_empty() {
+            return false;
+        }
+        let built =
+            RegexSearch::new(pattern).or_else(|_| RegexSearch::new(&regex::escape(pattern)));
+        let Ok(mut search) = built else {
+            return false;
+        };
+        let cursor = self.term.vi_mode_cursor.point;
+        let (origin, direction) = if forward {
+            (cursor.add(&self.term, Boundary::None, 1), SearchWay::Right)
+        } else {
+            (cursor.sub(&self.term, Boundary::None, 1), SearchWay::Left)
+        };
+        match self
+            .term
+            .search_next(&mut search, origin, direction, Side::Left, None)
+        {
+            Some(found) => {
+                self.term.vi_goto_point(*found.start());
+                true
+            }
+            None => false,
+        }
     }
 
     /// The last `lines` lines of the screen and scrollback as text, trailing
@@ -1972,6 +2158,86 @@ mod tests {
         run.pane.select_start(0, 0, false);
         run.pane.select_extend(4, 0);
         assert_eq!(run.pane.selection_text().as_deref(), Some("bravo"));
+    }
+
+    #[test]
+    fn copy_modes_cursor_moves_selects_and_searches() {
+        let mut run = idle(20, 4);
+        run.pane.process(b"alpha beta\r\ngamma delta\r\nlast");
+        assert_eq!(run.pane.copy_cursor(), None, "not before copy mode");
+        run.pane.copy_begin();
+        assert!(run.pane.copying());
+        // It comes up where the program's cursor is.
+        assert_eq!(run.pane.copy_cursor(), Some((4, 2)));
+        run.pane.copy_move(Motion::Up);
+        run.pane.copy_move(Motion::LineStart);
+        assert_eq!(run.pane.copy_cursor(), Some((0, 1)));
+
+        // v, then the cursor's moves stretch it.
+        run.pane.copy_select(SelectKind::Chars);
+        run.pane.copy_move(Motion::WordEnd);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("gamma"));
+        run.pane.copy_move(Motion::LineEnd);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("gamma delta"));
+        // V makes it whole lines, and V again takes it away.
+        run.pane.copy_select(SelectKind::Lines);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("gamma delta\n"));
+        run.pane.copy_select(SelectKind::Lines);
+        assert_eq!(run.pane.selection_text(), None);
+
+        // C-v: a rectangle.
+        run.pane.copy_move(Motion::Top);
+        assert_eq!(run.pane.copy_cursor(), Some((0, 0)));
+        run.pane.copy_select(SelectKind::Block);
+        run.pane.copy_move(Motion::Down);
+        run.pane.copy_move(Motion::Right);
+        assert_eq!(run.pane.selection_text().as_deref(), Some("al\nga"));
+        // Shown reversed, the cursor's cell among them.
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert!(buf[(1, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(2, 1)].modifier.contains(Modifier::REVERSED));
+        run.pane.select_clear();
+
+        // / and ?: the next match either way, round the ends; smart case.
+        assert!(run.pane.copy_search("delta", true));
+        assert_eq!(run.pane.copy_cursor(), Some((6, 1)));
+        assert!(run.pane.copy_search("a", true));
+        assert_eq!(run.pane.copy_cursor(), Some((10, 1)), "the next one on");
+        assert!(run.pane.copy_search("ALPHA|beta", false));
+        assert_eq!(run.pane.copy_cursor(), Some((6, 0)), "case counts");
+        assert!(run.pane.copy_search("last", false), "round the top");
+        assert_eq!(run.pane.copy_cursor(), Some((0, 2)));
+        assert!(!run.pane.copy_search("nowhere", true));
+        assert!(
+            !run.pane.copy_search("(", true),
+            "a bad pattern is looked for as written"
+        );
+
+        run.pane.copy_end();
+        assert!(!run.pane.copying());
+        assert_eq!(run.pane.copy_cursor(), None);
+    }
+
+    #[test]
+    fn copy_mode_scrolls_the_view_with_its_cursor() {
+        let mut run = idle(10, 4);
+        for i in 0..20 {
+            run.pane.process(format!("line {i}\r\n").as_bytes());
+        }
+        run.pane.copy_begin();
+        let (_, row) = run.pane.copy_cursor().expect("in sight");
+        run.pane.copy_move(Motion::Scroll(2));
+        assert_eq!(run.pane.scrolled(), 2);
+        assert_eq!(run.pane.copy_cursor().map(|c| c.1), Some(row));
+        // Up past the top of the screen scrolls it too.
+        run.pane.copy_move(Motion::ScreenTop);
+        run.pane.copy_move(Motion::Up);
+        assert_eq!(run.pane.scrolled(), 3);
+        assert_eq!(run.pane.copy_cursor(), Some((0, 0)));
+        run.pane.copy_move(Motion::Top);
+        assert!(run.pane.scrolled() > 3, "the history's first line");
+        run.pane.copy_end();
+        assert_eq!(run.pane.scrolled(), 0);
     }
 
     #[test]

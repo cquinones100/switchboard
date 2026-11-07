@@ -365,3 +365,77 @@ fn ctrl_shift_p_reaches_a_program_that_asked_for_it_and_a_shell_gets_ctrl_p() {
     client.type_text("\x1b[112;6u");
     client.wait_text("command>");
 }
+
+/// Stand-ins for the desktop's clipboard tools, first on the PATH, so a
+/// copy reaches a file in the test's home rather than the real clipboard.
+fn stand_in_clipboard(server: &TestServer) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let copied = server.home.join("copied");
+    for name in ["clip.exe", "wl-copy", "xclip", "xsel", "pbcopy"] {
+        let script = bin.join(name);
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ncat > '{}'\n", copied.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// Waits until the client has been sent `text` for the clipboard (OSC 52).
+fn wait_copied(client: &mut common::TestClient, text: &str) {
+    let osc = format!(
+        "\x1b]52;c;{}\x07",
+        switchboard::util::base64(text.as_bytes())
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !sent(&client.raw, osc.as_bytes()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{text:?} wasn't copied"
+        );
+        client.screen();
+    }
+}
+
+#[test]
+fn copy_mode_selects_with_the_keyboard_and_copies_through_the_clipboard() {
+    let server = TestServer::start();
+    stand_in_clipboard(&server);
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    client.type_text("echo copy-me-please\r");
+    client.wait_for("the output", |s| s.iter().any(|l| l == "copy-me-please"));
+    // The prefix, then [: copy mode, its cursor on the prompt under the
+    // output. Up a line, to its start, v, to its end, y.
+    client.type_text(&format!("{ALT}b"));
+    client.type_text("[");
+    client.wait_text("[0]");
+    client.type_text("k0v$y");
+    wait_copied(&mut client, "copy-me-please");
+    // y leaves copy mode.
+    client.wait_for("copy mode left", |s| !s.iter().any(|l| l.contains("[0]")));
+
+    // ? looks up for what is typed in its box; e stretches the selection to
+    // the end of the word found.
+    client.type_text(&format!("{ALT}b"));
+    client.type_text("[");
+    client.wait_text("[0]");
+    client.type_text("?");
+    client.wait_text("Search up");
+    client.type_text("echo\r");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Search up"))
+    });
+    client.type_text("vey");
+    wait_copied(&mut client, "echo");
+
+    // q leaves without copying.
+    client.type_text(&format!("{ALT}b"));
+    client.type_text("[");
+    client.wait_text("[0]");
+    client.type_text("q");
+    client.wait_for("copy mode left", |s| !s.iter().any(|l| l.contains("[0]")));
+}

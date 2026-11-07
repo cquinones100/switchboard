@@ -316,7 +316,7 @@ impl Action {
             Action::Resize(d, 5) => format!("Grow pane {}", toward(d)),
             Action::Resize(d, n) => format!("Grow pane {} by {n}", toward(d)),
             Action::Detach => "Detach, leaving everything running".into(),
-            Action::CopyMode => "Scroll back through the pane's history".into(),
+            Action::CopyMode => "Copy mode: scroll back through the pane's history, select and copy with the keyboard".into(),
             Action::SendPrefix => "Send the prefix key to the pane".into(),
             Action::ListKeys => "List the keys".into(),
             Action::NextNeedsYou => "Go to the next tab that needs you".into(),

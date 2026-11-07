@@ -209,11 +209,16 @@ impl Tab {
     }
 }
 
-/// Scrolling back through a pane's history with the keyboard.
-#[derive(Clone, Copy, Debug)]
+/// Scrolling back through a pane's history, and selecting in it with the
+/// keyboard (tmux's copy mode with `mode-keys vi`).
+#[derive(Clone, Debug, Default)]
 pub struct CopyMode {
-    /// Entered with the wheel: scrolled back to the bottom, it ends.
+    /// Entered with the wheel: scrolled back to the bottom, it ends, until a
+    /// key moves its cursor.
     pub exit_at_bottom: bool,
+    /// The last search, for n and N: what was looked for, and whether
+    /// forward (`/`) or back (`?`).
+    pub search: Option<(String, bool)>,
 }
 
 pub struct PaneSlot {
@@ -1553,7 +1558,7 @@ impl Server {
             return;
         };
         if self.panes.get(&pane).is_some_and(|s| s.copy.is_some()) {
-            self.copy_key(pane, key);
+            self.copy_key(id, pane, key);
             return;
         }
         if let Some(slot) = self.panes.get_mut(&pane) {
@@ -1667,9 +1672,8 @@ impl Server {
             }
             Action::CopyMode => {
                 if let Some(slot) = pane.and_then(|p| self.panes.get_mut(&p)) {
-                    slot.copy = Some(CopyMode {
-                        exit_at_bottom: false,
-                    });
+                    slot.copy = Some(CopyMode::default());
+                    slot.pane.copy_begin();
                 }
                 self.dirty_tab(current_tab);
             }
@@ -1722,52 +1726,136 @@ impl Server {
         self.sidebar_after_action(id, side_focused, &after);
     }
 
-    /// Keys while scrolling back: vi's, as tmux's copy mode with
-    /// `mode-keys vi`.
-    fn copy_key(&mut self, pane: PaneId, key: Key) {
+    /// Keys in copy mode: vi's, as tmux's copy-mode-vi had them. h j k l,
+    /// w b e (W B E), 0 $ ^, g G and H M L move its cursor, C-u C-d C-b C-f
+    /// (and the page keys) the view and the cursor with it, C-e and C-y the
+    /// view alone; v (or Space), V and C-v start a selection of characters,
+    /// lines or a rectangle, which the cursor's moves stretch; y (or Enter)
+    /// copies it through the clipboard the mouse's selections go to and
+    /// leaves; / and ? ask what to look for down or up, and n and N look
+    /// again either way; Esc takes a selection away, else leaves, as q does.
+    fn copy_key(&mut self, id: ClientId, pane: PaneId, key: Key) {
+        use super::pane::{Motion, SelectKind};
+        let k = key.normalized();
         let Some(slot) = self.panes.get_mut(&pane) else {
             return;
         };
         let (_, rows) = slot.pane.size();
         let half = (rows / 2).max(1) as i32;
         let page = rows.max(1) as i32;
-        let plain = key.mods == Mods::default();
-        let ctrl = key.mods
-            == Mods {
-                ctrl: true,
-                ..Mods::default()
-            };
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc if plain => {
-                slot.pane.scroll_to_bottom();
-                slot.pane.select_clear();
-                slot.copy = None;
+        let plain = k.mods == Mods::NONE;
+        let ctrl = k.mods == Mods::CTRL;
+        let tab = slot.tab;
+        // The wheel's copy mode becomes the keyboard's at its first key.
+        slot.pane.copy_begin();
+        if let Some(c) = slot.copy.as_mut() {
+            c.exit_at_bottom = false;
+        }
+        let motion = match k.code {
+            KeyCode::Char('h') | KeyCode::Left if plain => Some(Motion::Left),
+            KeyCode::Char('l') | KeyCode::Right if plain => Some(Motion::Right),
+            KeyCode::Char('k') | KeyCode::Up if plain => Some(Motion::Up),
+            KeyCode::Char('j') | KeyCode::Down if plain => Some(Motion::Down),
+            KeyCode::Char('w') if plain => Some(Motion::WordNext),
+            KeyCode::Char('b') if plain => Some(Motion::WordBack),
+            KeyCode::Char('e') if plain => Some(Motion::WordEnd),
+            KeyCode::Char('W') if plain => Some(Motion::BigWordNext),
+            KeyCode::Char('B') if plain => Some(Motion::BigWordBack),
+            KeyCode::Char('E') if plain => Some(Motion::BigWordEnd),
+            KeyCode::Char('0') | KeyCode::Home if plain => Some(Motion::LineStart),
+            KeyCode::Char('$') | KeyCode::End if plain => Some(Motion::LineEnd),
+            KeyCode::Char('^') if plain => Some(Motion::FirstChar),
+            KeyCode::Char('g') if plain => Some(Motion::Top),
+            KeyCode::Char('G') if plain => Some(Motion::Bottom),
+            KeyCode::Char('H') if plain => Some(Motion::ScreenTop),
+            KeyCode::Char('M') if plain => Some(Motion::ScreenMiddle),
+            KeyCode::Char('L') if plain => Some(Motion::ScreenBottom),
+            KeyCode::Char('u') if ctrl => Some(Motion::Scroll(half)),
+            KeyCode::Char('d') if ctrl => Some(Motion::Scroll(-half)),
+            KeyCode::Char('b') if ctrl => Some(Motion::Scroll(page)),
+            KeyCode::Char('f') if ctrl => Some(Motion::Scroll(-page)),
+            KeyCode::PageUp => Some(Motion::Scroll(page)),
+            KeyCode::PageDown => Some(Motion::Scroll(-page)),
+            _ => None,
+        };
+        if let Some(m) = motion {
+            slot.pane.copy_move(m);
+            self.dirty_tab(tab);
+            return;
+        }
+        match k.code {
+            KeyCode::Char('y') if ctrl => slot.pane.scroll(1),
+            KeyCode::Char('e') if ctrl => slot.pane.scroll(-1),
+            KeyCode::Char('v' | ' ') if plain => slot.pane.copy_select(SelectKind::Chars),
+            KeyCode::Char('V') if plain => slot.pane.copy_select(SelectKind::Lines),
+            KeyCode::Char('v') if ctrl => slot.pane.copy_select(SelectKind::Block),
+            KeyCode::Char('y') | KeyCode::Enter if plain => {
+                let Some(text) = slot.pane.selection_text() else {
+                    return;
+                };
+                self.leave_copy(pane);
+                self.to_clipboard(Some(id), &text);
             }
-            KeyCode::Char('k') | KeyCode::Up if plain => slot.pane.scroll(1),
-            KeyCode::Char('j') | KeyCode::Down if plain => slot.pane.scroll(-1),
-            KeyCode::Char('u') if ctrl => slot.pane.scroll(half),
-            KeyCode::Char('d') if ctrl => slot.pane.scroll(-half),
-            KeyCode::Char('b') if ctrl => slot.pane.scroll(page),
-            KeyCode::Char('f') if ctrl => slot.pane.scroll(-page),
-            KeyCode::PageUp => slot.pane.scroll(page),
-            KeyCode::PageDown => slot.pane.scroll(-page),
-            KeyCode::Char('g') if plain => slot.pane.scroll(i32::MAX / 2),
-            KeyCode::Char('G') => slot.pane.scroll_to_bottom(),
+            KeyCode::Esc if plain && slot.pane.selection_text().is_some() => {
+                slot.pane.select_clear();
+            }
+            KeyCode::Char('q') | KeyCode::Esc if plain => self.leave_copy(pane),
+            KeyCode::Char('c') if ctrl => self.leave_copy(pane),
+            KeyCode::Char(c @ ('/' | '?')) if plain => self.copy_ask_search(id, pane, c == '/'),
+            KeyCode::Char(c @ ('n' | 'N')) if plain => {
+                let Some((pattern, forward)) = slot.copy.as_ref().and_then(|c| c.search.clone())
+                else {
+                    return;
+                };
+                let forward = forward == (c == 'n');
+                if !slot.pane.copy_search(&pattern, forward) {
+                    self.say(Some(id), &format!("Pattern not found: {pattern}"));
+                }
+            }
             _ => {}
         }
-        if slot.copy.is_some_and(|c| c.exit_at_bottom) && slot.pane.scrolled() == 0 {
-            slot.copy = None;
-        }
-        let tab = slot.tab;
         self.dirty_tab(tab);
+    }
+
+    /// `/` and `?` in copy mode: what to look for, asked in a box, then
+    /// looked for down or up from the cursor.
+    fn copy_ask_search(&mut self, id: ClientId, pane: PaneId, forward: bool) {
+        let title = if forward { "Search down" } else { "Search up" };
+        let ask = crate::mission::ask::Ask::new(
+            title,
+            "Text, or a regular expression; a capital makes case count.",
+        );
+        self.open(
+            id,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, id, outcome| {
+                let crate::ui::Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let Some(slot) = server.panes.get_mut(&pane) else {
+                    return;
+                };
+                let Some(copy) = slot.copy.as_mut() else {
+                    return;
+                };
+                copy.search = Some((p.value.clone(), forward));
+                let found = slot.pane.copy_search(&p.value, forward);
+                let tab = slot.tab;
+                if !found {
+                    server.say(Some(id), &format!("Pattern not found: {}", p.value));
+                }
+                server.dirty_tab(tab);
+            })),
+        );
     }
 
     fn leave_copy(&mut self, pane: PaneId) {
         if let Some(slot) = self.panes.get_mut(&pane)
             && (slot.copy.take().is_some() || slot.pane.scrolled() > 0)
         {
-            slot.pane.scroll_to_bottom();
-            slot.pane.select_clear();
+            slot.pane.copy_end();
+            let tab = slot.tab;
+            self.dirty_tab(tab);
         }
     }
 
@@ -1893,12 +1981,16 @@ impl Server {
                     if up && slot.copy.is_none() {
                         slot.copy = Some(CopyMode {
                             exit_at_bottom: true,
+                            search: None,
                         });
                     }
                     slot.pane
                         .scroll(if up { WHEEL_LINES } else { -WHEEL_LINES });
-                    if slot.copy.is_some_and(|c| c.exit_at_bottom) && slot.pane.scrolled() == 0 {
+                    if slot.copy.as_ref().is_some_and(|c| c.exit_at_bottom)
+                        && slot.pane.scrolled() == 0
+                    {
                         slot.copy = None;
+                        slot.pane.copy_end();
                     }
                     let tab = slot.tab;
                     self.dirty_tab(tab);
@@ -2035,6 +2127,14 @@ impl Server {
                     if slot.copy.is_none() {
                         cursor = at;
                         frame.cursor_style = Some(slot.pane.cursor_style());
+                    } else if let Some((x, y)) = slot.pane.copy_cursor().filter(|_| focused) {
+                        // Copy mode's own cursor, a block, as tmux drew it.
+                        let (x, y) = (rect.x + x, rect.y + y);
+                        if x < rect.right() && y < rect.bottom() {
+                            cursor = Some((x, y));
+                            frame.cursor_style =
+                                Some(crossterm::cursor::SetCursorStyle::SteadyBlock);
+                        }
                     }
                 } else {
                     compose::tint_inactive(&mut frame.buf, rect, palette.inactive_bg);
