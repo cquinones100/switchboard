@@ -119,14 +119,21 @@ fn closing_a_busy_pane_asks_first() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
-    // A shell at its prompt closes at once.
+    // A shell at its prompt closes at once: waited for in front, since a
+    // login shell's profile can run a command of its own first.
     client.type_text(&format!("{ALT}L"));
-    client.wait_for("a second pane", |_| panes(&server.list()) == 2);
+    client.wait_for("a second pane at its shell", |_| {
+        let list = server.list();
+        panes(&list) == 2 && front_command(&list) == "sh"
+    });
     client.type_text(&format!("{ALT}w"));
     client.wait_for("the shell's pane closed", |_| panes(&server.list()) == 1);
     // One running a program asks.
     client.type_text(&format!("{ALT}L"));
-    client.wait_for("a second pane", |_| panes(&server.list()) == 2);
+    client.wait_for("a second pane at its shell", |_| {
+        let list = server.list();
+        panes(&list) == 2 && front_command(&list) == "sh"
+    });
     client.type_text("sleep 100\r");
     client.wait_for("sleep in front", |_| {
         front_command(&server.list()) == "sleep"
