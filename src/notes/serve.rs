@@ -370,6 +370,24 @@ impl Server {
         }
     }
 
+    /// A note shown in Notes, and Notes gone to, as notes-open.sh's `note`
+    /// did for a new note's notification: opened in the running app through
+    /// its socket, or, with none running, made the note the app opens with
+    /// (`.notes.json`'s last); then Notes is gone to wherever it is, or
+    /// opened in a tab of its own. `rel` is a path in the notes directory.
+    pub(crate) fn open_note(&mut self, client: ClientId, rel: &str) {
+        if !in_notes(rel) || !store::notes_dir().join(rel).is_file() {
+            self.say(Some(client), &format!("There is no note {rel} any more."));
+            return;
+        }
+        if self.notes_pane().is_some() {
+            tell(format!("open {rel}"));
+        } else {
+            Store::at(store::notes_dir()).set_last(Some(rel));
+        }
+        self.open_notes(client);
+    }
+
     /// Shows a client a pane, in whichever session it is.
     pub(crate) fn go_to_pane(&mut self, client: ClientId, pane: PaneId) {
         let Some(session) = self

@@ -1420,6 +1420,11 @@ impl Server {
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
             Do::ReadLog { job, name } => self.read_ci_log(client, &job, &name),
+            Do::OpenNote(rel) => {
+                self.mission_close(client);
+                self.new_note_open(client, &rel);
+            }
+            Do::OpenView(slug) => self.open_mission(client, Opening::View(slug)),
         }
     }
 

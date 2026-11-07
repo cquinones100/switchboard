@@ -387,6 +387,15 @@ impl Server {
         self.day_views(&dirs, &now);
     }
 
+    /// A new note's notification acted on: the note opened in Notes, and its
+    /// notification let go, as daemon.js's `openNote` did.
+    pub fn new_note_open(&mut self, client: ClientId, rel: &str) {
+        self.open_note(client, rel);
+        let dirs = Dirs::here();
+        new_notes::dismiss_note(&dirs.state, rel);
+        self.day_views(&dirs, &util::local_now());
+    }
+
     // ── The lookups ─────────────────────────────────────────────────────────
 
     fn read_feed(&mut self) {

@@ -329,3 +329,57 @@ fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     rig.wait("the note's tab in front", |l| tabs(l)[1]["current"] == true);
     assert_eq!(tabs(&rig.list()).len(), 2, "no other tab opened");
 }
+
+/// A note written for you, as the meeting notes and the standup record it.
+fn note_written(rig: &Rig, rel: &str, title: &str) {
+    std::fs::create_dir_all(&rig.server.state).unwrap();
+    std::fs::write(
+        rig.server.state.join("new-notes.json"),
+        json!([{ "path": rel, "title": title, "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
+    let rig = Rig::new();
+    // With the Notifications window off, Enter in the sidebar acts at once.
+    std::fs::write(
+        rig.dir.path().join("settings.json"),
+        json!({ "tips": false, "notifications": false, "ask_tab_note": false, "notice_list": false })
+            .to_string(),
+    )
+    .unwrap();
+    note_written(&rig, "Plan.md", "Plan");
+    let mut client = rig.server.attach(140, 36);
+    client.wait_text("● Plan");
+    // M-s into the sidebar, n to the notifications, Enter on the first.
+    client.type_text(&format!("{ALT}s"));
+    client.type_text("n");
+    client.type_text("\r");
+    rig.wait("Notes in a tab of its own", |l| {
+        marked(l, "@notes_pane").is_some()
+    });
+    client.wait_text("notes-stand-in");
+    // Notes wasn't running: the note is the one it opens with.
+    let meta = std::fs::read_to_string(rig.notes_dir().join(".notes.json")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&meta).unwrap()["last"],
+        "Plan.md"
+    );
+    client.wait_for("the notification let go", |s| {
+        !s.iter().any(|l| l.contains("● Plan"))
+    });
+    // Running, it is asked to show the note through its socket.
+    std::fs::write(rig.notes_dir().join("Work/Later.md"), "# Later\n").unwrap();
+    note_written(&rig, "Work/Later.md", "Later");
+    client.type_text(&format!("{ALT}1"));
+    client.wait_text("● Later");
+    client.type_text(&format!("{ALT}s"));
+    client.type_text("n");
+    client.type_text("\r");
+    rig.wait_heard("open Work/Later.md");
+    rig.wait("Notes in front", |l| {
+        marked(l, "@notes_pane").is_some_and(|(i, _)| tabs(l)[i]["current"] == true)
+    });
+}

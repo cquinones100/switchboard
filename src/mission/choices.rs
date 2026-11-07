@@ -111,6 +111,11 @@ pub enum Do {
         job: String,
         name: String,
     },
+    /// A note written for you opened in Notes (a path in the notes
+    /// directory), its notification let go.
+    OpenNote(String),
+    /// Mission control on a view, by its name lowercased with dashes.
+    OpenView(String),
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -702,6 +707,21 @@ pub fn notice_of(item: &Item) -> (String, String) {
     }
 }
 
+/// Where Enter on a notification takes it when it leads somewhere of its own
+/// (daemon.js's `openNotice`): a new note opens in Notes, a calendar change
+/// opens the Calendar view. `source` is the source that gave it.
+pub fn notice_opens(source: &str, item: &Item) -> Option<Do> {
+    match source {
+        "new-notes" => item
+            .data
+            .get("path")
+            .and_then(Value::as_str)
+            .map(|p| Do::OpenNote(p.to_string())),
+        "calendar" => Some(Do::OpenView("calendar".into())),
+        _ => None,
+    }
+}
+
 /// A notification's menu: a suggestion's own choices; else where it leads
 /// and putting it away.
 pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
@@ -729,7 +749,16 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     }
     let mut own = item.clone();
     own.id = id;
-    let mut out = if source == "inbox" {
+    let mut out = if let Some(open) = notice_opens(&source, item) {
+        vec![choice(
+            'o',
+            match &open {
+                Do::OpenNote(_) => "Open it in Notes",
+                _ => "Open the Calendar view",
+            },
+            open,
+        )]
+    } else if source == "inbox" {
         let mut b = board_choices(&own, ctx);
         let n = text(&own.data, "/notification");
         b.push(choice(
@@ -971,5 +1000,24 @@ mod tests {
         let choices = notice_choices(&meeting, &c);
         assert_eq!(keys(&choices), "oyx");
         assert!(matches!(&choices[2].act, Do::Dismiss { source, .. } if source == "meeting"));
+    }
+
+    #[test]
+    fn a_new_note_opens_in_notes_and_a_calendar_change_opens_the_calendar() {
+        let tabs: Vec<TabModel> = Vec::new();
+        let repo = |_: &Path| None;
+        let c = ctx(&tabs, &repo);
+        let note = Item::new("new-notes\tnote:Meetings/Standup.md", "Standup")
+            .data(json!({ "kind": "note", "path": "Meetings/Standup.md" }));
+        let choices = notice_choices(&note, &c);
+        assert_eq!(keys(&choices), "ox");
+        assert_eq!(choices[0].label, "Open it in Notes");
+        assert_eq!(choices[0].act, Do::OpenNote("Meetings/Standup.md".into()));
+        let change = Item::new("calendar\tcalendar:k1", "Standup moved to 3pm")
+            .data(json!({ "kind": "calendar-change", "key": "k1" }));
+        let choices = notice_choices(&change, &c);
+        assert_eq!(keys(&choices), "ox");
+        assert_eq!(choices[0].act, Do::OpenView("calendar".into()));
+        assert_eq!(notice_opens("slack", &change), None);
     }
 }

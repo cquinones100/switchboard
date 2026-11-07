@@ -375,7 +375,7 @@ The notifications sit at the bottom of the sidebar, under a double yellow rule a
 
 "Your day", "How you use it" and "Working a note continuously", below, say more of each.
 
-Moving past the last tab with `j`, `n` in the sidebar, or a click puts the cursor on them. Enter or a click does what one leads to: a meeting joins its call, a Slack message or an Inbox notification opens in the browser, working a note continuously opens mission control on its line, and one with nowhere to go shows its words in a box. Dismissing one, marking it read and a suggestion's choices are in its menu in mission control's Notifications view. Settings' "Notifications" (`sidebar_notifications`) turns the block, and that view, off.
+Moving past the last tab with `j`, `n` in the sidebar, or a click puts the cursor on them. Enter or a click does what one leads to: a meeting joins its call, a new note opens in Notes, a calendar change opens mission control's Calendar view, a Slack message or an Inbox notification opens in the browser, working a note continuously opens mission control on its line, and one with nowhere to go shows its words in a box. Dismissing one, marking it read and a suggestion's choices are in its menu in mission control's Notifications view. Settings' "Notifications" (`sidebar_notifications`) turns the block, and that view, off.
 
 ### Into the sidebar and its keys
 
@@ -492,7 +492,7 @@ On a tab, the menu offers:
 
 After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, CI, Merge queues, Tickets, Inbox, Sessions, Resources, Usage and Settings, then each plugin's view, each only while its setting is on. The ones that read a service ask it again when you go to them.
 
-**Notifications** is every notification the sidebar shows, whole. Enter's menu does what each leads to, and offers to dismiss a meeting, a Slack message (until its thread gets more), a calendar change (taking today's calendar as seen) or a new note; an Inbox notification gets the Inbox's menu, and a suggestion its own choices. It is there while the sidebar's notifications are on.
+**Notifications** is every notification the sidebar shows, whole. Enter's menu does what each leads to ("Open it in Notes" for a new note, "Open the Calendar view" for a calendar change), and offers to dismiss a meeting, a Slack message (until its thread gets more), a calendar change (taking today's calendar as seen) or a new note; an Inbox notification gets the Inbox's menu, and a suggestion its own choices. It is there while the sidebar's notifications are on.
 
 **Work map** is every piece of work in the repositories your tabs are in, a row each: each worktree, and a main checkout a tab is in, with its ticket (from the branch, while Linear is on), the tab it is open in or "no tab", its pull request and where that stands ("no PR", "#12 open", "checks running", "✗2 failing", "in merge queue at 3", "merged"), and its directory. Worktrees no tab has open are there too, from every repository a Claude session worked in over the last two weeks, each with when it was last used and the last prompt given there. Every open tab has a row, one in no repository included. Rows needing you come first, then work going on, then tabs, then merged work, then work no tab is in, the most recently used first. Merged work no tab is in sits last under "Merged, can be removed", closed until Enter on that heading opens it. On a row with a tab, Enter's menu goes to it; on a worktree with no tab it offers to open a tab there and resume its Claude (as `switchboard claude-here` does) or copy its directory, and on merged work, to remove the worktree after asking, which keeps one with changes and says why. The worktrees are read with git about once a minute while the view is in front. Settings' "Work map" (`view_work_map`); `M-j` and `M-o` open it whatever that says.
 
@@ -580,7 +580,7 @@ With Settings' "Today's todo note" (`todo_note`) on, each weekday, once Switchbo
 
 ### New notes in the notifications
 
-Each note written for you (a meeting's, the standup, today's todo) is in the sidebar's notifications until Notes shows it, its file is gone, or its menu in the Notifications view dismisses it (Settings' "New notes", `new_notes`).
+Each note written for you (a meeting's, the standup, today's todo) is in the sidebar's notifications until Notes shows it, its file is gone, or its menu in the Notifications view dismisses it. Enter on one opens it in Notes, through the running app's socket (or as the note it opens with when it isn't running), and goes to Notes wherever it is, or opens it in a tab of its own (Settings' "New notes", `new_notes`).
 
 ## How you use it
 

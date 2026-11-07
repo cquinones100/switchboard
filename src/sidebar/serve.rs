@@ -1262,6 +1262,12 @@ impl Server {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
+        // A new note opens in Notes, a calendar change the Calendar view.
+        if let Some(open) = crate::mission::choices::notice_opens(source, &item) {
+            self.sidebar_leave(&session);
+            self.mission_do(client, open, "Opening it");
+            return;
+        }
         match item.target {
             Target::Tab(t) => self.sidebar_go(&session, t),
             Target::Url(url) => {
