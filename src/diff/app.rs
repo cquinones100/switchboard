@@ -20,6 +20,11 @@
 //! `ga` asks Haiku a question about the change (ask.rs): a box to type it
 //! in, then a window on the right half with the answer streamed in.
 //!
+//! Asked for (`--working`), it shows the working tree's changes instead,
+//! the changes not staged and those staged in a section each, as
+//! diffview's plain `:DiffviewOpen` listed them (git.rs's `read_working`),
+//! a file both staged and changed since in both.
+//!
 //! `yp` copies the cursor's `path:line` and `yl` a GitHub link to it; `v`
 //! or `V` in a side of the diff selects lines, as Visual mode did in
 //! diffview's buffers, and then `yp` and `yl` copy the lines selected
@@ -47,7 +52,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 use super::ask::{self, Asking, Said};
-use super::git::{self, Change, Entry};
+use super::git::{self, Change, Entry, Section};
 use super::highlight::{self, Hl};
 use super::order;
 use super::sides::{self, Item};
@@ -149,7 +154,7 @@ pub enum Msg {
     Heard(Heard),
     /// Haiku's order of the code, by path.
     Order(Vec<String>),
-    /// A side of a file coloured.
+    /// A side of a file coloured, by the file's key (`Entry::key`).
     Coloured {
         path: String,
         new_side: bool,
@@ -205,7 +210,7 @@ enum Line {
 /// One row of the list.
 #[derive(Clone, Debug, PartialEq)]
 enum ListRow {
-    Header,
+    Header(Section),
     Loading,
     Heading(String, StoryLook),
     File(usize),
@@ -508,17 +513,23 @@ impl App {
     /// shown, and its story asked for.
     pub fn loaded(&mut self, change: Change) {
         self.loading = None;
-        let texts: Vec<&str> = vec![change.diff.as_str()];
-        let (diffs, hunks) = story::split(&texts);
-        let entries: Vec<story::Entry> = change
-            .entries
-            .iter()
-            .map(|e| story::Entry {
-                path: e.path.clone(),
-                additions: e.additions,
-                deletions: e.deletions,
-            })
-            .collect();
+        let (diffs, hunks) = story::split(&change.runs());
+        // A working tree's file both staged and changed since is one file
+        // to Haiku, as it was in diffview's story.
+        let mut entries: Vec<story::Entry> = Vec::new();
+        for e in &change.entries {
+            match entries.iter_mut().find(|s| s.path == e.path) {
+                Some(seen) => {
+                    seen.additions += e.additions;
+                    seen.deletions += e.deletions;
+                }
+                None => entries.push(story::Entry {
+                    path: e.path.clone(),
+                    additions: e.additions,
+                    deletions: e.deletions,
+                }),
+            }
+        }
         let commits = story::commits(&change.raw_commits);
         self.input = story::input(&entries, &diffs, &hunks, &commits);
         self.reading = Reading {
@@ -530,10 +541,11 @@ impl App {
         self.hunks = hunks;
         let mut paths: Vec<String> = change.entries.iter().map(|e| e.path.clone()).collect();
         paths.sort();
+        paths.dedup();
         let key = story::key(
             &change.top.to_string_lossy(),
             &paths,
-            &change.diff,
+            &change.runs().join("\n"),
             &commits,
         );
         self.change = Some(change);
@@ -561,7 +573,7 @@ impl App {
 
     /// The files in the order known now, the cursor kept on its file.
     fn sort(&mut self) {
-        let keep = self.current().map(|e| e.path.clone());
+        let keep = self.current().map(Entry::key);
         let entries = self.entries().to_vec();
         let story = self.story.as_ref();
         let smart = &self.smart;
@@ -579,15 +591,17 @@ impl App {
         let by_order = self.opts.order;
         order.sort_by(|&a, &b| {
             let (pa, pb) = (&entries[a].path, &entries[b].path);
-            if by_order {
-                order::reading_order(pa, pb, story, smart)
-            } else {
-                order::alphabetical(pa, pb)
-            }
+            entries[a].section.cmp(&entries[b].section).then_with(|| {
+                if by_order {
+                    order::reading_order(pa, pb, story, smart)
+                } else {
+                    order::alphabetical(pa, pb)
+                }
+            })
         });
         self.order = order;
         if let Some(keep) = keep
-            && let Some(at) = self.order.iter().position(|&i| entries[i].path == keep)
+            && let Some(at) = self.order.iter().position(|&i| entries[i].key() == keep)
         {
             self.at = at;
         }
@@ -726,13 +740,13 @@ impl App {
         let Some(entry) = self.current().cloned() else {
             return;
         };
-        if self.files.contains_key(&entry.path) {
+        if self.files.contains_key(&entry.key()) {
             return;
         }
         let Some(change) = &self.change else {
             return;
         };
-        let (left, right) = (change.left.clone(), change.right.clone());
+        let (left, right) = change.sides(&entry);
         let old_text = if entry.status == 'A' {
             Some(String::new())
         } else {
@@ -762,7 +776,7 @@ impl App {
                 continue;
             }
             let tx = self.tx.clone();
-            let path = entry.path.clone();
+            let path = entry.key();
             let named = if new_side {
                 entry.path.clone()
             } else {
@@ -779,7 +793,7 @@ impl App {
             });
         }
         self.files.insert(
-            entry.path.clone(),
+            entry.key(),
             Sides {
                 old,
                 new,
@@ -812,7 +826,7 @@ impl App {
         let w = self.diff_area().width;
         match self
             .current()
-            .and_then(|e| self.files.get(&e.path))
+            .and_then(|e| self.files.get(&e.key()))
             .and_then(|s| s.alone)
         {
             Some(true) => (0, w),
@@ -827,6 +841,17 @@ impl App {
     /// The rows the diff's text takes, below each side's bar.
     fn body_height(&self) -> usize {
         self.diff_area().height.saturating_sub(1) as usize
+    }
+
+    /// Which of the story's runs a file's changes are in: a working tree's
+    /// staged changes are its first, those not staged its second; a
+    /// branch's change has one, and every hunk counts.
+    fn run_of(&self, entry: &Entry) -> Option<usize> {
+        match entry.section {
+            Section::Committed => None,
+            Section::Staged => Some(1),
+            Section::Unstaged => Some(2),
+        }
     }
 
     /// The chapter a file is shown under: the page's, else its own.
@@ -847,16 +872,16 @@ impl App {
         let fresh = self
             .lines
             .as_ref()
-            .is_some_and(|(p, o, n, _)| *p == entry.path && *o == ow && *n == nw);
+            .is_some_and(|(p, o, n, _)| *p == entry.key() && *o == ow && *n == nw);
         if !fresh {
             let lines = self.build_lines(&entry, ow as usize, nw as usize);
-            self.lines = Some((entry.path.clone(), ow, nw, lines));
+            self.lines = Some((entry.key(), ow, nw, lines));
         }
         &self.lines.as_ref().expect("built above").3
     }
 
     fn build_lines(&self, entry: &Entry, ow: usize, nw: usize) -> Vec<Line> {
-        let Some(s) = self.files.get(&entry.path) else {
+        let Some(s) = self.files.get(&entry.key()) else {
             return Vec::new();
         };
         // Each note goes over the line its hunk starts at, on the side it
@@ -866,11 +891,14 @@ impl App {
             && let Some(story) = &self.story
             && let Some(home) = self.home(&entry.path)
         {
+            let run = self.run_of(entry);
             for hunk in story
                 .hunks
                 .get(&entry.path)
                 .map(Vec::as_slice)
                 .unwrap_or(&[])
+                .iter()
+                .filter(|h| run.is_none_or(|r| h.run == r))
             {
                 let new_side = match s.alone {
                     Some(side) => side,
@@ -965,11 +993,11 @@ impl App {
         let height = self.body_height();
         let alone = self
             .current()
-            .and_then(|e| self.files.get(&e.path))
+            .and_then(|e| self.files.get(&e.key()))
             .and_then(|s| s.alone);
         let rows_changed: Vec<bool> = self
             .current()
-            .and_then(|e| self.files.get(&e.path))
+            .and_then(|e| self.files.get(&e.key()))
             .map(|s| s.rows.iter().map(|r| r.changes()).collect())
             .unwrap_or_default();
         let lines = self.screen_lines().to_vec();
@@ -992,7 +1020,7 @@ impl App {
                 },
                 Some(entry),
             ) = (&lines[i], self.current())
-                && let Some(s) = self.files.get(&entry.path)
+                && let Some(s) = self.files.get(&entry.key())
                 && let Some(w) = s.rows[*row].new_words.first()
                 && w.start >= range.start
                 && w.start <= range.end
@@ -1287,7 +1315,7 @@ impl App {
         let changed: Vec<bool> = {
             let rows = self
                 .current()
-                .and_then(|e| self.files.get(&e.path))
+                .and_then(|e| self.files.get(&e.key()))
                 .map(|s| &s.rows);
             lines
                 .iter()
@@ -1320,7 +1348,7 @@ impl App {
         let Some(Line::Fold { first, .. }) = self.screen_lines().get(cur).cloned() else {
             return;
         };
-        if let Some(path) = self.current().map(|e| e.path.clone())
+        if let Some(path) = self.current().map(Entry::key)
             && let Some(s) = self.files.get_mut(&path)
         {
             s.opened.insert(first);
@@ -1329,7 +1357,7 @@ impl App {
     }
 
     fn all_folds(&mut self, open: bool) {
-        if let Some(path) = self.current().map(|e| e.path.clone())
+        if let Some(path) = self.current().map(Entry::key)
             && let Some(s) = self.files.get_mut(&path)
         {
             s.all_open = open;
@@ -1375,7 +1403,12 @@ impl App {
     /// The list's rows: its heading, the spinner while the story is told,
     /// each chapter's heading over its first file, and the files.
     fn list_rows(&self) -> Vec<ListRow> {
-        let mut rows = vec![ListRow::Header];
+        let first = self
+            .order
+            .first()
+            .and_then(|&i| self.entry(i))
+            .map_or(Section::Committed, |e| e.section);
+        let mut rows = vec![ListRow::Header(first)];
         if self.telling == Telling::Waiting {
             rows.push(ListRow::Loading);
         }
@@ -1383,6 +1416,19 @@ impl App {
         let short = self.list_width < SHORT_WHY;
         let starts = self.starts();
         for (k, &i) in self.order.iter().enumerate() {
+            // A working tree's staged changes under a heading of their own.
+            if let Some(e) = self.entry(i)
+                && e.section != first
+                && k > 0
+                && self
+                    .order
+                    .get(k - 1)
+                    .and_then(|&j| self.entry(j))
+                    .map(|p| p.section)
+                    != Some(e.section)
+            {
+                rows.push(ListRow::Header(e.section));
+            }
             if let (Some(story), Some(path)) = (&self.story, self.entry(i).map(|e| &e.path))
                 && starts[k]
                 && let Some(&n) = story.chapter.get(path)
@@ -1406,7 +1452,7 @@ impl App {
                     .story
                     .as_ref()
                     .and_then(|s| s.chapter.get(&self.entries()[i].path).copied()),
-                section: "changes".into(),
+                section: format!("{:?}", self.entries()[i].section),
             })
             .collect();
         story::starts(&rows)
@@ -1442,14 +1488,18 @@ impl App {
                 self.sort();
                 let back = self.whole_at.take();
                 let at = back
-                    .and_then(|p| self.order.iter().position(|&i| self.entries()[i].path == p))
+                    .and_then(|p| {
+                        self.order
+                            .iter()
+                            .position(|&i| self.entries()[i].key() == p)
+                    })
                     .unwrap_or(0);
                 self.show_at(at);
             }
             return;
         }
         if self.page.is_none() {
-            self.whole_at = self.current().map(|e| e.path.clone());
+            self.whole_at = self.current().map(Entry::key);
         }
         self.page = Some(index as usize);
         self.at = 0;
@@ -1520,17 +1570,16 @@ impl App {
             return self.say("No file here");
         };
         let line = span(first, last, "L");
-        let Some(change) = &self.change else {
+        let (Some(change), Some(entry)) = (&self.change, self.current()) else {
             return;
         };
         let Some(repo) = git::github_repo(&change.top) else {
             return self.say("origin isn't on GitHub");
         };
-        let commit = if new_side {
-            &change.right
-        } else {
-            &change.left
-        };
+        let (left, right) = change.sides(entry);
+        let commit = change
+            .commit_of(if new_side { &right } else { &left })
+            .to_string();
         let text = format!("https://github.com/{repo}/blob/{commit}/{path}#L{line}");
         self.clip(&text);
         self.say(format!("Copied {text}"));
@@ -1568,7 +1617,7 @@ impl App {
             ask::Side::Old
         };
         let hunk = line
-            .and_then(|l| ask::hunk_at(&self.hunks, &entry.path, l, None, side))
+            .and_then(|l| ask::hunk_at(&self.hunks, &entry.path, l, self.run_of(&entry), side))
             .map(|h| h.id.clone());
         ask::Cursor {
             path: Some(entry.path),
@@ -2022,9 +2071,13 @@ fn md_style(s: &crate::views::markdown::Style) -> Style {
 /// Reads the change in `dir` off the screen's thread: the base kept for
 /// the branch's commit, else asked for and fetched (said on the screen
 /// meanwhile), then the change against it.
-fn load(dir: PathBuf, base: Option<String>, tx: Sender<Msg>) {
+fn load(dir: PathBuf, base: Option<String>, working: bool, tx: Sender<Msg>) {
     let result = (|| -> Result<(Box<Change>, Option<String>), String> {
         let facts = git::facts(&dir).map_err(|e| e.to_string())?;
+        if working {
+            let change = git::read_working(&facts.top).map_err(|e| e.to_string())?;
+            return Ok((Box::new(change), None));
+        }
         let mut said = None;
         let base = match base {
             Some(b) => b,
@@ -2087,15 +2140,16 @@ extern "C" fn on_signal(_: libc::c_int) {
 }
 
 /// Runs the diff on this terminal until it is closed: the change in `dir`
-/// against `base` (worked out as M-d does when `None`).
-pub fn run(dir: PathBuf, base: Option<String>) -> ExitCode {
+/// against `base` (worked out as M-d does when `None`), or with `working`
+/// the working tree's changes.
+pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
     let opts = Options::read();
     let mut app = App::new(opts, cols, rows, tx.clone());
     {
         let tx = tx.clone();
-        std::thread::spawn(move || load(dir, base, tx));
+        std::thread::spawn(move || load(dir, base, working, tx));
     }
     // The pane closed under it (M-w), or the server ending: the loop ends
     // as it does on q, so the ask under way and its partial file go too.
@@ -2193,6 +2247,7 @@ mod tests {
             additions,
             deletions,
             binary: false,
+            section: Section::Committed,
         }
     }
 
@@ -2232,6 +2287,7 @@ mod tests {
                 entry("src/new.js", 'A', 1, 0),
             ],
             diff,
+            staged: None,
             raw_commits: String::new(),
         });
         app
@@ -2396,6 +2452,48 @@ mod tests {
             "the line around it"
         );
         assert_eq!(app.cur, y as usize - 1, "opened on the first change");
+    }
+
+    #[test]
+    fn a_working_trees_changes_not_staged_come_first_and_its_staged_ones_after() {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        let header = |p: &str| format!("diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n");
+        let staged = format!("{}@@ -1 +1 @@\n-a = 1\n+a = 2\n", header("a.txt"));
+        let unstaged = format!("{}@@ -1 +1 @@\n-a = 2\n+a = 3\n", header("a.txt"));
+        app.give_text("H", "a.txt", Some("a = 1\n".into()));
+        app.give_text(git::INDEX, "a.txt", Some("a = 2\n".into()));
+        app.give_text(git::WORK_TREE, "a.txt", Some("a = 3\n".into()));
+        let in_section = |section| Entry {
+            section,
+            ..entry("a.txt", 'M', 1, 1)
+        };
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            left: "H".into(),
+            right: "H".into(),
+            entries: vec![in_section(Section::Staged), in_section(Section::Unstaged)],
+            diff: unstaged,
+            staged: Some(staged),
+            ..Change::default()
+        });
+        let shown = screen(&mut app);
+        let names = list(&shown);
+        let at = |text: &str| names.iter().position(|l| l.contains(text)).unwrap();
+        assert!(at("Changes (1)") < at("Staged changes (1)"), "{names:?}");
+        assert_eq!(names.iter().filter(|l| l.contains("a.txt")).count(), 2);
+        let row = shown
+            .iter()
+            .find(|l| l.contains("a = 3"))
+            .expect("the file");
+        assert!(row.contains("a = 2"), "the index beside the file: {row:?}");
+        press(&mut app, "j");
+        assert_eq!(app.current().unwrap().section, Section::Staged);
+        let row = screen(&mut app)
+            .into_iter()
+            .find(|l| l.contains("a = 2"))
+            .expect("the staged change");
+        assert!(row.contains("a = 1"), "HEAD beside the index: {row:?}");
     }
 
     #[test]

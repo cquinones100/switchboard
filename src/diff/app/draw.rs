@@ -212,11 +212,15 @@ impl App {
         for (y, row) in rows.iter().skip(self.list_top).take(h).enumerate() {
             let y = y as u16;
             match row {
-                ListRow::Header => {
-                    let n = self.order.len();
+                ListRow::Header(section) => {
+                    let n = self
+                        .order
+                        .iter()
+                        .filter(|&&i| entries.get(i).is_some_and(|e| e.section == *section))
+                        .count();
                     let text = match (self.page, &self.story) {
                         (Some(p), Some(s)) => format!(" Page {p} of {} ({n})", s.chapters.len()),
-                        _ => format!(" Changes ({n})"),
+                        _ => format!(" {} ({n})", section.heading()),
                     };
                     Self::put(buf, 0, y, w, &text, self.faint());
                 }
@@ -373,20 +377,13 @@ impl App {
     fn draw_diff(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let area = self.diff_area();
         let Some(entry) = self.current().cloned() else {
-            if self.change.is_some() {
-                let base = self
-                    .change
-                    .as_ref()
-                    .map(|c| c.base.clone())
-                    .unwrap_or_default();
-                Self::put(
-                    buf,
-                    area.x + 1,
-                    1,
-                    area.width,
-                    &format!("No changes between {base} and this branch."),
-                    self.faint(),
-                );
+            if let Some(change) = &self.change {
+                let text = if change.working() {
+                    "No changes in the working tree.".to_string()
+                } else {
+                    format!("No changes between {} and this branch.", change.base)
+                };
+                Self::put(buf, area.x + 1, 1, area.width, &text, self.faint());
             }
             return None;
         };
@@ -402,7 +399,7 @@ impl App {
                 cx = Self::put(buf, cx, area.y, (x + w).saturating_sub(cx), &text, style);
             }
         }
-        let binary = self.files.get(&entry.path).is_some_and(|s| s.binary);
+        let binary = self.files.get(&entry.key()).is_some_and(|s| s.binary);
         if binary {
             Self::put(
                 buf,
@@ -421,7 +418,7 @@ impl App {
         self.top = self.top.min(lines.len().saturating_sub(1));
         let palette = self.palette();
         let dimmed = self.dimmed(&entry);
-        let s = self.files.get(&entry.path)?;
+        let s = self.files.get(&entry.key())?;
         let mut cursor = None;
         for (k, line) in lines.iter().skip(self.top).take(h).enumerate() {
             let y = area.y + 1 + k as u16;
@@ -540,11 +537,14 @@ impl App {
         let (Some(page), Some(story)) = (self.page, &self.story) else {
             return out;
         };
+        let run = self.run_of(entry);
         for hunk in story
             .hunks
             .get(&entry.path)
             .map(Vec::as_slice)
             .unwrap_or(&[])
+            .iter()
+            .filter(|h| run.is_none_or(|r| h.run == r))
         {
             if hunk.chapter == page {
                 continue;

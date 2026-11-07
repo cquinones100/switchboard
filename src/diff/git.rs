@@ -15,6 +15,13 @@
 //!
 //! The change is GitHub's "Files changed": the branch's commits since it
 //! left its base, `git diff <merge base> HEAD`, committed changes only.
+//!
+//! Asked for, the change is instead the working tree's, as diffview's
+//! plain `:DiffviewOpen` showed it: the changes staged (HEAD against the
+//! index) and those not (the index against the files, files git doesn't
+//! know yet among them as added), each file listed in its own section, and
+//! the story read from both, the staged first, as diffview.lua's
+//! `read_diff` ran them.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,9 +173,35 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
     })
 }
 
+/// Which list a changed file is in: a branch's committed change (M-d's),
+/// or a working tree's changes not staged and staged, which diffview listed
+/// apart, in that order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Section {
+    #[default]
+    Committed,
+    Unstaged,
+    Staged,
+}
+
+impl Section {
+    /// The list's heading.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Section::Committed | Section::Unstaged => "Changes",
+            Section::Staged => "Staged changes",
+        }
+    }
+}
+
+/// The index's side of a file, as `git show :<path>` reads it.
+pub const INDEX: &str = "";
+/// The file in the working tree, read from disk.
+pub const WORK_TREE: &str = "(work tree)";
+
 /// One changed file: its path (the new one for a rename) and the old one,
 /// its status letter as git gives it (A, D, M, R, C, T), its changed line
-/// counts, and whether git calls it binary.
+/// counts, whether git calls it binary, and the list it is in.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub path: String,
@@ -177,9 +210,19 @@ pub struct Entry {
     pub additions: usize,
     pub deletions: usize,
     pub binary: bool,
+    pub section: Section,
 }
 
 impl Entry {
+    /// What tells it from the others: its path, and its section in a
+    /// working tree, where one file may be both staged and changed since.
+    pub fn key(&self) -> String {
+        match self.section {
+            Section::Committed => self.path.clone(),
+            other => format!("{other:?}:{}", self.path),
+        }
+    }
+
     /// Its path on the old side.
     pub fn old(&self) -> &str {
         self.old_path.as_deref().unwrap_or(&self.path)
@@ -194,8 +237,10 @@ impl Entry {
 
 /// What M-d shows: the repository, what it compares (the base's name, the
 /// merge base and the branch's commit), the files, the diff as the story
-/// reads it, and the commits' messages as `story::commits` reads them.
-#[derive(Clone, Debug)]
+/// reads it, and the commits' messages as `story::commits` reads them. A
+/// working tree's has HEAD on both sides, its staged changes' diff in
+/// `staged` and its changes not staged in `diff`, and no commits.
+#[derive(Clone, Debug, Default)]
 pub struct Change {
     pub top: PathBuf,
     pub base: String,
@@ -203,7 +248,45 @@ pub struct Change {
     pub right: String,
     pub entries: Vec<Entry>,
     pub diff: String,
+    pub staged: Option<String>,
     pub raw_commits: String,
+}
+
+impl Change {
+    /// Whether it is a working tree's.
+    pub fn working(&self) -> bool {
+        self.staged.is_some()
+    }
+
+    /// The diff's runs, as `story::split` reads them: the staged changes
+    /// first in a working tree's.
+    pub fn runs(&self) -> Vec<&str> {
+        match &self.staged {
+            Some(staged) => vec![staged.as_str(), self.diff.as_str()],
+            None => vec![self.diff.as_str()],
+        }
+    }
+
+    /// What a file's two sides are read from (`text_at`): the commits
+    /// compared, else HEAD and the index for a staged file, the index and
+    /// the working tree for one not staged.
+    pub fn sides(&self, entry: &Entry) -> (String, String) {
+        match entry.section {
+            Section::Committed => (self.left.clone(), self.right.clone()),
+            Section::Staged => (self.right.clone(), INDEX.into()),
+            Section::Unstaged => (INDEX.into(), WORK_TREE.into()),
+        }
+    }
+
+    /// The commit a side's GitHub link names: HEAD for the index or the
+    /// working tree, which GitHub doesn't have.
+    pub fn commit_of<'a>(&'a self, side: &'a str) -> &'a str {
+        if side == INDEX || side == WORK_TREE {
+            &self.right
+        } else {
+            side
+        }
+    }
 }
 
 /// git's own a/ and b/ whatever the config says, which `story::split`
@@ -241,6 +324,7 @@ pub fn parse_entries(name_status: &str, numstat: &str) -> Vec<Entry> {
             additions: 0,
             deletions: 0,
             binary: false,
+            section: Section::Committed,
         });
     }
     // numstat -z: "added\tdeleted\tpath\0", or for a rename
@@ -302,13 +386,114 @@ pub fn read_change(top: &Path, base: &str) -> Result<Change> {
         right,
         entries,
         diff,
+        staged: None,
         raw_commits,
     })
 }
 
-/// A file's text at a commit, `None` when it isn't there or isn't text.
+/// The lines of a file git doesn't know yet that the story reads, as an
+/// addition of its first lines.
+const NEW_FILE_LINES: usize = 2000;
+
+/// The working tree's changes in the repository at `top`: those staged and
+/// those not, files git doesn't know yet among the second as added, which
+/// its diff leaves out (diffview.lua's `read_diff` for plain
+/// `:DiffviewOpen`).
+pub fn read_working(top: &Path) -> Result<Change> {
+    let head = git(top, &["rev-parse", "HEAD"])
+        .map_err(|_| anyhow!("This repository has no commit yet"))?
+        .trim()
+        .to_string();
+    let run = |extra: &[&str]| -> Result<String> {
+        let mut args: Vec<&str> = PLAIN.to_vec();
+        args.extend_from_slice(extra);
+        git(top, &args)
+    };
+    let mut entries = Vec::new();
+    let mut texts = Vec::new();
+    for (section, cached) in [(Section::Staged, true), (Section::Unstaged, false)] {
+        let with = |extra: &[&str]| -> Result<String> {
+            let mut args: Vec<&str> = if cached { vec!["--cached"] } else { Vec::new() };
+            args.extend_from_slice(extra);
+            run(&args)
+        };
+        let listed = parse_entries(
+            &with(&["-M", "-z", "--name-status"])?,
+            &with(&["-M", "-z", "--numstat"])?,
+        );
+        entries.extend(listed.into_iter().map(|e| Entry { section, ..e }));
+        texts.push(with(&["--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M"])?);
+    }
+    let untracked = git(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    for path in untracked.split(' ').filter(|p| !p.is_empty()) {
+        let Some(text) = text_at(top, WORK_TREE, path) else {
+            entries.push(Entry {
+                path: path.to_string(),
+                old_path: None,
+                status: 'A',
+                additions: 0,
+                deletions: 0,
+                binary: true,
+                section: Section::Unstaged,
+            });
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let shown = &lines[..lines.len().min(NEW_FILE_LINES)];
+        let unstaged = texts.last_mut().expect("two runs");
+        unstaged.push_str(&format!(
+            "diff --git a/{path} b/{path}\nnew file\n@@ -0,0 +1,{} @@\n",
+            shown.len()
+        ));
+        for line in shown {
+            unstaged.push('+');
+            unstaged.push_str(line);
+            unstaged.push('\n');
+        }
+        entries.push(Entry {
+            path: path.to_string(),
+            old_path: None,
+            status: 'A',
+            additions: lines.len(),
+            deletions: 0,
+            binary: false,
+            section: Section::Unstaged,
+        });
+    }
+    let diff = texts.pop().unwrap_or_default();
+    Ok(Change {
+        top: top.to_path_buf(),
+        base: String::new(),
+        left: head.clone(),
+        right: head,
+        entries,
+        diff,
+        staged: texts.pop(),
+        raw_commits: String::new(),
+    })
+}
+
+/// A file's text at a commit (`INDEX` for the index's, `WORK_TREE` for the
+/// file on disk, a link as the path it points to, as git records one),
+/// `None` when it isn't there or isn't text.
 pub fn text_at(top: &Path, commit: &str, path: &str) -> Option<String> {
-    let bytes = git_bytes(top, &["show", &format!("{commit}:{path}")])?;
+    let bytes = if commit == WORK_TREE {
+        let file = top.join(path);
+        let meta = std::fs::symlink_metadata(&file).ok()?;
+        if meta.file_type().is_symlink() {
+            std::fs::read_link(&file)
+                .ok()?
+                .to_string_lossy()
+                .into_owned()
+                .into_bytes()
+        } else if meta.is_file() {
+            std::fs::read(&file).ok()?
+        } else {
+            return None;
+        }
+    } else {
+        git_bytes(top, &["show", &format!("{commit}:{path}")])?
+    };
     if bytes.iter().take(8000).any(|b| *b == 0) {
         return None;
     }

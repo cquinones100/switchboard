@@ -7,7 +7,9 @@
 //! And `switchboard diff --ahead` tells the same story with nothing drawn,
 //! keeping it where M-d finds it, once per commit. lazygit (a stand-in)
 //! takes a pane's place the same way, from M-p's command and from mission
-//! control's menu on a tab, as the diff does from that menu.
+//! control's menu on a tab, as the diff does from that menu. M-p's
+//! working tree command shows the changes not yet committed, those not
+//! staged (a file git doesn't know yet among them) and those staged.
 
 mod common;
 
@@ -343,4 +345,51 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
         panes(&server)[0]["options"]["@in_place"] == "diff"
     });
     client.wait_text("export const a = 2;");
+}
+
+#[test]
+fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
+    let server = TestServer::start();
+    let dir = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_order": false});
+    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    let work = repository(server.dir.path());
+    std::fs::write(work.join("src/a.js"), "export const a = 3;\n").unwrap();
+    git(&work, &["add", "src/a.js"]);
+    std::fs::write(work.join("src/a.js"), "export const a = 4;\n").unwrap();
+    std::fs::write(work.join("new.txt"), "brand new\n").unwrap();
+
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    server.ok(&["press", "diff-working-tree"]);
+    let screen = client.wait_text("Staged changes (1)");
+    let at = |text: &str| screen.iter().position(|l| l.contains(text)).unwrap();
+    assert!(at("Changes (2)") < at("Staged changes (1)"), "{screen:?}");
+    client.wait_text("brand new");
+    client.type_text("j");
+    let screen = client.wait_text("export const a = 4;");
+    let row = screen.iter().find(|l| l.contains("a = 4;")).unwrap();
+    assert!(
+        row.contains("export const a = 3;"),
+        "the index beside the file: {row:?}"
+    );
+    client.type_text("j");
+    let screen = client.wait_text("export const a = 2;");
+    let row = screen.iter().find(|l| l.contains("a = 3;")).unwrap();
+    assert!(
+        row.contains("export const a = 2;"),
+        "HEAD beside the index: {row:?}"
+    );
+    assert_eq!(panes(&server)[0]["options"]["@in_place"], "diff");
+    client.send(b"\x1bd");
+    wait_until("the pane back", || {
+        panes(&server)[0]["options"].get("@in_place").is_none()
+    });
 }

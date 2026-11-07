@@ -53,16 +53,19 @@ pub enum Command {
     Ask,
     /// lazygit in place of this pane, or quit.
     Lazygit,
+    /// The working tree's changes in place of this pane, or closed.
+    WorkingTree,
 }
 
 impl Command {
-    pub const ALL: [Command; 6] = [
+    pub const ALL: [Command; 7] = [
         Command::Diff,
         Command::Side,
         Command::Full,
         Command::CopyStory,
         Command::Ask,
         Command::Lazygit,
+        Command::WorkingTree,
     ];
 
     /// Its name in keys.json.
@@ -74,6 +77,7 @@ impl Command {
             Command::CopyStory => "copy-diff-story",
             Command::Ask => "ask-about-diff",
             Command::Lazygit => "lazygit",
+            Command::WorkingTree => "diff-working-tree",
         }
     }
 
@@ -98,6 +102,9 @@ impl Command {
             Command::Lazygit => {
                 "Open lazygit in place of this pane, or quit it; quitting brings the pane back"
             }
+            Command::WorkingTree => {
+                "Open the changes not yet committed, staged and not, in place of this pane, or close them"
+            }
         }
     }
 
@@ -110,6 +117,7 @@ impl Command {
             Command::CopyStory => &["git", "diff", "review", "story", "diffview"],
             Command::Ask => &["git", "diff", "review", "story", "ai", "diffview"],
             Command::Lazygit => &["git", "commit", "stage"],
+            Command::WorkingTree => &["git", "diff", "review", "stage"],
         }
     }
 
@@ -122,12 +130,14 @@ impl Command {
     }
 }
 
-/// `switchboard diff [--base <ref>] [--ahead] [dir]`: the change in `dir`
-/// (where it runs, else) against `<ref>`, or, without one, its PR's base as
-/// M-d works it out; with `--ahead`, its story told and kept for M-d, with
-/// nothing drawn.
+/// `switchboard diff [--base <ref> | --working] [--ahead] [dir]`: the
+/// change in `dir` (where it runs, else) against `<ref>`, or, without one,
+/// its PR's base as M-d works it out; with `--working`, the working tree's
+/// changes, staged and not; with `--ahead`, its story told and kept for
+/// M-d, with nothing drawn.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut base = None;
+    let mut working = false;
     let mut ahead = false;
     let mut dir = None;
     let mut rest = args.into_iter();
@@ -138,6 +148,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 _ => return usage(),
             },
             "--ahead" => ahead = true,
+            "--working" => working = true,
             "-h" | "--help" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -149,13 +160,16 @@ pub fn main(args: Vec<String>) -> ExitCode {
     let dir = dir
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| crate::paths::home()));
+    if (working && (ahead || base.is_some())) || (ahead && base.is_some()) {
+        return usage();
+    }
     if ahead {
         return ahead::main(&dir);
     }
-    app::run(dir, base)
+    app::run(dir, base, working)
 }
 
 fn usage() -> ExitCode {
-    eprintln!("Usage: switchboard diff [--base <ref>] [--ahead] [dir]");
+    eprintln!("Usage: switchboard diff [--base <ref> | --working] [--ahead] [dir]");
     ExitCode::from(2)
 }

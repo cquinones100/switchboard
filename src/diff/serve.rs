@@ -43,7 +43,8 @@ impl Server {
     /// A diff command, from its key or the palette.
     pub fn diff_command(&mut self, client: ClientId, command: Command) {
         match command {
-            Command::Diff => self.toggle_diff(client),
+            Command::Diff => self.toggle_diff(client, false),
+            Command::WorkingTree => self.toggle_diff(client, true),
             Command::Side => self.tool_beside(client, true),
             Command::Full => self.tool_beside(client, false),
             // Pressed in the diff after C-\ C-n, which takes it back to its
@@ -103,7 +104,7 @@ impl Server {
         if lazygit {
             self.toggle_lazygit(client);
         } else {
-            self.toggle_diff(client);
+            self.toggle_diff(client, false);
         }
     }
 
@@ -138,8 +139,9 @@ impl Server {
         }
     }
 
-    /// M-d: the branch's diff in place of the pane, or closed.
-    fn toggle_diff(&mut self, client: ClientId) {
+    /// M-d: the branch's diff in place of the pane, or closed; with
+    /// `working`, the working tree's changes instead (M-p's command).
+    fn toggle_diff(&mut self, client: ClientId, working: bool) {
         if let Some(diff) = self.diff_here(client) {
             self.kill_pane(diff);
             return;
@@ -159,7 +161,11 @@ impl Server {
             );
             return;
         }
-        let command = vec![exe(), "diff".into(), dir.to_string_lossy().into_owned()];
+        let mut command = vec![exe(), "diff".into()];
+        if working {
+            command.push("--working".into());
+        }
+        command.push(dir.to_string_lossy().into_owned());
         if let Err(e) = self.open_in_place(pane, TOOL, command, Some(client)) {
             self.say(Some(client), &format!("Couldn't open the diff: {e}"));
         }
