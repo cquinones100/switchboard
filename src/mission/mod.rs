@@ -169,6 +169,9 @@ pub struct Mission {
     /// The view last brought to the front, by its title ("Tabs" for the
     /// cards), for what going to one does.
     pub(crate) came: Option<String>,
+    /// When the cards' spinners last turned (ms), which a box over mission
+    /// control holds them to for `BOXED_SPIN_MS`.
+    pub(crate) spun_at: i64,
 }
 
 impl Mission {
@@ -188,6 +191,7 @@ impl Mission {
             hits: Vec::new(),
             size: (0, 0),
             came: None,
+            spun_at: 0,
         }
     }
 

@@ -498,3 +498,87 @@ fn a_ci_jobs_kept_log_reads_from_its_end_without_its_timestamps() {
     client.type_text("q");
     client.wait_text("$");
 }
+
+/// A Claude session file for `pid`, as Claude Code writes one, so the
+/// pane's shell stands in for Claude.
+fn session_file(home: &std::path::Path, pid: u64, session: &str) {
+    let dir = home.join(".claude/sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = json!({"pid": pid, "entrypoint": "cli", "sessionId": session});
+    std::fs::write(dir.join(format!("{pid}.json")), file.to_string()).unwrap();
+}
+
+/// `switchboard hook <event>` in `pane`, as Claude Code runs it.
+fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
+    use std::io::Write;
+    let mut child = std::process::Command::new(common::BIN)
+        .args(["hook", event])
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", pane)
+        .env_remove("SLACK_RELAY_HELPER")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("switchboard runs");
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.to_string().as_bytes());
+    assert!(child.wait().expect("the hook ends").success());
+}
+
+/// How many times the screen changes in `span`, looked at every 50ms.
+fn changes(client: &mut TestClient, span: Duration) -> usize {
+    let until = Instant::now() + span;
+    let mut last = client.screen();
+    let mut n = 0;
+    while Instant::now() < until {
+        let now = client.screen();
+        if now != last {
+            n += 1;
+            last = now;
+        }
+    }
+    n
+}
+
+#[test]
+fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
+    let (server, mut client) = two_tabs(json!({}));
+    // The sidebar under mission control, whose spinner draws the screen
+    // again as often as it turns.
+    settings(&server, json!({"sidebar": true}));
+    wait_list(&server, "the sidebar back", |l| {
+        l["sessions"][0]["sidebar"]["columns"] != 0
+    });
+    // The first tab's shell stands in for a Claude at work.
+    let pane = tabs(&server.list())[0]["panes"][0].clone();
+    let id = pane["id"].as_str().unwrap().to_string();
+    session_file(&server.home, pane["pid"].as_u64().unwrap(), "s-spin");
+    hook(&server, &id, "UserPromptSubmit", json!({"prompt": "go on"}));
+    open(&mut client);
+    client.wait_text("WORKING 1");
+    let free = changes(&mut client, Duration::from_millis(1500));
+    assert!(free > 4, "the card's spinner turns: {free} changes");
+    // A menu over it: the spinners behind turn at most every 500ms, and
+    // the box, merged into the frame, is never sent again under itself, so
+    // it can't flicker.
+    client.type_text("\r");
+    client.wait_text("Go to tab");
+    let sent = client.raw.len();
+    let boxed = changes(&mut client, Duration::from_millis(1500));
+    assert!(boxed <= 4, "{boxed} changes behind the menu in 1.5s");
+    let after = String::from_utf8_lossy(&client.raw[sent..]).into_owned();
+    assert!(
+        !after.contains("Go to tab"),
+        "the box sent again: {after:?}"
+    );
+    assert!(
+        after.is_empty() || (after.starts_with("\x1b[?2026h") && after.ends_with("\x1b[?2026l")),
+        "each frame as synchronized output"
+    );
+}

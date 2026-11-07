@@ -57,6 +57,12 @@ const TYPE_AFTER: Duration = Duration::from_millis(500);
 /// question of several.
 const REANSWER_AFTER: Duration = Duration::from_millis(400);
 
+/// How often the cards' spinners turn at most behind a box over mission
+/// control (a menu, a question, the answer box), since the box is what is
+/// being read (the daemon's `BOXED_SPIN_MS`); the busy box's own spinner
+/// keeps its rate.
+const BOXED_SPIN_MS: i64 = 500;
+
 /// Mission control's keys, for `?` (render.js's `HELP.mission`).
 const KEYS: &[(&str, &str)] = &[
     (
@@ -300,6 +306,11 @@ impl Server {
         let Some((cols, rows)) = self.clients.get(&client).map(|c| (c.cols, c.rows)) else {
             return;
         };
+        // A box over mission control, other than the busy box.
+        let boxed = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| !matches!(c.overlays.top(), None | Some("mission" | "busy")));
         let Some(mut m) = self.take_mission(client) else {
             return;
         };
@@ -338,6 +349,14 @@ impl Server {
             m.view = views.iter().position(|v| v.id == id).map_or(0, |i| i + 1);
         }
         let now = util::now_ms();
+        // The spinners' frame by the clock, held behind a box until
+        // BOXED_SPIN_MS has passed since they last turned.
+        let frame = if boxed && now - m.spun_at < BOXED_SPIN_MS {
+            m.snap.frame
+        } else {
+            m.spun_at = now;
+            (now as u64 / SPINNER_MS) as usize
+        };
         m.snap = Snapshot {
             tabs,
             views,
@@ -351,7 +370,7 @@ impl Server {
             close: settings::is_on("easy_keys") && settings::is_on("menu_mouse"),
             now_secs: now.div_euclid(1000),
             tz: jiff::tz::TimeZone::system(),
-            frame: (now as u64 / SPINNER_MS) as usize,
+            frame,
             // Not in M-j's and M-o's pickers.
             pilot: m
                 .scope
