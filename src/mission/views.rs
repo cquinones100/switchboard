@@ -30,6 +30,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::facts::{Merge, PrFacts, PrState};
 use crate::items::{Item, State, Target, ViewData};
 use crate::sidebar::model::{MergeState, TabModel, TabState};
 use crate::{paths, settings};
@@ -136,9 +137,9 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, show_merged: bool)
                 Some(Scope::Tabs) => matches!(i.target, Target::Tab(_)),
                 Some(Scope::Untabbed) => !matches!(i.target, Target::Tab(_)),
             };
-            (scope.is_none() || !is_header(i))
-                && scoped
-                && (text.is_empty() || is_header(i) || search_text(i).contains(&text))
+            // A heading, which is no tab, stays with the work no tab has
+            // (the merged work's, under M-o), as views.js kept it.
+            scoped && (text.is_empty() || is_header(i) || search_text(i).contains(&text))
         })
         .cloned()
         .map(|mut i| {
@@ -313,9 +314,36 @@ fn pr_words(tab: &TabModel) -> String {
     format!("#{pr} {where_}")
 }
 
-fn state_of(tab: Option<&TabModel>) -> State {
+/// A worktree no tab is in, as far as its PR goes: a tab of no number
+/// standing in for it, with what GitHub said of its branch's PR (views.js's
+/// `mergeOf`), for `pr_words` and `state_of`.
+fn stand_in(pr: Option<&PrFacts>) -> TabModel {
+    let mut t = TabModel::new(crate::mux::TabId(0), 0, "");
+    if let Some(p) = pr {
+        t.pr = Some(p.number);
+        t.merge = match p.merge {
+            Some(Merge::Merged) => Some(MergeState::Merged),
+            Some(Merge::Queued { position }) => {
+                t.position = Some(position);
+                Some(MergeState::Queued)
+            }
+            None if p.state == PrState::Merged => Some(MergeState::Merged),
+            None => None,
+        };
+        t.checks = p.checks.filter(|_| p.state != PrState::Merged);
+    }
+    t
+}
+
+/// Whether a row needs you, is going on or waits: its tab's state, or for
+/// a worktree no tab is in, only its PR's failing checks.
+fn state_of(tab: Option<&TabModel>, facts: &TabModel) -> State {
     let Some(tab) = tab else {
-        return State::Idle;
+        return if facts.checks.is_some_and(|c| c.fail > 0) {
+            State::Attention
+        } else {
+            State::Idle
+        };
     };
     let needs = matches!(tab.state, TabState::Waiting | TabState::Done) || tab.pinned;
     if needs || tab.checks.is_some_and(|c| c.fail > 0) {
@@ -377,10 +405,16 @@ fn merged_pr(item: &Item) -> bool {
 }
 
 /// The Work map's rows, from the open tabs, the worktrees of their
-/// repositories, and the worktrees no tab is in that are known elsewhere.
-/// Every open tab is a row too, one in no repository included, so M-j, which
-/// lists the open tabs' rows, reaches them all.
-pub fn work_map(tabs: &[TabModel], worktrees: &[Worktree], revived: &[Revived]) -> Vec<Item> {
+/// repositories, and the worktrees no tab is in that are known elsewhere,
+/// whose PRs `pr_of` gives by their branch. Every open tab is a row too, one
+/// in no repository included, so M-j, which lists the open tabs' rows,
+/// reaches them all.
+pub fn work_map(
+    tabs: &[TabModel],
+    worktrees: &[Worktree],
+    revived: &[Revived],
+    pr_of: &dyn Fn(&Path) -> Option<PrFacts>,
+) -> Vec<Item> {
     let mut all: Vec<Worktree> = worktrees.to_vec();
     for r in revived {
         if !all.iter().any(|w| w.path == r.tree) {
@@ -427,7 +461,11 @@ pub fn work_map(tabs: &[TabModel], worktrees: &[Worktree], revived: &[Revived]) 
             Some(t) => format!("tab {}", t.index),
             None => "no tab".into(),
         };
-        let pr = tab.map(pr_words).unwrap_or_default();
+        // What the PR says, the tab's or the branch's for a worktree no
+        // tab is in.
+        let untabbed = stand_in(tab.is_none().then(|| pr_of(&w.path)).flatten().as_ref());
+        let facts = tab.unwrap_or(&untabbed);
+        let pr = pr_words(facts);
         let used = last.map(|l| format!("used {}", l.age)).unwrap_or_default();
         let place = paths::tilde(&w.path);
         let prompt = last.map(|l| l.prompt.clone()).unwrap_or_default();
@@ -445,7 +483,7 @@ pub fn work_map(tabs: &[TabModel], worktrees: &[Worktree], revived: &[Revived]) 
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect();
-        let merge = tab.and_then(|t| t.merge).map(|m| match m {
+        let merge = facts.merge.map(|m| match m {
             MergeState::Merged => "merged",
             MergeState::Queued => "queued",
         });
@@ -455,7 +493,7 @@ pub fn work_map(tabs: &[TabModel], worktrees: &[Worktree], revived: &[Revived]) 
             .unwrap_or_default();
         let mut item = Item::new(w.path.to_string_lossy(), format!("{lead}{title}"))
             .detail(detail.join(" · "))
-            .state(state_of(tab))
+            .state(state_of(tab, facts))
             .data(json!({
                 "merge": merge,
                 "merged": tab.is_none() && merge == Some("merged"),
@@ -488,7 +526,7 @@ pub fn work_map(tabs: &[TabModel], worktrees: &[Worktree], revived: &[Revived]) 
             .collect();
         let mut item = Item::new(format!("tab:{}", tab.id), &tab.name)
             .detail(detail.join(" · "))
-            .state(state_of(Some(tab)))
+            .state(state_of(Some(tab), tab))
             .target(Target::Tab(tab.id))
             .data(json!({ "merge": tab.merge.map(|m| match m {
                 MergeState::Merged => "merged",
@@ -576,7 +614,7 @@ mod tests {
             prompt: "try it out".into(),
             ..Revived::default()
         }];
-        let rows = work_map(&[waiting, loose], &trees, &revived);
+        let rows = work_map(&[waiting, loose], &trees, &revived, &|_| None);
         let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
         assert_eq!(
             titles,
@@ -610,6 +648,75 @@ mod tests {
         assert_eq!(open.data.items.len(), 2);
         let untabbed = shown(&picker, "old", Some(Scope::Untabbed), false);
         assert_eq!(untabbed.data.items.len(), 1);
+    }
+
+    #[test]
+    fn a_worktree_no_tab_is_in_whose_branch_merged_waits_to_be_removed() {
+        // lib/sidebar's "the Work map shows merged work with no tab under
+        // Merged, can be removed", its PR asked for by its branch.
+        let trees = vec![
+            Worktree {
+                path: "/r".into(),
+                branch: Some("main".into()),
+                main: true,
+            },
+            Worktree {
+                path: "/r/.claude/worktrees/ab-5".into(),
+                branch: Some("AB-5-done".into()),
+                main: false,
+            },
+            Worktree {
+                path: "/r/.claude/worktrees/ab-6".into(),
+                branch: Some("AB-6-going".into()),
+                main: false,
+            },
+        ];
+        let pr = |number, state| PrFacts {
+            number,
+            repo: "acme/r".into(),
+            url: String::new(),
+            state,
+            merge: None,
+            checks: None,
+            review_decision: None,
+            additions: 0,
+            deletions: 0,
+        };
+        let pr_of = |p: &Path| match p.to_str() {
+            Some("/r/.claude/worktrees/ab-5") => Some(pr(5, PrState::Merged)),
+            Some("/r/.claude/worktrees/ab-6") => Some(pr(6, PrState::Open)),
+            _ => None,
+        };
+        let rows = work_map(&[], &trees, &[], &pr_of);
+        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["AB-6  going", "Merged, can be removed", "AB-5  done"]
+        );
+        assert_eq!(rows[2].data["merged"], true);
+        let picker = View {
+            id: ViewId::WorkMap,
+            title: "Work map".into(),
+            data: ViewData {
+                items: rows,
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        // M-o's scope, work with no tab, keeps the header, which shows the
+        // merged work once Enter opens it.
+        let untabbed = shown(&picker, "", Some(Scope::Untabbed), false);
+        let titles: Vec<&str> = untabbed
+            .data
+            .items
+            .iter()
+            .map(|r| r.title.as_str())
+            .collect();
+        assert_eq!(titles, ["AB-6  going", "▸ Merged, can be removed"]);
+        let opened = shown(&picker, "", Some(Scope::Untabbed), true);
+        assert_eq!(opened.data.items.len(), 3);
+        let open = shown(&picker, "", Some(Scope::Tabs), true);
+        assert!(open.data.items.is_empty(), "no header among the open tabs");
     }
 
     #[test]

@@ -37,6 +37,12 @@ pub enum Do {
     Diff(TabId),
     /// The tab, and lazygit in its pane's place.
     Lazygit(TabId),
+    /// The diff or lazygit for work no tab is in, in a tab of its own in
+    /// its directory, closing with it (the daemon's popup there).
+    ToolIn {
+        dir: PathBuf,
+        lazygit: bool,
+    },
     /// Its name typed in.
     Rename(TabId),
     Pin(TabId),
@@ -681,8 +687,30 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 ));
             }
         }
+        // A row of the Work map: its tab, or a tab opened there resuming
+        // its Claude, then its diff and lazygit (in the tab's pane's place,
+        // or for work no tab is in, in a tab of their own there), removing
+        // merged work, and copying its directory.
         ViewId::WorkMap => {
-            out = target_choices(item, ctx);
+            let all = target_choices(item, ctx);
+            let (copy, first): (Vec<Choice>, Vec<Choice>) =
+                all.into_iter().partition(|c| matches!(c.act, Do::Copy(_)));
+            out = first;
+            match &item.target {
+                Target::Tab(t) => {
+                    out.push(choice('d', "Its diff (M-d)", Do::Diff(*t)));
+                    out.push(choice('L', "lazygit", Do::Lazygit(*t)));
+                }
+                Target::Dir(d) => {
+                    let tool = |lazygit| Do::ToolIn {
+                        dir: d.clone(),
+                        lazygit,
+                    };
+                    out.push(choice('d', "Its diff (M-d)", tool(false)));
+                    out.push(choice('L', "lazygit", tool(true)));
+                }
+                Target::Url(_) | Target::None => {}
+            }
             let merged = item.data.get("merged").and_then(Value::as_bool) == Some(true);
             if let (true, Target::Dir(d)) = (merged, &item.target) {
                 out.push(choice(
@@ -691,6 +719,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     Do::RemoveWorktree(d.clone()),
                 ));
             }
+            out.extend(copy);
         }
         ViewId::Notifications => return notice_choices(item, ctx),
         _ => out = target_choices(item, ctx),
@@ -1027,6 +1056,31 @@ mod tests {
         let choices = notice_choices(&inbox, &c);
         assert_eq!(keys(&choices), "wsDvoyrx");
         assert!(matches!(&choices[7].act, Do::Dismiss { source, .. } if source == "inbox"));
+    }
+
+    #[test]
+    fn a_work_map_row_offers_its_diff_and_lazygit_and_merged_work_is_removed() {
+        let tabs: Vec<TabModel> = vec![tab(3, "AB-1: Fix it")];
+        let repo = |_: &Path| None;
+        let c = ctx(&tabs, &repo);
+        let open = Item::new("/r/wt/ab-1", "AB-1  Fix it").target(Target::Tab(TabId(3)));
+        let choices = item_choices(&ViewId::WorkMap, &open, &[], &c);
+        assert_eq!(keys(&choices), "gdL");
+        assert_eq!(choices[1].act, Do::Diff(TabId(3)));
+        let dir = PathBuf::from("/r/wt/ab-5");
+        let merged = Item::new("/r/wt/ab-5", "AB-5  done")
+            .target(Target::Dir(dir.clone()))
+            .data(json!({ "merged": true }));
+        let choices = item_choices(&ViewId::WorkMap, &merged, &[], &c);
+        assert_eq!(keys(&choices), "odLxy");
+        assert_eq!(
+            choices[2].act,
+            Do::ToolIn {
+                dir: dir.clone(),
+                lazygit: true
+            }
+        );
+        assert_eq!(choices[3].act, Do::RemoveWorktree(dir));
     }
 
     #[test]

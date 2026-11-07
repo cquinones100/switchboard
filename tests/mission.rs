@@ -284,10 +284,28 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
     client.type_text(&format!("{ALT}j"));
     let screen = client.wait_text("Work map · open tabs");
     assert!(screen.iter().any(|l| l.contains("tab 1")));
-    // Typing filters the rows; Enter goes to the chosen one at once, as a
-    // picker does.
+    // Typing filters the rows; Enter opens the chosen one's menu, as the
+    // daemon's picker did, its diff and lazygit among what it offers.
     client.type_text("second");
     client.wait_for("one row", |s| !s.iter().any(|l| l.contains("tab 1 ")));
+    client.type_text("\r");
+    let screen = client.wait_text("Go to tab 2");
+    assert!(screen.iter().any(|l| l.contains("Its diff (M-d)")));
+    assert!(screen.iter().any(|l| l.contains("lazygit")));
+    // Esc closes the menu, not the picker, which types on.
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Go to tab 2"))
+    });
+    client.type_text("x");
+    client.wait_text("secondx");
+    client.type_text("\x7f");
+    client.wait_for("the filter as it was", |s| {
+        !s.iter().any(|l| l.contains("secondx"))
+    });
+    // Enter twice goes there.
+    client.type_text("\r");
+    client.wait_text("Go to tab 2");
     client.type_text("\r");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
@@ -295,6 +313,47 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
+}
+
+#[test]
+fn tab_in_a_picker_goes_round_its_rows_and_stops_on_easy_modes_close_button() {
+    let (server, mut client) = two_tabs(json!({}));
+    wait_list(&server, "the tabs named", |l| {
+        tabs(l)
+            .iter()
+            .all(|t| t["name"].as_str().is_some_and(|n| !n.is_empty()))
+    });
+    // Two rows: Tab twice goes round to the first, whose menu Enter opens.
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("\r");
+    let screen = client.wait_text("› Go to tab");
+    let first = screen
+        .iter()
+        .find_map(|l| l.split("› ").nth(1))
+        .map(|rest| rest.trim_end_matches([' ', '│']).to_string())
+        .unwrap();
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| !s.iter().any(|l| l.contains("› Go")));
+    client.type_text("\t\t\r");
+    client.wait_text(&format!("› {first}"));
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| !s.iter().any(|l| l.contains("› Go")));
+    client.type_text("\x1b");
+    client.wait_for("the picker closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    // With easy mode's close button, Tab past the last row stops on it,
+    // and Enter there closes the picker.
+    settings(&server, json!({ "easy_keys": true, "menu_mouse": true }));
+    std::thread::sleep(Duration::from_millis(2000));
+    client.type_text(&format!("{ALT}j"));
+    client.wait_text("Work map · open tabs");
+    client.type_text("\t\t\r");
+    client.wait_for("the picker closed by its ×", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+    assert_eq!(tabs(&server.list())[1]["current"], true, "nowhere gone");
 }
 
 #[test]

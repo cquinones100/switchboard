@@ -102,12 +102,14 @@ impl Server {
         for name in self.sources.schedule.due(now, fast, away) {
             self.start_lookup_named(name, &tabs);
         }
-        // A tab's PR not asked about yet is asked about now.
+        // A tab's PR not asked about yet is asked about now, and so is a
+        // worktree's no tab is in.
         if !away
             && settings::is_on("github")
             && tabs
                 .iter()
                 .filter_map(|t| t.key.as_ref())
+                .chain(self.sources.untabbed.values())
                 .any(|k| !self.sources.asked.contains(k))
             && self.sources.schedule.ask("merges", now)
         {
@@ -399,6 +401,49 @@ impl Server {
         tabs
     }
 
+    /// The worktrees no tab is in, from what mission control's Work map
+    /// has listed (each repository's worktrees and those `wt-revive`
+    /// knows), with what their PR is asked for by: their branch, as the
+    /// daemon asked about them beside the tabs. Kept for the Work map.
+    pub fn untabbed_prs(&mut self) {
+        let tabs: HashSet<PathBuf> = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.tabs.clone())
+            .filter_map(|t| self.tab_path(t).map(Path::to_path_buf))
+            .collect();
+        let mut trees: Vec<(PathBuf, String)> = self
+            .mission
+            .worktrees
+            .values()
+            .flatten()
+            .filter(|w| !w.main)
+            .filter_map(|w| Some((w.path.clone(), w.branch.clone()?)))
+            .collect();
+        for r in &self.mission.revived {
+            if !r.branch.is_empty() && !trees.iter().any(|(p, _)| *p == r.tree) {
+                trees.push((r.tree.clone(), r.branch.clone()));
+            }
+        }
+        let kept = &mut self.sources.kept;
+        let mut found = HashMap::new();
+        for (path, branch) in trees.into_iter().filter(|(p, _)| !tabs.contains(p)) {
+            let repo = match kept.repos.get(&path) {
+                Some((repo, at)) if at.elapsed() < REPO_KEPT => repo.clone(),
+                _ => {
+                    let repo = repo::origin_of(&path);
+                    kept.repos
+                        .insert(path.clone(), (repo.clone(), Instant::now()));
+                    repo
+                }
+            };
+            if let Some(repo) = repo {
+                found.insert(path, PrKey::Branch { repo, branch });
+            }
+        }
+        self.sources.untabbed = found;
+    }
+
     // Starts a lookup the schedule has marked asked, or lets it go again at
     // once when its settings are off or it has nothing to ask about.
     fn start_lookup_named(&mut self, name: &'static str, tabs: &[TabInfo]) {
@@ -421,7 +466,13 @@ impl Server {
                 if !settings::is_on("github") {
                     return false;
                 }
-                let keys: Vec<PrKey> = tabs.iter().filter_map(|t| t.key.clone()).collect();
+                // The tabs' PRs, and those of the worktrees no tab is in.
+                let mut keys: Vec<PrKey> = tabs.iter().filter_map(|t| t.key.clone()).collect();
+                for key in self.sources.untabbed.values() {
+                    if !keys.contains(key) {
+                        keys.push(key.clone());
+                    }
+                }
                 if keys.is_empty() {
                     return false;
                 }
@@ -555,7 +606,11 @@ impl Server {
             self.facts = facts;
             self.redraw_everywhere();
         }
-        let keys: HashSet<&PrKey> = tabs.iter().filter_map(|t| t.key.as_ref()).collect();
+        let keys: HashSet<&PrKey> = tabs
+            .iter()
+            .filter_map(|t| t.key.as_ref())
+            .chain(self.sources.untabbed.values())
+            .collect();
         if self.sources.known.len() > 4 * keys.len() + 64 {
             self.sources.known.retain(|k, _| keys.contains(k));
         }

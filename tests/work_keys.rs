@@ -181,6 +181,16 @@ fn m_o_lists_a_worktree_no_tab_has_open_and_reopens_it_in_a_tab() {
         s.iter()
             .any(|l| l.contains("lonely") && l.contains("no tab"))
     });
+    // Enter opens its menu, as the daemon's picker did: a tab there first,
+    // then its diff and lazygit, and its directory to copy.
+    client.send(b"\r");
+    let screen = client.wait_text("Open a tab there, resuming its Claude");
+    for offered in ["Its diff (M-d)", "lazygit", "Copy its directory"] {
+        assert!(
+            screen.iter().any(|l| l.contains(offered)),
+            "{offered}: {screen:#?}"
+        );
+    }
     client.send(b"\r");
     wait("a tab in the worktree", || {
         tabs(&server).iter().any(|t| {

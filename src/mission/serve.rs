@@ -438,7 +438,8 @@ impl Server {
             let tabs = self.sidebar_all_tabs();
             let trees: Vec<views::Worktree> =
                 self.mission.worktrees.values().flatten().cloned().collect();
-            let items = views::work_map(&tabs, &trees, &self.mission.revived);
+            let pr_of = |p: &Path| self.sources.untabbed_pr(p).cloned();
+            let items = views::work_map(&tabs, &trees, &self.mission.revived, &pr_of);
             let data = ViewData {
                 items,
                 at: Some(1),
@@ -676,6 +677,7 @@ impl Server {
                 self.mission.worktrees_busy = false;
                 if found != self.mission.worktrees {
                     self.mission.worktrees = found;
+                    self.untabbed_prs();
                     self.mission_redraw();
                 }
             }
@@ -685,6 +687,7 @@ impl Server {
                     && rows != self.mission.revived
                 {
                     self.mission.revived = rows;
+                    self.untabbed_prs();
                     self.mission_redraw();
                 }
             }
@@ -981,26 +984,51 @@ impl Server {
     }
 
     /// Keys while typing a `/` filter: Enter keeps it, Esc clears it, and
-    /// the arrows move. In M-j's and M-o's picker, Enter takes the chosen
-    /// row and Esc closes.
+    /// the arrows move. In M-j's and M-o's picker, Enter opens the chosen
+    /// row's menu, the filter typing on once it closes, and Esc closes.
     fn filter_key(&mut self, client: ClientId, m: &mut Mission, k: Key) {
         let moving = matches!(k.code, KeyCode::Up | KeyCode::Down)
             || (k.mods == Mods::CTRL && matches!(k.code, KeyCode::Char('p' | 'n')));
         let tabbing = matches!(k.code, KeyCode::Tab | KeyCode::BackTab) && m.snap.tab_focus;
-        if moving || (m.picker && (k.code == KeyCode::Enter || tabbing)) {
-            if let Some(f) = m.filter.as_mut() {
-                f.typing = false;
+        // In a picker, Tab and Shift-Tab go round its rows, still typing,
+        // and past either end to easy mode's × (when it has one), which
+        // Enter or Space presses, then on round; typing takes the focus
+        // back to the rows.
+        if m.picker && m.focus == Some(Focus::Close) {
+            match k.code {
+                KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.mission_close_from(client, m);
+                    return;
+                }
+                _ => m.focus = None,
             }
-            // In a picker, Tab and Shift-Tab go round its rows, still typing.
-            let k = match k.code {
-                KeyCode::Tab => Key::new(KeyCode::Down, Mods::NONE),
-                KeyCode::BackTab => Key::new(KeyCode::Up, Mods::NONE),
-                _ => k,
-            };
-            self.mission_key_in(client, m, k);
-            if let Some(f) = m.filter.as_mut() {
-                f.typing = true;
+            if tabbing {
+                let end = if k.code == KeyCode::Tab {
+                    KeyCode::Home
+                } else {
+                    KeyCode::End
+                };
+                self.picker_key(client, m, Key::new(end, Mods::NONE));
+                return;
             }
+        }
+        if m.picker && tabbing {
+            let forward = k.code == KeyCode::Tab;
+            let was = m.cursor;
+            let step = if forward { KeyCode::Down } else { KeyCode::Up };
+            self.picker_key(client, m, Key::new(step, Mods::NONE));
+            if m.cursor == was {
+                if m.snap.close {
+                    m.focus = Some(Focus::Close);
+                } else {
+                    let end = if forward { KeyCode::Home } else { KeyCode::End };
+                    self.picker_key(client, m, Key::new(end, Mods::NONE));
+                }
+            }
+            return;
+        }
+        if moving || (m.picker && k.code == KeyCode::Enter) {
+            self.picker_key(client, m, k);
             return;
         }
         if m.picker
@@ -1033,6 +1061,18 @@ impl Server {
             _ => return,
         }
         m.cursor = 0;
+    }
+
+    /// A key taken while a filter is typed, as if it weren't, the filter
+    /// typing on after it.
+    fn picker_key(&mut self, client: ClientId, m: &mut Mission, k: Key) {
+        if let Some(f) = m.filter.as_mut() {
+            f.typing = false;
+        }
+        self.mission_key_in(client, m, k);
+        if let Some(f) = m.filter.as_mut() {
+            f.typing = true;
+        }
     }
 
     // ── The mouse ───────────────────────────────────────────────────────────
@@ -1137,18 +1177,6 @@ impl Server {
         if item.data.get("own").is_some() {
             self.change_own(client, m, &item);
             return;
-        }
-        // As a picker (M-j, M-o), Enter does what the row is for at once, as
-        // the daemon's pickers did: goes to its tab, or reopens its worktree
-        // and resumes its Claude.
-        if m.picker {
-            match item.target.clone() {
-                Target::Tab(t) => return self.mission_go(client, t),
-                Target::Dir(dir) => {
-                    return self.mission_do(client, Do::OpenHere(dir), "Opening a tab");
-                }
-                Target::Url(_) | Target::None => {}
-            }
         }
         if let ViewId::Plugin(_) = view.id {
             match item.target.clone() {
@@ -1293,6 +1321,22 @@ impl Server {
             Do::Peek(tab) => self.mission_peek(client, tab),
             Do::Diff(tab) => self.tool_in_tab(client, tab, false),
             Do::Lazygit(tab) => self.tool_in_tab(client, tab, true),
+            Do::ToolIn { dir, lazygit } => {
+                let command = if lazygit {
+                    if util::which("lazygit").is_none() {
+                        self.mission_note(client, "lazygit isn't installed.");
+                        return;
+                    }
+                    vec!["lazygit".to_string()]
+                } else {
+                    let exe = crate::util::exe()
+                        .map(|e| e.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| "switchboard".into());
+                    vec![exe, "diff".into(), dir.to_string_lossy().into_owned()]
+                };
+                self.mission_close(client);
+                self.mission_new_tab(client, &dir, Some(command), None);
+            }
             Do::Rename(tab) => self.rename_tab(client, tab),
             Do::Pin(tab) => self.toggle_pin(tab),
             Do::Remind(tab) => self.remind_tab(client, tab),

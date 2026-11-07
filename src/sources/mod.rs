@@ -105,6 +105,10 @@ pub struct Sources {
     /// The keys asked about at least once, so a tab's new PR is asked about
     /// at once rather than on the next round.
     asked: HashSet<PrKey>,
+    /// The worktrees no tab is in, by their path, with what their PR is
+    /// asked for by (their branch), so the Work map knows which merged
+    /// (the daemon's `untabbed` stand-ins for tabs).
+    untabbed: HashMap<PathBuf, PrKey>,
     /// Each tab's place in the landing queue, and where its worktree is
     /// when it waits, for moving it.
     landing: HashMap<TabId, landing::Place>,
@@ -142,6 +146,15 @@ impl Sources {
     /// (Move up, Move down, Move to the front through `land-lock move`).
     pub fn landing_waiter(&self, tab: TabId) -> Option<&Waiter> {
         self.landing.get(&tab)?.waiter.as_ref()
+    }
+
+    /// What GitHub last said of the PR of a worktree no tab is in, by its
+    /// branch; none with the github setting off.
+    pub fn untabbed_pr(&self, path: &std::path::Path) -> Option<&PrFacts> {
+        if !settings::is_on("github") {
+            return None;
+        }
+        self.known.get(self.untabbed.get(path)?)
     }
 
     /// Takes a notification off the Inbox at once, once its menu has marked
