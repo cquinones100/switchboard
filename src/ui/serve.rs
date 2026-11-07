@@ -105,6 +105,26 @@ impl Server {
         self.open(client, Box::new(picker), Some(then));
     }
 
+    /// As `pick`, for a list that does a second thing with a row
+    /// (`Picker::also`): `then` is told the item, and whether it was taken
+    /// with Ctrl-O for that.
+    pub fn pick_also(
+        &mut self,
+        client: ClientId,
+        picker: Picker,
+        then: impl FnOnce(&mut Server, ClientId, Option<(Picked, bool)>) + Send + 'static,
+    ) {
+        let then: Then = Box::new(move |s, c, o| {
+            let picked = match o {
+                Outcome::Picked(p) => Some((p, false)),
+                Outcome::PickedAlso(p) => Some((p, true)),
+                _ => None,
+            };
+            then(s, c, picked)
+        });
+        self.open(client, Box::new(picker), Some(then));
+    }
+
     /// Closes every overlay of a kind on a client, each opener told it was
     /// dismissed.
     pub fn close_overlays(&mut self, client: ClientId, kind: &str) {

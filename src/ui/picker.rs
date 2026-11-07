@@ -22,6 +22,9 @@
 //! A list may show the chosen row whole below the rows (`previews`, as
 //! fzf's `--preview` window at the bottom showed wtn-open.zsh's item), when
 //! a row is cut to one line of something longer.
+//! A list may do a second thing with a row (`also`), as fzf's `--expect
+//! ctrl-o` let link-view.sh open a link it would otherwise read: Ctrl-O
+//! takes the row for that, and the keys row names both.
 //!
 //! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab, the wheel)
 //! move; Enter picks; Esc or C-c closes; Backspace, C-w and C-u edit what is
@@ -103,6 +106,9 @@ pub struct Picker {
     free: bool,
     order: Option<Order>,
     matcher: Matcher,
+    /// What Enter does and what Ctrl-O does, for a list that does two
+    /// things with a row, named on the keys row.
+    also: Option<(String, String)>,
     /// The rows shown, in order: the item and the grapheme indices matched
     /// in its haystack.
     shown: Vec<(usize, Vec<u32>)>,
@@ -130,6 +136,7 @@ impl Picker {
             free: false,
             order: None,
             matcher: Matcher::new(Config::DEFAULT),
+            also: None,
             shown: Vec::new(),
             cursor: 0,
             top: 0,
@@ -167,6 +174,13 @@ impl Picker {
     /// whatever matches, gives it back (`TYPED`).
     pub fn free(mut self) -> Picker {
         self.free = true;
+        self
+    }
+
+    /// A second thing done with a row, on Ctrl-O (`Outcome::PickedAlso`):
+    /// `enter` says what Enter does and `other` what Ctrl-O does.
+    pub fn also(mut self, enter: impl Into<String>, other: impl Into<String>) -> Picker {
+        self.also = Some((enter.into(), other.into()));
         self
     }
 
@@ -290,6 +304,15 @@ impl Picker {
             })),
             None if self.free => self.take_typed(),
             None => Step::Close(Outcome::Dismissed),
+        }
+    }
+
+    /// Ctrl-O: the row, or what is typed in a free list with no row
+    /// matching it, taken for the second thing.
+    fn pick_also(&self) -> Step {
+        match self.pick() {
+            Step::Close(Outcome::Picked(p)) => Step::Close(Outcome::PickedAlso(p)),
+            other => other,
         }
     }
 
@@ -508,12 +531,17 @@ impl Overlay for Picker {
                 lines.push(BoxLine::text(line, look.text()));
             }
         }
+        let keys = match &self.also {
+            Some((enter, other)) => {
+                format!("↑↓ move  ↵ {enter}  ctrl-o {other}  esc close")
+            }
+            None if self.free => {
+                "type to filter  ↑↓ move  ↵ choose  alt-↵ take what's typed  esc close".into()
+            }
+            None => "type to filter  ↑↓ move  ↵ choose  esc close".into(),
+        };
         let mut spec = BoxSpec::new(&self.title, &lines);
-        spec.keys = Some(if self.free {
-            "type to filter  ↑↓ move  ↵ choose  alt-↵ take what's typed  esc close"
-        } else {
-            "type to filter  ↑↓ move  ↵ choose  esc close"
-        });
+        spec.keys = Some(&keys);
         spec.place = Place::Share {
             cols_pct: 60,
             rows_pct: 60,
@@ -529,6 +557,7 @@ impl Overlay for Picker {
         match key.code {
             KeyCode::Enter if self.free && key.mods == Mods::ALT => self.take_typed(),
             KeyCode::Enter => self.pick(),
+            KeyCode::Char('o') if ctrl && self.also.is_some() => self.pick_also(),
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
             KeyCode::Down | KeyCode::Tab => self.move_to(self.cursor + 1),
@@ -670,6 +699,32 @@ mod tests {
         assert_eq!(
             enter(&mut strict, Mods::NONE),
             Step::Close(Outcome::Dismissed)
+        );
+    }
+
+    #[test]
+    fn a_list_that_does_two_things_takes_the_second_on_ctrl_o_and_names_both() {
+        let ctrl_o = Key::new(KeyCode::Char('o'), Mods::CTRL);
+        let mut plain = Picker::new("Pick", items());
+        assert_eq!(plain.key(ctrl_o, &Look::default()), Step::Same);
+        let mut p = Picker::new("Links", items()).also("read it", "open in browser");
+        typed(&mut p, "new");
+        assert_eq!(
+            p.key(ctrl_o, &Look::default()),
+            Step::Close(Outcome::PickedAlso(Picked {
+                index: 2,
+                value: "2".into(),
+                query: "new".into(),
+            }))
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 160, 30));
+        p.draw(&mut buf, &Look::default());
+        let shown = screen(&buf);
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("↵ read it  ctrl-o open in browser")),
+            "{shown:?}"
         );
     }
 

@@ -390,6 +390,13 @@ pub fn open(target: &str) -> Result<()> {
     Err(anyhow!("nothing here opens {target}: install xdg-utils"))
 }
 
+/// The file's folder, opened as `open` opens anything: Linux's file
+/// managers have no one way to be told which file to choose in it.
+pub fn reveal(file: &std::path::Path) -> Result<()> {
+    let folder = file.parent().unwrap_or(file);
+    open(&folder.to_string_lossy())
+}
+
 /// The clipboard's PNG, through Wayland's or X's clipboard tool.
 pub fn paste_image(file: &std::path::Path) -> bool {
     let out = match clipboard_tool() {

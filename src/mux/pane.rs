@@ -35,6 +35,7 @@
 
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -96,6 +97,21 @@ pub struct PaneView {
 pub struct Point {
     pub col: u16,
     pub line: i32,
+}
+
+/// The links in a line of a pane's text: each run's bytes and address.
+type Linked = Vec<(Range<usize>, String)>;
+
+/// A line of a pane's text ends: its trailing blanks go, and any link's
+/// share of them, and it joins the lines before it.
+fn end_line(current: &mut String, found: &mut Linked, out: &mut Vec<(String, Linked)>) {
+    current.truncate(current.trim_end().len());
+    let len = current.len();
+    found.retain_mut(|(range, _)| {
+        range.end = range.end.min(len);
+        range.start < range.end
+    });
+    out.push((std::mem::take(current), std::mem::take(found)));
 }
 
 /// The size a cell is taken to be, in pixels, for programs that ask (a
@@ -820,14 +836,22 @@ impl Pane {
     /// screen with a prompt at its top gives the prompt, not a page of
     /// blanks. Lines are joined by newlines, with none after the last.
     pub fn text(&self, lines: usize) -> String {
+        self.text_and_links(lines).0
+    }
+
+    /// As `text`, with the hyperlinks (OSC 8) in it: each run of text a
+    /// program made a link, by its bytes in the text, and its address, as
+    /// tmux's `capture-pane -e` kept them for link-view.sh to read.
+    pub fn text_and_links(&self, lines: usize) -> (String, Vec<(Range<usize>, String)>) {
         let grid = self.term.grid();
         let cols = self.term.columns();
         let history = grid.history_size().min(lines);
         let top = -(history as i32);
         let bottom = self.term.screen_lines() as i32;
 
-        let mut out: Vec<String> = Vec::new();
+        let mut out: Vec<(String, Linked)> = Vec::new();
         let mut current = String::new();
+        let mut found: Linked = Vec::new();
         for line in top..bottom {
             let row = &grid[Line(line)];
             for col in 0..cols {
@@ -838,24 +862,46 @@ impl Pane {
                 {
                     continue;
                 }
+                let start = current.len();
                 current.push(if cell.c == '\t' { ' ' } else { cell.c });
                 if let Some(marks) = cell.zerowidth() {
                     current.extend(marks);
+                }
+                if let Some(link) = cell.hyperlink() {
+                    match found.last_mut() {
+                        Some((range, uri)) if range.end == start && uri == link.uri() => {
+                            range.end = current.len();
+                        }
+                        _ => found.push((start..current.len(), link.uri().to_string())),
+                    }
                 }
             }
             if cols > 0 && row[Column(cols - 1)].flags.contains(Flags::WRAPLINE) {
                 continue;
             }
-            out.push(current.trim_end().to_string());
-            current.clear();
+            end_line(&mut current, &mut found, &mut out);
         }
         if !current.is_empty() {
-            out.push(current.trim_end().to_string());
+            end_line(&mut current, &mut found, &mut out);
         }
-        while out.last().is_some_and(|line| line.is_empty()) {
+        while out.last().is_some_and(|(line, _)| line.is_empty()) {
             out.pop();
         }
-        out.join("\n")
+        let mut text = String::new();
+        let mut links = Vec::new();
+        for (i, (line, found)) in out.into_iter().enumerate() {
+            if i > 0 {
+                text.push('\n');
+            }
+            let at = text.len();
+            links.extend(
+                found
+                    .into_iter()
+                    .map(|(range, uri)| (range.start + at..range.end + at, uri)),
+            );
+            text.push_str(&line);
+        }
+        (text, links)
     }
 
     /// The title the program set, or "".
@@ -1534,6 +1580,21 @@ mod tests {
         let sent = String::from_utf8(screen.render(&frame)).unwrap();
         assert!(sent.contains("the page"), "{sent:?}");
         assert!(!sent.contains("example.com/a"), "{sent:?}");
+    }
+
+    #[test]
+    fn a_panes_text_gives_its_hyperlinks_by_their_place_in_it() {
+        let mut run = idle(12, 3);
+        run.pane.process(
+            b"one\r\nsee \x1b]8;;https://example.com/long\x1b\\the long page\x1b]8;;\x1b\\  \r\nend",
+        );
+        let (text, links) = run.pane.text_and_links(100);
+        assert_eq!(text, "one\nsee the long page\nend", "a wrapped line joined");
+        assert_eq!(links.len(), 1, "{links:?}");
+        let (range, uri) = &links[0];
+        assert_eq!(&text[range.clone()], "the long page");
+        assert_eq!(uri, "https://example.com/long");
+        assert_eq!(run.pane.text(100), text);
     }
 
     #[test]

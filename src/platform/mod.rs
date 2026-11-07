@@ -114,6 +114,13 @@ pub fn open(target: &str) -> Result<()> {
     os::open(target)
 }
 
+/// Shows a file in its folder in the desktop's file manager (`open -R`,
+/// Finder with the file chosen; on Linux the folder opened), for the media
+/// picker's Ctrl-O.
+pub fn reveal(file: &std::path::Path) -> Result<()> {
+    os::reveal(file)
+}
+
 /// Where secrets go on a computer with no keyring to keep them: a file only
 /// its owner can read, `{ "<service>": "<secret>" }`.
 pub fn secrets_file() -> PathBuf {

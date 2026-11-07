@@ -123,6 +123,10 @@ pub fn open(target: &str) -> Result<()> {
     util::run("open", [target]).map(|_| ())
 }
 
+pub fn reveal(file: &std::path::Path) -> Result<()> {
+    util::run("open", ["-R", &file.to_string_lossy()]).map(|_| ())
+}
+
 /// The pasteboard's PNG, or its TIFF made a PNG, as a screenshot copied
 /// puts both there (notes/lua/notes/images.lua's `grab`). AppleScript's
 /// `the clipboard as «class PNGf»` can't read an image the screenshot tool

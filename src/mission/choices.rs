@@ -50,6 +50,9 @@ pub enum Do {
     /// Every merged tab closed and its worktree removed, asked first.
     CloseMerged(Vec<TabId>),
     Open(String),
+    /// A link read in a pane beside the one the client is in, mission
+    /// control closing first (daemon.js's `readHere`).
+    ReadHere(String),
     Copy(String),
     /// A new tab in a directory, starting work on a ticket or a PR as its
     /// own command.
@@ -383,6 +386,11 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
         ));
     }
     if !url.is_empty() {
+        out.push(choice(
+            'v',
+            "Read it here, in a pane beside",
+            Do::ReadHere(url.clone()),
+        ));
         out.push(choice('o', "Open it in the browser", Do::Open(url.clone())));
     }
     if !ticket.is_empty() {
@@ -487,6 +495,11 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             }
             if !url.is_empty() {
                 out.push(choice(
+                    'v',
+                    "Read the PR here, in a pane beside",
+                    Do::ReadHere(url.clone()),
+                ));
+                out.push(choice(
                     'p',
                     "Open the PR in the browser",
                     Do::Open(url.clone()),
@@ -506,6 +519,13 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     'g',
                     format!("Go to tab {}, where it is open", t.index),
                     Do::GoTo(t.id),
+                ));
+            }
+            if PR_URL.is_match(&url) {
+                out.push(choice(
+                    'v',
+                    "Read the PR here, in a pane beside",
+                    Do::ReadHere(url.clone()),
                 ));
             }
             if !url.is_empty() {
@@ -595,8 +615,8 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     if let Some(url) = &r.url {
                         out.push(choice(
                             char::from_digit(i as u32 + 1, 10).unwrap_or('#'),
-                            format!("Open {}", r.id),
-                            Do::Open(url.clone()),
+                            format!("Read {} here", r.id),
+                            Do::ReadHere(url.clone()),
                         ));
                     }
                 }
@@ -809,7 +829,11 @@ mod tests {
             .target(Target::Url("https://github.com/acme/app/pull/12".into()))
             .data(json!({ "pr": { "number": 12, "repo": "acme/app" }, "url": "https://github.com/acme/app/pull/12" }));
         let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &repo));
-        assert_eq!(keys(&choices), "twoy");
+        assert_eq!(keys(&choices), "twvoy");
+        assert_eq!(
+            choices[2].act,
+            Do::ReadHere("https://github.com/acme/app/pull/12".into())
+        );
         assert_eq!(choices[0].act, Do::GoTo(TabId(2)));
         assert_eq!(
             choices[1].act,
@@ -860,7 +884,7 @@ mod tests {
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1", "url": "https://linear.app/x/issue/AB-3" }));
         let choices = item_choices(&ViewId::Inbox, &item, &[], &ctx(&tabs, &repo));
-        assert_eq!(keys(&choices), "twsDoyr");
+        assert_eq!(keys(&choices), "twsDvoyr");
         assert_eq!(choices[0].act, Do::GoTo(TabId(8)), "AB-3, not AB-30");
         assert_eq!(choices.last().unwrap().act, Do::MarkRead("n1".into()));
     }

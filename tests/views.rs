@@ -5,7 +5,9 @@
 //! why it can't open the PR. And `switchboard open-url` opens a link in its
 //! site's Chrome profile, with a stand-in for Chrome writing down what it
 //! was given (test/open-url.test.js's test, with its `open`). A link a
-//! program in a pane writes as OSC 8 reaches the client as one.
+//! program in a pane writes as OSC 8 reaches the client as one, and M-p's
+//! link commands list a pane's links and images, copying one, reading one
+//! beside it, or opening a file through a stand-in for the desktop's opener.
 
 mod common;
 
@@ -310,4 +312,124 @@ fn a_link_a_program_writes_reaches_the_terminal_as_a_link() {
     let text = raw[open..].find("linked-text").expect("its text inside") + open;
     let close = raw[text..].find("\x1b]8;;\x1b\\").expect("then closed") + text;
     assert!(open < text && text < close);
+}
+
+/// Stand-ins for what copies and opens on each desktop, each writing down
+/// what it was given in `did`, so a test touches neither the clipboard nor
+/// the desktop.
+fn desktop_stand_ins(home: &Path, did: &Path) {
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for name in [
+        "open", "xdg-open", "wslview", "gio", "pbcopy", "wl-copy", "xclip", "xsel", "clip.exe",
+    ] {
+        let script = bin.join(name);
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nprintf '%s %s\\n' \"${{0##*/}}\" \"$*\" >> '{}'\n",
+                did.display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let did = server.dir.path().join("did");
+    desktop_stand_ins(&server.home, &did);
+    let work = server.dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(work.join("shot.png"), b"png").unwrap();
+
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    // Nothing listens on port 9, so reading a link fails at once, reaching
+    // nothing.
+    client.type_text(
+        "printf 'see http://127.0.0.1:9/plain, \\033]8;;http://127.0.0.1:9/docs\\033\\\\the docs\\033]8;;\\033\\\\ and shot.png\\n'\r",
+    );
+    client.wait_for("the printed line", |s| {
+        s.iter()
+            .any(|l| l.starts_with("see http") && l.ends_with("shot.png"))
+    });
+
+    // Copy: the newest first, a hyperlink with its text.
+    server.ok(&["press", "copy-link"]);
+    let screen = client.wait_text("the docs  http://127.0.0.1:9/docs");
+    let row = |s: &[String], text: &str| s.iter().position(|l| l.contains(text)).unwrap();
+    assert!(
+        row(&screen, "the docs  http") < row(&screen, "http://127.0.0.1:9/plain"),
+        "newest first:\n{}",
+        screen.join("\n")
+    );
+    client.wait_text("ctrl-o open in browser");
+    client.type_text("\r");
+    client.wait_text("Copied http://127.0.0.1:9/docs");
+    let raw = String::from_utf8_lossy(&client.raw).into_owned();
+    assert!(
+        raw.contains("\x1b]52;c;aHR0cDovLzEyNy4wLjAuMTo5L2RvY3M="),
+        "to the terminal's clipboard"
+    );
+    client.type_text("x");
+
+    // Open, with Ctrl-O: read beside the pane instead.
+    server.ok(&["press", "open-link"]);
+    client.wait_text("ctrl-o read it beside");
+    client.type_text("plain\x0f");
+    let shown = wait_panes(&server, 2);
+    let view = shown
+        .iter()
+        .find(|p| p["options"]["@link_view"] == "1")
+        .expect("a link view");
+    assert_eq!(view["options"]["@link_url"], "http://127.0.0.1:9/plain");
+
+    // An image the pane names, opened in its app.
+    let first = shown
+        .iter()
+        .find(|p| p["options"].get("@link_view").is_none())
+        .unwrap();
+    server.ok(&["select-pane", "-t", first["id"].as_str().unwrap()]);
+    server.ok(&["press", "open-media"]);
+    client.wait_text("Images and videos");
+    client.wait_text("shot.png");
+    client.type_text("\r");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let opened = std::fs::read_to_string(&did).unwrap_or_default();
+        if opened
+            .lines()
+            .any(|l| l.ends_with("work/shot.png") && !l.contains("copy"))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "nothing opened it: {opened:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // In the notes pane, the links are the note's, since Notes shows a
+    // link's text alone.
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join(".notes.json"), r#"{"last": "Plan.md"}"#).unwrap();
+    std::fs::write(
+        notes.join("Plan.md"),
+        "# Plan\n\n- [ ] Read [the RFC](https://rfc.example/1)\n",
+    )
+    .unwrap();
+    let id = first["id"].as_str().unwrap();
+    server.ok(&["set", "-t", id, "@notes_pane", "1"]);
+    server.ok(&["press", "read-link"]);
+    let screen = client.wait_text("the RFC  https://rfc.example/1");
+    assert!(
+        !screen.iter().any(|l| l.contains("127.0.0.1:9/docs")),
+        "the note's links alone:\n{}",
+        screen.join("\n")
+    );
 }

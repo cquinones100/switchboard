@@ -190,6 +190,9 @@ pub enum Outcome {
     Chose(usize),
     /// A picker's item.
     Picked(Picked),
+    /// A picker's item taken with its second key (`Picker::also`), for
+    /// what the list does besides what Enter does.
+    PickedAlso(Picked),
 }
 
 /// What came of a key or a mouse event given to an overlay.

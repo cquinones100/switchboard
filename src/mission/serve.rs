@@ -1289,6 +1289,13 @@ impl Server {
                     }
                 });
             }
+            Do::ReadHere(url) => {
+                self.mission_close(client);
+                match self.current_pane(client) {
+                    Some(pane) => self.read_beside(pane, &url),
+                    None => self.say(Some(client), "No pane to read it beside."),
+                }
+            }
             Do::Copy(text) => {
                 self.to_clipboard(Some(client), &text);
                 self.mission_note(client, format!("Copied {text}"));

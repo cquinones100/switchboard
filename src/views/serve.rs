@@ -3,6 +3,12 @@
 //! pr-view.sh, ticket-view.sh, gh-open.sh, linear-ticket.sh, pr-ready.sh,
 //! search.sh and link-view.sh.
 //!
+//! The link commands list what the pane shows (`shown`): read a link
+//! beside it, open one in the browser, copy one, or open an image or video
+//! in its app, each list's Ctrl-O doing the other thing link-view.sh's
+//! `pick` and `media` offered. In the notes pane, the links are the note's,
+//! since Notes shows a link's text alone.
+//!
 //! A view opens in a pane split off to the right of the pane you are in
 //! (`open_beside`), running one of Switchboard's own programs, and is
 //! marked with a pane option (`@pr_view`, `@ticket_view`, `@link_view`
@@ -16,13 +22,12 @@
 //! settings.sh's binding did, and says so after.
 
 use std::path::PathBuf;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde_json::Value;
 
 use super::ready::{self, Choice, ReadyBox};
 use super::search::{self, Found, Running, Source};
+use super::shown::{self, Shown};
 use super::{Command, ViewsEvent, page, ticket};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
@@ -40,35 +45,6 @@ pub const CHECKS_VIEW: &str = "@checks_view";
 /// The share of the pane a view takes, as tmux.conf's `split-window -l`.
 const VIEW_PERCENT: u16 = 45;
 const LINK_PERCENT: u16 = 50;
-
-static LINK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+").unwrap());
-
-/// The links in a pane's text, newest (lowest) first, each once, without
-/// the punctuation that follows a link in a sentence (link-view.sh's
-/// `links_of`).
-pub fn links_in(text: &str) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
-    for m in LINK.find_iter(text) {
-        let mut url = m.as_str();
-        while let Some(last) = url.chars().last() {
-            let unbalanced = last == ')' && url.matches('(').count() < url.matches(')').count();
-            if ".,;:!?'".contains(last) || unbalanced {
-                url = &url[..url.len() - 1];
-            } else {
-                break;
-            }
-        }
-        found.push(url.to_string());
-    }
-    let mut out: Vec<String> = Vec::new();
-    for url in found.into_iter().rev() {
-        if !out.contains(&url) {
-            out.push(url);
-        }
-    }
-    out
-}
 
 /// The program to run in a view's pane: this binary.
 fn exe() -> String {
@@ -100,7 +76,15 @@ fn linear_workspace() -> Option<String> {
 }
 
 fn is_readable(url: &str) -> bool {
-    url.starts_with("file://") || links::host_of(url).is_some()
+    shown::safe(url) && (url.starts_with("file://") || links::host_of(url).is_some())
+}
+
+/// The rows of a list of what a pane shows, each giving its address.
+fn rows(found: &[Shown]) -> Vec<PickItem> {
+    found
+        .iter()
+        .map(|f| PickItem::new(f.row(), f.url.clone()))
+        .collect()
 }
 
 fn search_title(query: &str, waiting: &[Source]) -> String {
@@ -140,6 +124,9 @@ impl Server {
             Command::Search => self.search_everything(client),
             Command::ReadLink => self.ask_link(client),
             Command::OpenLinkRead => self.open_link_read(client),
+            Command::OpenLink => self.pick_link(client, false),
+            Command::CopyLink => self.pick_link(client, true),
+            Command::OpenMedia => self.open_media(client),
         }
     }
 
@@ -589,44 +576,164 @@ impl Server {
         }
     }
 
+    /// The links a pane shows: the note's, top to bottom, in the notes
+    /// pane while it shows one; else the screen's and its scrollback's,
+    /// newest first. Why there are none, when there are none.
+    fn pane_links(&self, pane: PaneId) -> Result<Vec<Shown>, String> {
+        let Some(slot) = self.panes.get(&pane) else {
+            return Err("No pane here".into());
+        };
+        let notes = slot
+            .opts
+            .get("@notes_pane")
+            .is_some_and(|v| !v.is_empty() && v != "0");
+        if notes && let Some(rel) = crate::notes::serve::shown() {
+            let file = crate::notes::store::notes_dir().join(&rel);
+            if let Some(text) = util::read_text(&file) {
+                let found = shown::note_links(&text);
+                if found.is_empty() {
+                    return Err(format!("No links in {}", rel.trim_end_matches(".md")));
+                }
+                return Ok(found);
+            }
+        }
+        let (text, hyperlinks) = slot.pane.text_and_links(3000);
+        let found = shown::links_in(&text, &hyperlinks);
+        if found.is_empty() {
+            return Err("No links in this pane".into());
+        }
+        Ok(found)
+    }
+
     /// A link to read beside the pane: one typed, or one of those the pane
-    /// shows, newest first (link-view.sh's `pick`).
+    /// shows (link-view.sh's `pick`); Ctrl-O opens it in the browser.
     fn ask_link(&mut self, client: ClientId) {
         let Some((pane, _, _)) = self.here(client) else {
             return;
         };
-        let shown = self
-            .panes
-            .get(&pane)
-            .map(|s| links_in(&s.pane.text(3000)))
-            .unwrap_or_default();
-        let items: Vec<PickItem> = shown
-            .iter()
-            .map(|l| PickItem::new(l.clone(), l.clone()))
-            .collect();
-        let picker = Picker::new("Read a link beside this pane", items)
+        let shown = self.pane_links(pane).unwrap_or_default();
+        let picker = Picker::new("Read a link beside this pane", rows(&shown))
             .named("links")
-            .prompt("Link: ")
+            .prompt("Read: ")
             .exact()
-            .free();
-        self.pick(client, picker, move |server, client, picked| {
-            let Some(picked) = picked else {
+            .free()
+            .also("read it beside", "open in browser");
+        self.pick_also(client, picker, move |server, client, picked| {
+            let Some((picked, other)) = picked else {
                 return;
             };
-            let url = picked.value.trim().to_string();
-            if url.is_empty() {
+            server.link_picked(client, pane, picked.value.trim(), other);
+        });
+    }
+
+    /// M-p's "Open a link from this pane in the browser" (`copy` false) and
+    /// "Copy a link from this pane" (`copy`), each list's Ctrl-O doing what
+    /// link-view.sh's did: reading it beside the pane, and opening it.
+    fn pick_link(&mut self, client: ClientId, copy: bool) {
+        let Some((pane, _, _)) = self.here(client) else {
+            return;
+        };
+        let shown = match self.pane_links(pane) {
+            Ok(found) => found,
+            Err(why) => return self.say(Some(client), &why),
+        };
+        let (title, prompt, enter, other) = if copy {
+            ("Copy a link", "Copy: ", "copy it", "open in browser")
+        } else {
+            ("Open a link", "Open: ", "open in browser", "read it beside")
+        };
+        let picker = Picker::new(title, rows(&shown))
+            .named("links")
+            .prompt(prompt)
+            .exact()
+            .also(enter, other);
+        self.pick_also(client, picker, move |server, client, picked| {
+            let Some((picked, other)) = picked else {
                 return;
+            };
+            let url = picked.value;
+            match (copy, other) {
+                (true, false) => {
+                    server.to_clipboard(Some(client), &url);
+                    server.say(Some(client), &format!("Copied {url}"));
+                }
+                (true, true) => server.link_picked(client, pane, &url, true),
+                (false, other) => server.link_picked(client, pane, &url, !other),
             }
-            if !is_readable(&url) {
-                server.say(Some(client), "That isn't a link that can be read here");
+        });
+    }
+
+    /// A link picked from a list: opened in the browser (`browser`), else
+    /// read beside the pane it was listed from.
+    fn link_picked(&mut self, client: ClientId, pane: PaneId, url: &str, browser: bool) {
+        if url.is_empty() {
+            return;
+        }
+        if browser {
+            if shown::safe(url) && links::host_of(url).is_some() {
+                links::open_in_background(url.to_string());
+            } else {
+                self.say(Some(client), "That isn't a link that can be opened here");
+            }
+            return;
+        }
+        if !is_readable(url) {
+            self.say(Some(client), "That isn't a link that can be read here");
+            return;
+        }
+        let pane = Some(pane)
+            .filter(|p| self.panes.contains_key(p))
+            .or_else(|| self.current_pane(client));
+        if let Some(pane) = pane {
+            self.read_beside(pane, url);
+        }
+    }
+
+    /// M-p's "Open an image or video from this pane": a file it names
+    /// (from where the pane is, else `~` or absolute) or a link to one,
+    /// newest first; Enter opens a file in its app and a link in the
+    /// browser, Ctrl-O shows a file in its folder (link-view.sh's `media`).
+    fn open_media(&mut self, client: ClientId) {
+        let Some((pane, _, dir)) = self.here(client) else {
+            return;
+        };
+        let Some(slot) = self.panes.get(&pane) else {
+            return;
+        };
+        let text = slot.pane.text(3000);
+        let links = self.pane_links(pane).unwrap_or_default();
+        let found = shown::media_in(&text, &dir, &paths::home(), &links);
+        if found.is_empty() {
+            return self.say(Some(client), "No image or video in this pane");
+        }
+        let picker = Picker::new("Images and videos", rows(&found))
+            .named("media")
+            .prompt("Open: ")
+            .exact()
+            .also("open it", "show in its folder");
+        self.pick_also(client, picker, move |server, client, picked| {
+            let Some((picked, folder)) = picked else {
                 return;
+            };
+            let target = picked.value;
+            if target.contains("://") {
+                return server.link_picked(client, pane, &target, true);
             }
-            let pane = Some(pane)
-                .filter(|p| server.panes.contains_key(p))
-                .or_else(|| server.current_pane(client));
-            if let Some(pane) = pane {
-                server.read_beside(pane, &url);
+            let file = PathBuf::from(&target);
+            if !file.is_file() {
+                return server.say(Some(client), &format!("{} is gone", paths::tilde(&file)));
             }
+            let tx = server.tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let opened = if folder {
+                    crate::platform::reveal(&file)
+                } else {
+                    crate::platform::open(&target)
+                };
+                if let Err(e) = opened {
+                    Server::say_later(&tx, client, format!("Couldn't open it: {e}"));
+                }
+            });
         });
     }
 
@@ -650,20 +757,6 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_panes_links_are_listed_newest_first_each_once() {
-        let text = "See https://plain.example/one.\nThe PR (https://github.com/o/r/pull/2) is up\n\
-                    again https://plain.example/one and https://same.example/x";
-        assert_eq!(
-            links_in(text),
-            vec![
-                "https://same.example/x",
-                "https://plain.example/one",
-                "https://github.com/o/r/pull/2",
-            ]
-        );
-    }
 
     #[test]
     fn a_search_says_which_sources_are_still_looking() {

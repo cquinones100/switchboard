@@ -20,6 +20,8 @@
 //!   place (pr-image.js).
 //! - `page`: what a link holds (link-view.sh's `show`, lib/link-view.js).
 //! - `search`: search everything's sources (lib/search.js).
+//! - `shown`: the links, images and videos a pane shows, for M-p's link
+//!   commands (link-view.sh's `links_of` and `media_of`).
 //! - `ready`: whether the PR can merge (pr-ready.sh).
 //! - `serve`: the server's side: the keys, the boxes, the panes beside.
 
@@ -35,6 +37,7 @@ pub mod pr;
 pub mod ready;
 pub mod search;
 mod serve;
+pub mod shown;
 pub mod ticket;
 
 use crate::mux::server::ClientId;
@@ -61,10 +64,17 @@ pub enum Command {
     ReadLink,
     /// The link read beside this pane, in the browser.
     OpenLinkRead,
+    /// A link the pane shows, in the browser (or read beside it).
+    OpenLink,
+    /// A link the pane shows, copied (or opened in the browser).
+    CopyLink,
+    /// An image or video the pane shows, opened in its app (or shown in
+    /// its folder).
+    OpenMedia,
 }
 
 impl Command {
-    pub const ALL: [Command; 9] = [
+    pub const ALL: [Command; 12] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -74,6 +84,9 @@ impl Command {
         Command::Search,
         Command::ReadLink,
         Command::OpenLinkRead,
+        Command::OpenLink,
+        Command::CopyLink,
+        Command::OpenMedia,
     ];
 
     /// Its name in keys.json.
@@ -88,6 +101,9 @@ impl Command {
             Command::Search => "search-everything",
             Command::ReadLink => "read-link",
             Command::OpenLinkRead => "open-link-being-read",
+            Command::OpenLink => "open-link",
+            Command::CopyLink => "copy-link",
+            Command::OpenMedia => "open-media",
         }
     }
 
@@ -115,6 +131,15 @@ impl Command {
                 "Read a link in a pane beside this one, typed or one this pane shows"
             }
             Command::OpenLinkRead => "Open the link being read beside this pane in the browser",
+            Command::OpenLink => {
+                "Open a link from this pane in the browser, or read it in a pane beside"
+            }
+            Command::CopyLink => {
+                "Copy a link from this pane to the clipboard, or open it in the browser"
+            }
+            Command::OpenMedia => {
+                "Open an image or video from this pane in its app, or show it in its folder"
+            }
         }
     }
 
@@ -131,6 +156,9 @@ impl Command {
             Command::Search => &["search", "find", "notes"],
             Command::ReadLink => &["links", "read", "browser"],
             Command::OpenLinkRead => &["links", "browser"],
+            Command::OpenLink => &["links", "browser"],
+            Command::CopyLink => &["links", "copy"],
+            Command::OpenMedia => &["links", "image", "video", "media"],
         }
     }
 
@@ -143,7 +171,12 @@ impl Command {
             Command::OpenTicket => Some("M-l"),
             Command::PrReady => Some("M-m"),
             Command::Search => Some("M-F"),
-            Command::OpenRepo | Command::ReadLink | Command::OpenLinkRead => None,
+            Command::OpenRepo
+            | Command::ReadLink
+            | Command::OpenLinkRead
+            | Command::OpenLink
+            | Command::CopyLink
+            | Command::OpenMedia => None,
         }
     }
 }
