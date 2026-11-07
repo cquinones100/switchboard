@@ -151,9 +151,10 @@ impl Action {
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`,
     /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
-    /// `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`), updates'
-    /// (`update-switchboard`, `run-setup`), Notes' (`notes`,
-    /// `notes-beside`, `note-tab`, `choose-tab-note`), and the extras'
+    /// `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`,
+    /// `clear-image-cache`), updates' (`update-switchboard`, `run-setup`),
+    /// Notes' (`notes`, `notes-beside`, `note-tab`, `choose-tab-note`), and
+    /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
     /// `notifications`, `habits-report`, `send-reply`, `update-main`,
     /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,

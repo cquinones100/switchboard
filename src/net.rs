@@ -262,19 +262,28 @@ pub async fn request_json(
     .into())
 }
 
-/// A GET whose answer is a file rather than JSON (a release's archive): its
-/// status and its bytes, redirects followed (GitHub sends a release's files
-/// from another host), given `timeout` to arrive whole rather than the
-/// usual 30 seconds, since a file can be large and a connection slow.
-/// Counted in the request audit as it is sent, and failing only when no
-/// answer comes, as `request_json` does.
+/// A file fetched whole: its status, the type the server gave it (its
+/// `Content-Type`), and its bytes.
+#[derive(Clone, Debug)]
+pub struct Download {
+    pub status: u16,
+    pub content_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
+/// A GET whose answer is a file rather than JSON (a release's archive, a
+/// picture the PR image view keeps): its status, type and bytes, redirects
+/// followed (GitHub sends a release's files from another host), given
+/// `timeout` to arrive whole rather than the usual 30 seconds, since a file
+/// can be large and a connection slow. Counted in the request audit as it
+/// is sent, and failing only when no answer comes, as `request_json` does.
 #[cfg(feature = "net")]
-pub async fn get_bytes(
+pub async fn get_file(
     url: &str,
     headers: &[(&str, &str)],
     timeout: Duration,
     audit: Audit<'_>,
-) -> Result<(u16, Vec<u8>)> {
+) -> Result<Download> {
     let mut request = client()?.get(url).timeout(timeout);
     for (name, value) in headers {
         request = request.header(*name, *value);
@@ -300,18 +309,26 @@ pub async fn get_bytes(
     };
     let response = request.send().await.map_err(unreachable)?;
     let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
     let bytes = response.bytes().await.map_err(unreachable)?;
-    Ok((status, bytes.to_vec()))
+    Ok(Download {
+        status,
+        content_type,
+        bytes: bytes.to_vec(),
+    })
 }
 
 /// Without the `net` feature: the same function, which never reaches out.
 #[cfg(not(feature = "net"))]
-pub async fn get_bytes(
+pub async fn get_file(
     _url: &str,
     _headers: &[(&str, &str)],
     _timeout: Duration,
     audit: Audit<'_>,
-) -> Result<(u16, Vec<u8>)> {
+) -> Result<Download> {
     Err(ServiceError::new(
         ErrorKind::Unreachable,
         audit.service,
@@ -321,6 +338,17 @@ pub async fn get_bytes(
         ),
     )
     .into())
+}
+
+/// `get_file`'s status and bytes alone.
+pub async fn get_bytes(
+    url: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+    audit: Audit<'_>,
+) -> Result<(u16, Vec<u8>)> {
+    let file = get_file(url, headers, timeout, audit).await?;
+    Ok((file.status, file.bytes))
 }
 
 /// A body as JSON, else its text as a JSON string, else `null` when empty.

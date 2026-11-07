@@ -15,12 +15,23 @@
 //! can't be loaded at all, the Markdown is shown as its text and diagrams as
 //! their source, rather than nothing.
 //!
-//! The page measures itself once drawn: where the body's blocks start and
-//! end, which the pages are cut between (`super::render`), written as JSON
-//! into a hidden element that Chrome's `--dump-dom` prints.
+//! With the image cache on (`super::cache`), the page names the copies kept
+//! on this computer in place of the links (`Local`): a pinned file's copy,
+//! whose hash was checked as it was kept and again as it is used, in place
+//! of the CDN's, a PR's pictures in its HTML, and a ticket's in the page's
+//! script, once DOMPurify has cleaned the Markdown, so a copy is never a
+//! way past it.
+//!
+//! The page measures itself once drawn, when everything it loads has
+//! loaded or failed and the diagrams are drawn: where the body's blocks
+//! start and end, which the pages are cut between (`super::render`), and
+//! whether anything failed to load, written as JSON into a hidden element
+//! that Chrome's `--dump-dom` prints.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -90,26 +101,126 @@ pub fn diagrams(html: &str) -> String {
         .into_owned()
 }
 
-/// A script or stylesheet tag for a pinned file.
-fn script(pin: Pin) -> String {
-    format!(
-        r#"<script src="{}" integrity="{}" crossorigin="anonymous"></script>"#,
-        pin.url, pin.integrity
+/// The copies on this computer of what the page loads, by the link the
+/// page names: the pinned files' and the pictures' (`super::cache`).
+pub type Local = BTreeMap<String, PathBuf>;
+
+/// A file's `file://` link, every byte but a path's own characters
+/// percent-encoded, so it reads the same in an attribute, in JSON and to
+/// Chrome whatever the path holds.
+pub fn file_url(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut url = String::from("file://");
+    for &b in path.as_os_str().as_bytes() {
+        if b.is_ascii_alphanumeric() || b"/-._~".contains(&b) {
+            url.push(b as char);
+        } else {
+            url.push_str(&format!("%{b:02X}"));
+        }
+    }
+    url
+}
+
+/// A script tag for a pinned file: its copy here when there is one, which
+/// was checked against the pin's hash as it was taken (the browser can't
+/// check a `file://` script, which it reads as another origin's), else the
+/// CDN's, checked by the browser.
+fn script(pin: Pin, local: &Local) -> String {
+    match local.get(pin.url) {
+        Some(copy) => format!(r#"<script src="{}"></script>"#, file_url(copy)),
+        None => format!(
+            r#"<script src="{}" integrity="{}" crossorigin="anonymous"></script>"#,
+            pin.url, pin.integrity
+        ),
+    }
+}
+
+/// The stylesheet's tag, its copy here or the CDN's, as `script`.
+fn stylesheet(local: &Local) -> String {
+    match local.get(STYLESHEET.url) {
+        Some(copy) => format!(r#"<link rel="stylesheet" href="{}">"#, file_url(copy)),
+        None => format!(
+            r#"<link rel="stylesheet" href="{}" integrity="{}" crossorigin="anonymous">"#,
+            STYLESHEET.url, STYLESHEET.integrity
+        ),
+    }
+}
+
+/// HTML's escapes in an attribute's value undone, as the browser reads it.
+fn unescape(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// A picture in HTML: the tag up to its `src`, and the link.
+static IMG_SRC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)(<img\b[^>]*?\ssrc=")([^"]*)""#).unwrap());
+/// A picture in Markdown, `![words](link)`, or as HTML in it.
+static MD_IMAGE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"!\[[^\]]*\]\(\s*<?(https://[^\s)>]+)|(?i:<img\b[^>]*?\ssrc=["']?(https://[^"'\s>]+))"#,
     )
+    .unwrap()
+});
+
+/// The pictures the page shows, by their links as the browser reads them,
+/// each once: a PR's from its HTML, a ticket's from its Markdown. Only
+/// `https://` ones, which are all the image cache keeps.
+pub fn pictures(parts: &Parts) -> Vec<String> {
+    let mut found: Vec<String> = IMG_SRC
+        .captures_iter(&parts.html)
+        .map(|c| unescape(&c[2]))
+        .collect();
+    for text in &parts.markdown {
+        found.extend(
+            MD_IMAGE
+                .captures_iter(text)
+                .filter_map(|c| c.get(1).or_else(|| c.get(2)))
+                .map(|m| m.as_str().to_string()),
+        );
+    }
+    let mut seen = std::collections::HashSet::new();
+    found.retain(|url| url.starts_with("https://") && seen.insert(url.clone()));
+    found
+}
+
+/// A PR's HTML with each picture kept here named by its copy.
+pub fn with_local_pictures(html: &str, local: &Local) -> String {
+    if local.is_empty() {
+        return html.to_string();
+    }
+    IMG_SRC
+        .replace_all(html, |c: &regex::Captures| {
+            match local.get(&unescape(&c[2])) {
+                Some(copy) => format!(r#"{}{}""#, &c[1], file_url(copy)),
+                None => c[0].to_string(),
+            }
+        })
+        .into_owned()
 }
 
 /// What runs once the scripts have loaded: the Markdown drawn and cleaned
 /// in place of the elements that name it (so its paragraphs are the page's
-/// own blocks, which pages break between), each diagram drawn, and then the
-/// page measured.
+/// own blocks, which pages break between), its pictures kept here named by
+/// their copies before they are part of the page (and so before they
+/// load), each diagram drawn, and then, once everything has loaded or
+/// failed, the page measured.
 const RUN: &str = r#"
 const sources = JSON.parse(document.getElementById("markdown").textContent);
+const local = JSON.parse(document.getElementById("local").textContent);
 const safe = typeof marked !== "undefined" && typeof DOMPurify !== "undefined";
 document.querySelectorAll("[data-md]").forEach((el) => {
   const source = sources[Number(el.dataset.md)] ?? "";
   if (safe) {
     const t = document.createElement("template");
     t.innerHTML = DOMPurify.sanitize(marked.parse(source));
+    t.content.querySelectorAll("img[src]").forEach((img) => {
+      const copy = local[img.getAttribute("src")];
+      if (copy) img.setAttribute("src", copy);
+    });
     el.replaceWith(t.content);
   } else {
     const pre = document.createElement("pre");
@@ -130,20 +241,26 @@ const measure = () => {
     const r = el.getBoundingClientRect();
     return [r.top - box.top, r.bottom - box.top];
   });
+  const sheet = document.querySelector('link[rel="stylesheet"]');
   document.getElementById("measured").textContent = JSON.stringify({
     top: box.top + window.scrollY,
     height: box.height,
     blocks,
     loaded: safe && typeof mermaid !== "undefined",
+    complete: !!sheet?.sheet && [...document.images].every((img) => img.complete && img.naturalWidth > 0),
   });
   document.body.dataset.done = "1";
 };
-if (typeof mermaid === "undefined") {
-  measure();
-} else {
+const settled = new Promise((done) => {
+  if (document.readyState === "complete") done();
+  else window.addEventListener("load", done);
+});
+let drawn = Promise.resolve();
+if (typeof mermaid !== "undefined") {
   mermaid.initialize({ startOnLoad: false, theme: "dark" });
-  mermaid.run().catch(() => {}).finally(measure);
+  drawn = mermaid.run().catch(() => {});
 }
+Promise.all([settled, drawn]).then(measure);
 "#;
 
 /// The strips that say which page is which, drawn below the body where
@@ -170,10 +287,25 @@ pub fn band_label(page: usize, total: usize) -> String {
 }
 
 /// The page, `width` CSS pixels wide, a diagram no taller than `fit`, with
-/// the strips when there are several pages.
-pub fn html(parts: &Parts, width: u32, fit: u32, band: u32, bands: &Bands) -> String {
+/// the strips when there are several pages, naming the copies in `local`
+/// in place of their links.
+pub fn html(
+    parts: &Parts,
+    width: u32,
+    fit: u32,
+    band: u32,
+    bands: &Bands,
+    local: &Local,
+) -> String {
     let sources = serde_json::to_string(&parts.markdown)
         .unwrap_or_else(|_| "[]".into())
+        .replace('<', "\\u003c");
+    let copies: BTreeMap<&str, String> = local
+        .iter()
+        .map(|(url, copy)| (url.as_str(), file_url(copy)))
+        .collect();
+    let copies = serde_json::to_string(&copies)
+        .unwrap_or_else(|_| "{}".into())
         .replace('<', "\\u003c");
     let strips: String = bands
         .labels
@@ -190,7 +322,7 @@ pub fn html(parts: &Parts, width: u32, fit: u32, band: u32, bands: &Bands) -> St
     let [r, g, b] = BACKGROUND;
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8">
-<link rel="stylesheet" href="{css}" integrity="{css_integrity}" crossorigin="anonymous">
+{css}
 <style>
 html {{ overflow: hidden; }}
 body {{ background: #{r:02x}{g:02x}{b:02x}; margin: 0; }}
@@ -207,20 +339,20 @@ pre.mermaid svg {{ max-height: {fit}px; max-width: 100%; height: auto; }}
 </article>
 {strips}<pre id="measured" hidden></pre>
 <script type="application/json" id="markdown">{sources}</script>
+<script type="application/json" id="local">{copies}</script>
 {marked}
 {purify}
 {mermaid}
 <script>{run}</script>
 </body></html>"#,
-        css = STYLESHEET.url,
-        css_integrity = STYLESHEET.integrity,
+        css = stylesheet(local),
         title = escape(&parts.title),
         number = escape(&parts.number),
         meta = parts.meta,
-        body = diagrams(&parts.html),
-        marked = script(MARKED),
-        purify = script(PURIFY),
-        mermaid = script(MERMAID),
+        body = with_local_pictures(&diagrams(&parts.html), local),
+        marked = script(MARKED, local),
+        purify = script(PURIFY, local),
+        mermaid = script(MERMAID, local),
         run = RUN,
     )
 }
@@ -366,7 +498,14 @@ mod tests {
 
     #[test]
     fn the_page_loads_only_pinned_files_each_checked_by_its_hash() {
-        let page = html(&Parts::default(), 600, 400, 30, &Bands::default());
+        let page = html(
+            &Parts::default(),
+            600,
+            400,
+            30,
+            &Bands::default(),
+            &Local::new(),
+        );
         for pin in PINS {
             assert!(pin.url.contains('@'), "pinned to a version: {}", pin.url);
             assert!(pin.integrity.starts_with("sha384-"));
@@ -384,6 +523,75 @@ mod tests {
             loads.find_iter(&page).count(),
             PINS.len(),
             "nothing else is loaded from the web"
+        );
+    }
+
+    #[test]
+    fn the_page_names_the_copies_kept_here_in_place_of_their_links() {
+        let mut local = Local::new();
+        for pin in PINS {
+            let name = pin.url.rsplit('/').next().unwrap();
+            local.insert(pin.url.into(), PathBuf::from(format!("/c/my cache/{name}")));
+        }
+        let picture = "https://private-user-images.githubusercontent.com/1/a.png?jwt=x&x=1";
+        local.insert(picture.into(), PathBuf::from("/c/a.png"));
+        let parts = Parts {
+            html: format!(
+                r#"<p><img src="{}" alt="a"> <img src="https://example.com/b.png"></p>"#,
+                picture.replace('&', "&amp;")
+            ),
+            ..Parts::default()
+        };
+        let page = html(&parts, 600, 400, 30, &Bands::default(), &local);
+        assert!(page.contains(
+            r#"<link rel="stylesheet" href="file:///c/my%20cache/github-markdown-dark.css">"#
+        ));
+        assert!(page.contains(r#"<script src="file:///c/my%20cache/mermaid.min.js"></script>"#));
+        assert!(
+            !page.contains("integrity="),
+            "a copy was checked as it was kept, and the browser can't check a file's"
+        );
+        assert!(page.contains(r#"<img src="file:///c/a.png" alt="a">"#));
+        assert!(
+            page.contains(r#"<img src="https://example.com/b.png">"#),
+            "a picture with no copy is loaded as before"
+        );
+        // A ticket's pictures are named by their copies in the page's script,
+        // after DOMPurify has cleaned the Markdown.
+        assert!(page.contains(&format!(r#""{picture}":"file:///c/a.png""#)));
+        assert!(page.contains("const copy = local[img.getAttribute(\"src\")]"));
+        let cleaned = page.find("DOMPurify.sanitize(").unwrap();
+        assert!(page.find("img.setAttribute(\"src\", copy)").unwrap() > cleaned);
+    }
+
+    #[test]
+    fn the_pictures_are_found_in_a_prs_html_and_a_tickets_markdown() {
+        let parts = Parts {
+            html: concat!(
+                r#"<a href="https://x.example/p"><img src="https://camo.githubusercontent.com/a/b" style="max-width:100%"></a>"#,
+                r#"<IMG alt="q" SRC="https://img.example/q.png?a=1&amp;b=2"><img src="http://plain.example/p.png">"#,
+                r#"<img src="https://camo.githubusercontent.com/a/b">"#
+            )
+            .into(),
+            markdown: vec![
+                "See ![shot](https://uploads.linear.app/x/y.png?signature=s) and [a link](https://x.example)".into(),
+                r#"<img width="20" src='https://img.example/r.gif'> ![](<https://img.example/s.png>)"#.into(),
+            ],
+            ..Parts::default()
+        };
+        assert_eq!(
+            pictures(&parts),
+            [
+                "https://camo.githubusercontent.com/a/b",
+                "https://img.example/q.png?a=1&b=2",
+                "https://uploads.linear.app/x/y.png?signature=s",
+                "https://img.example/r.gif",
+                "https://img.example/s.png",
+            ]
+        );
+        assert_eq!(
+            file_url(Path::new("/a b/c#d?.png")),
+            "file:///a%20b/c%23d%3F.png"
         );
     }
 
@@ -406,7 +614,7 @@ mod tests {
             ["first".to_string(), "second".to_string()]
         );
         assert_eq!(parts.meta, "Todo · Unassigned · High · bug");
-        let page = html(&parts, 600, 400, 30, &Bands::default());
+        let page = html(&parts, 600, 400, 30, &Bands::default(), &Local::new());
         assert!(
             page.contains("DOMPurify.sanitize(marked.parse(source))"),
             "Markdown becomes HTML only through DOMPurify"
@@ -452,7 +660,7 @@ mod tests {
             top: 500.0,
             labels: vec![band_label(1, 2), band_label(2, 2)],
         };
-        let page = html(&Parts::default(), 600, 400, 30, &bands);
+        let page = html(&Parts::default(), 600, 400, 30, &bands, &Local::new());
         assert!(page.contains(r#"<div class="band" style="top:500px"><span>Page 1 of 2"#));
         assert!(page.contains(r#"<div class="band" style="top:530px"><span>Page 2 of 2</span>"#));
     }

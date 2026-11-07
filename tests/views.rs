@@ -509,3 +509,119 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
         screen.join("\n")
     );
 }
+
+/// What the image views keep, under a test's home.
+fn image_cache(home: &Path) -> switchboard::views::image::cache::Cache {
+    switchboard::views::image::cache::Cache::at(home.join(".cache/switchboard"))
+}
+
+#[test]
+fn the_palette_clears_the_image_cache_after_a_yes() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let cache = image_cache(&server.home);
+    let picture = cache
+        .keep_asset("https://example.com/a.png", "png", b"picture")
+        .unwrap();
+    let text = server.home.join(".cache/switchboard/pr-image/ENG-1.json");
+    std::fs::create_dir_all(text.parent().unwrap()).unwrap();
+    std::fs::write(&text, "{}").unwrap();
+    let other = server.home.join(".cache/switchboard/tab-names.json");
+    std::fs::write(&other, "{}").unwrap();
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["press", "clear-image-cache"]);
+    client.wait_text("Clear the PR and ticket image cache? [Y/n]");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("image cache?"))
+    });
+    assert!(picture.exists() && text.exists(), "no is no");
+
+    server.ok(&["press", "clear-image-cache"]);
+    client.wait_text("Clear the PR and ticket image cache? [Y/n]");
+    client.type_text("\r");
+    client.wait_text("The PR and ticket image cache is cleared.");
+    assert!(!cache.assets().exists(), "the copies gone");
+    assert!(!text.exists(), "and the text last read");
+    assert!(other.exists(), "nothing else of the cache's");
+}
+
+/// `switchboard pr-image --ticket ENG-1` with `PR_IMAGE_DUMP`, in a home of
+/// the test's own, with no terminal (so its pane is 100 by 50 cells of 16
+/// by 32 pixels) and nothing on its PATH, Chrome included; Linear moved to
+/// a port nothing listens on.
+#[cfg(target_os = "linux")]
+fn dump_ticket(home: &Path, out: &Path) -> std::process::Output {
+    use std::os::unix::process::CommandExt;
+    let bin = home.join("empty-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let mut cmd = Command::new(BIN);
+    cmd.args(["pr-image", "--ticket", "ENG-1"])
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", &bin)
+        .env("PR_IMAGE_DUMP", out)
+        .env("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9")
+        .stdin(Stdio::null());
+    // SAFETY: setsid alone, between fork and exec, so the program has no
+    // terminal to ask its size of.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.output().expect("pr-image runs")
+}
+
+/// A ticket opened again at the same size shows the pages kept, without
+/// looking for Chrome (Linux alone, where the PATH is where Chrome is
+/// looked for, so a failure can't start a real one).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_ticket_drawn_before_shows_from_the_cache_without_chrome() {
+    use switchboard::views::image::page::Parts;
+    use switchboard::views::image::render::{Shot, View};
+    let dir = TempDir::new("sb-image-cache");
+    let home = dir.path().join("home");
+    let parts = Parts {
+        title: "Fix the login".into(),
+        number: "ENG-1".into(),
+        html: "<p>hi</p>".into(),
+        ..Parts::default()
+    };
+    let text = home.join(".cache/switchboard/pr-image/ENG-1.json");
+    std::fs::create_dir_all(text.parent().unwrap()).unwrap();
+    std::fs::write(&text, serde_json::to_string(&parts).unwrap()).unwrap();
+    let drawn = dir.path().join("page-1-1.png");
+    std::fs::write(&drawn, "page one").unwrap();
+    let view = View::new(100, 50, (16, 32));
+    let shot = Shot {
+        file: drawn,
+        rows: 10,
+        from: 0.0,
+    };
+    image_cache(&home).save_pages(&parts, &view, &[shot]);
+
+    let out = dir.path().join("dump");
+    let run = dump_ticket(&home, &out);
+    assert!(run.status.success(), "{run:?}");
+    assert_eq!(
+        std::fs::read_to_string(out.join("page-1.png")).unwrap(),
+        "page one"
+    );
+
+    // With the cache turned off, it has to be drawn, and there is no
+    // Chrome to draw it.
+    let config = home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("settings.json"), r#"{"image_cache": false}"#).unwrap();
+    let run = dump_ticket(&home, &dir.path().join("dump-off"));
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("needs Google Chrome or Chromium"),
+        "{run:?}"
+    );
+}

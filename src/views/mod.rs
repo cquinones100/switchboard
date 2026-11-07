@@ -3,7 +3,8 @@
 //! (M-S-f), with M-r and M-l opening the PR and the ticket in the browser
 //! and M-m saying whether the PR can merge; and M-p's commands for the
 //! branch's merge queue and Linear project in the browser (merge-queue.sh,
-//! linear-project.sh) and its ticket and PR copied (branch-copy.sh).
+//! linear-project.sh), its ticket and PR copied (branch-copy.sh), and the
+//! image views' cache cleared (image-cache-clear.sh).
 //!
 //! Under tmux each view was glow and less in a pane split off to the right
 //! (tmux/pr-view.sh, ticket-view.sh, link-view.sh); here each is a program
@@ -85,10 +86,13 @@ pub enum Command {
     CopyTicketUrl,
     CopyPrNumber,
     CopyPrUrl,
+    /// What the PR and ticket image views keep, removed after a yes
+    /// (image-cache-clear.sh; `image::cache`).
+    ClearImageCache,
 }
 
 impl Command {
-    pub const ALL: [Command; 18] = [
+    pub const ALL: [Command; 19] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -107,6 +111,7 @@ impl Command {
         Command::CopyTicketUrl,
         Command::CopyPrNumber,
         Command::CopyPrUrl,
+        Command::ClearImageCache,
     ];
 
     /// Its name in keys.json.
@@ -130,6 +135,7 @@ impl Command {
             Command::CopyTicketUrl => "copy-ticket-url",
             Command::CopyPrNumber => "copy-pr-number",
             Command::CopyPrUrl => "copy-pr-url",
+            Command::ClearImageCache => "clear-image-cache",
         }
     }
 
@@ -172,6 +178,9 @@ impl Command {
             Command::CopyTicketUrl => "Copy the branch's ticket URL",
             Command::CopyPrNumber => "Copy the branch's PR number",
             Command::CopyPrUrl => "Copy the branch's PR URL",
+            Command::ClearImageCache => {
+                "Clear the PR and ticket image cache: the pictures, stylesheet and pages the image views keep"
+            }
         }
     }
 
@@ -195,6 +204,7 @@ impl Command {
             Command::OpenProject => &["linear", "project", "browser"],
             Command::CopyTicketId | Command::CopyTicketUrl => &["linear", "ticket", "copy"],
             Command::CopyPrNumber | Command::CopyPrUrl => &["github", "pr", "copy"],
+            Command::ClearImageCache => &["pr", "ticket", "images", "cache"],
         }
     }
 
@@ -218,7 +228,8 @@ impl Command {
             | Command::CopyTicketId
             | Command::CopyTicketUrl
             | Command::CopyPrNumber
-            | Command::CopyPrUrl => None,
+            | Command::CopyPrUrl
+            | Command::ClearImageCache => None,
         }
     }
 }

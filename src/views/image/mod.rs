@@ -8,11 +8,16 @@
 //!
 //! - `page`: the page, from the PR's HTML or the ticket's Markdown.
 //! - `render`: Chrome drawing it, and the pages cut from its picture.
+//! - `cache`: what the page loads and the pages drawn, kept (the
+//!   image_cache setting).
 //!
 //! The PR or ticket as last read is drawn at once (from
-//! `~/.cache/switchboard/pr-image/`, named as pr-image.js named it), and
-//! read again while it shows: when that has changed, the pages are drawn
-//! again where they were. Each page is shown through the kitty graphics
+//! `~/.cache/switchboard/pr-image/`, named as pr-image.js named it), its
+//! pages shown from the cache without running Chrome when they were drawn
+//! before at this size, and read again while it shows: the read is always
+//! kept, for its pictures' fresh signatures, and the pages are drawn again
+//! where they were when it changed, or when something the pages shown
+//! loaded had failed. Each page is shown through the kitty graphics
 //! protocol's Unicode placeholders, as the notes app draws a note's
 //! pictures (src/notes/images.rs): the terminal is given the page's PNG by
 //! its path, and the pane is filled with placeholder cells coloured with
@@ -35,15 +40,19 @@ use serde_json::{Value, json};
 
 use crate::diff::in_place::IN_PLACE;
 use crate::integrations::{github, linear};
-use crate::mux::server::{ClientId, Server};
+use crate::mux::server::{ClientId, Event as ServerEvent, Server};
 use crate::notes::images::{self, Picture};
+use crate::ui::Confirm;
+use crate::views::ViewsEvent;
 use crate::{paths, settings, util};
 
+pub mod cache;
 pub mod page;
 pub mod render;
 
+use cache::Cache;
 use page::Parts;
-use render::{NEEDS_CHROME, Renderer, Shot, View};
+use render::{Drawing, NEEDS_CHROME, Renderer, Shot, View};
 
 /// The tools' names in `@in_place`, as pane-in-place.sh named them.
 pub const PR_TOOL: &str = "pr-image";
@@ -198,12 +207,13 @@ pub fn page_bytes(shot: &Shot, cols: u16, id: u32, ids: [u32; 2]) -> String {
 /// What the work off the view's own thread hands back.
 enum Msg {
     Fresh(Result<Parts, String>),
-    Laid(u64, Result<(Vec<Shot>, bool), String>),
+    Laid(u64, Result<Drawing, String>),
 }
 
 struct App {
     asked: Asked,
-    cache: Option<PathBuf>,
+    /// Where the PR or ticket as last read is kept.
+    last_read: Option<PathBuf>,
     renderer: Renderer,
     cell: (u32, u32),
     view: View,
@@ -214,6 +224,12 @@ struct App {
     /// A layout is being made; another is wanted after it.
     busy: bool,
     again: bool,
+    /// Everything the pages shown loaded did; until then, a read of the
+    /// same text draws them again.
+    complete: bool,
+    /// A read of the same text came while a layout was being made, which
+    /// is made again if it turns out something failed to load.
+    recheck: bool,
     /// The footer's note: why the last layout failed, or that the page's
     /// scripts didn't load.
     said: String,
@@ -246,7 +262,8 @@ impl App {
     }
 
     /// Lays the pages out for the view as it is, off this thread; one asked
-    /// for while one is being made is made after it.
+    /// for while one is being made is made after it. Pages drawn before for
+    /// this text at this size are shown from the cache, without Chrome.
     fn lay_out(&mut self) {
         let Some(parts) = self.parts.clone() else {
             return;
@@ -257,6 +274,18 @@ impl App {
         }
         self.busy = true;
         self.layouts += 1;
+        let kept = self.renderer.cache.as_ref();
+        if let Some(shots) = kept.and_then(|c| c.pages_for(&parts, &self.view)) {
+            let drawing = Drawing {
+                shots,
+                loaded: true,
+                complete: true,
+            };
+            return self.laid(self.layouts, Ok(drawing));
+        }
+        if self.shots.is_empty() {
+            self.footer("Drawing it…");
+        }
         let (n, view, renderer, tx) = (
             self.layouts,
             self.view,
@@ -268,18 +297,20 @@ impl App {
         });
     }
 
-    fn laid(&mut self, n: u64, result: Result<(Vec<Shot>, bool), String>) {
+    fn laid(&mut self, n: u64, result: Result<Drawing, String>) {
         self.busy = false;
         match result {
-            Ok((shots, loaded)) => {
+            Ok(drawing) => {
                 let from = self.shots.get(self.at).map_or(0.0, |s| s.from);
-                self.at = shots
+                self.at = drawing
+                    .shots
                     .iter()
                     .rposition(|s| s.from <= from + 1e-6)
                     .unwrap_or(0);
-                self.shots = shots;
+                self.shots = drawing.shots;
+                self.complete = drawing.complete;
                 self.renderer.forget_others(n);
-                self.said = if loaded {
+                self.said = if drawing.loaded {
                     String::new()
                 } else {
                     "drawn without Mermaid and marked: the CDN couldn't be reached".into()
@@ -287,6 +318,9 @@ impl App {
             }
             Err(e) if self.shots.is_empty() => return self.fail(&e),
             Err(e) => self.said = e,
+        }
+        if std::mem::take(&mut self.recheck) && !self.complete {
+            self.again = true;
         }
         if self.again {
             self.again = false;
@@ -296,23 +330,30 @@ impl App {
         }
     }
 
+    /// The PR or ticket read anew: kept even when it shows the same, for
+    /// its pictures' fresh signatures, and drawn again when it changed, or
+    /// when something the pages shown loaded had failed.
     fn fresh(&mut self, result: Result<Parts, String>) {
         match result {
-            Ok(parts) if self.parts.as_ref() != Some(&parts) => {
-                if let Some(file) = &self.cache {
-                    if let Some(dir) = file.parent() {
-                        let _ = std::fs::create_dir_all(dir);
-                    }
+            Ok(parts) => {
+                if self.parts.as_ref() != Some(&parts)
+                    && let Some(file) = &self.last_read
+                {
                     let _ = util::write_atomic(file, util::json_compact(&parts));
                 }
-                let first = self.parts.is_none();
+                let changed = self
+                    .parts
+                    .as_ref()
+                    .is_none_or(|old| cache::same_text(old) != cache::same_text(&parts));
                 self.parts = Some(parts);
-                if first {
-                    self.footer("Drawing it…");
+                if changed {
+                    self.lay_out();
+                } else if self.busy {
+                    self.recheck = true;
+                } else if !self.complete {
+                    self.lay_out();
                 }
-                self.lay_out();
             }
-            Ok(_) => {}
             Err(e) if self.parts.is_none() => self.fail(&e),
             Err(_) => {}
         }
@@ -423,7 +464,8 @@ impl Drop for Work {
 }
 
 /// Why the view can't draw at all, said in place of the pages: no Chrome
-/// to draw them with, or a terminal that can't show them.
+/// to draw them with (and no pages kept to show without it), or a terminal
+/// that can't show them.
 pub fn cannot_draw(chrome: bool, terminal: bool) -> Option<&'static str> {
     if !chrome {
         Some(NEEDS_CHROME)
@@ -445,16 +487,17 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let cache = cache_file(&asked);
-    let cached: Option<Parts> = cache
+    let last_read = cache_file(&asked);
+    let cached: Option<Parts> = last_read
         .as_ref()
         .and_then(util::read_json)
         .and_then(|v: Value| serde_json::from_value(v).ok());
+    let kept = settings::is_on("image_cache").then(Cache::here);
     let work =
         Work(std::env::temp_dir().join(format!("switchboard-pr-image-{}", std::process::id())));
     // For checking the drawing without a terminal: the pages as PNGs, and out.
     if let Some(out) = std::env::var_os("PR_IMAGE_DUMP") {
-        return dump(&asked, cached, &work.0, Path::new(&out));
+        return dump(&asked, cached, kept, &work.0, Path::new(&out));
     }
     let ids = ids_for(std::process::id());
     let screen = match Screen::enter(ids) {
@@ -467,22 +510,39 @@ pub fn main(args: Vec<String>) -> ExitCode {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
     let cell = cell();
+    let view = View::new(cols, rows, cell);
     let chrome = render::find_chrome();
+    // The pages kept for the text last read at this size, shown without
+    // Chrome; and both caches held to their limit as the view starts, off
+    // its thread, those pages kept.
+    let ready = match (&kept, &cached) {
+        (Some(c), Some(p)) => c.pages_for(p, &view).map(|_| cache::page_key(p, &view)),
+        _ => None,
+    };
+    if let Some(c) = kept.clone() {
+        let keep = ready.clone();
+        std::thread::spawn(move || {
+            c.prune(cache::LIMIT, std::time::SystemTime::now(), keep.as_deref())
+        });
+    }
     let mut app = App {
         asked: asked.clone(),
-        cache,
+        last_read,
         renderer: Renderer {
-            chrome: chrome.clone().unwrap_or_default(),
+            chrome: chrome.clone(),
             work: work.0.clone(),
+            cache: kept,
         },
         cell,
-        view: View::new(cols, rows, cell),
+        view,
         parts: None,
         shots: Vec::new(),
         at: 0,
         layouts: 0,
         busy: false,
         again: false,
+        complete: true,
+        recheck: false,
         said: String::new(),
         failed: None,
         ids,
@@ -490,13 +550,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
         resized: None,
         tx: tx.clone(),
     };
-    if let Some(why) = cannot_draw(chrome.is_some(), images::terminal_can()) {
+    if let Some(why) = cannot_draw(chrome.is_some() || ready.is_some(), images::terminal_can()) {
         app.fail(why);
     } else {
         match cached {
             Some(parts) => {
                 app.parts = Some(parts);
-                app.footer("Drawing it…");
                 app.lay_out();
             }
             None => app.footer(&format!("Reading the {}…", app.asked.what())),
@@ -535,12 +594,20 @@ pub fn main(args: Vec<String>) -> ExitCode {
 }
 
 /// `PR_IMAGE_DUMP=<dir>`: the pages written there as `page-<n>.png`, for a
-/// pane of the terminal's size (or 100 by 50), with no terminal needed.
-fn dump(asked: &Asked, cached: Option<Parts>, work: &Path, out: &Path) -> ExitCode {
-    let Some(chrome) = render::find_chrome() else {
+/// pane of the terminal's size (or 100 by 50), with no terminal needed:
+/// those kept, when the cache holds them, else drawn.
+fn dump(
+    asked: &Asked,
+    cached: Option<Parts>,
+    kept: Option<Cache>,
+    work: &Path,
+    out: &Path,
+) -> ExitCode {
+    let chrome = render::find_chrome();
+    if chrome.is_none() && cached.is_none() {
         eprintln!("{NEEDS_CHROME}");
         return ExitCode::FAILURE;
-    };
+    }
     let parts = match cached {
         Some(p) => p,
         None => match util::block_on(fetch(asked)) {
@@ -552,21 +619,31 @@ fn dump(asked: &Asked, cached: Option<Parts>, work: &Path, out: &Path) -> ExitCo
         },
     };
     let (cols, rows) = terminal::size().unwrap_or((100, 50));
-    let renderer = Renderer {
-        chrome,
-        work: work.to_path_buf(),
+    let view = View::new(cols, rows, cell());
+    let drawn = match kept.as_ref().and_then(|c| c.pages_for(&parts, &view)) {
+        Some(shots) => Ok(Drawing {
+            shots,
+            loaded: true,
+            complete: true,
+        }),
+        None => Renderer {
+            chrome,
+            work: work.to_path_buf(),
+            cache: kept,
+        }
+        .render(&parts, &view, 1),
     };
-    match renderer.render(&parts, &View::new(cols, rows, cell()), 1) {
-        Ok((shots, loaded)) => {
+    match drawn {
+        Ok(drawing) => {
             let _ = std::fs::create_dir_all(out);
-            for (i, shot) in shots.iter().enumerate() {
+            for (i, shot) in drawing.shots.iter().enumerate() {
                 let _ = std::fs::copy(&shot.file, out.join(format!("page-{}.png", i + 1)));
             }
             eprintln!(
                 "{} page(s) in {}{}",
-                shots.len(),
+                drawing.shots.len(),
                 out.display(),
-                if loaded {
+                if drawing.loaded {
                     ""
                 } else {
                     " (the page's scripts didn't load)"
@@ -647,6 +724,27 @@ impl Server {
             }
             Err(e) => self.say(Some(client), &format!("Couldn't open the image view: {e}")),
         }
+    }
+
+    /// M-p's "Clear the PR and ticket image cache": the copies, the pages
+    /// drawn and the text last read removed after a yes, off the server's
+    /// task, and said once they are.
+    pub fn clear_image_cache(&mut self, client: ClientId) {
+        self.ask(
+            client,
+            Confirm::new("Clear the PR and ticket image cache?"),
+            |server, client, yes| {
+                if !yes {
+                    return;
+                }
+                let tx = server.tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    Cache::here().clear();
+                    let text = "The PR and ticket image cache is cleared.".to_string();
+                    let _ = tx.send(ServerEvent::Views(ViewsEvent::Say { client, text }));
+                });
+            },
+        );
     }
 }
 

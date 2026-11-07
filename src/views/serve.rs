@@ -135,6 +135,7 @@ impl Server {
             Command::CopyTicketUrl => self.copy_ticket(client, true),
             Command::CopyPrNumber => self.copy_pr(client, false),
             Command::CopyPrUrl => self.copy_pr(client, true),
+            Command::ClearImageCache => self.clear_image_cache(client),
         }
     }
 
