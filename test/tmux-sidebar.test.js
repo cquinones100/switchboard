@@ -4689,3 +4689,22 @@ test("typing into Claude's prompt presses i first while its vim mode line says -
   assert.ok(await until(() => tmux("capture-pane", "-p", "-t", insert).includes("/ci-loop")));
   assert.doesNotMatch(tmux("capture-pane", "-p", "-t", insert), /i\/ci-loop/, "nothing before the text in Insert mode");
 });
+
+test("a tab's menu shows its whole title in a box, with nothing cut, and the sidebar lists i in its keys", async (t) => {
+  const label = `AB-7: ${"a title long enough that the sidebar cuts it at three lines ".repeat(4).trim()}`;
+  const window = tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}");
+  tmux("set", "-w", "-t", window, "@tab_label", `#12 ${label}`);
+  t.after(() => tmux("kill-window", "-t", window));
+  await new Promise((resolve) => setTimeout(resolve, 2_100));
+  await sidebar.refresh();
+  const tab = sidebar.state.tabs.find((x) => x.id === window);
+  const client = {};
+  await sidebar.tabChoices(client, tab).find((c) => c.key === "i").act();
+  assert.equal(client.choose.title, `Tab ${tab.index}`);
+  assert.equal(client.choose.body.split("\n\n")[0].split("\n").join(" "), `#12 ${label}`, "the title as the tab bar has it, its PR in front");
+  assert.deepEqual(client.choose.choices.map((c) => c.label), ["Copy the title"]);
+  const box = sidebar.chooseModal(client.choose, 100, 40).replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, " ");
+  assert.ok(!box.includes("…"), "nothing cut");
+  assert.equal(box.match(/sidebar/g)?.length, 4, "every line of it drawn");
+  assert.ok(sidebar.HELP.sidebar.some(([key]) => key === "i"));
+});

@@ -893,6 +893,7 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | `M-s` | jump in from any pane, on the tab you are in, and back out | |
 | `M-c` | into the pane running Claude in the tab you are in, from the sidebar or a pane beside it | |
 | `M-y` | copy the latest reply of the Claude in the tab you are in, the last message it wrote text in, read from its session transcript (`tmux/reply-copy.sh`, `lib/claude-reply.js`; the `copy_reply` setting, under Sessions) | |
+| `M-T` | the whole title of the tab you are in, in a box, which the sidebar cuts at three lines and the status line at its width: the title as the tab bar has it, wrapped, then its branch, directory, PR and Linear ticket as far as they are known, read from tmux and the tab name's cache alone; its Copy the title option (or `y`) copies the title, moved to with `j`/`k` or Tab and taken with Enter or a click, and Close, Esc or a click off the options closes it (`tmux/tab-title.sh`; the `tab_title` setting, under Tabs and status bar) | |
 | `C-w h` / `C-w l` | move in, on the tab you are in, and back out, as between any panes | |
 | (closing the tab in front) | the cursor lands in the sidebar of the tab that takes its place, to pick the next one | |
 | `M-Space` | open mission control | close it |
@@ -901,10 +902,11 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | `j` `k` (arrows) | choose a tab, bringing it to the front (the list holds still until you leave the sidebar) | move down or up a row |
 | `C-d` `C-u` | scroll the list half a screen down or up, the cursor moving as many lines onto the tab there and stopping at the first and last tab, as in Vim (the `sidebar_half_page` setting, Sidebar; off, they run in the chosen tab) | |
 | `h` `l` | back out / go to the tab | move left or right |
-| `Enter` | go into the chosen tab's pane | what can be done with the chosen card or row, in a menu: on a tab, go there (first, so Enter twice goes), answer it, peek at it, its diff or lazygit, the `M-p` palette there, and on a merged tab close every Merged tab; elsewhere the view's own actions |
+| `Enter` | go into the chosen tab's pane | what can be done with the chosen card or row, in a menu: on a tab, go there (first, so Enter twice goes), answer it, peek at it, show its full title (as `M-T`, with Copy the title), its diff or lazygit, the `M-p` palette there, and on a merged tab close every Merged tab; elsewhere the view's own actions |
 | `1`–`9` | put the cursor on that tab, in its sidebar (Enter goes in) | choose that tab |
 | `n` | to the notifications at the bottom, when there are any (the Notifications view, as moving onto them does), else it says there are none; `M-p`'s "Go to the notifications" does the same from any pane | |
 | `t` | a new tab running Claude in the chosen tab's directory, as `M-t` opens one | |
+| `i` | the chosen tab's full title in a box, as `M-T` shows it | in Enter's menu |
 | `d` `L` | the chosen tab's diff (diffview, as `M-d` there) or lazygit, in its place there, as `M-p` opens them | in Enter's menu |
 | any bound Alt or Ctrl key | runs in the chosen tab | |
 | `Tab` `S-Tab` | the next or previous row, tabs then notifications, wrapping round, as on a webpage | move focus, as on a webpage, through what can be clicked: each view's name in the bar, the filter, then each card or row, wrapping round; the focused one is drawn in reverse video (a card or row by its own highlight), and `Enter` or `Space` presses it as a click would; in a menu, a question or an answer box, Tab goes round its options, Yes and No, or answers |

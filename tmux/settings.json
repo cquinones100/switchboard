@@ -564,6 +564,13 @@
     "default": true
   },
   {
+    "key": "tab_title",
+    "category": "Tabs and status bar",
+    "label": "Show a tab's full title",
+    "description": "M-T, the sidebar's i and a tab's menu in mission control show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, the key reaches the pane",
+    "default": true
+  },
+  {
     "key": "save_contents",
     "category": "Sessions",
     "label": "Save what panes show",
