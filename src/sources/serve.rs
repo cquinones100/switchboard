@@ -230,8 +230,10 @@ impl Server {
         self.inbox_notices();
     }
 
-    /// Gives today's todo note what a view last read: each item as a line,
-    /// and whether the look failed, as the daemon handed todo.js its views.
+    /// Gives today's todo note what a view last read, as the daemon handed
+    /// todo.js its views: each item as a line (`todo_line`), the PR board's
+    /// open ones under their column ("In review: ..."), the merged left out,
+    /// and the ticket board's not done; and whether the look failed.
     fn hand_to_todo(&mut self, name: &str) {
         let Some(view) = self.sources.views.get(name) else {
             return;
@@ -239,11 +241,13 @@ impl Server {
         let lines = view
             .items
             .iter()
-            .map(|i| {
-                if i.detail.is_empty() {
-                    i.title.clone()
-                } else {
-                    format!("{} — {}", i.title, i.detail)
+            .filter_map(|i| {
+                let column = i.group.as_deref().unwrap_or("");
+                match name {
+                    PRS if column == "Merged" => None,
+                    PRS if !column.is_empty() => Some(format!("{column}: {}", todo_line(i))),
+                    TICKETS if column == "Done" => None,
+                    _ => Some(todo_line(i)),
                 }
             })
             .collect();
@@ -632,4 +636,48 @@ impl Server {
 /// The file that asks the PR lookups again: `github` in the state directory.
 pub fn github_file() -> PathBuf {
     paths::state_dir().join("github")
+}
+
+/// An item as a line of today's todo note's prompt (daemon.js's `line`): its
+/// title and detail, then its link, so the note can link to it.
+fn todo_line(item: &Item) -> String {
+    let mut line = [item.title.as_str(), item.detail.as_str()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let data = |pointer: &str| {
+        item.data
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .filter(|u| !u.is_empty())
+    };
+    let url = match &item.target {
+        crate::items::Target::Url(u) => Some(u.as_str()),
+        _ => data("/url").or_else(|| data("/ci/url")),
+    };
+    if let Some(url) = url {
+        line.push(' ');
+        line.push_str(url);
+    }
+    line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::items::Target;
+
+    #[test]
+    fn a_todo_line_is_the_title_the_detail_and_the_link() {
+        let pr = Item::new("1", "#12 Fix the login")
+            .detail("acme/app · checks passing")
+            .target(Target::Url("https://github.com/acme/app/pull/12".into()));
+        assert_eq!(
+            todo_line(&pr),
+            "#12 Fix the login · acme/app · checks passing https://github.com/acme/app/pull/12"
+        );
+        let ci = Item::new("2", "#3 Tidy").data(json!({ "ci": { "url": "https://x/3" } }));
+        assert_eq!(todo_line(&ci), "#3 Tidy https://x/3");
+    }
 }
