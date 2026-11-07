@@ -18,11 +18,11 @@
 //! opened a PR is still reachable by its number.
 //!
 //! The tabs and panes come from the server (`switchboard list`) where tmux's
-//! `list-panes` gave them, and a jump is `select-tab` and `select-pane`. A
-//! row is the tab's label, as the tab bar shows it, where the tmux version
-//! ran the second status line's script for each; the server has no command
-//! for moving a client to another session, so a tab in another session is
-//! made current there and the jump says so.
+//! `list-panes` gave them, and a jump is `select-tab` and `select-pane`, or,
+//! for a tab in another session, `switch-client`, which takes the terminal
+//! you used last there as tmux's did. A row is the tab's label, as the tab
+//! bar shows it, where the tmux version ran the second status line's script
+//! for each.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -381,15 +381,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
     // Asked about this process's own pane rather than the client's current
     // one: a pane that isn't focused still says where it actually is.
-    let (current_tab, current_session) = if socket::in_pane() {
-        let ask = |what: &str| {
-            socket::ask_ok(&["display", what])
-                .map(|v| v.trim().to_string())
-                .unwrap_or_default()
-        };
-        (ask("tab"), ask("session"))
+    let current_tab = if socket::in_pane() {
+        socket::ask_ok(&["display", "tab"])
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default()
     } else {
-        (String::new(), String::new())
+        String::new()
     };
 
     let described = describe(panes);
@@ -433,16 +430,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
         }
         &rows[worktree::choose_numbered("Select tab [1]: ", rows.len())]
     };
-    if let Err(e) = socket::ask_ok(&["select-tab", "-t", &chosen.tab])
+    // A tab in another session takes your terminal along to that session.
+    if let Err(e) = socket::ask_ok(&["switch-client", "-t", &chosen.tab])
         .and_then(|_| socket::ask_ok(&["select-pane", "-t", &chosen.pane]))
     {
         return fail(&e.to_string());
-    }
-    if !current_session.is_empty() && chosen.session != current_session {
-        eprintln!(
-            "That tab is in the session {}: it is the current one there now.",
-            chosen.session
-        );
     }
     ExitCode::SUCCESS
 }

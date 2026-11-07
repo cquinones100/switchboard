@@ -1261,7 +1261,7 @@ switchboard wt-jump theme-slot   any tab whose branch, directory or name contain
 switchboard wt-jump --list       print the tabs, and jump to none
 ```
 
-Tabs are matched on each pane's directory and the branch checked out there, and on the tab's name, whose `#<number>` front is its PR; you land on the pane that matched. A ticket is matched whole, so `ABC-12` never finds `ABC-123`. A bare number is looked for as a `pr-<number>` worktree first, and only then is GitHub asked which branch the PR is on. One match jumps outright; several are listed by number, the tabs waiting on you first; none prints the `wt` or `wtpr` that would open one. A tab in another session is made the current tab there, and it says so. To pick a tab by looking, `M-j` opens mission control's Work map as a picker of the open tabs.
+Tabs are matched on each pane's directory and the branch checked out there, and on the tab's name, whose `#<number>` front is its PR; you land on the pane that matched. A ticket is matched whole, so `ABC-12` never finds `ABC-123`. A bare number is looked for as a `pr-<number>` worktree first, and only then is GitHub asked which branch the PR is on. One match jumps outright; several are listed by number, the tabs waiting on you first; none prints the `wt` or `wtpr` that would open one. A tab in another session is made the current tab there, and the terminal you used last moves to that session, as tmux's did. To pick a tab by looking, `M-j` opens mission control's Work map as a picker of the open tabs.
 
 `switchboard wt-revive` lists the worktrees no tab has open, in the repository you are in (or `<dir>`'s), every open tab's and every one a Claude session ran in over the last two weeks: each one's repository and branch, how long since it was used and the last prompt Claude was given there, most recent first. `--json` prints a line of JSON for each. What each transcript says is cached in `~/.cache/wt-revive/index.json`, so it reads only the transcripts that changed. `M-o` shows these rows in mission control's Work map, and Enter on one offers "Open a tab there, resuming its Claude", which runs `claude-here` there as `wtr` does.
 
@@ -1803,6 +1803,9 @@ switchboard capture-pane [-t pane] [-S lines]
                                          of history above it
 switchboard select-pane -t pane          focus a pane
 switchboard select-tab -t tab            bring a tab to the front
+switchboard switch-client -t tab         bring a tab to the front and show it
+                                         in the terminal you used last, moving
+                                         it to the tab's session
 switchboard kill-pane [-t pane]          close a pane, without asking
 switchboard kill-tab [-t tab]            close a tab, without asking
 switchboard rename-tab [-t tab] name     name a tab; "" names it after its

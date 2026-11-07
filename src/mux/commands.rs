@@ -27,6 +27,9 @@
 //!                                        paste-buffer -p
 //! capture-pane [-t pane] [-S lines]      the screen (and that much history)
 //! select-pane -t pane | select-tab -t tab
+//! switch-client -t tab                   the client used last shown the
+//!                                        tab, in its session (tmux's
+//!                                        switch-client)
 //! kill-pane [-t pane] | kill-tab [-t tab]
 //! rename-tab [-t tab] name               "" to name it after its directory
 //! set [-t target] [-u] @option [value]   a tab's or pane's option
@@ -65,6 +68,7 @@ pub const NAMES: &[&str] = &[
     "capture-pane",
     "select-pane",
     "select-tab",
+    "switch-client",
     "kill-pane",
     "kill-tab",
     "rename-tab",
@@ -189,6 +193,29 @@ impl Server {
             "select-tab" => self.target_tab(rest, caller).map(|t| {
                 if let Some(s) = self.session_of_tab(t).map(|s| s.name.clone()) {
                     self.select_tab(&s, t);
+                }
+                Reply::ok("")
+            }),
+            // tmux's `switch-client` with no `-c`: the client used last
+            // among those showing the caller's session (else any), moved to
+            // the session holding the tab, and the tab made current there.
+            "switch-client" => self.target_tab(rest, caller).map(|t| {
+                if let Some(s) = self.session_of_tab(t).map(|s| s.name.clone()) {
+                    self.select_tab(&s, t);
+                    let here = caller
+                        .and_then(|p| self.panes.get(&p))
+                        .and_then(|slot| self.session_of_tab(slot.tab))
+                        .map(|s| s.name.clone());
+                    let client = self
+                        .clients
+                        .values()
+                        .filter(|c| here.as_ref().is_none_or(|h| *h == c.session))
+                        .max_by_key(|c| c.activity)
+                        .map(|c| c.id)
+                        .or_else(|| self.latest_client());
+                    if let Some(client) = client {
+                        self.switch_client(client, &s);
+                    }
                 }
                 Reply::ok("")
             }),

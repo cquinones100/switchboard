@@ -92,6 +92,37 @@ fn send_keys_and_capture_pane() {
 }
 
 #[test]
+fn switch_client_takes_the_terminal_to_another_session_s_tab() {
+    let server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    // A second session, made by a client that then goes.
+    let mut other = common::TestClient::attach(&server.socket(), Some("work"), 80, 24);
+    other.wait_text("$");
+    other.detach();
+    let list = server.list();
+    let work = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "work")
+        .expect("the work session")["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["switch-client", "-t", &work]);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while server.list()["clients"][0]["session"] != "work" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{:?}",
+            server.list()["clients"]
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
 fn detaching_leaves_it_running_and_attaching_again_shows_it() {
     let mut server = TestServer::start();
     let mut client = server.attach(80, 24);
