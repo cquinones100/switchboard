@@ -387,6 +387,31 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
 }
 
 #[test]
+fn a_time_typed_into_the_reminder_list_wins_over_the_row_it_resembles() {
+    let (server, mut client) = two_tabs(json!({}));
+    open(&mut client);
+    client.type_text("\r");
+    client.wait_text("Remind me about it later");
+    client.type_text("e");
+    client.wait_text("Or type a time");
+    // "2h" matches "In 20 minutes" and "In 3 hours" by their numbers and
+    // letters, but names a time of its own.
+    client.type_text("2h\r");
+    client.wait_text("What for?");
+    client.type_text("\r");
+    let list = wait_list(&server, "the reminder set", |l| {
+        tabs(l)[0]["options"]["@remind_at"].is_string()
+    });
+    let at: i64 = tabs(&list)[0]["options"]["@remind_at"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let now = jiff::Timestamp::now().as_second();
+    assert!((at - now - 7200).abs() < 60, "{at} is two hours from {now}");
+}
+
+#[test]
 fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     let server = TestServer::start();
     settings(&server, json!({"view_calendar": true}));

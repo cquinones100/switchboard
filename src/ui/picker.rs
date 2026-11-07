@@ -122,6 +122,8 @@ pub struct Picker {
     /// Each item's text whole, by its place in `items`, shown under the
     /// rows for the chosen one; none when empty.
     previews: Vec<String>,
+    /// Lines said under the count, dimmed, as fzf's `--header`.
+    header: Vec<String>,
 }
 
 impl Picker {
@@ -145,6 +147,7 @@ impl Picker {
             drawn: None,
             room: 10,
             previews: Vec::new(),
+            header: Vec::new(),
         };
         picker.refilter();
         picker
@@ -221,6 +224,18 @@ impl Picker {
     pub fn previews(mut self, previews: Vec<String>) -> Picker {
         self.previews = previews;
         self
+    }
+
+    /// A line said under the count, dimmed, as fzf's `--header`.
+    pub fn header(mut self, line: impl Into<String>) -> Picker {
+        self.header.push(line.into());
+        self
+    }
+
+    /// The box's line the first row is drawn on: after the prompt, the
+    /// count and the header.
+    fn first_row(&self) -> usize {
+        2 + self.header.len()
     }
 
     /// Typed, as if by hand.
@@ -479,7 +494,7 @@ impl Overlay for Picker {
             .max(10)
             .min(area.height as usize);
         let inner = outer_w.saturating_sub(2);
-        let rows = outer_h.saturating_sub(2 + 2 + 2).max(1);
+        let rows = outer_h.saturating_sub(2 + self.first_row() + 2).max(1);
         // With previews, the lower half shows the chosen one, under a rule.
         let preview_rows = if self.previews.is_empty() {
             0
@@ -502,11 +517,14 @@ impl Overlay for Picker {
                 look.dim(),
             ),
         ];
+        for line in &self.header {
+            lines.push(BoxLine::text(format!("   {line}"), look.dim()));
+        }
         for row in self.top..(self.top + self.room).min(self.shown.len()) {
             lines.push(self.row_line(row, widths, look));
         }
         if preview_rows > 1 {
-            while lines.len() < 2 + self.room {
+            while lines.len() < self.first_row() + self.room {
                 lines.push(BoxLine::blank());
             }
             lines.push(BoxLine::text("─".repeat(inner), look.faint()));
@@ -589,10 +607,12 @@ impl Overlay for Picker {
             return Step::Same;
         };
         let hit = drawn.hit(mouse.col, mouse.row);
+        let first = self.first_row();
         let row = match hit {
-            Hit::Line(i, _) if i >= 2 && i < 2 + self.room => {
-                Some(self.top + i - 2).filter(|r| *r < self.shown.len())
+            Hit::Line(i, _) if i >= first && i < first + self.room => {
+                Some(self.top + i - first).filter(|r| *r < self.shown.len())
             }
+
             _ => None,
         };
         match draw::gesture(&mouse) {
@@ -795,6 +815,27 @@ mod tests {
             ..click
         };
         assert_eq!(p.mouse(outside, &look), Step::Close(Outcome::Dismissed));
+    }
+
+    #[test]
+    fn a_header_goes_under_the_count_and_clicks_still_find_their_rows() {
+        let look = Look::default();
+        let mut p = Picker::new("Pick", items()).header("Or type one of your own.");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let count = s.iter().position(|l| l.contains("4/4")).unwrap();
+        assert!(s[count + 1].contains("Or type one of your own."), "{s:#?}");
+        let d = p.drawn.clone().unwrap();
+        let click = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col: d.inner.x + 5,
+            row: d.rows[4].0,
+            mods: Mods::NONE,
+        };
+        p.mouse(click, &look);
+        assert_eq!(p.chosen().unwrap().text, "Close the pane");
     }
 
     #[test]

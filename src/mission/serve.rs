@@ -38,7 +38,8 @@ use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{self, Rules};
 use crate::sidebar::render::Filter;
 use crate::sidebar::text::SPINNER_MS;
-use crate::ui::{Confirm, Menu, MenuOption, Outcome, Theme};
+use crate::ui::{Confirm, Menu, MenuOption, Outcome, PickItem, Picker, Theme};
+
 use crate::usage::ViewKind;
 use crate::{paths, settings, util};
 
@@ -1898,7 +1899,10 @@ impl Server {
     // ── Reminders ───────────────────────────────────────────────────────────
 
     /// "Remind me about this tab": when (remind.sh's times, or one typed),
-    /// then what for; with a reminder set, clearing it comes first.
+    /// then what for; with a reminder set, clearing it comes first. The
+    /// times are a list to pick from or type in, as remind.sh's fzf was: a
+    /// choice's number and Enter takes it, and what is typed wins over the
+    /// row it resembles when it names a time (`2m` over "In 20 minutes").
     pub fn remind_tab(&mut self, client: ClientId, tab: TabId) {
         if !settings::is_on("reminders") {
             self.say(Some(client), "Reminders are off in Settings.");
@@ -1920,15 +1924,36 @@ impl Server {
             labels.push("Clear the reminder".into());
         }
         labels.extend(remind::CHOICES.iter().map(|c| c.to_string()));
-        labels.push("Another time…".into());
-        let menu = Menu::new(
-            format!("Remind me about {name}"),
-            labels.iter().map(MenuOption::new).collect(),
-        )
-        .body("Or type a time of your own: 45m, 2h, 1d, 3pm, 15:30.");
-        self.choose(client, menu, move |server, client, chose| {
-            let Some(label) = chose.and_then(|i| labels.get(i)).cloned() else {
+        let rows = labels
+            .iter()
+            .enumerate()
+            .map(|(i, label)| PickItem {
+                text: label.clone(),
+                key: (i + 1).to_string(),
+                value: label.clone(),
+                ..PickItem::default()
+            })
+            .collect();
+        let picker = Picker::new(format!("Remind me about {name}"), rows)
+            .prompt("When? ")
+            .header(remind::TYPED_HINT)
+            .exact()
+            .free()
+            .order(Box::new(|_, matched| matched.to_vec()));
+        self.pick(client, picker, move |server, client, picked| {
+            let Some(picked) = picked else {
                 return;
+            };
+            let typed = picked.query.trim();
+            let label = match typed.parse::<usize>() {
+                Ok(n) if (1..=labels.len()).contains(&n) => labels[n - 1].clone(),
+                _ if !typed.is_empty() && remind::when(typed, &util::local_now()).is_some() => {
+                    typed.to_string()
+                }
+                _ => labels
+                    .get(picked.index)
+                    .cloned()
+                    .unwrap_or_else(|| typed.to_string()),
             };
             if label == "Clear the reminder" {
                 if let Some(t) = server.tabs.get_mut(&tab) {
@@ -1939,20 +1964,6 @@ impl Server {
                 server.dirty_tab(tab);
                 server.mission_redraw();
                 server.mission_note(client, format!("Reminder cleared for {name}."));
-                return;
-            }
-            if label == "Another time…" {
-                let ask = Ask::new("When?", remind::TYPED_HINT);
-                let name = name.clone();
-                server.open(
-                    client,
-                    Box::new(ask),
-                    Some(Box::new(move |server: &mut Server, client, outcome| {
-                        if let Outcome::Picked(p) = outcome {
-                            server.remind_when(client, tab, name, &p.value);
-                        }
-                    })),
-                );
                 return;
             }
             server.remind_when(client, tab, name, &label);

@@ -1,7 +1,8 @@
 //! A tab's reminder (tmux/remind.sh, M-p's "Remind me about this tab", now
 //! in a tab's menu in mission control too): when, as Slack's "Remind me
 //! about this" asks (in 20 minutes, in an hour, in 3 hours, tomorrow, next
-//! week, or a time typed in: 45m, 2h, 1d, 3pm, 15:30), then what for, which
+//! week, or a time typed in: 45m, 2h, 1d, 3pm, 15:30, and here tomorrow
+//! 9am too, or tomorrow alone for 9:00), then what for, which
 //! may be left empty. The tab waits under the sidebar's Reminders with the
 //! time left, and when it comes due it moves to Needs you and is said once,
 //! until you go to the tab. The time and note are the tab's `@remind_at`
@@ -27,8 +28,8 @@ pub const CHOICES: [&str; 5] = [
     "Next Monday at 9:00",
 ];
 
-/// What the box asking for a typed time says.
-pub const TYPED_HINT: &str = "A time: 45m, 2h, 1d, 3pm or 15:30.";
+/// What the list of times says of typing one.
+pub const TYPED_HINT: &str = "Or type a time: 45m, 2h, 1d, 3pm, 15:30, tomorrow 9am.";
 
 /// The time a choice or a typed text names, in seconds, or `None`.
 pub fn when(text: &str, now: &Zoned) -> Option<i64> {
@@ -38,8 +39,6 @@ pub fn when(text: &str, now: &Zoned) -> Option<i64> {
         LazyLock::new(|| Regex::new(r"^([0-9]+)(h|hr|hrs|hours?)$").expect("a regex"));
     static DAYS: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^([0-9]+)(d|days?)$").expect("a regex"));
-    static CLOCK: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"^([0-9]{1,2})(:([0-9]{2}))?(am|pm)?$").expect("a regex"));
     let text: String = text
         .to_lowercase()
         .chars()
@@ -67,6 +66,20 @@ pub fn when(text: &str, now: &Zoned) -> Option<i64> {
         }
         _ => {}
     }
+    // Tomorrow at a time, or at 9:00 with none given.
+    if let Some(rest) = text.strip_prefix("tomorrow") {
+        let rest = rest.strip_prefix("at").unwrap_or(rest);
+        let date = now.date().tomorrow().ok()?;
+        if rest.is_empty() {
+            return at_nine(date);
+        }
+        let time = clock(rest, true)?;
+        return date
+            .to_datetime(time)
+            .to_zoned(now.time_zone().clone())
+            .ok()
+            .map(|z| z.timestamp().as_second());
+    }
     let number = |m: &regex::Captures| m[1].parse::<i64>().ok();
     if let Some(m) = MINUTES.captures(&text) {
         return Some(secs + number(&m)? * 60);
@@ -77,26 +90,7 @@ pub fn when(text: &str, now: &Zoned) -> Option<i64> {
     if let Some(m) = DAYS.captures(&text) {
         return Some(secs + number(&m)? * 86_400);
     }
-    let m = CLOCK.captures(&text)?;
-    let mut hour: i8 = m[1].parse().ok()?;
-    let minute: i8 = m.get(3).map_or(Ok(0), |v| v.as_str().parse()).ok()?;
-    let meridiem = m.get(4).map(|v| v.as_str());
-    // A bare number is a count of something, not a time.
-    if meridiem.is_none() && m.get(2).is_none() {
-        return None;
-    }
-    if meridiem.is_some() && !(1..=12).contains(&hour) {
-        return None;
-    }
-    match meridiem {
-        Some("pm") if hour < 12 => hour += 12,
-        Some("am") if hour == 12 => hour = 0,
-        _ => {}
-    }
-    if hour > 23 || minute > 59 {
-        return None;
-    }
-    let time = Time::new(hour, minute, 0, 0).ok()?;
+    let time = clock(&text, false)?;
     let today = now
         .date()
         .to_datetime(time)
@@ -112,6 +106,33 @@ pub fn when(text: &str, now: &Zoned) -> Option<i64> {
         .to_zoned(now.time_zone().clone())
         .ok()
         .map(|z| z.timestamp().as_second())
+}
+
+/// A clock time, lowercased and without spaces: `3pm`, `15:30`, `9:15am`;
+/// a bare hour (`9`) only where `bare` says one can be, since alone a
+/// number is a count of something, not a time.
+fn clock(text: &str, bare: bool) -> Option<Time> {
+    static CLOCK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^([0-9]{1,2})(:([0-9]{2}))?(am|pm)?$").expect("a regex"));
+    let m = CLOCK.captures(text)?;
+    let mut hour: i8 = m[1].parse().ok()?;
+    let minute: i8 = m.get(3).map_or(Ok(0), |v| v.as_str().parse()).ok()?;
+    let meridiem = m.get(4).map(|v| v.as_str());
+    if !bare && meridiem.is_none() && m.get(2).is_none() {
+        return None;
+    }
+    if meridiem.is_some() && !(1..=12).contains(&hour) {
+        return None;
+    }
+    match meridiem {
+        Some("pm") if hour < 12 => hour += 12,
+        Some("am") if hour == 12 => hour = 0,
+        _ => {}
+    }
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+    Time::new(hour, minute, 0, 0).ok()
 }
 
 /// When a reminder is, as remind.sh said it once set: `Fri 3:15 PM`.
@@ -172,6 +193,21 @@ mod tests {
             "a time already past today is tomorrow's"
         );
         assert_eq!(when("3", &now), None, "a bare number names no time");
+        let nine = at("2026-11-05T09:00:00[America/New_York]");
+        for typed in ["tomorrow", "tomorrow 9am", "Tomorrow at 9", "tomorrow 9:00"] {
+            assert_eq!(
+                when(typed, &now),
+                Some(nine.timestamp().as_second()),
+                "{typed}"
+            );
+        }
+        let late = at("2026-11-05T15:30:00[America/New_York]");
+        assert_eq!(
+            when("tomorrow 3:30pm", &now),
+            Some(late.timestamp().as_second())
+        );
+        assert_eq!(when("tomorrow soon", &now), None);
+
         assert_eq!(when("13pm", &now), None);
         assert_eq!(when("soonish", &now), None);
     }
