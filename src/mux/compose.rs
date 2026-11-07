@@ -4,9 +4,12 @@
 //! inside a synchronized update so the terminal never shows half a frame.
 //!
 //! The look is tmux.conf's: lines between panes in colour238, the focused
-//! pane's in colour81, panes without the focus on a colour236 background (its
-//! `window-style`) and the focused one on the terminal's own, and the status
-//! line at the bottom with the session's name and the tabs.
+//! pane's in the current tab's color (update-colors.sh's
+//! `pane-active-border-style`), panes without the focus on a colour236
+//! background (its `window-style`) and the focused one on the terminal's
+//! own, and the status line at the bottom with the session's name and the
+//! tabs; theme.sh's light shades in place of the dark ones with the theme
+//! light (src/status/theme.rs).
 
 use std::io::Write;
 
@@ -19,8 +22,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::layout::Placement;
 use crate::agent::State;
+use crate::status::{Hits, Left, Palette};
 
-/// tmux.conf's colours, by the 256-colour palette's numbers.
+/// tmux.conf's colours, by the 256-colour palette's numbers: the dark
+/// theme's (src/status/theme.rs has both).
 pub mod colors {
     use ratatui::style::Color;
     pub const STATUS_BG: Color = Color::Indexed(235);
@@ -108,9 +113,15 @@ impl Screen {
     }
 }
 
-/// Lines between panes, with their crossings joined, the ones beside the
-/// focused pane in the accent colour.
-pub fn draw_borders(buf: &mut Buffer, placement: &Placement, focused: Option<Rect>) {
+/// Lines between panes, with their crossings joined, in `line`, the ones
+/// beside the focused pane in `focus` (the current tab's color).
+pub fn draw_borders(
+    buf: &mut Buffer,
+    placement: &Placement,
+    focused: Option<Rect>,
+    focus: Color,
+    line: Color,
+) {
     let area = buf.area;
     let is_border = |x: u16, y: u16| placement.borders.iter().any(|b| on_border(b, x, y));
     let cells: Vec<(u16, u16)> = placement
@@ -146,11 +157,7 @@ pub fn draw_borders(buf: &mut Buffer, placement: &Placement, focused: Option<Rec
             _ => "─",
         };
         let beside_focus = focused.is_some_and(|r| touches(r, x, y));
-        let color = if beside_focus {
-            colors::ACCENT
-        } else {
-            colors::BORDER
-        };
+        let color = if beside_focus { focus } else { line };
         buf[(x, y)]
             .set_symbol(symbol)
             .set_style(Style::new().fg(color).bg(Color::Reset));
@@ -175,14 +182,15 @@ fn touches(r: Rect, x: u16, y: u16) -> bool {
 }
 
 /// Gives an unfocused pane tmux's `window-style` background: cells left on
-/// the terminal's default background get colour236.
-pub fn tint_inactive(buf: &mut Buffer, area: Rect) {
+/// the terminal's default background get `bg` (colour236, or colour254
+/// light).
+pub fn tint_inactive(buf: &mut Buffer, area: Rect, bg: Color) {
     let area = area.intersection(buf.area);
     for y in area.top()..area.bottom() {
         for x in area.left()..area.right() {
             let cell = &mut buf[(x, y)];
             if cell.bg == Color::Reset {
-                cell.bg = colors::INACTIVE_BG;
+                cell.bg = bg;
             }
         }
     }
@@ -225,12 +233,21 @@ fn badge(state: State) -> (&'static str, Style) {
 /// column, end column, tab index).
 pub type TabSpans = Vec<(u16, u16, usize)>;
 
-/// The status line in `area` (one row): the session's name, how many of its
-/// tabs wait on you, have finished unseen and are working (tmux.conf's
-/// `@agent_counts`, a zero hiding its badge), then the tabs, each with its
-/// badge after its number.
-pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatus]) -> TabSpans {
-    let base = Style::new().bg(colors::STATUS_BG).fg(colors::STATUS_FG);
+/// The status line in `area` (one row): the session's name on its badge in
+/// the current tab's color, how many of its tabs wait on you, have finished
+/// unseen and are working (tmux.conf's `@agent_counts`, a zero hiding its
+/// badge), the ⌘ Commands button and the health light (src/status), then
+/// the tabs, each with its badge after its number. Gives where the button
+/// and each tab went, for clicks.
+pub fn draw_status(
+    buf: &mut Buffer,
+    area: Rect,
+    session: &str,
+    left: &Left,
+    tabs: &[TabStatus],
+    p: &Palette,
+) -> Hits {
+    let base = Style::new().bg(p.status_bg).fg(p.status_fg);
     buf.set_style(area, base);
     let mut x = area.x;
     let session_label = format!("  {session} ");
@@ -239,10 +256,7 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
         x,
         area,
         &session_label,
-        Style::new()
-            .bg(colors::SESSION_BG)
-            .fg(colors::WHITE)
-            .add_modifier(Modifier::BOLD),
+        crate::status::session_style(left, p),
     );
     for state in [State::Waiting, State::Done, State::Working] {
         let n = tabs.iter().filter(|t| t.agent == Some(state)).count();
@@ -251,7 +265,8 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
             x = put(buf, x, area, &format!("  {symbol} {n}  "), style);
         }
     }
-    x = put(buf, x, area, " ", base);
+    let (after, button) = crate::status::draw_left(buf, x, area, left, p);
+    x = after;
     let mut spans = Vec::new();
     // Each tab in its project's color, as window-names.sh's
     // window-status-format and update-colors.sh's current one drew it: the
@@ -259,11 +274,11 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
     for tab in tabs {
         let style = if tab.current {
             Style::new()
-                .bg(colors::CURRENT_BG)
+                .bg(p.current_bg)
                 .fg(tab.color.unwrap_or(colors::ACCENT))
                 .add_modifier(Modifier::BOLD)
         } else {
-            base.fg(tab.color.unwrap_or(colors::TAB_FG))
+            base.fg(tab.color.unwrap_or(p.tab_fg))
         };
         let start = x;
         x = put(buf, x, area, &format!(" {}:", tab.index), style);
@@ -278,7 +293,10 @@ pub fn draw_status(buf: &mut Buffer, area: Rect, session: &str, tabs: &[TabStatu
             break;
         }
     }
-    spans
+    Hits {
+        button,
+        tabs: spans,
+    }
 }
 
 /// Writes text from column `x`, clipped to the area; gives the column after it.
@@ -349,6 +367,7 @@ mod tests {
             &mut frame.buf,
             area,
             "main",
+            &Left::default(),
             &[
                 TabStatus {
                     index: 1,
@@ -365,14 +384,16 @@ mod tests {
                     color: None,
                 },
             ],
+            &Palette::DARK,
         );
         assert!(
             row(&frame.buf, 0).starts_with("  main   1:api  2:web "),
             "{:?}",
             row(&frame.buf, 0)
         );
-        assert_eq!(spans.len(), 2);
-        assert_eq!(spans[1].2, 2);
+        assert_eq!(spans.tabs.len(), 2);
+        assert_eq!(spans.tabs[1].2, 2);
+        assert_eq!(spans.button, None);
     }
 
     #[test]
@@ -392,11 +413,13 @@ mod tests {
             &mut frame.buf,
             area,
             "main",
+            &Left::default(),
             &[
                 tab(1, "api", Some(green)),
                 tab(2, "web", Some(red)),
                 tab(3, "x", None),
             ],
+            &Palette::DARK,
         );
         let line = row(&frame.buf, 0);
         let at = |text: &str| line.find(text).unwrap() as u16;
@@ -426,12 +449,14 @@ mod tests {
             &mut frame.buf,
             area,
             "main",
+            &Left::default(),
             &[
                 tab(1, "api", Some(State::Waiting)),
                 tab(2, "web", Some(State::Done)),
                 tab(3, "db", Some(State::Waiting)),
                 tab(4, "ops", None),
             ],
+            &Palette::DARK,
         );
         let line = row(&frame.buf, 0);
         assert!(
@@ -444,9 +469,43 @@ mod tests {
         let check = line.chars().position(|c| c == '✓').unwrap() as u16;
         assert_eq!(frame.buf[(check, 0)].bg, Color::Indexed(41));
         assert_eq!(
-            spans[0].1 - spans[0].0,
+            spans.tabs[0].1 - spans.tabs[0].0,
             " 1:  !   api ".chars().count() as u16
         );
+    }
+
+    #[test]
+    fn the_session_wears_the_tab_s_color_and_the_button_comes_before_the_tabs() {
+        let mut frame = Frame::new(60, 1);
+        let area = frame.area();
+        let green = Color::Rgb(0x23, 0xef, 0x59);
+        let left = Left {
+            color: Some(green),
+            button: true,
+            health: Vec::new(),
+        };
+        let hits = draw_status(
+            &mut frame.buf,
+            area,
+            "main",
+            &left,
+            &[TabStatus {
+                index: 1,
+                name: "api".into(),
+                current: true,
+                agent: None,
+                color: Some(green),
+            }],
+            &Palette::LIGHT,
+        );
+        let line = row(&frame.buf, 0);
+        assert!(line.starts_with("  main   ⌘ Commands   1:api "), "{line:?}");
+        assert_eq!(frame.buf[(2, 0)].bg, green);
+        assert_eq!(frame.buf[(2, 0)].fg, Palette::LIGHT.bright);
+        assert_eq!(hits.button, Some((8, 20)));
+        assert_eq!(hits.tabs, vec![(21, 28, 1)]);
+        assert_eq!(frame.buf[(21, 0)].bg, Palette::LIGHT.current_bg);
+        assert_eq!(frame.buf[(30, 0)].bg, Palette::LIGHT.status_bg);
     }
 
     #[test]
@@ -485,7 +544,13 @@ mod tests {
                 },
             ],
         };
-        draw_borders(&mut frame.buf, &placement, None);
+        draw_borders(
+            &mut frame.buf,
+            &placement,
+            None,
+            colors::ACCENT,
+            colors::BORDER,
+        );
         assert_eq!(frame.buf[(2, 2)].symbol(), "┼");
         assert_eq!(frame.buf[(2, 0)].symbol(), "│");
         assert_eq!(frame.buf[(0, 2)].symbol(), "─");

@@ -58,10 +58,10 @@ const KEYS: &[(&str, &str)] = &[
     ("?", "these keys"),
 ];
 
-/// The shades the sidebar is drawn in: the light ones only when the theme
-/// setting says light, as the boxes are.
+/// The shades the sidebar is drawn in: the light ones when the theme is
+/// light (src/status/theme.rs), as the boxes are.
 fn theme() -> Theme {
-    if settings::cached("theme") == Some(Value::String("light".into())) {
+    if crate::status::theme::light() {
         Theme::LIGHT
     } else {
         Theme::DARK
@@ -482,10 +482,11 @@ impl Server {
         if !self.sidebar_shown(&s.name) {
             return None;
         }
+        let status = crate::status::lines();
         let rows = s
             .rows
-            .saturating_sub(1)
-            .min(buf.area.height.saturating_sub(1));
+            .saturating_sub(status)
+            .min(buf.area.height.saturating_sub(status));
         let width = (s.sidebar - 1).min(buf.area.width);
         let area = Rect::new(0, 0, width, rows).intersection(buf.area);
         if area.is_empty() {
@@ -521,7 +522,7 @@ impl Server {
             let line = Style::new().fg(if focused {
                 colors::ACCENT
             } else {
-                colors::BORDER
+                crate::status::theme::palette().border
             });
             for y in 0..rows {
                 buf[(width, y)].set_symbol("│").set_style(line);

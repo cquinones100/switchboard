@@ -130,9 +130,12 @@ Each step is a commit (or a few) on the branch, with its tests.
    one Claude per tab, pinned tabs, M-a/M-c/M-f, and the messages and tips
    agent-state.sh showed) and tab names and accent colors done (src/tabs:
    tab-label.sh, accent-color.sh, window-names.sh, path-facts.sh, the PR
-   prefix and ticket titles, looked up in the background); left: the second
-   status line (tab-status.sh), the session badge and focused border in the
-   tab's color (update-colors.sh), and reminders (remind.sh).
+   prefix and ticket titles, looked up in the background), and the rest of
+   the status line done (src/status: the second status line from
+   tab-status.sh, the session badge and the focused pane's lines in the
+   tab's color from update-colors.sh, the ⌘ Commands button, health.sh's
+   light, and theme.sh's dark and light with `system` read from the
+   terminal's answer to OSC 11); left: reminders (remind.sh).
 4. **Sidebar and mission control** — the boxes done (src/ui: an overlay stack
    per client, messages, tips, the question before M-w closes a busy pane,
    menus, pickers with nucleo-matcher, the M-p palette and its ranking), and

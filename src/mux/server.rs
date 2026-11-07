@@ -22,7 +22,7 @@ use ratatui::style::{Modifier, Style};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 
-use super::compose::{self, Frame, Screen, TabStatus};
+use super::compose::{self, Frame, Screen};
 use super::input::{self, Input, Key, KeyCode, Mods, Mouse, MouseButton, MouseKind, Parser};
 use super::keys::{Action, Bindings};
 use super::layout::Layout;
@@ -145,22 +145,27 @@ pub struct Session {
 }
 
 impl Session {
-    /// The area panes are laid out in: all but the status line and the
-    /// sidebar.
+    /// The area panes are laid out in: all but the status line (its one or
+    /// two rows, src/status) and the sidebar.
     pub fn main_area(&self) -> Rect {
         let side = self.sidebar.min(self.cols.saturating_sub(1));
         Rect::new(
             side,
             0,
             self.cols.saturating_sub(side).max(1),
-            self.rows.saturating_sub(1).max(1),
+            self.rows.saturating_sub(crate::status::lines()).max(1),
         )
     }
 
     /// All but the status line: a zoomed pane takes it, covering the
     /// sidebar, as a zoomed tmux pane covered the sidebar's.
     pub fn full_area(&self) -> Rect {
-        Rect::new(0, 0, self.cols.max(1), self.rows.saturating_sub(1).max(1))
+        Rect::new(
+            0,
+            0,
+            self.cols.max(1),
+            self.rows.saturating_sub(crate::status::lines()).max(1),
+        )
     }
 
     /// Where a tab's panes go: the whole of it when zoomed.
@@ -232,7 +237,8 @@ pub struct Client {
     pub dirty: bool,
     drag: Option<Drag>,
     last_click: Option<(Instant, u16, u16, u8)>,
-    tab_spans: compose::TabSpans,
+    /// Where the status line's button and tabs were drawn, for clicks.
+    status_hits: crate::status::Hits,
     /// What is shown over the tab, the top one taking the input (src/ui).
     pub overlays: crate::ui::Stack,
     pub activity: Instant,
@@ -291,6 +297,8 @@ pub struct Server {
     pub mission: crate::mission::MissionState,
     /// Each client's search everything, as its sources answer (src/views).
     pub views: crate::views::Views,
+    /// What the health light says (src/status).
+    pub status: crate::status::Status,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -343,6 +351,8 @@ async fn run() -> Result<()> {
         eprintln!("keys.json: {p}");
     }
     server.sidebar_load();
+    // The status line's rows, before any tab is laid out.
+    server.status_tick();
     super::persist::restore(&mut server);
     loop {
         // A program holding a frame back (synchronized output) that never
@@ -531,6 +541,7 @@ impl Server {
             sidebar: Default::default(),
             mission: Default::default(),
             views: Default::default(),
+            status: Default::default(),
         }
     }
 
@@ -585,6 +596,7 @@ impl Server {
             Event::Views(event) => self.views_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
+                self.status_tick();
                 self.ask_presence();
                 self.refresh_names();
                 self.sources_tick();
@@ -1186,10 +1198,12 @@ impl Server {
             dirty: true,
             drag: None,
             last_click: None,
-            tab_spans: Vec::new(),
+            status_hits: Default::default(),
             overlays: Default::default(),
             activity: Instant::now(),
         };
+        // For the `system` theme: the terminal's background (src/status).
+        Server::ask_background(&client.tx);
         self.clients.insert(id, client);
         self.size_session_to(id);
         if let Some(tab) = self.session(&name).map(|s| s.current) {
@@ -1345,6 +1359,11 @@ impl Server {
     }
 
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
+        // The terminal's answer about its background, asked as it attached,
+        // is the server's (src/status), whatever is up.
+        if parsed.input == Input::Unknown && self.status_reply(&parsed.raw) {
+            return;
+        }
         // Mission control takes them while it is the box on top
         // (src/mission); any other overlay up takes them (src/ui).
         let Some(parsed) = self.mission_input(id, parsed) else {
@@ -1544,6 +1563,7 @@ impl Server {
             Action::FocusClaude => self.focus_claude(current_tab),
             Action::TogglePin => self.toggle_pin(current_tab),
             Action::Palette => self.open_palette(id),
+            Action::ToggleTheme => self.toggle_theme(id),
             Action::ResetTips => self.reset_tips(),
             Action::NewClaudeTab
             | Action::WorkOnTickets
@@ -1645,14 +1665,21 @@ impl Server {
         let Some(c) = self.clients.get(&id) else {
             return;
         };
-        let status_row = c.rows.saturating_sub(1);
-        if m.row == status_row && m.kind == MouseKind::Press && m.button == MouseButton::Left {
-            let hit = c
-                .tab_spans
-                .iter()
-                .find(|(start, end, _)| m.col >= *start && m.col < *end)
-                .map(|(_, _, i)| *i);
+        let status_row = c.rows.saturating_sub(crate::status::lines());
+        if m.row >= status_row && m.kind == MouseKind::Press && m.button == MouseButton::Left {
+            // The tabs' row: the ⌘ Commands button opens the palette, a tab
+            // is gone to; the second status line takes no clicks.
+            let hit = (m.row == status_row)
+                .then(|| c.status_hits.at(m.col))
+                .flatten();
             let session = c.session.clone();
+            if self.status_button(id, hit) {
+                return;
+            }
+            let hit = match hit {
+                Some(crate::status::Hit::Tab(i)) => Some(i),
+                _ => None,
+            };
             if let Some(tab) = hit.and_then(|i| {
                 self.session(&session)
                     .and_then(|s| s.tabs.get(i - 1).copied())
@@ -1816,13 +1843,13 @@ impl Server {
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
         let session = c.session.clone();
-        let (spans, side) = match self.session(&c.session) {
+        let (hits, side) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
-            None => (Vec::new(), None),
+            None => (Default::default(), None),
         };
         let c = self.clients.get_mut(&id).expect("checked above");
         c.overlays.draw(&mut frame);
-        c.tab_spans = spans;
+        c.status_hits = hits;
         c.dirty = false;
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
@@ -1835,9 +1862,10 @@ impl Server {
         frame: &mut Frame,
         s: &Session,
         c: &Client,
-    ) -> (compose::TabSpans, Option<crate::sidebar::Drawn>) {
+    ) -> (crate::status::Hits, Option<crate::sidebar::Drawn>) {
         let rows = frame.area().height;
         let cols = frame.area().width;
+        let palette = crate::status::theme::palette();
         // With the sidebar focused, no pane has the focus.
         let side_focused = self.sidebar.focused(&s.name);
         let mut cursor = None;
@@ -1875,7 +1903,7 @@ impl Server {
                         frame.cursor_style = Some(slot.pane.cursor_style());
                     }
                 } else {
-                    compose::tint_inactive(&mut frame.buf, rect);
+                    compose::tint_inactive(&mut frame.buf, rect, palette.inactive_bg);
                 }
                 if slot.pane.scrolled() > 0 || slot.copy.is_some() {
                     let label = format!("[{}]", slot.pane.scrolled());
@@ -1892,26 +1920,24 @@ impl Server {
                 }
             }
             if placement.panes.len() > 1 {
-                compose::draw_borders(&mut frame.buf, &placement, focused_rect);
+                // The focused pane's lines in the tab's color, as
+                // update-colors.sh set pane-active-border-style.
+                let focus = self
+                    .tab_color(s.current)
+                    .map(Into::into)
+                    .unwrap_or(compose::colors::ACCENT);
+                compose::draw_borders(
+                    &mut frame.buf,
+                    &placement,
+                    focused_rect,
+                    focus,
+                    palette.border,
+                );
             }
         }
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
-        let tabs: Vec<TabStatus> = s
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| {
-                self.tabs.get(t).map(|_| TabStatus {
-                    index: i + 1,
-                    name: self.tab_label(*t),
-                    current: *t == s.current,
-                    agent: self.tab_agent(*t),
-                    color: self.tab_color(*t).map(Into::into),
-                })
-            })
-            .collect();
-        let status = Rect::new(0, rows.saturating_sub(1), cols, 1);
-        let spans = compose::draw_status(&mut frame.buf, status, &s.name, &tabs);
+        let hits = self.draw_status_rows(frame, s);
+        let status = Rect::new(0, rows.saturating_sub(crate::status::lines()), cols, 1);
         if c.prefix {
             compose::put(
                 &mut frame.buf,
@@ -1924,7 +1950,7 @@ impl Server {
             );
         }
         frame.cursor = cursor;
-        (spans, side)
+        (hits, side)
     }
 }
 

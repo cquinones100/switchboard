@@ -124,10 +124,9 @@ impl Default for Look {
 }
 
 impl Look {
-    /// The look the settings give now. The theme is light only when the
-    /// theme setting says light: "system" followed macOS's appearance
-    /// through Ghostty, and the multiplexer's own colours are tmux.conf's
-    /// dark ones.
+    /// The look the settings give now. The theme is light when the theme
+    /// setting says light, or says system on a terminal whose background is
+    /// light (src/status/theme.rs).
     pub fn read() -> Look {
         let all = settings::read_settings();
         let on = |key: &str| {
@@ -135,7 +134,9 @@ impl Look {
                 .find(|s| s.key == key)
                 .is_none_or(|s| s.value != serde_json::Value::Bool(false))
         };
-        let light = all.iter().any(|s| s.key == "theme" && s.value == "light");
+        let light = all
+            .iter()
+            .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value));
         let mouse = on("menu_mouse");
         Look {
             mouse,
@@ -331,11 +332,16 @@ impl Stack {
     pub fn draw(&mut self, frame: &mut Frame) {
         if let Some((text, _)) = &self.note {
             let area = frame.area();
-            let row = Rect::new(0, area.height.saturating_sub(1), area.width, 1);
+            let row = Rect::new(
+                0,
+                area.height.saturating_sub(crate::status::lines()),
+                area.width,
+                1,
+            );
             frame.buf.set_style(
                 row,
                 Style::new()
-                    .bg(crate::mux::compose::colors::STATUS_BG)
+                    .bg(crate::status::theme::palette().status_bg)
                     .fg(crate::mux::compose::colors::ACCENT),
             );
             for x in row.left()..row.right() {

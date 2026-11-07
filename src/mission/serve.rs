@@ -99,10 +99,10 @@ pub enum Opening {
     Picker(Scope),
 }
 
-/// The shades mission control is drawn in: the light ones only when the
-/// theme setting says light, as the sidebar's.
+/// The shades mission control is drawn in: the light ones when the theme
+/// is light (src/status/theme.rs), as the sidebar's.
 fn theme() -> Theme {
-    if settings::cached("theme") == Some(Value::String("light".into())) {
+    if crate::status::theme::light() {
         Theme::LIGHT
     } else {
         Theme::DARK

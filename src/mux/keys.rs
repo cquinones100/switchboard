@@ -67,6 +67,9 @@ pub enum Action {
     Palette,
     /// Show every tip again, each once more.
     ResetTips,
+    /// Switch between the light and dark theme (the theme setting;
+    /// src/status/theme.rs).
+    ToggleTheme,
     /// Into the sidebar, or back out of it (M-s).
     FocusSidebar,
     /// Turn the sidebar on or off (the sidebar setting).
@@ -104,7 +107,7 @@ impl Action {
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
-    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`,
+    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
     /// `continue-shaping`, `mission-control`, `find-tab`,
@@ -138,6 +141,7 @@ impl Action {
             "toggle-pin" => Action::TogglePin,
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
+            "toggle-theme" => Action::ToggleTheme,
             "focus-sidebar" => Action::FocusSidebar,
             "toggle-sidebar" => Action::ToggleSidebar,
             "new-claude-tab" => Action::NewClaudeTab,
@@ -195,6 +199,7 @@ impl Action {
             Action::TogglePin => "toggle-pin".into(),
             Action::Palette => "palette".into(),
             Action::ResetTips => "reset-tips".into(),
+            Action::ToggleTheme => "toggle-theme".into(),
             Action::FocusSidebar => "focus-sidebar".into(),
             Action::ToggleSidebar => "toggle-sidebar".into(),
             Action::NewClaudeTab => "new-claude-tab".into(),
@@ -250,6 +255,7 @@ impl Action {
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
             Action::Palette => "Find a command and run it (the palette)".into(),
             Action::ResetTips => "Show the tips again, each once more".into(),
+            Action::ToggleTheme => "Toggle light and dark theme".into(),
             Action::FocusSidebar => "Jump into the sidebar, or back out of it".into(),
             Action::ToggleSidebar => "Turn the sidebar on or off".into(),
             Action::NewClaudeTab => "New tab, running Claude, in a directory you pick".into(),
@@ -294,6 +300,7 @@ impl Action {
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
             Action::ResetTips => &["help", "tips"],
+            Action::ToggleTheme => &["theme", "colors"],
             Action::FocusSidebar => &["sidebar", "tabs", "navigate"],
             Action::ToggleSidebar => &["sidebar"],
             Action::NewClaudeTab => &["tabs", "claude", "new"],
@@ -349,6 +356,7 @@ impl Action {
             .map(Action::View);
         [
             Action::ResetTips,
+            Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::WorkOnPr,
             Action::WorkOnNote,
@@ -536,6 +544,7 @@ mod tests {
             Action::TogglePin,
             Action::Palette,
             Action::ResetTips,
+            Action::ToggleTheme,
             Action::FocusSidebar,
             Action::ToggleSidebar,
             Action::MissionControl,

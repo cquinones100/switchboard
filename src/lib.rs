@@ -34,6 +34,8 @@
 //! - `links`: opening a link in the browser, in its site's Chrome profile.
 //! - `views`: reading things beside your work: the PR description, the
 //!   ticket, any link, search everything, and whether the PR can merge.
+//! - `status`: the status line's button, health light and second line, and
+//!   dark and light.
 
 pub mod agent;
 pub mod cmd;
@@ -53,6 +55,7 @@ pub mod requests;
 pub mod settings;
 pub mod sidebar;
 pub mod sources;
+pub mod status;
 pub mod tabs;
 pub mod ui;
 pub mod usage;
