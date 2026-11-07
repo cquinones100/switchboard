@@ -1682,11 +1682,13 @@ mod tests {
         // puts it in front; this one runs sleep elsewhere than itself.
         let mut run = start(Some(&["bash", "--norc", "--noprofile", "-i"]), 80, 5, &[]);
         let shell = run.pane.pid().expect("pid");
+        // In front and named bash: on macOS the pane's process has its group
+        // before it has run bash, while it is still a copy of this test.
         run.until("the shell in front", |r| {
             r.pane.foreground_pgid() == Some(shell)
+                && r.pane.foreground_command().as_deref() == Some("bash")
         });
         assert_eq!(run.pane.cwd(), Some(run.home.clone()));
-        assert_eq!(run.pane.foreground_command().as_deref(), Some("bash"));
         let dir = scratch("front");
         run.pane
             .write(format!("(cd '{}' && exec sleep 30)\n", dir.display()).as_bytes())

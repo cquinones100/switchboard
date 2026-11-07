@@ -950,7 +950,12 @@ mod tests {
         drop(terminal);
         assert_eq!(pty.read_until(LEAVE), LEAVE);
         let after = pty.settings();
-        assert_eq!(after.c_lflag, before.c_lflag);
+        // PENDIN aside, which macOS's kernel sets itself as a terminal goes
+        // back to canonical mode, to have the input pending typed again.
+        assert_eq!(
+            after.c_lflag & !libc::PENDIN,
+            before.c_lflag & !libc::PENDIN
+        );
         assert_eq!(after.c_iflag, before.c_iflag);
         assert_eq!(after.c_oflag, before.c_oflag);
         assert!(write_screen(b"late").is_err(), "nothing after it is back");
