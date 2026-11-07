@@ -194,7 +194,7 @@ A program in a pane gets a key so only when it asked for keys told apart the sam
 
 Keys are written as tmux wrote them: `M-` for Alt, `C-` for Ctrl, `S-` for Shift, then a character or one of `Enter`, `Escape`, `Tab`, `BTab` (Shift-Tab), `BSpace`, `Space`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Delete` and `F1` to `F12`. `M-F` and `M-S-f` are the same key. Unbinding `M-Left`, `M-Right`, `M-Up` and `M-Down`, as above, hands Alt-arrows to the programs in your panes.
 
-The server reads the file when it starts, so a change takes effect after `switchboard kill-server` and `switchboard`; anything in it that can't be used is written to `server.log`. Settings' "Key bindings" row, under "Your files", opens it in an editor.
+The server reads the file as it starts and again within two seconds of a change, so a change takes effect without a restart; anything in it that can't be used is said in a box (to the first client to attach, at the start) and written to `server.log`. Settings' "Key bindings" row, under "Your files", opens it in an editor. A `~/.config/switchboard/tmux.conf` from the tmux version isn't read: the first client to attach is told so, and where its keys and options go now.
 
 The actions, by the names the file uses:
 

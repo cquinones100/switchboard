@@ -28,11 +28,32 @@ use crate::ui::{Menu, MenuOption, Outcome, PickItem, Picker};
 use crate::{links, paths, platform, settings, util, worktree};
 
 /// What the server keeps for the extras: the clients that pressed `C-w`
-/// and wait for h, j, k or l (tmux.conf's `window-nav` key table).
+/// and wait for h, j, k or l (tmux.conf's `window-nav` key table), and what
+/// the server found as it started that the first client to attach is told.
 #[derive(Default)]
 pub struct Extras {
     nav: HashSet<ClientId>,
+    on_attach: Vec<String>,
+    /// keys.json's modification time when last read, so a change to it
+    /// takes effect on the next tick, as a tmux.conf reload did.
+    keys_seen: Option<std::time::SystemTime>,
 }
+
+/// When keys.json was last changed, if it is there.
+fn keys_modified() -> Option<std::time::SystemTime> {
+    std::fs::metadata(paths::config_dir().join("keys.json"))
+        .and_then(|m| m.modified())
+        .ok()
+}
+
+/// What a `~/.config/switchboard/tmux.conf` of your own is told: tmux.conf
+/// sourced it last, so your bindings and options won; nothing reads it now,
+/// and what took its place is said, rather than its lines being ignored
+/// without a word.
+const OLD_TMUX_CONF: &str = "~/.config/switchboard/tmux.conf isn't read any more: \
+     Switchboard is no longer tmux. Your keys go in ~/.config/switchboard/keys.json \
+     (the guide's \"Changing the keys\"), and the workspace's options are in Settings \
+     (M-p, then Settings).";
 
 /// What becomes of a key before the bindings see it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +117,52 @@ impl Server {
             self.tip("option-alt", Some(client));
         }
         KeyFate::Bindings
+    }
+
+    /// What the server found as it started, to say to the first client
+    /// that attaches: what keys.json has that couldn't be used, and a
+    /// tmux.conf of your own it no longer reads.
+    pub fn note_at_start(&mut self, keys_problems: &[String]) {
+        self.extras.keys_seen = keys_modified();
+        if !keys_problems.is_empty() {
+            self.extras.on_attach.push(format!(
+                "Some of ~/.config/switchboard/keys.json couldn't be used:\n\n{}",
+                keys_problems.join("\n")
+            ));
+        }
+        if paths::config_dir().join("tmux.conf").exists() {
+            self.extras.on_attach.push(OLD_TMUX_CONF.to_string());
+        }
+    }
+
+    /// Reads keys.json again when it has changed (or gone) since it was
+    /// last read, and says what of it couldn't be used.
+    pub fn reload_keys_if_changed(&mut self) {
+        let seen = keys_modified();
+        if seen == self.extras.keys_seen {
+            return;
+        }
+        self.extras.keys_seen = seen;
+        let (bindings, problems) = crate::mux::keys::Bindings::load();
+        self.bindings = bindings;
+        if !problems.is_empty() {
+            self.say_for(
+                None,
+                &format!(
+                    "Some of ~/.config/switchboard/keys.json couldn't be used:\n\n{}",
+                    problems.join("\n")
+                ),
+                20,
+            );
+        }
+    }
+
+    /// A client attached: what the server had to say as it started, said.
+    pub fn extras_attached(&mut self, client: ClientId) {
+        let notes = std::mem::take(&mut self.extras.on_attach);
+        if !notes.is_empty() {
+            self.say_for(Some(client), &notes.join("\n\n"), 20);
+        }
     }
 
     /// A command, from its key or the palette.

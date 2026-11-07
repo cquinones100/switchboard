@@ -348,7 +348,6 @@
   },
   {
     "key": "message_boxes",
-
     "category": "Tabs and status bar",
     "label": "Messages in a box",
     "description": "What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment",

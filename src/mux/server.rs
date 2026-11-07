@@ -380,9 +380,10 @@ async fn run() -> Result<()> {
     let mut server = Server::new(tx, pane_tx);
     let (bindings, problems) = Bindings::load();
     server.bindings = bindings;
-    for p in problems {
+    for p in &problems {
         eprintln!("keys.json: {p}");
     }
+    server.note_at_start(&problems);
     server.sidebar_load();
     // The status line's rows, before any tab is laid out.
     server.status_tick();
@@ -636,6 +637,8 @@ impl Server {
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
+                self.reload_keys_if_changed();
+
                 self.status_tick();
                 self.ask_presence();
                 self.refresh_names();
@@ -1344,6 +1347,7 @@ impl Server {
             self.agent_focus(tab);
         }
         self.update_attached(id);
+        self.extras_attached(id);
     }
 
     fn resize_client(&mut self, id: ClientId, cols: u16, rows: u16) {

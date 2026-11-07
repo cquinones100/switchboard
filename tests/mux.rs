@@ -98,6 +98,25 @@ fn dragging_the_line_between_panes_resizes_them() {
 }
 
 #[test]
+fn an_old_tmux_conf_and_keys_json_s_mistakes_are_said_on_attaching() {
+    let mut server = TestServer::start();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("tmux.conf"), "bind -n M-g new-window\n").unwrap();
+    std::fs::write(config.join("keys.json"), r#"{"root": {"M-g": "fly"}}"#).unwrap();
+    server.restart();
+    let mut client = server.attach(120, 30);
+    client.wait_text("tmux.conf isn't read any more");
+    client.wait_text("fly isn't an action");
+    client.type_text("x");
+    // A change to keys.json takes effect on the server's next tick.
+    std::fs::write(config.join("keys.json"), r#"{"root": {"M-g": "new-tab"}}"#).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2500));
+    client.type_text(&format!("{ALT}g"));
+    client.wait_for("a tab from M-g", |_| tabs(&server.list()) == 2);
+}
+
+#[test]
 fn a_program_ending_closes_its_tab() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);
