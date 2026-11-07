@@ -182,7 +182,49 @@ pub fn live_sessions_in(worktree: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// What a worktree is for, in the refusal's words: `work` ("ticket", "item")
+/// The tab a process runs in, as `<session>:<number> <name>`, from the
+/// running server's panes and their process trees, for the refusal to say
+/// where the session already working is, as `ensureWorktree` named its tmux
+/// window. `None` with no server, or when no pane holds it.
+fn tab_holding(pid: u32) -> Option<String> {
+    let list: Value = serde_json::from_str(&crate::mux::socket::ask_ok(&["list"]).ok()?).ok()?;
+    let under = |root: u32| {
+        let mut stack = vec![root];
+        let mut seen = 0;
+        while let Some(p) = stack.pop() {
+            if p == pid {
+                return true;
+            }
+            seen += 1;
+            if seen > 4096 {
+                break;
+            }
+            stack.extend(crate::mux::procinfo::children_of(p));
+        }
+        false
+    };
+    for session in list["sessions"].as_array()? {
+        for tab in session["tabs"].as_array().into_iter().flatten() {
+            let holds = tab["panes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p["pid"].as_u64())
+                .any(|root| under(root as u32));
+            if holds {
+                return Some(format!(
+                    "{}:{} {}",
+                    session["name"].as_str().unwrap_or(""),
+                    tab["index"].as_i64().unwrap_or(0),
+                    tab["label"].as_str().unwrap_or("")
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// What a worktree is for, in the refusal's words:`work` ("ticket", "item")
 /// and `command` ("wt", "wtn"); `start` is the commit a new branch is made
 /// from, with no upstream, else the current HEAD.
 pub struct Purpose<'a> {
@@ -206,8 +248,14 @@ pub fn ensure_worktree(worktree: &Path, branch: &str, purpose: &Purpose) -> Resu
                 .map(|s| {
                     let title = session_title(s);
                     let id = s.get("sessionId").and_then(Value::as_str).unwrap_or("");
+                    let tab = s
+                        .get("pid")
+                        .and_then(Value::as_u64)
+                        .and_then(|pid| tab_holding(pid as u32))
+                        .map(|tab| format!("\n  Tab:     {tab}"))
+                        .unwrap_or_default();
                     format!(
-                        "  Session: {id}\n  Title:   {}",
+                        "  Session: {id}\n  Title:   {}{tab}",
                         if title.is_empty() {
                             "(none yet)"
                         } else {

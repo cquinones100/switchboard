@@ -296,7 +296,13 @@ fn choose(done: &[&Entry], root: &Path) -> Vec<usize> {
         let Some(answer) =
             ask_tty("Remove which? Numbers or ranges (1 3-5), a for all, Enter for none:")
         else {
-            eprintln!("No terminal to ask on — nothing removed.");
+            // Ctrl-D at the question is no choice, as Esc in fzf was; only
+            // a missing terminal needs saying.
+            if std::fs::File::open("/dev/tty").is_err() {
+                eprintln!("No terminal to ask on — nothing removed.");
+            } else {
+                eprintln!();
+            }
             return Vec::new();
         };
         match parse_choice(&answer, done.len()) {

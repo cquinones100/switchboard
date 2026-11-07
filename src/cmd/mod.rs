@@ -102,7 +102,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "claude-here",
         run: claude_here::main,
-        about: "Start or resume Claude in a directory",
+        about: "Resume the last Claude session of a directory (a picker when there are several)",
     },
     Command {
         name: "claude-reply",
@@ -142,7 +142,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "worktree-done",
         run: worktree_done::main,
-        about: "Finish with a worktree",
+        about: "Remove the worktrees whose Linear ticket is done or canceled, picked from a list",
     },
     Command {
         name: "worktree-from-branch",
