@@ -1210,7 +1210,7 @@ eval "$(switchboard worktree-from-pr init zsh)"
 eval "$(switchboard worktree-resume init zsh)"
 ```
 
-For bash, put the same lines with `init bash` in `~/.bashrc`; zsh and bash are the shells `init` writes for. Setup doesn't add these lines. The workspace's own keys don't need them, since each tab they open defines its function from `init` before running it, and neither do mission control's menus ("Start work on it in a new tab (wt)", "Work on it in a new tab (wtpr)", "Shape it in a new tab", "Start a CI loop on it in a new tab"), which start the work the same way, or `/wt` and `/wtn`. You need them only to type the functions yourself.
+For bash, put the same lines with `init bash` in `~/.bashrc`; zsh and bash are the shells `init` writes for. `worktree-from-ticket`'s `init` also defines `claude`, which in one of Switchboard's panes starts Claude with Switchboard's plugin as Settings' "Load Switchboard as a plugin" says now (`switchboard claude-plugin-dirs`), so a Claude typed in a shell opened before that setting changed loads it, or doesn't, as a new tab would; outside the workspace it is plain `claude`. Setup doesn't add these lines. The workspace's own keys don't need them, since each tab they open defines its function from `init` before running it, and neither do mission control's menus ("Start work on it in a new tab (wt)", "Work on it in a new tab (wtpr)", "Shape it in a new tab", "Start a CI loop on it in a new tab"), which start the work the same way, or `/wt` and `/wtn`. You need them only to type the functions yourself.
 
 ### Where the worktrees go
 

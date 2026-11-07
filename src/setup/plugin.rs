@@ -238,6 +238,18 @@ fn names(entry: &str, plugin: &Path, home: &Path) -> bool {
     path.components().eq(plugin.components())
 }
 
+/// `CLAUDE_CODE_PLUGIN_DIRS` for a Claude started now, from the value it
+/// has: the plugin's directory added while Settings' `claude_plugin` is
+/// `on`, taken out while it isn't, any other folder kept; `None` to leave
+/// it unset. A new pane's (src/mux/server.rs) and `claude-plugin-dirs`'s.
+pub fn value_now(current: Option<&str>, on: bool, plugin: &Path, home: &Path) -> Option<String> {
+    if on {
+        Some(env_value(current, plugin, home))
+    } else {
+        without_plugin(current, plugin, home)
+    }
+}
+
 /// `CLAUDE_CODE_PLUGIN_DIRS` without the plugin's directory, the rest
 /// kept; `None` when nothing is left.
 pub fn without_plugin(inherited: Option<&str>, plugin: &Path, home: &Path) -> Option<String> {
@@ -452,6 +464,30 @@ mod tests {
             env_value(Some("::/opt/a::"), &plugin, home),
             format!("/opt/a:{p}")
         );
+    }
+
+    #[test]
+    fn a_claude_started_now_takes_the_plugin_as_the_setting_says() {
+        let home = Path::new("/home/u");
+        let plugin = home.join(".local/share/switchboard/plugin");
+        let p = plugin.to_string_lossy().into_owned();
+        let stale = format!("/opt/mine:{p}");
+        assert_eq!(
+            value_now(Some(&stale), true, &plugin, home),
+            Some(stale.clone())
+        );
+        assert_eq!(
+            value_now(Some("/opt/mine"), true, &plugin, home),
+            Some(stale.clone()),
+            "on: added where a shell from before had it out"
+        );
+        assert_eq!(
+            value_now(Some(&stale), false, &plugin, home),
+            Some("/opt/mine".to_string()),
+            "off: taken out, the rest kept"
+        );
+        assert_eq!(value_now(Some(&p), false, &plugin, home), None);
+        assert_eq!(value_now(None, false, &plugin, home), None);
     }
 
     #[test]

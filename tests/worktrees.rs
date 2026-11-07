@@ -1310,3 +1310,64 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         "claimed lately, so still taken"
     );
 }
+
+#[test]
+fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
+    let dir = TempDir::new("sbw-claude");
+    let home = dir.path().join("home");
+    let bin = home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // A stand-in claude saying the plugin folders it was started with.
+    let claude = bin.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\necho \"dirs=${CLAUDE_CODE_PLUGIN_DIRS-unset}\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let plugin = home.join(".local/share/switchboard/plugin");
+    let ours = plugin.to_string_lossy().into_owned();
+    let settings = dir.path().join("settings.json");
+    // A shell's value from before the setting changed, with a folder of
+    // the person's own beside Switchboard's.
+    let run = |on: bool, in_workspace: bool, before: &str| {
+        std::fs::write(&settings, json!({ "claude_plugin": on }).to_string()).unwrap();
+        let mut cmd = Command::new("bash");
+        cmd.arg("-c")
+            .arg(format!(
+                "eval \"$('{}' worktree-from-ticket init bash)\"; claude",
+                BIN
+            ))
+            .env("HOME", &home)
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("SWITCHBOARD_SETTINGS", &settings)
+            .env("CLAUDE_CODE_PLUGIN_DIRS", before)
+            .env_remove("SWITCHBOARD_PANE")
+            .env_remove("SWITCHBOARD_STATE_DIR");
+        if in_workspace {
+            cmd.env("SWITCHBOARD", dir.path().join("sock"));
+        } else {
+            cmd.env_remove("SWITCHBOARD");
+        }
+        let out = cmd.output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let with = format!("/opt/mine:{ours}");
+    assert_eq!(run(false, true, &with), "dirs=/opt/mine", "off: taken out");
+    assert_eq!(
+        run(false, true, &ours),
+        "dirs=unset",
+        "off, nothing else: unset"
+    );
+    assert_eq!(
+        run(true, true, "/opt/mine"),
+        format!("dirs={with}"),
+        "on: put back"
+    );
+    assert_eq!(
+        run(false, false, &with),
+        format!("dirs={with}"),
+        "outside the workspace, left as it is"
+    );
+}

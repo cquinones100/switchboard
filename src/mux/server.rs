@@ -961,25 +961,16 @@ impl Server {
         // (src/setup/way.rs), and the plugin would run them twice.
         let plugin = crate::setup::plugin::ENV;
         let inherited = std::env::var(plugin).ok();
-        if crate::settings::is_on(crate::setup::way::SETTING) {
-            env.push((
-                plugin.to_string(),
-                crate::setup::plugin::env_value(
-                    inherited.as_deref(),
-                    &paths::plugin_dir(),
-                    &paths::home(),
-                ),
-            ));
-        } else if inherited.is_some() {
-            env.push((
-                plugin.to_string(),
-                crate::setup::plugin::without_plugin(
-                    inherited.as_deref(),
-                    &paths::plugin_dir(),
-                    &paths::home(),
-                )
-                .unwrap_or_default(),
-            ));
+        let now = crate::setup::plugin::value_now(
+            inherited.as_deref(),
+            crate::settings::is_on(crate::setup::way::SETTING),
+            &paths::plugin_dir(),
+            &paths::home(),
+        );
+        match now {
+            Some(value) => env.push((plugin.to_string(), value)),
+            None if inherited.is_some() => env.push((plugin.to_string(), String::new())),
+            None => {}
         }
         let spec = PaneSpawn {
             id: Some(id),

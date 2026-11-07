@@ -53,6 +53,12 @@ fn usage() -> ExitCode {
 /// WT_PROMPT, which /wt sets on the pane it respawns, is added to the prompt
 /// and cleared, so a later `wt` in the same shell doesn't see it again.
 /// `rc`, not `status`: `status` is a read-only special variable in zsh.
+///
+/// With it comes a `claude` function: in one of Switchboard's panes, each
+/// Claude it starts takes Switchboard's plugin as Settings has it now
+/// (`claude-plugin-dirs`), since a shell open from before `claude_plugin`
+/// changed keeps the value its pane started with. Only Switchboard's entry
+/// changes; one process a launch, none outside the workspace.
 pub fn shell_function() -> String {
     format!(
         r#"wt() {{
@@ -77,8 +83,19 @@ pub fn shell_function() -> String {
   fi
   cd "$dir" || return 1
   claude "$prompt"
+}}
+
+claude() {{
+  if [ -n "${{SWITCHBOARD:-}}" ]; then
+    local dirs
+    if dirs=$({} 2>/dev/null); then
+      if [ -n "$dirs" ]; then export CLAUDE_CODE_PLUGIN_DIRS="$dirs"; else unset CLAUDE_CODE_PLUGIN_DIRS; fi
+    fi
+  fi
+  command claude "$@"
 }}"#,
-        worktree::self_command("worktree-from-ticket")
+        worktree::self_command("worktree-from-ticket"),
+        worktree::self_command("claude-plugin-dirs")
     )
 }
 

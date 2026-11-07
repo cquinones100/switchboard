@@ -12,6 +12,7 @@ pub mod apply_actions;
 pub mod aws_login;
 pub mod claude_context;
 pub mod claude_here;
+pub mod claude_plugin_dirs;
 pub mod claude_reply;
 pub mod codex_review;
 pub mod land_lock;
@@ -111,6 +112,11 @@ pub const COMMANDS: &[Command] = &[
         name: "claude-here",
         run: claude_here::main,
         about: "Resume the last Claude session of a directory (a picker when there are several)",
+    },
+    Command {
+        name: "claude-plugin-dirs",
+        run: claude_plugin_dirs::main,
+        about: "CLAUDE_CODE_PLUGIN_DIRS for a Claude started now in a pane (the claude function wt's init prints runs it)",
     },
     Command {
         name: "claude-reply",
