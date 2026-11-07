@@ -51,6 +51,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | Key | What it does |
 |---|---|
 | `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line opens it too |
+| `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a workspace key |
 | `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
 | `M-Space` | Mission control: every tab as a card, the Work map, PRs, CI, tickets, your day, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
@@ -68,7 +69,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-N` / `M-e` | Notes in its own tab / beside the pane you are in |
 | `M-b d` | Detach, leaving everything running; `switchboard` attaches again |
 
-`M-b` is the prefix for the rest, and `M-b ?` lists every key. Tips in the top-right corner teach the others the first time each would help. Menus and questions take a click too, and a click outside a box closes it.
+`M-b` is the prefix for the rest, and `M-/` (or `M-b ?`) lists every key. Tips in the top-right corner teach the others the first time each would help. Menus and questions take a click too, and a click outside a box closes it.
 
 Vim's keys are the default in Notes and the diff, and you don't need to know them: Notes has a toolbar over each note, and Settings' Easy mode lets Shift-arrows and the mouse select, typing replace a selection, and gives the diff a row of buttons for its keys.
 

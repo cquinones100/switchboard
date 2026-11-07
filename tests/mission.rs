@@ -32,6 +32,7 @@ fn settings(server: &TestServer, extra: Value) {
         "view_sessions": false,
         "view_resources": false,
         "usage": false,
+        "view_keys": false,
         "standup_note": false,
         "meeting_notes": false,
         "new_notes": false,
@@ -580,5 +581,52 @@ fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
     assert!(
         after.is_empty() || (after.starts_with("\x1b[?2026h") && after.ends_with("\x1b[?2026l")),
         "each frame as synchronized output"
+    );
+}
+
+#[test]
+fn m_slash_opens_every_key_and_enter_presses_one_in_the_pane_below() {
+    let (server, mut client) = two_tabs(json!({ "view_keys": true }));
+    client.type_text(&format!("{ALT}/"));
+    let screen = client.wait_text("MISSION CONTROL");
+    let all = screen.join("\n");
+    assert!(all.contains("PANES"), "the workspace's by tag: {all}");
+    assert!(all.contains("jk move  ↵ press it"), "{all}");
+    // The filter finds a key by what it does, the cursor on it rather than
+    // on its group's heading.
+    client.type_text("/split pane to the right\r");
+    client.wait_for("the list narrowed", |s| {
+        s.iter()
+            .any(|l| l.contains("M-S-L") && l.contains("Split pane to the right"))
+            && !s.iter().any(|l| l.contains("Split pane to the left"))
+    });
+    // Enter offers to press it, and pressing splits the pane mission
+    // control was over.
+    client.type_text("\r");
+    pick(&mut client, "Press M-S-L");
+    wait_list(&server, "the pane split", |l| {
+        tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
+    });
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+}
+
+#[test]
+fn with_the_keys_view_off_m_slash_reaches_the_pane() {
+    let (server, mut client) = two_tabs(json!({ "view_keys": false }));
+    let pane = tabs(&server.list())[1]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["send-keys", "-t", &pane, "-l", "cat -v"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.type_text(&format!("{ALT}/after\r"));
+    client.wait_text("^[/after");
+    assert!(
+        !client
+            .screen()
+            .iter()
+            .any(|l| l.contains("MISSION CONTROL"))
     );
 }

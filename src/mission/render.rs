@@ -985,6 +985,14 @@ fn list(
         .max()
         .unwrap_or(0)
         .min(32);
+    // Keys (the Keys view) line up as the key, what it does, then its tags,
+    // the key column as wide as the widest key, so none is cut.
+    let key_width = shown
+        .iter()
+        .filter_map(|(_, i)| super::keymap::key_of(i))
+        .map(width)
+        .max()
+        .unwrap_or(0);
     for (index, item) in shown {
         let chosen = index == cursor && m.cursor >= 0;
         let fill = if chosen {
@@ -1014,6 +1022,16 @@ fn list(
                 .unwrap_or(0);
             row.put(format!(" {}", item.title.to_uppercase()), bold(theme.dim))
                 .put(format!(" {count}"), fg(theme.faint));
+            lines.push(row.line(cols, fill));
+            continue;
+        }
+        if let Some(key) = super::keymap::key_of(item) {
+            row.put("   ", Style::new())
+                .put(text::pad(key, key_width), bold(theme.bright))
+                .put("  ", Style::new())
+                .put(item.title.clone(), name)
+                .put("  ", Style::new())
+                .put(item.detail.clone(), fg(theme.faint));
             lines.push(row.line(cols, fill));
             continue;
         }
@@ -1135,6 +1153,7 @@ fn hints(m: &Mission, view: Option<&View>) -> String {
     };
     match view.id {
         ViewId::Settings => format!("jk move  ↵ change  / search  {next}  ? keys  esc close"),
+        ViewId::Keys => format!("jk move  ↵ press it  / filter  {next}  ? keys  esc close"),
         ViewId::Calendar => format!("jk event  hl beside  ↵ actions  {next}  ? keys  esc close"),
         ViewId::Prs | ViewId::Tickets => {
             format!("hl column  jk move  ↵ what to do with it  {next}  ? keys  esc close")

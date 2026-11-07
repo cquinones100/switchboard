@@ -45,6 +45,33 @@ impl Act {
             Act::Paragraph(_) | Act::Monospaced | Act::Character(_)
         )
     }
+
+    /// A style, which a note's leader keys (Space, then the item's key)
+    /// put on the word, the line or the selection, as the menu does.
+    pub fn leader(self) -> bool {
+        matches!(
+            self,
+            Act::Paragraph(_) | Act::Monospaced | Act::Character(_) | Act::Link | Act::Table
+        )
+    }
+}
+
+/// The item a note's leader key takes: Space, then the menu's key of one
+/// of its styles.
+pub fn leader(key: char) -> Option<Item> {
+    leader_items()
+        .into_iter()
+        .find(|i| i.key.chars().eq(std::iter::once(key)))
+}
+
+/// The items the leader keys take, in the menu's order, for the leader and
+/// mission control's Keys view.
+pub fn leader_items() -> Vec<Item> {
+    items()
+        .into_iter()
+        .map(|(_, i)| i)
+        .filter(|i| i.act.leader())
+        .collect()
 }
 
 /// An item: its key, its label, what it does.

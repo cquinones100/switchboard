@@ -342,6 +342,109 @@ const BUTTONS: [(&str, &str); 8] = [
     ("Close", "q"),
 ];
 
+/// One of the diff's keys for mission control's Keys view: the keys that do
+/// it, apart by spaces and written as the views write keys (`esc`, `↵`,
+/// `^c`), what it does, and whether it is `ga`'s (the diff_ask setting).
+pub struct KeyRow {
+    pub keys: &'static str,
+    pub does: &'static str,
+    pub ask: bool,
+}
+
+const fn key_row(keys: &'static str, does: &'static str) -> KeyRow {
+    KeyRow {
+        keys,
+        does,
+        ask: false,
+    }
+}
+
+const fn ask_row(keys: &'static str, does: &'static str) -> KeyRow {
+    KeyRow {
+        keys,
+        does,
+        ask: true,
+    }
+}
+
+/// The diff's own keys where each works, for mission control's Keys view
+/// (M-/; the tmux version's lib/sidebar/app-keys.json), under a heading for
+/// each place. `the_keys_view_lists_keys_the_diff_takes` presses each where
+/// it is listed, so one the diff stops taking fails it.
+pub const KEYS: &[(&str, &[KeyRow])] = &[
+    (
+        "M-d's diff",
+        &[
+            key_row("]c [c", "next, last chapter of the story, in the file list"),
+            key_row(
+                "]p [p",
+                "next chapter as a page of its own, the one before (from the first, the whole diff)",
+            ),
+            key_row("J K", "scroll the diff down, up from the file list"),
+            key_row("E", "widen the file list, or narrow it again"),
+            key_row(
+                "c",
+                "the branch's commits, one at a time; c again goes back",
+            ),
+            key_row("v V", "select lines in a side of the diff, for yp and yl"),
+            key_row("yp", "copy path:line"),
+            key_row(
+                "yl",
+                "copy a link to the line on GitHub (the lines selected)",
+            ),
+            key_row("yS", "copy the story as Markdown"),
+            ask_row("ga", "ask Claude about the diff"),
+            key_row("q esc", "close the diff (esc in the file list)"),
+            key_row("^c", "close the diff and go back to the pane"),
+        ],
+    ),
+    (
+        "M-d: the cover while the story is told",
+        &[
+            key_row("esc q", "show the diff now, without waiting for the story"),
+            key_row("t", "show Haiku's answer so far, or the chapters again"),
+        ],
+    ),
+    (
+        "M-d: asking a question (ga)",
+        &[
+            ask_row("↵", "ask it"),
+            ask_row("⇧↵ ^j", "a new line"),
+            ask_row("esc ^c", "cancel"),
+        ],
+    ),
+    (
+        "M-d: an answer (ga)",
+        &[
+            ask_row("ga", "ask another question"),
+            ask_row("yy", "copy the answer"),
+            ask_row("yS", "copy the story as Markdown"),
+            ask_row(
+                "gf",
+                "open the path:line under the cursor, in the diff when the change has that file",
+            ),
+            ask_row("q esc", "close the answer, stopping it while it runs"),
+        ],
+    ),
+];
+
+/// The diff's keys as mission control's Keys view lists them, a group
+/// each, `ga`'s only with `ask` (diff_ask), a group left with none left
+/// out.
+pub fn key_groups(ask: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
+    KEYS.iter()
+        .map(|(title, rows)| {
+            let rows: Vec<(String, String)> = rows
+                .iter()
+                .filter(|r| ask || !r.ask)
+                .map(|r| (r.keys.to_string(), r.does.to_string()))
+                .collect();
+            (*title, rows)
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect()
+}
+
 /// What came of a key or the mouse.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Act {
@@ -3313,6 +3416,68 @@ mod tests {
         }
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(app.answer.as_ref().unwrap().question, text);
+    }
+
+    /// A key as the Keys view writes it, as the terminal sends it.
+    fn events(token: &str) -> Vec<KeyEvent> {
+        let plain = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        match token {
+            "esc" => vec![KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)],
+            "↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)],
+            "⇧↵" => vec![KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)],
+            t if t.starts_with('^') => t[1..]
+                .chars()
+                .map(|c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+                .collect(),
+            t => t.chars().map(plain).collect(),
+        }
+    }
+
+    #[test]
+    fn the_keys_view_lists_keys_the_diff_takes() {
+        // Each place a group is listed for, made from a fresh diff.
+        let place = |title: &str| -> App {
+            let mut app = app();
+            match title {
+                "M-d's diff" => {}
+                "M-d: the cover while the story is told" => {
+                    app.telling = Telling::Waiting;
+                    app.cover = Some(Instant::now());
+                }
+                "M-d: asking a question (ga)" => press(&mut app, "ga"),
+                "M-d: an answer (ga)" => {
+                    press(&mut app, "gaWhy?");
+                    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    assert!(app.answer.is_some());
+                }
+                other => panic!("no place for {other}"),
+            }
+            app
+        };
+        for (title, rows) in KEYS {
+            for row in *rows {
+                for token in row.keys.split(' ') {
+                    let mut app = place(title);
+                    // Selecting is in a side of the diff.
+                    if token == "v" || token == "V" {
+                        app.key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+                    }
+                    let mut act = Act::Same;
+                    for event in events(token) {
+                        act = app.key(event);
+                    }
+                    assert_ne!(act, Act::Same, "{token} in {title} does nothing");
+                }
+            }
+        }
+        // ga and its boxes only with diff_ask.
+        let without: Vec<String> = key_groups(false)
+            .into_iter()
+            .flat_map(|(_, rows)| rows.into_iter().map(|(k, _)| k))
+            .collect();
+        assert!(!without.contains(&"ga".to_string()));
+        assert_eq!(key_groups(false).len(), 2);
+        assert_eq!(key_groups(true).len(), 4);
     }
 
     #[test]

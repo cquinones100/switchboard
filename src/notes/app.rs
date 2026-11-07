@@ -45,7 +45,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 
 use super::editor::{Editor, Effect, Mode};
-use super::format::{self, Character, Paragraph, Selection};
+use super::format::{self, Selection};
 use super::images::{self, Images};
 use super::menu::{self, Act as FormatAct, Ask, FormatMenu, Progress};
 use super::palette::{self, Act as PaletteAct};
@@ -307,6 +307,52 @@ A monospaced block, for code or anything that needs its spacing kept.
 
 A web link: https://www.apple.com/macos/, a [link with text](https://example.com), a link to a note: [[Welcome to Notes]], and a #tag.
 ";
+
+/// A note's own keys over Vim's (`note_key`), for mission control's Keys
+/// view (the tmux version's lib/sidebar/app-keys.json); the leader keys and
+/// easy mode's Cmd keys follow them there, from the tables their code reads.
+pub const NOTE_KEYS: &[(&str, &str)] = &[
+    ("Enter", "tick, fold or follow what the cursor is on"),
+    ("Ctrl-P", "the Format menu, on the word, line or selection"),
+    ("Ctrl-Shift-P", "every Notes command, in a palette"),
+    ("Ctrl-F", "find a note"),
+    ("Ctrl-B", "show or put away the list of notes"),
+    ("Ctrl-V", "paste the clipboard's image, while typing"),
+    ("Enter", "carry the list on, while typing"),
+    (
+        "Tab  Shift-Tab",
+        "next, previous table cell, or indent, outdent the item, while typing",
+    ),
+    ("Ctrl-C", "copy the selection"),
+];
+
+/// Notes' keys, a group each, for mission control's Keys view: a note's
+/// (its own, then each leader key, then easy mode's Cmd keys while
+/// `easy` is on), then the list's (what its `?` shows).
+pub fn key_groups(easy: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
+    let owned = |rows: &[(&str, &str)]| -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(k, d)| (k.to_string(), d.to_string()))
+            .collect()
+    };
+    let mut note = owned(NOTE_KEYS);
+    for item in menu::leader_items() {
+        let does = match item.act {
+            FormatAct::Table => format!("{}, below the line", item.label),
+            _ => format!("{}, on the word, line or selection", item.label),
+        };
+        note.push((format!("Space {}", item.key), does));
+    }
+    if easy {
+        for (_, _, shown, does) in easy::CMD_KEYS {
+            note.push((shown.to_string(), format!("{does} (easy mode)")));
+        }
+    }
+    vec![
+        ("Notes: a note", note),
+        ("Notes: the list", owned(sidebar::KEYS)),
+    ]
+}
 
 /// How long after the last change a note is saved.
 const AUTOSAVE: Duration = Duration::from_millis(800);
@@ -1107,7 +1153,7 @@ impl App {
     }
 
     pub fn help(&mut self) {
-        let text = format!("Notes\n\n{}", sidebar::HELP.join("\n"));
+        let text = format!("Notes\n\n{}", sidebar::help_text());
         self.push(Box::new(Message::new(&text, 3600)), Then::Nothing);
     }
 
@@ -1914,7 +1960,7 @@ impl App {
 
     /// A key in the note: the note's own keys first (Enter, the Format
     /// menu, the leader keys, Ctrl-F and Ctrl-B, easy mode's Cmd keys),
-    /// then Vim's.
+    /// then Vim's. `NOTE_KEYS` lists them for mission control's Keys view.
     fn note_key(&mut self, key: Key) {
         if self.open.is_none() {
             if self.list_pending.take() == Some('w') {
@@ -2096,7 +2142,9 @@ impl App {
     }
 
     /// The note's leader keys (Space, then a key): the styles, on the word
-    /// or line, or on the selection.
+    /// or line, or on the selection, each under its key in the Format menu
+    /// (`menu::leader`, which mission control's Keys view lists too); a
+    /// table only outside a selection.
     fn leader_key(&mut self, key: Key) {
         let Some(c) = (match key.code {
             KeyCode::Char(c) if !key.mods.ctrl && !key.mods.alt => Some(c),
@@ -2106,26 +2154,10 @@ impl App {
         };
         let from = self.format_from(None);
         let in_visual = from.selection.is_some();
-        let act = match c {
-            'b' => FormatAct::Character(Character::Bold),
-            'i' => FormatAct::Character(Character::Italic),
-            'U' => FormatAct::Character(Character::Underline),
-            'x' => FormatAct::Character(Character::Strike),
-            'h' => FormatAct::Character(Character::Highlight),
-            '`' => FormatAct::Character(Character::Code),
-            '1' => FormatAct::Paragraph(Paragraph::Title),
-            '2' => FormatAct::Paragraph(Paragraph::Heading),
-            '3' => FormatAct::Paragraph(Paragraph::Subheading),
-            '0' => FormatAct::Paragraph(Paragraph::Body),
-            'l' => FormatAct::Paragraph(Paragraph::Check),
-            '8' => FormatAct::Paragraph(Paragraph::Bullet),
-            '-' => FormatAct::Paragraph(Paragraph::Dash),
-            '7' => FormatAct::Paragraph(Paragraph::Number),
-            'q' => FormatAct::Paragraph(Paragraph::Quote),
-            'm' => FormatAct::Monospaced,
-            't' if !in_visual => FormatAct::Table,
-            'k' => FormatAct::Link,
-            _ => return,
+        let act = match menu::leader(c).map(|item| item.act) {
+            Some(FormatAct::Table) if in_visual => return,
+            Some(act) => act,
+            None => return,
         };
         if in_visual {
             self.editor.leave_visual();

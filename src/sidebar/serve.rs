@@ -42,8 +42,8 @@ mod window;
 const SPIN: Duration = Duration::from_millis(text::SPINNER_MS);
 
 /// The sidebar's keys, for `?` (render.js's `HELP.sidebar`, less what comes
-/// with mission control).
-const KEYS: &[(&str, &str)] = &[
+/// with mission control), and mission control's Keys view.
+pub const KEYS: &[(&str, &str)] = &[
     ("j k", "show a tab"),
     ("g G", "first, last"),
     ("^d ^u", "half a screen down, up"),

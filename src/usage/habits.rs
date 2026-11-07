@@ -274,6 +274,7 @@ pub const VIEWS: &[View] = &[
     view("Sessions", "view_sessions"),
     view("Resources", "view_resources"),
     view("Usage", "usage"),
+    view("Keys", "view_keys"),
 ];
 
 /// A feature off (by default, or as an earlier install left it), suggested

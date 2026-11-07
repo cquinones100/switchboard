@@ -22,6 +22,7 @@
 //! handled with the whole server at hand.
 //!
 //! - `views`: the views after the tabs, the Work map and Settings among them.
+//! - `keymap`: the Keys view, every key Switchboard binds (M-/).
 //! - `render`: the screen, as lines, and where a click lands.
 //! - `calendar`: the Calendar view drawn as a day, hours down the side.
 //! - `choices`: what the menu Enter opens offers, as data.
@@ -37,6 +38,7 @@ pub mod ask;
 pub mod busy;
 pub mod calendar;
 pub mod choices;
+pub mod keymap;
 pub mod remind;
 pub mod render;
 mod serve;

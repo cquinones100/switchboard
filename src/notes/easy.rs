@@ -135,20 +135,27 @@ pub enum Cmd {
     Cut,
 }
 
+/// The Cmd keys: the letter Ghostty sends with Ctrl+Alt+Shift for each, what
+/// it is, the Cmd key as you press it and what it does (for mission
+/// control's Keys view).
+pub const CMD_KEYS: [(char, Cmd, &str, &str); 4] = [
+    ('s', Cmd::Save, "⌘S", "save"),
+    ('z', Cmd::Undo, "⌘Z", "undo"),
+    ('y', Cmd::Redo, "⌘⇧Z", "redo"),
+    ('x', Cmd::Cut, "⌘X", "cut the selection"),
+];
+
 pub fn cmd_key(key: &Key) -> Option<Cmd> {
     if !(key.mods.ctrl && key.mods.alt) {
         return None;
     }
-    match key.code {
-        KeyCode::Char(c) => match c.to_ascii_lowercase() {
-            's' => Some(Cmd::Save),
-            'z' => Some(Cmd::Undo),
-            'y' => Some(Cmd::Redo),
-            'x' => Some(Cmd::Cut),
-            _ => None,
-        },
-        _ => None,
-    }
+    let KeyCode::Char(c) = key.code else {
+        return None;
+    };
+    CMD_KEYS
+        .iter()
+        .find(|(letter, ..)| *letter == c.to_ascii_lowercase())
+        .map(|(_, cmd, ..)| *cmd)
 }
 
 #[cfg(test)]

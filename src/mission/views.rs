@@ -5,7 +5,8 @@
 //! In the daemon's order, each only while its setting is on: the
 //! Notifications (the sidebar's, whole), the Work map, the Calendar, Slack,
 //! Closed, the PR board, CI, the Merge queues, the ticket board, the Inbox,
-//! Sessions, Resources, Usage, Settings, then each plugin's.
+//! Sessions, Resources, Usage, Keys (`keymap`), Settings, then each
+//! plugin's.
 //!
 //! Two are put together here. The Work map is every piece of work in the
 //! repositories the tabs are in, one row each: each worktree, and a main
@@ -51,6 +52,7 @@ pub enum ViewId {
     Sessions,
     Resources,
     Usage,
+    Keys,
     Settings,
     Plugin(String),
 }
@@ -102,8 +104,15 @@ pub fn is_header(item: &Item) -> bool {
     item.data.get("header").and_then(Value::as_bool) == Some(true)
 }
 
-fn header(id: &str, title: &str, count: usize) -> Item {
+pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
     Item::new(format!("header:{id}"), title).data(json!({ "header": true, "count": count }))
+}
+
+/// Whether a view lists its rows under headings to pass over (Settings'
+/// categories, the Keys view's groups): the cursor never rests on one, and
+/// a filter leaves out those with nothing under them.
+pub fn grouped(id: &ViewId) -> bool {
+    matches!(id, ViewId::Settings | ViewId::Keys)
 }
 
 /// What a `/` filter matches an item by.
@@ -150,8 +159,9 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, show_merged: bool)
             i
         })
         .collect();
-    // A filtered Settings view leaves out the categories with no match.
-    let items = if view.id == ViewId::Settings {
+    // A filtered Settings or Keys view leaves out the headings with no
+    // match.
+    let items = if grouped(&view.id) {
         kept.iter()
             .enumerate()
             .filter(|(at, i)| !is_header(i) || kept.get(at + 1).is_some_and(|n| !is_header(n)))

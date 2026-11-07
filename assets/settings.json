@@ -340,6 +340,13 @@
     "default": true
   },
   {
+    "key": "view_keys",
+    "category": "Mission control",
+    "label": "Keys",
+    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', with / to filter and Enter to press a workspace key; off, M-/ reaches the pane",
+    "default": true
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and status bar",
     "label": "One Claude to a tab",

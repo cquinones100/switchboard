@@ -134,6 +134,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-c` | Go to the pane running Claude in this tab |
 | `M-f` | Pin or unpin the tab, keeping it at the top of Needs you |
 | `M-p` | The palette: find any command by what it does, and run it |
+| `M-/` | Every key, in mission control's Keys view (see "The Keys view") |
 | `M-Space` | Open or close mission control |
 | `M-s` | Into the sidebar, or back out of it |
 | `M-v` | The branch's PR description in a pane to the right, or close it |
@@ -169,7 +170,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 | `M-b` and an arrow | The pane on that side |
 | `M-b` and Ctrl with an arrow | Grow the pane a cell that way |
 
-`M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line.
+`M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line. `M-/` shows them all with the keys of the sidebar, mission control, the diff and Notes, in mission control's Keys view.
 
 `C-w` waits for the next key: `h`, `j`, `k` or `l` moves to the pane on that side (from the sidebar too), `C-w` again sends `C-w` itself to the pane (deleting a word in a shell or in Claude's prompt), and any other key does what it would have done. Settings' "C-w then h, j, k or l moves between panes" (`ctrl_w_panes`) off leaves `C-w` to the pane, and Settings' "Alt-arrows move between panes" (`pane_arrows`) off hands Alt-arrows to the pane.
 
@@ -213,7 +214,7 @@ The actions, by the names the file uses:
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
 - Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
-- The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
+- The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `clear-image-cache`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
@@ -511,7 +512,7 @@ On a tab, the menu offers:
 
 ### The views
 
-After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, CI, Merge queues, Tickets, Inbox, Sessions, Resources, Usage and Settings, then each plugin's view, each only while its setting is on. The ones that read a service ask it again when you go to them.
+After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, CI, Merge queues, Tickets, Inbox, Sessions, Resources, Usage, Keys and Settings, then each plugin's view, each only while its setting is on. The ones that read a service ask it again when you go to them.
 
 **Notifications** is every notification the sidebar shows, one by one and whole. Enter's menu does what each leads to ("Open it in Notes" for a new note, "Open the Calendar view" for a calendar change, the Calendar view's menu for the next meeting, the Slack view's for a message and the Inbox's for an Inbox notification), and offers to dismiss it: a meeting, a Slack message (until its thread gets more), a calendar change (taking today's calendar as seen), a new note, or an Inbox notification (from the notifications alone: it stays unread in Linear and in the Inbox view). Whatever is picked dismisses it too; a suggestion gets its own choices instead. It is there while the sidebar's notifications are on.
 
@@ -529,7 +530,7 @@ After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, 
 
 **Inbox** is your unread Linear notifications that need you, newest first: a mention of you in a ticket or a comment, a new comment on a ticket of yours, a ticket newly assigned to you; status changes and the rest of Linear's inbox are left out. Each is in the sidebar's notifications too. Enter offers what the Tickets board offers for its ticket, and to mark it read in Linear. Settings' "Inbox" (`view_inbox`).
 
-**Settings** is below, and each plugin's view comes last (see "Plugins").
+**Keys** is below, as are **Settings**; each plugin's view comes last (see "Plugins").
 
 Settings' "GitHub" (`github`) off takes out the PRs, CI and Merge queues views, and Settings' "Linear" (`linear`) off the Tickets and Inbox views.
 
@@ -546,6 +547,10 @@ While you are away (no terminal attached, the screen locked, or the computer idl
 ### Finding a tab or a worktree
 
 `M-j` opens the Work map showing only the open tabs, and `M-o` only the worktrees no tab has open (and the merged ones under their heading), each with a filter already typing: the arrows, `C-n` `C-p` and Tab move, Tab going round past either end (stopping on easy mode's × on the way, which Enter closes), Enter opens the chosen row's menu, its usual action first, so Enter twice goes to the tab or opens one in the worktree and resumes its Claude, and Esc closes the menu, then the picker. The filter types on while a menu is open over it.
+
+### The Keys view
+
+`M-/` opens mission control on its Keys view: every key Switchboard binds, in one list. First the workspace's, the keys above and yours from `keys.json`, as `M-p` lists them, each under the first of its tags (panes, tabs, git and the rest), the biggest group first, a command with no key of its own shown as `M-p`, which reaches it; then the sidebar's and mission control's own (what their `?` shows), then the diff's (`M-d`: its own keys, the cover while its story is told, and, with Settings' "Ask Claude about the diff" (`diff_ask`) on, the box `ga` opens and the answer it shows), then Notes' (a note's, its leader keys and, with Easy mode on, easy mode's Cmd keys, then the list's). Each row is the key, what it does and its tags. `/` filters by a key, its words or any of its tags, leaving out the groups with nothing that matches, and Enter on one of the workspace's keys offers to press it in the pane mission control was opened over, as an `M-p` pick is; the diff's commands, which only the diff takes, and the other parts' keys are there to read. Settings' "Keys" (`view_keys`), under Mission control, takes the view away and hands `M-/` back to the pane.
 
 ### Settings
 
@@ -1745,6 +1750,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Resources (`view_resources`) | on | Mission control's Resources view: a table of the CPU and memory each tab's processes use, heaviest overall first, read with ps every few seconds only while the view is in front |
 | Requests in Usage (`request_audit`) | on | The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out |
 | Usage (`usage`) | on | Mission control's Usage view: today's Claude spend and how much of the rate limits is used |
+| Keys (`view_keys`) | on | Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', with / to filter and Enter to press a workspace key; off, M-/ reaches the pane |
 | RSVP from the Calendar (`calendar_rsvp`) | on | Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector |
 | Slack without a tab (`slack_background`) | on | Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of a Slack tab looping /slack-updates |
 | Pause lookups while away (`pause_when_away`) | on | Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return |

@@ -122,6 +122,9 @@ pub enum Do {
     OpenNote(String),
     /// Mission control on a view, by its name lowercased with dashes.
     OpenView(String),
+    /// A workspace key from the Keys view, pressed in the pane mission
+    /// control was over once it has closed, as an M-p pick is.
+    Press(crate::mux::keys::Action),
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -722,6 +725,13 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             out.extend(copy);
         }
         ViewId::Notifications => return notice_choices(item, ctx),
+        // A workspace key, pressed; a part's own key only reads.
+        ViewId::Keys => {
+            if let Some(action) = super::keymap::press_of(item) {
+                let key = super::keymap::key_of(item).unwrap_or("it");
+                out.push(choice('p', format!("Press {key}"), Do::Press(action)));
+            }
+        }
         _ => out = target_choices(item, ctx),
     }
     out

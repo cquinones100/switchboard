@@ -63,8 +63,9 @@ const REANSWER_AFTER: Duration = Duration::from_millis(400);
 /// keeps its rate.
 const BOXED_SPIN_MS: i64 = 500;
 
-/// Mission control's keys, for `?` (render.js's `HELP.mission`).
-const KEYS: &[(&str, &str)] = &[
+/// Mission control's keys, for `?` (render.js's `HELP.mission`), and its
+/// Keys view.
+pub(super) const KEYS: &[(&str, &str)] = &[
     (
         "h j k l",
         "choose a card or row; in the Calendar, h l move between events side by side",
@@ -537,6 +538,21 @@ impl Server {
                 let loaded = views::loaded(&d);
                 out.push(view(id, kind.title(), d, loaded));
             }
+        }
+        // Every key, from the bindings the server holds (M-/).
+        if on("view_keys") {
+            let shown = super::keymap::Shown {
+                github: on("github"),
+                linear: on("linear"),
+                ask: on("diff_ask"),
+                easy: on("easy_keys"),
+            };
+            let data = ViewData {
+                items: super::keymap::items(&self.bindings, shown),
+                at: Some(1),
+                ..ViewData::default()
+            };
+            out.push(view(ViewId::Keys, "Keys", data, true));
         }
         let own = self.mission_own();
         let data = ViewData {
@@ -1608,6 +1624,10 @@ impl Server {
                 self.new_note_open(client, &rel);
             }
             Do::OpenView(slug) => self.open_mission(client, Opening::View(slug)),
+            Do::Press(action) => {
+                self.mission_close(client);
+                self.act(client, action);
+            }
         }
     }
 
@@ -2536,7 +2556,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
 /// heading, which Enter does nothing on: opened, filtered or sent to the
 /// top, it goes down to the first setting under the heading.
 fn settle(m: &mut Mission) {
-    let Some(view) = m.current().filter(|v| v.id == ViewId::Settings) else {
+    let Some(view) = m.current().filter(|v| views::grouped(&v.id)) else {
         return;
     };
     let items = &view.data.items;
@@ -2572,9 +2592,9 @@ fn move_to(m: &mut Mission, to: isize, count: isize) {
 fn row_step(m: &Mission, by: isize) -> isize {
     if m.view != 0 {
         let mut to = m.cursor + by;
-        // In Settings a category's heading is passed over, staying put
+        // In Settings and Keys a heading is passed over, staying put
         // when only headings are left that way.
-        if let Some(view) = m.current().filter(|v| v.id == ViewId::Settings) {
+        if let Some(view) = m.current().filter(|v| views::grouped(&v.id)) {
             let items = &view.data.items;
             while to >= 0 && items.get(to as usize).is_some_and(views::is_header) {
                 to += by;

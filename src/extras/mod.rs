@@ -6,8 +6,9 @@
 //! date (update-main.sh), Switchboard's setup checked or run a part at a time
 //! (repo-update.sh's `setup-check` and `setup-part`), the Calendar and Slack
 //! tabs (loop-tab.sh), a PR or ticket opened by number (pr-open.zsh,
-//! ticket-open.zsh), the AWS login (aws-login.sh), M-0 (tab-goto.sh), and
-//! `C-w` then h, j, k or l between panes (tmux.conf's `window-nav` table).
+//! ticket-open.zsh), the AWS login (aws-login.sh), M-0 (tab-goto.sh),
+//! `C-w` then h, j, k or l between panes (tmux.conf's `window-nav` table),
+//! and M-/, mission control's Keys view (`sidebar.sh mission view:keys`).
 //!
 //! What each does is said by its `Command`, as the other parts' are, so the
 //! palette lists them with tmux.conf's descriptions and tags; `serve` puts
@@ -170,10 +171,12 @@ pub enum Command {
     OpenTicketId,
     /// "Log in to AWS (aws sso login) in your Chrome profile".
     AwsLogin,
+    /// M-/: mission control's Keys view, every key.
+    Keys,
 }
 
 impl Command {
-    pub const ALL: [Command; 26] = [
+    pub const ALL: [Command; 27] = [
         Command::RenameTab,
         Command::GoToTab,
         Command::PaneNav,
@@ -200,6 +203,7 @@ impl Command {
         Command::OpenPrNumber,
         Command::OpenTicketId,
         Command::AwsLogin,
+        Command::Keys,
     ];
 
     /// Its name in keys.json.
@@ -220,6 +224,7 @@ impl Command {
             Command::OpenPrNumber => "open-pr-number".into(),
             Command::OpenTicketId => "open-ticket-id".into(),
             Command::AwsLogin => "aws-login".into(),
+            Command::Keys => "keys-view".into(),
         }
     }
 
@@ -257,6 +262,7 @@ impl Command {
             Command::OpenPrNumber => "Open a PR in the browser by number or URL",
             Command::OpenTicketId => "Open a Linear ticket in the browser by ID, number or URL",
             Command::AwsLogin => "Log in to AWS (aws sso login) in your Chrome profile",
+            Command::Keys => "Every key, by what it is about, with / to filter",
         }
     }
 
@@ -278,6 +284,7 @@ impl Command {
             Command::OpenPrNumber => &["github", "pr", "browser"],
             Command::OpenTicketId => &["linear", "ticket", "browser"],
             Command::AwsLogin => &["aws", "login", "sso"],
+            Command::Keys => &["help", "keys"],
         }
     }
 
@@ -286,6 +293,7 @@ impl Command {
         match self {
             Command::GoToTab => Some("M-0"),
             Command::PaneNav => Some("C-w"),
+            Command::Keys => Some("M-/"),
             _ => None,
         }
     }
@@ -431,7 +439,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_round_trip_and_only_two_have_keys() {
+    fn names_round_trip_and_only_three_have_keys() {
         for c in Command::ALL {
             assert_eq!(Command::parse(&c.name()), Some(c), "{}", c.name());
         }
@@ -440,7 +448,7 @@ mod tests {
             "mission-merge-queues"
         );
         let keyed: Vec<_> = Command::ALL.iter().filter_map(|c| c.key()).collect();
-        assert_eq!(keyed, ["M-0", "C-w"]);
+        assert_eq!(keyed, ["M-0", "C-w", "M-/"]);
         assert!(!Command::PaneNav.in_palette());
     }
 

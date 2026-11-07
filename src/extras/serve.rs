@@ -211,6 +211,28 @@ impl Server {
                     self.open_beside(pane, "@aws_login", vec!["aws-login".into()], AWS_PERCENT);
                 }
             }
+            // With the view off, M-/ is the pane's.
+            Command::Keys if is_off("view_keys") => {
+                self.key_back_to_pane(client, &Action::Extra(command));
+            }
+            Command::Keys => self.open_mission(client, Opening::View("keys".into())),
+        }
+    }
+
+    /// A key whose setting is off reaches the pane in front as it is, as
+    /// tmux.conf's `send-keys` gave it back: the key pressed alone that is
+    /// bound to `action`.
+    pub fn key_back_to_pane(&mut self, client: ClientId, action: &Action) {
+        let mut keys: Vec<Key> = self
+            .bindings
+            .root
+            .iter()
+            .filter(|(_, a)| *a == action)
+            .map(|(k, _)| *k)
+            .collect();
+        keys.sort_by_key(Key::notation);
+        if let (Some(key), Some(pane)) = (keys.first().copied(), self.current_pane(client)) {
+            self.key_to_pane(pane, key);
         }
     }
 

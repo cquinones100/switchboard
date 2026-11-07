@@ -39,6 +39,7 @@ use crate::mux::{PaneId, TabId};
 
 pub use model::{Group, Rules, Stage, TabModel, TabState};
 pub use render::{Filter, Owner};
+pub use serve::KEYS;
 
 /// What the server's timers tell the sidebar.
 #[derive(Debug)]

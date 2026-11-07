@@ -324,29 +324,61 @@ pub fn next_note(notes: &[NoteEntry], path: &Path) -> Option<PathBuf> {
         .map(|n| n.path.clone())
 }
 
-/// The list's keys, for `?`.
-pub const HELP: &[&str] = &[
-    "Enter or click   open a note, folder or tag",
-    "n                new note in this folder",
-    "N                new folder",
-    "dd               delete (to Recently Deleted)",
-    "r                restore from Recently Deleted",
-    "p                pin or unpin",
-    "t                its tab: go there, or open one",
-    "s  S             mark notes, squash them into one",
-    "m                move to a folder",
-    "R                rename a note or folder",
-    "/                search every note",
-    "Ctrl-F           find a note",
-    "Ctrl-B           put the list away (Ctrl-B again",
-    "                 in a note shows it)",
-    "Ctrl-Shift-P     every command, in a palette",
-    "x                clear the search or tag",
-    "Tab              go to the note",
-    "q                quit",
-    "",
-    "In a note, Ctrl-P opens the Format menu.",
+/// The list's keys, for `?` and mission control's Keys view.
+pub const KEYS: &[(&str, &str)] = &[
+    ("Enter or click", "open a note, folder or tag"),
+    ("n", "new note in this folder"),
+    ("N", "new folder"),
+    ("dd", "delete (to Recently Deleted)"),
+    ("r", "restore from Recently Deleted"),
+    ("p", "pin or unpin"),
+    ("t", "its tab: go there, or open one"),
+    ("s  S", "mark notes, squash them into one"),
+    ("m", "move to a folder"),
+    ("R", "rename a note or folder"),
+    ("/", "search every note"),
+    ("Ctrl-F", "find a note"),
+    (
+        "Ctrl-B",
+        "put the list away (Ctrl-B again in a note shows it)",
+    ),
+    ("Ctrl-Shift-P", "every command, in a palette"),
+    ("x", "clear the search or tag"),
+    ("Tab", "go to the note"),
+    ("q", "quit"),
 ];
+
+/// The keys' column, and how wide what each does may run before it wraps.
+const KEYS_WIDTH: usize = 17;
+const DOES_WIDTH: usize = 31;
+
+/// What `?` shows: the list's keys in two columns, what each does wrapped
+/// under itself, then where the Format menu is.
+pub fn help_text() -> String {
+    let mut lines = Vec::new();
+    for (keys, does) in KEYS {
+        let mut line = format!("{keys:<KEYS_WIDTH$}");
+        let mut used = 0;
+        for word in does.split(' ') {
+            let w = width(word);
+            if used > 0 && used + 1 + w > DOES_WIDTH {
+                lines.push(line);
+                line = " ".repeat(KEYS_WIDTH);
+                used = 0;
+            }
+            if used > 0 {
+                line.push(' ');
+                used += 1;
+            }
+            line.push_str(word);
+            used += w;
+        }
+        lines.push(line);
+    }
+    lines.push(String::new());
+    lines.push("In a note, Ctrl-P opens the Format menu.".into());
+    lines.join("\n")
+}
 
 /// A note's title, read from its file.
 pub fn title_at(path: &Path) -> String {
@@ -395,6 +427,23 @@ mod tests {
         assert_eq!(state.here(), "");
         state.show(Some("Work".into()), None, None);
         assert_eq!(state.here(), "Work");
+    }
+
+    #[test]
+    fn the_lists_keys_read_in_two_columns_a_long_one_wrapped_under_itself() {
+        let text = help_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "Enter or click   open a note, folder or tag");
+        let at = lines.iter().position(|l| l.starts_with("Ctrl-B")).unwrap();
+        assert_eq!(
+            lines[at],
+            "Ctrl-B           put the list away (Ctrl-B again"
+        );
+        assert_eq!(lines[at + 1], "                 in a note shows it)");
+        assert_eq!(
+            lines.last(),
+            Some(&"In a note, Ctrl-P opens the Format menu.")
+        );
     }
 
     #[test]
