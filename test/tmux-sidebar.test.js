@@ -2807,13 +2807,13 @@ test("each mission control view but Settings can be turned off in Settings, the 
   const settingsFile = path.join(home, ".config/switchboard/settings.json");
   try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_landing: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false, view_resources: false }));
+    fs.writeFileSync(settingsFile, JSON.stringify({ view_work_map: false, view_ci: false, view_landing: false, view_inbox: false, view_slack: false, view_closed: false, view_sessions: false, view_calendar: false, pr_board: false, ticket_board: false, usage: false, view_resources: false, view_keys: false }));
     sidebar.reloadSettings();
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title), ["Settings"]);
     assert.deepEqual(sidebar.builtInViews({ tabs: [] }, { workMap: true }).map((v) => v.title), ["Work map", "Settings"]);
     fs.rmSync(settingsFile);
     sidebar.reloadSettings();
-    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Tickets", "Inbox", "Sessions", "Resources", "Usage", "Settings"]);
+    assert.deepEqual(sidebar.builtInViews({ tabs: [] }).map((v) => v.title).filter((t) => t !== "Calendar"), ["Work map", "Slack", "Closed", "PRs", "CI", "Tickets", "Inbox", "Sessions", "Resources", "Usage", "Keys", "Settings"]);
   } finally {
     fs.rmSync(settingsFile, { force: true });
     sidebar.reloadSettings();

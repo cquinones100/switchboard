@@ -1,0 +1,483 @@
+[
+  {
+    "group": "M-d's diff",
+    "in": "diffview",
+    "keys": [
+      {
+        "keys": [
+          "]c",
+          "[c"
+        ],
+        "does": "next, last chapter of the story, in the file list"
+      },
+      {
+        "keys": [
+          "]p",
+          "[p"
+        ],
+        "does": "next chapter as a page of its own, the one before (from the first, the whole diff)"
+      },
+      {
+        "keys": [
+          "J",
+          "K"
+        ],
+        "does": "scroll the diff down, up from the file list"
+      },
+      {
+        "keys": [
+          "E"
+        ],
+        "does": "widen the file list, or narrow it again"
+      },
+      {
+        "keys": [
+          "c"
+        ],
+        "does": "the branch's commits, one at a time; c again goes back"
+      },
+      {
+        "keys": [
+          "yp"
+        ],
+        "does": "copy path:line"
+      },
+      {
+        "keys": [
+          "yl"
+        ],
+        "does": "copy a GitHub link to the line (lines, in visual mode)"
+      },
+      {
+        "keys": [
+          "yS"
+        ],
+        "does": "copy the story as Markdown"
+      },
+      {
+        "keys": [
+          "ga"
+        ],
+        "does": "ask Claude about the diff",
+        "setting": "diff_ask"
+      },
+      {
+        "keys": [
+          "q",
+          "<Esc>"
+        ],
+        "does": "close the diff (Esc in the file list)"
+      },
+      {
+        "keys": [
+          "<C-c>"
+        ],
+        "does": "close the diff and go back to the pane"
+      }
+    ]
+  },
+  {
+    "group": "M-d: the cover while the story is told",
+    "in": "diff-cover",
+    "keys": [
+      {
+        "keys": [
+          "<Esc>",
+          "q"
+        ],
+        "does": "show the diff now, without waiting for the story"
+      },
+      {
+        "keys": [
+          "t"
+        ],
+        "does": "show Haiku's answer so far, or the chapters again"
+      }
+    ]
+  },
+  {
+    "group": "M-d: asking a question (ga)",
+    "in": "diffask-box",
+    "setting": "diff_ask",
+    "keys": [
+      {
+        "keys": [
+          "<CR>"
+        ],
+        "does": "ask it"
+      },
+      {
+        "keys": [
+          "<S-CR>",
+          "<C-j>"
+        ],
+        "mode": "i",
+        "does": "a new line"
+      },
+      {
+        "keys": [
+          "<Esc>",
+          "q"
+        ],
+        "does": "cancel"
+      }
+    ]
+  },
+  {
+    "group": "M-d: an answer (ga)",
+    "in": "diffask",
+    "setting": "diff_ask",
+    "keys": [
+      {
+        "keys": [
+          "ga"
+        ],
+        "does": "ask another question"
+      },
+      {
+        "keys": [
+          "yy"
+        ],
+        "does": "copy the answer"
+      },
+      {
+        "keys": [
+          "yS"
+        ],
+        "does": "copy the story as Markdown"
+      },
+      {
+        "keys": [
+          "gf"
+        ],
+        "does": "open the path:line under the cursor, in the diff when the change has that file"
+      },
+      {
+        "keys": [
+          "q",
+          "<Esc>"
+        ],
+        "does": "close the answer, stopping it while it runs"
+      }
+    ]
+  },
+  {
+    "group": "Notes: a note",
+    "in": "note",
+    "keys": [
+      {
+        "keys": [
+          "<CR>"
+        ],
+        "does": "tick, fold or follow what the cursor is on"
+      },
+      {
+        "keys": [
+          "<C-p>"
+        ],
+        "does": "the Format menu, on the word, line or selection"
+      },
+      {
+        "keys": [
+          "<C-S-p>"
+        ],
+        "does": "every Notes command, in a palette"
+      },
+      {
+        "keys": [
+          "<C-f>"
+        ],
+        "does": "find a note"
+      },
+      {
+        "keys": [
+          "<C-b>"
+        ],
+        "does": "show or put away the list of notes"
+      },
+      {
+        "keys": [
+          "<C-v>"
+        ],
+        "mode": "i",
+        "does": "paste the clipboard's image, while typing"
+      },
+      {
+        "keys": [
+          "<CR>"
+        ],
+        "mode": "i",
+        "does": "carry the list on, while typing"
+      },
+      {
+        "keys": [
+          "<Tab>",
+          "<S-Tab>"
+        ],
+        "mode": "i",
+        "does": "next, previous table cell, or indent, outdent the item, while typing"
+      },
+      {
+        "keys": [
+          "<leader>b"
+        ],
+        "does": "bold (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>i"
+        ],
+        "does": "italic (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>U"
+        ],
+        "does": "underline (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>x"
+        ],
+        "does": "strikethrough (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>h"
+        ],
+        "does": "highlight (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>`"
+        ],
+        "does": "code (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>1"
+        ],
+        "does": "title (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>2"
+        ],
+        "does": "heading (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>3"
+        ],
+        "does": "subheading (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>0"
+        ],
+        "does": "body (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>l"
+        ],
+        "does": "checklist (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>8"
+        ],
+        "does": "bulleted list (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>-"
+        ],
+        "does": "dashed list (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>7"
+        ],
+        "does": "numbered list (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>q"
+        ],
+        "does": "quote (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>m"
+        ],
+        "does": "monospaced block (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>t"
+        ],
+        "does": "table (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<leader>k"
+        ],
+        "does": "link (on the word, line or selection)"
+      },
+      {
+        "keys": [
+          "<C-M-S-s>"
+        ],
+        "shown": "⌘S",
+        "setting": "easy_keys",
+        "does": "save (easy mode)"
+      },
+      {
+        "keys": [
+          "<C-M-S-z>"
+        ],
+        "shown": "⌘Z",
+        "setting": "easy_keys",
+        "does": "undo (easy mode)"
+      },
+      {
+        "keys": [
+          "<C-M-S-y>"
+        ],
+        "shown": "⌘⇧Z",
+        "setting": "easy_keys",
+        "does": "redo (easy mode)"
+      },
+      {
+        "keys": [
+          "<C-M-S-x>"
+        ],
+        "mode": "v",
+        "shown": "⌘X",
+        "setting": "easy_keys",
+        "does": "cut the selection (easy mode)"
+      },
+      {
+        "keys": [
+          "<C-c>"
+        ],
+        "mode": "v",
+        "shown": "^c",
+        "setting": "easy_keys",
+        "does": "copy the selection (easy mode)"
+      }
+    ]
+  },
+  {
+    "group": "Notes: the list",
+    "in": "notes-list",
+    "keys": [
+      {
+        "keys": [
+          "<CR>"
+        ],
+        "does": "open a note, folder or tag"
+      },
+      {
+        "keys": [
+          "n",
+          "N"
+        ],
+        "does": "new note, new folder"
+      },
+      {
+        "keys": [
+          "dd",
+          "D"
+        ],
+        "does": "delete, to Recently Deleted"
+      },
+      {
+        "keys": [
+          "r"
+        ],
+        "does": "restore from Recently Deleted"
+      },
+      {
+        "keys": [
+          "p"
+        ],
+        "does": "pin or unpin"
+      },
+      {
+        "keys": [
+          "t"
+        ],
+        "does": "the note's tab: go there, or open one"
+      },
+      {
+        "keys": [
+          "s",
+          "S"
+        ],
+        "does": "mark notes, squash them into one"
+      },
+      {
+        "keys": [
+          "m"
+        ],
+        "does": "move to a folder"
+      },
+      {
+        "keys": [
+          "R"
+        ],
+        "does": "rename a note or folder"
+      },
+      {
+        "keys": [
+          "/"
+        ],
+        "does": "search every note"
+      },
+      {
+        "keys": [
+          "<C-f>"
+        ],
+        "does": "find a note"
+      },
+      {
+        "keys": [
+          "<C-b>"
+        ],
+        "does": "put the list away"
+      },
+      {
+        "keys": [
+          "<C-S-p>"
+        ],
+        "does": "every Notes command, in a palette"
+      },
+      {
+        "keys": [
+          "x"
+        ],
+        "does": "clear the search or tag"
+      },
+      {
+        "keys": [
+          "<Tab>"
+        ],
+        "does": "go to the note"
+      },
+      {
+        "keys": [
+          "q"
+        ],
+        "does": "quit"
+      },
+      {
+        "keys": [
+          "?"
+        ],
+        "does": "these keys"
+      }
+    ]
+  }
+]

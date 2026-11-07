@@ -88,10 +88,12 @@ fi
 # pane M-p was pressed in shows it (@in_place, pane-in-place.sh); "Ask Claude
 # about the diff" (#diffview #ai) also only with the diff_ask setting on.
 #
-# Usage (from the tests too): palette.sh --filter <github> <linear> <in_place> <diff_ask> < rows
+# M-p itself is left out, but for <all> (the Keys view, --list).
+#
+# Usage (from the tests too): palette.sh --filter <github> <linear> <in_place> <diff_ask> [all] < rows
 filter() {
-  awk -F'\t' -v github="$1" -v linear="$2" -v in_place="$3" -v ask="$4" '
-    $1 == "M-p" { next }
+  awk -F'\t' -v github="$1" -v linear="$2" -v in_place="$3" -v ask="$4" -v all="${5:-}" '
+    $1 == "M-p" && all == "" { next }
     github == "off" && $2 ~ / #github( |$)/ { next }
     linear == "off" && $2 ~ / #linear( |$)/ { next }
     in_place != "diffview" && $2 ~ / #diffview( |$)/ { next }
@@ -146,6 +148,18 @@ show_key='
     }
     return out
   }'
+
+# Every binding the palette knows, M-p included, for mission control's Keys
+# view (lib/sidebar/keymap.js), as "<keys>\t<shown key>\t<description>": the
+# #github and #linear ones only while that setting is on, and M-d's (#diffview)
+# whatever pane it is read from, since the view lists M-d's keys too.
+#
+# Usage: palette.sh --list
+if [ "${1:-}" = --list ]; then
+  IFS='|' read -r github linear ask < <(tmux display -p '#{@setting_github}|#{@setting_linear}|#{@setting_diff_ask}')
+  bindings | filter "$github" "$linear" diffview "$ask" all | awk -F'\t' "$show_key"'{ print $1 "\t" shown($1) "\t" $2 }'
+  exit 0
+fi
 
 # The palette itself is left out: picking it would only reopen it.
 # Shown as "<description>  <tags>  <key>", the recent ones first and the rest

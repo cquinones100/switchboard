@@ -890,6 +890,7 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | `C-w h` / `C-w l` | move in, on the tab you are in, and back out, as between any panes | |
 | (closing the tab in front) | the cursor lands in the sidebar of the tab that takes its place, to pick the next one | |
 | `M-Space` | open mission control | close it |
+| `M-/` | mission control's Keys view: every key tmux.conf describes (the root, prefix and palette tables, as `M-p` lists them, from `palette.sh --list`), grouped by their first tag, the biggest group first, a palette-only command shown as `M-p`, then the sidebar's and mission control's own (their `?`), `M-d`'s and Notes' (`lib/sidebar/app-keys.json`, which `test/keymap.test.js` checks against their maps); `/` filters by key, words or tag, and Enter on a tmux key presses it in the pane you came from (`lib/sidebar/keymap.js`; the `view_keys` setting, under Mission control, hands the key back to the pane) | |
 | `M-w` | close the pane | close it, whatever is open over it |
 | `j` `k` (arrows) | choose a tab, bringing it to the front (the list holds still until you leave the sidebar) | move down or up a row |
 | `C-d` `C-u` | scroll the list half a screen down or up, the cursor moving as many lines onto the tab there and stopping at the first and last tab, as in Vim (the `sidebar_half_page` setting, Sidebar; off, they run in the chosen tab) | |

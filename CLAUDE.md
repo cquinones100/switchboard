@@ -362,6 +362,8 @@ lists it only while the pane `M-p` was pressed in (or, from the sidebar, the
 pane it acts on) has that tool in its `@in_place`, so it needs no message for
 a pane without one; `test/palette.test.js` runs `palette.sh --filter`.
 
+`M-/` opens mission control's Keys view (`lib/sidebar/keymap.js`, `view_keys` setting), every key in one list: the same bindings, from `palette.sh --list`, grouped by their first tag, then the sidebar's and mission control's from `render.js`'s `HELP`, and M-d's and Notes' from `lib/sidebar/app-keys.json`, which `test/keymap.test.js` checks against their real maps, so a new key in M-d's keymaps or a Notes buffer gets a row there too.
+
 The palette lists the commands picked last first, newest first, from
 `~/.local/state/tmux-palette/recent` (the last six keys, written by
 `palette.sh` after each pick), then the rest by description. As you type, a command picked before after the same words comes first, then one picked after longer words starting with them (`~/.local/state/tmux-palette/queries`, `<query>\t<key>`, the last 300, read by `--rank`; the `palette_learn` setting). Its columns are

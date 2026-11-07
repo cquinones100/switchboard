@@ -38,3 +38,10 @@ test("palette.sh --filter lists a #diffview command only while the pane shows M-
   assert.deepEqual(keys("on", "on", "diffview", "off"), ["@palette D", "M-r"], "Ask left out with diff_ask off");
   assert.deepEqual(keys("off", "on", "diffview", "on"), ["@palette D", "@palette k"], "#github still follows its setting");
 });
+
+test("palette.sh --filter keeps M-p itself for the Keys view's list (all), which the palette leaves out", () => {
+  const rows = "M-p\tShow this list #palette\nM-r\tOpen the PR #github\n";
+  const keys = (...args) => spawnSync("bash", [script, "--filter", ...args], { input: rows, encoding: "utf8" }).stdout.trim().split("\n").filter(Boolean).map((row) => row.split("\t")[0]);
+  assert.deepEqual(keys("on", "on", "", "on"), ["M-r"]);
+  assert.deepEqual(keys("on", "on", "", "on", "all"), ["M-p", "M-r"]);
+});
