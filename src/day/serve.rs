@@ -292,28 +292,41 @@ impl Server {
             self.look_at_slack();
             return;
         }
-        self.day.slack_asked = Some(ms);
         if !self.day.slack_kept {
             self.open_loop_tab("Slack", "5m", "/slack-updates", &dirs);
             return;
         }
-        // The Slack tab's Claude, between its ticks: asked to look now.
+        // The Slack tab's Claude, idle between its ticks (or with only its
+        // loop's background work going): asked to look now, the command
+        // typed and then Enter on its own, a moment later, as send-keys -l
+        // and send-keys Enter did, so Enter never reaches Claude Code before
+        // it has taken the command in.
+        use crate::sidebar::model::TabState;
         let pane = self
-            .tabs
-            .values()
-            .filter(|t| self.tab_own_name(t.id) == Some("Slack"))
-            .flat_map(|t| t.layout.panes())
-            .find(|p| {
-                self.runs_claude(*p)
-                    && !matches!(
-                        self.agents.state(*p),
-                        Some(crate::agent::State::Working | crate::agent::State::Waiting)
-                    )
-            });
-        if let Some(slot) = pane.and_then(|p| self.panes.get_mut(&p)) {
-            let _ = slot.pane.write(b"/slack-updates\r");
-            log(&dirs.state, "slack: asked the Slack tab to look now");
-        }
+            .sidebar_all_tabs()
+            .into_iter()
+            .filter(|t| self.tab_own_name(t.id).unwrap_or(&t.name) == "Slack")
+            .filter(|t| t.claude.is_some())
+            .filter(|t| matches!(t.state, TabState::Idle | TabState::Background))
+            .find_map(|t| t.claude_pane);
+        let Some(pane) = pane else {
+            return;
+        };
+        self.day.slack_asked = Some(ms);
+        let enter = crate::mux::input::Key::new(
+            crate::mux::input::KeyCode::Enter,
+            crate::mux::input::Mods::NONE,
+        );
+        use crate::mission::answer::Press;
+        self.press(
+            pane,
+            vec![
+                Press::Text("/slack-updates".into()),
+                Press::Settle,
+                Press::Key(enter),
+            ],
+        );
+        log(&dirs.state, "slack: asked the Slack tab to look now");
     }
 
     /// Leaving the Slack view: what its look brought is seen.
@@ -439,13 +452,23 @@ impl Server {
         dirs
     }
 
-    // Whether a tab of `name` runs Claude.
+    // Whether a tab keeps the Calendar or the Slack view (`name`): the tab
+    // of that name with Claude in it, or any tab looping its skill
+    // (calendar.js's `calendarLooping`, slack.js's `slackLooping`).
     fn keeps(&self, name: &str) -> bool {
-        self.tabs
-            .values()
-            .filter(|t| self.tab_own_name(t.id) == Some(name))
-            .flat_map(|t| t.layout.panes())
-            .any(|p| self.runs_claude(p))
+        self.sidebar_all_tabs().iter().any(|t| {
+            let called = self.tab_own_name(t.id).unwrap_or(&t.name);
+            let claude = t.panes.iter().any(|p| self.runs_claude(*p));
+            let looping = match &t.tab_loop {
+                Some(crate::sidebar::model::TabLoop::Scheduled(s)) => Some(s.prompt.as_str()),
+                _ => None,
+            };
+            if name == "Calendar" {
+                calendar::keeps_calendar(called, claude, looping)
+            } else {
+                slack::keeps_slack(called, claude, looping)
+            }
+        })
     }
 
     // Once a minute: the notes due, and the tabs that keep a view out of
