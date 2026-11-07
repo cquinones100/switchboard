@@ -233,8 +233,17 @@ impl Server {
         let dir = notes.clone();
         self.off_task(
             client,
-            move || notes_offered(&dir),
-            move |server, client, names| {
+            move || {
+                let names = notes_offered(&dir);
+                // Each note's unticked items, shown for the one chosen, as
+                // note-shape.sh's fzf --preview grepped them.
+                let previews: Vec<String> = names
+                    .iter()
+                    .map(|n| unticked(&dir.join(format!("{n}.md"))))
+                    .collect();
+                (names, previews)
+            },
+            move |server, client, (names, previews)| {
                 if names.is_empty() {
                     server.say(
                         Some(client),
@@ -248,7 +257,8 @@ impl Server {
                     .collect();
                 let picker = Picker::new("The note whose checklist to shape", rows)
                     .named("notes")
-                    .prompt("note> ");
+                    .prompt("note> ")
+                    .previews(previews);
                 server.pick(client, picker, move |server, client, picked| {
                     if let Some(picked) = picked {
                         server.shape_items_of(client, notes, format!("{}.md", picked.value));
@@ -257,7 +267,21 @@ impl Server {
             },
         );
     }
+}
 
+/// A note's unticked checklist lines, the first 40, as note-shape.sh's
+/// preview showed them.
+fn unticked(file: &std::path::Path) -> String {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- [ ] "))
+        .take(40)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+impl Server {
     /// The note's items read, then asked which to shape.
     fn shape_items_of(&mut self, client: ClientId, notes: PathBuf, note: String) {
         let file = notes.join(&note);

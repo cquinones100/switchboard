@@ -466,25 +466,28 @@ impl Server {
             value: p.name.to_string(),
             ..PickItem::default()
         }));
+        // Tab marks several, as repo-update.sh's fzf --multi did.
         let picker = Picker::new("A part of Switchboard's setup", rows)
             .named("setup-part")
-            .prompt("part> ");
-        self.pick(client, picker, |server, client, picked| {
-            let Some(picked) = picked else {
+            .prompt("part> ")
+            .multi();
+        self.pick_many(client, picker, |server, client, picked| {
+            if picked.is_empty() {
                 return;
-            };
-            let parts: Vec<String> = if picked.value.is_empty() {
+            }
+            let every = picked.iter().any(|p| p.value.is_empty());
+            let parts: Vec<String> = if every {
                 crate::setup::PARTS
                     .iter()
                     .map(|p| p.name.to_string())
                     .collect()
             } else {
-                vec![picked.value.clone()]
+                picked.iter().map(|p| p.value.clone()).collect()
             };
-            let named = if picked.value.is_empty() {
+            let named = if every {
                 "every part".to_string()
             } else {
-                picked.value.clone()
+                parts.join(", ")
             };
             let menu = Menu::new(
                 format!("Switchboard setup: {named}"),
