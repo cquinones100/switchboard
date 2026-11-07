@@ -142,6 +142,23 @@ pub fn read_server(r: &mut impl io::Read) -> io::Result<Option<ServerMsg>> {
     }
 }
 
+/// Takes one whole client message off the front of `buf`, when one is
+/// there: for a connection that reads into a buffer of its own, so that a
+/// frame half read can be handed on with the connection (src/mux/upgrade.rs).
+/// `Ok(None)` while the frame isn't whole yet.
+pub fn take_client(buf: &mut Vec<u8>) -> io::Result<Option<ClientMsg>> {
+    let Some(header) = buf.get(..HEADER) else {
+        return Ok(None);
+    };
+    let (tag, len) = parse_header(header.try_into().expect("a header's length"))?;
+    if buf.len() < HEADER + len {
+        return Ok(None);
+    }
+    let payload = buf[HEADER..HEADER + len].to_vec();
+    buf.drain(..HEADER + len);
+    decode(tag, payload, ClientMsg::Input).map(Some)
+}
+
 /// As `read_client`, on the server's runtime.
 pub async fn read_client_async(
     r: &mut (impl tokio::io::AsyncRead + Unpin),
@@ -374,6 +391,32 @@ mod tests {
         let mut h = vec![tag];
         h.extend_from_slice(&len.to_be_bytes());
         h
+    }
+
+    #[test]
+    fn messages_are_taken_off_a_buffer_a_whole_frame_at_a_time() {
+        let mut stream = Vec::new();
+        for msg in client_msgs() {
+            stream.extend(encode_client(&msg));
+        }
+        // Fed a byte at a time, as a connection might read them.
+        let mut buf = Vec::new();
+        let mut got = Vec::new();
+        for byte in &stream {
+            buf.push(*byte);
+            while let Some(msg) = take_client(&mut buf).unwrap() {
+                got.push(msg);
+            }
+        }
+        assert_eq!(got, client_msgs());
+        assert!(buf.is_empty());
+        // A frame half read stays, to be handed on whole.
+        let one = encode_client(&ClientMsg::Input(b"abc".to_vec()));
+        let mut half = one[..4].to_vec();
+        assert_eq!(take_client(&mut half).unwrap(), None);
+        assert_eq!(half, one[..4]);
+        let mut bad = vec![9, 0, 0, 0, 0];
+        assert!(take_client(&mut bad).is_err());
     }
 
     #[test]

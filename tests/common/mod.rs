@@ -367,6 +367,11 @@ impl TestClient {
             .unwrap();
     }
 
+    /// Bytes written to the server as they are, a frame or a part of one.
+    pub fn write_raw(&mut self, bytes: &[u8]) {
+        self.stream.write_all(bytes).unwrap();
+    }
+
     pub fn type_text(&mut self, text: &str) {
         self.send(text.as_bytes());
     }

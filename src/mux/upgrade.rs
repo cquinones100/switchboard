@@ -20,6 +20,16 @@
 //! pane's Claude was doing; and the connection of the `switchboard upgrade`
 //! that asked, which the new build answers.
 //!
+//! Attached terminals stay attached without noticing: each connection is
+//! handed over by descriptor too, with its session and size. A connection
+//! first stops reading (what the terminal sends meanwhile waits in the
+//! socket for the new build), then, once the panes are paused and the last
+//! frame drawn, writes what is queued for it and gives back the frame it
+//! had half read and whatever it couldn't write in time, which the new
+//! build reads and writes first; so the stream of frames never breaks,
+//! and a client from before this feature, which knows nothing of it, goes
+//! on as it was. The new build draws each screen again whole.
+//!
 //! Safety first, since a build that can't take the panes up loses them all:
 //! before anything stops, the new binary is asked `server
 //! --handover-version`, and only one that answers the version this server
@@ -50,7 +60,7 @@ use tokio::sync::oneshot;
 use super::pane::{HandedPane, Pane, PaneAdopt};
 use super::persist::Saved;
 use super::proto::{self, ServerMsg};
-use super::server::{Answer, ClientId, Event, Loop, PaneSlot, Reply, Server};
+use super::server::{Answer, ClientId, Event, Held, Hold, Loop, PaneSlot, Reply, Server};
 use super::{PaneId, pty};
 use crate::agent::PaneAgent;
 use crate::{paths, settings};
@@ -116,6 +126,30 @@ pub struct Handover {
     /// What each pane's Claude was doing.
     #[serde(default)]
     pub agents: Vec<(PaneId, PaneAgent)>,
+    /// The terminals attached.
+    #[serde(default)]
+    pub clients: Vec<HandedClient>,
+}
+
+/// An attached terminal handed over: its connection by descriptor, where it
+/// was in the stream of frames, and what it was showing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandedClient {
+    pub id: u32,
+    pub fd: RawFd,
+    pub session: String,
+    pub cols: u16,
+    pub rows: u16,
+    /// How long since it was last used, so the one used last still sizes
+    /// its session.
+    #[serde(default)]
+    pub idle_ms: u64,
+    /// Bytes read of a frame not yet whole.
+    #[serde(default)]
+    pub input: Vec<u8>,
+    /// Bytes of frames not yet written.
+    #[serde(default)]
+    pub output: Vec<u8>,
 }
 
 /// Writes the handover, readable only by you, in place of any left before.
@@ -417,6 +451,10 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         .await;
         return;
     };
+    // The terminals' keys wait in their sockets from here on.
+    for c in server.clients.values() {
+        let _ = c.hold.send(Hold::Pause);
+    }
     let parked = settle(server, lp).await;
     let why_not = if server.quit {
         Some("the server is ending".to_string())
@@ -428,11 +466,12 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         None
     };
     if let Some(why) = why_not {
-        resume(server, lp, listener);
+        resume(server, lp, listener, Vec::new());
         fail(server, asker, client, why).await;
         return;
     }
     super::persist::finish_writing(server);
+    let held = take_clients(server).await;
 
     let file = paths::state_dir().join(FILE);
     let mut panes = Vec::new();
@@ -450,11 +489,28 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         client: client.map(|c| c.0),
         cell: server.terminal.cell,
         agents: server.agents.records(),
+        clients: held
+            .iter()
+            .filter_map(|(id, held)| {
+                let c = server.clients.get(id)?;
+                Some(HandedClient {
+                    id: id.0,
+                    fd: held.stream.as_raw_fd(),
+                    session: c.session.clone(),
+                    cols: c.cols,
+                    rows: c.rows,
+                    idle_ms: c.activity.elapsed().as_millis() as u64,
+                    input: held.input.clone(),
+                    output: held.output.clone(),
+                })
+            })
+            .collect(),
     };
     let mut fds: Vec<RawFd> = vec![handover.listener];
     fds.extend(handover.lock);
     fds.extend(handover.asker);
     fds.extend(handover.panes.iter().map(|p| p.fd));
+    fds.extend(handover.clients.iter().map(|c| c.fd));
     let why = match write_file(&file, &handover) {
         Err(e) => format!(
             "the handover couldn't be written to {} ({e})",
@@ -462,9 +518,10 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         ),
         Ok(()) => {
             eprintln!(
-                "switchboard server: restarting on {} in place, handing over {} panes",
+                "switchboard server: restarting on {} in place, handing over {} panes and {} terminals",
                 paths::tilde(&binary),
-                handover.panes.len()
+                handover.panes.len(),
+                handover.clients.len()
             );
             let opened = fds.iter().all(|fd| pty::set_cloexec(*fd, false).is_ok());
             let failed = if opened {
@@ -479,16 +536,53 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
             format!("{} couldn't be started ({failed})", paths::tilde(&binary))
         }
     };
-    resume(server, lp, listener);
+    resume(server, lp, listener, held);
     fail(server, asker, client, why).await;
 }
 
-/// After a handover that didn't happen: the panes read and write again and
-/// the socket takes connections again.
-fn resume(server: &mut Server, lp: &mut Loop<'_>, listener: std::os::unix::net::UnixListener) {
+/// Every attached terminal's connection, given back by its task once what
+/// is queued for it is written (for a moment at most). One leaving anyway
+/// is let go; one that doesn't answer is closed with the old process.
+async fn take_clients(server: &mut Server) -> Vec<(ClientId, Held)> {
+    let mut asked = Vec::new();
+    for (id, c) in &server.clients {
+        let (tx, rx) = oneshot::channel();
+        if c.hold.send(Hold::Give(tx)).is_ok() {
+            asked.push((*id, rx));
+        }
+    }
+    let mut held = Vec::new();
+    for (id, rx) in asked {
+        match tokio::time::timeout(ASKER_WAIT, rx).await {
+            Ok(Ok(Some(h))) => held.push((id, h)),
+            _ => {
+                server.clients.remove(&id);
+            }
+        }
+    }
+    held
+}
+
+/// After a handover that didn't happen: the panes read and write again, the
+/// terminals' connections are served again (`held`, given back, or those
+/// only paused), and the socket takes connections again.
+fn resume(
+    server: &mut Server,
+    lp: &mut Loop<'_>,
+    listener: std::os::unix::net::UnixListener,
+    held: Vec<(ClientId, Held)>,
+) {
     server.upgrade.handing = false;
     for slot in server.panes.values() {
         slot.pane.resume();
+    }
+    if held.is_empty() {
+        for c in server.clients.values() {
+            let _ = c.hold.send(Hold::Resume);
+        }
+    }
+    for (id, held) in held {
+        server.resume_client(id, held);
     }
     lp.acceptor.restart(Some(listener));
 }
@@ -549,6 +643,31 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     for (id, agent) in handover.agents {
         if server.panes.contains_key(&id) {
             server.agents.put(id, agent);
+        }
+    }
+    // The one used longest ago first, so the one used last sizes its
+    // session, as it did.
+    let mut clients = handover.clients;
+    clients.sort_by_key(|c| std::cmp::Reverse(c.idle_ms));
+    for c in clients {
+        if !pty::is_open(c.fd) {
+            lost.push(format!("terminal {}", c.id));
+            continue;
+        }
+        let _ = pty::set_cloexec(c.fd, true);
+        // SAFETY: handed over open, and owned by nothing else here.
+        let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(c.fd) };
+        if let Err(e) = server.adopt_client(
+            ClientId(c.id),
+            stream,
+            &c.session,
+            c.cols,
+            c.rows,
+            Duration::from_millis(c.idle_ms),
+            c.input,
+            c.output,
+        ) {
+            lost.push(format!("terminal {} ({e:#})", c.id));
         }
     }
     for slot in server.panes.values() {
@@ -679,6 +798,16 @@ mod tests {
             client: Some(2),
             cell: Some((9, 18)),
             agents: vec![(PaneId(4), PaneAgent::default())],
+            clients: vec![HandedClient {
+                id: 2,
+                fd: 12,
+                session: "main".into(),
+                cols: 100,
+                rows: 30,
+                idle_ms: 1500,
+                input: vec![1, 0, 0],
+                output: b"\x1b[H".to_vec(),
+            }],
         }
     }
 
@@ -700,6 +829,7 @@ mod tests {
         let read = read_file(&file).unwrap();
         assert!(!file.exists(), "removed once read");
         assert_eq!(read.panes, sample().panes);
+        assert_eq!(read.clients, sample().clients);
         assert_eq!(read.layout, sample().layout);
         assert_eq!(
             (read.listener, read.lock, read.asker),

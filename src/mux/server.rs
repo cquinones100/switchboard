@@ -22,6 +22,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant as TokioInstant;
 
 use super::compose::{self, Frame, Screen};
 use super::input::{self, Input, Key, KeyCode, Mods, Mouse, MouseButton, MouseKind, Parser};
@@ -65,6 +66,8 @@ pub enum Event {
         /// starts there.
         cwd: Option<PathBuf>,
         tx: mpsc::UnboundedSender<ServerMsg>,
+        /// Its connection, for handing it to a new build.
+        hold: mpsc::UnboundedSender<Hold>,
     },
     Input(ClientId, Vec<u8>),
     Resize(ClientId, u16, u16),
@@ -272,6 +275,8 @@ enum Drag {
 pub struct Client {
     pub id: ClientId,
     pub tx: mpsc::UnboundedSender<ServerMsg>,
+    /// Its connection's task, for handing it to a new build.
+    pub(super) hold: mpsc::UnboundedSender<Hold>,
     pub session: String,
     pub cols: u16,
     pub rows: u16,
@@ -648,7 +653,8 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             cwd,
         } => {
             let id = ClientId(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed));
-            let (otx, mut orx) = mpsc::unbounded_channel::<ServerMsg>();
+            let (otx, orx) = mpsc::unbounded_channel::<ServerMsg>();
+            let (htx, hrx) = mpsc::unbounded_channel::<Hold>();
             if tx
                 .send(Event::Attach {
                     id,
@@ -657,6 +663,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     rows,
                     cwd: cwd.map(PathBuf::from),
                     tx: otx,
+                    hold: htx,
                 })
                 .is_err()
             {
@@ -666,37 +673,12 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                 let _ = tx.send(Event::Cell(w, h));
             }
             drop(busy);
-            let writer = tokio::spawn(async move {
-                while let Some(msg) = orx.recv().await {
-                    let exit = matches!(msg, ServerMsg::Exit { .. });
-                    if w.write_all(&proto::encode_server(&msg)).await.is_err() || exit {
-                        break;
-                    }
-                }
-                let _ = w.shutdown().await;
-            });
-            loop {
-                match proto::read_client_async(&mut r).await {
-                    Ok(Some(ClientMsg::Input(bytes))) => {
-                        let _ = tx.send(Event::Input(id, bytes));
-                    }
-                    Ok(Some(ClientMsg::Resize {
-                        cols,
-                        rows,
-                        xpixel,
-                        ypixel,
-                    })) => {
-                        let _ = tx.send(Event::Resize(id, cols, rows));
-                        if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
-                            let _ = tx.send(Event::Cell(w, h));
-                        }
-                    }
-                    Ok(Some(ClientMsg::Detach)) | Ok(None) | Err(_) => break,
-                    Ok(Some(_)) => {}
-                }
-            }
-            let _ = tx.send(Event::Gone(id));
-            let _ = writer.await;
+            // The first frame was read whole and nothing past it, so the
+            // rest of the stream is the attachment's.
+            let Ok(stream) = r.reunite(w) else {
+                return;
+            };
+            serve_client(stream, id, tx, orx, hrx, Vec::new(), Vec::new()).await;
         }
         ClientMsg::Command {
             args,
@@ -738,6 +720,215 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
         }
         _ => {}
     }
+}
+
+/// What the server asks of an attached terminal's connection, to hand it to
+/// a new build (src/mux/upgrade.rs).
+#[derive(Debug)]
+pub enum Hold {
+    /// Read nothing more from the terminal: what it sends meanwhile waits
+    /// in the socket for the new build.
+    Pause,
+    /// Read again: the handover didn't happen.
+    Resume,
+    /// Write what is queued (for a moment at most) and give the connection
+    /// back with what is read of a frame and not yet written; `None` for a
+    /// terminal leaving anyway.
+    Give(oneshot::Sender<Option<Held>>),
+}
+
+/// An attached terminal's connection, given back by its task.
+#[derive(Debug)]
+pub struct Held {
+    pub stream: std::os::unix::net::UnixStream,
+    /// Bytes read of a frame not yet whole.
+    pub input: Vec<u8>,
+    /// Bytes of frames not yet written.
+    pub output: Vec<u8>,
+}
+
+/// How long a connection given back has to write what is queued for it; the
+/// rest goes to the new build to write.
+const FLUSH: Duration = Duration::from_millis(500);
+/// Output held for a terminal that isn't reading before what the server
+/// sends waits in the channel instead.
+const OUTPUT_HELD: usize = 1 << 20;
+
+/// An attached terminal's connection: what it sends, read into a buffer of
+/// the task's own and taken off it a frame at a time, goes to the server as
+/// events; what the server sends is written as frames. It ends once the
+/// terminal has left and the server has let it go. Reading into a buffer,
+/// and writing from one, is what lets the connection stop between two
+/// frames and be handed to a new build with the frame read or written half
+/// (`Hold`), and taken up there again with them (`input`, `output`).
+pub(super) async fn serve_client(
+    stream: tokio::net::UnixStream,
+    id: ClientId,
+    tx: mpsc::UnboundedSender<Event>,
+    mut out: mpsc::UnboundedReceiver<ServerMsg>,
+    mut hold: mpsc::UnboundedReceiver<Hold>,
+    mut input: Vec<u8>,
+    mut output: Vec<u8>,
+) {
+    // Taking input, until the terminal leaves or a handover stops it.
+    let mut reading = true;
+    let mut left = false;
+    let mut out_closed = false;
+    let mut hold_closed = false;
+    // An Exit frame queued, and how many bytes of the output end with it;
+    // once it is written nothing more is.
+    let mut exit_at: Option<usize> = None;
+    let mut written_up = false;
+    let leave = |left: &mut bool, reading: &mut bool| {
+        *reading = false;
+        if !*left {
+            *left = true;
+            let _ = tx.send(Event::Gone(id));
+        }
+    };
+    let take = |input: &mut Vec<u8>, left: &mut bool, reading: &mut bool| loop {
+        match proto::take_client(input) {
+            Ok(Some(ClientMsg::Input(bytes))) => {
+                let _ = tx.send(Event::Input(id, bytes));
+            }
+            Ok(Some(ClientMsg::Resize {
+                cols,
+                rows,
+                xpixel,
+                ypixel,
+            })) => {
+                let _ = tx.send(Event::Resize(id, cols, rows));
+                if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
+                    let _ = tx.send(Event::Cell(w, h));
+                }
+            }
+            Ok(Some(ClientMsg::Detach)) | Err(_) => {
+                input.clear();
+                leave(left, reading);
+                return;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+        }
+    };
+    take(&mut input, &mut left, &mut reading);
+    loop {
+        if left && out_closed && (output.is_empty() || written_up) {
+            break;
+        }
+        tokio::select! {
+            biased;
+            asked = hold.recv(), if !hold_closed => match asked {
+                Some(Hold::Pause) => reading = false,
+                Some(Hold::Resume) => {
+                    reading = !left;
+                    take(&mut input, &mut left, &mut reading);
+                }
+                Some(Hold::Give(back)) => {
+                    while let Ok(msg) = out.try_recv() {
+                        if exit_at.is_none() {
+                            output.extend_from_slice(&proto::encode_server(&msg));
+                            if matches!(msg, ServerMsg::Exit { .. }) {
+                                exit_at = Some(output.len());
+                            }
+                        }
+                    }
+                    if left || written_up || exit_at.is_some() {
+                        let _ = back.send(None);
+                        return;
+                    }
+                    let deadline = TokioInstant::now() + FLUSH;
+                    while !output.is_empty() {
+                        match tokio::time::timeout_at(deadline, stream.writable()).await {
+                            Ok(Ok(())) => match stream.try_write(&output) {
+                                Ok(n) => {
+                                    output.drain(..n);
+                                }
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                                Err(_) => {
+                                    let _ = back.send(None);
+                                    return;
+                                }
+                            },
+                            _ => break,
+                        }
+                    }
+                    let held = stream.into_std().ok().map(|stream| Held {
+                        stream,
+                        input,
+                        output,
+                    });
+                    let _ = back.send(held);
+                    return;
+                }
+                None => hold_closed = true,
+            },
+            ready = stream.readable(), if reading => {
+                if ready.is_err() {
+                    leave(&mut left, &mut reading);
+                    continue;
+                }
+                let mut buf = [0u8; 16 * 1024];
+                match stream.try_read(&mut buf) {
+                    Ok(0) => leave(&mut left, &mut reading),
+                    Ok(n) => {
+                        input.extend_from_slice(&buf[..n]);
+                        take(&mut input, &mut left, &mut reading);
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => leave(&mut left, &mut reading),
+                }
+            }
+            msg = out.recv(), if !out_closed && output.len() < OUTPUT_HELD => match msg {
+                Some(msg) => {
+                    if exit_at.is_none() && !written_up {
+                        output.extend_from_slice(&proto::encode_server(&msg));
+                        if matches!(msg, ServerMsg::Exit { .. }) {
+                            exit_at = Some(output.len());
+                        }
+                    }
+                }
+                None => out_closed = true,
+            },
+            ready = stream.writable(), if !output.is_empty() && !written_up => {
+                if ready.is_err() {
+                    written_up = true;
+                    continue;
+                }
+                match stream.try_write(&output) {
+                    Ok(n) => {
+                        output.drain(..n);
+                        if let Some(at) = exit_at.as_mut() {
+                            *at = at.saturating_sub(n);
+                            // The Exit written: the terminal is told it is
+                            // done, and nothing more is written.
+                            if *at == 0 {
+                                written_up = true;
+                                output.clear();
+                                shut_write(&stream);
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => {
+                        written_up = true;
+                        output.clear();
+                    }
+                }
+            }
+            // Nothing left to wait on: the server let go of a terminal it
+            // had stopped reading.
+            else => break,
+        }
+    }
+    shut_write(&stream);
+}
+
+/// Says to the peer that nothing more will be written.
+fn shut_write(stream: &tokio::net::UnixStream) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: shuts the writing half of a socket held here.
+    unsafe { libc::shutdown(stream.as_raw_fd(), libc::SHUT_WR) };
 }
 
 // ── The state ───────────────────────────────────────────────────────────────
@@ -792,7 +983,8 @@ impl Server {
                 rows,
                 cwd,
                 tx,
-            } => self.attach(id, session, cols, rows, cwd, tx),
+                hold,
+            } => self.attach(id, session, cols, rows, cwd, tx, hold),
             Event::Input(id, bytes) => self.input(id, &bytes),
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
             Event::Cell(w, h) => self.terminal_cell((w, h)),
@@ -1580,6 +1772,7 @@ impl Server {
 
     // ── Clients ──────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn attach(
         &mut self,
         id: ClientId,
@@ -1588,6 +1781,7 @@ impl Server {
         rows: u16,
         cwd: Option<PathBuf>,
         tx: mpsc::UnboundedSender<ServerMsg>,
+        hold: mpsc::UnboundedSender<Hold>,
     ) {
         let name = session.unwrap_or_else(|| {
             self.sessions
@@ -1604,6 +1798,7 @@ impl Server {
         let client = Client {
             id,
             tx,
+            hold,
             session: name.clone(),
             cols,
             rows,
@@ -1628,6 +1823,108 @@ impl Server {
         }
         self.update_attached(id);
         self.extras_attached(id);
+    }
+
+    /// A terminal a server handed over as it replaced itself with a new
+    /// build (src/mux/upgrade.rs), attached as it was, to its session (the
+    /// first, if its session is gone) at its size, its connection going on
+    /// from the frame it was at; its screen is drawn again whole.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn adopt_client(
+        &mut self,
+        id: ClientId,
+        stream: std::os::unix::net::UnixStream,
+        session: &str,
+        cols: u16,
+        rows: u16,
+        idle: Duration,
+        input: Vec<u8>,
+        output: Vec<u8>,
+    ) -> Result<()> {
+        NEXT_CLIENT.fetch_max(id.0.saturating_add(1), Ordering::Relaxed);
+        let name = if self.session(session).is_some() {
+            session.to_string()
+        } else {
+            self.sessions
+                .first()
+                .map(|s| s.name.clone())
+                .ok_or_else(|| anyhow!("no session is left to show it"))?
+        };
+        stream.set_nonblocking(true)?;
+        let stream = tokio::net::UnixStream::from_std(stream)?;
+        let (otx, orx) = mpsc::unbounded_channel::<ServerMsg>();
+        let (htx, hrx) = mpsc::unbounded_channel::<Hold>();
+        tokio::spawn(serve_client(
+            stream,
+            id,
+            self.tx.clone(),
+            orx,
+            hrx,
+            input,
+            output,
+        ));
+        // Whatever the build before asked of the terminal for hover is
+        // asked off again, as a client new to this server has it.
+        let _ = otx.send(ServerMsg::Output(b"\x1b[?1003l\x1b[?1002h".to_vec()));
+        Server::ask_background(&otx);
+        let client = Client {
+            id,
+            tx: otx,
+            hold: htx,
+            session: name,
+            cols,
+            rows,
+            parser: Parser::new(),
+            prefix: false,
+            screen: Screen::default(),
+            dirty: true,
+            drag: None,
+            last_click: None,
+            status_hits: Default::default(),
+            overlays: Default::default(),
+            activity: Instant::now()
+                .checked_sub(idle)
+                .unwrap_or_else(Instant::now),
+            options_taken: 0,
+        };
+        self.clients.insert(id, client);
+        self.size_session_to(id);
+        Ok(())
+    }
+
+    /// A terminal's connection given back for a handover that didn't
+    /// happen, served again as it was, its screen drawn again whole.
+    pub(super) fn resume_client(&mut self, id: ClientId, held: Held) {
+        let Some(c) = self.clients.get_mut(&id) else {
+            return;
+        };
+        let stream = match held
+            .stream
+            .set_nonblocking(true)
+            .and_then(|()| tokio::net::UnixStream::from_std(held.stream))
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("switchboard server: taking a terminal's connection up again: {e}");
+                self.clients.remove(&id);
+                return;
+            }
+        };
+        let (otx, orx) = mpsc::unbounded_channel::<ServerMsg>();
+        let (htx, hrx) = mpsc::unbounded_channel::<Hold>();
+        tokio::spawn(serve_client(
+            stream,
+            id,
+            self.tx.clone(),
+            orx,
+            hrx,
+            held.input,
+            held.output,
+        ));
+        c.tx = otx;
+        c.hold = htx;
+        c.screen.invalidate();
+        c.dirty = true;
     }
 
     fn resize_client(&mut self, id: ClientId, cols: u16, rows: u16) {

@@ -2,7 +2,8 @@
 //! server of the test's own (its "new build" the same binary) is given a
 //! second tab, a split, options and programs that keep writing, then
 //! upgraded; it must keep its pid, every tab, pane, layout and option, and
-//! every program running untouched, still its child, still writing.
+//! every program running untouched, still its child, still writing, and the
+//! terminal attached must stay attached, its keys still reaching the panes.
 
 mod common;
 
@@ -11,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use common::TestServer;
 use serde_json::Value;
+use switchboard::mux::proto::{self, ClientMsg};
 
 /// A program that says its pid, then writes a tick every 100ms.
 const TICKER: &str = "echo pid=$$; i=0; while :; do echo tick$i; i=$((i+1)); sleep 0.1; done";
@@ -138,11 +140,16 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
         );
     }
     let ticked = last_tick(&server.ok(&["capture-pane", "-t", &ticker])).unwrap();
+    // A key whose frame is half sent as the server hands over: the rest
+    // follows once it has, and the new build reads it whole.
+    let typed = proto::encode_client(&ClientMsg::Input(b"carried over".to_vec()));
+    client.write_raw(&typed[..3]);
 
     let (code, out, err) = server.run(&["upgrade"]);
     assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
     assert!(out.contains("restarted"), "{out}");
     assert!(out.contains("keeping 3 panes in 2 tabs"), "{out}");
+    client.write_raw(&typed[3..]);
 
     // The same process, every program in it its child as before, running.
     let after = server.list();
@@ -169,6 +176,23 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     assert!(text.contains("pid="), "what it showed came back: {text}");
     wait_tick(&server, &ticker, ticked);
     wait_tick(&server, &beside, ticked);
+
+    // The terminal attached before is still attached, drawn to by the new
+    // build, its keys (the one half sent too) reaching the pane in front,
+    // whose terminal echoes them, and its resizes taken.
+    client.wait_for("ticks on the terminal attached before", |s| {
+        s.iter().any(|l| last_tick(l).is_some_and(|n| n > ticked))
+    });
+    client.wait_text("carried over");
+    assert!(client.exit.is_none(), "it was never told to end");
+    client.resize(90, 30);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.list()["sessions"][0]["tabs"][1]["panes"][0]["cols"]
+        == before["sessions"][0]["tabs"][1]["panes"][0]["cols"]
+    {
+        assert!(Instant::now() < deadline, "the resize wasn't taken");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 
     // A terminal attaching now sees it all.
     let mut fresh = server.attach(100, 30);
