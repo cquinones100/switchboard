@@ -30,10 +30,16 @@ both have to be in place.
    If the skill cannot find `switchboard codex-review` it stops and says so
    rather than reviewing on its own.
 
-3. **Install the skill.** `switchboard setup skills` writes it, with
-   Switchboard's other skills, into `~/.claude/skills/`, so that
-   `~/.claude/skills/review-loop/SKILL.md` exists. Claude Code picks it up on
-   the next session, and `/review-loop` invokes it.
+3. **Install the skill.** `switchboard setup plugin` writes it, with
+   Switchboard's other skills, hooks and instructions, into a Claude Code
+   plugin, `~/.local/share/switchboard/plugin`, which Claude in
+   Switchboard's panes loads. Elsewhere, load it for a session with
+   `claude --plugin-dir ~/.local/share/switchboard/plugin` (its skill is
+   then `/switchboard:review-loop`, or `/review-loop` while nothing else has
+   that name), or copy its `skills/review-loop` folder into
+   `~/.claude/skills/`. With Settings' "Load Switchboard as a plugin" off,
+   `switchboard setup skills` writes it into `~/.claude/skills/` for every
+   session. Claude Code picks it up on the next session.
 
 ## What Codex is allowed to do
 

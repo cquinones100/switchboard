@@ -331,6 +331,7 @@ pub async fn ask_claude(prompt: String, opts: AskOpts) -> anyhow::Result<String>
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::null())
     .kill_on_drop(true);
+    crate::setup::plugin::headless(&mut cmd);
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!("Claude Code isn't installed")

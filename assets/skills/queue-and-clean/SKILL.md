@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Queue and clean
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path queue-and-clean`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path queue-and-clean`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Queue this worktree's PR for merge, in the merge queue or with auto-merge, unless it is already queued. Then watch the PR without blocking the conversation. When something the branch can fix stops it merging (a required check fails, it has merge conflicts, or the merge queue drops it), fix it, push, queue it again and go back to watching, as described in "Fixing". When it merges, wait until the merge has deployed, test the feature on the deployed site in a real browser, recording a video of the test, and ask the user to approve it ("Deploy and test"). Once they approve, remove the worktree and its local branch. If it closes without merging, or stops for something you can't fix, leave everything as it is.
 
@@ -42,7 +42,7 @@ Arguments: a PR number, if one was given. Otherwise use the current branch's PR;
 
 4. Settle the ticket and the note now, so finishing up later asks nothing:
    - **The ticket**: the Linear ticket the branch names (an ID like `ABC-123` at the start of the branch name), else one the PR's title or body names. None is fine: then there is no ticket to close out.
-   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.claude/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. Remember the answer; read the note only at "Closing out".
+   - **The note**: which of the user's notes holds this work's checklist item, settled as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says, with **No note** as an option, since not every PR has one. Remember the answer; read the note only at "Closing out".
    - **The deploy and the test**: settle both as "Settling" in the file `switchboard skill-path deploy-test` prints says, so nothing after the merge has to ask.
 
 ## No PR

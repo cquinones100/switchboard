@@ -4,32 +4,46 @@
 //! gone with the programs they configured, so these parts are all that is
 //! left of it:
 //!
-//! - `claude` (`claude_settings`): Switchboard's hooks, statusline and
-//!   permissions merged into your own `~/.claude/settings.json`.
+//! - `plugin` (`plugin`): Switchboard's skills, hooks and instructions as a
+//!   Claude Code plugin in `~/.local/share/switchboard/plugin`, which the
+//!   Claude sessions in its panes load and Claude elsewhere doesn't.
+//! - `claude` (`claude_settings`): Switchboard's statusline and permissions
+//!   merged into your own `~/.claude/settings.json`, with its hooks the old
+//!   way, without them as a plugin.
 //! - `claude-md` (`claude_md`): your `~/.claude/CLAUDE.md`, importing your
-//!   rules and Switchboard's part of them.
-//! - `skills` (`skills`): the skills that ship with Switchboard, written
-//!   into `~/.claude/skills` from the copies compiled into the binary.
+//!   rules, and Switchboard's part the old way.
+//! - `skills` (`skills`): Switchboard's skills in `~/.claude/skills` the old
+//!   way, taken out of it as a plugin, and the commands a repository's old
+//!   skills run linked into `~/.local/bin`.
 //! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal.
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
 //!   your home that leads nowhere now, tidied.
 //!
-//! The guided setup also says which optional parts are there (`optional`):
-//! the services and programs a feature needs, each with how to set it up.
+//! Which way the middle three put Switchboard, as a plugin or in
+//! `~/.claude` as earlier versions did, is Settings' "Load Switchboard as a
+//! plugin" and Claude Code's version (`way`); `--move` runs the parts that
+//! move Switchboard over after the setting changes, as Settings does. The
+//! guided setup also says which optional parts are there (`optional`): the
+//! services and programs a feature needs, each with how to set it up.
 //!
 //! As setup.sh did, running it again changes only what isn't in place yet:
 //! each part says what it changed, or that it was up to date, and `--check`
 //! says what would change and changes nothing. With parts named it does just
 //! those, asking nothing; alone, it is the guided setup, which asks [Y/n]
-//! before a part changes anything the first time (Enter is yes, a closed
-//! input no, so nothing piped or unattended says yes), brings a part already
-//! set up up to date without asking, and ends with what is left to do.
+//! before a part changes anything of yours the first time (Enter is yes, a
+//! closed input no, so nothing piped or unattended says yes), brings a part
+//! already set up up to date without asking, and ends with what is left to
+//! do. The plugin is Switchboard's own, so it is never asked about. An
+//! install an earlier version made is asked once whether to load
+//! Switchboard as a plugin; after a yes, taking out what it put in your
+//! files isn't asked about again.
 //!
 //! What the parts write is compiled into the binary, so a binary built from
-//! a clone brings new skills, hooks and a new part of CLAUDE.md that reach
-//! `~/.claude` only through a run of setup. The setup.sh version had git's
-//! post-merge hook run it after every pull; here the first run of a new
-//! build (`switchboard` attaching, `refresh`) brings the parts already set
+//! a clone brings new skills, hooks and settings that reach the plugin and
+//! `~/.claude` only through a run of setup (or, for the plugin, the
+//! server's start). The setup.sh version had git's post-merge hook run it
+//! after every pull; here the first run of a new build (`switchboard`
+//! attaching, `refresh`) writes the plugin and brings the parts already set
 //! up up to date quietly, as the guided setup would without asking, and
 //! `switchboard setup` after a build does the same out loud.
 
@@ -37,8 +51,10 @@ pub mod claude_md;
 pub mod claude_settings;
 pub mod leftovers;
 pub mod optional;
+pub mod plugin;
 pub mod skills;
 pub mod terminal;
+pub mod way;
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -47,6 +63,7 @@ use std::process::ExitCode;
 use anyhow::Result;
 
 use crate::{paths, platform, util};
+use way::Way;
 
 /// What a part changed, said as it goes: setup.sh's `change`. The part's
 /// name is printed above its first change, so a part with nothing to do says
@@ -97,18 +114,23 @@ pub struct Part {
 
 pub const PARTS: &[Part] = &[
     Part {
+        name: "plugin",
+        about: "write Switchboard's plugin (its hooks, skills and instructions), which Claude in its panes loads, to ~/.local/share/switchboard/plugin",
+        run: plugin::run,
+    },
+    Part {
         name: "claude",
-        about: "add Switchboard's hooks, statusline and permissions to ~/.claude/settings.json",
+        about: "add Switchboard's statusline and permissions to ~/.claude/settings.json, and its hooks unless it loads as a plugin (then take them out)",
         run: claude_settings::run,
     },
     Part {
         name: "claude-md",
-        about: "write ~/.claude/CLAUDE.md to import your rules and Switchboard's part",
+        about: "write ~/.claude/CLAUDE.md to import your rules, and Switchboard's part unless it loads as a plugin (then take it out)",
         run: claude_md::run,
     },
     Part {
         name: "skills",
-        about: "write the skills that ship with Switchboard into ~/.claude/skills",
+        about: "write Switchboard's skills into ~/.claude/skills unless it loads as a plugin (then take them out), and link skill-path and codex-review into ~/.local/bin",
         run: skills::run,
     },
     Part {
@@ -140,6 +162,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 refresh_now();
                 return ExitCode::SUCCESS;
             }
+            "--move" => return move_over(),
             "--parts" => {
                 for part in PARTS {
                     println!("{}\t{}", part.name, part.about);
@@ -166,6 +189,9 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if named.is_empty() {
         return guided(check);
     }
+    if let (_, Some(why)) = way::settle(check) {
+        println!("{why}");
+    }
     let mut report = Report::new(check);
     let failed: Vec<&str> = named
         .iter()
@@ -185,7 +211,9 @@ fn usage() {
     println!("Sets Claude Code up for Switchboard. Alone, it asks before each part the first");
     println!("time; with parts named, it does just those. --check says what would change and");
     println!("changes nothing; --refresh brings the parts already set up up to date, quietly,");
-    println!("as the first run of a new build does; --parts lists the parts:\n");
+    println!("as the first run of a new build does; --move moves Switchboard into its plugin");
+    println!("or back into ~/.claude, as Settings' \"Load Switchboard as a plugin\" says; --parts");
+    println!("lists the parts:\n");
     for part in PARTS {
         println!("  {:10} {}", part.name, part.about);
     }
@@ -368,7 +396,9 @@ fn terminal_offered(check: bool, list: &mut List) {
     }
 }
 
-/// Claude Code's three parts, offered when Claude Code is there.
+/// Claude Code's parts: the plugin, written without asking, then, when
+/// Claude Code is there, the way Switchboard reaches it and the parts that
+/// way puts in place.
 fn claude_code(check: bool, list: &mut List) {
     println!("Claude Code");
     if util::which("switchboard").is_some() {
@@ -389,13 +419,202 @@ fn claude_code(check: bool, list: &mut List) {
             "git, which the worktree commands, M-d's diff and the tabs' branches need: install it with your package manager"
         });
     }
+    plugin_offered(check, list);
     if util::which("claude").is_none() {
         list.optional(
             "Claude Code, which every tab here runs, for tab states, the sidebar's sessions and M-a: curl -fsSL https://claude.ai/install.sh | bash",
         );
         return;
     }
-    let [settings, md, skills] = [&PARTS[0], &PARTS[1], &PARTS[2]];
+    match way_offered(check, list) {
+        Way::Plugin => plugin_way(check, list),
+        Way::Old => old_way(check, list),
+    }
+}
+
+/// The plugin: Switchboard's own, so written without asking.
+fn plugin_offered(check: bool, list: &mut List) {
+    const THERE: &str = "Switchboard's plugin for the Claude in its panes (its skills, the hooks behind tab states and M-a, its instructions), in ~/.local/share/switchboard/plugin";
+    let part = part_named("plugin").expect("a part");
+    match pending(part) {
+        Err(e) => list.todo(format!("Switchboard's plugin: {e:#}")),
+        Ok(0) => list.ok(THERE),
+        Ok(_) if check => list.not_now(
+            "plugin",
+            "Switchboard's plugin, which setup writes without asking: switchboard setup plugin",
+        ),
+        Ok(_) => {
+            if apply(part) {
+                list.ok(THERE);
+            } else {
+                list.todo("switchboard setup plugin failed");
+            }
+        }
+    }
+}
+
+/// The way Switchboard reaches Claude Code: a Claude Code too old for the
+/// plugin said, and an install an earlier version made in `~/.claude`, whose
+/// owner hasn't chosen, asked once whether to move into the plugin.
+fn way_offered(check: bool, list: &mut List) -> Way {
+    let (way, why) = way::settle(check);
+    if let Some(why) = why {
+        list.optional(&why);
+        return Way::Old;
+    }
+    if way == Way::Plugin && way::old_install() && !way::chosen() {
+        if check {
+            way::set(Way::Old);
+            list.not_now(
+                "loading Switchboard as a plugin",
+                "Switchboard as a plugin in its panes, in place of its hooks, skills and instructions in ~/.claude: switchboard setup asks",
+            );
+            return Way::Old;
+        }
+        if ask(
+            check,
+            "Load Switchboard as a plugin in its panes? Its hooks, skills and instructions move out of ~/.claude, so Claude elsewhere has only your own; Settings' \"Load Switchboard as a plugin\" moves them back.",
+        ) {
+            list.ok("Switchboard loads as a plugin in its panes");
+            return Way::Plugin;
+        }
+        return match way::choose(Way::Old, false) {
+            Ok(()) => {
+                list.optional(
+                    "Switchboard stays in ~/.claude, for every Claude of yours: Settings' \"Load Switchboard as a plugin\" moves it into the plugin",
+                );
+                Way::Old
+            }
+            Err(e) => {
+                list.todo(format!(
+                    "your answer, kept in Settings' \"Load Switchboard as a plugin\": {e:#}"
+                ));
+                Way::Old
+            }
+        };
+    }
+    if way == Way::Old && way::too_old().is_none() {
+        list.optional(
+            "Switchboard as a plugin, which keeps its hooks, skills and instructions to the Claude in its panes: Settings' \"Load Switchboard as a plugin\"",
+        );
+    }
+    way
+}
+
+/// Switchboard as a plugin: your settings get its statusline and
+/// permissions, asked the first time, and what an earlier version put in
+/// `~/.claude` is taken out without asking.
+fn plugin_way(check: bool, list: &mut List) {
+    let settings = part_named("claude").expect("a part");
+    match pending(settings) {
+        Err(e) => list.todo(format!("Claude Code's settings: {e:#}")),
+        Ok(0) => list.ok(
+            "Claude Code's statusline and permissions (the Sessions and Usage views, the loops running unattended)",
+        ),
+        Ok(_) if claude_settings::set_up() => {
+            if check {
+                list.todo("your Claude Code settings have Switchboard's changes to take: switchboard setup claude");
+            } else if apply(settings) {
+                list.ok("Switchboard's Claude Code settings, brought up to date in yours");
+            } else {
+                list.todo("switchboard setup claude failed");
+            }
+        }
+        Ok(_) => {
+            if ask(
+                check,
+                "Add Switchboard's statusline and permissions to your ~/.claude/settings.json? Yours are kept, and a copy is left beside it.",
+            ) {
+                let had = paths::claude_dir().join("settings.json").exists();
+                if apply(settings) {
+                    list.ok(if had {
+                        "added Switchboard's statusline and permissions to yours; your old ones are beside them as settings.json.bak.*"
+                    } else {
+                        "made ~/.claude/settings.json with Switchboard's statusline and permissions"
+                    });
+                } else {
+                    list.todo("adding Switchboard's settings to ~/.claude/settings.json failed");
+                }
+            } else {
+                list.not_now(
+                    "claude",
+                    "Claude Code's statusline and permissions, for the Sessions and Usage views and the loops: switchboard setup claude adds them",
+                );
+            }
+        }
+    }
+
+    // Your CLAUDE.md: Switchboard's import taken out without asking, your
+    // rules imported after asking the first time.
+    let md = part_named("claude-md").expect("a part");
+    match pending(md) {
+        Err(e) => list.todo(format!("your CLAUDE.md: {e:#}")),
+        Ok(0) => {
+            if claude_md::rules_named() {
+                list.ok("your CLAUDE.md imports your rules");
+            }
+        }
+        Ok(_) if claude_md::set_up() || !claude_md::rules_named() => {
+            if check {
+                list.todo("your CLAUDE.md has changes to take: switchboard setup claude-md");
+            } else if apply(md) {
+                list.ok("your CLAUDE.md, brought up to date");
+            } else {
+                list.todo("switchboard setup claude-md failed");
+            }
+        }
+        Ok(_) => {
+            if ask(
+                check,
+                "Write your ~/.claude/CLAUDE.md to import your own rules, as ~/.config/switchboard/claude.json names them? A CLAUDE.md of yours there is moved aside first.",
+            ) {
+                if apply(md) {
+                    list.ok("your CLAUDE.md imports your rules");
+                } else {
+                    list.todo("switchboard setup claude-md failed");
+                }
+            } else {
+                list.not_now(
+                    "claude-md",
+                    "your rules in your CLAUDE.md: switchboard setup claude-md",
+                );
+            }
+        }
+    }
+
+    // The skills an earlier version wrote, taken out.
+    if skills::installed() {
+        let part = part_named("skills").expect("a part");
+        match pending(part) {
+            Err(e) => list.todo(format!("Switchboard's skills: {e:#}")),
+            Ok(_) if check => list.todo(
+                "Switchboard's skills in ~/.claude/skills, which its plugin carries now: switchboard setup skills takes them out",
+            ),
+            Ok(_) => {
+                if apply(part) {
+                    list.ok("took Switchboard's skills out of ~/.claude/skills: its plugin carries them");
+                } else {
+                    list.todo("switchboard setup skills failed");
+                }
+            }
+        }
+    }
+    let own = skills::own_skills();
+    if !own.is_empty() {
+        list.optional(&format!(
+            "your own skills by the names of Switchboard's, which take the bare name (Switchboard's run as /switchboard:<name>): {}",
+            own.join(" ")
+        ));
+    }
+}
+
+/// Switchboard in `~/.claude`, as earlier versions put it: its hooks,
+/// statusline and permissions, its part of CLAUDE.md and its skills, each
+/// asked the first time and then kept up to date.
+fn old_way(check: bool, list: &mut List) {
+    let settings = part_named("claude").expect("a part");
+    let md = part_named("claude-md").expect("a part");
+    let skills = part_named("skills").expect("a part");
 
     // Without these hooks every tab shows idle, and M-a has nothing to walk.
     match pending(settings) {
@@ -541,13 +760,13 @@ fn finish(check: bool, list: List) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The `claude-md` part, as Settings runs it after claude.json changes:
-/// this binary's own `setup claude-md` with its input closed. What it
-/// changed last, in its own words, or why it failed.
-pub fn run_claude_md() -> Result<String, String> {
+/// This binary's own `setup` with `args` and its input closed, as Settings
+/// runs it: what it said last, in its own words, or why it failed.
+fn run_setup(args: &[&str]) -> Result<String, String> {
     let exe = util::exe().map_err(|e| e.to_string())?;
     let out = std::process::Command::new(exe)
-        .args(["setup", "claude-md"])
+        .arg("setup")
+        .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(std::process::Stdio::null())
         .output()
@@ -574,6 +793,67 @@ pub fn run_claude_md() -> Result<String, String> {
     }
 }
 
+/// The `claude-md` part, as Settings runs it after claude.json changes.
+pub fn run_claude_md() -> Result<String, String> {
+    run_setup(&["claude-md"])
+}
+
+/// `setup --move`, as Settings runs it after "Load Switchboard as a plugin"
+/// changes.
+pub fn run_move() -> Result<String, String> {
+    run_setup(&["--move"])
+}
+
+/// `switchboard setup --move`: Switchboard moved the way the setting now
+/// says, by the parts that do it, out loud, asking nothing, ending with a
+/// line saying where it is. Into the plugin, each part runs only when it
+/// has something of Switchboard's to take out, so nothing of yours is
+/// added; back into `~/.claude`, all three put it there, as the old way's
+/// whole setup did.
+fn move_over() -> ExitCode {
+    let (way, why) = way::settle(false);
+    let mut report = Report::new(false);
+    let mut failed = Vec::new();
+    let plugin = part_named("plugin").expect("a part");
+    if !run_part(&mut report, plugin, true) {
+        failed.push(plugin.name);
+    }
+    let parts: Vec<&str> = match way {
+        Way::Old => vec!["claude", "claude-md", "skills"],
+        Way::Plugin => [
+            ("claude", claude_settings::set_up()),
+            (
+                "claude-md",
+                claude_md::set_up() || exists(&claude_md::part_file()),
+            ),
+            ("skills", skills::installed()),
+        ]
+        .into_iter()
+        .filter(|(_, any)| *any)
+        .map(|(name, _)| name)
+        .collect(),
+    };
+    for name in parts {
+        let part = part_named(name).expect("a part");
+        if !run_part(&mut report, part, true) {
+            failed.push(part.name);
+        }
+    }
+    if !failed.is_empty() {
+        eprintln!("Failed: {}", failed.join(" "));
+        return ExitCode::from(1);
+    }
+    println!(
+        "{}",
+        match (way, why) {
+            (_, Some(why)) => why,
+            (Way::Plugin, None) => "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude".to_string(),
+            (Way::Old, None) => "Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours".to_string(),
+        }
+    );
+    ExitCode::SUCCESS
+}
+
 // ── A new build ─────────────────────────────────────────────────────────────
 
 /// Where the build whose parts were last put in place is recorded.
@@ -595,17 +875,18 @@ fn build_mark() -> String {
     };
     add(claude_settings::ASSET.as_bytes());
     add(claude_md::PART.as_bytes());
-    for (path, bytes) in skills::FILES {
+    for (path, bytes) in plugin::files() {
         add(path.as_bytes());
-        add(bytes);
+        add(&bytes);
     }
     format!("{} {hash:016x}", crate::update::version_line())
 }
 
-/// The first run of a new build: the parts already set up brought up to
-/// date, quietly, as `switchboard` attaches. Not in a run with a state
-/// directory of its own (a try of a worktree's build, or a test's), which
-/// shares your home and would put its version of the skills in it.
+/// The first run of a new build: the plugin written and the parts already
+/// set up brought up to date, quietly, as `switchboard` attaches. Not in a
+/// run with a state directory of its own (a try of a worktree's build, or a
+/// test's), which shares your home and would put its version of the skills
+/// in it.
 pub fn refresh() {
     if std::env::var_os("SWITCHBOARD_STATE_DIR").is_some() {
         return;
@@ -617,8 +898,12 @@ pub fn refresh() {
 /// once per build, recorded only once every part it ran worked, so one
 /// that failed is tried again on the next run. A part you said no to, or
 /// never ran, is left for the guided setup to ask about; your CLAUDE.md
-/// gets only Switchboard's part written again, with no pull of your rules'
-/// repository, which the update look does.
+/// gets only Switchboard's part written again (or, as a plugin, its import
+/// taken out), with no pull of your rules' repository, which the update
+/// look does. Nothing is moved quietly: an install an earlier version made
+/// in `~/.claude` whose owner hasn't chosen is kept the old way, recorded in
+/// the setting, so the panes don't load the plugin on top of its hooks, and
+/// the guided setup asks.
 pub fn refresh_now() {
     let file = build_file();
     let mark = build_mark();
@@ -627,12 +912,22 @@ pub fn refresh_now() {
     }
     let mut report = Report::new(false);
     report.silent = true;
-    let mut worked = true;
+    let mut worked = plugin::run(&mut report).is_ok();
+    if way::old_install() && !way::chosen() {
+        worked &= way::choose(Way::Old, false).is_ok();
+    }
+    let (way, _) = way::settle(false);
     if claude_settings::set_up() {
         worked &= claude_settings::run(&mut report).is_ok();
     }
-    if claude_md::set_up() {
-        worked &= claude_md::write_part(&mut report).is_ok();
+    match way {
+        Way::Old if claude_md::set_up() => {
+            worked &= claude_md::write_part(&mut report).is_ok();
+        }
+        Way::Plugin if claude_md::set_up() || exists(&claude_md::part_file()) => {
+            worked &= claude_md::migrate(&mut report).is_ok();
+        }
+        _ => {}
     }
     if skills::installed() {
         worked &= skills::run(&mut report).is_ok();

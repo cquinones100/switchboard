@@ -1,6 +1,7 @@
 //! `switchboard codex-review`, ported from test/codex-review.test.js: run
 //! against a repository and its origin (a bare repository) in a temporary
-//! HOME, with `--dry-run` so no reviewer runs. The origin is a path, which
+//! HOME, with `--dry-run` so no reviewer runs, but for a stand-in Claude on
+//! the test's PATH where what it is started with matters. The origin is a path, which
 //! isn't GitHub, so the branch has no PR and nothing asks GitHub; the
 //! token and GitHub's address are pointed nowhere all the same.
 
@@ -269,4 +270,53 @@ fn the_patch_id_names_a_change_whatever_its_base() {
     assert_eq!(text(&none.stdout), "\n", "no change, no hash");
     let bad = review(home, &work, &["--patch-id", "HEAD"]);
     assert_eq!(bad.status.code(), Some(1));
+}
+
+#[test]
+fn claude_reviews_without_switchboard_s_plugin_from_the_pane() {
+    let tmp = TempDir::new("cr-plugin");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "A change"]);
+    // A stand-in Claude that says which plugin directories it was given,
+    // and finds nothing.
+    let bin = home.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let said = home.join("plugin-dirs");
+    fs::write(
+        bin.join("claude"),
+        format!(
+            "#!/bin/sh\ncat >/dev/null\nprintf '%s' \"${{CLAUDE_CODE_PLUGIN_DIRS-unset}}\" > '{}'\necho '{{\"structured_output\":{{\"findings\":[]}}}}'\n",
+            said.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    let plugin = home.join(".local/share/switchboard/plugin");
+    let run = |dirs: &str| {
+        let mut cmd = Command::new(BIN);
+        cmd.args(["codex-review", "--reviewer", "claude", "--no-rules"])
+            .current_dir(&work)
+            .stdin(Stdio::null());
+        env(&mut cmd, home);
+        let path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{path}", bin.display()))
+            .env("CLAUDE_CODE_PLUGIN_DIRS", dirs);
+        let out = cmd.output().unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        fs::read_to_string(&said).unwrap()
+    };
+    assert_eq!(
+        run(&format!("/opt/mine:{}", plugin.display())),
+        "/opt/mine",
+        "the pane's plugin left out, yours kept"
+    );
+    assert_eq!(run(&plugin.to_string_lossy()), "unset");
 }

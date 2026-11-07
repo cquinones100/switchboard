@@ -472,6 +472,8 @@ fn a_hook_outside_the_workspace_says_nothing_and_succeeds() {
     assert_eq!(lines[0]["event"], "done");
     assert_eq!(lines[0]["last"], "Done.");
     assert_eq!(lines[0]["transcript_path"], "/t.jsonl");
+    // (Hooks reach Claude outside the workspace only when Switchboard is set
+    // up the old way, in ~/.claude; as a plugin, only its panes' run them.)
 
     // A server running, a pane it doesn't know.
     let server = TestServer::start();
@@ -483,4 +485,56 @@ fn a_hook_outside_the_workspace_says_nothing_and_succeeds() {
         "{}",
     );
     assert_eq!(got, silent);
+}
+
+/// What `$CLAUDE_CODE_PLUGIN_DIRS` is in the first pane, as its shell
+/// echoes it.
+fn plugin_dirs_in_a_pane(server: &TestServer) -> String {
+    let mut client = server.attach(120, 24);
+    client.wait_text("$");
+    let (pane, _) = first_pane(server);
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "echo \"dirs=[$CLAUDE_CODE_PLUGIN_DIRS]\"",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    let found = |text: &str| {
+        text.lines()
+            .find(|l| l.starts_with("dirs=["))
+            .map(|l| l.trim_end().to_string())
+    };
+    client.wait_for("the echo", |_| {
+        found(&server.ok(&["capture-pane", "-t", &pane])).is_some()
+    });
+    found(&server.ok(&["capture-pane", "-t", &pane])).unwrap()
+}
+
+#[test]
+fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
+    let server = TestServer::start();
+    let plugin = server.home.join(".local/share/switchboard/plugin");
+    // Written as the server started.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !plugin.join(".claude-plugin/plugin.json").is_file() {
+        assert!(Instant::now() < deadline, "no plugin: {}", server.log());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let hooks = std::fs::read_to_string(plugin.join("hooks/hooks.json")).unwrap();
+    assert!(hooks.contains("switchboard claude-context"), "{hooks}");
+    assert!(plugin.join("skills/wt/SKILL.md").is_file());
+    assert_eq!(
+        plugin_dirs_in_a_pane(&server),
+        format!("dirs=[{}]", plugin.display())
+    );
+
+    // Off: setup keeps Switchboard in ~/.claude, and the panes name no
+    // plugin.
+    let dir = TempDir::new("sbt-plugin-off");
+    let file = dir.path().join("settings.json");
+    std::fs::write(&file, r#"{"claude_plugin": false, "notifications": false}"#).unwrap();
+    let off = TestServer::start_with_env(&[("SWITCHBOARD_SETTINGS", file.to_str().unwrap())]);
+    assert_eq!(plugin_dirs_in_a_pane(&off), "dirs=[]");
 }

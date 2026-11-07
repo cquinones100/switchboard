@@ -9,7 +9,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 ## Requirements
 
 - Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
-- [Claude Code](https://claude.com/claude-code), which the tabs run, and git.
+- [Claude Code](https://claude.com/claude-code), which the tabs run, 2.1.280 or later to load Switchboard as a plugin (an older one gets it in `~/.claude`, as before), and git.
 - A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". `switchboard setup` offers to set it in Ghostty, Terminal and iTerm2. Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty.
 
 Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex each turn on a part of it when you have them; the [guide](docs/guide.md) says what each needs.
@@ -40,7 +40,9 @@ Then start it:
 switchboard
 ```
 
-`switchboard setup` puts in place what Claude Code needs for the workspace: the hooks that tell each tab what its Claude is doing, the statusline, the permissions its skills run with, a `~/.claude/CLAUDE.md` that imports Switchboard's part beside your own rules, and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). It merges into your own `~/.claude/settings.json` rather than replacing it, keeps a copy of the file before, and keeps a skill of your own by the same name. It also offers to make Option act as Alt in a Mac's terminal, to tidy the links and `~/.zshrc` lines a tmux version of Switchboard left, and says which optional parts are missing (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
+`switchboard setup` puts in place what Claude Code needs for the workspace. Switchboard's hooks, which tell each tab what its Claude is doing, its instructions (how to read the tabs, the notes app) and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest) are a Claude Code plugin, `~/.local/share/switchboard/plugin`, which only the Claude in Switchboard's panes loads, so Claude elsewhere is as you set it up. The statusline and the permissions its skills run with, which a plugin can't carry, are merged into your own `~/.claude/settings.json` after asking, keeping a copy of the file before. With Settings' "Load Switchboard as a plugin" off, or a Claude Code older than 2.1.280, setup puts the hooks, a `~/.claude/CLAUDE.md` import of Switchboard's part and the skills in `~/.claude` instead, for every Claude of yours, as earlier versions did; an install of an earlier version is asked once which it wants. Setup also offers to make Option act as Alt in a Mac's terminal, to tidy the links and `~/.zshrc` lines a tmux version of Switchboard left, and says which optional parts are missing (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
+
+As a plugin, a Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
 
 ## First keys
 
@@ -72,7 +74,7 @@ Vim's keys are the default in Notes and the diff, and you don't need to know the
 
 ## Staying up to date
 
-A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings. `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary, so the setup is what takes a new build's to `~/.claude`; the first time a new build attaches, it brings the parts you have set up up to date by itself, and `switchboard setup` says what it did.
+A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings. `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary; the server writes a new build's plugin as it starts, and the setup takes them to `~/.claude` when Switchboard is set up there; the first time a new build attaches, it brings the parts you have set up up to date by itself, and `switchboard setup` says what it did.
 
 ## Making it yours
 
@@ -82,7 +84,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 |---|---|
 | `settings.json` | What you changed in Settings, only the settings that differ from their defaults; you may edit it by hand |
 | `keys.json` | Keys bound to other actions, or unbound |
-| `CLAUDE.md` | Your own Claude rules, imported with Switchboard's part into `~/.claude/CLAUDE.md` |
+| `CLAUDE.md` | Your own Claude rules, imported into `~/.claude/CLAUDE.md` |
 | `claude.json` | Where your rules come from instead: another file, or a git repository of yours |
 | `browser.json` | The Chrome profile each site's links open in, and the default one |
 | `linear.json` | Your Linear workspace, and the team and labels `/shape` files tickets with |
@@ -93,7 +95,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `trusted-dirs` | The directories whose own scripts may run |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |
 
-Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/`, and what setup writes for Claude Code (Switchboard's part of your CLAUDE.md, the clone of your rules' repository) in `~/.local/share/switchboard/`.
+Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/`, and what setup writes for Claude Code (Switchboard's plugin, its part of your CLAUDE.md when that imports it, the clone of your rules' repository) in `~/.local/share/switchboard/`.
 
 ## More
 

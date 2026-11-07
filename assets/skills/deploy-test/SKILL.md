@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Deploy test
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path deploy-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path deploy-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Wait for a merged PR to reach the site it deploys to, walk through what it changed in Chrome while recording a video, and ask the user to approve what the video shows. Nothing here changes the repository: it needs only the PR and its repo, so it runs from any clone, or from `/queue-and-clean`, which reads this file and follows it (see "From queue-and-clean").
 

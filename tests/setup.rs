@@ -24,11 +24,45 @@ struct Home {
 }
 
 impl Home {
+    /// A home with a stand-in Claude Code new enough for the plugin, so the
+    /// real one is never run.
     fn new(prefix: &str) -> Home {
         let dir = TempDir::new(prefix);
         let home = dir.path().join("home");
         fs::create_dir_all(home.join("bin")).unwrap();
-        Home { _dir: dir, home }
+        let h = Home { _dir: dir, home };
+        h.claude_version("2.1.319");
+        h
+    }
+
+    /// The stand-in Claude Code, saying it is `version`.
+    fn claude_version(&self, version: &str) {
+        self.stand_in(
+            "claude",
+            &format!(
+                "#!/bin/sh\n[ \"$1\" = --version ] && echo '{version} (Claude Code)'\nexit 0\n"
+            ),
+        );
+    }
+
+    /// Switchboard's own settings file, holding `settings`.
+    fn settings(&self, settings: Value) {
+        let file = self.path(".config/switchboard/settings.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, settings.to_string()).unwrap();
+    }
+
+    /// Settings' "Load Switchboard as a plugin" off: the old way.
+    fn old_way(&self) {
+        self.settings(json!({ "claude_plugin": false }));
+    }
+
+    /// What Switchboard's settings file holds, `{}` when there is none.
+    fn saved(&self) -> Value {
+        fs::read_to_string(self.path(".config/switchboard/settings.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(json!({}))
     }
 
     fn path(&self, rel: &str) -> PathBuf {
@@ -57,6 +91,8 @@ impl Home {
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")
             .env_remove("SWITCHBOARD_PULL_ONLY")
+            .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
+            .env_remove("CLAUDE_CODE_ENTRYPOINT")
             // The terminal and the services the guided setup looks at are
             // the test's: none.
             .env_remove("TERM_PROGRAM")
@@ -167,6 +203,8 @@ fn product() -> Value {
 #[test]
 fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_your_own() {
     let h = Home::new("setup-claude");
+    // The old way, which adds the hooks too.
+    h.old_way();
     let file = h.path(".claude/settings.json");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     // Yours: a model, a permission, a hook of your own beside the tmux
@@ -295,6 +333,8 @@ fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_
 #[test]
 fn claude_md_imports_your_rules_from_a_file_or_a_repository_and_switchboard_s_part_once() {
     let h = Home::new("setup-md");
+    // The old way, which imports Switchboard's part.
+    h.old_way();
     let file = h.path(".claude/CLAUDE.md");
     let config = h.path(".config/switchboard/claude.json");
     let run = |args: &[&str]| h.run(args);
@@ -585,6 +625,8 @@ fn claude_md_adds_gh_as_a_credential_helper_of_a_rules_clone_on_github_once() {
 #[test]
 fn skills_are_written_keeping_one_of_your_own_and_brought_up_to_date() {
     let h = Home::new("setup-skills");
+    // The old way, which writes them into ~/.claude/skills.
+    h.old_way();
     let skills = h.path(".claude/skills");
     let shipped: Vec<String> =
         fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills"))
@@ -751,33 +793,116 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 #[test]
-fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the_second_time() {
+fn the_guided_setup_writes_the_plugin_asks_first_and_changes_nothing_the_second_time() {
     let h = Home::new("setup-guided");
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
-    h.stand_in("claude", "#!/bin/sh\n");
+    let plugin = h.path(".local/share/switchboard/plugin");
 
-    // --check says what the setup would offer, and writes nothing.
+    // --check says what the setup would do, and writes nothing.
     let check = ok(&h.run(&["setup", "--check"]));
     assert!(
         // A Mac's terminal may be offered after them.
-        check.contains("switchboard setup would offer: claude, claude-md, skills"),
+        check.contains("switchboard setup would offer: plugin, claude"),
         "{check}"
     );
     assert!(!h.path(".claude").exists(), "nothing written: {check}");
+    assert!(!plugin.exists(), "nothing written: {check}");
 
-    // A closed input says no to everything.
+    // A closed input says no to what is asked; the plugin, Switchboard's
+    // own, is written without asking.
     let closed = ok(&h.run(&["setup"]));
     assert!(closed.contains("[Y/n]"), "{closed}");
-    assert!(closed.contains("– Switchboard's skills"), "{closed}");
+    assert!(closed.contains("✓ Switchboard's plugin"), "{closed}");
+    assert!(
+        closed.contains("– Claude Code's statusline and permissions"),
+        "{closed}"
+    );
     assert!(
         closed.contains("the Slack relay, for reaching your tabs from Slack"),
         "{closed}"
     );
-    assert!(!h.path(".claude").exists(), "nothing written: {closed}");
+    assert!(!h.path(".claude").exists(), "nothing of yours: {closed}");
+    assert!(plugin.join(".claude-plugin/plugin.json").is_file());
+    assert_eq!(
+        read(&plugin.join("skills/wt/SKILL.md")),
+        read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills/wt/SKILL.md"))
+    );
+    let hooks = read(&plugin.join("hooks/hooks.json"));
+    assert!(
+        hooks.contains("switchboard hook Stop") && hooks.contains("switchboard claude-context"),
+        "{hooks}"
+    );
+
+    // Yes, by Enter.
+    let said = ok(&h.run_with(&["setup"], "\n"));
+    assert!(
+        said.contains(
+            "✓ made ~/.claude/settings.json with Switchboard's statusline and permissions"
+        ),
+        "{said}"
+    );
+    assert!(said.ends_with("Ready.\n"), "{said}");
+    let settings: Value = serde_json::from_str(&read(&h.path(".claude/settings.json"))).unwrap();
+    assert_eq!(settings["statusLine"]["command"], "switchboard statusline");
+    assert!(
+        settings.get("hooks").is_none(),
+        "the hooks are the plugin's: {settings}"
+    );
+    assert!(!h.path(".claude/skills").exists());
+    assert!(!h.path(".claude/CLAUDE.md").exists());
+    assert_eq!(h.saved(), json!({}), "the setting at its default, on");
+
+    // A second run asks nothing and changes nothing.
+    let before = snapshot(&h.home);
+    let second = ok(&h.run(&["setup"]));
+    assert!(!second.contains("[Y/n]"), "{second}");
+    let claude = second.split("\n\n").next().unwrap();
+    assert_eq!(claude.matches('✓').count(), 4, "{second}");
+    assert_eq!(snapshot(&h.home), before, "nothing changed");
+    for part in ["plugin", "claude", "claude-md"] {
+        assert_eq!(
+            ok(&h.run(&["setup", part])),
+            format!("{part}: up to date\n")
+        );
+    }
+
+    // The plugin takes what is new without asking.
+    fs::write(plugin.join("skills/wt/SKILL.md"), "an older wt\n").unwrap();
+    let newer = ok(&h.run(&["setup"]));
+    assert!(
+        newer.contains("bring ~/.local/share/switchboard/plugin up to date (1 file written)"),
+        "{newer}"
+    );
+    assert_ne!(read(&plugin.join("skills/wt/SKILL.md")), "an older wt\n");
+
+    // Without switchboard on the PATH, the hooks couldn't run: left to do.
+    fs::remove_file(h.path("bin/switchboard")).unwrap();
+    let missing = h
+        .command(BIN)
+        .arg("setup")
+        .env("PATH", format!("{}:/usr/bin:/bin", h.path("bin").display()))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    assert!(stdout(&missing).contains("Left to do:\n  ✗ switchboard on your PATH"));
+}
+
+#[test]
+fn the_guided_setup_the_old_way_asks_for_each_part_in_claude_and_keeps_them_up_to_date() {
+    let h = Home::new("setup-guided-old");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    h.old_way();
+
+    let check = ok(&h.run(&["setup", "--check"]));
+    assert!(
+        check.contains("switchboard setup would offer: plugin, claude, claude-md, skills"),
+        "{check}"
+    );
+    assert!(check.contains("– Switchboard as a plugin"), "{check}");
 
     // Yes to each, by Enter or y.
-    let yes = h.run_with(&["setup"], "\ny\nY\n");
-    let said = ok(&yes);
+    let said = ok(&h.run_with(&["setup"], "\ny\nY\n"));
     assert!(
         said.contains("✓ made ~/.claude/settings.json with Switchboard's Claude Code settings"),
         "no settings of yours to keep a copy of: {said}"
@@ -788,13 +913,17 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     );
     assert!(said.contains("✓ installed Switchboard's skills"), "{said}");
     assert!(said.ends_with("Ready.\n"), "{said}");
+    assert!(read(&h.path(".claude/settings.json")).contains("switchboard hook Stop"));
+    assert_eq!(
+        read(&h.path(".claude/CLAUDE.md")),
+        "@~/.local/share/switchboard/switchboard.md\n"
+    );
+    assert!(h.path(".claude/skills/wt/.switchboard-skill").is_file());
 
     // A second run asks nothing and changes nothing.
     let before = snapshot(&h.home);
     let second = ok(&h.run(&["setup"]));
     assert!(!second.contains("[Y/n]"), "{second}");
-    let claude = second.split("\n\n").next().unwrap();
-    assert_eq!(claude.matches('✓').count(), 5, "{second}");
     assert_eq!(snapshot(&h.home), before, "nothing changed");
     for part in ["claude", "claude-md", "skills"] {
         assert_eq!(
@@ -811,31 +940,31 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
         newer.contains("✓ Switchboard's skills, brought up to date"),
         "{newer}"
     );
+}
 
-    // Without switchboard on the PATH, the hooks couldn't run: left to do.
-    fs::remove_file(h.path("bin/switchboard")).unwrap();
-    let missing = h
-        .command(BIN)
-        .arg("setup")
-        .env("PATH", format!("{}:/usr/bin:/bin", h.path("bin").display()))
-        .stdin(Stdio::null())
-        .output()
-        .unwrap();
-    assert!(!missing.status.success());
-    assert!(stdout(&missing).contains("Left to do:\n  ✗ switchboard on your PATH"));
+/// An install made the old way by an earlier version, before the setting:
+/// Switchboard's hooks, part of CLAUDE.md and skills in `~/.claude`, and no
+/// choice in the settings file.
+fn earlier_install(h: &Home) {
+    h.old_way();
+    ok(&h.run(&["setup", "claude", "claude-md", "skills"]));
+    h.settings(json!({}));
 }
 
 #[test]
-fn a_new_build_brings_its_parts_to_what_is_set_up_once() {
+fn a_new_build_writes_the_plugin_and_keeps_an_earlier_install_the_old_way_moving_nothing() {
     let h = Home::new("setup-refresh");
-    // Nothing set up: nothing is written but the build's mark.
+    let plugin = h.path(".local/share/switchboard/plugin");
+    // Nothing set up: the plugin and the build's mark, nothing of yours.
     ok(&h.run(&["setup", "--refresh"]));
     assert!(!h.path(".claude").exists());
+    assert!(plugin.join("skills/wt/SKILL.md").is_file());
     assert!(h.path(".local/share/switchboard/setup-build").is_file());
+    assert_eq!(h.saved(), json!({}), "the plugin, by default");
 
-    // Set up by an older build, whose skills and part of CLAUDE.md differ.
-    ok(&h.run(&["setup", "skills"]));
-    ok(&h.run(&["setup", "claude-md"]));
+    // Set up by an earlier version, whose skills and part of CLAUDE.md are
+    // older than this build's.
+    earlier_install(&h);
     fs::write(h.path(".claude/skills/wt/SKILL.md"), "an older wt\n").unwrap();
     fs::write(h.path(".local/share/switchboard/switchboard.md"), "older\n").unwrap();
     fs::write(
@@ -843,20 +972,267 @@ fn a_new_build_brings_its_parts_to_what_is_set_up_once() {
         "0.0.1 (old)\n",
     )
     .unwrap();
+    let settings = read(&h.path(".claude/settings.json"));
     let said = ok(&h.run(&["setup", "--refresh"]));
     assert_eq!(said, "", "quiet");
+    assert_eq!(
+        h.saved()["claude_plugin"],
+        json!(false),
+        "the old way recorded, so the panes don't load the plugin on top of the hooks"
+    );
+    assert_eq!(
+        read(&h.path(".claude/settings.json")),
+        settings,
+        "nothing moved"
+    );
     assert_ne!(read(&h.path(".claude/skills/wt/SKILL.md")), "an older wt\n");
     assert_ne!(
         read(&h.path(".local/share/switchboard/switchboard.md")),
         "older\n"
     );
-    // Claude Code's settings, never set up, are left for setup to ask about.
-    assert!(!h.path(".claude/settings.json").exists());
 
     // Once per build: what is changed after is left alone.
     fs::write(h.path(".claude/skills/wt/SKILL.md"), "edited\n").unwrap();
     ok(&h.run(&["setup", "--refresh"]));
     assert_eq!(read(&h.path(".claude/skills/wt/SKILL.md")), "edited\n");
+}
+
+#[test]
+fn the_guided_setup_asks_an_earlier_install_once_whether_to_load_switchboard_as_a_plugin() {
+    let h = Home::new("setup-offer");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    earlier_install(&h);
+    let installed = snapshot(&h.path(".claude"));
+    const ASKED: &str = "Load Switchboard as a plugin in its panes?";
+
+    // --check says it would ask, and changes nothing.
+    let check = ok(&h.run(&["setup", "--check"]));
+    assert!(check.contains("loading Switchboard as a plugin"), "{check}");
+    assert_eq!(snapshot(&h.path(".claude")), installed);
+    assert_eq!(h.saved(), json!({}));
+
+    // A closed input says no: the old way, recorded, nothing moved.
+    let no = ok(&h.run(&["setup"]));
+    assert!(no.contains(ASKED), "{no}");
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert_eq!(snapshot(&h.path(".claude")), installed);
+    // Asked once.
+    let again = ok(&h.run(&["setup"]));
+    assert!(!again.contains(ASKED), "{again}");
+
+    // Yes: moved, and the setting left on.
+    h.settings(json!({}));
+    let yes = ok(&h.run_with(&["setup"], "y\n"));
+    assert!(
+        yes.contains("✓ Switchboard loads as a plugin in its panes"),
+        "{yes}"
+    );
+    assert!(yes.ends_with("Ready.\n"), "{yes}");
+    assert_eq!(h.saved(), json!({}));
+    assert!(!read(&h.path(".claude/settings.json")).contains("switchboard hook"));
+    assert!(
+        !h.path(".claude/CLAUDE.md").exists(),
+        "setup made it only to import Switchboard's part"
+    );
+    assert!(!h.path(".claude/skills/wt").exists());
+    let after = ok(&h.run(&["setup"]));
+    assert!(!after.contains("[Y/n]"), "{after}");
+}
+
+#[test]
+fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
+    let h = Home::new("setup-move");
+    // Yours: settings with a model, a hook and a permission, a CLAUDE.md,
+    // and a skill by one of Switchboard's names.
+    fs::create_dir_all(h.path(".claude/skills/today")).unwrap();
+    fs::write(h.path(".claude/skills/today/SKILL.md"), "mine\n").unwrap();
+    fs::write(h.path(".claude/CLAUDE.md"), "# Mine\n- be brief\n").unwrap();
+    let your_hooks =
+        json!({ "Stop": [{ "hooks": [{ "type": "command", "command": "say done" }] }] });
+    fs::write(
+        h.path(".claude/settings.json"),
+        json!({ "model": "opus", "permissions": { "allow": ["Bash(make *)"] }, "hooks": your_hooks })
+            .to_string(),
+    )
+    .unwrap();
+    let skills_left = || -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(h.path(".claude/skills"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let settings =
+        || -> Value { serde_json::from_str(&read(&h.path(".claude/settings.json"))).unwrap() };
+    let up_to_date = || {
+        for part in ["claude", "claude-md", "skills"] {
+            assert_eq!(
+                ok(&h.run(&["setup", part])),
+                format!("{part}: up to date\n")
+            );
+        }
+    };
+
+    // The old way, set up.
+    h.old_way();
+    ok(&h.run(&["setup", "claude", "claude-md", "skills"]));
+    assert!(read(&h.path(".claude/settings.json")).contains("switchboard hook Stop"));
+    assert_eq!(
+        read(&h.path(".claude/CLAUDE.md")),
+        "# Mine\n- be brief\n\n@~/.local/share/switchboard/switchboard.md\n"
+    );
+    assert!(h.path(".claude/skills/wt/SKILL.md").is_file());
+
+    // On: Switchboard moves into its plugin, and only Switchboard's parts.
+    let on = ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert!(on.starts_with("on\n"), "{on}");
+    assert!(
+        on.ends_with(
+            "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude\n"
+        ),
+        "{on}"
+    );
+    assert_eq!(h.saved(), json!({}));
+    let s = settings();
+    assert_eq!(s["hooks"], your_hooks, "yours kept, Switchboard's out");
+    assert_eq!(s["model"], "opus");
+    assert_eq!(s["statusLine"]["command"], "switchboard statusline");
+    let allow = s["permissions"]["allow"].as_array().unwrap();
+    assert!(allow.contains(&json!("Bash(make *)")));
+    assert!(allow.contains(&json!("Bash(switchboard tabs)")));
+    assert_eq!(read(&h.path(".claude/CLAUDE.md")), "# Mine\n- be brief\n");
+    assert!(!h.path(".local/share/switchboard/switchboard.md").exists());
+    assert_eq!(skills_left(), ["today"]);
+    assert_eq!(read(&h.path(".claude/skills/today/SKILL.md")), "mine\n");
+    assert!(
+        h.path(".local/share/switchboard/plugin/skills/wt/SKILL.md")
+            .is_file()
+    );
+    // Again: nothing to move.
+    let before = snapshot(&h.path(".claude"));
+    ok(&h.run(&["setup", "--move"]));
+    assert_eq!(snapshot(&h.path(".claude")), before);
+    up_to_date();
+
+    // Off: back into ~/.claude, yours kept.
+    let off = ok(&h.run(&["setting", "claude_plugin", "off"]));
+    assert!(
+        off.ends_with("Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours\n"),
+        "{off}"
+    );
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    let s = settings();
+    let text = s["hooks"].to_string();
+    assert!(
+        text.contains("say done") && text.contains("switchboard hook Stop"),
+        "{text}"
+    );
+    assert_eq!(
+        read(&h.path(".claude/CLAUDE.md")),
+        "# Mine\n- be brief\n\n@~/.local/share/switchboard/switchboard.md\n"
+    );
+    assert!(h.path(".claude/skills/wt/.switchboard-skill").is_file());
+    assert_eq!(read(&h.path(".claude/skills/today/SKILL.md")), "mine\n");
+    let before = snapshot(&h.path(".claude"));
+    ok(&h.run(&["setup", "--move"]));
+    assert_eq!(snapshot(&h.path(".claude")), before);
+    up_to_date();
+}
+
+#[test]
+fn a_claude_code_too_old_for_the_plugin_keeps_the_old_way_whatever_the_setting() {
+    let h = Home::new("setup-old-claude");
+    h.claude_version("2.1.100");
+    earlier_install(&h);
+    let installed = snapshot(&h.path(".claude"));
+
+    // Setup keeps the old way, says why, and turns the setting off.
+    let said = ok(&h.run(&["setup", "claude", "claude-md", "skills"]));
+    assert!(
+        said.contains(
+            "Claude Code 2.1.100 is older than 2.1.280, which loads Switchboard as a plugin"
+        ),
+        "{said}"
+    );
+    assert_eq!(snapshot(&h.path(".claude")), installed, "nothing taken out");
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+
+    // Turned on, it stays off, saying why.
+    let on = ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert!(on.contains("is older than 2.1.280"), "{on}");
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert_eq!(snapshot(&h.path(".claude")), installed);
+
+    // The guided setup says so too, and asks nothing about the plugin.
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    let guided = ok(&h.run(&["setup"]));
+    assert!(
+        !guided.contains("Load Switchboard as a plugin in its panes?"),
+        "{guided}"
+    );
+
+    // Once Claude Code is new enough, turning it on moves Switchboard over.
+    h.claude_version("2.1.280");
+    ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert_eq!(h.saved(), json!({}));
+    assert!(!read(&h.path(".claude/settings.json")).contains("switchboard hook"));
+}
+
+#[test]
+fn claude_context_gives_an_interactive_session_switchboard_s_instructions_and_a_headless_one_nothing()
+ {
+    let h = Home::new("setup-context");
+    let run = |entrypoint: Option<&str>, input: &str| -> Output {
+        let mut cmd = h.command(BIN);
+        cmd.arg("claude-context")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(e) = entrypoint {
+            cmd.env("CLAUDE_CODE_ENTRYPOINT", e);
+        }
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    let part = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/switchboard.md"));
+    let start = r#"{"session_id":"s1","hook_event_name":"SessionStart","source":"startup"}"#;
+
+    let out = run(Some("cli"), start);
+    assert!(out.status.success());
+    assert!(out.stderr.is_empty());
+    let answer: Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    assert_eq!(
+        answer,
+        json!({ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": part } })
+    );
+    // Whatever its input.
+    let odd = run(None, "not json");
+    assert!(odd.status.success());
+    assert_eq!(odd.stdout, out.stdout);
+
+    // A headless session, by how Claude Code says it started it, or by
+    // its session file: nothing, and still 0.
+    let headless = run(Some("sdk-cli"), start);
+    assert!(headless.status.success());
+    assert!(headless.stdout.is_empty() && headless.stderr.is_empty());
+    let sessions = h.path(".claude/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(
+        sessions.join("1.json"),
+        json!({ "pid": 1, "sessionId": "s1", "entrypoint": "sdk-cli" }).to_string(),
+    )
+    .unwrap();
+    let by_file = run(Some("cli"), start);
+    assert!(by_file.status.success());
+    assert!(by_file.stdout.is_empty());
 }
 
 #[test]
@@ -970,7 +1346,14 @@ fn parts_are_listed_and_an_unknown_one_refused() {
         .collect();
     assert_eq!(
         names,
-        ["claude", "claude-md", "skills", "terminal", "leftovers"]
+        [
+            "plugin",
+            "claude",
+            "claude-md",
+            "skills",
+            "terminal",
+            "leftovers"
+        ]
     );
     assert!(
         parts

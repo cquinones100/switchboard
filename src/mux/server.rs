@@ -386,6 +386,14 @@ async fn run() -> Result<()> {
             }
         }
     });
+    // Switchboard's plugin, which Claude in the panes loads, as this build
+    // has it: off the server's task, and before the restored panes' Claude
+    // sessions take the time a shell and Claude take to start.
+    tokio::task::spawn_blocking(|| {
+        if let Err(e) = crate::setup::plugin::write_quietly() {
+            eprintln!("switchboard server: Switchboard's plugin for Claude Code: {e:#}");
+        }
+    });
     let mut server = Server::new(tx, pane_tx);
     let (bindings, problems) = Bindings::load();
     server.bindings = bindings;
@@ -904,8 +912,9 @@ impl Server {
     }
 
     /// A program started for pane `id`, as every pane's is: `command` (the
-    /// login shell when `None`) in `cwd`, its environment naming the server
-    /// and the pane.
+    /// login shell when `None`) in `cwd`, its environment naming the server,
+    /// the pane and, while Settings' "Load Switchboard as a plugin" is on,
+    /// Switchboard's plugin for the Claude Code that runs there.
     pub(crate) fn start_program(
         &self,
         id: PaneId,
@@ -932,6 +941,33 @@ impl Server {
                     "{} open-url",
                     crate::worktree::shell_quote(&exe.to_string_lossy())
                 ),
+            ));
+        }
+        // Claude Code loads the plugin directories this names for the
+        // session (src/setup/plugin.rs): Switchboard's skills, hooks and
+        // instructions, for Claude here alone. Any the server was started
+        // with are kept. Off, setup has put them in ~/.claude instead
+        // (src/setup/way.rs), and the plugin would run them twice.
+        let plugin = crate::setup::plugin::ENV;
+        let inherited = std::env::var(plugin).ok();
+        if crate::settings::is_on(crate::setup::way::SETTING) {
+            env.push((
+                plugin.to_string(),
+                crate::setup::plugin::env_value(
+                    inherited.as_deref(),
+                    &paths::plugin_dir(),
+                    &paths::home(),
+                ),
+            ));
+        } else if inherited.is_some() {
+            env.push((
+                plugin.to_string(),
+                crate::setup::plugin::without_plugin(
+                    inherited.as_deref(),
+                    &paths::plugin_dir(),
+                    &paths::home(),
+                )
+                .unwrap_or_default(),
             ));
         }
         let spec = PaneSpawn {

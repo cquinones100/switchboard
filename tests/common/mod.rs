@@ -150,6 +150,8 @@ impl TestServer {
             .env("PS1", "$ ")
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
+            .env_remove("SWITCHBOARD_SETTINGS")
+            .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .env_remove("TMUX")
             .env_remove("TMUX_PANE");
     }

@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Shape
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path shape`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path shape`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Turn a rough idea into a Linear ticket someone can pick up and build: clear on the problem, grounded in the code as it is, honest about scope. The `switchboard shape` command starts a session with this skill; it also works in a session that is already running.
 

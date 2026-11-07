@@ -276,8 +276,9 @@ pub const VIEWS: &[View] = &[
     view("Usage", "usage"),
 ];
 
-/// A feature off by default, suggested once what you do within a week says
-/// it would help: `keys` pressed (or picked in M-p) at least `times` together.
+/// A feature off (by default, or as an earlier install left it), suggested
+/// once what you do within a week says it would help: `keys` pressed (or
+/// picked in M-p) at least `times` together.
 pub struct Try {
     pub key: &'static str,
     pub keys: &'static [&'static str],
@@ -322,6 +323,19 @@ pub const TRIES: &[Try] = &[
         body: |n| {
             format!(
                 "You went to Notes {n} times this week. Each weekday morning a note Todos/Today's Todo <date> would gather your notes' unticked items, today's calendar, and your PRs, tickets and Slack. It sends your notes' unticked items to Claude (Sonnet) to write it."
+            )
+        },
+    },
+    // Off where an install made before the plugin kept Switchboard in
+    // ~/.claude (src/setup/way.rs); turning it on moves it over.
+    Try {
+        key: "claude_plugin",
+        keys: &["M-a", "M-c"],
+        times: 20,
+        title: "Load Switchboard as a plugin?",
+        body: |n| {
+            format!(
+                "You went to a tab's Claude {n} times this week. As a plugin, Switchboard's hooks, skills and instructions reach only the Claude in its panes, and come out of ~/.claude, so Claude elsewhere has only your own; turning it on moves them over. It needs Claude Code 2.1.280 or later."
             )
         },
     },

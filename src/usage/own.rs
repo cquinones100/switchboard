@@ -111,7 +111,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 label: "Your CLAUDE.md",
                 kind: Kind::Rules,
                 min: None,
-                detail: "Your own rules, read with Switchboard's part",
+                detail: "Your own rules, which ~/.claude/CLAUDE.md imports",
             },
             row(
                 "file",

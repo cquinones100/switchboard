@@ -1125,9 +1125,10 @@ fn outside_repository_warnings(
 /// only Read, Grep and Glob, so it runs nothing and reaches no network, and
 /// dontAsk, which denies whatever isn't allowed rather than asking. No
 /// settings file is loaded, so no hooks, permission rules or plugins come
-/// along, no MCP server, no skill, and no CLAUDE.md
-/// (CLAUDE_CODE_DISABLE_CLAUDE_MDS, set where it runs): on a branch under
-/// review that file is the contributor's.
+/// along (nor Switchboard's plugin from the pane's environment,
+/// `plugin::headless`, set where it runs), no MCP server, no skill, and no
+/// CLAUDE.md (CLAUDE_CODE_DISABLE_CLAUDE_MDS, set there too): on a branch
+/// under review that file is the contributor's.
 fn claude_args(diff_dir: &Path, model: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
@@ -1489,6 +1490,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     if claude {
         cmd.stdout(Stdio::piped())
             .env("CLAUDE_CODE_DISABLE_CLAUDE_MDS", "1");
+        crate::setup::plugin::headless(&mut cmd);
     } else if verbose {
         cmd.stdout(std::io::stderr());
     } else {

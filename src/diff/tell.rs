@@ -53,7 +53,8 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// A headless Claude's environment: `~/.local/bin` on the PATH, and not
-/// the pane's, so its hooks don't speak for the tab it runs under.
+/// the pane's, so its hooks don't speak for the tab it runs under, nor
+/// Switchboard's plugin (`plugin::headless`).
 pub fn headless(cmd: &mut Command) {
     let path = format!(
         "{}:{}",
@@ -65,6 +66,7 @@ pub fn headless(cmd: &mut Command) {
         .env_remove("SWITCHBOARD")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE");
+    crate::setup::plugin::headless(cmd);
 }
 
 /// A command's stdout, fed `input`, killed after `seconds`: an error, with

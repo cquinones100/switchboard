@@ -9,6 +9,7 @@
 use std::process::ExitCode;
 
 pub mod aws_login;
+pub mod claude_context;
 pub mod claude_here;
 pub mod claude_reply;
 pub mod codex_review;
@@ -62,7 +63,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "setup",
         run: crate::setup::main,
-        about: "Set Claude Code up for Switchboard: its hooks, statusline, CLAUDE.md and skills",
+        about: "Set Claude Code up for Switchboard: its plugin (hooks, skills, instructions), statusline, permissions and CLAUDE.md",
     },
     Command {
         name: "try",
@@ -78,6 +79,11 @@ pub const COMMANDS: &[Command] = &[
         name: "statusline",
         run: statusline::main,
         about: "Claude Code's statusline, which keeps each session's context and spend (run by Claude Code)",
+    },
+    Command {
+        name: "claude-context",
+        run: claude_context::main,
+        about: "Switchboard's instructions for Claude, as a session starts (run by Claude Code's hooks)",
     },
     Command {
         name: "tabs",

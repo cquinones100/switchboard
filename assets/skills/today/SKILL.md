@@ -6,7 +6,7 @@ argument-hint: "[tomorrow | a date]"
 
 # Today
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path today`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path today`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Show the user's day from their Google Calendar as one table, through the Google Calendar connector.
 

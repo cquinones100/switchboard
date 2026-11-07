@@ -12,6 +12,8 @@
 //! over a file that can't be read as a JSON object, the version before kept
 //! as `settings.json.bak`, a value equal to its default left out. A running
 //! workspace takes it at once, as it reads the file again on any change.
+//! Changing `claude_plugin` moves Switchboard into its plugin or back into
+//! `~/.claude` after, as Settings does (`switchboard setup --move`).
 
 use std::process::ExitCode;
 
@@ -56,6 +58,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
         },
     };
     match settings::write_setting(key, new.clone()) {
+        Ok(()) if key == crate::setup::way::SETTING => {
+            println!("{}", words_of(&new));
+            crate::setup::main(vec!["--move".to_string()])
+        }
         Ok(()) => {
             println!("{}", words_of(&new));
             ExitCode::SUCCESS

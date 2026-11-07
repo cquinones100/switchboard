@@ -220,6 +220,7 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     .kill_on_drop(true);
+    crate::setup::plugin::headless(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

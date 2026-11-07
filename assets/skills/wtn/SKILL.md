@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # wtn
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path wtn`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path wtn`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Hand this tab over to `wtn` for one checklist item of a note: `/wt`'s counterpart for work kept in a note rather than a Linear ticket. This session ends, and in its place `wtn` (`switchboard worktree-from-note`) makes a worktree on a branch named after the item (`note/<slug>`), moves the pane's shell into it, and starts a new Claude session there, told the item, its plan, and to land it with `/queue-and-clean` when done: on the default branch in a repository whose `CLAUDE.md` commits straight there, else through a PR.
 
@@ -17,7 +17,7 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
 
 ## Steps
 
-1. **The note.** Settle it as `~/.claude/skills/note-watch/pick-note.md` says (read it and follow it), a note named in the arguments counting as already named. Its step 5 marks the tab with the note.
+1. **The note.** Settle it as `~/.local/share/switchboard/plugin/skills/note-watch/pick-note.md` says (read it and follow it), a note named in the arguments counting as already named. Its step 5 marks the tab with the note.
 
 2. **The item.** Read the note. Its items are its unticked top-level checklist lines (`- [ ] …` at the start of a line), each with the lines indented under it, leaving out any under a section named for parked work (`## Defered`, `## Later`).
    - **Named in the arguments**, by line number or by words only one item's first line holds: use it. Words that match several: ask which, as below, with those alone.

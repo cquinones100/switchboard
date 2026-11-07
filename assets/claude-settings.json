@@ -5,7 +5,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(node ~/.claude/skills/*)",
+      "Bash(node ~/.local/share/switchboard/plugin/skills/*)",
       "Bash(switchboard codex-review)",
       "Bash(switchboard codex-review *)",
       "Bash(switchboard skill-path *)",

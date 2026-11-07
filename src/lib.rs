@@ -38,8 +38,10 @@
 //!   whether the PR can merge.
 //! - `status`: the status line's button, health light and second line, and
 //!   dark and light.
-//! - `setup`: what `switchboard setup` puts in place for Claude Code: its
-//!   hooks, statusline and permissions, your CLAUDE.md, and the skills.
+//! - `setup`: what `switchboard setup` puts in place for Claude Code:
+//!   Switchboard's plugin (its hooks, skills and instructions, for the
+//!   Claude in its panes) or the same in `~/.claude`, the statusline and
+//!   permissions, and your CLAUDE.md.
 //! - `diff`: M-d's diff in a pane's place, told as a story, with questions
 //!   about it answered, a commit or the working tree at a time; lazygit in
 //!   a pane's place.

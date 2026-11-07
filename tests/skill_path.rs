@@ -44,7 +44,7 @@ fn every_skill_opens_by_running_skill_path_with_its_own_name() {
     assert!(!all.is_empty());
     for (name, text) in all {
         let opening = format!(
-            "This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path {name}`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here."
+            "This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path {name}`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here."
         );
         let rest = after_title(&text)
             .unwrap_or_else(|| panic!("{name} starts with its frontmatter and title"));

@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # CI loop
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path ci-loop`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path ci-loop`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Watch this branch's PR checks without blocking the conversation. When a check fails because of this branch, fix it, push, and watch the new run. When it fails for a reason the branch didn't cause, rerun it once. Stop when every check on the PR's latest commit has passed, or when something needs the user.
 

@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Clean worktree
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path clean-worktree`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path clean-worktree`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Remove one worktree and its local branch, and nothing else: never the main clone, never the remote branch (GitHub or the repository's settings handle that), and never with `--force`. Run on its own, or from `/queue-and-clean`, which reads this file and follows it (see "From queue-and-clean").
 

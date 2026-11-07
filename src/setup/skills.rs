@@ -1,19 +1,32 @@
-//! The `skills` part: the skills that ship with Switchboard (/wt, /shape,
-//! /review-loop, /ci-loop and the rest), written into `~/.claude/skills`,
-//! where Claude Code finds a personal skill. Ported from setup.sh's
+//! The skills that ship with Switchboard (/wt, /shape, /review-loop,
+//! /ci-loop and the rest), as the binary carries them (`assets/skills`,
+//! compiled in by build.rs), and the `skills` part, which puts them in
+//! `~/.claude/skills` or takes them out of it, as the way setup puts
+//! Switchboard says (src/setup/way.rs). Ported from setup.sh's
 //! `part_skills`, which linked each from a clone's `claude/skills`; the
-//! binary carries them instead (`assets/skills`, compiled in by build.rs),
-//! so each is a folder of its own, written out again whenever what the
-//! binary carries differs from it.
+//! binary carries them instead.
 //!
-//! A skill folder Switchboard wrote holds `.switchboard-skill`, the list of
-//! the files it wrote, so a later run knows the folder is Switchboard's to
-//! bring up to date, removes a file a newer version no longer ships, and
-//! leaves alone what the skill made for itself (`npm ci`'s `node_modules`
-//! beside a skill's scripts). A skill of your own by the same name, a folder
-//! without that list or a link elsewhere, is yours and kept as it is; a link
-//! into a Switchboard clone's skills, as setup.sh made, is replaced by the
-//! folder.
+//! As a plugin, the skills are the plugin's (src/setup/plugin.rs), loaded
+//! only by the Claude sessions in Switchboard's panes, so Claude elsewhere
+//! has your own skills and none of Switchboard's. A copy left in
+//! `~/.claude/skills` would take the skill's bare name (`/wt`) everywhere,
+//! the plugin's too, so the part removes each one Switchboard put there,
+//! with whatever the skill made for itself beside its files (`npm ci`'s
+//! `node_modules`).
+//!
+//! The old way, each is written into `~/.claude/skills`, where Claude Code
+//! finds a personal skill, as a folder of its own, written out again
+//! whenever what the binary carries differs from it. A skill folder
+//! Switchboard wrote holds `.switchboard-skill`, the list of the files it
+//! wrote, so a later run knows the folder is Switchboard's to bring up to
+//! date, removes a file a newer version no longer ships, and leaves alone
+//! what the skill made for itself.
+//!
+//! Either way, a skill of your own by the same name, a folder without that
+//! list or a link elsewhere, is yours and kept as it is (as a plugin, Claude
+//! Code runs it for the bare name, and Switchboard's as
+//! `/switchboard:<name>`); a link into a Switchboard clone's skills, as
+//! setup.sh made, is Switchboard's.
 //!
 //! Beside them, `skill-path` and `codex-review` are linked into
 //! `~/.local/bin` to the binary (`link_commands`), as setup.sh linked its
@@ -26,12 +39,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 
+use super::way::Way;
 use super::{Report, exists, home_tilde, is_link};
 use crate::paths;
 
 include!(concat!(env!("OUT_DIR"), "/skills.rs"));
 
-/// The list of what Switchboard wrote, in each skill folder of its own.
+/// The list of what an earlier version wrote, in each skill folder of its
+/// own.
 pub const MANIFEST: &str = ".switchboard-skill";
 
 /// `~/.claude/skills`.
@@ -131,8 +146,8 @@ fn from_switchboard(name: &str) -> bool {
         || (clone.join("Cargo.toml").is_file() && clone.join("assets/skills").is_dir())
 }
 
-/// Whether Switchboard's skills are installed: any of them written by it,
-/// or linked from a clone.
+/// Whether Switchboard's skills are in `~/.claude/skills`: any of them
+/// written there, or linked from a clone.
 pub fn installed() -> bool {
     shipped()
         .keys()
@@ -148,18 +163,40 @@ pub fn own_skills() -> Vec<String> {
         .collect()
 }
 
-/// The part: each skill written or brought up to date, every one tried and
-/// the ones that couldn't be said together at the end.
+/// The part, the way setup puts Switchboard: each skill written or brought
+/// up to date in `~/.claude/skills` the old way, taken out of it as a
+/// plugin; every one tried and the ones that couldn't be said together at
+/// the end; and the commands linked.
 pub fn run(r: &mut Report) -> Result<()> {
     let dir = skills_dir();
-    if !r.check {
+    let way = super::way::current();
+    let mut done = Vec::new();
+    let mut failed = Vec::new();
+    if way == Way::Old && !r.check {
         fs::create_dir_all(&dir)?;
     }
-    let mut failed = Vec::new();
     for (name, files) in shipped() {
-        if write_skill(r, &dir.join(name), name, &files).is_err() {
-            failed.push(name);
+        let dest = dir.join(name);
+        let result = match way {
+            Way::Old => write_skill(r, &dest, name, &files),
+            Way::Plugin => match found(name) {
+                Found::Ours(_) if !r.check => fs::remove_dir_all(&dest).map_err(Into::into),
+                Found::Linked if !r.check => fs::remove_file(&dest).map_err(Into::into),
+                Found::Ours(_) | Found::Linked => Ok(()),
+                Found::Nothing | Found::Own => continue,
+            },
+        };
+        match result {
+            Ok(()) => done.push(name),
+            Err(_) => failed.push(name),
         }
+    }
+    if way == Way::Plugin && !done.is_empty() {
+        r.change(format!(
+            "take Switchboard's skills out of {} ({}): its plugin carries them for the Claude in its panes",
+            home_tilde(&dir),
+            done.join(" ")
+        ));
     }
     if let Err(e) = link_commands(r) {
         bail!("could not link the commands skills run into ~/.local/bin: {e}");
@@ -168,7 +205,9 @@ pub fn run(r: &mut Report) -> Result<()> {
         return Ok(());
     }
     bail!(
-        "could not write these skills into {}: {}",
+        "could not {} these skills {} {}: {}",
+        if way == Way::Old { "write" } else { "take" },
+        if way == Way::Old { "into" } else { "out of" },
         home_tilde(&dir),
         failed.join(" ")
     )
@@ -214,6 +253,7 @@ fn link_commands(r: &mut Report) -> Result<()> {
     Ok(())
 }
 
+/// One skill written into `~/.claude/skills`, the old way.
 fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(&str, &[u8])]) -> Result<()> {
     let shown = home_tilde(dest);
     // A skill new here, or a link replaced, is said in one line; one

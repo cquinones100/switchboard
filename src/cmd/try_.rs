@@ -8,12 +8,16 @@
 //! worktree's path>`, kept short since a Unix socket's path can't be over
 //! 104 bytes on macOS. Everything Switchboard reads is found through `~`
 //! (src/paths.rs), so that home gives the try its own settings, state,
-//! server and socket, and the binary's own `switchboard setup` parts that
-//! ask nothing (`claude`, `claude-md`, `skills`) lay out its Claude Code
-//! hooks, CLAUDE.md and skills there, so setup is tried too. Its
-//! `~/.local/bin/switchboard` is the worktree's build, first on the try's
-//! PATH, so Claude Code's hooks and statusline in its panes, which run
-//! `switchboard` by name, reach the try's server.
+//! server and socket, and the binary's own `switchboard setup` parts run
+//! there by name, asking nothing (`plugin`, `claude`, `claude-md`,
+//! `skills`), so setup is tried too: its plugin, the hooks, skills and
+//! instructions its panes' Claude loads, and its Claude Code statusline and
+//! permissions, or, with Settings' "Load Switchboard as a plugin" off in
+//! the settings it copies, its hooks, CLAUDE.md and skills in its own
+//! `~/.claude` as before (src/setup/way.rs). Its `~/.local/bin/switchboard`
+//! is the worktree's build, first on the try's PATH, so Claude Code's hooks
+//! and statusline in its panes, which run `switchboard` by name, reach the
+//! try's server.
 //!
 //! What isn't Switchboard's comes from your real home, as the script had it:
 //!
@@ -355,14 +359,15 @@ fn built_binary(messages: &str) -> Option<PathBuf> {
         .next_back()
 }
 
-/// The binary's own setup parts that ask nothing, run in the try's home, so
-/// its hooks, CLAUDE.md and skills are the worktree's. What they say is
-/// shown indented; a failure is said, and the try goes on.
+/// The binary's own setup parts, run by name in the try's home, so its
+/// plugin (or, the old way, its hooks, CLAUDE.md and skills), statusline
+/// and permissions are the worktree's. What they say is shown indented; a
+/// failure is said, and the try goes on.
 fn run_setup(env: &Env, home: &Path) {
     let bin = home.join(".local/bin/switchboard");
     let mut command = Command::new(&bin);
     command
-        .args(["setup", "claude", "claude-md", "skills"])
+        .args(["setup", "plugin", "claude", "claude-md", "skills"])
         .current_dir(home)
         .stdin(Stdio::null());
     env.apply(&mut command);

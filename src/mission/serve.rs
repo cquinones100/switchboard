@@ -1199,6 +1199,15 @@ impl Server {
             let key = key.to_string();
             if let Some(note) = self.change_setting(&key) {
                 m.note = Some(note);
+            } else if key == crate::setup::way::SETTING {
+                let on = settings::is_on(&key);
+                self.claude_plugin_setup(
+                    client,
+                    format!(
+                        "Load Switchboard as a plugin: {}",
+                        if on { "on" } else { "off" }
+                    ),
+                );
             }
             return;
         }
@@ -1562,6 +1571,9 @@ impl Server {
                 );
             }
             Do::Habit { id, outcome } => match self.habit_outcome(&id, outcome) {
+                Ok(Some(said)) if id == format!("on:{}", crate::setup::way::SETTING) => {
+                    self.claude_plugin_setup(client, said)
+                }
                 Ok(Some(said)) => self.mission_note(client, said),
                 Ok(None) => {}
                 Err(e) => self.mission_note(client, e),
@@ -2231,6 +2243,24 @@ impl Server {
             Some(match result {
                 Ok(changed) if changed.is_empty() => said,
                 Ok(changed) => format!("{said} ({changed})"),
+                Err(why) => format!("{said}; setup couldn't finish: {why}"),
+            })
+        });
+    }
+
+    /// Setup's `--move`, run after "Load Switchboard as a plugin" changed,
+    /// which moves Switchboard's hooks, skills and instructions into its
+    /// plugin or back into ~/.claude (src/setup/way.rs); `said` is said with
+    /// where they are now, or why it couldn't finish. Panes started from now
+    /// on follow the setting; a Claude already running keeps what it loaded.
+    fn claude_plugin_setup(&mut self, client: ClientId, said: String) {
+        self.mission_busy(client, "Moving Switchboard over", None, async move {
+            let result = tokio::task::spawn_blocking(crate::setup::run_move)
+                .await
+                .unwrap_or_else(|e| Err(e.to_string()));
+            Some(match result {
+                Ok(changed) if changed.is_empty() => said,
+                Ok(changed) => format!("{said}. {changed}"),
                 Err(why) => format!("{said}; setup couldn't finish: {why}"),
             })
         });

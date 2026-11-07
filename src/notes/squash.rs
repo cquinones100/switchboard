@@ -48,7 +48,8 @@ pub fn input(store: &Store, paths: &[PathBuf]) -> Result<String, String> {
 }
 
 /// The command that merges them: `claude -p` with no tools and no session
-/// kept, the prompt as its argument and the notes on its stdin.
+/// kept, nor Switchboard's plugin, the prompt as its argument and the notes
+/// on its stdin.
 pub fn command(program: &Path, model: &str) -> Command {
     let mut cmd = Command::new(program);
     cmd.args([
@@ -63,6 +64,7 @@ pub fn command(program: &Path, model: &str) -> Command {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::setup::plugin::headless(&mut cmd);
     cmd
 }
 

@@ -1,6 +1,6 @@
 //! `switchboard tabs`: a line per pane of every tab, for a Claude session
-//! to see what is in flight in the other tabs (Switchboard's part of
-//! CLAUDE.md, /project-status). It replaces the one tmux call the tmux
+//! to see what is in flight in the other tabs (Switchboard's part of Claude's
+//! instructions, /project-status). It replaces the one tmux call the tmux
 //! version's CLAUDE.md gave, `tmux list-panes -a -f ... -F ...`, with the
 //! same columns, tab-separated: the tab's number, the pane's place
 //! (`<session>:@<tab>.%<pane>`), the tab's name as the tab bar shows it,

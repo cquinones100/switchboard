@@ -5,7 +5,7 @@ description: Bring the current branch up to date with the remote's main by fetch
 
 # Resolve conflicts
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path resolve-conflicts`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path resolve-conflicts`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Bring the branch up to date with the remote's main, then resolve the conflicts in the git operation and drive it to completion. Work through every conflicting commit without stopping to ask.
 

@@ -130,6 +130,13 @@ pub fn read_settings() -> Vec<Setting> {
         .collect()
 }
 
+/// Whether your file sets an option, rather than leaving it to its default:
+/// a choice made, though one that matches the default is kept only when
+/// written by hand, since `write_setting` keeps the file to what differs.
+pub fn is_set(key: &str) -> bool {
+    saved().contains_key(key)
+}
+
 /// One option's value now, or `None` for an option that isn't listed.
 pub fn setting(key: &str) -> Option<Value> {
     read_settings()

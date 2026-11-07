@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # wt
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path wt`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path wt`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Hand this tab over to `wt` for a Linear ticket. This session ends, and in its place `wt` creates the ticket's worktree, moves the pane's shell into it, and starts a new Claude session there with the usual ticket prompt. Because the pane itself now runs from the worktree, the workspace sees that directory: splits, new tabs, the tab name, and the status line all follow it, which a `cd` from inside this session could never do.
 

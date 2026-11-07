@@ -45,6 +45,15 @@ pub fn cache_dir() -> PathBuf {
     home_join(".cache/switchboard")
 }
 
+/// Where Switchboard's plugin for Claude Code is written (its skills, hooks
+/// and instructions, src/setup/plugin.rs), relative to the home.
+pub const PLUGIN: &str = ".local/share/switchboard/plugin";
+
+/// `~/.local/share/switchboard/plugin`.
+pub fn plugin_dir() -> PathBuf {
+    home_join(PLUGIN)
+}
+
 /// A path with the home directory's first occurrence shown as `~`, as the
 /// Node scripts wrote `file.replace(os.homedir(), "~")`.
 pub fn tilde(path: impl AsRef<Path>) -> String {

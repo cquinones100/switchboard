@@ -43,6 +43,10 @@ impl Setup {
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        // A stand-in Claude Code, which the try's setup asks its version.
+        let claude = bin.join("claude");
+        fs::write(&claude, "#!/bin/sh\necho '2.1.319 (Claude Code)'\n").unwrap();
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
         write(
             &wt.join("Cargo.toml"),
             "[package]\nname = \"switchboard\"\n",
@@ -181,16 +185,26 @@ fn print_sets_a_home_up_and_clean_takes_it_away() {
     assert_eq!(settings["github"], json!(false));
     assert_eq!(settings["meeting_notes"], json!(false));
     assert_eq!(settings["update_check"], json!("off"));
-    // Its setup ran there: the try's Claude settings carry its hooks, and
-    // yours are as they were.
+    // Its setup ran there: the try has its own plugin, with the hooks and
+    // skills its panes' Claude loads, and its Claude settings carry the
+    // statusline; yours are as they were.
     let claude = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
-    assert!(claude.contains("switchboard hook Stop"), "{claude}");
+    assert!(claude.contains("switchboard statusline"), "{claude}");
+    assert!(!claude.contains("switchboard hook"), "{claude}");
     assert_eq!(
         fs::read_to_string(s.real.join(".claude/settings.json")).unwrap(),
         "{\"model\": \"opus\"}\n"
     );
-    assert!(home.join(".claude/skills/wt/SKILL.md").is_file());
+    let plugin = home.join(".local/share/switchboard/plugin");
+    assert!(plugin.join("skills/wt/SKILL.md").is_file());
+    assert!(
+        fs::read_to_string(plugin.join("hooks/hooks.json"))
+            .unwrap()
+            .contains("switchboard hook Stop")
+    );
+    assert!(!home.join(".claude/skills/wt").exists());
     assert!(!s.real.join(".claude/skills").exists());
+    assert!(!s.real.join(".local/share/switchboard").exists());
 
     let cleaned = ok(&s.try_(&["--clean"]));
     assert!(cleaned.contains("Removed"), "{cleaned}");

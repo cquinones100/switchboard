@@ -93,6 +93,7 @@ async fn ask_claude(dir: &Path, material: String, system_prompt: String) -> Aske
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     .kill_on_drop(true);
+    crate::setup::plugin::headless(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {

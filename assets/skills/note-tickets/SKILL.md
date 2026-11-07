@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 # Note tickets
 
-This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path note-tickets`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
+This is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path note-tickets`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
 Turn the to-dos in the user's notes (from Switchboard's notes app) into Linear tickets, without duplicating work Linear already has. The user starts this on purpose, and it reads only the notes they name: the notes app is built to keep a note's text on the Mac, and running this skill is the user's choice to send some of it to Claude.
 
