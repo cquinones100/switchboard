@@ -38,11 +38,14 @@
 //!   dark and light.
 //! - `setup`: what `switchboard setup` puts in place for Claude Code: its
 //!   hooks, statusline and permissions, your CLAUDE.md, and the skills.
+//! - `diff`: M-d's diff in a pane's place, told as a story, with questions
+//!   about it answered.
 
 pub mod agent;
 pub mod cmd;
 pub mod connector;
 pub mod day;
+pub mod diff;
 pub mod facts;
 pub mod integrations;
 pub mod items;
