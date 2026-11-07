@@ -807,6 +807,7 @@ impl Server {
             | Action::Detach
             | Action::ResetTips
             | Action::TogglePin
+            | Action::CopyReply
             // C-w's next key moves from the sidebar, and M-0's tab keeps
             // the cursor in a sidebar, as M-1 to M-9 do (src/extras).
             | Action::Extra(crate::extras::Command::PaneNav | crate::extras::Command::GoToTab) => {

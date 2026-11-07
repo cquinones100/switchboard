@@ -59,6 +59,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-F` | Search your notes, Linear, GitHub and Slack at once |
 | `M-s` | Into the sidebar and back out |
 | `M-c` | Into the pane running Claude in this tab |
+| `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin the tab to the top of Needs you |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |

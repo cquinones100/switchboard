@@ -13,8 +13,10 @@
 //! - `serve`: the server's side: hooks, focus, the keys, one Claude per tab.
 //!
 //! What it says goes in a message box (src/ui): nowhere for M-a to go, no
-//! Claude for M-c, a session moved to a tab of its own; a first wait or
-//! finish while you look elsewhere, the first pin, and Claude's first start
+//! Claude for M-c, what M-y copied of its latest reply (read from the
+//! transcript as the sidebar reads it), a session moved to a tab of its
+//! own; a first wait or finish while you look elsewhere, the first pin, and
+//! Claude's first start
 //! in a worktree (its PR keys, with GitHub on), bring their tips. M-a walks
 //! the sidebar's Needs you (src/sidebar), which alone can tell a tab that
 //! looks done is still working in the background.

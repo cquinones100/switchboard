@@ -1,7 +1,7 @@
 //! Key bindings: which key does what. The defaults are the multiplexer keys
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
-//! tab's Claude, M-f to pin a tab), M-s into the sidebar and the views'
+//! tab's Claude, M-y to copy its latest reply, M-f to pin a tab), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
@@ -68,6 +68,8 @@ pub enum Action {
     NextNeedsYou,
     /// Into the pane running Claude in this tab.
     FocusClaude,
+    /// The latest reply of this tab's Claude, copied (M-y).
+    CopyReply,
     /// Pin the tab, keeping it at the top of what needs you, or unpin it.
     TogglePin,
     /// The palette: every command, to find and run one (M-p).
@@ -142,7 +144,7 @@ impl Action {
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
-    /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
+    /// `focus-claude`, `copy-reply`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
     /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
@@ -202,6 +204,7 @@ impl Action {
             "list-keys" => Action::ListKeys,
             "next-needs-you" => Action::NextNeedsYou,
             "focus-claude" => Action::FocusClaude,
+            "copy-reply" => Action::CopyReply,
             "toggle-pin" => Action::TogglePin,
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
@@ -269,6 +272,7 @@ impl Action {
             Action::ListKeys => "list-keys".into(),
             Action::NextNeedsYou => "next-needs-you".into(),
             Action::FocusClaude => "focus-claude".into(),
+            Action::CopyReply => "copy-reply".into(),
             Action::TogglePin => "toggle-pin".into(),
             Action::Palette => "palette".into(),
             Action::ResetTips => "reset-tips".into(),
@@ -342,6 +346,7 @@ impl Action {
             Action::ListKeys => "List the keys".into(),
             Action::NextNeedsYou => "Go to the next tab that needs you".into(),
             Action::FocusClaude => "Jump to the pane running Claude in this tab".into(),
+            Action::CopyReply => "Copy the latest reply of this tab's Claude".into(),
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
             Action::Palette => "Find a command and run it (the palette)".into(),
             Action::ResetTips => "Show the tips again, each once more".into(),
@@ -406,6 +411,7 @@ impl Action {
             Action::SendPrefix => &["keys"],
             Action::ListKeys => &["help", "keys"],
             Action::NextNeedsYou | Action::FocusClaude => &["claude", "tabs", "navigate"],
+            Action::CopyReply => &["claude", "copy"],
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
             Action::ResetTips => &["help", "tips"],
@@ -560,6 +566,7 @@ impl Default for Bindings {
         bind("M-B", WorkOnBranch);
         bind("M-a", NextNeedsYou);
         bind("M-c", FocusClaude);
+        bind("M-y", CopyReply);
         bind("M-f", TogglePin);
         bind("M-p", Palette);
         bind("M-s", FocusSidebar);
@@ -727,6 +734,7 @@ mod tests {
             Action::LastPane,
             Action::NextNeedsYou,
             Action::FocusClaude,
+            Action::CopyReply,
             Action::TogglePin,
             Action::Palette,
             Action::ResetTips,

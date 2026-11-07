@@ -997,6 +997,85 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
 const TAIL: u64 = 512 * 1024;
 const MAX_TAIL: u64 = 16 * 1024 * 1024;
 
+/// The last message Claude wrote text in, whole, from a transcript's text
+/// (or its end): what M-y copies (lib/sidebar/claude.js's `parseReply`).
+/// Unlike a turn's reply, it reaches back past a prompt not answered yet.
+/// Claude Code writes each of a message's parts as an entry of its own, so
+/// the parts sharing its message's id are joined, each with its blank lines
+/// in front and its spaces at the end taken off; a subagent's message, an
+/// API error and Claude Code's own stand-in messages are no reply.
+pub fn parse_reply(text: &str) -> Option<String> {
+    let said = |e: &Value| {
+        let yes = |key: &str| e.get(key).and_then(Value::as_bool) == Some(true);
+        e.get("type").and_then(Value::as_str) == Some("assistant")
+            && !yes("isSidechain")
+            && !yes("isApiErrorMessage")
+            && e.pointer("/message/model").and_then(Value::as_str) != Some("<synthetic>")
+    };
+    let entries: Vec<Value> = text
+        .split('\n')
+        .filter(|line| line.starts_with('{'))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(said)
+        .collect();
+    let texts = |e: &Value| -> Vec<String> {
+        e.pointer("/message/content")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| {
+                let lead = t.len() - t.trim_start().len();
+                let from = t[..lead].rfind('\n').map_or(0, |at| at + 1);
+                t[from..].trim_end().to_string()
+            })
+            .collect()
+    };
+    let last = entries.iter().rposition(|e| !texts(e).is_empty())?;
+    let id = entries[last]
+        .pointer("/message/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty());
+    let parts: Vec<String> = entries
+        .iter()
+        .enumerate()
+        .filter(|(at, e)| {
+            *at == last || (id.is_some() && e.pointer("/message/id").and_then(Value::as_str) == id)
+        })
+        .flat_map(|(_, e)| texts(e))
+        .collect();
+    Some(parts.join("\n\n"))
+}
+
+/// What `parse` finds at the end of `file`, `size` bytes long: in its last
+/// `TAIL` bytes, then four times as many while nothing turns up, up to
+/// `MAX_TAIL` or the whole file.
+fn from_end<T>(file: &Path, size: u64, parse: impl Fn(&str) -> Option<T>) -> Option<T> {
+    let mut f = fs::File::open(file).ok()?;
+    let mut length = TAIL;
+    loop {
+        let take = length.min(size);
+        let mut buf = Vec::with_capacity(take as usize);
+        f.seek(SeekFrom::Start(size - take)).ok()?;
+        (&mut f).take(take).read_to_end(&mut buf).ok()?;
+        let found = parse(&String::from_utf8_lossy(&buf));
+        if found.is_some() || take == size || length >= MAX_TAIL {
+            return found;
+        }
+        length *= 4;
+    }
+}
+
+/// The latest reply in a transcript (`parse_reply`), read from its end.
+/// Blocking: a transcript can be tens of megabytes, so the server reads it
+/// off its task.
+pub fn last_reply(file: &Path) -> Option<String> {
+    let size = fs::metadata(file).ok()?.len();
+    from_end(file, size, parse_reply)
+}
+
 // ── Reading, with what was read kept ────────────────────────────────────────
 
 /// Claude Code's files as last read: the session files by their modified
@@ -1124,19 +1203,7 @@ impl Reader {
         {
             return turn.clone();
         }
-        let mut f = fs::File::open(file).ok()?;
-        let mut length = TAIL;
-        let turn = loop {
-            let take = length.min(size);
-            let mut buf = Vec::with_capacity(take as usize);
-            f.seek(SeekFrom::Start(size - take)).ok()?;
-            (&mut f).take(take).read_to_end(&mut buf).ok()?;
-            let turn = parse_turn(&String::from_utf8_lossy(&buf));
-            if turn.is_some() || take == size || length >= MAX_TAIL {
-                break turn;
-            }
-            length *= 4;
-        };
+        let turn = from_end(file, size, parse_turn);
         self.turns
             .insert(file.to_path_buf(), (size, mtime, turn.clone()));
         turn
@@ -1634,6 +1701,43 @@ mod tests {
             "Check the build."
         );
         assert_eq!(loop_name("one line\nanother"), "one line");
+    }
+
+    #[test]
+    fn the_latest_reply_is_the_last_message_claude_wrote_text_in_its_parts_joined() {
+        let lines = [
+            json!({"type": "user", "message": {"content": "explain it"}}),
+            json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": "\n\n  First part."}]}}),
+            json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "tool_use", "id": "t", "name": "Read", "input": {}}]}}),
+            json!({"type": "assistant", "message": {"id": "m1", "content": [{"type": "text", "text": "Second part.  \n"}]}}),
+            // A subagent's, an API error and a stand-in message are no reply.
+            json!({"type": "assistant", "isSidechain": true, "message": {"id": "s", "content": [{"type": "text", "text": "a subagent"}]}}),
+            json!({"type": "assistant", "isApiErrorMessage": true, "message": {"id": "e", "content": [{"type": "text", "text": "API Error"}]}}),
+            json!({"type": "assistant", "message": {"id": "x", "model": "<synthetic>", "content": [{"type": "text", "text": "No response requested."}]}}),
+            json!({"type": "assistant", "message": {"id": "w", "content": [{"type": "text", "text": "   "}]}}),
+            // A prompt not answered yet is reached back past.
+            json!({"type": "user", "message": {"content": "and then?"}}),
+        ];
+        let text = lines
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            parse_reply(&format!("partial line\n{text}\n")).as_deref(),
+            Some("  First part.\n\nSecond part.")
+        );
+        assert_eq!(parse_reply(&lines[0].to_string()), None);
+        // Read from a file's end.
+        let dir = std::env::temp_dir().join(format!("sb-reply-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t.jsonl");
+        fs::write(&file, &text).unwrap();
+        assert_eq!(
+            last_reply(&file).as_deref(),
+            Some("  First part.\n\nSecond part.")
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

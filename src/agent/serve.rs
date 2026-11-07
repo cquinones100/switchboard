@@ -342,6 +342,69 @@ impl Server {
         }
     }
 
+    /// M-y: the latest reply of the tab's Claude to the clipboard
+    /// (tmux/reply-copy.sh), from any pane of the tab, the sidebar included:
+    /// its Claude pane, as M-c finds it, or the one a tool standing in its
+    /// place (M-d, lazygit) has parked, and that pane's transcript as the
+    /// sidebar last found it, read from its end off the server's task
+    /// (`sidebar::claude::last_reply`). A box says how many lines were
+    /// copied, and that Claude is still working when it is, or that the tab
+    /// has no Claude or no reply yet. With the copy_reply setting off, the
+    /// key reaches the pane.
+    pub fn copy_reply(&mut self, client: ClientId, tab: TabId) {
+        if !settings::is_on("copy_reply") {
+            self.key_back_to_pane(client, &crate::mux::keys::Action::CopyReply);
+            return;
+        }
+        let Some(pane) = self
+            .panes_with_parked(tab)
+            .into_iter()
+            .find(|p| self.runs_claude(*p))
+        else {
+            self.say(Some(client), "No Claude in this tab");
+            return;
+        };
+        let transcript = |server: &Server| {
+            server
+                .sidebar
+                .panes
+                .get(&pane)
+                .and_then(|read| read.transcript.clone())
+        };
+        // A session started since the sidebar's last look is looked for now.
+        if transcript(self).is_none() {
+            self.sidebar_read();
+        }
+        let Some(file) = transcript(self) else {
+            self.say(Some(client), "Couldn't find this tab's Claude session");
+            return;
+        };
+        let working = self
+            .agents
+            .get(pane)
+            .is_some_and(|a| a.state == Some(State::Working));
+        self.off_task(
+            client,
+            move || crate::sidebar::claude::last_reply(&file),
+            move |server, client, reply| {
+                let Some(reply) = reply else {
+                    server.say(Some(client), "Claude hasn't replied yet in this tab");
+                    return;
+                };
+                server.to_clipboard(Some(client), &reply);
+                let lines = reply.lines().count().max(1);
+                let mut words = format!(
+                    "Copied Claude's latest reply ({lines} line{})",
+                    if lines == 1 { "" } else { "s" }
+                );
+                if working {
+                    words.push_str(", written while it is still working");
+                }
+                server.say(Some(client), &words);
+            },
+        );
+    }
+
     /// M-f: pins the tab, or unpins it. A pin of its own, not Claude's
     /// "done": visiting the tab doesn't clear it, and pinned tabs lead M-a's
     /// walk (and the sidebar's Needs you). The first pin brings its tip.

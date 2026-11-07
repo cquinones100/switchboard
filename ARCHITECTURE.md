@@ -57,7 +57,7 @@ The workspace:
 | Module | What it is |
 |---|---|
 | `mux` | The multiplexer: protocol, socket, client, input, panes, layout, keys, drawing, server, commands, persistence |
-| `agent` | What each Claude session is doing, from its hooks; one Claude to a tab; `M-a`, `M-c`, `M-f` |
+| `agent` | What each Claude session is doing, from its hooks; one Claude to a tab; `M-a`, `M-c`, `M-y`, `M-f` |
 | `tabs` | What each tab is called and the color it wears, from git's files and lookups in the background |
 | `status` | The status line's button, health light and second line, and dark and light |
 | `ui` | The boxes over the workspace: messages, tips, questions, menus, pickers, the palette |

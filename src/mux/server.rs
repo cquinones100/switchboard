@@ -1895,6 +1895,7 @@ impl Server {
             Action::ListKeys => self.list_keys(id),
             Action::NextNeedsYou => self.next_needs_you(id),
             Action::FocusClaude => self.focus_claude(current_tab),
+            Action::CopyReply => self.copy_reply(id, current_tab),
             Action::TogglePin => self.toggle_pin(current_tab),
             Action::Palette => self.open_palette(id),
             Action::ToggleTheme => self.toggle_theme(id),

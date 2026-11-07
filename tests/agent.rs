@@ -631,3 +631,83 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
     let off = TestServer::start_with_env(&[("SWITCHBOARD_SETTINGS", file.to_str().unwrap())]);
     assert_eq!(plugin_dirs_in_a_pane(&off), "dirs=[]");
 }
+
+/// Stand-ins for the desktop's clipboard tools, first on the PATH, so a
+/// copy reaches a file in the test's home rather than the real clipboard.
+fn stand_in_clipboard(server: &TestServer) {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let copied = server.home.join("copied");
+    for name in ["clip.exe", "wl-copy", "xclip", "xsel", "pbcopy"] {
+        let script = bin.join(name);
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\ncat > '{}'\n", copied.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn m_y_copies_the_latest_reply_of_the_tabs_claude() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    stand_in_clipboard(&server);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}y"));
+    client.wait_text("No Claude in this tab");
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("No Claude"))
+    });
+
+    // The pane's shell stands in for Claude, its transcript in the
+    // project's directory, with a prompt and no reply yet.
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-y", "cwd": "/w"}));
+    let project = server.home.join(".claude/projects/-w");
+    std::fs::create_dir_all(&project).unwrap();
+    let transcript = project.join("s-y.jsonl");
+    let prompt = json!({"type": "user", "message": {"content": "explain"}});
+    std::fs::write(&transcript, format!("{prompt}\n")).unwrap();
+    client.type_text(&format!("{ALT}y"));
+    client.wait_text("Claude hasn't replied yet in this tab");
+    client.type_text("\x1b");
+
+    let said = [
+        json!({"type": "assistant", "message": {"id": "m", "content": [{"type": "text", "text": "It works\nlike this."}]}}),
+        json!({"type": "assistant", "message": {"id": "m", "content": [{"type": "text", "text": "And so."}]}}),
+    ];
+    std::fs::write(&transcript, format!("{prompt}\n{}\n{}\n", said[0], said[1])).unwrap();
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-y"}),
+    );
+    client.type_text(&format!("{ALT}y"));
+    client.wait_text("Copied Claude's latest reply (4 lines), written while it is");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let copied = server.home.join("copied");
+    while std::fs::read_to_string(&copied).ok().as_deref()
+        != Some("It works\nlike this.\n\nAnd so.")
+    {
+        assert!(Instant::now() < deadline, "not copied");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    client.type_text("\x1b");
+
+    // Off, the key reaches the pane.
+    // The sidebar going too shows the settings were read again.
+    settings(&server, json!({"copy_reply": false, "sidebar": false}));
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    server.ok(&["send-keys", "-t", &pane, "-l", "cat -v"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.type_text(&format!("{ALT}yafter\r"));
+    client.wait_text("^[yafter");
+}

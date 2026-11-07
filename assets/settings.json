@@ -557,6 +557,13 @@
     "default": "dark"
   },
   {
+    "key": "copy_reply",
+    "category": "Sessions",
+    "label": "Copy Claude's reply",
+    "description": "M-y copies the latest reply of the tab's Claude to the clipboard, read from its session transcript; off, the key reaches the pane",
+    "default": true
+  },
+  {
     "key": "save_contents",
     "category": "Sessions",
     "label": "Save what panes show",

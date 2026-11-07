@@ -103,6 +103,8 @@ Whatever the workspace types into a tab's Claude (`M-m`'s `/resolve-conflicts`, 
 
 `M-a` goes to the next tab that needs you: pinned tabs and reminders that have come due first, then the ones waiting on you, then the finished ones, and last the sidebar's notifications while there are any (Settings' "M-a goes to notifications", `needs_notices`). Pressed again, it goes on to the next, wrapping round, so pressing it repeatedly visits each one. It says "Nothing needs you." when nothing does. `M-c` goes to the pane running Claude in the current tab.
 
+`M-y` copies the latest reply of the tab's Claude to the clipboard, from any pane of the tab or its sidebar: the last message Claude wrote text in, read from its session's transcript, its parts joined as written, reaching back past a prompt not answered yet and passing over subagents, API errors and Claude Code's own stand-in messages. A Claude parked behind the diff or lazygit in its pane's place counts. A box says how many lines were copied, and that Claude is still working when it is, or that the tab has no Claude or no reply yet. Settings' "Copy Claude's reply" (`copy_reply`) off hands `M-y` to the pane.
+
 `M-f` pins the tab: it goes to the top of Needs you, ahead of everything else there, whatever Claude is doing in it, and stays there until you press `M-f` in it again, since visiting it doesn't clear it.
 
 A tab holds one Claude. A session started in a tab that already runs one is moved to a tab of its own as it starts, and a box says so, since the sidebar, mission control, the Slack relay, `M-c` and `M-m` each take a tab's Claude to be one pane (Settings' "One Claude to a tab", `one_claude_per_tab`).
@@ -132,6 +134,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-B` | Start work on a branch, new or existing, in a new tab (`wtb`) |
 | `M-a` | Go to the next tab that needs you |
 | `M-c` | Go to the pane running Claude in this tab |
+| `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin or unpin the tab, keeping it at the top of Needs you |
 | `M-p` | The palette: find any command by what it does, and run it |
 | `M-/` | Every key, in mission control's Keys view (see "The Keys view") |
@@ -213,7 +216,7 @@ The actions, by the names the file uses:
 
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
-- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
+- Claude and work: `next-needs-you`, `focus-claude`, `copy-reply`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `clear-image-cache`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
@@ -399,7 +402,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 
 ### Into the sidebar and its keys
 
-`M-s` moves into the sidebar, on the tab you are in, and back out; `M-Left` from the leftmost pane moves in too, and `M-Right` back out. While it has the focus, its cursor moves through the tabs and each comes to the front as the cursor reaches it, with the list held still so tabs don't move about as you look at them. Leaving keeps the tab you are on. A key that acts on "the pane" (a split, `M-w`, zoom) gives the focus back to your pane first and acts there; `M-a`, `M-1`…`M-9`, `M-f` and `M-p` keep it, and pressed from the sidebar `M-a` and `M-1`…`M-9` leave the cursor on the tab they went to.
+`M-s` moves into the sidebar, on the tab you are in, and back out; `M-Left` from the leftmost pane moves in too, and `M-Right` back out. While it has the focus, its cursor moves through the tabs and each comes to the front as the cursor reaches it, with the list held still so tabs don't move about as you look at them. Leaving keeps the tab you are on. A key that acts on "the pane" (a split, `M-w`, zoom) gives the focus back to your pane first and acts there; `M-a`, `M-1`…`M-9`, `M-f`, `M-y` and `M-p` keep it, and pressed from the sidebar `M-a` and `M-1`…`M-9` leave the cursor on the tab they went to.
 
 | Key | In the sidebar |
 | --- | --- |
@@ -1718,6 +1721,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 |---|---|---|
 | Work a note continuously (`autopilot`) | on | With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go |
 | wtpr asks where the PR stands (`wtpr_prompt`) | on | Claude, started in a PR's worktree by wtpr (or mission control's "work on it in a new tab"), first reads the PR, its review threads, failing checks and ticket and says where it stands and what it would do next, changing nothing until you say; off, it starts with no prompt |
+| Copy Claude's reply (`copy_reply`) | on | M-y copies the latest reply of the tab's Claude to the clipboard, read from its session transcript; off, the key reaches the pane |
 | Save what panes show (`save_contents`) | on | Keep each pane's screen in the layout saves, to show again after a restart; it can hold secrets |
 | Restore on start (`auto_restore`) | on | Bring back the last saved tabs and panes, each Claude resumed, when the server starts with none open |
 | Load Switchboard as a plugin (`claude_plugin`) | on | Claude in Switchboard's panes loads its hooks (the tabs' Claude states), skills and instructions as a plugin, and setup keeps them out of ~/.claude, so Claude elsewhere has only your own; it needs Claude Code 2.1.280 or later, and managed settings that don't set disableSideloadFlags. Off, setup puts them in ~/.claude as before, for every Claude of yours. Changing it moves them over |
