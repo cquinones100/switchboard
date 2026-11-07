@@ -124,7 +124,7 @@ main() {
   tmp=$(mktemp -d 2>/dev/null || mktemp -d -t switchboard)
   trap 'rm -rf "$tmp"' EXIT
   trap 'exit 130' INT TERM
-  say "Downloading Switchboard $version for $t…"
+  say "Downloading Switchboard $version for ${t}…"
   fetch "$archive_url" "$tmp/$archive" || fail "couldn't download $archive."
   fetch "$sum_url" "$tmp/$archive.sha256" || fail "couldn't download $archive.sha256."
 
