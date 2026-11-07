@@ -110,7 +110,7 @@ fn stand_in_claude(home: &Path) {
     lines.push(json!({"type": "result", "result": pieces.concat()}).to_string());
     let asked = home.join("claude-asked");
     let mut script = format!(
-        "#!/bin/sh\ncat > /dev/null\necho asked >> '{}'\n",
+        "#!/bin/sh\ncat > /dev/null\necho \"asked $*\" >> '{}'\n",
         asked.display()
     );
     for line in lines {
@@ -226,17 +226,24 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     client.type_text("echo pane-is-back\r");
     client.wait_text("pane-is-back");
 
-    // M-d again opens the story kept, with no new ask.
-    let asked = |home: &Path| {
-        std::fs::read_to_string(home.join("claude-asked"))
-            .unwrap_or_default()
+    // M-d again opens the story kept, with no new ask for it: the stories
+    // asked, which stream, apart from Haiku's order of the files.
+    let log = |home: &Path| std::fs::read_to_string(home.join("claude-asked")).unwrap_or_default();
+    let stories = |home: &Path| {
+        log(home)
             .lines()
+            .filter(|l| l.contains("stream-json"))
             .count()
     };
-    let before = asked(&server.home);
+    let before = stories(&server.home);
     client.send(b"\x1bd");
     client.wait_text("1/2 Change the core");
-    assert_eq!(asked(&server.home), before, "the story came from the cache");
+    assert_eq!(
+        stories(&server.home),
+        before,
+        "the story came from the cache; asked:\n{}",
+        log(&server.home)
+    );
     // M-d pressed in the diff closes it too.
     client.send(b"\x1bd");
     wait_until("the pane back again", || {
