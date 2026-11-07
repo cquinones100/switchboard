@@ -273,7 +273,11 @@ an item whose plan needs a choice is never taken. A tab waiting on you, or
 finished and waiting for your answer, frees its place among those working but
 still counts toward the most open, and a tab queue-and-clean has landed and
 moved back to the main clone leaves the mode, so the next item opens in its
-place. Its tabs say `auto` in the sidebar, and while it is on, mission
+place. That landed tab says `landed` and closes itself once you leave it
+after having it in front for a moment, or half an hour after landing if you
+never look; a prompt typed in it after landing keeps it open as yours
+(Settings' "Close a worked note's landed tabs", `autopilot_close`). Its
+tabs say `auto` in the sidebar, and while it is on, mission
 control's Tabs view leads with its line: the note, how many work and are open,
 and the item it takes next. `k` from the top row of tabs (or a click) reaches
 it, and Enter there pauses or resumes it, skips the next item, takes only

@@ -4351,9 +4351,13 @@ test("working a note continuously keeps 3 tabs working and at most 5 open, a tab
 
     // queue-and-clean's landing moves the pane back to the main clone.
     tmux("respawn-pane", "-k", "-t", wait1, "-c", repo, "cat");
-    const after = await settle();
-    assert.ok(!after.some(([id]) => id === wait1), "the landed tab leaves the mode");
-    assert.equal(after.length, 5, "and the next item opens in its place");
+    // Its session resumed there, idle, as SessionStart leaves it.
+    tmux("set-option", "-w", "-u", "-t", wait1, "@agent");
+    await settle();
+    assert.match(tmux("show-option", "-wqv", "-t", wait1, "@autopilot_left"), /^\d+$/, "the landed tab is marked landed");
+    const after = mine().filter(([id]) => id !== wait1);
+    assert.equal(after.length, 5, "and leaves the mode: the next item opens in its place");
+    tmux("kill-window", "-t", wait1);
     assert.equal(sidebar.readAutopilot().said, "");
 
     sidebar.writeAutopilot({ paused: true });
@@ -4372,6 +4376,57 @@ test("working a note continuously keeps 3 tabs working and at most 5 open, a tab
     Object.assign(process.env, saved);
     sidebar.writeAutopilot({ on: false });
     mine().forEach(([id]) => tmux("kill-window", "-t", id));
+  }
+});
+
+test("a landed tab of the mode working a note closes once you leave it after seeing it, or half an hour after landing, and stays yours once you prompt it", async () => {
+  const dir = path.join(tmp, "autopilot-close");
+  const repo = path.join(dir, "repo");
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env: { ...process.env, ...gitEnv } });
+  sidebar.writeAutopilot({ on: false, note: "Work.md", repo });
+  const sent = [];
+  const pilot = sidebar.autopilot({ batch: (commands) => sent.push(...commands) });
+  const now = Math.floor(Date.now() / 1000);
+  const tab = (id, autopilot, { front = false, state = "idle", since } = {}) => ({
+    id,
+    current: front,
+    attached: true,
+    state,
+    panes: [{ pane_id: `%${id}`, pane_current_path: repo, "@agent_since": since === undefined ? "" : String(since) }],
+    autopilot: { since: now - 3600, inWorktree: true, ...autopilot },
+  });
+  const check = (...tabs) => {
+    sent.length = 0;
+    pilot.check(tabs, { away: false });
+    // A window or pane killed as [kill-window, its id], an option set as [set-option, the option].
+    return sent.map((command) => (command[0].startsWith("kill-") ? [command[0], command.at(-1)] : [command[0], command.find((word) => word.startsWith("@autopilot"))]));
+  };
+  try {
+    const removed = tab("@1", {});
+    removed.panes[0].pane_current_path = path.join(repo, ".claude/worktrees/gone");
+    assert.deepEqual(check(removed), [], "still in its removed worktree under the main clone: not landed yet");
+    const asking = tab("@1", {}, { state: "waiting", since: now - 30 });
+    asking.claudePane = "%asking";
+    asking.panes = [{ pane_id: "%asking", pane_current_path: path.join(repo, ".claude/worktrees/gone") }, { pane_id: "%shell", pane_current_path: repo }];
+    assert.deepEqual(check(asking), [], "Claude still asking in its removed worktree, a shell beside it in the main clone: not landed yet");
+    assert.deepEqual(check(tab("@1", {})), [["set-option", "@autopilot_left"]], "back in the main clone, it is marked landed");
+    assert.deepEqual(check(tab("@1", { landed: now - 60 })), [], "not seen and landed a minute ago: left open");
+    assert.deepEqual(check(tab("@1", { landed: now - sidebar.CLOSE_AFTER_S - 1 })), [["kill-window", "@1"]], "never seen: closed half an hour after landing");
+    assert.deepEqual(check(tab("@2", { landed: now - 60 }, { front: true })), [], "in front a moment: not seen yet, as passing over it does");
+    await wait(1100);
+    assert.deepEqual(check(tab("@2", { landed: now - 60 }, { front: true })), [["set-option", "@autopilot_seen"]], "in front a second: seen");
+    assert.deepEqual(check(tab("@2", { landed: now - 60, seen: true }, { front: true })), [], "never closed while in front");
+    assert.deepEqual(check(tab("@2", { landed: now - 60, seen: true })), [["kill-window", "@2"]], "closed once you leave it");
+    const withNotes = tab("@4", { landed: now - 60, seen: true });
+    withNotes.panes.push({ pane_id: "%notes", pane_current_path: repo, "@notes_pane": "1" });
+    assert.deepEqual(check(withNotes), [["kill-pane", "%@4"]], "with Notes beside it, only its own panes close, so Notes goes back to its tab");
+    assert.deepEqual(check(tab("@3", { landed: now - 60 }, { state: "working", since: now - 120 })), [], "still working from before it landed: not yours yet");
+    check(tab("@3", { landed: now - 60, seen: true }, { state: "working", since: now - 10 }));
+    assert.ok(sent.length && sent.every((command) => command.includes("-u") && command.includes("@3")), "a prompt since landing takes it out of the mode, never closed");
+  } finally {
+    sidebar.writeAutopilot({ on: false, repo: "" });
   }
 });
 

@@ -365,10 +365,14 @@ case "${1:-}" in
       [ "${from%% *}" = done ] && tmux set -p -t "$pane" @agent_compact_from " "
     done < <(tmux list-panes -t "$window" -F $'#{pane_id}\t#{@agent_state}\t#{@agent_compact_from}' 2>/dev/null)
     # A reminder come due is done with once you are at its tab (remind.sh).
-    IFS=$'\t' read -r front at < <(tmux display -p -t "$window" $'#{&&:#{window_active},#{session_attached}}\t#{@remind_at}' 2>/dev/null)
+    IFS=$'\t' read -r front landed at < <(tmux display -p -t "$window" $'#{&&:#{window_active},#{session_attached}}\t#{?@autopilot_left,1,0}\t#{@remind_at}' 2>/dev/null)
     if [ "${front:-}" = 1 ] && [ -n "${at:-}" ] && [ "$at" -le "$(date +%s)" ]; then
       tmux set -wu -t "$window" @remind_at \; set -wu -t "$window" @remind_note \; set -wu -t "$window" @remind_said 2>/dev/null
     fi
+    # A tab of the mode working a note, landed and back in the main clone,
+    # has been seen, so the sidebar daemon closes it once you leave it
+    # (lib/sidebar/autopilot.js).
+    [ "${front:-}" = 1 ] && [ "${landed:-}" = 1 ] && tmux set -w -t "$window" @autopilot_seen 1 2>/dev/null
     # Every window, not just this one, so a session that ended without saying
     # so loses its mark the next time any tab is focused.
     tmux list-windows -a -F '#{window_id}' | while read -r w; do refresh "$w"; done
