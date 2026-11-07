@@ -216,8 +216,8 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
         "{}",
         screen.join("\n")
     );
-    // The first row is its category's heading; j to GitHub, Enter turns it on.
-    client.type_text("j");
+    // The cursor rests on the first setting, GitHub, not on its category's
+    // heading; Enter turns it on.
     client.type_text("\r");
     let file = server.home.join(".config/switchboard/settings.json");
     let deadline = Instant::now() + Duration::from_secs(10);

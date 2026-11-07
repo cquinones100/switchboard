@@ -368,6 +368,7 @@ impl Server {
             None => m.snap.tabs.len(),
         } as isize;
         m.cursor = m.cursor.min(count - 1).max(floor(&m));
+        settle(&mut m);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
         let title = now_view
@@ -2463,6 +2464,22 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
 
 /// The first place the cursor can be: -1, the line of the note worked
 /// continuously, while it leads the tabs (src/autopilot); else 0.
+/// In Settings the cursor rests on a setting, never on a category's
+/// heading, which Enter does nothing on: opened, filtered or sent to the
+/// top, it goes down to the first setting under the heading.
+fn settle(m: &mut Mission) {
+    let Some(view) = m.current().filter(|v| v.id == ViewId::Settings) else {
+        return;
+    };
+    let items = &view.data.items;
+    let at = m.cursor.max(0) as usize;
+    if items.get(at).is_some_and(views::is_header)
+        && let Some(next) = (at..items.len()).find(|i| !views::is_header(&items[*i]))
+    {
+        m.cursor = next as isize;
+    }
+}
+
 fn floor(m: &Mission) -> isize {
     if m.view == 0 && m.snap.pilot.is_some() {
         -1
@@ -2486,7 +2503,19 @@ fn move_to(m: &mut Mission, to: isize, count: isize) {
 /// list a row.
 fn row_step(m: &Mission, by: isize) -> isize {
     if m.view != 0 {
-        return m.cursor + by;
+        let mut to = m.cursor + by;
+        // In Settings a category's heading is passed over, staying put
+        // when only headings are left that way.
+        if let Some(view) = m.current().filter(|v| v.id == ViewId::Settings) {
+            let items = &view.data.items;
+            while to >= 0 && items.get(to as usize).is_some_and(views::is_header) {
+                to += by;
+            }
+            if to < 0 || to as usize >= items.len() {
+                return m.cursor;
+            }
+        }
+        return to;
     }
     let cols = m.size.0 as usize;
     let g = super::render::grid(
