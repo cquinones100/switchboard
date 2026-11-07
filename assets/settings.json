@@ -17,7 +17,7 @@
     "key": "notifications",
     "category": "Notifications",
     "label": "Push notifications",
-    "description": "A macOS banner, named for the tab, when a Claude tab waits on you",
+    "description": "A desktop notification, named for the tab, when a Claude tab waits on you",
     "default": true
   },
   {
@@ -153,7 +153,7 @@
     "key": "todo_note_time",
     "category": "Integrations",
     "label": "Todo note time",
-    "description": "When Today's todo note is written each weekday, or as soon as the Mac is on after it",
+    "description": "When Today's todo note is written each weekday, or as soon as the computer is on after it",
     "choices": [
       {
         "value": "7",
@@ -217,7 +217,7 @@
     "key": "menu_mouse",
     "category": "Mission control",
     "label": "Click in menus",
-    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; and a click picks an option of M-m's, the update popup's and M-w's menus; off, they take keys alone",
+    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone",
     "default": true
   },
   {
@@ -231,7 +231,7 @@
     "key": "hover_highlight",
     "category": "Mission control",
     "label": "Highlight on hover",
-    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update popup's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff; off, nothing follows the mouse. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
+    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff; off, nothing follows the mouse. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
     "default": true
   },
   {
@@ -322,7 +322,7 @@
     "key": "request_audit",
     "category": "Mission control",
     "label": "Requests in Usage",
-    "description": "The Usage view lists today's requests to services outside this Mac (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
+    "description": "The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
     "default": true
   },
   {
@@ -364,21 +364,21 @@
     "key": "notes_palette",
     "category": "Notes",
     "label": "Notes command palette",
-    "description": "Ctrl-Shift-P in Notes lists every command Notes has, each with its key; off, it is your Neovim config's keymaps palette again",
+    "description": "Ctrl-Shift-P in Notes lists every command Notes has, each with its key; off, Ctrl-Shift-P says the palette is off",
     "default": true
   },
   {
     "key": "notes_ctrl_v_image",
     "category": "Notes",
     "label": "Ctrl-V pastes an image",
-    "description": "Ctrl-V while typing in a note pastes the clipboard's image under the line, as in Claude Code, when the clipboard holds one; off, or with no image there, Ctrl-V is Neovim's own",
+    "description": "Ctrl-V while typing in a note pastes the clipboard's image under the line, as in Claude Code, when the clipboard holds one; off, or with no image there, Ctrl-V types the next key as it is, as in Vim",
     "default": true
   },
   {
     "key": "notes_images",
     "category": "Notes",
     "label": "Images drawn in a note",
-    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty does); off, it is its name, which Enter opens in Quick Look",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do); off, it is its name, which Enter opens in Quick Look or the desktop's image viewer",
     "default": true
   },
   {
@@ -441,7 +441,7 @@
     "key": "pause_when_away",
     "category": "Mission control",
     "label": "Pause lookups while away",
-    "description": "Stop asking GitHub, Linear and the calendar for mission control's views while no tmux client is attached or the Mac has been idle 10 minutes, and catch up on return",
+    "description": "Stop asking GitHub, Linear and the calendar for mission control's views while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return",
     "default": true
   },
   {
@@ -518,7 +518,7 @@
     "key": "theme",
     "category": "Appearance",
     "label": "Theme",
-    "description": "tmux's colors, and Ghostty's with them; system follows macOS's appearance when tmux starts or this changes",
+    "description": "The status line's, the pane borders' and the boxes' colors; system follows the terminal's own background, which it is asked for as it attaches",
     "choices": [
       {
         "value": "dark",
@@ -546,7 +546,7 @@
     "key": "auto_restore",
     "category": "Sessions",
     "label": "Restore on start",
-    "description": "Bring back the last saved tabs and panes when tmux starts",
+    "description": "Bring back the last saved tabs and panes, each Claude resumed, when the server starts with none open",
     "default": true
   },
   {
@@ -602,14 +602,14 @@
     "key": "habits",
     "category": "Help",
     "label": "Suggestions from how you work",
-    "description": "Count the keys you press, the commands you pick in M-p and the mission control views you open, on this Mac only and never sent anywhere, and suggest in the notifications a view to turn off that you never open, a key for a command you keep picking in M-p, or a feature that is off which what you do would use; off, what was counted is removed",
+    "description": "Count the keys you press, the commands you pick in M-p and the mission control views you open, on this computer only and never sent anywhere, and suggest in the notifications a view to turn off that you never open, a key for a command you keep picking in M-p, or a feature that is off which what you do would use; off, what was counted is removed",
     "default": true
   },
   {
     "key": "easy_keys",
     "category": "Help",
     "label": "Easy mode",
-    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (through Switchboard's Ghostty config), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update popup's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (fzf lists in popups, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
+    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (where the terminal sends them as the guide says), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update box's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (lists to pick from, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
     "default": false
   },
   {
@@ -623,7 +623,7 @@
     "key": "pane_arrows",
     "category": "Help",
     "label": "Alt-arrows move between panes",
-    "description": "M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do, and between Neovim's windows first; off, they reach the pane",
+    "description": "M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do in Vim; off, they reach the pane",
     "default": true
   },
   {
