@@ -690,12 +690,17 @@ fn m_y_copies_the_latest_reply_of_the_tabs_claude() {
     );
     client.type_text(&format!("{ALT}y"));
     client.wait_text("Copied Claude's latest reply (4 lines), written while it is");
+    // Copied through the terminal (OSC 52), as every copy is, whichever of
+    // the desktop's clipboard programs this computer has, if any.
+    let osc = format!(
+        "\x1b]52;c;{}\x07",
+        switchboard::util::base64(b"It works\nlike this.\n\nAnd so.")
+    );
+    client.wait_for("the reply copied", |_| true);
     let deadline = Instant::now() + Duration::from_secs(10);
-    let copied = server.home.join("copied");
-    while std::fs::read_to_string(&copied).ok().as_deref()
-        != Some("It works\nlike this.\n\nAnd so.")
-    {
+    while !String::from_utf8_lossy(&client.raw).contains(&osc) {
         assert!(Instant::now() < deadline, "not copied");
+        client.wait_for("more drawn", |_| true);
         std::thread::sleep(Duration::from_millis(50));
     }
     client.type_text("\x1b");
