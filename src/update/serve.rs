@@ -43,6 +43,10 @@ pub struct Updates {
     rules_pulling: Arc<AtomicBool>,
     /// The box up now, if one is.
     prompt: Option<Prompt>,
+    /// What the last look found, and when: a terminal attaching just after
+    /// a look (the server's first tick looks before anyone has attached)
+    /// is offered from it rather than GitHub being asked again.
+    last: Option<(Instant, Vec<Release>)>,
     serial: u64,
 }
 
@@ -138,6 +142,8 @@ impl Overlay for UpdateBox {
 
 const UPDATE_NOW: usize = 0;
 const NOT_NOW: usize = 1;
+/// How long what a look found stands for a terminal attaching after it.
+const FRESH: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Server {
     /// On the server's tick: the hourly look, once the hour since the last
@@ -155,11 +161,26 @@ impl Server {
         }
     }
 
-    /// A terminal attached: a look, offering anything newer on it.
+    /// A terminal attached: a look, offering anything newer on it, or
+    /// what a look that finished within `FRESH` found.
     pub fn update_attached(&mut self, client: ClientId) {
         self.pull_rules(Why::Attach);
-        if super::looks_by_itself() && super::allowed(Why::Attach, &update_setting(true)) {
-            self.update_look(Why::Attach, Some(client));
+        if !super::looks_by_itself() || !super::allowed(Why::Attach, &update_setting(true)) {
+            return;
+        }
+        let fresh = self
+            .update
+            .last
+            .as_ref()
+            .filter(|(at, _)| !self.update.checking && at.elapsed() < FRESH)
+            .map(|(_, releases)| releases.clone());
+        match fresh {
+            Some(releases) => self.update_event(UpdateEvent::Checked {
+                why: Why::Attach,
+                client: Some(client),
+                found: Ok(releases),
+            }),
+            None => self.update_look(Why::Attach, Some(client)),
         }
     }
 
@@ -205,7 +226,10 @@ impl Server {
             .filter(|c| self.clients.contains_key(c))
             .or_else(|| self.latest_client());
         let releases = match found {
-            Ok(releases) => releases,
+            Ok(releases) => {
+                self.update.last = Some((Instant::now(), releases.clone()));
+                releases
+            }
             Err(why_not) => {
                 if why == Why::Asked {
                     self.say(

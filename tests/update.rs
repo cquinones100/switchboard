@@ -514,7 +514,12 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
     // A checksum that doesn't match installs nothing.
     fake.publish("v9.9.9", &stub("9.9.9"), true);
     let out = run_install(&fake, dir.path(), &stubs);
-    assert!(!out.status.success());
+    assert!(
+        !out.status.success(),
+        "installed a mismatched archive:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("isn't the file that was published"),
         "{}",
