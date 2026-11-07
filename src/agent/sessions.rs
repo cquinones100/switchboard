@@ -151,8 +151,10 @@ pub fn named_like_claude(pane: &crate::mux::pane::Pane) -> bool {
 /// file it ran, `claude` where it names it after the link that was run
 /// (Linux) or Claude Code renamed itself, and `node` when an npm install's
 /// script runs it, its script then being Claude Code's (`claude`, or a file
-/// in `@anthropic-ai/claude-code`). Only the script is looked at, never the
-/// arguments after it, so `node app.js claude` is no Claude.
+/// in `@anthropic-ai/claude-code`), or a shell running a script named
+/// `claude` (a wrapper of your own, which a Mac names after its
+/// interpreter). Only the script is looked at, never the arguments after
+/// it, so `node app.js claude` is no Claude.
 pub fn is_claude_name(command: &str, args: impl FnOnce() -> Option<Vec<String>>) -> bool {
     let parts: Vec<&str> = command.split('.').collect();
     let version = parts.len() == 3
@@ -162,18 +164,29 @@ pub fn is_claude_name(command: &str, args: impl FnOnce() -> Option<Vec<String>>)
     if version || command == "claude" {
         return true;
     }
-    if command != "node" {
+    let node = command == "node";
+    if !node && !matches!(command, "sh" | "bash" | "zsh" | "dash") {
         return false;
     }
     let Some(args) = args() else {
         return false;
     };
+    // A shell given -c runs a command line, not a script: one that ends by
+    // running claude is named claude by then.
+    let flags = args.iter().skip(1).take_while(|a| a.starts_with('-'));
+    if !node
+        && flags
+            .into_iter()
+            .any(|f| !f.starts_with("--") && f.contains('c'))
+    {
+        return false;
+    }
     let Some(script) = args.iter().skip(1).find(|a| !a.starts_with('-')) else {
         return false;
     };
     let script = Path::new(script);
     script.file_name().is_some_and(|name| name == "claude")
-        || script.components().any(|c| c.as_os_str() == "claude-code")
+        || (node && script.components().any(|c| c.as_os_str() == "claude-code"))
 }
 
 #[cfg(test)]
@@ -257,6 +270,17 @@ mod tests {
         ));
         assert!(!is_claude_name("node", args(&["node", "app.js", "claude"])));
         assert!(!is_claude_name("node", args(&["node"])));
+        // A wrapper script of your own, as a Mac names it.
+        assert!(is_claude_name(
+            "sh",
+            args(&["/bin/sh", "/home/u/bin/claude"])
+        ));
+        assert!(is_claude_name("bash", args(&["bash", "-e", "/u/claude"])));
+        assert!(!is_claude_name("bash", args(&["bash", "-c", "claude"])));
+        assert!(!is_claude_name(
+            "sh",
+            args(&["sh", "/x/claude-code/run.sh"])
+        ));
     }
 
     #[test]
