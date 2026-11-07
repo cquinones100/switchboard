@@ -533,8 +533,10 @@ impl Persist {
         for s in &server.sessions {
             let mut tabs = Vec::new();
             for tab in s.tabs.iter().filter_map(|t| server.tabs.get(t)) {
+                // A pane waiting behind a tool is saved in its place.
+                let (layout, active, last_pane) = server.saved_layout(tab);
                 let mut panes = Vec::new();
-                for id in tab.layout.panes() {
+                for id in layout.panes() {
                     let Some(slot) = server.panes.get(&id) else {
                         continue;
                     };
@@ -570,9 +572,9 @@ impl Persist {
                 tabs.push(SavedTab {
                     id: tab.id,
                     name: tab.name.clone(),
-                    layout: tab.layout.clone(),
-                    active: tab.active,
-                    last_pane: tab.last_pane,
+                    layout,
+                    active,
+                    last_pane,
                     zoomed: tab.zoomed,
                     opts: tab.opts.clone(),
                     panes,

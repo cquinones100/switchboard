@@ -605,6 +605,7 @@ impl Server {
                 super::persist::tick(self);
                 self.usage_tick();
                 self.mission_tick();
+                self.diff_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -776,7 +777,7 @@ impl Server {
     }
 
     /// Starts a pane: `command` (the login shell when `None`) in `cwd`.
-    fn spawn_pane(
+    pub(crate) fn spawn_pane(
         &mut self,
         tab: TabId,
         cwd: Option<PathBuf>,
@@ -989,6 +990,10 @@ impl Server {
     /// Takes a pane out of its tab; the tab goes when it was its last, and
     /// the session when that was its last tab.
     pub fn remove_pane(&mut self, pane: PaneId) {
+        // A tool in a pane's place gives the place back (src/diff/in_place.rs).
+        if self.give_place_back(pane) {
+            return;
+        }
         let Some(slot) = self.panes.remove(&pane) else {
             return;
         };
@@ -1016,11 +1021,7 @@ impl Server {
 
     /// Ends every pane of a tab and takes it out.
     pub fn kill_tab(&mut self, tab: TabId) {
-        let panes = self
-            .tabs
-            .get(&tab)
-            .map(|t| t.layout.panes())
-            .unwrap_or_default();
+        let panes = self.panes_with_parked(tab);
         for p in panes {
             if let Some(mut slot) = self.panes.remove(&p) {
                 slot.pane.kill();
@@ -1583,6 +1584,7 @@ impl Server {
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
             Action::View(command) => self.view_command(id, command),
+            Action::Diff(command) => self.diff_command(id, command),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

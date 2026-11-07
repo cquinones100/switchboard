@@ -104,7 +104,7 @@ switchboard <command>     ──┘            ├─ background tasks: GitHub, 
 | `display-popup`, `say.sh`, `tip.sh`, `menu.sh`, `confirm.sh` | overlays in `src/ui/` |
 | fzf (palette, pickers) | `src/ui/picker.rs` with nucleo-matcher |
 | glow, mermaid-ascii | `src/views/markdown.rs` (pulldown-cmark), a Mermaid flowchart/sequence drawer |
-| diffview.nvim, `nvim/lua/diffstory.lua`, `diffask.lua` | `src/views/diff/` (syntect for highlighting) |
+| diffview.nvim, `nvim/lua/diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `src/diff/` (`switchboard diff`; syntect for highlighting, similar for the line and word diffs) |
 | the notes app (`notes/`, Neovim) | `src/views/notes/` (ropey) |
 | `gh` | GitHub's API over reqwest; the token from `GH_TOKEN`/`GITHUB_TOKEN`, `gh auth token` when gh is there, else a stored secret |
 | `security`, `pbcopy`, `osascript`, `ioreg`, `open` | `src/platform/` |
@@ -169,7 +169,17 @@ Each step is a commit (or a few) on the branch, with its tests.
    `codex-review`, `shape`, `skill-path`, `land-lock`, `wait-deploy`,
    `watch-note`, the skills' scripts, the skills' text moved off tmux.
 7. **The Slack relay**.
-8. **The diff viewer**, with its story, pages and ask.
+8. **The diff viewer**, with its story, pages and ask — done (src/diff:
+   `switchboard diff` in a pane's place, the pane parked behind it and
+   given back when it ends, with M-p's side and full; M-d against the PR's
+   base, fetched unless the branch is where it last compared; the files in
+   reading order beside a side-by-side diff with its changed words, syntax
+   colours and folds; the story with its cover, chapters, notes, pages and
+   Markdown, cached and followed while another program tells it; told
+   ahead for each tab's new commit; `ga`'s question; easy mode's buttons).
+   Left: the branch's commits one at a time (diffview's `c`), visual-mode
+   ranges for yp and yl, and a working tree's changes, which M-d never
+   showed.
 9. **The notes app**.
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.

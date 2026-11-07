@@ -1,11 +1,13 @@
 //! M-d's diff: a branch's changes as GitHub's "Files changed" shows them,
-//! ported from diffview.nvim as M-d set it up (nvim/lua/plugins/diffview.lua,
-//! nvim/lua/diffstory.lua, nvim/lua/diffask.lua, nvim/diff.lua) and the
-//! scripts around it (tmux/diff-base.sh, tmux/diff-story-ahead.sh,
+//! in place of the pane you are in, ported from diffview.nvim as M-d set it
+//! up (nvim/lua/plugins/diffview.lua, nvim/lua/diffstory.lua,
+//! nvim/lua/diffask.lua, nvim/diff.lua) and the scripts around it
+//! (tmux/pane-in-place.sh, tmux/diff-base.sh, tmux/diff-story-ahead.sh,
 //! lib/sidebar/story-ahead.js).
 //!
 //! Under tmux, M-d ran a stripped-down Neovim in a pane's place; here it is
-//! `switchboard diff`, a program of Switchboard's own run in a pane.
+//! `switchboard diff`, a program of Switchboard's own the server runs in
+//! the pane's place (`in_place`), the pane parked until the diff ends.
 //!
 //! - `git`: what the branch is compared with, and the change itself.
 //! - `order`: the files in reading order, generated files last.
@@ -16,6 +18,8 @@
 //! - `ask`: a question about the diff, answered by Haiku.
 //! - `app`: the program on the screen.
 //! - `ahead`: the story told ahead of time for each tab's new commit.
+//! - `in_place`: a tool in a pane's place, in the server.
+//! - `serve`: the server's keys: M-d and the palette's commands.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -25,10 +29,87 @@ pub mod app;
 pub mod ask;
 pub mod git;
 pub mod highlight;
+pub mod in_place;
 pub mod order;
+mod serve;
 pub mod sides;
 pub mod story;
 pub mod tell;
+
+/// What the diff's keys do in the server, an action of the multiplexer's
+/// (`mux::keys::Action::Diff`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Command {
+    /// M-d: the branch's diff in place of this pane, or closed.
+    Diff,
+    /// The pane a tool stands in for beside it, on its left.
+    Side,
+    /// The tool alone again, that pane parked once more.
+    Full,
+    /// yS pressed in the diff: its story copied as Markdown.
+    CopyStory,
+    /// ga pressed in the diff: a question about it.
+    Ask,
+}
+
+impl Command {
+    pub const ALL: [Command; 5] = [
+        Command::Diff,
+        Command::Side,
+        Command::Full,
+        Command::CopyStory,
+        Command::Ask,
+    ];
+
+    /// Its name in keys.json.
+    pub fn name(self) -> &'static str {
+        match self {
+            Command::Diff => "diff",
+            Command::Side => "tool-beside",
+            Command::Full => "tool-alone",
+            Command::CopyStory => "copy-diff-story",
+            Command::Ask => "ask-about-diff",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Command> {
+        Command::ALL.into_iter().find(|c| c.name() == name)
+    }
+
+    /// What it does, as tmux.conf described its binding.
+    pub fn about(self) -> &'static str {
+        match self {
+            Command::Diff => {
+                "Open the branch's diff against its PR's base in place of this pane, or close it"
+            }
+            Command::Side => "Show the pane a tool stands in for (the diff) beside it, on its left",
+            Command::Full => "Show a tool in place of a pane alone again, full width",
+            Command::CopyStory => "Copy the diff's story (M-d) as Markdown, to share it",
+            Command::Ask => {
+                "Ask Claude about the diff (M-d), with its story, reading the repository as needed"
+            }
+        }
+    }
+
+    /// tmux.conf's tags. `#diffview` lists a command in the palette only
+    /// while the pane has the diff in it.
+    pub fn tags(self) -> &'static [&'static str] {
+        match self {
+            Command::Diff => &["git", "diff", "review"],
+            Command::Side | Command::Full => &["panes", "split"],
+            Command::CopyStory => &["git", "diff", "review", "story", "diffview"],
+            Command::Ask => &["git", "diff", "review", "story", "ai", "diffview"],
+        }
+    }
+
+    /// The key tmux.conf bound it to, or `None` for one only in the palette.
+    pub fn key(self) -> Option<&'static str> {
+        match self {
+            Command::Diff => Some("M-d"),
+            _ => None,
+        }
+    }
+}
 
 /// `switchboard diff [--base <ref>] [--ahead] [dir]`: the change in `dir`
 /// (where it runs, else) against `<ref>`, or, without one, its PR's base as

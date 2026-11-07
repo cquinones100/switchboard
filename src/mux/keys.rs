@@ -2,7 +2,8 @@
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
 //! tab's Claude, M-f to pin a tab), M-s into the sidebar and the views'
-//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), under the same keys, with
+//! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views) and M-d (src/diff), under
+//! the same keys, with
 //! the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
 //! adds to or changes them:
 //!
@@ -100,6 +101,9 @@ pub enum Action {
     /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f and the link
     /// commands (src/views).
     View(crate::views::Command),
+    /// What the diff does: M-d, and the palette's commands for a tool in a
+    /// pane's place and for the diff open in it (src/diff).
+    Diff(crate::diff::Command),
 }
 
 impl Action {
@@ -124,6 +128,9 @@ impl Action {
         };
         if let Some(command) = crate::views::Command::parse(name) {
             return Some(Action::View(command));
+        }
+        if let Some(command) = crate::diff::Command::parse(name) {
+            return Some(Action::Diff(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -214,6 +221,7 @@ impl Action {
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
             Action::View(command) => command.name().into(),
+            Action::Diff(command) => command.name().into(),
         }
     }
 
@@ -276,6 +284,7 @@ impl Action {
                 "Remind me about this tab later: it waits under Reminders with the time left, then needs you".into()
             }
             Action::View(command) => command.about().into(),
+            Action::Diff(command) => command.about().into(),
         }
     }
 
@@ -315,6 +324,7 @@ impl Action {
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
             Action::View(command) => command.tags(),
+            Action::Diff(command) => command.tags(),
         }
     }
 
@@ -354,6 +364,10 @@ impl Action {
             .into_iter()
             .filter(|c| c.key().is_none())
             .map(Action::View);
+        let diff = crate::diff::Command::ALL
+            .into_iter()
+            .filter(|c| c.key().is_none())
+            .map(Action::Diff);
         [
             Action::ResetTips,
             Action::ToggleTheme,
@@ -366,6 +380,7 @@ impl Action {
         ]
         .into_iter()
         .chain(views)
+        .chain(diff)
         .collect()
     }
 }
@@ -427,6 +442,11 @@ impl Default for Bindings {
         for command in crate::views::Command::ALL {
             if let Some(k) = command.key() {
                 bind(k, View(command));
+            }
+        }
+        for command in crate::diff::Command::ALL {
+            if let Some(k) = command.key() {
+                bind(k, Diff(command));
             }
         }
         let mut prefix = HashMap::new();
@@ -554,6 +574,8 @@ mod tests {
             Action::RemindTab,
             Action::View(crate::views::Command::PrView),
             Action::View(crate::views::Command::OpenLinkRead),
+            Action::Diff(crate::diff::Command::Diff),
+            Action::Diff(crate::diff::Command::Ask),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

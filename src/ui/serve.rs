@@ -403,10 +403,11 @@ impl Server {
                 .is_none_or(|s| s.value != serde_json::Value::Bool(false))
         };
         let learn = on("palette_learn");
-        let entries = palette::recent_first(
-            palette::entries(&self.bindings, on("github"), on("linear")),
-            &palette::read_recent(),
-        );
+        // The diff's commands only where they can act (src/diff).
+        let mut entries = palette::entries(&self.bindings, on("github"), on("linear"));
+        let listed = self.diff_palette(client);
+        entries.retain(|e| listed(&e.action));
+        let entries = palette::recent_first(entries, &palette::read_recent());
         let picks = if learn {
             palette::read_queries()
         } else {
