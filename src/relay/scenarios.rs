@@ -3494,6 +3494,48 @@ fn skill_under_a_finished_turn_opens_a_menu_of_the_tabs_skills_and_run_types_it(
 }
 
 #[test]
+fn a_skill_menu_lists_switchboard_s_from_its_plugin_as_the_relay_s_settings_say() {
+    // The menu's names, as the relay with `settings` draws it for a Claude
+    // tab, Switchboard's plugin holding a today.
+    let menu = |settings: super::Settings| -> Vec<String> {
+        let mut rig = Rig::new();
+        std::rc::Rc::get_mut(&mut rig.cx).unwrap().settings = settings;
+        let dir = rig.cx.paths.plugin_dir.join("skills/today");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), "---\ndescription: The day\n---\n").unwrap();
+        let work = rig.root.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let (tab, _) = super::mux::Mux::new_tab(&rig.mux, &work, None, None).unwrap();
+        rig.mux
+            .windows
+            .borrow_mut()
+            .iter_mut()
+            .find(|(w, _)| w.id == tab)
+            .unwrap()
+            .1[0]
+            .info
+            .claude = true;
+        let t = tabs::tab(&rig.cx, &tab).unwrap();
+        let screen = super::screens::skill_screen(&rig.cx, &t, "screen", None, "");
+        screen["blocks"][0]["element"]["option_groups"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["options"].as_array().cloned().unwrap_or_default())
+            .map(|o| o["value"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert!(
+        menu(Box::new(|_| None)).contains(&"today".to_string()),
+        "on by default"
+    );
+    let off = menu(Box::new(|key| {
+        (key == crate::setup::way::SETTING).then_some(Value::Bool(false))
+    }));
+    assert!(!off.contains(&"today".to_string()), "{off:?}");
+}
+
+#[test]
 fn a_skill_menu_with_more_skills_than_it_holds_cuts_the_rest_and_takes_any_name() {
     let rig = Rig::new();
     let many = rig.root.join("many-skills");
