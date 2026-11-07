@@ -505,6 +505,21 @@ impl App {
                     }
                 }
             }
+            // The lines selected, on the side with the focus, reversed as
+            // Visual mode's highlight.
+            if let Some(from) = self.visual
+                && self.focus != Focus::List
+                && (from.min(self.cur)..=from.max(self.cur)).contains(&(self.top + k))
+            {
+                let (x, w) = if self.focus == Focus::Old {
+                    (old_x, ow)
+                } else {
+                    (new_x, nw)
+                };
+                for cx in x..x + w {
+                    buf[(cx, y)].modifier.insert(Modifier::REVERSED);
+                }
+            }
             let at_cursor = self.top + k == self.cur;
             if at_cursor && self.focus != Focus::List {
                 let (x, w) = if self.focus == Focus::Old {

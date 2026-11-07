@@ -137,7 +137,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
 - **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
-- **The diff**: a branch's commits one at a time (diffview's `c`), visual-mode ranges for `yp` and `yl`, and a working tree's changes, which `M-d` never showed.
+- **The diff**: a branch's commits one at a time (diffview's `c`), and a working tree's changes, which `M-d` never showed.
 - **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now), a new note's notification opening the note and a calendar change's opening the Calendar view, the Calendar drawn as a day, plugins' counts in the sidebar, the CI menu's failing log (the logs are kept), and the second status line's push count.
 - **Elsewhere**: keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 

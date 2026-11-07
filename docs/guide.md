@@ -825,7 +825,7 @@ Its Close, Ask again and Copy buttons do the same, the wheel scrolls it, and a c
 
 ### The file list
 
-Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the diff without leaving it. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it.
+Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the diff without leaving it. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub. In a side of the diff, `v` or `V` starts selecting lines from the cursor, lit as the cursor moves; `yp` and `yl` then copy the lines selected (`path:12-20`, `#L12-L20`) and end the selection, as does `Esc` or `v` again. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it.
 
 With Settings' "Easy mode" (`easy_keys`, under Help) on, the diff has a row of buttons at the bottom, each pressing its keys in the list: ◀ Chapter, Chapter ▶, ◀ Page, Page ▶, Widen, Copy link, Ask (with Ask Claude about the diff on) and Close, followed, with "Key help line" (`key_help_line`) on, by a line naming the keys. With "Highlight on hover" (`hover_highlight`) on, the button under the mouse lights. Both take effect when the diff next opens.
 
@@ -843,7 +843,8 @@ The keys depend on where the cursor is: in the file list, or in the diff on its 
 | `l`, `o`, `→` | Into the diff | `→`: from the old side to the new |
 | `←` | | From the new side to the old, from the old to the list |
 | `J` `K` | Scroll the diff five lines down or up | |
-| `Esc` | Close the diff | Back to the list |
+| `v` `V` | | Select lines from the cursor, for `yp` and `yl`; again to stop |
+| `Esc` | Close the diff | End a selection, else back to the list |
 
 These work wherever the cursor is:
 
@@ -857,8 +858,8 @@ These work wherever the cursor is:
 | `Ctrl-w h` `Ctrl-w l`, `Ctrl-w w` | The pane of the diff to the left or right, or the next one |
 | `]p` `[p` | The next or previous page of the story |
 | `E` | Widen or narrow the list |
-| `yp` | Copy the cursor's `path:line` |
-| `yl` | Copy a GitHub link to the cursor's line |
+| `yp` | Copy the cursor's `path:line`, or the lines selected (`path:12-20`) |
+| `yl` | Copy a GitHub link to the cursor's line, or to the lines selected |
 | `yS` | Copy the story as Markdown |
 | `ga` | Ask Haiku about the change |
 | `q`, `Ctrl-c` | Close the diff |

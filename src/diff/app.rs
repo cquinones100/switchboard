@@ -20,6 +20,11 @@
 //! `ga` asks Haiku a question about the change (ask.rs): a box to type it
 //! in, then a window on the right half with the answer streamed in.
 //!
+//! `yp` copies the cursor's `path:line` and `yl` a GitHub link to it; `v`
+//! or `V` in a side of the diff selects lines, as Visual mode did in
+//! diffview's buffers, and then `yp` and `yl` copy the lines selected
+//! (`path:12-20`, `#L12-L20`).
+//!
 //! The screen is drawn into a cell buffer and only what changed is sent,
 //! through the multiplexer's own renderer (`mux::compose::Screen`), so the
 //! program is tested by drawing into a buffer and reading it back.
@@ -317,6 +322,9 @@ pub struct App {
     message: Option<(String, Instant)>,
     /// The first key of a pair (y, g, ], [, z, C-w as w), and a count typed.
     pending: Option<char>,
+    /// Where a selection of lines started (`v`, `V`), as a screen line of
+    /// the diff, on the side with the focus.
+    visual: Option<usize>,
     count: Option<usize>,
     spin: usize,
     hover: Option<Button>,
@@ -376,6 +384,7 @@ impl App {
             asks: 0,
             message: None,
             pending: None,
+            visual: None,
             count: None,
             spin: 0,
             hover: None,
@@ -702,6 +711,7 @@ impl App {
 
     /// Shows the list's file at `at`, opened at its first change.
     fn show_at(&mut self, at: usize) {
+        self.visual = None;
         if self.order.is_empty() {
             return;
         }
@@ -997,7 +1007,12 @@ impl App {
     /// The line number (from 1) under the cursor on a side, the nearest
     /// line above (else below) where the side has none there.
     fn line_under(&mut self, new_side: bool) -> Option<usize> {
-        let cur = self.cur;
+        self.line_at(new_side, self.cur)
+    }
+
+    /// The line number (from 1) at a screen line of the diff, on a side,
+    /// as `line_under` finds it.
+    fn line_at(&mut self, new_side: bool, cur: usize) -> Option<usize> {
         let lines = self.screen_lines().to_vec();
         let on = |l: &Line| match l {
             Line::Pair { old, new, .. } => match if new_side { new } else { old } {
@@ -1064,7 +1079,12 @@ impl App {
         if self.answer.is_some() {
             return self.answer_key(key);
         }
-        self.normal_key(key)
+        let before = self.focus;
+        let act = self.normal_key(key);
+        if self.focus != before {
+            self.visual = None;
+        }
+        act
     }
 
     fn normal_key(&mut self, key: KeyEvent) -> Act {
@@ -1102,7 +1122,14 @@ impl App {
                 self.focus = if list { self.main_side() } else { Focus::List };
             }
             KeyCode::Esc if list => return Act::Quit,
+            KeyCode::Esc if self.visual.is_some() => self.visual = None,
             KeyCode::Esc => self.focus = Focus::List,
+            KeyCode::Char('v' | 'V') if !list && !ctrl => {
+                self.visual = match self.visual {
+                    Some(_) => None,
+                    None => Some(self.cur),
+                };
+            }
             KeyCode::Char('J') if list => self.scroll_diff(SCROLL * count, true),
             KeyCode::Char('K') if list => self.scroll_diff(SCROLL * count, false),
             KeyCode::Char('j') | KeyCode::Down if list => self.move_list(count as isize),
@@ -1453,8 +1480,10 @@ impl App {
         }
     }
 
-    /// Where the cursor is: the file, which side, and the line.
-    fn here(&mut self) -> Option<(String, bool, usize)> {
+    /// Where the cursor is: the file, which side, and the lines, the first
+    /// and the last of those selected (the cursor's alone with none). A
+    /// selection ends once it is copied, as Vim's `y` leaves Visual mode.
+    fn here(&mut self) -> Option<(String, bool, usize, usize)> {
         let entry = self.current()?.clone();
         let new_side = match self.focus {
             Focus::Old => false,
@@ -1462,27 +1491,35 @@ impl App {
             Focus::List => self.main_side() == Focus::New,
         };
         let line = self.line_under(new_side).unwrap_or(1);
+        let (first, last) = match self.visual.take().filter(|_| self.focus != Focus::List) {
+            Some(from) => {
+                let other = self.line_at(new_side, from).unwrap_or(line);
+                (line.min(other), line.max(other))
+            }
+            None => (line, line),
+        };
         let path = if new_side {
             entry.path.clone()
         } else {
             entry.old().to_string()
         };
-        Some((path, new_side, line))
+        Some((path, new_side, first, last))
     }
 
     fn copy_path(&mut self) {
-        let Some((path, _, line)) = self.here() else {
+        let Some((path, _, first, last)) = self.here() else {
             return self.say("No file here");
         };
-        let text = format!("{path}:{line}");
+        let text = format!("{path}:{}", span(first, last, ""));
         self.clip(&text);
         self.say(format!("Copied {text}"));
     }
 
     fn copy_link(&mut self) {
-        let Some((path, new_side, line)) = self.here() else {
+        let Some((path, new_side, first, last)) = self.here() else {
             return self.say("No file here");
         };
+        let line = span(first, last, "L");
         let Some(change) = &self.change else {
             return;
         };
@@ -1841,6 +1878,7 @@ impl App {
         if let Some(button) = hit {
             return self.press(button);
         }
+        self.visual = None;
         // A click outside a box closes it.
         let inside = |r: Option<Rect>| {
             r.is_some_and(|r| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
@@ -1942,6 +1980,16 @@ impl App {
             Button::AnswerCopy => self.copy_answer(),
         }
         Act::Redraw
+    }
+}
+
+/// Lines as `yp` and `yl` name them: one line alone, else the first and
+/// the last, the last after `mark` (GitHub's `#L12-L20`).
+fn span(first: usize, last: usize, mark: &str) -> String {
+    if last > first {
+        format!("{first}-{mark}{last}")
+    } else {
+        first.to_string()
     }
 }
 
@@ -2272,6 +2320,36 @@ mod tests {
             ..click
         };
         assert_eq!(app.mouse(click), Act::Quit);
+    }
+
+    #[test]
+    fn v_selects_lines_on_a_side_and_yp_copies_them_as_a_range() {
+        let mut app = app();
+        press(&mut app, "j");
+        assert_eq!(app.current().unwrap().path, "src/a.js");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.focus, Focus::New);
+        press(&mut app, "ggvjj");
+        let shown = draw(&mut app);
+        let (ow, _) = app.side_widths();
+        let x = app.diff_area().x + ow + 2;
+        assert!(
+            shown[(x, 1)].modifier.contains(Modifier::REVERSED),
+            "the lines selected lit"
+        );
+        press(&mut app, "yp");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied src/a.js:1-3");
+        assert_eq!(app.visual, None, "the selection ends once copied");
+        app.message = None;
+        press(&mut app, "yp");
+        assert_eq!(app.message.as_ref().unwrap().0, "Copied src/a.js:3");
+        // Esc ends a selection before it leaves the side.
+        app.message = None;
+        press(&mut app, "v");
+        app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!((app.visual, app.focus), (None, Focus::New));
+        assert_eq!(span(12, 20, "L"), "12-L20");
+        assert_eq!(span(7, 7, "L"), "7");
     }
 
     #[test]
