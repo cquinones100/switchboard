@@ -162,3 +162,87 @@ fn a_command_with_no_server_says_so() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("no server is running"));
 }
+
+/// Where a pane is: its tab, its place among the tab's panes, its size.
+fn place(list: &serde_json::Value, pane: &str) -> Option<(String, usize, u64, u64)> {
+    list["sessions"][0]["tabs"]
+        .as_array()?
+        .iter()
+        .find_map(|t| {
+            let panes = t["panes"].as_array()?;
+            let at = panes.iter().position(|p| p["id"] == pane)?;
+            Some((
+                t["id"].as_str()?.to_string(),
+                at,
+                panes[at]["cols"].as_u64()?,
+                panes[at]["rows"].as_u64()?,
+            ))
+        })
+}
+
+#[test]
+fn respawn_starts_another_program_in_the_same_pane() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // A program that takes a second to end once hung up, so its end comes
+    // after the one started in its place.
+    let pane = server
+        .ok(&[
+            "split",
+            "-d",
+            "--",
+            "sh",
+            "-c",
+            "trap 'sleep 1; exit 0' HUP; echo first-program; while :; do sleep 0.1; done",
+        ])
+        .trim()
+        .to_string();
+    client.wait_for("the first program", |_| {
+        server
+            .ok(&["capture-pane", "-t", &pane])
+            .contains("first-program")
+    });
+    let before = place(&server.list(), &pane).expect("the pane is listed");
+
+    // Still running, it is kept unless -k says to end it, as tmux did.
+    let (code, _, err) = server.run(&["respawn-pane", "-t", &pane, "--", "sh", "-c", "exit 0"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("still running"), "{err}");
+
+    server.ok(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        &pane,
+        "--",
+        "sh",
+        "-c",
+        "echo second-program; sleep 30",
+    ]);
+    client.wait_for("the second program in its place", |_| {
+        let text = server.ok(&["capture-pane", "-t", &pane]);
+        text.contains("second-program") && !text.contains("first-program")
+    });
+    // The first program's end has come by now, and the pane is still there,
+    // where it was, as big as it was.
+    std::thread::sleep(std::time::Duration::from_millis(1800));
+    assert_eq!(place(&server.list(), &pane), Some(before.clone()));
+    assert_eq!(panes(&server.list()), 2);
+
+    // `switchboard respawn` does the same for the skills, ending what runs.
+    server.ok(&[
+        "respawn",
+        "-t",
+        &pane,
+        "sh",
+        "-c",
+        "echo third-program; sleep 30",
+    ]);
+    client.wait_for("the third program", |_| {
+        server
+            .ok(&["capture-pane", "-t", &pane])
+            .contains("third-program")
+    });
+    assert_eq!(place(&server.list(), &pane), Some(before));
+}

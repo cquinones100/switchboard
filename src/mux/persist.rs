@@ -800,7 +800,14 @@ fn restore_tab(
         server.next_pane = server.next_pane.max(id.0.saturating_add(1));
         let pane = saved.entry(id).or_insert_with(|| SavedPane::new(id));
         if let Some(slot) = server.panes.get_mut(&id) {
-            slot.opts = pane.opts.clone();
+            // The pane comes back as its shell, so what said what its
+            // program was, or allowed it, stays behind with it.
+            slot.opts = pane
+                .opts
+                .iter()
+                .filter(|(name, _)| !super::respawn::PROGRAM_MARKS.contains(&name.as_str()))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
         }
         started.push(id);
     }

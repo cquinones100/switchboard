@@ -14,16 +14,12 @@
 //! note's path can hold anything, where the tmux version passed them in the
 //! environment to keep them out of the command line.
 //!
-//! The server has no respawn of its own: the new program starts in a pane
-//! split from this one, left in the background, and this one is closed,
-//! which gives the new pane its place, so the tab, its options and its name
-//! stay as they were. When the pane was the one in front in its tab, the new
-//! one is made so. Closing the pane ends the Claude session that asked for
+//! The server's `respawn-pane -k` does it (src/mux/respawn.rs): the pane
+//! keeps its id, its place, its tab's options and name, and the focus if it
+//! had it. Ending the pane's program ends the Claude session that asked for
 //! this, so it is the last thing that session runs.
 
 use std::process::ExitCode;
-
-use serde_json::Value;
 
 use crate::mux::socket;
 use crate::worktree;
@@ -102,40 +98,37 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
-/// Whether the pane is the one in front in its tab, from `list`.
-fn in_front(list: &Value, pane: &str) -> bool {
-    list["sessions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|s| s["tabs"].as_array().into_iter().flatten())
-        .flat_map(|t| t["panes"].as_array().into_iter().flatten())
-        .any(|p| p["id"] == pane && p["active"] == true)
+/// The server's arguments for it: the pane, the directory, the program
+/// ended whether or not it still runs (as the skills ran `tmux
+/// respawn-pane -k`), and the command, after `--` so none of its words is
+/// read as a flag.
+pub fn server_args(pane: &str, dir: Option<&str>, command: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "respawn-pane".to_string(),
+        "-k".into(),
+        "-t".into(),
+        pane.into(),
+    ];
+    if let Some(d) = dir {
+        args.extend(["-c".to_string(), d.to_string()]);
+    }
+    args.push("--".into());
+    args.extend(command.iter().cloned());
+    args
 }
 
 fn respawn(pane: &str, dir: Option<&str>, command: &[String]) -> anyhow::Result<()> {
-    let list: Value = serde_json::from_str(&socket::ask_ok(&["list"])?)?;
-    let front = in_front(&list, pane);
-    let mut split = vec!["split", "-d", "-t", pane];
-    if let Some(d) = dir {
-        split.extend(["-c", d]);
-    }
-    split.push("--");
-    split.extend(command.iter().map(String::as_str));
-    let new = socket::ask_ok(&split)?.trim().to_string();
-    socket::ask_ok(&["kill-pane", "-t", pane])?;
-    if front {
-        // This process may already be gone with the pane it ran in, which
-        // is no matter: the new pane was the only one left to take its place.
-        let _ = socket::ask(&["select-pane", "-t", &new]);
-    }
+    let args = server_args(pane, dir, command);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    // This process may be gone with the program it ran under before the
+    // answer comes, which is no matter: the new program is running.
+    socket::ask_ok(&args)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn worktree_functions_are_defined_and_anything_else_runs_as_it_is() {
@@ -150,13 +143,26 @@ mod tests {
     }
 
     #[test]
-    fn the_pane_in_front_is_read_from_the_list() {
-        let list = json!({ "sessions": [{ "tabs": [{ "panes": [
-            { "id": "%1", "active": false },
-            { "id": "%2", "active": true }
-        ] }] }] });
-        assert!(in_front(&list, "%2"));
-        assert!(!in_front(&list, "%1"));
-        assert!(!in_front(&list, "%9"));
+    fn the_server_is_asked_to_end_the_program_and_start_the_command() {
+        let args = server_args("%3", Some("/w"), &["sh".into(), "-c".into(), "-x".into()]);
+        assert_eq!(
+            args,
+            [
+                "respawn-pane",
+                "-k",
+                "-t",
+                "%3",
+                "-c",
+                "/w",
+                "--",
+                "sh",
+                "-c",
+                "-x"
+            ]
+        );
+        assert_eq!(
+            server_args("%3", None, &["claude".into()]),
+            ["respawn-pane", "-k", "-t", "%3", "--", "claude"]
+        );
     }
 }

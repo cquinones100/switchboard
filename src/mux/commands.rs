@@ -16,6 +16,10 @@
 //!                                        -E puts it at the end of the tabs
 //! split [-t pane] [-L|-R|-U|-D] [-c dir] [-p percent] [-d] [-- command...]
 //!                                        prints the new pane's id
+//! respawn-pane [-t pane] [-c dir] [-k] [-- command...]
+//!                                        the pane's program replaced, in the
+//!                                        same pane; -k ends one still running
+//!                                        (src/mux/respawn.rs)
 //! send-keys [-t pane] [-l|-p] key...     keys by name (Enter, C-c, M-x), or
 //!                                        with -l, text typed as it is, or
 //!                                        with -p, text pasted (bracketed
@@ -52,6 +56,7 @@ pub const NAMES: &[&str] = &[
     "sources",
     "new-tab",
     "split",
+    "respawn-pane",
     "send-keys",
     "capture-pane",
     "select-pane",
@@ -169,6 +174,7 @@ impl Server {
             }
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
+            "respawn-pane" => self.cmd_respawn(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
             "capture-pane" => self.cmd_capture(rest, caller),
             "select-pane" => self.target_pane(rest, caller).map(|p| {
@@ -450,6 +456,21 @@ impl Server {
             .split(target, side, dir, command, percent, a.has('d'))
             .map_err(|e| e.to_string())?;
         Ok(Reply::ok(format!("{pane}\n")))
+    }
+
+    fn cmd_respawn(
+        &mut self,
+        rest: &[String],
+        cwd: &Path,
+        caller: Option<PaneId>,
+    ) -> Result<Reply, String> {
+        let a = Args::parse(rest, "tc")?;
+        let pane = self.pane_from(&a, caller)?;
+        let dir = a.value('c').map(|d| resolve(cwd, d));
+        let command = (!a.rest.is_empty()).then(|| a.rest.clone());
+        self.respawn_pane(pane, dir, command, a.has('k'))
+            .map_err(|e| e.to_string())?;
+        Ok(Reply::ok(""))
     }
 
     fn cmd_send_keys(&mut self, rest: &[String], caller: Option<PaneId>) -> Result<Reply, String> {

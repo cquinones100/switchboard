@@ -957,7 +957,7 @@ fn respawn_puts_a_program_in_the_pane_s_place_and_tabs_lists_it() {
     let panes = list["sessions"][0]["tabs"][0]["panes"].as_array().unwrap();
     assert_eq!(panes.len(), 1, "the new program in the old one's place");
     let new = panes[0]["id"].as_str().unwrap();
-    assert_ne!(new, old);
+    assert_eq!(new, old, "in the same pane, as tmux's respawn-pane kept it");
     assert_eq!(panes[0]["active"], true);
     assert_eq!(
         list["sessions"][0]["tabs"][0]["id"],

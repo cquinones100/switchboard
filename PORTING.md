@@ -205,8 +205,11 @@ Each step is a commit (or a few) on the branch, with its tests.
     `skills` parts and the guided run, `assets/claude-settings.json` with
     hooks running `switchboard hook <Event>`, the skills compiled in from
     `assets/skills` by build.rs and moved off tmux onto `switchboard`'s
-    commands, `respawn`, `tabs` and `setting` among them), and `switchboard
-    statusline` done (src/cmd/statusline.rs), and releases and updates
+    commands, `respawn`, `tabs` and `setting` among them; `respawn` asks the
+    server's `respawn-pane -k`, which starts the new program in the same
+    pane, the old one's late end ignored, as the Slack relay's restart in
+    its tab does too), and `switchboard statusline` done
+    (src/cmd/statusline.rs), and releases and updates
     done (`.github/workflows/ci.yml` and `release.yml`: a `v<version>` tag
     matching Cargo.toml's version builds the three targets and publishes
     each archive with its SHA-256; install.sh installs the newest into
@@ -220,9 +223,6 @@ Each step is a commit (or a few) on the branch, with its tests.
       install.sh;
     - settle which modifier the keys use on Linux (Alt with a `modifier`
       setting was proposed);
-    - a server-side `respawn` (a pane's program started again in place),
-      replacing the workarounds in `switchboard respawn` (split and close)
-      and the Slack relay (typing into the leftover shell);
     - CI's clippy with `--no-default-features` once tests/views.rs builds
       without dead-code warnings there;
     - the review loop (`/review-loop`, Claude reviewing where Codex isn't

@@ -21,7 +21,9 @@
 //!
 //! The relay's tab is marked `@slack_relay` rather than known by its name,
 //! which the tab's label can change. A tab left at a shell by a relay that
-//! stopped is reused, with the relay started in it again.
+//! stopped is reused: its pane's shell is replaced by the relay, as the tab
+//! first ran it (the server's `respawn-pane`), rather than the command
+//! typed into a shell that may have had something half typed.
 
 use std::io::Read;
 use std::process::ExitCode;
@@ -64,13 +66,14 @@ pub fn start(server: &Server, paths: &Paths) -> Result<String, String> {
         if !running(paths)
             && let Some(pane) = existing.panes.first()
         {
-            // Left at its shell when the relay stopped: started there again.
-            let line = format!("{} run", crate::worktree::self_command("slack-relay"));
-            server
-                .send_keys(&pane.id, &["C-u"])
-                .and_then(|_| server.type_text(&pane.id, &line))
-                .and_then(|_| server.send_keys(&pane.id, &["Enter"]))
-                .map_err(|e| e.to_string())?;
+            // Left at its shell when the relay stopped: started there again,
+            // in the shell's place.
+            let home = crate::paths::home();
+            let home = home.to_string_lossy();
+            let mut args = vec!["respawn-pane", "-k", "-t", &pane.id, "-c", &home, "--"];
+            let command = tab_command();
+            args.extend(command.iter().map(String::as_str));
+            server.ask(&args).map_err(|e| e.to_string())?;
         }
         server.select_tab(&existing.id).map_err(|e| e.to_string())?;
         return Ok(String::new());

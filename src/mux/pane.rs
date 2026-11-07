@@ -17,6 +17,11 @@
 //! and the group in front of the terminal is the program you're using:
 //! the pane's directory and command are read from that (`procinfo`).
 //!
+//! Each program a pane runs has a number of its own (`generation`), which
+//! its reader thread sends with everything it reads, so when the program is
+//! replaced (`respawn`, as tmux's `respawn-pane`) what the old one still
+//! writes, and its end, are told from the new one's and dropped.
+//!
 //! A pane is drawn the way tmux drew one: the named ANSI colors stay
 //! palette indexes, so your own terminal's colors apply, and the program's
 //! default colors are your terminal's default; only a color the program
@@ -25,7 +30,7 @@
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
@@ -94,8 +99,14 @@ const READ_SIZE: usize = 64 * 1024;
 /// The next pane's id when the server doesn't give one.
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
+/// The next program's number; never 0, so no event matches a pane by
+/// accident.
+static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+
 pub struct Pane {
     id: PaneId,
+    /// Which program of the pane's this is, as its events carry it.
+    generation: u64,
     term: Term<Listener>,
     parser: Processor,
     /// What the emulator reported while reading, until `process` handles it.
@@ -191,6 +202,7 @@ impl Pane {
             None => PaneId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
         };
         let (cols, rows) = clamp_size(spec.cols, spec.rows);
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
 
         let pair = native_pty_system()
             .openpty(pty_size(cols, rows))
@@ -240,7 +252,7 @@ impl Pane {
                 let reaped = reaped.clone();
                 std::thread::Builder::new()
                     .name(format!("pane {id} reader"))
-                    .spawn(move || read_loop(id, reader, child, reaped, events))
+                    .spawn(move || read_loop(id, generation, reader, child, reaped, events))
             });
         if let Err(err) = started {
             let _ = killer.kill();
@@ -264,6 +276,7 @@ impl Pane {
 
         Ok(Pane {
             id,
+            generation,
             term,
             parser: Processor::new(),
             events: queued,
@@ -282,6 +295,16 @@ impl Pane {
 
     pub fn id(&self) -> PaneId {
         self.id
+    }
+
+    /// Which program of the pane's this is: what its events carry.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether the program is still running (not yet reaped).
+    pub fn running(&self) -> bool {
+        self.exited.is_none() && !self.reaped.load(Ordering::Acquire)
     }
 
     /// Feeds what the program wrote to the emulator, writing its answers to
@@ -820,6 +843,7 @@ impl Drop for Pane {
 /// never blocks on a full terminal.
 fn read_loop(
     id: PaneId,
+    generation: u64,
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     reaped: Arc<AtomicBool>,
@@ -833,7 +857,7 @@ fn read_loop(
             Ok(n) => {
                 if listening
                     && events
-                        .send(PaneEvent::Output(id, buf[..n].to_vec()))
+                        .send(PaneEvent::Output(id, generation, buf[..n].to_vec()))
                         .is_err()
                 {
                     listening = false;
@@ -848,7 +872,7 @@ fn read_loop(
         _ => None,
     };
     reaped.store(true, Ordering::Release);
-    let _ = events.send(PaneEvent::Exited(id, code));
+    let _ = events.send(PaneEvent::Exited(id, generation, code));
 }
 
 /// Writes what the server queued for the program, in order, until the pane
@@ -1061,13 +1085,15 @@ mod tests {
                     return;
                 }
                 match self.rx.try_recv() {
-                    Ok(PaneEvent::Output(id, bytes)) => {
+                    Ok(PaneEvent::Output(id, generation, bytes)) => {
                         assert_eq!(id, self.pane.id());
+                        assert_eq!(generation, self.pane.generation());
                         let notices = self.pane.process(&bytes);
                         self.notices.extend(notices);
                     }
-                    Ok(PaneEvent::Exited(id, code)) => {
+                    Ok(PaneEvent::Exited(id, generation, code)) => {
                         assert_eq!(id, self.pane.id());
+                        assert_eq!(generation, self.pane.generation());
                         self.pane.set_exited(code);
                         self.exit = Some(code);
                     }

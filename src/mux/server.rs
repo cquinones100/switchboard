@@ -620,8 +620,13 @@ impl Server {
 
     pub fn pane_event(&mut self, event: PaneEvent) {
         match event {
-            PaneEvent::Output(id, bytes) => {
-                let Some(slot) = self.panes.get_mut(&id) else {
+            PaneEvent::Output(id, generation, bytes) => {
+                // Output of a program `respawn` has replaced is dropped.
+                let Some(slot) = self
+                    .panes
+                    .get_mut(&id)
+                    .filter(|s| s.pane.generation() == generation)
+                else {
                     return;
                 };
                 let notices = slot.pane.process(&bytes);
@@ -635,9 +640,13 @@ impl Server {
                 }
                 self.dirty_tab(tab);
             }
-            PaneEvent::Exited(id, code) => {
-                if let Some(slot) = self.panes.get_mut(&id) {
-                    slot.pane.set_exited(code);
+            PaneEvent::Exited(id, generation, code) => {
+                match self.panes.get_mut(&id) {
+                    // A program `respawn` replaced ending late leaves the
+                    // new one where it is.
+                    Some(slot) if slot.pane.generation() != generation => return,
+                    Some(slot) => slot.pane.set_exited(code),
+                    None => {}
                 }
                 self.remove_pane(id);
             }
@@ -806,6 +815,30 @@ impl Server {
         cols: u16,
         rows: u16,
     ) -> Result<PaneId> {
+        let pane = self.start_program(id, cwd, command, cols, rows)?;
+        self.panes.insert(
+            id,
+            PaneSlot {
+                pane,
+                tab,
+                opts: BTreeMap::new(),
+                copy: None,
+            },
+        );
+        Ok(id)
+    }
+
+    /// A program started for pane `id`, as every pane's is: `command` (the
+    /// login shell when `None`) in `cwd`, its environment naming the server
+    /// and the pane.
+    pub(crate) fn start_program(
+        &self,
+        id: PaneId,
+        cwd: Option<PathBuf>,
+        command: Option<Vec<String>>,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Pane> {
         let env = vec![
             (
                 "SWITCHBOARD".to_string(),
@@ -822,17 +855,7 @@ impl Server {
             rows: rows.max(1),
             scrollback: HISTORY,
         };
-        let pane = Pane::spawn(spec, self.pane_tx.clone())?;
-        self.panes.insert(
-            id,
-            PaneSlot {
-                pane,
-                tab,
-                opts: BTreeMap::new(),
-                copy: None,
-            },
-        );
-        Ok(id)
+        Pane::spawn(spec, self.pane_tx.clone())
     }
 
     /// Makes a session with one tab, unless it is there.

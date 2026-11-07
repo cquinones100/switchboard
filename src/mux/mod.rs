@@ -15,6 +15,7 @@
 //! - `compose`: drawing a client's screen, sending only what changed.
 //! - `server`: the server task, owning all of it.
 //! - `commands`: what shells, hooks and skills ask of the server.
+//! - `respawn`: a pane's program ended and another started in its place.
 //! - `persist`: the layout saved as it changes and restored on start.
 
 pub mod client;
@@ -27,6 +28,7 @@ pub mod pane;
 pub mod persist;
 pub mod procinfo;
 pub mod proto;
+pub mod respawn;
 pub mod server;
 pub mod socket;
 
@@ -137,11 +139,14 @@ pub enum TermNotice {
     Clipboard(String),
 }
 
-/// What a pane's reader thread sends the server.
+/// What a pane's reader thread sends the server. Each carries which of the
+/// pane's programs it is about (`Pane::generation`), since a pane whose
+/// program is replaced (`respawn`) keeps its id: what the old program wrote
+/// last, and its end, come after the new one has started, and are dropped.
 #[derive(Debug)]
 pub enum PaneEvent {
     /// The program wrote this.
-    Output(PaneId, Vec<u8>),
+    Output(PaneId, u64, Vec<u8>),
     /// The program ended, with its exit code when it has one.
-    Exited(PaneId, Option<i32>),
+    Exited(PaneId, u64, Option<i32>),
 }
