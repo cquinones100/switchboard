@@ -57,8 +57,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::extkeys::ModifyOtherKeys;
 use super::compose::Links;
+use super::extkeys::ModifyOtherKeys;
 use super::{MouseReporting, PaneEvent, PaneId, PaneModes, TermNotice};
 
 /// What to start in a new pane.

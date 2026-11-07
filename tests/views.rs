@@ -18,11 +18,9 @@ use common::{BIN, TempDir};
 use serde_json::json;
 // What only the tests against a stand-in for GitHub use, which need the
 // `net` feature.
-#[cfg(feature = "net")]
 use {common::TestServer, serde_json::Value, std::path::Path};
 
 /// Settings for the tests: no desktop notifications or tips, and these.
-#[cfg(feature = "net")]
 fn settings(server: &TestServer, extra: Value) {
     let dir = server.home.join(".config/switchboard");
     std::fs::create_dir_all(&dir).unwrap();
@@ -50,7 +48,6 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The first tab's panes, as `list` gives them.
-#[cfg(feature = "net")]
 fn panes(server: &TestServer) -> Vec<Value> {
     server.list()["sessions"][0]["tabs"][0]["panes"]
         .as_array()
@@ -58,7 +55,6 @@ fn panes(server: &TestServer) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-#[cfg(feature = "net")]
 fn wait_panes(server: &TestServer, n: usize) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
