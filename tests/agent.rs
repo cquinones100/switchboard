@@ -237,6 +237,40 @@ fn a_finished_tab_clears_once_it_has_been_in_front() {
 }
 
 #[test]
+fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    // A stand-in lazygit to take the pane's place.
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let lazygit = bin.join("lazygit");
+    std::fs::write(&lazygit, "#!/bin/sh\nexec sleep 60\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    server.ok(&["press", "lazygit"]);
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    // The tab still shows what its Claude is doing behind it.
+    assert_eq!(tabs(&server.list())[0]["agent"], "working");
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    hook(&server, &pane, "Stop", json!({}));
+    assert_eq!(tabs(&server.list())[0]["agent"], "done");
+    // Looking at the tab sees it finished, though lazygit is in front.
+    server.ok(&["select-tab", "-t", &first]);
+    wait_list(&server, "the finished mark seen behind lazygit", |l| {
+        tabs(l)[0]["agent"].is_null()
+    });
+}
+
+#[test]
 fn a_pane_not_running_claude_keeps_no_state() {
     let server = TestServer::start();
     settings(&server, json!({}));

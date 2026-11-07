@@ -152,11 +152,11 @@ impl Server {
             .is_some_and(|s| s.current == tab && self.clients.values().any(|c| c.session == s.name))
     }
 
+    /// A tab's panes, a Claude parked behind the diff or lazygit included:
+    /// the tab still shows what it is doing, and looking at the tab sees it
+    /// finished, as looking at a tmux window did whatever was in front.
     fn tab_panes(&self, tab: TabId) -> Vec<PaneId> {
-        self.tabs
-            .get(&tab)
-            .map(|t| t.layout.panes())
-            .unwrap_or_default()
+        self.panes_with_parked(tab)
     }
 
     /// Whether a pane runs Claude, by its program's name or a session file
@@ -329,8 +329,11 @@ impl Server {
     /// M-c: into the pane running Claude in this tab (tmux/claude-focus.sh),
     /// or, with none, saying so.
     pub fn focus_claude(&mut self, tab: TabId) {
-        match self
-            .tab_panes(tab)
+        // Only one in the layout: a parked one is reached by quitting
+        // what stands in its place.
+        let shown = self.tabs.get(&tab).map(|t| t.layout.panes());
+        match shown
+            .unwrap_or_default()
             .into_iter()
             .find(|p| self.runs_claude(*p))
         {
