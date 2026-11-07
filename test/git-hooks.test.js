@@ -128,6 +128,52 @@ test("pre-push takes the reviewed commit rebased unchanged onto a newer main, bu
   }
 });
 
+test("post-checkout copies the main clone's lib packages into a new worktree with the same lockfile, and runs no npm", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "post-checkout-")));
+  const bin = path.join(tmp, "bin");
+  const log = path.join(tmp, "npm.log");
+  fs.mkdirSync(bin);
+  // A stand-in npm, which must never run: the worktree may be a fork's, whose .npmrc can run its code.
+  fs.writeFileSync(path.join(bin, "npm"), `#!/bin/sh\necho "$PWD $*" >> ${JSON.stringify(log)}\n`, { mode: 0o755 });
+  const env = { ...process.env, HOME: tmp, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const clone = path.join(tmp, "clone");
+  const git = (...args) => spawnSync("git", ["-C", clone, ...args], { env, encoding: "utf8" });
+  const has = (dir) => fs.existsSync(path.join(tmp, dir, "lib/node_modules/ical.js/package.json"));
+  try {
+    execFileSync("git", ["init", "-q", "-b", "main", clone], { env });
+    fs.mkdirSync(path.join(clone, "lib/node_modules/ical.js"), { recursive: true });
+    fs.writeFileSync(path.join(clone, "lib/node_modules/ical.js/package.json"), "{}\n");
+    fs.writeFileSync(path.join(clone, "lib/package-lock.json"), "{}\n");
+    fs.writeFileSync(path.join(clone, ".gitignore"), "node_modules/\n");
+    // The hook committed, and core.hooksPath relative, as setup.sh git sets it, so git runs the new worktree's copy.
+    fs.mkdirSync(path.join(clone, ".githooks"));
+    fs.copyFileSync(path.join(repo, ".githooks/post-checkout"), path.join(clone, ".githooks/post-checkout"));
+    git("add", ".");
+    git("commit", "-q", "-m", "first");
+    git("config", "core.hooksPath", ".githooks");
+
+    git("worktree", "add", "-q", "-b", "work", path.join(tmp, "work"));
+    assert.ok(has("work"), "the main clone's packages, copied");
+    assert.ok(!fs.existsSync(path.join(tmp, "work/lib/node_modules/node_modules")));
+
+    // Another lockfile, as a fork's PR may bring: nothing is installed, and it says so.
+    git("checkout", "-q", "-b", "fork");
+    fs.writeFileSync(path.join(clone, "lib/package-lock.json"), '{"changed":true}\n');
+    git("commit", "-q", "-am", "another lockfile");
+    git("checkout", "-q", "main");
+    const fork = git("worktree", "add", "-q", path.join(tmp, "fork"), "fork");
+    assert.ok(!has("fork"));
+    assert.match(fork.stderr, /run npm ci in lib once you trust its lockfile/);
+
+    fs.rmSync(path.join(tmp, "work/lib/node_modules"), { recursive: true });
+    execFileSync("git", ["-C", path.join(tmp, "work"), "checkout", "-q", "-b", "again"], { env, stdio: "ignore" });
+    assert.ok(!has("work"), "a branch switched to in a worktree copies nothing");
+    assert.ok(!fs.existsSync(log), "npm never ran");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("this repository's Claude settings run the push guard and the hook guard before every command", () => {
   const settings = JSON.parse(fs.readFileSync(path.join(repo, ".claude/settings.json"), "utf8"));
   const commands = settings.hooks.PreToolUse.filter((h) => h.matcher === "Bash").flatMap((h) => h.hooks.map((x) => x.command));

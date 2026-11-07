@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+# After `git worktree add` makes a new worktree of this clone, gives it lib's
+# Node packages, since git never copies the gitignored node_modules: without
+# them the worktree's tests (the Calendar view's iCal feed needs ical.js) and
+# anything run from it fail. It runs for every way a worktree is made (wt,
+# wtn, wtb, wtpr, Claude Code's own), each of which checks the new worktree
+# out from nothing, the one checkout whose old HEAD is all zeros.
+#
+# The packages are copied from the main clone's lib/node_modules, and only
+# when the worktree's lockfile is the main clone's: npm is never run here,
+# since the worktree may be a fork's PR (wtpr), and npm reads the project's own
+# .npmrc, which can run its code. With another lockfile, it says to run npm ci
+# in lib. A checkout in a worktree that has its packages changes nothing.
+#
+# Enabled per clone by `./setup.sh git`, which points core.hooksPath at
+# .githooks.
+
+set -u
+
+[[ ${1:-} =~ ^0+$ ]] || exit 0
+repo=$(git rev-parse --show-toplevel) || exit 0
+main=$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd) || exit 0
+[[ -f $repo/lib/package-lock.json && ! -e $repo/lib/node_modules && ! $repo -ef $main ]] || exit 0
+
+if [[ -d $main/lib/node_modules ]] && cmp -s "$repo/lib/package-lock.json" "$main/lib/package-lock.json"; then
+  # -c clones the files on APFS, so the copy takes no space or time to speak of.
+  cp -Rc "$main/lib/node_modules" "$repo/lib/" 2>/dev/null ||
+    { rm -rf "$repo/lib/node_modules"; cp -R "$main/lib/node_modules" "$repo/lib/"; } ||
+    echo "post-checkout: could not copy lib's Node packages from $main; run npm ci in lib" >&2
+else
+  echo "post-checkout: lib's Node packages aren't installed in this worktree; run npm ci in lib once you trust its lockfile" >&2
+fi
+exit 0
