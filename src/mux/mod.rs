@@ -10,6 +10,8 @@
 //!   encoded again for a pane in the modes its program asked for.
 //! - `extkeys`: xterm's modifyOtherKeys as a pane's program sets it.
 //! - `pane`: one pane's PTY and terminal emulator, drawn into a cell buffer.
+//! - `pty`: a pane's terminal: its master, its program, and the threads
+//!   reading and writing it, which can be paused and handed on.
 //! - `procinfo`: a pane's processes: their directory and command.
 //! - `layout`: a tab's panes as a tree of splits.
 //! - `keys`: which key does what.
@@ -35,6 +37,7 @@ pub mod passthrough;
 pub mod persist;
 pub mod procinfo;
 pub mod proto;
+pub mod pty;
 pub mod respawn;
 pub mod server;
 pub mod socket;

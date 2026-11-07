@@ -45,6 +45,9 @@ const PRESENCE_EVERY: Duration = Duration::from_secs(60);
 pub const AWAY_MS: f64 = 10.0 * 60_000.0;
 /// Lines the wheel scrolls at a time.
 const WHEEL_LINES: i32 = 3;
+/// How long a server ending waits for its panes' programs to end once hung
+/// up, before it goes and their terminals with it.
+const HANG_UP_WAIT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClientId(pub u32);
@@ -862,6 +865,16 @@ impl Server {
         }
         for slot in self.panes.values_mut() {
             slot.pane.kill();
+        }
+        // Each program, a closed pane's still ending too, is given a moment
+        // to end while its terminal is still there: one that catches the
+        // hangup and ends at its next turn (the diff, Notes, the views)
+        // would otherwise find the terminal gone under it as the server's
+        // end closes it, and crossterm, reading, then reads its end over and
+        // over.
+        let deadline = Instant::now() + HANG_UP_WAIT;
+        while Instant::now() < deadline && super::pty::programs_running() > 0 {
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 

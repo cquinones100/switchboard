@@ -34,11 +34,11 @@
 //! tmux's `extended-keys on` gave them.
 
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io;
 use std::ops::Range;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
@@ -55,7 +55,7 @@ use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor, Processor, Rgb};
 use anyhow::{Context, Result};
 use crossterm::cursor::SetCursorStyle;
-use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -63,6 +63,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::compose::Links;
 use super::extkeys::ModifyOtherKeys;
+use super::pty::Pty;
 use super::{MouseReporting, PaneEvent, PaneId, PaneModes, TermNotice};
 
 /// What to start in a new pane.
@@ -160,9 +161,6 @@ pub enum SelectKind {
 /// a program that divides one by the other to find the grid.
 pub const CELL: (u16, u16) = (8, 16);
 
-/// Bytes read from the PTY at a time.
-const READ_SIZE: usize = 64 * 1024;
-
 /// The next pane's id when the server doesn't give one.
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
@@ -178,14 +176,8 @@ pub struct Pane {
     parser: Processor,
     /// What the emulator reported while reading, until `process` handles it.
     events: Arc<Mutex<Vec<Event>>>,
-    master: Box<dyn MasterPty + Send>,
-    /// To the thread that writes to the program.
-    input: mpsc::Sender<Vec<u8>>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
-    pid: Option<u32>,
-    /// Set once the reader thread has reaped the program, after which its
-    /// pid may be another process's and is never signalled.
-    reaped: Arc<AtomicBool>,
+    /// The terminal, its program, and the threads reading and writing it.
+    pty: Pty,
     cols: u16,
     rows: u16,
     title: String,
@@ -299,12 +291,6 @@ impl Pane {
         let (cols, rows) = clamp_size(spec.cols, spec.rows);
         let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
 
-        let pair = native_pty_system()
-            .openpty(pty_size(cols, rows, CELL))
-            .context("opening a terminal for the pane")?;
-        let reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
-
         // portable-pty starts the shell as a login shell (`-zsh` as its
         // argv[0]), as terminals do, and in $HOME when no directory is
         // given or the one given is gone.
@@ -327,32 +313,18 @@ impl Pane {
         for (key, value) in &spec.env {
             cmd.env(key, value);
         }
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .context("starting the pane's program")?;
-        // Our copy of the terminal's other end is closed, so the reader
-        // sees the end once the program and whatever it started have
-        // closed theirs.
-        drop(pair.slave);
-        let pid = child.process_id();
-        let mut killer = child.clone_killer();
-        let reaped = Arc::new(AtomicBool::new(false));
-
-        let (input, queue) = mpsc::channel::<Vec<u8>>();
-        let started = std::thread::Builder::new()
-            .name(format!("pane {id} writer"))
-            .spawn(move || write_loop(writer, queue))
-            .and_then(|_| {
-                let reaped = reaped.clone();
-                std::thread::Builder::new()
-                    .name(format!("pane {id} reader"))
-                    .spawn(move || read_loop(id, generation, reader, child, reaped, events))
-            });
-        if let Err(err) = started {
-            let _ = killer.kill();
-            return Err(err).context("starting the pane's threads");
-        }
+        let (master, pid) = super::pty::open(cmd, pty_size(cols, rows, CELL))?;
+        let pty = match Pty::start(master, pid, Vec::new(), false, id, generation, events) {
+            Ok(pty) => pty,
+            Err(err) => {
+                if let Some(pid) = pid.and_then(|p| libc::pid_t::try_from(p).ok()) {
+                    // SAFETY: a signal to the child just started, not yet
+                    // reaped.
+                    unsafe { libc::kill(pid, libc::SIGHUP) };
+                }
+                return Err(err).context("starting the pane's threads");
+            }
+        };
 
         let queued = Arc::new(Mutex::new(Vec::new()));
         let config = Config {
@@ -378,11 +350,7 @@ impl Pane {
             term,
             parser: Processor::new(),
             events: queued,
-            master: pair.master,
-            input,
-            killer,
-            pid,
-            reaped,
+            pty,
             cols,
             rows,
             title: String::new(),
@@ -406,7 +374,7 @@ impl Pane {
 
     /// Whether the program is still running (not yet reaped).
     pub fn running(&self) -> bool {
-        self.exited.is_none() && !self.reaped.load(Ordering::Acquire)
+        self.exited.is_none() && !self.pty.reaped()
     }
 
     /// Whether kitty's graphics commands in the output are picked out for
@@ -522,14 +490,7 @@ impl Pane {
     /// pane's writer thread, so this never waits on the program; it fails
     /// once the program has ended or its terminal can't be written to.
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        let gone = || io::Error::new(io::ErrorKind::BrokenPipe, "the pane's program has ended");
-        if self.reaped.load(Ordering::Acquire) {
-            return Err(gone());
-        }
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        self.input.send(bytes.to_vec()).map_err(|_| gone())
+        self.pty.write(bytes)
     }
 
     /// Resizes the PTY and the emulator; a no-op when the size is the same.
@@ -546,7 +507,7 @@ impl Pane {
         });
         // The program learns of it by SIGWINCH; a terminal that is gone
         // has no program left to tell.
-        let _ = self.master.resize(pty_size(cols, rows, self.cell));
+        let _ = self.pty.resize(pty_size(cols, rows, self.cell));
     }
 
     /// The colours the terminal said it draws in, for the program's
@@ -563,9 +524,7 @@ impl Pane {
             return;
         }
         self.cell = cell;
-        let _ = self
-            .master
-            .resize(pty_size(self.cols, self.rows, self.cell));
+        let _ = self.pty.resize(pty_size(self.cols, self.rows, self.cell));
     }
 
     /// (columns, rows).
@@ -1126,15 +1085,12 @@ impl Pane {
 
     /// The pane's own program (its shell, usually).
     pub fn pid(&self) -> Option<u32> {
-        self.pid
+        self.pty.pid()
     }
 
     /// The process group in front on the PTY (the program you're using).
     pub fn foreground_pgid(&self) -> Option<u32> {
-        self.master
-            .process_group_leader()
-            .and_then(|pgid| u32::try_from(pgid).ok())
-            .filter(|&pgid| pgid > 0)
+        self.pty.foreground_pgid()
     }
 
     /// The directory of the program in front, else of the pane's own:
@@ -1142,7 +1098,7 @@ impl Pane {
     pub fn cwd(&self) -> Option<PathBuf> {
         self.foreground_pgid()
             .and_then(super::procinfo::cwd_of)
-            .or_else(|| self.pid.and_then(super::procinfo::cwd_of))
+            .or_else(|| self.pid().and_then(super::procinfo::cwd_of))
     }
 
     /// The name of the program in front (`zsh`, `claude`, `node`): what
@@ -1150,14 +1106,14 @@ impl Pane {
     pub fn foreground_command(&self) -> Option<String> {
         self.foreground_pgid()
             .and_then(super::procinfo::command_of)
-            .or_else(|| self.pid.and_then(super::procinfo::command_of))
+            .or_else(|| self.pid().and_then(super::procinfo::command_of))
     }
 
     /// The arguments of the program in front, its own name first.
     pub fn foreground_args(&self) -> Option<Vec<String>> {
         self.foreground_pgid()
             .and_then(super::procinfo::args_of)
-            .or_else(|| self.pid.and_then(super::procinfo::args_of))
+            .or_else(|| self.pid().and_then(super::procinfo::args_of))
     }
 
     /// Every process in front on the PTY (the foreground process group), for
@@ -1184,26 +1140,28 @@ impl Pane {
     /// front (a program the shell started, in a group of its own), so both
     /// get it here too; the shell passes it on to its other jobs.
     pub fn kill(&mut self) {
-        if self.exited.is_some() || self.reaped.load(Ordering::Acquire) {
+        if self.exited.is_some() {
             return;
         }
-        let pid = self.pid.and_then(|pid| libc::pid_t::try_from(pid).ok());
-        if let Some(front) = self.foreground_pgid()
-            && let Ok(front) = libc::pid_t::try_from(front)
-            && Some(front) != pid
-        {
-            // SAFETY: a signal to a process group of this pane's terminal.
-            unsafe { libc::killpg(front, libc::SIGHUP) };
-        }
-        // The program leads a session of its own (portable-pty starts it
-        // with setsid), so its pid is its process group's too.
-        // SAFETY: a signal to the group of a child not yet reaped.
-        if let Some(pid) = pid
-            && unsafe { libc::killpg(pid, libc::SIGHUP) } == 0
-        {
-            return;
-        }
-        let _ = self.killer.kill();
+        self.pty.hang_up();
+    }
+
+    /// Stops reading the program's output and writing to it, between two
+    /// reads and two writes, as a server does before handing its panes to
+    /// a new build: what the program writes meanwhile waits in the
+    /// terminal. `parked` says when it has stopped; `resume` reads again.
+    pub fn pause(&self) {
+        self.pty.pause();
+    }
+
+    /// Whether, paused, nothing more will be read or written.
+    pub fn parked(&self) -> bool {
+        self.pty.parked()
+    }
+
+    /// Reads and writes again after `pause`.
+    pub fn resume(&self) {
+        self.pty.resume();
     }
 }
 
@@ -1213,59 +1171,6 @@ impl Pane {
 impl Drop for Pane {
     fn drop(&mut self) {
         self.kill();
-    }
-}
-
-/// Reads the program's output until the terminal's other end is closed
-/// (portable-pty reads the EIO a closed terminal gives as the end), then
-/// waits for the program and says how it ended. Once the server stops
-/// listening it keeps reading and dropping what it reads, so the program
-/// never blocks on a full terminal.
-fn read_loop(
-    id: PaneId,
-    generation: u64,
-    mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
-    reaped: Arc<AtomicBool>,
-    events: UnboundedSender<PaneEvent>,
-) {
-    let mut buf = vec![0u8; READ_SIZE];
-    let mut listening = true;
-    loop {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                if listening
-                    && events
-                        .send(PaneEvent::Output(id, generation, buf[..n].to_vec()))
-                        .is_err()
-                {
-                    listening = false;
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => break,
-        }
-    }
-    let code = match child.wait() {
-        Ok(status) if status.signal().is_none() => i32::try_from(status.exit_code()).ok(),
-        _ => None,
-    };
-    reaped.store(true, Ordering::Release);
-    let _ = events.send(PaneEvent::Exited(id, generation, code));
-}
-
-/// Writes what the server queued for the program, in order, until the pane
-/// is dropped or the terminal can't be written to.
-fn write_loop(mut writer: Box<dyn Write + Send>, queue: mpsc::Receiver<Vec<u8>>) {
-    while let Ok(bytes) = queue.recv() {
-        if writer
-            .write_all(&bytes)
-            .and_then(|()| writer.flush())
-            .is_err()
-        {
-            break;
-        }
     }
 }
 
