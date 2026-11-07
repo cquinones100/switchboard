@@ -231,7 +231,7 @@ The commands you picked last come first, the newest at the top, then the rest by
 
 While GitHub or Linear is off in Settings, the commands tagged `#github` or `#linear` leave the palette, and `M-v`, `M-r` and `M-m` (GitHub) or `M-i` and `M-l` (Linear) do nothing but say so, with a tip the first time. The diff's own commands, copying its story and asking Claude about it, are listed only while the pane has the diff open (asking only with Settings' "Ask Claude about the diff" on), and the two that show the pane a tool stands in for beside it, or the tool alone again, only while a tool stands in the pane's place.
 
-`M-p`'s "Shape the note's checklist items" hands a note's checklist items to `/shape`, to be filed as Linear tickets. `M-p`'s "View the branch's PR description as an image" draws the description as GitHub does, in place of the pane.
+`M-p`'s "Shape a note's checklist items as Linear tickets" picks a note (the one open in Notes first, then the newest), then its items (every one chosen to begin with; Enter on a row leaves it out or puts it back, and the first row shapes what is chosen), then the repository, and opens a background tab running `/shape` for each item, its details and numbered sub-items with it. "Shape a new Linear ticket from what you type, in a new tab" does the same for one idea typed in. Both need Linear (the `linear` setting). `M-p`'s "View the branch's PR description as an image" draws the description as GitHub does, in place of the pane.
 
 ### Messages
 
@@ -615,7 +615,7 @@ The branch's pull request, its Linear ticket and any link can be read in a pane 
 
 `M-v` shows the branch's pull request in a pane to the right, taking 45% of the width: its title and number, a line saying whose branch goes into which and whether it is open, a draft, merged or closed, then its description. The PR is found from the pane's branch (a fork's branch by the branch it tracks, a `wtpr` worktree by its number), and a merged or closed one still counts. The copy last read for the branch shows at once, and the PR is read again in the background; when it has changed, the view is laid out again where you were. `M-v` again closes it. With no PR to show, the view says why: not a git repository, no `origin` on GitHub, no GitHub token, or no PR for the branch yet ("Push it and open one, then M-v again").
 
-`M-p`'s "View the branch's PR description as an image" draws the description as GitHub does and shows it a page at a time as images in place of the pane.
+`M-p`'s "View the branch's PR description as an image" draws the description as GitHub draws it (its HTML, GitHub's stylesheet, Mermaid diagrams drawn) and shows it a page at a time as pictures in place of the pane: `j`/`k` or Space between pages, "Page 2 of 3" and "↓ more" in the corner, `q` (or the command again) giving the pane back. "View the branch's Linear ticket as an image" does the same for the ticket. Both need Chrome or Chromium, which draws the page (the view says so when neither is installed), and a terminal that shows kitty's pictures (Ghostty or kitty).
 
 ### The Linear ticket
 
