@@ -81,6 +81,15 @@ net = ["dep:reqwest", "dep:tokio-tungstenite"]
 
 [dev-dependencies]
 
+# Debug builds keep only line tables, and the crates none: every integration
+# test is a binary of its own linking all of them, and full debug info made
+# the target directory tens of gigabytes. Backtraces still name lines.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 # Small and quick to start, since tmux runs some of these on every focus.
 opt-level = 3
