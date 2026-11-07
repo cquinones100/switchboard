@@ -132,7 +132,10 @@ fn the_relay_reads_and_types_into_tabs_through_the_server() {
         mux.capture(&pane, 60)
             .filter(|s| s.contains("hello") && s.contains("world"))
     });
-    assert!(screen.lines().any(|l| l == "hello") && screen.lines().any(|l| l == "world"));
+    assert!(
+        screen.lines().any(|l| l == "hello") && screen.lines().any(|l| l == "world"),
+        "each line of the paste on a line of its own: {screen:?}"
+    );
     mux.type_text(&pane, "2").unwrap();
     wait("a number typed", || {
         mux.capture(&pane, 60)
