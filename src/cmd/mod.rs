@@ -25,6 +25,7 @@ pub mod slack_updates_save;
 pub mod statusline;
 pub mod tabs;
 pub mod today_save;
+pub mod try_;
 pub mod update_main;
 pub mod wait_deploy;
 pub mod watch_note;
@@ -62,6 +63,11 @@ pub const COMMANDS: &[Command] = &[
         name: "setup",
         run: crate::setup::main,
         about: "Set Claude Code up for Switchboard: its hooks, statusline, CLAUDE.md and skills",
+    },
+    Command {
+        name: "try",
+        run: try_::main,
+        about: "Build a Switchboard worktree and run it under a home of its own (--detached, --print, --clean)",
     },
     Command {
         name: "update",

@@ -1563,6 +1563,29 @@ When `~/.config/switchboard/claude.json` names a git repository for your Claude 
 
 A `switchboard` you built from source with cargo is kept current by git and cargo: its server never looks for releases, and `switchboard update` leaves it alone unless you add `--force`.
 
+### Trying a change
+
+`switchboard try` tries a clone or worktree of Switchboard's source without touching the workspace you use:
+
+```text
+switchboard try              the worktree you are in, attached in this terminal
+switchboard try <dir>        another worktree
+switchboard try --print      set it up and print the environment for another
+                             terminal: eval "$(switchboard try --print)", then
+                             switchboard
+switchboard try --detached   start its server with no client and print the
+                             command that reaches it
+switchboard try --clean      end its server and remove its home (name a
+                             removed worktree by the path it had)
+switchboard try --clean-all  the same for every try of yours
+```
+
+It builds the worktree with cargo (nothing to do when the build is up to date), then runs that build under a home of its own, `/tmp/sb-<hash>`: its own settings, state, server and socket, and its own `~/.claude` hooks, CLAUDE.md and skills, which the build's `switchboard setup claude claude-md skills` lays out there, so setup is tried too. Its `~/.local/bin/switchboard` is the build, first on its PATH, so Claude Code's hooks and statusline in its panes reach the try's server. Running it again sets the home up again and keeps what the try saved. Attaching from one of Switchboard's own panes is refused, since the workspace around it would take every key: use a terminal of its own, `--print`, or `--detached`, which is for a Claude working in the worktree: it prints the prefix to put before `send-keys`, `capture-pane` and `list` to press keys in the try and read its screen.
+
+What isn't Switchboard's comes from your real home. Linked: `~/Library/Keychains` on a Mac (without it Claude Code isn't signed in and the Keychain's secrets aren't found), your dotfiles (`.ssh`, `.gitconfig`, shell history), your `~/.config` folders but Switchboard's (gh's sign-in among them), `~/.local/share` but Switchboard's, the programs in `~/.local/bin` that aren't Switchboard's, Claude's plugins and its sign-in on Linux, and your own Claude skills and hooks. Copied: your shell's startup files (each ending by moving any XDG, notes or Switchboard path it set in your home to the same place in the try's), `~/.claude.json`, `~/.claude/settings.json` and `settings.local.json`, `~/.config/switchboard` and the clone your CLAUDE.md's rules come from, so nothing the try does writes to yours. Fresh: `~/.local/state`, `~/.cache`, Claude's sessions and transcripts, and `~/Notes`. Its settings turn off what would duplicate your workspace or spend on its own: the Slack look and view, meeting, standup and todo notes, banners, the update check and restoring saved tabs; turn any back on in its Settings. Linked things are yours, so an edit made through them (a git config, gh signing in again) is made to the real one, and keys sent in a try act with your real credentials.
+
+Since its build and setup run with those credentials, it tries only code of yours: a worktree whose `.git` leads back to it, whose commits beyond its origin's branches are on no other remote and were written and committed under your git email, and which isn't partway through a merge, rebase, cherry-pick or revert. Anything else, such as a fork's pull request checked out with `wtpr`, is refused, saying why, until you have read it and listed its path in `~/.config/switchboard/trusted-dirs`.
+
 ## Your own files
 
 Everything of your own is in `~/.config/switchboard/`, which nothing writes over but Settings, so an update leaves it be. Each file is read after Switchboard's defaults, so what it says wins, and Settings lists each setting in these files under the file's name.
@@ -1578,7 +1601,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `slack-updates.json` | The Slack channels the Slack view shows in full | "The Slack view" |
 | `slack-relay.json` | Your Slack member ID, the one person the relay listens to | "The Slack app, and keeping it yours" |
 | `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules | "On call: `/oncall`" |
-| `trusted-dirs` | The directories whose own scripts may run, one a line; nothing runs a repository's scripts today | |
+| `trusted-dirs` | The directories whose own code may run, one a line: `switchboard try` builds a worktree holding someone else's commits only once it is listed | "Trying a change" |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you | "GitHub and Linear access" |
 
 What Switchboard keeps for itself is in `~/.local/state/switchboard/` (the socket, the saved layout, the tips shown, what it counted, the day's files) and its caches in `~/.cache/switchboard/`; the Slack relay's state is in `~/.local/state/slack-relay/`. None of it is yours to edit, and any of it can be deleted while the server is stopped, at the cost of what it held.
