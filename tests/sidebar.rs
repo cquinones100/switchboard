@@ -333,6 +333,45 @@ fn a_message_to_a_claude_whose_prompt_is_in_vim_s_normal_mode_presses_i_first() 
 }
 
 #[test]
+fn on_a_short_screen_the_header_stays_and_a_click_on_more_scrolls_half_a_screen() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 14);
+    client.wait_text("$");
+    for n in 2..=8 {
+        server.ok(&["new-tab", "-d", "-n", &format!("t{n}")]);
+    }
+    // The first tab in front: the list at the top, the tabs below cut off
+    // and counted on the last row, the session's line at the top.
+    server.ok(&[
+        "select-tab",
+        "-t",
+        tabs(&server.list())[0]["id"].as_str().unwrap(),
+    ]);
+    let screen = client.wait_for("tabs cut below", |s| {
+        s.iter()
+            .any(|l| left(l, 34).contains("▼") && left(l, 34).contains("more"))
+    });
+    assert!(left(&screen[0], 34).contains("main"), "{:?}", screen[0]);
+    assert!(!screen.iter().any(|l| left(l, 34).contains("▲")));
+    let down = row_of(&mut client, "▼");
+    // A click on it: half a screen down, the session's line still at the
+    // top and the tabs above counted under it.
+    client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", down + 1, down + 1).as_bytes());
+    let screen = client.wait_for("tabs above counted", |s| {
+        left(&s[1], 34).contains("▲") && left(&s[1], 34).contains("more")
+    });
+    assert!(left(&screen[0], 34).contains("main"), "{:?}", screen[0]);
+    let list = wait_list(&server, "the sidebar focused, on a later tab", |l| {
+        focused(l) && tabs(l)[0]["current"] == false
+    });
+    assert!(focused(&list));
+    // A click on the ▲ row goes back up.
+    client.send(b"\x1b[<0;6;2M\x1b[<0;6;2m");
+    client.wait_for("back at the top", |s| !left(&s[1], 34).contains("▲"));
+}
+
+#[test]
 fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
     let server = TestServer::start();
     settings(&server, json!({}));

@@ -586,6 +586,7 @@ impl Server {
             here: s.current,
             filter: side.and_then(|x| x.filter.as_ref()).filter(|_| focused),
             top: side.filter(|x| x.focused).and_then(|x| x.top),
+            keep: side.and_then(|x| x.keep),
             hover: self.sidebar.hover.get(&client),
         };
         let out = render::sidebar_lines(
@@ -620,18 +621,19 @@ impl Server {
     }
 
     /// After a client is drawn: where its sidebar went, kept for the mouse
-    /// and C-d; the list's place, kept while it has the focus; and the
-    /// spinner's next turn, timed only while something spins.
+    /// and C-d; the list's place, kept while it has the focus, and kept for
+    /// the next tab in front to hold to (`View::keep`); and the spinner's
+    /// next turn, timed only while something spins.
     pub fn sidebar_drawn(&mut self, client: ClientId, session: &str, drawn: Option<Drawn>) {
         let Some(d) = drawn else {
             self.sidebar.drawn.remove(&client);
             return;
         };
-        if let Some(side) = self.sidebar.sides.get_mut(session)
-            && side.focused
-        {
+        let side = self.sidebar.side(session);
+        if side.focused {
             side.top = Some(d.scroll.top);
         }
+        side.keep = Some(d.scroll.top);
         let spins = d.spins;
         self.sidebar.drawn.insert(client, d);
         if spins && !self.sidebar.spin_pending {
@@ -1286,6 +1288,28 @@ impl Server {
         self.sidebar_move(session, to as isize);
     }
 
+    /// A click on the ▲ or ▼ more row: the list half a screen up or down,
+    /// the cursor with it, as C-u and C-d, whether or not a filter is being
+    /// typed, the focus coming into the sidebar as the wheel brings it;
+    /// nothing with sidebar_half_page off.
+    fn sidebar_scroll_click(&mut self, client: ClientId, session: &str, down: bool) {
+        if !settings::is_on("sidebar_half_page") {
+            return;
+        }
+        if !self.sidebar.focused(session) {
+            self.sidebar_enter(session, None);
+        }
+        let order = self.sidebar_order(session);
+        let on_notice = self
+            .sidebar
+            .side(session)
+            .cursor
+            .as_ref()
+            .is_some_and(|c| matches!(c, Owner::Notice { .. }));
+        let key = Key::new(KeyCode::Char(if down { 'd' } else { 'u' }), Mods::CTRL);
+        self.sidebar_half_page(client, session, key, &[], &order, on_notice);
+    }
+
     /// Presses a key as if the sidebar weren't there: in the tab's pane, or
     /// whatever it is bound to.
     fn press_key(&mut self, client: ClientId, key: Key, raw: &[u8]) {
@@ -1299,7 +1323,8 @@ impl Server {
     // ── The mouse ───────────────────────────────────────────────────────────
 
     /// A mouse event, before the panes see it: on the sidebar, a click goes
-    /// to a tab (a right click peeks at it), the wheel moves the cursor and
+    /// to a tab (a right click peeks at it) or, on the ▲ or ▼ more row,
+    /// scrolls half a screen, the wheel moves the cursor and
     /// the mouse lights the row it is over (hover_highlight); a press
     /// anywhere else takes the focus out of the sidebar. Drags and releases
     /// are the panes'. Gives whether the sidebar took it.
@@ -1365,6 +1390,9 @@ impl Server {
                     self.show_notices(&session, &notice);
                 }
                 Some(notice @ Owner::Notice { .. }) => self.sidebar_open_notice(client, &notice),
+                // The ▲ and ▼ more rows scroll half a screen, as C-u and C-d.
+                Some(Owner::ScrollUp) => self.sidebar_scroll_click(client, &session, false),
+                Some(Owner::ScrollDown) => self.sidebar_scroll_click(client, &session, true),
                 None => {}
             },
             (MouseKind::Press, MouseButton::Right) => {
@@ -1522,7 +1550,7 @@ impl Server {
             // nowhere to show them.
             let source = match &first.owner {
                 Owner::Notice { source, .. } => source.as_str(),
-                Owner::Tab(_) => "",
+                _ => "",
             };
             if let Some(view) = Self::notice_view(source) {
                 self.open_mission(client, view);

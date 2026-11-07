@@ -330,6 +330,8 @@ The sidebar runs down the left of every tab: the session's tabs, most in need of
 
 At its top are the session's name, in a pill of the current tab's color, and its counts: failing builds first, in red (`✗ 2`), then the tabs waiting on you (`! 1`), finished (`✓ 3`) and working (`⋯ 4`). Below them are the tabs in their groups, each group under its heading with how many it holds.
 
+On a screen too short for every tab, the session's line at the top and the notifications at the bottom stay put and only the groups and tabs scroll: the line under the session's says how many tabs are above (`▲ 3 more`) while no filter is typed there, and the list's last row how many are cut below (`▼ 2 more`). The list holds still as you go from tab to tab: it stays where it was while the tab in front is in sight there, else at the top while the tab is in sight there, else it scrolls to the heading of the tab's group.
+
 ### Groups
 
 Each tab is in one group, and the groups come in this order:
@@ -416,7 +418,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | any other Alt or Ctrl key | goes to the chosen tab and runs there |
 | `?` | these keys |
 
-A click on a tab goes there, a right click peeks at it, and the wheel moves the cursor, bringing the focus into the sidebar. A click anywhere else takes the focus back out. With Settings' "Highlight on hover" (`hover_highlight`) on, the row under the mouse is lit.
+A click on a tab goes there, a right click peeks at it, and the wheel moves the cursor, bringing the focus into the sidebar. A click on the `▲ more` or `▼ more` row scrolls half a screen, as `C-u` and `C-d` do, whether or not a filter is being typed (with `sidebar_half_page` on). A click anywhere else takes the focus back out. With Settings' "Highlight on hover" (`hover_highlight`) on, the row under the mouse is lit.
 
 ### Peeking
 

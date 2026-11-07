@@ -67,8 +67,10 @@ pub struct PaneRead {
 }
 
 /// A session's sidebar while it is looked at: whether it has the focus,
-/// its cursor, the layout held still while you browse, a / filter, and
-/// where its list was scrolled to.
+/// its cursor, the layout held still while you browse, a / filter, where
+/// its list was scrolled to while it has the focus, and where its list was
+/// last shown, which the next tab in front holds to while it is in sight
+/// there (render.rs's `View::keep`).
 #[derive(Clone, Debug, Default)]
 pub struct Side {
     pub focused: bool,
@@ -76,6 +78,7 @@ pub struct Side {
     pub frozen: Option<model::Frozen>,
     pub filter: Option<Filter>,
     pub top: Option<usize>,
+    pub keep: Option<usize>,
 }
 
 /// Where a client's sidebar was last drawn, for the mouse and C-d.

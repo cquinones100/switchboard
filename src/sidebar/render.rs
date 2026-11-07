@@ -4,7 +4,12 @@
 //! session's name and its counts; then the tabs in their groups, each with
 //! its badge, number and name in its project's color, and under it what it
 //! is doing; then, pinned to the bottom under their own heading, the
-//! notifications, which never scroll away.
+//! notifications, which never scroll away. The header stays at the top just
+//! as they do, so on a short screen only the groups and tabs scroll, the
+//! filter line saying how many tabs are above (`▲ 3 more`) and the list's
+//! last row how many are cut below (`▼ 2 more`); beside a tab in sight
+//! where the list was last shown, the list holds there, so going from tab
+//! to tab doesn't move it.
 //!
 //! Each line says what it belongs to (`Owner`), for a click on it, and the
 //! list says where it scrolled to (`Scroll`), for C-d and C-u to move by.
@@ -27,18 +32,21 @@ pub const NAME_LINES: usize = 3;
 const YELLOW: Color = Color::Indexed(220);
 
 /// What a line of the sidebar belongs to: a tab, or a notification (its
-/// source and its item's id), for the cursor and a click.
+/// source and its item's id), for the cursor and a click; or the row saying
+/// how many tabs are out of sight above or below, which a click scrolls.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
     Notice { source: String, id: String },
+    ScrollUp,
+    ScrollDown,
 }
 
 impl Owner {
     pub fn tab(&self) -> Option<TabId> {
         match self {
             Owner::Tab(t) => Some(*t),
-            Owner::Notice { .. } => None,
+            _ => None,
         }
     }
 
@@ -106,6 +114,10 @@ pub struct View<'a> {
     pub filter: Option<&'a Filter>,
     /// Where its list was scrolled to, kept while it has the focus.
     pub top: Option<usize>,
+    /// Where the session's list was last shown, which it holds to while
+    /// the tab it sits beside is in sight there, so going from tab to tab
+    /// doesn't move the list.
+    pub keep: Option<usize>,
     /// What the mouse is over.
     pub hover: Option<&'a Owner>,
 }
@@ -190,8 +202,9 @@ impl Row {
     }
 }
 
-/// Where the list scrolled to: the line at its top, how many lines it shows
-/// of how many, each line's tab, and the chosen tab's first line.
+/// Where the list scrolled to: the line at its top, how many lines it has
+/// room for of how many, each line's tab, and the chosen tab's first line,
+/// all counted in the list of groups and tabs alone, under the header.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scroll {
     pub top: usize,
@@ -315,8 +328,13 @@ pub fn sidebar_lines(
     r: &Rules,
     theme: &Theme,
 ) -> Lines {
+    // The header (the session's pill and counts, and the filter line) stays
+    // at the top whatever the list's scroll, as the notifications stay at
+    // the bottom; only the groups and tabs between them scroll.
+    let mut head: Vec<Line> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
     let mut owners: Vec<Option<TabId>> = Vec::new();
+    let mut headings: Vec<usize> = Vec::new();
     let mut spins = false;
     let mut cursor_at = 0;
     let mut cursor_end = 0;
@@ -328,7 +346,7 @@ pub fn sidebar_lines(
     let here = tabs.iter().find(|t| t.id == view.here);
 
     // The session's name in a pill of its tab's color, and the counts.
-    let mut head = Row::default();
+    let mut pill_row = Row::default();
     let pill = match here.and_then(|t| t.color) {
         Some(c) => Style::new()
             .bg(c.into())
@@ -339,12 +357,12 @@ pub fn sidebar_lines(
             .fg(theme.bright)
             .add_modifier(Modifier::BOLD),
     };
-    head.put(" ", Style::new())
+    pill_row
+        .put(" ", Style::new())
         .put(format!(" {session} "), pill)
         .put("  ", Style::new());
-    counts(&mut head, tabs, r, theme);
-    lines.push(head.fit(cols, None));
-    owners.push(None);
+    counts(&mut pill_row, tabs, r, theme);
+    head.push(pill_row.fit(cols, None));
     // A / filter being typed, or kept, in the line under it.
     match view.filter {
         Some(f) => {
@@ -354,13 +372,13 @@ pub fn sidebar_lines(
             if f.typing {
                 row.put("▏", fg(theme.dim));
             }
-            lines.push(row.fit(cols, None));
+            head.push(row.fit(cols, None));
         }
-        None => lines.push(Line::blank(cols)),
+        None => head.push(Line::blank(cols)),
     }
-    owners.push(None);
 
     for group in model::grouped(tabs, frozen, r) {
+        headings.push(lines.len());
         // Build failing's heading is in the failing badge's red, so it reads
         // at a glance.
         let mut heading = Row::default();
@@ -584,26 +602,88 @@ pub fn sidebar_lines(
         }
     }
 
-    // The list scrolls to keep the chosen tab in sight above the
-    // notifications, from where it was scrolled to (kept as C-d and C-u
-    // leave it) when it is kept, else as little as it takes.
-    let room = rows.saturating_sub(notice_lines.len());
-    let floor = (cursor_end + 1) as isize - room as isize;
-    let wanted = view.top.map_or(floor, |t| t as isize);
-    let top = wanted
-        .max(floor)
-        .min(cursor_at as isize)
-        .min(lines.len() as isize - room as isize)
-        .max(0) as usize;
+    // The list scrolls to keep the chosen tab in sight between the header
+    // and the notifications, from where it was scrolled to (view.top, as C-d
+    // and C-u leave it) when it is kept. Else it holds where the session's
+    // list was last shown (view.keep) while the tab is in sight there, so
+    // going from tab to tab doesn't move it, and otherwise stays at the top
+    // while the tab is in sight there, or scrolls to the heading of the
+    // tab's group. A list too long for its room keeps its last row to say
+    // how many tabs are cut below.
     let length = lines.len();
-    let mut shown: Vec<Line> = lines.into_iter().skip(top).take(room).collect();
-    let mut shown_owners: Vec<Option<Owner>> = owners
-        .iter()
-        .skip(top)
-        .take(room)
-        .map(|o| o.map(Owner::Tab))
-        .collect();
-    while shown.len() < room {
+    let space = rows.saturating_sub(head.len() + notice_lines.len());
+    let room = if length > space {
+        space.saturating_sub(1)
+    } else {
+        space
+    };
+    let in_sight = |at: usize| at <= cursor_at && cursor_end < at + room;
+    let steady = match view.keep {
+        Some(keep) if in_sight(keep) => keep,
+        _ if cursor_end < room => 0,
+        _ => headings
+            .iter()
+            .rev()
+            .find(|h| **h <= cursor_at)
+            .copied()
+            .unwrap_or(0),
+    };
+    let wanted = view.top.unwrap_or(steady) as isize;
+    // Never further than shows the list's end whole.
+    let top = wanted
+        .max((cursor_end + 1) as isize - room as isize)
+        .min(cursor_at as isize)
+        .min(length as isize - space as isize)
+        .max(0) as usize;
+    let whole = length.saturating_sub(top) <= space;
+    let end = if whole { length } else { top + room };
+    let tabs_in = |from: usize, to: usize| -> Vec<TabId> {
+        let mut seen: Vec<TabId> = Vec::new();
+        for t in owners[from.min(length)..to.min(length)].iter().flatten() {
+            if !seen.contains(t) {
+                seen.push(*t);
+            }
+        }
+        seen
+    };
+    // The tabs out of sight above, said on the filter line while no filter
+    // is there, and below, on the list's last row; a click on either
+    // scrolls as C-u or C-d does, and lights under the mouse as a tab does.
+    let more = |mark: &str, owner: &Owner, n: usize| {
+        let fill = (view.hover == Some(owner)).then_some(theme.panel);
+        let said = if n > 0 {
+            format!("{mark} {n} more")
+        } else {
+            format!("{mark} more")
+        };
+        let mut row = Row::default();
+        row.put(" ", Style::new()).put(said, fg(theme.faint));
+        row.fit(cols, fill)
+    };
+    let mut head_owners: Vec<Option<Owner>> = vec![None; head.len()];
+    if top > 0 && view.filter.is_none() {
+        // A tab cut at the top counts as above.
+        head[1] = more("▲", &Owner::ScrollUp, tabs_in(0, top).len());
+        head_owners[1] = Some(Owner::ScrollUp);
+    }
+    let below = (!whole).then(|| {
+        // A tab cut at the bottom counts as below.
+        let shown = tabs_in(top, end);
+        tabs_in(end, length)
+            .into_iter()
+            .filter(|t| !shown.contains(t) || owners.get(end) == Some(&Some(*t)))
+            .count()
+    });
+    let mut shown: Vec<Line> = head;
+    let mut shown_owners: Vec<Option<Owner>> = head_owners;
+    shown.extend(lines.into_iter().skip(top).take(end - top));
+    shown_owners.extend(owners[top..end].iter().map(|o| o.map(Owner::Tab)));
+    if let Some(n) = below {
+        shown.push(more("▼", &Owner::ScrollDown, n));
+        shown_owners.push(Some(Owner::ScrollDown));
+    }
+    let list_end = rows.saturating_sub(notice_lines.len()).max(shown.len());
+    while shown.len() < list_end {
         shown.push(Line::blank(cols));
         shown_owners.push(None);
     }
@@ -616,7 +696,7 @@ pub fn sidebar_lines(
         owners: shown_owners,
         scroll: Scroll {
             top,
-            room,
+            room: space,
             length,
             owners,
             cursor_at,
@@ -686,6 +766,7 @@ mod tests {
             here: TabId(here),
             filter: None,
             top: None,
+            keep: None,
             hover: None,
         }
     }
@@ -1003,6 +1084,129 @@ mod tests {
             at(8, Some(99)).top,
             last.length - last.room,
             "never past the end"
+        );
+    }
+
+    #[test]
+    fn on_a_short_screen_the_header_stays_says_what_is_out_of_sight_and_the_list_holds_still() {
+        // Three groups of two-line tabs: 3 waiting, 4 working, 5 idle.
+        let tabs: Vec<TabModel> = (1..=12)
+            .map(|n| {
+                let state = match n {
+                    1..=3 => TabState::Waiting,
+                    4..=7 => TabState::Working,
+                    _ => TabState::Idle,
+                };
+                let mut t = tab(n, &format!("tab {n}"), state);
+                t.since = Some(rules().now_secs() - 60);
+                t
+            })
+            .collect();
+        let draw = |here: u32, keep: Option<usize>, filter: Option<&Filter>| {
+            let v = View {
+                keep,
+                filter,
+                ..view(here)
+            };
+            lines(&tabs, 30, 16, &v)
+        };
+        for here in [1, 5, 7, 12] {
+            assert!(
+                texts(&draw(here, None, None))[0].contains(" s "),
+                "the session's pill first, beside tab {here}"
+            );
+        }
+        let first = draw(1, None, None);
+        let text = texts(&first);
+        assert_eq!(text[1], "", "at the top, the filter line is blank");
+        assert_eq!(
+            text[15], " ▼ 8 more",
+            "and the last row says how many tabs are cut below"
+        );
+        assert_eq!(first.owners[15], Some(Owner::ScrollDown));
+        // Beside a tab in sight at the top, the same list, but for which tab
+        // is the one it sits beside.
+        let unmarked = |out: &Lines| -> Vec<String> {
+            texts(out)[1..]
+                .iter()
+                .map(|l| l.replace(['▌', '▏'], ""))
+                .collect()
+        };
+        assert_eq!(
+            unmarked(&draw(2, None, None)),
+            unmarked(&first),
+            "two tabs in sight show the same list"
+        );
+        let low = draw(7, None, None);
+        let text = texts(&low);
+        assert!(
+            text[2].starts_with(" WORKING 4"),
+            "a tab below the fold scrolls the list to its group's heading: {text:?}"
+        );
+        assert_eq!(
+            unmarked(&draw(5, None, None)),
+            unmarked(&low),
+            "and every tab in that group shows it the same"
+        );
+        assert_eq!(
+            text[1], " ▲ 3 more",
+            "the filter line says how many are above"
+        );
+        assert_eq!(low.owners[1], Some(Owner::ScrollUp));
+        assert_eq!(text[15], " ▼ 5 more");
+        // Each tab's rows still name it, shifted under the header.
+        for (owner, line) in low.owners.iter().zip(&text) {
+            if let Some(Owner::Tab(t)) = owner
+                && line.contains("tab ")
+            {
+                assert!(
+                    line.contains(&format!("tab {} ", t.0))
+                        || line.ends_with(&format!("tab {}", t.0)),
+                    "{line:?} belongs to {t:?}"
+                );
+            }
+        }
+        assert!(low.owners.contains(&Some(Owner::Tab(TabId(7)))));
+        let kept = Filter {
+            text: "tab".into(),
+            typing: false,
+        };
+        assert!(
+            texts(&draw(7, None, Some(&kept)))[1].contains("/tab"),
+            "a filter keeps its line"
+        );
+        // Under the mouse, the more row lights as a tab's does.
+        let lit = lines(
+            &tabs,
+            30,
+            16,
+            &View {
+                hover: Some(&Owner::ScrollDown),
+                ..view(7)
+            },
+        );
+        assert_eq!(lit.lines[15].fill, Some(Theme::DARK.panel));
+
+        // A group taller than the list: beside a tab in sight where the list
+        // was last shown (keep), it is shown there too.
+        let many: Vec<TabModel> = (1..=20)
+            .map(|n| tab(n, &format!("tab {n}"), TabState::Working))
+            .collect();
+        let tall = |here: u32, keep: Option<usize>| {
+            lines(&many, 30, 40, &View { keep, ..view(here) })
+                .scroll
+                .top
+        };
+        let front = tall(15, None);
+        assert!(front > 0);
+        assert_eq!(
+            tall(14, Some(front)),
+            front,
+            "going to a tab in sight leaves the list where it was"
+        );
+        assert!(
+            tall(20, Some(front)) > front,
+            "and a tab out of sight still scrolls it"
         );
     }
 
