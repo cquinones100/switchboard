@@ -550,6 +550,37 @@ function M.note_lines(story, hunk, home, width)
   return vim.tbl_map(function(line) return { { line, "Comment" } } end, wrap(text, width, "▎ ", "▎ "))
 end
 
+-- The story of a diff running to the working tree (M-d with uncommitted
+-- changes): the committed part's story (nil when nothing is committed), and
+-- after its chapters a last one, "Not committed yet", with no why, holding
+-- the files with uncommitted changes the story doesn't already place, in
+-- the order of `paths` (each file with uncommitted changes). A file in both
+-- keeps its committed chapter; the last one touches every such file, so its
+-- page shows them all. Drawn without asking Haiku, so editing tells no new
+-- story. The story as given when no file is left for the last chapter.
+-- With no story told of the commits (one file, no Claude, Haiku failing),
+-- `committed` (their files, in the list's order) go first, in a "Committed"
+-- chapter, so the last one stays last.
+function M.with_uncommitted(story, paths, committed)
+  local made = story and vim.deepcopy(story) or { chapters = {}, place = {}, chapter = {}, hunks = {} }
+  if not story and committed and #committed > 0 then
+    table.insert(made.chapters, { title = "Committed", why = "", files = vim.list_extend({}, committed), touches = vim.list_extend({}, committed) })
+    for i, path in ipairs(committed) do
+      made.place[path] = i
+      made.chapter[path] = 1
+    end
+  end
+  local fresh = vim.tbl_filter(function(path) return not made.chapter[path] end, paths)
+  if #fresh == 0 then return made end
+  table.insert(made.chapters, { title = "Not committed yet", why = "", files = fresh, touches = vim.list_extend({}, paths) })
+  local placed = vim.tbl_count(made.place)
+  for i, path in ipairs(fresh) do
+    made.place[path] = placed + i
+    made.chapter[path] = #made.chapters
+  end
+  return made
+end
+
 -- The story as Markdown, to share: each chapter's number, title and why,
 -- the files it touches, and each hunk's note under its file as path:line.
 function M.markdown(story)

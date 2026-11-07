@@ -98,13 +98,19 @@ end
 local function copy_link()
   local at = here()
   if not at then return vim.notify("No file here", vim.log.levels.WARN) end
+  local commit = at.file.rev and at.file.rev.commit
+  -- The working tree's side of a file with uncommitted changes
+  -- (uncommitted_mode) has no line on GitHub to link to yet.
+  local source = at.view.page and at.view.page.parent or at.view
+  if not commit and source.dirty and source.dirty[at.file.path] then
+    return vim.notify(at.file.path .. " has uncommitted changes, so this side has no GitHub link yet", vim.log.levels.WARN)
+  end
   local top = at.view.adapter.ctx.toplevel
   local remote = vim.trim(vim.fn.system({ "git", "-C", top, "remote", "get-url", "origin" }))
   -- A URL may name a port (SSH over 443); scp form's number after the colon is an owner.
   if remote:match("^[%w+.-]+://") then remote = remote:gsub("(github%.com):%d+/", "%1/") end
   local repo = remote:match("github%.com[:/](.-)%.git$") or remote:match("github%.com[:/](.-)/?$")
   if not repo then return vim.notify("origin isn't on GitHub", vim.log.levels.WARN) end
-  local commit = at.file.rev and at.file.rev.commit
   if not commit then commit = vim.trim(vim.fn.system({ "git", "-C", top, "rev-parse", "HEAD" })) end
   local lines = "#L" .. at.first .. (at.last > at.first and "-L" .. at.last or "")
   copy("https://github.com/" .. repo .. "/blob/" .. commit .. "/" .. at.file.path .. lines)
@@ -358,19 +364,26 @@ end
 -- The files Haiku orders, and the file its order of them is kept in by
 -- their paths and the diff's revisions: the implementation's, the server's
 -- side too, since its order holds within each group; nil with fewer than two.
+-- `left` and `right` are the sides' commits, "" for the working tree or index.
+local function order_path(top, left, right, all)
+  local paths = vim.tbl_filter(function(path)
+    local k = kind(path)
+    return k == SERVER_SIDE or k == IMPLEMENTATION
+  end, all)
+  if #paths < 2 then return nil end
+  table.sort(paths)
+  local key = vim.fn.sha256(table.concat({ top, left, right, table.concat(paths, "\n") }, "\0"))
+  return { key = key, file = vim.fn.stdpath("cache") .. "/diff-order/" .. key .. ".json" }
+end
 local function order_file(view)
   local entries = {}
   for _, entry in view.files:iter() do
     local k = kind(entry.path)
     if k == SERVER_SIDE or k == IMPLEMENTATION then table.insert(entries, entry) end
   end
-  if #entries < 2 then return nil end
-  local paths = vim.tbl_map(function(e) return e.path end, entries)
-  table.sort(paths)
-  local key = vim.fn.sha256(table.concat({
-    view.adapter.ctx.toplevel, view.left.commit or "", view.right.commit or "", table.concat(paths, "\n"),
-  }, "\0"))
-  return { key = key, file = vim.fn.stdpath("cache") .. "/diff-order/" .. key .. ".json", entries = entries }
+  local order = order_path(view.adapter.ctx.toplevel, view.left.commit or "", view.right.commit or "", vim.tbl_map(function(e) return e.path end, entries))
+  if order then order.entries = entries end
+  return order
 end
 
 local asked = {}
@@ -657,12 +670,16 @@ end
 -- (diffstory.split's texts), the untracked files added to the last, and
 -- `raw_commits` the commits' messages as diffstory.commits reads them.
 -- Returns how many runs there are, or nil, calling nothing, when the view's
--- left side isn't one git can diff.
-local function read_diff(view, untracked, done)
+-- left side isn't one git can diff. `range` ({ left, right } commits), when
+-- given, is read in place of the view's sides: the committed part of a diff
+-- running to the working tree (uncommitted_mode).
+local function read_diff(view, untracked, done, range)
   local ds = require("diffstory")
   local top = view.adapter.ctx.toplevel
   local RevType = require("diffview.vcs.rev").RevType
   local left, right = view.left and view.left.type, view.right and view.right.type
+  local sides = { left = view.left and view.left.commit, right = view.right and view.right.commit }
+  if range then left, right, sides = RevType.COMMIT, RevType.COMMIT, range end
   if not (left == RevType.COMMIT or left == RevType.STAGE) then return nil end
   -- The change as diffview shows it, with git's own a/ and b/ whatever the
   -- config says, which diffstory.split reads, and never the repository's
@@ -677,8 +694,8 @@ local function read_diff(view, untracked, done)
   else
     local args = vim.deepcopy(git)
     if right == RevType.STAGE then table.insert(args, "--cached") end
-    table.insert(args, view.left.commit)
-    if right == RevType.COMMIT then table.insert(args, view.right.commit) end
+    table.insert(args, sides.left)
+    if right == RevType.COMMIT then table.insert(args, sides.right) end
     table.insert(runs, args)
   end
   -- The commits' messages, for the why of each chapter: those from the left
@@ -686,7 +703,7 @@ local function read_diff(view, untracked, done)
   -- none for the working tree against the index.
   local log = left == RevType.COMMIT and {
     "git", "-C", top, "log", "--no-color", "--format=%H%x00%s%x00%b%x1e",
-    view.left.commit .. ".." .. (right == RevType.COMMIT and view.right.commit or "HEAD"),
+    sides.left .. ".." .. (right == RevType.COMMIT and sides.right or "HEAD"),
   }
   local outputs, raw_commits = {}, ""
   local function each(i, finish)
@@ -744,6 +761,99 @@ local function line_reader(read)
   end
 end
 
+-- M-d's diff from the merge base to the working tree, which
+-- tmux/pane-in-place.sh opens (`:DiffviewOpen <merge base>`, with
+-- g:diff_uncommitted) with the diff_uncommitted setting on, clean or not, so
+-- edits made while it is open come in on a refresh: its commits and the
+-- changes not yet committed together, untracked files included, each file
+-- with uncommitted changes marked ● in the list and "uncommitted" in its bar.
+-- Its story is the committed part's (the merge base to HEAD, the one told
+-- ahead of time for the commit), the files only uncommitted after it in a
+-- last chapter drawn without asking Haiku (diffstory.with_uncommitted), so
+-- editing tells no new story; with nothing committed, that chapter alone,
+-- under no cover. view.uncommitted is set as the view opens; a page of it
+-- reads its parent's, read again on the page's own refresh.
+local function uncommitted_mode(view)
+  local RevType = require("diffview.vcs.rev").RevType
+  return vim.g.diff_uncommitted and not view.page and view.panel and view.panel.ordered_file_list
+    and view.left and view.left.type == RevType.COMMIT and view.right and view.right.type == RevType.LOCAL and true or false
+end
+
+-- HEAD's commit, nil when git can't say.
+local function head_of(out)
+  local sha = vim.trim(out or "")
+  return sha:match("^%x+$") and sha or nil
+end
+
+-- What is uncommitted now, read with git as the view opens and on every
+-- refresh: view.dirty (path -> true), each file whose index or working tree
+-- differs from HEAD, untracked ones included; view.dirty_order, those the
+-- list has, in the kinds' order; view.head. Then done(committed) on the main
+-- loop, `committed` being the committed part's files ({ path, additions,
+-- deletions }), empty when nothing is committed past the merge base.
+local function look_uncommitted(view, done)
+  local git = { "git", "-C", view.adapter.ctx.toplevel, "-c", "core.quotePath=false" }
+  local function run(args, callback)
+    vim.system(vim.list_extend(vim.deepcopy(git), args), { text = true }, callback)
+  end
+  run({ "status", "--porcelain=v1", "-z", "--untracked-files=all" }, function(status)
+    run({ "rev-parse", "HEAD" }, function(head)
+      local sha = head_of(head.stdout)
+      local function finish(numstat)
+        vim.schedule(function()
+          local dirty, fields, i = {}, vim.split(status.stdout or "", "\0", { plain = true }), 1
+          while i <= #fields do
+            local field = fields[i]
+            if #field > 3 then
+              dirty[field:sub(4)] = true
+              -- A rename or copy names the path it came from next: a
+              -- rename's is gone from the index, so changed too.
+              if field:sub(1, 2):find("[RC]") then
+                i = i + 1
+                if field:sub(1, 2):find("R") and fields[i] and fields[i] ~= "" then dirty[fields[i]] = true end
+              end
+            end
+            i = i + 1
+          end
+          local listed = {}
+          for _, entry in view.files:iter() do listed[entry.path] = true end
+          local function in_order(paths)
+            local kept = vim.tbl_filter(function(path) return listed[path] end, vim.tbl_keys(paths))
+            table.sort(kept, function(a, b)
+              if kind(a) ~= kind(b) then return kind(a) < kind(b) end
+              return a:lower() < b:lower()
+            end)
+            return kept
+          end
+          -- git diff --numstat -z: "added\tdeleted\tpath", or for a rename an
+          -- empty path, then the old and the new.
+          local committed, parts, j = {}, vim.split(numstat or "", "\0", { plain = true }), 1
+          while j <= #parts do
+            local added, deleted, path = parts[j]:match("^([%d-]+)\t([%d-]+)\t(.*)$")
+            if added then
+              if path == "" then
+                path = parts[j + 2]
+                j = j + 2
+              end
+              if path then table.insert(committed, { path = path, additions = tonumber(added), deletions = tonumber(deleted) }) end
+            end
+            j = j + 1
+          end
+          local committed_paths = {}
+          for _, e in ipairs(committed) do committed_paths[e.path] = true end
+          view.dirty, view.dirty_order, view.committed_order, view.head = dirty, in_order(dirty), in_order(committed_paths), sha
+          done(committed)
+        end)
+      end
+      if not sha or sha == view.left.commit then return finish(nil) end
+      -- As diffview lists a commit range: submodules left out.
+      run({ "diff", "--ignore-submodules", "--numstat", "-z", view.left.commit, sha }, function(out)
+        finish(out.code == 0 and out.stdout or nil)
+      end)
+    end)
+  end)
+end
+
 -- Which story each diff between two commits (M-d's) was last told, so M-d
 -- opening it again lists its files in that story's order from the start,
 -- with no cover, before git has read the diff to know its key:
@@ -752,11 +862,15 @@ end
 -- ask_story still works the key out, so an entry gone stale costs only the
 -- cover coming up after all. The index and the working tree change with no
 -- commit, so a diff of either is never in it.
+-- A diff to the working tree (uncommitted_mode) is known by its committed
+-- part, from the merge base to HEAD, whose story it shows.
 local function index_at(view)
   local RevType = require("diffview.vcs.rev").RevType
   local left, right = view.left, view.right
-  if not (left and right and left.type == RevType.COMMIT and right.type == RevType.COMMIT) then return nil end
-  return table.concat({ view.adapter.ctx.toplevel, left.commit, right.commit }, "\0")
+  if not (left and right and left.type == RevType.COMMIT) then return nil end
+  local head = right.type == RevType.COMMIT and right.commit or (view.uncommitted and view.head ~= left.commit and view.head)
+  if not head then return nil end
+  return table.concat({ view.adapter.ctx.toplevel, left.commit, head }, "\0")
 end
 local function read_json(path)
   local ok, lines = pcall(vim.fn.readfile, path)
@@ -809,6 +923,14 @@ local function clear(view)
   end
   local order = order_file(view)
   if order then remove(order.file) end
+  -- And the order of the diff M-d opens with the diff_uncommitted setting,
+  -- from the same merge base to the working tree as it is now: its tracked
+  -- changes and its untracked files.
+  local top = view.adapter.ctx.toplevel
+  local tracked = vim.fn.systemlist({ "git", "-C", top, "-c", "core.quotePath=false", "diff", "--ignore-submodules", "--name-only", view.left.commit or "HEAD" })
+  local fresh = vim.fn.systemlist({ "git", "-C", top, "-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard" })
+  local working = order_path(top, view.left.commit or "", "", vim.list_extend(tracked, fresh))
+  if working then remove(working.file) end
   local _, paths, untracked = changed(view)
   table.sort(paths)
   local dir = vim.fn.stdpath("cache") .. "/diff-story"
@@ -841,9 +963,37 @@ local function clear(view)
   if not runs then finish(nil) end
 end
 
-local function ask_story(view)
+-- The story the view shows: the one told (view.told), with, for a diff to
+-- the working tree, its uncommitted files in a last chapter
+-- (uncommitted_mode); put in the list's order and the bars.
+local function show_story(view, told)
+  view.told = told
+  local story = told
+  if vim.g.diff_story and view.dirty_order and #view.dirty_order > 0 then
+    story = require("diffstory").with_uncommitted(told, view.dirty_order, view.committed_order)
+  end
+  view.story = story
+  if require("diffview.lib").get_current_view() == view then
+    active_story = story
+    reorder(view)
+    redraw_bars(view)
+  else
+    -- A view in another tab is put in its story's order as it is entered
+    -- (view_enter), its cursor kept on its file.
+    view.unsorted = true
+  end
+end
+
+-- `committed`, for a diff to the working tree (uncommitted_mode), is its
+-- committed part's files, whose story is told in place of the whole diff's.
+local function ask_story(view, committed)
   local ds = require("diffstory")
-  local entries, paths, untracked = changed(view)
+  local entries, paths, untracked
+  if committed then
+    entries, paths, untracked = committed, vim.tbl_map(function(e) return e.path end, committed), {}
+  else
+    entries, paths, untracked = changed(view)
+  end
   -- What Haiku is given, for the cover's first line.
   view.reading = { files = #entries, additions = 0, deletions = 0 }
   for _, e in ipairs(entries) do
@@ -862,16 +1012,7 @@ local function ask_story(view)
       index(target, target.want, made)
       settle(target, true)
     end
-    target.story = made
-    if require("diffview.lib").get_current_view() == target then
-      active_story = made
-      reorder(target)
-      redraw_bars(target)
-    else
-      -- A view in another tab is put in its story's order as it is entered
-      -- (view_enter), its cursor kept on its file.
-      target.unsorted = true
-    end
+    show_story(target, made)
   end
   -- A story told of another diff than the one shown now goes: the list is
   -- the kinds' order again until this one's story is known.
@@ -921,9 +1062,10 @@ local function ask_story(view)
     view.reading.estimate = ds.estimate(ds.count(hunks))
     local commits = ds.commits(raw_commits)
     -- What Haiku reads, kept for a question about the diff (ga), which
-    -- then needs no git of its own.
+    -- then needs no git of its own; not the committed part alone, since a
+    -- question is about the whole diff shown.
     local input = ds.input(entries, diffs, hunks, commits)
-    view.ask_input = { diff = input, hunks = hunks, runs = #outputs }
+    if not committed then view.ask_input = { diff = input, hunks = hunks, runs = #outputs } end
     local function parse(text) return ds.parse(text, paths, generated, hunks) end
     local key = story_key(top, paths, outputs, raw_commits)
     -- What the view shows now, which an answer asked for before must match.
@@ -1095,7 +1237,7 @@ local function ask_story(view)
       local ok, p = pcall(vim.json.decode, read_ok and table.concat(lines, "\n") or "")
       if ok and type(p) == "table" and type(p.text) == "string" and type(p.started) == "number" then progress[key] = p end
     end))
-  end)
+  end, committed and { left = view.left.commit, right = view.head })
 end
 
 -- Each chapter's heading over its first file in the list, as lines drawn
@@ -1113,7 +1255,7 @@ local function story_rows(panel, story)
     for _, comp in ipairs(section and section.files and section.files.comp and section.files.comp.components or {}) do
       local entry = comp.context
       if entry and entry.path then
-        table.insert(rows, { entry = entry, comp = comp, section = name, chapter = story.chapter[entry.path] })
+        table.insert(rows, { entry = entry, comp = comp, section = name, chapter = story and story.chapter[entry.path] })
       end
     end
   end
@@ -1145,12 +1287,40 @@ local function draw_headings(panel)
     end
   end
 end
+-- A ● after each file with uncommitted changes in a diff to the working tree
+-- (uncommitted_mode), in the theme's yellow; a page marks as its whole diff.
+-- Each list's view, by its panel, which knows nothing of its view.
+local panel_views = setmetatable({}, { __mode = "k" })
+local uncommitted_marks = vim.api.nvim_create_namespace("diff_uncommitted")
+local function draw_marks(panel)
+  if not (panel.bufid and vim.api.nvim_buf_is_valid(panel.bufid)) then return end
+  vim.api.nvim_buf_clear_namespace(panel.bufid, uncommitted_marks, 0, -1)
+  local view = panel_views[panel]
+  local source = view and (view.page and view.page.parent or view)
+  if not (source and source.dirty) then return end
+  -- Every file's row, nested in its folders too when the list is diffview's
+  -- tree (the diff_order setting off); a folder's context is collapsible.
+  local function walk(comp)
+    local entry = comp.context
+    if entry and entry.path and type(entry.collapsed) ~= "boolean" and source.dirty[entry.path] and comp.lstart then
+      pcall(vim.api.nvim_buf_set_extmark, panel.bufid, uncommitted_marks, comp.lstart, 0, {
+        virt_text = { { "●", "DiffviewUncommitted" } }, virt_text_pos = "eol",
+      })
+    end
+    for _, child in ipairs(comp.components or {}) do walk(child) end
+  end
+  for _, name in ipairs({ "conflicting", "working", "staged" }) do
+    local section = panel.components and panel.components[name]
+    if section and section.files and section.files.comp then walk(section.files.comp) end
+  end
+end
 local function headings_after_redraw()
   local FilePanel = require("diffview.scene.views.diff.file_panel").FilePanel
   local redraw = FilePanel.redraw
   FilePanel.redraw = function(self, ...)
     local result = redraw(self, ...)
     draw_headings(self)
+    draw_marks(self)
     return result
   end
 end
@@ -1295,7 +1465,10 @@ path_bar = function(winid, symbol)
       local text = vim.fn.strdisplaywidth(whole) <= room and whole or (vim.fn.strcharpart(whole, 0, math.max(room - 1, 0)) .. "…")
       if room > 10 then why = "   %#Comment#" .. escape(text) end
     end
-    vim.wo[winid].winbar = " " .. chapter .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file) .. why
+    -- A file with changes not yet committed says so (uncommitted_mode).
+    local source = view.page and view.page.parent or view
+    local uncommitted = symbol ~= "a" and source.dirty and source.dirty[file] and "   %#DiffviewUncommitted#● uncommitted" or ""
+    vim.wo[winid].winbar = " " .. chapter .. (dir and "%#Comment#" .. escape(dir) or "") .. "%#Title#" .. escape(name or file) .. uncommitted .. why
   end
 end
 
@@ -1320,6 +1493,10 @@ local function draw_notes(view)
   end
   local story, entry = view.story, view.cur_entry
   if not (vim.g.diff_notes and story and story.hunks and entry and entry.path) then return end
+  -- A file changed since its commits (uncommitted_mode) has its story's
+  -- hunks at the committed lines, which the working tree may have moved.
+  local source = view.page and view.page.parent or view
+  if source.dirty and source.dirty[entry.path] then return end
   local ds = require("diffstory")
   -- A working tree against the index is told as two runs, its staged
   -- changes then its unstaged; anything else as one. A page is told the
@@ -1843,6 +2020,8 @@ local function minimal_highlights()
   vim.api.nvim_set_hl(0, "DiffviewMinimalFiller", { fg = normal, bg = normal })
   -- On a page of the story, the hunks of another chapter, faint.
   vim.api.nvim_set_hl(0, "DiffviewStoryOther", { link = "Comment" })
+  -- A file with uncommitted changes' ●, in the theme's yellow (base16's base0A).
+  vim.api.nvim_set_hl(0, "DiffviewUncommitted", { link = "Type" })
   -- The file list quiet but for the names: the repository's path, its heading
   -- ("Changes (3)", which diffview draws whatever its options) and each
   -- file's +12 −3 faint.
@@ -1898,14 +2077,21 @@ return {
       view_opened = function(view)
         -- A page of the story (turn_page), shown its chapter from the whole diff's story.
         view.page = pending_page
+        if view.panel then panel_views[view.panel] = view end
+        if uncommitted_mode(view) then
+          view.uncommitted = true
+          view.head = head_of(vim.fn.system({ "git", "-C", view.adapter.ctx.toplevel, "rev-parse", "HEAD" }))
+        end
+        -- Nothing committed yet: no story to wait for, only the uncommitted files.
+        local nothing_committed = view.uncommitted and view.head == view.left.commit
         if view.panel and view.panel.ordered_file_list then wrap_set_file(view) end
         -- The diff under a cover until its story is told (a page has its
         -- own), unless the index knows it: then its files are listed in its
         -- order from the start (view_enter makes it the one sorted by).
-        if vim.g.diff_story and not vim.g.diff_ahead and not vim.g.diff_clear and not view.page and view.panel and view.panel.ordered_file_list then
+        if vim.g.diff_story and not vim.g.diff_ahead and not vim.g.diff_clear and not view.page and not nothing_committed and view.panel and view.panel.ordered_file_list then
           local known = indexed(view)
           if known then
-            view.story, view.want, view.from_index = known.story, known.key, true
+            view.story, view.told, view.want, view.from_index = known.story, known.story, known.key, true
           else
             cover(view)
           end
@@ -1949,6 +2135,34 @@ return {
               vim.schedule(function() set_width(view.panel, fit_width(view.panel)) end)
             end)
           end
+          -- A diff to the working tree reads what is uncommitted on every
+          -- refresh (R, or diffview's own on focus and save), marks it, and
+          -- tells the committed part's story, or with nothing committed
+          -- shows the uncommitted files' chapter alone.
+          -- A page of it reads what is uncommitted into its whole diff on its
+          -- own refresh, since diffview leaves the whole diff, in a hidden
+          -- tab, as it was; its marks and bars drawn again.
+          if view.page and view.page.parent.uncommitted then
+            view.emitter:on("files_updated", function()
+              look_uncommitted(view.page.parent, function()
+                if view.panel:is_open() then view.panel:redraw() end
+                redraw_bars(view)
+              end)
+            end)
+          end
+          if view.uncommitted then
+            view.emitter:on("files_updated", function()
+              look_uncommitted(view, function(committed)
+                local nothing_committed = not (committed and #committed > 0)
+                show_story(view, not nothing_committed and view.told or nil)
+                if not vim.g.diff_story then return end
+                if not nothing_committed then return ask_story(view, committed) end
+                view.want, view.why_none = nil, "nothing is committed yet"
+                stop_loading(view)
+                settle(view, true)
+              end)
+            end)
+          end
           if view.panel and view.panel.ordered_file_list and vim.g.diff_order then
             view.emitter:on("files_updated", function()
               if vim.g.diff_clear then
@@ -1972,7 +2186,9 @@ return {
                   view.unsorted = true
                 end
               elseif vim.g.diff_story then
-                ask_story(view)
+                -- A diff to the working tree tells its story once it has
+                -- read what is uncommitted, above.
+                if not view.uncommitted then ask_story(view) end
               else
                 ask_order(view)
               end
@@ -2025,7 +2241,22 @@ return {
       opts.file_panel.listing_style = "list"
       sort_lists()
     end
-    if vim.g.diff_story then headings_after_redraw() end
+    headings_after_redraw()
+    -- diffview lists untracked files only against the index; M-d's diff to
+    -- the working tree (uncommitted_mode) lists them against the merge base
+    -- too, as files added.
+    if vim.g.diff_uncommitted then
+      local GitAdapter = require("diffview.vcs.adapters.git").GitAdapter
+      local RevType = require("diffview.vcs.rev").RevType
+      local show_untracked = GitAdapter.show_untracked
+      GitAdapter.show_untracked = function(self, opt)
+        local revs = opt and opt.revs
+        if revs and revs.left.type == RevType.COMMIT and revs.right.type == RevType.LOCAL then
+          return show_untracked(self, { dv_opt = opt.dv_opt })
+        end
+        return show_untracked(self, opt)
+      end
+    end
     require("diffview").setup(opts)
     vim.api.nvim_create_autocmd("FileType", {
       pattern = { "DiffviewFiles", "DiffviewFileHistory" },

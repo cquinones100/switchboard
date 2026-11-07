@@ -95,9 +95,11 @@ local BUTTONS = {
   { label = "Page ▶", keys = "]p" },
   { label = "Widen", keys = "E" },
   { label = "Copy link", keys = "yl" },
+  -- diffview's own: reads the changes again, uncommitted ones included.
+  { label = "Refresh", keys = "R" },
   { label = "Close", keys = "q" },
 }
-local HELP = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · q close"
+local HELP = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · R refresh · q close"
 -- Ask, with the diff_ask setting on (ga, lua/plugins/diffview.lua).
 if vim.g.diff_ask then
   table.insert(BUTTONS, #BUTTONS, { label = "Ask", keys = "ga" })

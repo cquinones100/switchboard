@@ -773,8 +773,8 @@ test("easy mode puts a button for each of the list's keys at the bottom of M-d's
   // Each case starts M-d's Neovim with the settings given as --cmd, and reads
   // its statusline as it starts.
   [
-    { cmds: ["--cmd", "let g:diff_easy = v:true"], buttons: 8, help: true, laststatus: "3" },
-    { cmds: ["--cmd", "let g:diff_easy = v:true", "--cmd", "let g:diff_key_help = v:false"], buttons: 8, help: false, laststatus: "3" },
+    { cmds: ["--cmd", "let g:diff_easy = v:true"], buttons: 9, help: true, laststatus: "3" },
+    { cmds: ["--cmd", "let g:diff_easy = v:true", "--cmd", "let g:diff_key_help = v:false"], buttons: 9, help: false, laststatus: "3" },
     { cmds: [], buttons: 0, help: false, laststatus: "0" },
   ].forEach(({ cmds, buttons, help, laststatus }) => {
     const run = spawnSync("nvim", ["--headless", "-u", path.join(nvimDir, "diff.lua"), ...cmds, "-c", "lua io.write(vim.o.laststatus .. '\\n' .. vim.o.statusline .. '\\n')", "-c", "qa!"], {
@@ -784,7 +784,7 @@ test("easy mode puts a button for each of the list's keys at the bottom of M-d's
     const [last, line] = (run.stdout + run.stderr).trim().split("\n").slice(-2);
     assert.equal(last, laststatus, `${cmds.join(" ")}: the bar is shown only in easy mode`);
     assert.equal(line.match(/@v:lua\.diff_button_click@/g)?.length ?? 0, buttons);
-    if (buttons) ["Chapter ▶", "Page ▶", "Widen", "Copy link", "Ask", "Close"].forEach((label) => assert.ok(line.includes(` ${label} `), label));
+    if (buttons) ["Chapter ▶", "Page ▶", "Widen", "Copy link", "Refresh", "Ask", "Close"].forEach((label) => assert.ok(line.includes(` ${label} `), label));
     assert.equal(/\]c \[c chapters/.test(line), help, "the keys are named unless the help line is off");
   });
 });
@@ -902,4 +902,209 @@ test("ga in M-d's diff asks Haiku in the repository with its read-only tools, an
   const input = fs.readFileSync(`${kept}.input`, "utf8");
   assert.match(input, /<diff>[\s\S]*-x\n\+y[\s\S]*<\/diff>/, "with the diff, read with git since one file tells no story");
   assert.match(input, /<cursor>\nsrc\/a\.js\n<\/cursor>\n\n<question>\nWhat does it change\?\n<\/question>$/, "the file under the list's cursor, then the question");
+});
+
+test("a diff to the working tree puts the files only uncommitted in a last chapter, after the story's own, with no why", () => {
+  const out = execFileSync("nvim", ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${nvimDir}`, "-l", "/dev/stdin"], {
+    encoding: "utf8",
+    input: `
+      local ds = require("diffstory")
+      local story = { chapters = { { title = "Change the model", why = "Why.", files = { "a.js" }, touches = { "a.js" } } }, place = { ["a.js"] = 1 }, chapter = { ["a.js"] = 1 }, hunks = {} }
+      local both = ds.with_uncommitted(story, { "a.js", "new.js" })
+      local alone = ds.with_uncommitted(nil, { "b.js", "c.js" })
+      io.write(vim.json.encode({
+        both = { titles = vim.tbl_map(function(c) return c.title end, both.chapters), last = both.chapters[2], place = both.place, chapter = both.chapter },
+        alone = { titles = vim.tbl_map(function(c) return c.title end, alone.chapters), place = alone.place },
+        kept = #story.chapters,
+        none = #ds.with_uncommitted(story, { "a.js" }).chapters,
+        untold = (function()
+          local made = ds.with_uncommitted(nil, { "a.js", "b.js" }, { "a.js" })
+          return { titles = vim.tbl_map(function(c) return c.title end, made.chapters), place = made.place, chapter = made.chapter }
+        end)(),
+      }))
+    `,
+  });
+  const result = JSON.parse(out);
+  assert.deepEqual(result.both.titles, ["Change the model", "Not committed yet"]);
+  assert.deepEqual(result.both.last, { title: "Not committed yet", why: "", files: ["new.js"], touches: ["a.js", "new.js"] }, "a file in both keeps its committed chapter; the last one's page shows every uncommitted file");
+  assert.deepEqual(result.both.place, { "a.js": 1, "new.js": 2 });
+  assert.deepEqual(result.both.chapter, { "a.js": 1, "new.js": 2 });
+  assert.deepEqual(result.alone, { titles: ["Not committed yet"], place: { "b.js": 1, "c.js": 2 } }, "with nothing committed, that chapter alone");
+  assert.equal(result.kept, 1, "the story told is left as it was");
+  assert.equal(result.none, 1, "no last chapter when every uncommitted file has one");
+  assert.deepEqual(result.untold, { titles: ["Committed", "Not committed yet"], place: { "a.js": 1, "b.js": 2 }, chapter: { "a.js": 1, "b.js": 2 } }, "with no story told of the commits, they go first, so the uncommitted chapter stays last");
+});
+
+// M-d's Neovim on a diff from `rev` (with g:diff_uncommitted, as
+// pane-in-place.sh opens a branch with uncommitted changes), once its story
+// settles: the list's order, the files marked ●, the chapters' headings, each
+// bar, and whether a cover came up.
+const openUncommitted = ({ repo, bin, home, config, cache, rev, uncommitted = true, env = {} }) => {
+  const run = spawnSync(
+    "nvim",
+    ["--headless", "-u", path.join(nvimDir, "diff.lua"), ...(uncommitted ? ["--cmd", "let g:diff_uncommitted = 1"] : []), "-c", `DiffviewOpen ${rev}`, "-c", `lua
+      local view = require("diffview.lib").get_current_view()
+      local covered = false
+      local function look()
+        for _, w in ipairs(vim.api.nvim_list_wins()) do
+          if vim.api.nvim_win_get_config(w).relative ~= "" then covered = true end
+        end
+      end
+      vim.wait(8000, function() look() return view.settled and #view.panel:ordered_file_list() > 0 and (view.dirty or not view.uncommitted) end, 10)
+      vim.wait(300, function() look() return false end, 10)
+      local panel = view.panel
+      local marked, headings = {}, {}
+      for _, m in ipairs(vim.api.nvim_buf_get_extmarks(panel.bufid, -1, 0, -1, { details = true })) do
+        local line = vim.api.nvim_buf_get_lines(panel.bufid, m[2], m[2] + 1, false)[1]
+        if m[4].virt_text and m[4].virt_text[1][1] == "●" then table.insert(marked, line) end
+        if m[4].virt_lines then table.insert(headings, (m[4].virt_lines[1][1][1] ~= "" and m[4].virt_lines[1] or m[4].virt_lines[2])[1][1]) end
+      end
+      local bars, links = {}, {}
+      for _, entry in ipairs(panel:ordered_file_list()) do
+        view:set_file(entry, false)
+        vim.wait(1000, function() return view.cur_entry == entry end, 10)
+        vim.wait(100)
+        for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.wo[w].winbar:find(vim.fs.basename(entry.path), 1, true) then bars[entry.path] = vim.wo[w].winbar end
+        end
+        -- yl in the working tree's side: what it says.
+        local main = view.cur_layout:get_main_win()
+        vim.api.nvim_set_current_win(main.id)
+        local notify = vim.notify
+        vim.notify = function(text) links[entry.path] = text end
+        vim.api.nvim_feedkeys("yl", "x", false)
+        vim.notify = notify
+      end
+      io.write(vim.json.encode({ covered = covered, order = vim.tbl_map(function(e) return e.path end, panel:ordered_file_list()), marked = marked, headings = headings, bars = bars, links = links }))`, "-c", "qa!"],
+    { cwd: repo, encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: cache, HOME: home, XDG_CONFIG_HOME: config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "", ...env } },
+  );
+  return JSON.parse(`${run.stdout}${run.stderr}`.trim().split("\n").at(-1));
+};
+const uncommittedSetup = (name) => {
+  const root = path.join(tmp, name);
+  const dirs = { repo: path.join(root, "repo"), bin: path.join(root, "bin"), home: path.join(root, "home"), config: path.join(root, "config"), cache: path.join(root, "cache") };
+  [path.join(dirs.repo, "src"), dirs.bin, dirs.home, dirs.config].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  fs.symlinkSync(nvimDir, path.join(dirs.config, "nvim"));
+  const asked = path.join(root, "asked");
+  const answer = JSON.stringify({ chapters: [{ title: "Change the model", why: "The data changes shape.", files: ["src/model.js"] }, { title: "Show it", why: "The page shows it.", files: ["src/ui.js"] }] });
+  fs.writeFileSync(path.join(dirs.bin, "claude"), `#!/bin/sh\ncat > '${root}/given'\necho asked >> '${asked}'\nprintf '%s\\n' '${JSON.stringify({ type: "result", result: answer })}'\n`, { mode: 0o755 });
+  const git = (...args) => execFileSync("git", ["-C", dirs.repo, "-c", "user.email=t@e", "-c", "user.name=t", ...args]);
+  git("init", "-q");
+  ["model", "ui", "page"].forEach((file) => fs.writeFileSync(path.join(dirs.repo, `src/${file}.js`), "a\n"));
+  git("add", ".");
+  git("commit", "-qm", "one");
+  const askedCount = () => (fs.existsSync(asked) ? fs.readFileSync(asked, "utf8").trim().split("\n").length : 0);
+  return { ...dirs, root, git, askedCount };
+};
+
+test("M-d on a branch with nothing committed lists its uncommitted changes, untracked files too, marked, in a chapter of their own, with no cover and no ask", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
+  const setup = uncommittedSetup("nothing-committed");
+  fs.writeFileSync(path.join(setup.repo, "src/page.js"), "edited\n");
+  fs.writeFileSync(path.join(setup.repo, "src/new.js"), "new\n");
+  const result = openUncommitted({ ...setup, rev: "HEAD" });
+  assert.deepEqual([...result.order].sort(), ["src/new.js", "src/page.js"], "the edit and the untracked file");
+  assert.equal(result.marked.length, 2, "both marked");
+  assert.deepEqual(result.headings, ["1/1 Not committed yet"]);
+  assert.match(result.bars["src/page.js"], /● uncommitted/, "the bar says so");
+  assert.equal(result.covered, false, "no story to wait for under a cover");
+  assert.equal(setup.askedCount(), 0, "Haiku isn't asked");
+  // With diff_order off, diffview's folder tree: each file marked inside its folder.
+  fs.writeFileSync(path.join(setup.bin, "tmux"), "#!/bin/sh\ncase \"$*\" in *@setting_diff_order*) echo off ;; esac\n", { mode: 0o755 });
+  const tree = openUncommitted({ ...setup, rev: "HEAD", env: { TMUX: "fake" } });
+  assert.deepEqual(tree.marked.map((line) => line.match(/(\w+)\.js/)[1]).sort(), ["new", "page"], "both marked in the tree");
+});
+
+test("M-d on a branch with commits and uncommitted changes tells the commits' story, kept from before, with the uncommitted files last and marked", { skip: !ready && "needs lazy.nvim's diffview", timeout: 90_000 }, () => {
+  const setup = uncommittedSetup("both");
+  fs.writeFileSync(path.join(setup.repo, "src/model.js"), "A\n");
+  fs.writeFileSync(path.join(setup.repo, "src/ui.js"), "B\n");
+  setup.git("commit", "-qam", "two");
+  // The clean branch first, as M-d opens it today (and as the story told ahead does).
+  const clean = openUncommitted({ ...setup, rev: "HEAD~1...HEAD", uncommitted: false });
+  assert.deepEqual(clean.order, ["src/model.js", "src/ui.js"]);
+  assert.deepEqual(clean.marked, [], "nothing marked on a clean branch");
+  assert.equal(setup.askedCount(), 1);
+  // Clean, to the working tree, as M-d opens it now: the same story, nothing marked, no chapter added.
+  const cleanTree = openUncommitted({ ...setup, rev: "HEAD~1" });
+  assert.deepEqual(cleanTree.order, ["src/model.js", "src/ui.js"]);
+  assert.deepEqual(cleanTree.headings, ["1/2 Change the model", "2/2 Show it"]);
+  assert.deepEqual(cleanTree.marked, []);
+  assert.equal(setup.askedCount(), 1, "the commits' story reused, not asked again");
+  fs.writeFileSync(path.join(setup.repo, "src/ui.js"), "B2\n");
+  fs.writeFileSync(path.join(setup.repo, "src/page.js"), "edited\n");
+  fs.writeFileSync(path.join(setup.repo, "src/new.js"), "new\n");
+  const result = openUncommitted({ ...setup, rev: "HEAD~1" });
+  assert.deepEqual(result.order, ["src/model.js", "src/ui.js", "src/new.js", "src/page.js"], "the story's chapters, then the files only uncommitted");
+  assert.deepEqual(result.headings, ["1/3 Change the model", "2/3 Show it", "3/3 Not committed yet"]);
+  assert.deepEqual(result.marked.map((line) => line.match(/(\w+)\.js/)[1]).sort(), ["new", "page", "ui"], "only the files with uncommitted changes marked, one in both included");
+  assert.doesNotMatch(result.bars["src/model.js"], /uncommitted/, "a file changed only in commits shows as before");
+  assert.match(result.bars["src/ui.js"], /● uncommitted/);
+  assert.match(result.links["src/new.js"], /has uncommitted changes, so this side has no GitHub link yet/, "yl gives no link to a line not committed");
+  assert.doesNotMatch(result.links["src/model.js"] ?? "", /uncommitted/, "and goes on as before for a file changed only in commits");
+  assert.equal(result.covered, false, "the commits' story is known, so no cover");
+  assert.equal(setup.askedCount(), 1, "and Haiku isn't asked again");
+});
+
+test("M-d says when there is nothing to show, opens the working tree with the setting on, and the commits alone with it off", { timeout: 60_000 }, () => {
+  const root = path.join(tmp, "pane-in-place");
+  const tools = path.join(root, "tools");
+  const bin = path.join(root, "bin");
+  const repo = path.join(root, "repo");
+  const origin = path.join(root, "origin.git");
+  [tools, bin, path.join(root, "home")].forEach((dir) => fs.mkdirSync(dir, { recursive: true }));
+  fs.copyFileSync(path.join(__dirname, "../tmux/pane-in-place.sh"), path.join(tools, "pane-in-place.sh"));
+  fs.symlinkSync(path.join(__dirname, "../tmux/diff-base.sh"), path.join(tools, "diff-base.sh"));
+  const log = path.join(root, "log");
+  fs.writeFileSync(path.join(tools, "say.sh"), `#!/bin/sh\n[ "$1" = wait ] && exit 0\nprintf 'said %s\\n' "$3" >> '${log}'\n`, { mode: 0o755 });
+  // A tmux that answers the setting from SETTING and keeps each popup's command.
+  fs.writeFileSync(path.join(bin, "tmux"), `#!/bin/sh\ncase "$1" in\n  show) printf '%s\\n' "$SETTING" ;;\n  display-popup) for a; do last=$a; done; case "$*" in *-E*-d*) printf 'opened %s\\n' "$last" >> '${log}' ;; esac ;;\nesac\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho main\n", { mode: 0o755 });
+  const env = { ...process.env, HOME: path.join(root, "home"), PATH: `${bin}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(root, "cache"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { env, stdio: "ignore" });
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin], { env });
+  execFileSync("git", ["clone", "-q", origin, repo], { env, stdio: "ignore" });
+  fs.writeFileSync(path.join(repo, "a.js"), "a\n");
+  git("add", ".");
+  git("commit", "-qm", "one");
+  git("push", "-q", "origin", "HEAD:main");
+  git("checkout", "-q", "-b", "feature");
+  const mergeBase = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim();
+  const press = (setting = "") => {
+    fs.rmSync(log, { force: true });
+    spawnSync("bash", [path.join(tools, "pane-in-place.sh"), "popup", "diffview", repo, "client"], { env: { ...env, SETTING: setting }, encoding: "utf8", timeout: 30_000 });
+    return fs.existsSync(log) ? fs.readFileSync(log, "utf8").trim() : "";
+  };
+  assert.equal(press(), "said Nothing to show: no commits past origin/main and no uncommitted changes", "a box, and no diff");
+  fs.writeFileSync(path.join(repo, "new.js"), "new\n");
+  const dirty = press();
+  assert.match(dirty, /^opened .*let g:diff_uncommitted = 1.*DiffviewOpen ([0-9a-f]{40})'$/, "an untracked file opens the diff to the working tree");
+  assert.equal(dirty.match(/DiffviewOpen ([0-9a-f]{40})/)[1], mergeBase, "from the merge base");
+  assert.equal(press("off"), "said Nothing to show: no commits past origin/main", "with the setting off, the commits alone");
+  fs.writeFileSync(path.join(repo, "a.js"), "A\n");
+  git("commit", "-qam", "two");
+  fs.rmSync(path.join(repo, "new.js"));
+  assert.match(press(), /^opened .*let g:diff_uncommitted = 1.*DiffviewOpen [0-9a-f]{40}'$/, "a clean branch with commits opens to the working tree too, so later edits come in on a refresh");
+  assert.match(press("off"), /^opened .*DiffviewOpen origin\/main\.\.\.HEAD'$/, "with the setting off, its commits alone, as before");
+  assert.doesNotMatch(press("off"), /diff_uncommitted/);
+});
+
+test("clearing a tab's diff cache clears the file order of the diff M-d opens to the working tree too", { skip: !ready && "needs lazy.nvim's diffview", timeout: 60_000 }, () => {
+  const setup = uncommittedSetup("clear-working");
+  // Haiku's file order, as ask_order asks for it.
+  fs.writeFileSync(path.join(setup.bin, "claude"), `#!/bin/sh\ncat > /dev/null\necho '["src/ui.js", "src/model.js", "src/page.js", "src/new.js"]'\n`, { mode: 0o755 });
+  // The diff_story setting off, so the list is in Haiku's order alone.
+  fs.writeFileSync(path.join(setup.bin, "tmux"), "#!/bin/sh\ncase \"$*\" in *@setting_diff_story\\ *|*@setting_diff_story) echo off ;; esac\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(setup.repo, "src/model.js"), "A\n");
+  fs.writeFileSync(path.join(setup.repo, "src/ui.js"), "B\n");
+  setup.git("commit", "-qam", "two");
+  fs.writeFileSync(path.join(setup.repo, "src/page.js"), "edited\n");
+  fs.writeFileSync(path.join(setup.repo, "src/new.js"), "new\n");
+  const orders = path.join(setup.cache, "nvim/diff-order");
+  const env = { ...process.env, PATH: `${setup.bin}:${process.env.PATH}`, XDG_CACHE_HOME: setup.cache, HOME: setup.home, XDG_CONFIG_HOME: setup.config, XDG_DATA_HOME: process.env.XDG_DATA_HOME ?? path.join(os.homedir(), ".local/share"), TMUX: "fake" };
+  spawnSync("nvim", ["--headless", "-u", path.join(nvimDir, "diff.lua"), "--cmd", "let g:diff_uncommitted = 1", "-c", "DiffviewOpen HEAD~1", "-c", `lua vim.wait(8000, function() return #vim.fn.glob("${orders}/*.json", false, true) > 0 end, 20)`, "-c", "qa!"], { cwd: setup.repo, encoding: "utf8", env });
+  assert.equal(fs.readdirSync(orders).length, 1, "the working tree's file order kept");
+  // As diff-cache-clear.sh opens it: the commits alone.
+  const run = spawnSync("nvim", ["--headless", "-u", path.join(nvimDir, "diff.lua"), "--noplugin", "--cmd", "let g:diff_clear = 1", "-c", "DiffviewOpen HEAD~1...HEAD", "-c", "lua vim.defer_fn(function() vim.cmd('cquit 2') end, 20000)"], { cwd: setup.repo, encoding: "utf8", env });
+  assert.match(`${run.stdout}${run.stderr}`, /cleared 1/);
+  assert.deepEqual(fs.readdirSync(orders), [], "and cleared");
 });

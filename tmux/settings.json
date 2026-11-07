@@ -281,6 +281,13 @@
     "default": true
   },
   {
+    "key": "diff_uncommitted",
+    "category": "Diff",
+    "label": "Uncommitted changes in M-d",
+    "description": "M-d's diff runs from the PR's base to the working tree, marking files with changes not yet committed and listing them in a last chapter; off, it shows the branch's commits only",
+    "default": true
+  },
+  {
     "key": "diff_list_wide",
     "category": "Diff",
     "label": "Diff file list wide",

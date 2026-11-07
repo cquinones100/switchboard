@@ -55,8 +55,11 @@ tool_command() {
       ;;
     # GitHub's "Files changed": the branch's commits since it left its PR's
     # base branch, which diff-base.sh works out and fetches (shared with the
-    # story told ahead of time, diff-story-ahead.sh). Committed changes only,
-    # as on GitHub. gh and the fetch each wait on the network, about a
+    # story told ahead of time, diff-story-ahead.sh). With the
+    # diff_uncommitted setting on, from the merge base to the working tree,
+    # changes not yet committed (staged, unstaged or untracked) included,
+    # which diffview.lua marks apart (g:diff_uncommitted); with nothing at
+    # all to show, a box says so. gh and the fetch each wait on the network, about a
     # second, so a popup says it is loading until they are done. It is
     # started in the background, since display-popup holds until the popup
     # closes, and closes itself after 30 seconds should nothing close it.
@@ -84,7 +87,19 @@ tool_command() {
         fi
         return
       fi
-      echo "nvim -u ~/.config/nvim/diff.lua --noplugin --cmd 'let g:diff_pane = 1' --cmd 'let g:diff_base = \"$ref\"' -c 'DiffviewOpen $ref...HEAD'"
+      nvim="nvim -u ~/.config/nvim/diff.lua --noplugin --cmd 'let g:diff_pane = 1' --cmd 'let g:diff_base = \"$ref\"'"
+      setting=$(tmux show -gqv @setting_diff_uncommitted 2>/dev/null)
+      # Run to the working tree even while it is clean, so edits made once
+      # the diff is open come in on its refresh (R); its story is still the
+      # commits' own, known by the same key as the ...HEAD diff's.
+      if git -C "$dir" diff --quiet "$ref...HEAD" 2>/dev/null &&
+        { [ "$setting" = off ] || [ -z "$(git -C "$dir" status --porcelain 2>/dev/null | head -1)" ]; }; then
+        "${0%/*}/say.sh" -c "$client" "Nothing to show: no commits past $ref$([ "$setting" = off ] || echo ' and no uncommitted changes')"
+      elif [ "$setting" != off ] && merge_base=$(git -C "$dir" merge-base "$ref" HEAD 2>/dev/null); then
+        echo "$nvim --cmd 'let g:diff_uncommitted = 1' -c 'DiffviewOpen $merge_base'"
+      else
+        echo "$nvim -c 'DiffviewOpen $ref...HEAD'"
+      fi
       ;;
   esac
 }
