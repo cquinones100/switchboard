@@ -19,6 +19,12 @@ fn panes(list: &serde_json::Value) -> usize {
 }
 
 /// The command in front in the session's focused pane.
+/// Whether a pane's program is its shell: the test's /bin/sh, which a Mac
+/// runs as bash.
+fn is_shell(command: &str) -> bool {
+    matches!(command, "sh" | "bash" | "dash")
+}
+
 fn front_command(list: &serde_json::Value) -> String {
     let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
     let tab = tabs.iter().find(|t| t["current"] == true).unwrap();
@@ -124,7 +130,7 @@ fn closing_a_busy_pane_asks_first() {
     client.type_text(&format!("{ALT}L"));
     client.wait_for("a second pane at its shell", |_| {
         let list = server.list();
-        panes(&list) == 2 && front_command(&list) == "sh"
+        panes(&list) == 2 && is_shell(&front_command(&list))
     });
     client.type_text(&format!("{ALT}w"));
     client.wait_for("the shell's pane closed", |_| panes(&server.list()) == 1);
@@ -132,7 +138,7 @@ fn closing_a_busy_pane_asks_first() {
     client.type_text(&format!("{ALT}L"));
     client.wait_for("a second pane at its shell", |_| {
         let list = server.list();
-        panes(&list) == 2 && front_command(&list) == "sh"
+        panes(&list) == 2 && is_shell(&front_command(&list))
     });
     client.type_text("sleep 100\r");
     client.wait_for("sleep in front", |_| {
