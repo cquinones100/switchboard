@@ -763,6 +763,12 @@ impl App {
             });
             return;
         }
+        // A file still in conflict has no story, its markers no change of
+        // anyone's to tell (diffview.lua's guard).
+        if self.entries().iter().any(|e| e.status == 'U') {
+            self.telling = Telling::Untold("a merge conflict is unresolved".into());
+            return;
+        }
         if !self.opts.haiku {
             self.telling = Telling::Untold("Haiku isn't asked here".into());
             return;
@@ -1366,6 +1372,10 @@ impl App {
             ('g', 'g') if self.focus == Focus::List => self.move_list(isize::MIN / 2),
             ('g', 'g') => self.move_cursor(isize::MIN / 2),
             ('g', 'a') if self.opts.ask => self.open_ask(),
+            // A commit of the history asks nothing, which is said.
+            ('g', 'a') if self.in_history => {
+                self.say("Ask works in the diff, not in the history");
+            }
             (']', 'c') if self.focus == Focus::List => self.chapter_jump(1),
             ('[', 'c') if self.focus == Focus::List => self.chapter_jump(-1),
             (']', 'c') => self.change_jump(count, true),
@@ -2065,6 +2075,12 @@ impl App {
                 if a.body.trim().is_empty() {
                     a.body = text;
                 }
+            }
+            // Claude Code missing is all there is to say, as diffview.lua
+            // said it.
+            Said::Done(Err(why)) if why == ask::NOT_INSTALLED => {
+                a.done = true;
+                a.body = why;
             }
             Said::Done(Err(why)) => {
                 a.done = true;
@@ -3215,6 +3231,29 @@ mod tests {
         press(&mut app, "gg");
         screen(&mut app);
         assert_eq!(app.answer.as_ref().unwrap().top, 0);
+    }
+
+    #[test]
+    fn a_merge_conflict_unresolved_has_no_story_and_ga_in_a_commit_says_so() {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            entries: vec![entry("src/a.js", 'U', 1, 1), entry("src/b.js", 'M', 1, 0)],
+            ..Change::default()
+        });
+        assert_eq!(
+            app.telling,
+            Telling::Untold("a merge conflict is unresolved".into())
+        );
+        app.in_history = true;
+        app.opts.ask = false;
+        press(&mut app, "ga");
+        let said = app.message.take().map(|(t, _)| t);
+        assert_eq!(
+            said.as_deref(),
+            Some("Ask works in the diff, not in the history")
+        );
     }
 
     #[test]

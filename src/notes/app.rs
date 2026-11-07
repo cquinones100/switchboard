@@ -1702,6 +1702,8 @@ impl App {
             return self.window_key(key);
         }
         let last = self.list_rows.len().saturating_sub(1);
+        // Half the list's height, as Vim's Ctrl-D and Ctrl-U.
+        let half = (self.geo.list.height as usize / 2).max(1);
         match key.code {
             KeyCode::Enter => self.activate(),
             KeyCode::Down => self.list_at = (self.list_at + 1).min(last),
@@ -1710,8 +1712,8 @@ impl App {
             KeyCode::Char('f') if ctrl => self.finder(),
             KeyCode::Char('b') if ctrl => self.toggle_list(),
             KeyCode::Char('w') if ctrl => self.list_pending = Some('w'),
-            KeyCode::Char('d') if ctrl => self.list_at = (self.list_at + 10).min(last),
-            KeyCode::Char('u') if ctrl => self.list_at = self.list_at.saturating_sub(10),
+            KeyCode::Char('d') if ctrl => self.list_at = (self.list_at + half).min(last),
+            KeyCode::Char('u') if ctrl => self.list_at = self.list_at.saturating_sub(half),
             _ => match c {
                 Some('j') => self.list_at = (self.list_at + 1).min(last),
                 Some('k') => self.list_at = self.list_at.saturating_sub(1),
@@ -2164,10 +2166,8 @@ impl App {
     /// Easy mode's Cmd keys.
     fn cmd_key(&mut self, cmd: easy::Cmd) {
         match cmd {
-            easy::Cmd::Save => {
-                self.save();
-                self.say("Saved");
-            }
+            // Saved without a word, as easy.lua's :write was.
+            easy::Cmd::Save => self.save(),
             easy::Cmd::Undo | easy::Cmd::Redo => {
                 if matches!(self.editor.mode, Mode::Visual { .. }) {
                     self.editor.leave_visual();
@@ -2361,6 +2361,10 @@ impl App {
                     return self.button(b);
                 }
                 if inside(self.geo.list) {
+                    // Leaving the note saves it, as leaving its buffer did.
+                    if self.focus == Focus::Note {
+                        self.save();
+                    }
                     self.focus = Focus::List;
                     let at = self.list_top + (y - self.geo.list.y) as usize;
                     if at < self.list_rows.len() {

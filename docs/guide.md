@@ -822,7 +822,7 @@ While Haiku reads, the diff waits under a cover, blank for its first moment so a
 
 Each chapter heads its first file in the list with its number, title and a why of two or three sentences. The bar over the diff names the file's chapter before its path; in a list narrower than about 48 columns the heading keeps only the why's first sentence, and the whole why follows the path in that bar. A file sits in the chapter that holds most of its changed lines. With Settings' "Diff story notes on changes" (`diff_story_notes`) on, Haiku's note sits over each change worth one, saying what it does and what to check, and a change belonging to another chapter than its file's is headed with that chapter's number and title.
 
-In the list, `]c` and `[c` go to the next chapter and the one before. `]p` opens the first chapter as a page, a diff of its own holding only the files that chapter touches, as if it were a commit, the list headed "Page 1 of N"; `]p` and `[p` turn the pages, and `[p` from the first goes back to the whole diff. On a page, the changes of other chapters in its files are dimmed. Settings' "Diff story a page at a time" (`diff_story_pages`) off makes `]p` and `[p` do nothing. With no story, `]c` in the list, `]p` and `[p` say why in a box: it is still being told, it is off in Settings, the diff changes only one file, or what went wrong when Haiku was asked. When Haiku's answer named changes the diff doesn't have, a box says the story may be thin.
+In the list, `]c` and `[c` go to the next chapter and the one before. `]p` opens the first chapter as a page, a diff of its own holding only the files that chapter touches, as if it were a commit, the list headed "Page 1 of N"; `]p` and `[p` turn the pages, and `[p` from the first goes back to the whole diff. On a page, the changes of other chapters in its files are dimmed. Settings' "Diff story a page at a time" (`diff_story_pages`) off makes `]p` and `[p` do nothing. With no story, `]c` in the list, `]p` and `[p` say why in a box: it is still being told, it is off in Settings, the diff changes only one file, a merge conflict is unresolved, or what went wrong when Haiku was asked. When Haiku's answer named changes the diff doesn't have, a box says the story may be thin.
 
 `yS` copies the story as Markdown, to share: each chapter's number, title and why, its files, and each change's note under its file as `path:line`. `M-p`'s "Copy the diff's story (M-d) as Markdown, to share it" presses it, and is listed only while the diff is open.
 
@@ -832,7 +832,7 @@ With Settings' "Diff story told ahead" (`diff_story_ahead`) on, when a tab's bra
 
 ### The branch's commits one at a time
 
-`c` goes through the branch's commits one at a time, oldest first, so the branch reads in the order it was written: each commit's own change against the commit before it, in the diff's place, the list headed with "Commit 2 of 5", its hash and its subject. `]p` goes to the next commit and `[p` to the one before; `c`, `q` or `Esc` in the list go back to the whole branch, where you were. A commit has no story of its own, and `ga` asks only about the whole branch. A working tree's changes have no commits to go through.
+`c` goes through the branch's commits one at a time, oldest first, so the branch reads in the order it was written: each commit's own change against the commit before it, in the diff's place, the list headed with "Commit 2 of 5", its hash and its subject. `]p` goes to the next commit and `[p` to the one before; `c`, `q` or `Esc` in the list go back to the whole branch, where you were. A commit has no story of its own, and `ga` asks only about the whole branch (in a commit it says so). A working tree's changes have no commits to go through.
 
 ### Asking about the change
 
@@ -941,7 +941,7 @@ Nothing in a note is sent anywhere. Squashing notes, after you say yes, is the o
 | Key | Does |
 | --- | --- |
 | Enter, or a click | open a note, or show a folder's or a tag's notes |
-| `j` `k`, the arrows, `gg` `G`, Ctrl-D Ctrl-U | move, ten rows at a time with Ctrl-D and Ctrl-U |
+| `j` `k`, the arrows, `gg` `G`, Ctrl-D Ctrl-U | move, half the list at a time with Ctrl-D and Ctrl-U |
 | `n` / `N` | new note in the folder shown, its title ready to type / new folder |
 | `dd` or `D` | delete, to Recently Deleted; from there, for good, after a question |
 | `r` | restore, in Recently Deleted |

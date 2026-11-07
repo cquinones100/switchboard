@@ -227,15 +227,16 @@ impl Asking {
     }
 }
 
+/// What the answer says when there is no Claude Code to ask, alone.
+pub const NOT_INSTALLED: &str =
+    "Claude Code isn't installed: `claude` is neither on the PATH nor in ~/.local/bin.";
+
 /// Asks Haiku `input` in the repository at `top`, saying what comes
 /// through `said` as it streams; blocks until it is answered, fails, or
 /// `asking` is stopped.
 pub fn run(top: &Path, input: String, asking: &Asking, said: &dyn Fn(Said)) {
     let Some(claude) = tell::claude_command() else {
-        return said(Said::Done(Err(
-            "Claude Code isn't installed: `claude` is neither on the PATH nor in ~/.local/bin."
-                .into(),
-        )));
+        return said(Said::Done(Err(NOT_INSTALLED.into())));
     };
     let mut cmd = Command::new(claude);
     cmd.args([

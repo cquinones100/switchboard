@@ -191,6 +191,9 @@ impl Server {
         {
             return;
         }
+        // Each tab's own directory, the one it is named after, as
+        // story-ahead.js read each tab's path: not every pane's, which would
+        // tell stories for branches no tab is about.
         let mut dirs: Vec<PathBuf> = Vec::new();
         for s in &self.sessions {
             for tab in &s.tabs {

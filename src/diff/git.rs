@@ -446,8 +446,8 @@ fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Cha
 }
 
 /// The lines of a file git doesn't know yet that the story reads, as an
-/// addition of its first lines.
-const NEW_FILE_LINES: usize = 2000;
+/// addition of its first lines, as many as diffstory.lua's `LINES_PER_FILE`.
+const NEW_FILE_LINES: usize = 400;
 
 /// The working tree's changes in the repository at `top`: those staged and
 /// those not, files git doesn't know yet among the second as added, which
