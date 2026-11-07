@@ -39,4 +39,6 @@ pub use serve::Shown;
 pub struct TabNames {
     pub names: Names,
     pub shown: HashMap<TabId, Shown>,
+    /// Whether what the last server kept (`names.restore`) has been read.
+    pub restored: bool,
 }

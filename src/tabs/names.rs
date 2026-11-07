@@ -1,8 +1,10 @@
 //! What the tab bar knows about each directory, and the lookups behind it:
 //! tmux/path-facts.sh's answer per directory (its color, its label with no
 //! name set, its PR), tmux/window-pr.sh's PR per repository and branch, and
-//! tmux/ticket-title.sh's title per ticket, kept in memory by the server
-//! rather than in files under `~/.cache`.
+//! tmux/ticket-title.sh's title per ticket, kept in memory by the server,
+//! and the PRs and titles found in one file under `~/.cache` (`saved`,
+//! `restore`), as the scripts kept them in files there, so a restart shows
+//! them at once rather than asking GitHub and Linear again for every tab.
 //!
 //! A directory's answer is kept while its branch stays the one it was
 //! worked out on: ten minutes once it has a PR, whose number never changes,
@@ -25,6 +27,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
 
 use super::color::{self, Rgb};
 use super::git::{self, GitPlace};
@@ -362,6 +366,82 @@ impl Names {
         self.kept
             .retain(|_, kept| now.duration_since(kept.at) < FORGET);
     }
+
+    /// The PRs and titles found, to keep across a restart, each with the
+    /// time (seconds since the epoch, `epoch` being now) it holds until.
+    pub fn saved(&self, now: Instant, epoch: i64) -> Value {
+        let until = |next: Instant| {
+            epoch + i64::try_from(next.saturating_duration_since(now).as_secs()).unwrap_or(0)
+        };
+        let mut prs: Vec<Value> = self
+            .prs
+            .iter()
+            .filter_map(|((repo, branch), known)| {
+                Some(json!({
+                    "repo": repo.to_string_lossy(),
+                    "branch": branch,
+                    "pr": known.value?,
+                    "until": until(known.next),
+                }))
+            })
+            .collect();
+        let mut titles: Vec<Value> = self
+            .titles
+            .iter()
+            .filter_map(|(id, known)| {
+                Some(json!({
+                    "id": id,
+                    "title": known.value.as_ref()?,
+                    "until": until(known.next),
+                }))
+            })
+            .collect();
+        // In a steady order, so the file changes only when what it says does.
+        prs.sort_by_key(|p| (p["repo"].to_string(), p["branch"].to_string()));
+        titles.sort_by_key(|t| t["id"].to_string());
+        json!({ "prs": prs, "titles": titles })
+    }
+
+    /// Takes in what `saved` kept, but what no longer holds, each asked for
+    /// again when it would have been.
+    pub fn restore(&mut self, saved: &Value, now: Instant, epoch: i64) {
+        let next = |entry: &Value| {
+            let until = entry.get("until")?.as_i64().filter(|u| *u > epoch)?;
+            Some(now + Duration::from_secs(u64::try_from(until - epoch).ok()?))
+        };
+        let entries = |key: &str| saved.get(key).and_then(Value::as_array).cloned();
+        for entry in entries("prs").unwrap_or_default() {
+            let (Some(repo), Some(branch), Some(pr), Some(next)) = (
+                entry.get("repo").and_then(Value::as_str),
+                entry.get("branch").and_then(Value::as_str),
+                entry.get("pr").and_then(Value::as_u64),
+                next(&entry),
+            ) else {
+                continue;
+            };
+            self.prs
+                .entry((PathBuf::from(repo), branch.to_string()))
+                .or_insert(Known {
+                    value: Some(pr),
+                    next,
+                    asked: None,
+                });
+        }
+        for entry in entries("titles").unwrap_or_default() {
+            let (Some(id), Some(title), Some(next)) = (
+                entry.get("id").and_then(Value::as_str),
+                entry.get("title").and_then(Value::as_str),
+                next(&entry),
+            ) else {
+                continue;
+            };
+            self.titles.entry(id.to_string()).or_insert(Known {
+                value: Some(title.to_string()),
+                next,
+                asked: None,
+            });
+        }
+    }
 }
 
 // An answer into what is known: a definite one replaces it and holds for
@@ -403,6 +483,58 @@ mod tests {
         let mut names = Names::default();
         names.set_switches(switches);
         (names, now)
+    }
+
+    #[test]
+    fn what_was_found_is_kept_across_a_restart_until_it_would_be_asked_again() {
+        let now = Instant::now();
+        let mut names = Names::default();
+        names.answer(
+            Answer::Pr {
+                repo: PathBuf::from("/r/.git"),
+                branch: "eng-42".into(),
+                found: Ok(Some(12)),
+            },
+            now,
+        );
+        names.answer(
+            Answer::Title {
+                id: "ENG-42".into(),
+                found: Ok(Some("Fix the login".into())),
+            },
+            now,
+        );
+        names.answer(
+            Answer::Title {
+                id: "ENG-7".into(),
+                found: Ok(None),
+            },
+            now,
+        );
+        let saved = names.saved(now, 1_000);
+        assert_eq!(saved["prs"][0]["pr"], 12);
+        assert_eq!(saved["prs"][0]["until"], 1_000 + 24 * 3600);
+        assert_eq!(
+            saved["titles"].as_array().unwrap().len(),
+            1,
+            "no title, nothing kept"
+        );
+
+        // After a restart an hour on: known at once, asked again only when due.
+        let later = Instant::now();
+        let mut again = Names::default();
+        again.restore(&saved, later, 1_000 + 3600);
+        let pr = &again.prs[&(PathBuf::from("/r/.git"), "eng-42".to_string())];
+        assert_eq!(pr.value, Some(12));
+        assert!(pr.next > later + Duration::from_secs(22 * 3600));
+        assert_eq!(
+            again.titles["ENG-42"].value.as_deref(),
+            Some("Fix the login")
+        );
+        // A day and more on, none of it holds.
+        let mut stale = Names::default();
+        stale.restore(&saved, later, 1_000 + 25 * 3600);
+        assert!(stale.prs.is_empty() && stale.titles.is_empty());
     }
 
     #[test]

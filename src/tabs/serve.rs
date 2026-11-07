@@ -10,11 +10,19 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::{paths, util};
+
 use super::color::{self, Rgb};
 use super::label::{self, PaneKind};
 use super::names::{Answer, Ask};
 use crate::mux::TabId;
 use crate::mux::server::{Event, Server};
+
+/// Where the PRs and titles found are kept for the next server, as
+/// window-pr.sh and ticket-title.sh kept theirs under `~/.cache`.
+fn names_file() -> PathBuf {
+    paths::cache_dir().join("tab-names.json")
+}
 
 /// What a tab shows, as last worked out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,6 +42,15 @@ impl Server {
     /// after, starting any lookup that directory needs, and redraws the
     /// session's status line when it changed.
     pub fn name_tab(&mut self, tab_id: TabId) {
+        // The PRs and titles the last server found, before anything is
+        // asked for again.
+        if !self.tab_names.restored {
+            self.tab_names.restored = true;
+            if let Some(saved) = util::read_json(names_file()) {
+                let names = &mut self.tab_names.names;
+                names.restore(&saved, Instant::now(), util::now_secs());
+            }
+        }
         let Some(tab) = self.tabs.get(&tab_id) else {
             return;
         };
@@ -103,12 +120,16 @@ impl Server {
     /// A lookup's answer, from `Event::TabLookup`: the tabs are named again
     /// when it changed what they show.
     pub fn tab_lookup(&mut self, answer: Answer) {
-        if self.tab_names.names.answer(answer, Instant::now()) {
+        let now = Instant::now();
+        if self.tab_names.names.answer(answer, now) {
+            let saved = self.tab_names.names.saved(now, util::now_secs());
+            let _ = util::write_atomic(names_file(), saved.to_string());
             self.name_all_tabs();
         }
     }
 
     // Runs a lookup off the server task, answering with `Event::TabLookup`.
+
     fn start_lookup(&self, ask: Ask) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;

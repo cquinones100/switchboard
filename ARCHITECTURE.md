@@ -86,7 +86,7 @@ The workspace:
 | Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
 | State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), and the statusline's `context/` and `usage/` |
 | The Slack relay's state | `~/.local/state/slack-relay/`, where the Node relay kept it |
-| Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies; `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |
+| Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies, the PRs and ticket titles the tabs show (`tab-names.json`); `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |
 | What setup writes for Claude Code | `~/.local/share/switchboard/`: `switchboard.md` (Switchboard's part of CLAUDE.md, imported from `~/.claude/CLAUDE.md`), `claude-md/` (the clone of your rules' repository), `setup-build` (the build whose parts were last put in place) |
 | `/oncall`'s state | `~/.local/state/oncall/state.md`, kept by the skill |
 | Claude Code | `~/.claude/settings.json` (merged into, never linked), `~/.claude/CLAUDE.md`, `~/.claude/skills/` |
