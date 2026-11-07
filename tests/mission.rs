@@ -235,8 +235,12 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
     });
     // / narrows it; Esc clears the filter, then closes it.
     client.type_text("/push notif\r");
-    let screen = client.wait_text("Push notifications");
-    assert!(!screen.iter().any(|l| l.contains("INTEGRATIONS")));
+    // Push notifications is on the screen before the filter too, so what
+    // is waited for is the rest gone.
+    client.wait_for("the list narrowed", |s| {
+        s.iter().any(|l| l.contains("Push notifications"))
+            && !s.iter().any(|l| l.contains("INTEGRATIONS"))
+    });
     client.type_text("\x1b");
     client.wait_text("INTEGRATIONS");
     client.type_text("\x1b");
@@ -254,8 +258,8 @@ fn your_claude_md_row_names_where_the_rules_come_from_and_runs_setup() {
     client.wait_text("INTEGRATIONS");
     client.type_text("/read with switchboard\r");
     client.wait_text("local file");
-    // Past its category's heading to the row.
-    client.type_text("j\r");
+    // The cursor rests on the row, not its category's heading.
+    client.type_text("\r");
     client.wait_text("Where your CLAUDE.md's rules come from");
     client.type_text("j\r");
     client.wait_text("Your CLAUDE.md: a file");
