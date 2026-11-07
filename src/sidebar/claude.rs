@@ -147,13 +147,13 @@ struct LoopDef {
 }
 
 static QUEUE_COMMAND: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"mergeQueueEntry|land-lock\.js wait").expect("a regex"));
+    LazyLock::new(|| Regex::new(r"mergeQueueEntry|land-lock(?:\.js)? wait").expect("a regex"));
 static REVIEW_COMMAND: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"codex-review").expect("a regex"));
 static CI_COMMAND: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"gh pr checks").expect("a regex"));
 static DEPLOY_COMMAND: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"wait-deploy\.js").expect("a regex"));
+    LazyLock::new(|| Regex::new(r"wait-deploy\.js|switchboard wait-deploy").expect("a regex"));
 
 static LOOPS: [LoopDef; 5] = [
     LoopDef {
@@ -1098,6 +1098,26 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn the_skills_commands_mark_their_loops_in_either_form() {
+        for (command, kind) in [
+            ("switchboard land-lock wait", Some("queue")),
+            (
+                "node ~/.claude/skills/queue-and-clean/scripts/land-lock.js wait",
+                Some("queue"),
+            ),
+            ("switchboard land-lock take", None),
+            (
+                "switchboard wait-deploy --repo a/b --sha 1 --environment prod",
+                Some("deploy"),
+            ),
+            ("node scripts/wait-deploy.js --repo a/b", Some("deploy")),
+            ("switchboard codex-review --notes n", Some("review")),
+        ] {
+            assert_eq!(loop_of(command), kind, "{command}");
+        }
+    }
+
     /// A transcript in a temporary directory of the test's own.
     struct Transcript {
         dir: PathBuf,
@@ -1399,7 +1419,7 @@ mod tests {
             })
         );
         t.add(&[end("q1")]);
-        t.add(&run("u9", "q2", "node land-lock.js wait", 300));
+        t.add(&run("u9", "q2", "switchboard land-lock wait", 300));
         assert_eq!(
             work(&mut r).loop_run,
             Some(LoopRun {
