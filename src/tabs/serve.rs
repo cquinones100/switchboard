@@ -183,6 +183,20 @@ impl Server {
         self.tab_names.shown.get(&tab)?.pr
     }
 
+    /// A tab's full title where its name is a note item cut short: its
+    /// `@tab_title`, else, for a tab opened before there was one, the
+    /// work-a-note mode's `@autopilot_item`, either only while the tab's
+    /// name is still that item cut short (src/tabs/title.rs).
+    pub fn tab_full_title(&self, tab: TabId) -> Option<String> {
+        let opts = &self.tabs.get(&tab)?.opts;
+        let name = opts.get("@tab_name").map(String::as_str).unwrap_or("");
+        ["@tab_title", "@autopilot_item"]
+            .iter()
+            .filter_map(|k| opts.get(*k))
+            .find(|whole| title::cut_of(name, whole))
+            .cloned()
+    }
+
     /// M-T's box for a tab (src/tabs/title.rs): its whole title, and its
     /// branch, directory, PR and ticket, with Copy the title and Close; with
     /// the tab_title setting off, it says so.
@@ -200,12 +214,24 @@ impl Server {
         else {
             return;
         };
-        let full = self.tab_label(tab);
+        let label = self.tab_label(tab);
         let path = self.tab_path(tab).map(Path::to_path_buf);
-        let branch = path
-            .as_deref()
-            .and_then(git::locate)
-            .map(|place| place.branch);
+        let place = path.as_deref().and_then(git::locate);
+        let branch = place.as_ref().map(|p| p.branch.clone());
+        // A note item's whole first line, where the tab bar has it cut
+        // short, else the item its branch is for, read from git's config.
+        let whole = self.tab_full_title(tab).or_else(|| {
+            let place = place.as_ref().filter(|p| p.on_branch())?;
+            let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
+            let item = title::wtn_item(&config, &place.branch)?;
+            let own = self.tab_own_name(tab).unwrap_or("");
+            title::cut_of(own, &item).then_some(item)
+        });
+        let full = match (whole, self.tab_pr(tab)) {
+            (Some(whole), Some(n)) => format!("#{n} {whole}"),
+            (Some(whole), None) => whole,
+            (None, _) => label,
+        };
         let shown = self.tab_names.shown.get(&tab);
         let ticket = shown
             .and_then(|s| title::ticket_of(&s.label))

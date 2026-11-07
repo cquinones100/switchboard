@@ -268,4 +268,18 @@ fn tab_marks_a_few_of_a_note_s_items_and_each_marked_gets_a_tab() {
         .map(|t| t["options"]["@tab_name"].as_str().unwrap_or("").to_string())
         .collect();
     assert_eq!(names, ["Fix the login", "Write the docs"]);
+    let titles: Vec<String> = tabs(&server)[before..]
+        .iter()
+        .map(|t| {
+            t["options"]["@tab_title"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        ["Fix the login", "Write the docs"],
+        "each item's whole first line kept as its tab's full title"
+    );
 }

@@ -263,7 +263,7 @@ Only when `$SWITCHBOARD_PANE` and `$CLAUDE_CODE_SESSION_ID` are set and this ses
    switchboard set @tab_name "$(switchboard show @tab_label)"
    ```
 
-   Skip this if `@tab_label` is empty.
+   Skip this if `@tab_label` is empty. A full title the tab keeps in `@tab_title` (a note item's whole first line, which the tab bar has cut short) is left as it is, since the name pinned is still that item cut short.
 3. Write the final line, `queue-and-clean: success (…)` as above, as your reply's text, and in the same reply, as its final action, on its own and not chained to anything:
 
    ```

@@ -336,6 +336,9 @@ impl Server {
     fn tab_model(&self, s: &Session, attached: bool, id: TabId, index: usize) -> Option<TabModel> {
         let tab = self.tabs.get(&id)?;
         let (pr, name) = split_pr(&self.tab_label(id));
+        // A note item's tab shows its whole first line, which the sidebar
+        // wraps to its three lines, while its name is that item cut short.
+        let name = self.tab_full_title(id).unwrap_or(name);
         let panes = tab.layout.panes();
         // The pane whose state the tab shows, and since when: the longest
         // there of those in that state; else the first running Claude.

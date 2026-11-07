@@ -169,6 +169,33 @@ fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     assert!(text.contains("somewhere"), "the title whole: {text}");
     client.type_text("y");
     client.wait_text("Copied the tab's title");
+    client.type_text("\r");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Copied the tab's title"))
+    });
+
+    // A note item's tab: named with the item cut short, its whole first
+    // line its full title, which the box shows while the name is that.
+    let item = "Copy Claude's last reply into the clipboard, with a key of its own and a tip";
+    let short = tabs::title::short_name(item);
+    server.ok(&["set", "-t", &id, "@tab_name", &short]);
+    server.ok(&["set", "-t", &id, "@tab_title", item]);
+    client.wait_for("the short name", |s| s[29].contains("clipboard…"));
+    client.type_text("\x1bT");
+    let text = client.wait_text("Copy the title").join("\n");
+    assert!(text.contains("a tip"), "the item whole: {text}");
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Copy the title"))
+    });
+    // Renamed since, even to the item's first words, it shows its name.
+    server.ok(&["set", "-t", &id, "@tab_name", "Copy Claude's last reply"]);
+    client.wait_for("the new name", |s| {
+        s[29].ends_with("Copy Claude's last reply")
+    });
+    client.type_text("\x1bT");
+    let text = client.wait_text("Copy the title").join("\n");
+    assert!(!text.contains("a tip"), "{text}");
 }
 
 #[cfg(feature = "net")]

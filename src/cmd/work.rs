@@ -823,8 +823,9 @@ impl Server {
     }
 
     /// A tab for one of a note's items, in the background, in the note's
-    /// repository: named after the item and linked to its note
-    /// (`@tab_name`, `@tab_note`), running `wtn --item <line>` with the
+    /// repository: named after the item, cut short, its whole first line
+    /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
+    /// `@tab_note`), running `wtn --item <line>` with the
     /// note's path in WTN_NOTE, so only the line number is a word of the
     /// command. What working a note continuously opens for each item it
     /// takes too (wtn-open.zsh's `open_tab`).
@@ -842,9 +843,15 @@ impl Server {
             &["--item".into(), item.line.to_string()],
         ));
         let tab = self.work_tab(client, repo, command, false)?;
+        // Named with the item cut short, for the tab bar and the second
+        // status line, its whole first line kept as the tab's full title,
+        // which M-T, the sidebar and mission control show.
         if let Some(t) = self.tabs.get_mut(&tab) {
-            t.opts
-                .insert("@tab_name".into(), item.text.chars().take(50).collect());
+            t.opts.insert(
+                "@tab_name".into(),
+                crate::tabs::title::short_name(&item.text),
+            );
+            t.opts.insert("@tab_title".into(), item.text.clone());
             t.opts.insert("@tab_note".into(), note.to_string());
         }
         self.dirty_tab(tab);

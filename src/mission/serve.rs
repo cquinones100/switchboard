@@ -1872,6 +1872,9 @@ impl Server {
                 // name the tab after a rename here.
                 if let Some(t) = server.tabs.get_mut(&tab) {
                     t.name.clear();
+                    // The name typed is the tab's whole title now, so a
+                    // full title kept for a note's item goes.
+                    t.opts.remove("@tab_title");
                     if p.value.is_empty() {
                         t.opts.remove("@tab_name");
                     } else {
