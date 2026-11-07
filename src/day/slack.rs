@@ -264,7 +264,8 @@ pub fn slack_view(look: &Look) -> ViewData {
         } else if look.looping {
             "Nothing saved yet: the Slack tab is looking.".into()
         } else {
-            "Nothing saved yet: going to this view opens a Slack tab, which looks every 5 minutes (M-p, Open a Slack tab).".into()
+            "Nothing saved yet: going to this view opens a Slack tab, which looks every 5 minutes."
+                .into()
         };
         return ViewData {
             error: Some(note),

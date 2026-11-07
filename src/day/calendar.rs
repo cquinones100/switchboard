@@ -48,7 +48,7 @@ pub const MEETING_AFTER_MS: i64 = 10 * 60_000;
 
 /// What the view says when neither the feed nor /today is set up, from
 /// lib/sidebar/setup-help.js.
-pub const SETUP: &str = "The calendar isn't set up. Either: (1) give mission control your Google Calendar's secret address: in Google Calendar, open Settings, your calendar, Integrate calendar, copy \"Secret address in iCal format\", then run switchboard platform secret-set google-calendar-ical in a terminal, paste it and press Ctrl-D; mission control reads it every five minutes. Or (2) connect Google Calendar in Claude (/mcp in Claude Code) and open a Calendar tab (M-p, \"Open a Calendar tab\"), which runs /today every 30 minutes.";
+pub const SETUP: &str = "The calendar isn't set up. Either: (1) give mission control your Google Calendar's secret address: in Google Calendar, open Settings, your calendar, Integrate calendar, copy \"Secret address in iCal format\", then run switchboard platform secret-set google-calendar-ical in a terminal, paste it and press Ctrl-D; mission control reads it every five minutes. Or (2) connect Google Calendar in Claude (/mcp in Claude Code), and mission control opens a Calendar tab in the background, which runs /today every 30 minutes.";
 
 /// A ticket or pull request an event names, with its link when it has one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
