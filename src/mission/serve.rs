@@ -413,9 +413,11 @@ impl Server {
             loaded,
         };
         if on("sidebar_notifications") {
+            // One by one, in the order of their kinds, as the sidebar and
+            // the Notifications window have them.
             let items: Vec<Item> = self
-                .notices
-                .iter()
+                .notice_lists()
+                .into_iter()
                 .flat_map(|(source, items)| {
                     items.iter().map(move |i| {
                         let mut item = i.clone();
@@ -1111,6 +1113,7 @@ impl Server {
                 None,
                 list,
                 None,
+                None,
             );
             return;
         };
@@ -1173,7 +1176,12 @@ impl Server {
         let seen = (view.id == ViewId::Slack
             || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack"))
             && item.data.get("message").is_some();
-        self.mission_menu(client, item.title.clone(), body, list, seen.then_some(item));
+        // A notification is dismissed after whatever is picked in its menu.
+        let dismiss = (view.id == ViewId::Notifications)
+            .then(|| choices::dismisses(&item))
+            .flatten();
+        let title = item.title.clone();
+        self.mission_menu(client, title, body, list, seen.then_some(item), dismiss);
     }
 
     /// What an item's menu offers, with what the menus need to know of the
@@ -1219,10 +1227,15 @@ impl Server {
         };
         let seen = choices::notice_of(&item).0 == "slack" && item.data.get("message").is_some();
         let body = (!body.is_empty()).then_some(body);
-        self.mission_menu(client, item.title.clone(), body, list, seen.then_some(item));
+        let dismiss = choices::dismisses(&item);
+        let title = item.title.clone();
+        self.mission_menu(client, title, body, list, seen.then_some(item), dismiss);
     }
 
-    /// A menu of choices over mission control; the one taken is done.
+    /// A menu of choices over mission control; the one taken is done. Its
+    /// options have no keys of their own, as the daemon's menus had none:
+    /// j and k move, Enter takes. `seen` is a Slack message seen whatever
+    /// is picked, and `dismiss` a notification dismissed after it.
     fn mission_menu(
         &mut self,
         client: ClientId,
@@ -1230,6 +1243,7 @@ impl Server {
         body: Option<String>,
         list: Vec<Choice>,
         seen: Option<Item>,
+        dismiss: Option<(String, Item)>,
     ) {
         let options: Vec<MenuOption> = list
             .iter()
@@ -1247,8 +1261,25 @@ impl Server {
                 server.slack_item_acted(item);
             }
             let label = c.label.clone();
+            let dismissed = matches!(c.act, Do::Dismiss { .. });
             server.mission_do(client, c.act, &label);
+            if let Some((source, item)) = dismiss.filter(|_| !dismissed) {
+                server.notice_dismiss(&source, &item);
+            }
         });
+    }
+
+    /// Puts a notification away, by the source that gave it: the next
+    /// meeting until another, a Slack message until its thread gets more,
+    /// the calendar's changes by taking the day as seen, a new note, an
+    /// Inbox item (here alone), what the mode working a note said.
+    pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
+        match source {
+            "inbox" => self.inbox_dismiss(item),
+            "autopilot" => self.autopilot_dismiss(),
+            "habits" => {}
+            _ => self.day_dismiss(source, item),
+        }
     }
 
     // ── Doing it ────────────────────────────────────────────────────────────
@@ -1443,7 +1474,7 @@ impl Server {
                 Err(e) => self.mission_note(client, e),
             },
             Do::Dismiss { source, item } => {
-                self.day_dismiss(&source, &item);
+                self.notice_dismiss(&source, &item);
                 self.mission_note(client, "Dismissed.");
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
@@ -1528,6 +1559,7 @@ impl Server {
         match after {
             After::DropInbox(id) => {
                 self.sources.drop_inbox_item(&id);
+                self.inbox_notices();
                 self.refresh_sources(Some(crate::sources::INBOX));
             }
             After::Worktrees => self.mission_worktrees(true),

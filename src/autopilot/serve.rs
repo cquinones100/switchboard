@@ -253,7 +253,8 @@ impl Server {
 
     // ── Its menu ────────────────────────────────────────────────────────────
 
-    /// The menu Enter on its line in mission control opens.
+    /// The menu Enter on its line in mission control opens, moved through
+    /// with j and k as mission control's other menus are.
     pub fn autopilot_menu(&mut self, client: ClientId) {
         let mode = Mode::read(&paths::state_dir());
         let list = line::choices(&mode, &self.autopilot.pilot.next.text);
@@ -565,6 +566,11 @@ impl Server {
     }
 
     // ── What it says ────────────────────────────────────────────────────────
+
+    /// Its notification put away: what it said, forgotten.
+    pub fn autopilot_dismiss(&mut self) {
+        self.autopilot_say("");
+    }
 
     /// What it has to say, kept in its file for the notifications; empty
     /// for nothing.

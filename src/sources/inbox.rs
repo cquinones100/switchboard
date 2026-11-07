@@ -4,8 +4,11 @@
 //! yours, and a ticket newly assigned to you. Status changes and the like,
 //! most of Linear's inbox, are left out, and so are those read, archived or
 //! snoozed. Each one also goes in the sidebar's notifications (the server's
-//! `notices` under "inbox"). Enter offers what the Tickets board does with
+//! `notices` under "inbox"), until it is dismissed there, which is kept
+//! here alone (`dismiss`). Enter offers what the Tickets board does with
 //! its ticket, and marks the notification read in Linear (`mark_read`).
+
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -107,9 +110,81 @@ pub async fn mark_read(id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The file the notifications dismissed are kept in, here alone (Linear
+/// isn't told), shared with the meetings dismissed (src/day/calendar.rs).
+fn dismissed_file(state: &Path) -> PathBuf {
+    state.join("notices-dismissed.json")
+}
+
+/// The Inbox items dismissed from the notifications, by their notification
+/// ID (daemon.js's `dismissedNotices().inbox`).
+pub fn dismissed(state: &Path) -> Vec<String> {
+    crate::util::read_json(dismissed_file(state))
+        .and_then(|v| v.get("inbox").cloned())
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+/// The notification ID an Inbox item stands for.
+pub fn notification_of(item: &Item) -> &str {
+    match item.data.get("notification").and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => id,
+        _ => &item.id,
+    }
+}
+
+/// Remembers an Inbox item dismissed from the notifications, the last 500
+/// kept, and the file's other keys (the meetings') as they were.
+pub fn dismiss(state: &Path, item: &Item) {
+    let file = dismissed_file(state);
+    let mut saved = crate::util::read_json_object(&file);
+    let mut ids = dismissed(state);
+    ids.push(notification_of(item).to_string());
+    let skip = ids.len().saturating_sub(500);
+    saved.insert("inbox".into(), json!(ids[skip..]));
+    let _ = std::fs::create_dir_all(state);
+    let _ = crate::util::write_atomic(&file, crate::util::json_compact(&Value::Object(saved)));
+}
+
+/// The Inbox items still to be shown as notifications: those not
+/// dismissed.
+pub fn notices(state: &Path, items: &[Item]) -> Vec<Item> {
+    let gone = dismissed(state);
+    items
+        .iter()
+        .filter(|i| !gone.iter().any(|g| g == notification_of(i)))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_dismissed_leaves_the_notifications_and_the_meetings_stay_in_the_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "sb-inbox-{}-{}",
+            std::process::id(),
+            crate::util::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("notices-dismissed.json"),
+            r#"{"meeting":["t0:Standup@x"]}"#,
+        )
+        .unwrap();
+        let a = Item::new("1", "AB-1 Do it").data(json!({ "notification": "1" }));
+        let b = Item::new("2", "AB-2 Do that").data(json!({ "notification": "2" }));
+        dismiss(&dir, &a);
+        let left = notices(&dir, &[a, b]);
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, "2");
+        let saved = crate::util::read_json(dir.join("notices-dismissed.json")).unwrap();
+        assert_eq!(saved["meeting"], json!(["t0:Standup@x"]));
+        assert_eq!(saved["inbox"], json!(["1"]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn unread_mentions_comments_and_assignments_newest_first_leaving_out_status_changes() {

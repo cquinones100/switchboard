@@ -69,19 +69,16 @@ impl Server {
         }
     }
 
-    /// The notifications as the window lists them, each as the sidebar
-    /// names it and its item.
-    fn notice_entries(&self) -> Vec<(Owner, Item)> {
-        if !settings::is_on("sidebar_notifications") {
-            return Vec::new();
-        }
-        self.notices
-            .iter()
+    /// The notifications as the window lists them, one by one in the order
+    /// of their kinds, each as the sidebar names it and its item.
+    pub(crate) fn notice_entries(&self) -> Vec<(Owner, Item)> {
+        self.notice_lists()
+            .into_iter()
             .flat_map(|(source, items)| {
                 items.iter().map(move |item| {
                     (
                         Owner::Notice {
-                            source: source.clone(),
+                            source: source.to_string(),
                             id: item.id.clone(),
                         },
                         item.clone(),
@@ -92,7 +89,7 @@ impl Server {
     }
 
     /// The chosen notification's place in a session's window.
-    fn notice_cursor(&self, session: &str, entries: &[(Owner, Item)]) -> usize {
+    pub(crate) fn notice_cursor(&self, session: &str, entries: &[(Owner, Item)]) -> usize {
         self.sidebar
             .windows
             .at
@@ -235,6 +232,10 @@ impl Server {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return true;
         };
+        // Any key puts out what the mouse lit.
+        if self.sidebar.windows.hover.remove(&client).is_some() {
+            self.dirty_session(&session);
+        }
         let entries = self.notice_entries();
         let at = self.notice_cursor(&session, &entries) as isize;
         let back = self.sidebar.windows.back.contains(&session);

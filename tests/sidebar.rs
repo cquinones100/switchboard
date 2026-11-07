@@ -307,7 +307,7 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     )
     .unwrap();
     let mut client = server.attach(140, 36);
-    client.wait_text("● Plan");
+    client.wait_text("● New note: Plan");
 
     // M-s, then n: the cursor onto it, and the window in front, the focus
     // still in the sidebar, the notification's whole message in it.
@@ -344,7 +344,7 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     let screen = client.wait_for("the window out of the bar", |s| {
         !s.last().unwrap().contains("Notifications")
     });
-    assert!(screen.iter().any(|l| l.contains("● Plan")));
+    assert!(screen.iter().any(|l| l.contains("● New note: Plan")));
 
     // Enter on the notification: into the window's pane; Enter there opens
     // its menu over it, Esc closes that, and Esc goes back to the tab.

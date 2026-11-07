@@ -24,7 +24,7 @@ use super::model::{self, MergeState, Rules, TabLoop, TabModel, TabState};
 use super::peek::Peek;
 use super::render::{self, Filter, Notice, Owner, View};
 use super::walk::{Next, Place, Stop, Why};
-use super::{Drawn, PaneRead, SidebarEvent, claude, config, text};
+use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
 use crate::facts::{Merge, PrState};
 use crate::items::Target;
@@ -51,10 +51,14 @@ const KEYS: &[(&str, &str)] = &[
     ("h esc q ^c", "back to your pane"),
     ("1-9", "go to that tab"),
     ("/", "find a tab by title (↵ go, esc clear)"),
-    ("tab ⇧tab", "next, last tab"),
+    (
+        "tab ⇧tab",
+        "next, last tab (with tab_focus off: mission control)",
+    ),
+    ("M-space", "mission control"),
     ("space", "peek at it"),
     ("n", "to the notifications, when there are any"),
-    ("t", "new tab there (M-t)"),
+    ("t", "new tab running Claude there (M-t)"),
     ("M-x C-x", "run that key there"),
     ("M-s", "back to your pane"),
     ("?", "these keys"),
@@ -442,23 +446,40 @@ impl Server {
         Some(t)
     }
 
-    /// The notifications the sources have given, in the sidebar's shape:
-    /// none with the sidebar_notifications setting off.
-    fn sidebar_notices(&self) -> Vec<Notice> {
+    /// The notifications the sources have given, each source's list in the
+    /// order the kinds are shown (`notices::ORDER`): none with the
+    /// sidebar_notifications setting off.
+    pub(crate) fn notice_lists(&self) -> Vec<(&str, &[crate::items::Item])> {
         if !settings::is_on("sidebar_notifications") {
             return Vec::new();
         }
-        self.notices
+        let mut lists: Vec<(&str, &[crate::items::Item])> = self
+            .notices
             .iter()
-            .flat_map(|(source, items)| {
-                items.iter().map(move |item| Notice {
+            .filter(|(_, items)| !items.is_empty())
+            .map(|(source, items)| (source.as_str(), items.as_slice()))
+            .collect();
+        lists.sort_by_key(|(source, _)| notices::rank(source));
+        lists
+    }
+
+    /// The notifications in the sidebar's shape: a row for each kind, with
+    /// how many there are (`notices::summary`), named by its first, so the
+    /// tabs keep the room however many come in; the Notifications window
+    /// lists each.
+    fn sidebar_notices(&self) -> Vec<Notice> {
+        self.notice_lists()
+            .into_iter()
+            .map(|(source, items)| {
+                let (title, detail) = notices::summary(source, items);
+                Notice {
                     owner: Owner::Notice {
-                        source: source.clone(),
-                        id: item.id.clone(),
+                        source: source.to_string(),
+                        id: items[0].id.clone(),
                     },
-                    title: item.title.clone(),
-                    detail: item.detail.clone(),
-                })
+                    title,
+                    detail,
+                }
             })
             .collect()
     }
@@ -881,6 +902,35 @@ impl Server {
         self.dirty_session(session);
     }
 
+    /// j and k on the notifications with the Notifications window: the
+    /// next or last of them one by one, the window following; up from the
+    /// first goes back to the last tab, and down from the last stays.
+    fn sidebar_notice_step(&mut self, session: &str, tabs: usize, cursor: &Owner, by: isize) {
+        let entries = self.notice_entries();
+        let at = entries
+            .iter()
+            .position(|(o, _)| o == cursor)
+            .unwrap_or_else(|| self.notice_cursor(session, &entries)) as isize;
+        let to = at + by;
+        if to < 0 {
+            self.sidebar_move(session, tabs as isize - 1);
+            return;
+        }
+        if let Some((owner, _)) = entries.get(to as usize) {
+            self.sidebar_notice_to(session, owner);
+        }
+    }
+
+    /// The sidebar's cursor and the Notifications window's onto one
+    /// notification.
+    fn sidebar_notice_to(&mut self, session: &str, owner: &Owner) {
+        let w = &mut self.sidebar.windows;
+        w.at.insert(session.to_string(), owner.clone());
+        w.back.remove(session);
+        self.sidebar.side(session).cursor = Some(owner.clone());
+        self.dirty_session(session);
+    }
+
     /// Goes to a tab from the sidebar, the focus into its pane.
     fn sidebar_go(&mut self, session: &str, tab: TabId) {
         self.sidebar_leave(session);
@@ -899,9 +949,16 @@ impl Server {
         let Some(here) = self.session(session).map(|s| s.current) else {
             return;
         };
+        // Any key puts out what the mouse lit.
+        if self.sidebar.hover.remove(&client).is_some() {
+            self.dirty_session(session);
+        }
         let side = self.sidebar.side(session).clone();
         let cursor = side.cursor.clone().unwrap_or(Owner::Tab(here));
-        let on_notice = notices.iter().position(|o| *o == cursor);
+        // A kind's row holds the cursor while it is on any of its
+        // notifications, as the Notifications window goes through them.
+        let on_notice = notices.iter().position(|o| o.same_row(&cursor));
+        let by_item = on_notice.is_some() && settings::is_on("notice_list");
         let at = match on_notice {
             Some(i) => order.len() + i,
             None => order
@@ -968,6 +1025,20 @@ impl Server {
         }
 
         match k.code {
+            // On the notifications with the Notifications window, j and k go
+            // through them one by one, the window following.
+            KeyCode::Char('j') | KeyCode::Down if none && by_item => {
+                self.sidebar_notice_step(session, order.len(), &cursor, 1)
+            }
+            KeyCode::Char('n') if ctrl && by_item => {
+                self.sidebar_notice_step(session, order.len(), &cursor, 1)
+            }
+            KeyCode::Char('k') | KeyCode::Up if none && by_item => {
+                self.sidebar_notice_step(session, order.len(), &cursor, -1)
+            }
+            KeyCode::Char('p') if ctrl && by_item => {
+                self.sidebar_notice_step(session, order.len(), &cursor, -1)
+            }
             KeyCode::Char('j') | KeyCode::Down if none => self.sidebar_move(session, at + 1),
             KeyCode::Char('n') if ctrl => self.sidebar_move(session, at + 1),
             KeyCode::Char('k') | KeyCode::Up if none => self.sidebar_move(session, at - 1),
@@ -1006,14 +1077,48 @@ impl Server {
             KeyCode::Char('h' | 'q') if none => self.sidebar_leave(session),
             KeyCode::Char('c') if ctrl => self.sidebar_leave(session),
             // Tab and Shift-Tab go round its tabs and notifications, as on a
-            // webpage, the last wrapping to the first.
+            // webpage, the last wrapping to the first, one notification at a
+            // time with the Notifications window; with tab_focus off, Tab
+            // opens mission control, as M-Space does.
             KeyCode::Tab if tab_focus => {
-                let last = order.len() as isize + notices.len() as isize - 1;
-                self.sidebar_move(session, if at >= last { 0 } else { at + 1 });
+                let entries = self.notice_entries();
+                let last = match on_notice {
+                    Some(_) if by_item => {
+                        entries.iter().position(|(o, _)| *o == cursor)
+                            == Some(entries.len().saturating_sub(1))
+                    }
+                    Some(i) => i + 1 >= notices.len(),
+                    None => at + 1 >= order.len() as isize && notices.is_empty(),
+                };
+                if last {
+                    self.sidebar_move(session, 0);
+                } else if by_item {
+                    self.sidebar_notice_step(session, order.len(), &cursor, 1);
+                } else {
+                    self.sidebar_move(session, at + 1);
+                }
+            }
+            KeyCode::Tab => {
+                self.sidebar_leave(session);
+                self.open_mission(client, crate::mission::Opening::Tabs);
             }
             KeyCode::BackTab if tab_focus => {
                 let last = order.len() as isize + notices.len() as isize - 1;
-                self.sidebar_move(session, if at <= 0 { last } else { at - 1 });
+                let entries = self.notice_entries();
+                if by_item {
+                    self.sidebar_notice_step(session, order.len(), &cursor, -1);
+                } else if on_notice.is_some() || at != 0 {
+                    self.sidebar_move(session, at - 1);
+                } else {
+                    // From the first tab round to the last notification,
+                    // the last one by one with the Notifications window.
+                    self.sidebar_move(session, last);
+                    if settings::is_on("notice_list")
+                        && let Some((owner, _)) = entries.last()
+                    {
+                        self.sidebar_notice_to(session, owner);
+                    }
+                }
             }
             KeyCode::Char(' ') if none => {
                 if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
@@ -1027,10 +1132,12 @@ impl Server {
                     self.sidebar_move(session, order.len() as isize);
                 }
             }
+            // t: a new tab running Claude, as M-t opens one, from the chosen
+            // tab, so its directory comes first.
             KeyCode::Char('t') if none => {
                 if let Some(t) = chosen {
                     self.sidebar_go(session, t);
-                    self.act(client, Action::NewTab);
+                    self.act(client, Action::NewClaudeTab);
                 }
             }
             KeyCode::Char('?') if none => {
@@ -1272,54 +1379,59 @@ impl Server {
         );
     }
 
-    /// A notification, chosen: where its item goes (a tab, a link, a
-    /// directory for a new tab; the mode working a note to mission control's
-    /// tabs, where its line is), or, with nowhere to go, its words said.
+    /// A kind of notification, chosen with the Notifications window off
+    /// (daemon.js's `openNotice`): the next meeting joins its call (with
+    /// none, the Calendar view opens), the newest note written for you
+    /// opens in Notes, a calendar change opens the Calendar view, a
+    /// suggestion Settings, the mode working a note mission control's tabs,
+    /// where its line is, and the others mission control on their view.
     fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
         let Owner::Notice { source, id } = owner else {
-            return;
-        };
-        if source == "autopilot" {
-            self.open_mission(client, crate::mission::Opening::Tabs);
-            return;
-        }
-        let Some(item) = self
-            .notices
-            .get(source)
-            .and_then(|items| items.iter().find(|i| &i.id == id))
-            .cloned()
-        else {
             return;
         };
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
-        // A new note opens in Notes, a calendar change the Calendar view.
-        if let Some(open) = crate::mission::choices::notice_opens(source, &item) {
-            self.sidebar_leave(&session);
-            self.mission_do(client, open, "Opening it");
-            return;
-        }
-        match item.target {
-            Target::Tab(t) => self.sidebar_go(&session, t),
-            Target::Url(url) => {
-                self.sidebar_leave(&session);
-                crate::links::open_in_background(url);
-            }
-            Target::Dir(dir) => {
-                self.sidebar_leave(&session);
-                if let Err(e) = self.new_tab(&session, Some(dir), None, None, false) {
-                    self.say(Some(client), &format!("Couldn't open a tab there: {e}"));
+        let item = self
+            .notices
+            .get(source)
+            .and_then(|items| items.iter().find(|i| &i.id == id).or(items.first()))
+            .cloned();
+        self.sidebar_leave(&session);
+        let view = |slug: &str| crate::mission::Opening::View(slug.to_string());
+        match source.as_str() {
+            "new-notes" => {
+                if let Some(open) = item
+                    .as_ref()
+                    .and_then(|i| crate::mission::choices::notice_opens(source, i))
+                {
+                    self.mission_do(client, open, "Opening it");
                 }
             }
-            Target::None => {
-                let words = if item.detail.is_empty() {
-                    item.title
-                } else {
-                    format!("{}\n{}", item.title, item.detail)
-                };
-                self.say(Some(client), &words);
-            }
+            "meeting" => match item.map(|i| i.target) {
+                Some(Target::Url(url)) => crate::links::open_in_background(url),
+                _ => self.open_mission(client, view("calendar")),
+            },
+            "calendar" => self.open_mission(client, view("calendar")),
+            "habits" => self.open_mission(client, crate::mission::Opening::Settings),
+            "autopilot" => self.open_mission(client, crate::mission::Opening::Tabs),
+            other => self.open_mission(client, view(other)),
+        }
+    }
+
+    /// The view mission control shows a kind of notification in, while that
+    /// view is on (goToNotices), for "Go to the notifications" with no
+    /// sidebar to go to.
+    fn notice_view(source: &str) -> Option<crate::mission::Opening> {
+        let on = settings::is_on;
+        let view = |slug: &str| Some(crate::mission::Opening::View(slug.to_string()));
+        match source {
+            "slack" if on("view_slack") => view("slack"),
+            "inbox" if on("linear") && on("view_inbox") => view("inbox"),
+            "meeting" | "calendar" if on("view_calendar") => view("calendar"),
+            "habits" => Some(crate::mission::Opening::Settings),
+            "autopilot" => Some(crate::mission::Opening::Tabs),
+            _ => None,
         }
     }
 
@@ -1349,10 +1461,20 @@ impl Server {
             return;
         }
         if !self.sidebar_shown(&session) {
+            // The first one's view, when that view is on; else why there is
+            // nowhere to show them.
+            let source = match &first.owner {
+                Owner::Notice { source, .. } => source.as_str(),
+                Owner::Tab(_) => "",
+            };
+            if let Some(view) = Self::notice_view(source) {
+                self.open_mission(client, view);
+                return;
+            }
             let why = if settings::is_on("sidebar") {
-                "The notifications are in the sidebar, which this window is too narrow for."
+                "The notifications are in the sidebar, which this window is too narrow for; Settings' Notifications window shows them in a tab of their own"
             } else {
-                "The notifications are in the sidebar, which is off."
+                "The notifications are in the sidebar, which is off; Settings' Notifications window shows them in a tab of their own"
             };
             self.say(Some(client), why);
             return;

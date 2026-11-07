@@ -41,6 +41,15 @@ impl Owner {
             Owner::Notice { .. } => None,
         }
     }
+
+    /// Whether two stops share a row of the sidebar: the same tab, or
+    /// notifications of one kind, which the sidebar shows as one row.
+    pub fn same_row(&self, other: &Owner) -> bool {
+        match (self, other) {
+            (Owner::Notice { source: a, .. }, Owner::Notice { source: b, .. }) => a == b,
+            _ => self == other,
+        }
+    }
 }
 
 /// A notification as the sidebar lists it.
@@ -550,7 +559,7 @@ pub fn sidebar_lines(
         notice_owners.extend([None, None, None]);
         for n in notices {
             // The sidebar's cursor on it, as on a tab.
-            let fill = if view.focused && view.cursor == Some(&n.owner) {
+            let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
                 Some(theme.highlight)
             } else if view.hover == Some(&n.owner) {
                 Some(theme.panel)

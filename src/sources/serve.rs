@@ -197,12 +197,7 @@ impl Server {
                     }
                     Err(e) => setup::failed(view, &e, "your Linear inbox"),
                 }
-                let items = if enabled(INBOX) {
-                    view.items.clone()
-                } else {
-                    Vec::new()
-                };
-                self.set_notices("inbox", items);
+                self.inbox_notices();
             }
             Answer::Landing(places) => {
                 self.sources.kept.landing_busy = false;
@@ -214,6 +209,23 @@ impl Server {
         }
         self.update_facts(&tabs);
         self.redraw_everywhere();
+    }
+
+    /// The Inbox's items as notifications, those dismissed there left out,
+    /// while the view is on.
+    pub(crate) fn inbox_notices(&mut self) {
+        let items = match self.sources.views.get(INBOX) {
+            Some(view) if enabled(INBOX) => inbox::notices(&paths::state_dir(), &view.items),
+            _ => Vec::new(),
+        };
+        self.set_notices("inbox", items);
+    }
+
+    /// Dismisses an Inbox item from the notifications, here alone: it stays
+    /// in the Inbox view and unread in Linear.
+    pub fn inbox_dismiss(&mut self, item: &Item) {
+        inbox::dismiss(&paths::state_dir(), item);
+        self.inbox_notices();
     }
 
     /// Gives today's todo note what a view last read: each item as a line,

@@ -722,8 +722,10 @@ pub fn notice_opens(source: &str, item: &Item) -> Option<Do> {
     }
 }
 
-/// A notification's menu: a suggestion's own choices; else where it leads
-/// and putting it away.
+/// A notification's menu (daemon.js's `noticeChoices`): a suggestion's own
+/// choices; else what its view's menu does with it, then putting it away.
+/// Whatever is picked but a suggestion's, the notification is dismissed
+/// after, since it was dealt with (`dismisses`).
 pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let (source, id) = notice_of(item);
     if source == "habits" {
@@ -758,36 +760,45 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             },
             open,
         )]
-    } else if source == "inbox" {
-        let mut b = board_choices(&own, ctx);
-        let n = text(&own.data, "/notification");
-        b.push(choice(
-            'r',
-            "Mark it read",
-            Do::MarkRead(if n.is_empty() {
-                own.id.clone()
-            } else {
-                n.to_string()
-            }),
-        ));
-        b
     } else {
-        target_choices(&own, ctx)
+        match source.as_str() {
+            "inbox" => item_choices(&ViewId::Inbox, &own, &[], ctx),
+            // The Slack view's menu, less its own dismissing.
+            "slack" => item_choices(&ViewId::Slack, &own, &[], ctx)
+                .into_iter()
+                .filter(|c| !c.label.starts_with("Dismiss"))
+                .collect(),
+            // The Calendar view's menu on the meeting's event.
+            "meeting" => {
+                let mut event = own.clone();
+                event.data = own.data.get("event").cloned().unwrap_or_default();
+                item_choices(&ViewId::Calendar, &event, &[], ctx)
+            }
+            _ => target_choices(&own, ctx),
+        }
     };
-    if matches!(
-        source.as_str(),
-        "meeting" | "slack" | "calendar" | "new-notes"
-    ) {
-        out.push(choice(
-            'x',
-            "Dismiss it",
-            Do::Dismiss {
-                source,
-                item: Box::new(own),
-            },
-        ));
-    }
+    out.push(choice(
+        'x',
+        "Dismiss it",
+        Do::Dismiss {
+            source,
+            item: Box::new(own),
+        },
+    ));
     out
+}
+
+/// What a notification's menu puts away after whatever is picked in it:
+/// the notification itself, by its source, but for a suggestion, whose
+/// choices say what becomes of it.
+pub fn dismisses(item: &Item) -> Option<(String, Item)> {
+    let (source, id) = notice_of(item);
+    if source.is_empty() || source == "habits" {
+        return None;
+    }
+    let mut own = item.clone();
+    own.id = id;
+    Some((source, own))
 }
 
 /// Whether Enter on an item does something of its own rather than open a
@@ -995,11 +1006,27 @@ mod tests {
         let suggestion = Item::new("habits\tkey:M-d", "Press M-d");
         let choices = notice_choices(&suggestion, &c);
         assert_eq!(choices[0].label, "Got key:M-d");
+        // The next meeting offers what its event's menu in the Calendar
+        // view does, then putting it away; every pick dismisses it after.
         let meeting = Item::new("meeting\tm1", "Standup in 5m")
-            .target(Target::Url("https://meet.example/x".into()));
+            .target(Target::Url("https://meet.example/x".into()))
+            .data(json!({ "kind": "meeting", "event": {
+                "title": "Standup", "join": "https://meet.example/x",
+                "link": "https://calendar.example/e" } }));
         let choices = notice_choices(&meeting, &c);
-        assert_eq!(keys(&choices), "oyx");
+        assert_eq!(keys(&choices), "jox");
+        assert_eq!(choices[0].act, Do::Open("https://meet.example/x".into()));
         assert!(matches!(&choices[2].act, Do::Dismiss { source, .. } if source == "meeting"));
+        let (source, own) = dismisses(&meeting).expect("dismissed after");
+        assert_eq!((source.as_str(), own.id.as_str()), ("meeting", "m1"));
+        assert_eq!(dismisses(&suggestion), None, "a suggestion's choices say");
+        // An Inbox item offers its ticket's menu and can be put away too.
+        let inbox = Item::new("inbox\tn1", "AB-3 Do it")
+            .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
+            .data(json!({ "ticket": "AB-3", "notification": "n1" }));
+        let choices = notice_choices(&inbox, &c);
+        assert_eq!(keys(&choices), "wsDvoyrx");
+        assert!(matches!(&choices[7].act, Do::Dismiss { source, .. } if source == "inbox"));
     }
 
     #[test]

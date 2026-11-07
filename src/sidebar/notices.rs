@@ -33,6 +33,76 @@ use crate::ui::Theme;
 /// The tab option that marks a session's Notifications window.
 pub const MARK: &str = "@notices_window";
 
+/// The kinds of notification by the source that gives them, in the order
+/// they are shown (daemon.js's `notices`): the meeting about to start,
+/// Slack's new messages, what changed on today's calendar, notes written
+/// for you, the Linear inbox, what the mode working a note has to say, and
+/// suggestions. A source not named here goes after them.
+pub const ORDER: [&str; 7] = [
+    "meeting",
+    "slack",
+    "calendar",
+    "new-notes",
+    "inbox",
+    "autopilot",
+    "habits",
+];
+
+/// A source's place in `ORDER`.
+pub fn rank(source: &str) -> usize {
+    ORDER
+        .iter()
+        .position(|s| *s == source)
+        .unwrap_or(ORDER.len())
+}
+
+/// A kind's one row in the sidebar, its title and the dim line under it,
+/// from its notifications (daemon.js's `notices`): how many there are, and
+/// the first of them; the Notifications window lists each.
+pub fn summary(source: &str, items: &[Item]) -> (String, String) {
+    let Some(first) = items.first() else {
+        return (String::new(), String::new());
+    };
+    let n = items.len();
+    let one = n == 1;
+    let data = |key: &str| {
+        first
+            .data
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    match source {
+        // The first message's sender and place, without its mark.
+        "slack" => (
+            format!("{n} new on Slack"),
+            first
+                .title
+                .split_once(char::is_whitespace)
+                .map_or(String::new(), |(_, rest)| rest.trim_start().to_string()),
+        ),
+        "calendar" if one => (format!("Calendar: {}", first.title), String::new()),
+        "calendar" => (format!("{n} calendar changes"), first.title.clone()),
+        "new-notes" => (
+            if one {
+                format!("New note: {}", first.title)
+            } else {
+                format!("{n} new notes")
+            },
+            format!("from {}", data("source")),
+        ),
+        "inbox" => (
+            format!("{n} in your Linear inbox"),
+            first.detail.split(": ").next().unwrap_or("").to_string(),
+        ),
+        "habits" if one => (format!("Suggestion: {}", first.title), String::new()),
+        "habits" => (format!("{n} suggestions"), first.title.clone()),
+        // The next meeting and the mode's word are one each, as they are.
+        _ => (first.title.clone(), first.detail.clone()),
+    }
+}
+
 /// The yellow of the notifications.
 const YELLOW: Color = Color::Indexed(220);
 
@@ -288,6 +358,45 @@ mod tests {
         for l in &lines {
             assert_eq!(width(&l.text()), 40, "{:?}", l.text());
         }
+    }
+
+    #[test]
+    fn each_kind_is_one_row_in_the_sidebar_counted_as_the_daemon_counted_it() {
+        let slack = |id: &str, who: &str| Item::new(id, format!("◆ {who} · #general"));
+        assert_eq!(
+            summary("slack", &[slack("a", "Ada"), slack("b", "Dee")]),
+            ("2 new on Slack".into(), "Ada · #general".into())
+        );
+        let change = |t: &str| Item::new(t, t);
+        assert_eq!(
+            summary("calendar", &[change("Standup moved to 10:00")]),
+            ("Calendar: Standup moved to 10:00".into(), String::new())
+        );
+        assert_eq!(
+            summary("calendar", &[change("one"), change("two")]),
+            ("2 calendar changes".into(), "one".into())
+        );
+        let note = Item::new("n", "Plan").data(serde_json::json!({ "source": "Fathom" }));
+        assert_eq!(
+            summary("new-notes", std::slice::from_ref(&note)),
+            ("New note: Plan".into(), "from Fathom".into())
+        );
+        assert_eq!(summary("new-notes", &[note.clone(), note]).0, "2 new notes");
+        let inbox = Item::new("i", "AB-1 Fix it").detail("Ada commented: looks good");
+        assert_eq!(
+            summary("inbox", &[inbox]),
+            ("1 in your Linear inbox".into(), "Ada commented".into())
+        );
+        assert_eq!(
+            summary("habits", &[change("Turn off the Slack view")]).0,
+            "Suggestion: Turn off the Slack view"
+        );
+        let mut sources = vec!["habits", "slack", "inbox", "meeting", "autopilot"];
+        sources.sort_by_key(|s| rank(s));
+        assert_eq!(
+            sources,
+            ["meeting", "slack", "inbox", "autopilot", "habits"]
+        );
     }
 
     #[test]

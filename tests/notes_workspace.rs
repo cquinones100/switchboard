@@ -352,7 +352,7 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
     .unwrap();
     note_written(&rig, "Plan.md", "Plan");
     let mut client = rig.server.attach(140, 36);
-    client.wait_text("● Plan");
+    client.wait_text("● New note: Plan");
     // M-s into the sidebar, n to the notifications, Enter on the first.
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
@@ -368,13 +368,13 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
         "Plan.md"
     );
     client.wait_for("the notification let go", |s| {
-        !s.iter().any(|l| l.contains("● Plan"))
+        !s.iter().any(|l| l.contains("● New note: Plan"))
     });
     // Running, it is asked to show the note through its socket.
     std::fs::write(rig.notes_dir().join("Work/Later.md"), "# Later\n").unwrap();
     note_written(&rig, "Work/Later.md", "Later");
     client.type_text(&format!("{ALT}1"));
-    client.wait_text("● Later");
+    client.wait_text("● New note: Later");
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
     client.type_text("\r");
