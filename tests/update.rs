@@ -263,8 +263,23 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
     );
 }
 
+/// A state directory of the test process's own: `install_release` runs in
+/// this process, not in a `switchboard` given a home of its own, and counts
+/// its downloads in the request audit, which would otherwise be yours.
+fn own_state() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let dir = std::env::temp_dir().join(format!("sbu-state-{}", std::process::id()));
+        // SAFETY: set once, before this test reads anything of the
+        // environment through the library, and only the tests here run in
+        // this process.
+        unsafe { std::env::set_var("SWITCHBOARD_STATE_DIR", dir) };
+    });
+}
+
 #[test]
 fn a_download_whose_checksum_is_wrong_changes_nothing() {
+    own_state();
     let fake = Fake::start();
     let json = fake.publish("v9.9.9", &stub("9.9.9"), true);
     let dir = TempDir::new("sbu");

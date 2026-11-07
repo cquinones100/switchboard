@@ -45,8 +45,10 @@ pub fn count(service: &str, protocol: &str, source: &str) {
 }
 
 /// Counts `n` requests at once (a connector called several times in a run).
+/// Nothing is counted in the library's own unit tests, whose home is yours:
+/// a test's stand-in for Claude or a service is no request of yours.
 pub fn count_n(service: &str, protocol: &str, source: &str, n: usize) {
-    if LOCAL.is_match(service) {
+    if LOCAL.is_match(service) || cfg!(test) {
         return;
     }
     let _ = (|| -> std::io::Result<()> {
