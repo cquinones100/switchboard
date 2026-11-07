@@ -201,7 +201,19 @@ Each step is a commit (or a few) on the branch, with its tests.
     the box on attaching, the binary swapped only once its checksum
     matches and it runs; `switchboard --version` names its commit).
 11. **Docs and removal**: README, CLAUDE.md, user docs; the old files removed;
-    the PR.
+    the PR. Before the PR:
+    - point `src/update/release.rs`'s `REPO` and install.sh at
+      cquinones100/switchboard, and README's install line at the new
+      install.sh;
+    - settle which modifier the keys use on Linux (Alt with a `modifier`
+      setting was proposed);
+    - a server-side `respawn` (a pane's program started again in place),
+      replacing the workarounds in `switchboard respawn` (split and close)
+      and the Slack relay (typing into the leftover shell);
+    - CI's clippy with `--no-default-features` once tests/views.rs builds
+      without dead-code warnings there;
+    - the review loop (`/review-loop`, Claude reviewing where Codex isn't
+      installed) over the branch, offered before the PR.
 
 ## Conventions
 
