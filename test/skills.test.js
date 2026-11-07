@@ -84,3 +84,25 @@ test("queue-and-clean ticks the note's item before its cleanup removes the workt
   order(text.split("## Cleanup")[1], "step 2 has found nothing would be lost", '"Closing out"', "clean-worktree: success");
   assert.match(text, /## Closing out\n\nInside the cleanup, once clean-worktree's step 2 has found nothing would be lost and before its step 3 removes the worktree/);
 });
+
+// Switchboard's project skills, in .claude/skills: for working on Switchboard
+// itself, so setup.sh never links them (test/setup.test.js checks that).
+const projectDir = path.join(__dirname, "../.claude/skills");
+const projectSkills = fs.readdirSync(projectDir).filter((name) => fs.existsSync(path.join(projectDir, name, "SKILL.md")));
+
+test("every project skill has frontmatter naming it after its folder, with a description", () => {
+  assert.ok(projectSkills.includes("plan-item"));
+  for (const name of projectSkills) {
+    const text = fs.readFileSync(path.join(projectDir, name, "SKILL.md"), "utf8");
+    const frontmatter = text.match(/^---\n([\s\S]*?)\n---\n/);
+    assert.ok(frontmatter, `${name} starts with its frontmatter`);
+    assert.match(frontmatter[1], new RegExp(`^name: ${name}$`, "m"), `${name}'s name is its folder's`);
+    assert.match(frontmatter[1], /^description: \S/m, `${name} has a description`);
+  }
+});
+
+test("plan-item asks where the item goes: the top, in order of difficulty, or the bottom", () => {
+  const text = fs.readFileSync(path.join(projectDir, "plan-item/SKILL.md"), "utf8");
+  assert.match(text, /^disable-model-invocation: true$/m, "it reads your note, so only you start it");
+  for (const option of ["**Top of the list**", "**In order of difficulty**", "**Bottom of the list**"]) assert.ok(text.includes(option), option);
+});

@@ -330,6 +330,7 @@ test("setup.sh skills links Switchboard's skills, keeping one of your own by the
     assert.equal(fs.readlinkSync(path.join(skills, "note-watch")), path.join(home, "dotfiles/claude/skills/note-watch"), "a link of your own too");
     assert.equal(fs.readlinkSync(path.join(skills, "today")), "../../dotfiles/claude/skills/today", "a relative one as well");
     assert.ok(!fs.readdirSync(skills).some((name) => name.includes(".bak.")), "and nothing moved aside");
+    fs.readdirSync(path.join(repo, ".claude/skills")).forEach((name) => assert.ok(!fs.existsSync(path.join(skills, name)), `the repository's own ${name} is never linked`));
     assert.match(spawnSync("bash", [script, "skills"], { env, encoding: "utf8" }).stdout, /skills: up to date/, "a second run changes nothing");
 
     // One that can't be linked doesn't stop the rest, and is said at the end.
