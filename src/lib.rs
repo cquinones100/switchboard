@@ -34,13 +34,15 @@
 //!   the day's spend, closed tabs, your own files' settings, plugins.
 //! - `links`: opening a link in the browser, in its site's Chrome profile.
 //! - `views`: reading things beside your work: the PR description, the
-//!   ticket, any link, search everything, and whether the PR can merge.
+//!   ticket, any link, a pane's links and images, search everything, and
+//!   whether the PR can merge.
 //! - `status`: the status line's button, health light and second line, and
 //!   dark and light.
 //! - `setup`: what `switchboard setup` puts in place for Claude Code: its
 //!   hooks, statusline and permissions, your CLAUDE.md, and the skills.
 //! - `diff`: M-d's diff in a pane's place, told as a story, with questions
-//!   about it answered.
+//!   about it answered, a commit or the working tree at a time; lazygit in
+//!   a pane's place.
 //! - `relay`: the Slack relay, a Slack app talking to you in its DM about
 //!   your tabs while you are away.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the

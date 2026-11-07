@@ -67,8 +67,8 @@ The workspace:
 | `day` | Your day: the calendar, Slack, the notes written for you |
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |
-| `views` | Reading beside your work: the PR description, the ticket, a link, search everything, whether a PR can merge |
-| `diff` | `M-d`'s diff in a pane's place, told as a story, with questions about it answered |
+| `views` | Reading beside your work: the PR description, the ticket, a link, a pane's links and images, search everything, whether a PR can merge |
+| `diff` | `M-d`'s diff in a pane's place, told as a story, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
@@ -138,6 +138,7 @@ What the tmux version did that the binary doesn't yet, so a part that brings one
 
 - **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
 - **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now), a new note's notification opening the note and a calendar change's opening the Calendar view, the Calendar drawn as a day, plugins' counts in the sidebar, the CI menu's failing log (the logs are kept), and the second status line's push count.
+- **The sidebar's tools**: its `d` and `L` on a tab (the tab's diff and lazygit in its pane's place), which mission control's menu on a tab offers.
 - **Elsewhere**: keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 
 ### Before this lands
