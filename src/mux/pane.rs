@@ -105,6 +105,9 @@ pub struct PaneAdopt {
     pub hung_up: bool,
     /// What the pane showed, as the bytes that draw it again (`replay`).
     pub screen: String,
+    /// What the emulator held of a sequence or character not yet whole
+    /// (`replay::unfinished`), given after the screen.
+    pub tail: Vec<u8>,
 }
 
 /// What a pane hands over to a new build: `PaneAdopt`'s parts, the master
@@ -123,6 +126,8 @@ pub struct HandedPane {
     pub hung_up: bool,
     #[serde(default)]
     pub screen: String,
+    #[serde(default)]
+    pub tail: Vec<u8>,
 }
 
 /// How a pane is drawn this time.
@@ -235,7 +240,13 @@ pub struct Pane {
     /// The colours the terminal attached last said it draws in, which the
     /// program is told when it asks.
     colors: super::terminal::Colors,
+    /// The last `RECENT` bytes the program wrote, for what of them the
+    /// emulator holds unfinished when the pane is handed over.
+    recent: Vec<u8>,
 }
+
+/// How much of the program's latest output a pane keeps (`recent`).
+const RECENT: usize = 4096;
 
 /// Collects what the emulator reports while it reads, for `process` to
 /// handle once it has. The emulator calls this from inside its parser,
@@ -403,6 +414,7 @@ impl Pane {
         // What the replay sets is the program's own doing, so what the
         // emulator reports of it (the title) is taken as it would be.
         pane.process(spec.screen.as_bytes());
+        pane.process(&spec.tail);
         Ok(pane)
     }
 
@@ -448,6 +460,7 @@ impl Pane {
             other_keys: extended_keys.then(ModifyOtherKeys::default),
             cell: CELL,
             colors: Default::default(),
+            recent: Vec::new(),
         }
     }
 
@@ -455,6 +468,10 @@ impl Pane {
     /// program, what was still to be written to it, and what it shows. It
     /// is paused (`pause`) first, so nothing is read or written meanwhile.
     pub fn hand_over(&mut self) -> HandedPane {
+        // A frame held back (synchronized output) is drawn into the screen
+        // handed over, the rest of it following there; what the emulator
+        // answers meanwhile waits with the input.
+        let _ = self.flush_sync();
         let other_keys = self.other_keys.as_ref().map_or(0, ModifyOtherKeys::level);
         HandedPane {
             id: self.id,
@@ -465,6 +482,7 @@ impl Pane {
             input: self.pty.pending_input(),
             hung_up: self.pty.hung_up(),
             screen: super::replay::replay(&mut self.term, &self.title, other_keys),
+            tail: super::replay::unfinished(&self.recent).to_vec(),
         }
     }
 
@@ -527,6 +545,15 @@ impl Pane {
         };
         if let Some(keys) = &mut self.other_keys {
             keys.feed(bytes);
+        }
+        if bytes.len() >= RECENT {
+            self.recent.clear();
+            self.recent
+                .extend_from_slice(&bytes[bytes.len() - RECENT..]);
+        } else {
+            self.recent.extend_from_slice(bytes);
+            let over = self.recent.len().saturating_sub(RECENT);
+            self.recent.drain(..over);
         }
         if self.sync_deadline().is_some_and(|at| at <= Instant::now()) {
             self.parser.stop_sync(&mut self.term);
@@ -2342,6 +2369,85 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
         // And killing an ended pane signals nothing.
         run.pane.kill();
+    }
+
+    #[test]
+    fn a_pane_handed_over_is_taken_up_as_it_was() {
+        let mut run = start(
+            Some(&[
+                "/bin/sh",
+                "-c",
+                "stty -echo; while read l; do echo \"got:$l\"; done",
+            ]),
+            30,
+            6,
+            &[],
+        );
+        run.pane
+            .process(b"\x1b]2;the title\x07before\r\n\x1b[?2004h\x1b[?2026hheld back");
+        assert!(run.pane.sync_deadline().is_some(), "a frame held back");
+        // Paused, with a key still to be written and a sequence cut short.
+        run.pane.pause();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !run.pane.parked() {
+            assert!(Instant::now() < deadline, "the pane didn't stop");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        run.pane.write(b"queued\r").unwrap();
+        run.pane.process(b"\r\n\x1b[3");
+        let handed = run.pane.hand_over();
+        assert_eq!(handed.tail, b"\x1b[3");
+        assert_eq!(handed.input, b"queued\r");
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let master = super::super::pty::duplicate(handed.fd).unwrap();
+        let pane = Pane::adopt(
+            PaneAdopt {
+                id: PaneId(77),
+                master,
+                pid: handed.pid,
+                cols: handed.cols,
+                rows: handed.rows,
+                scrollback: 1000,
+                extended_keys: false,
+                input: handed.input,
+                hung_up: handed.hung_up,
+                screen: handed.screen,
+                tail: handed.tail,
+            },
+            tx,
+        )
+        .unwrap();
+        let mut taken = Running {
+            home: scratch("adopted"),
+            pane,
+            rx,
+            notices: Vec::new(),
+            exit: None,
+        };
+        assert_eq!(taken.pane.title(), "the title");
+        assert!(taken.pane.modes().bracketed_paste);
+        assert_eq!(taken.pane.size(), (30, 6));
+        let text = taken.pane.text(100);
+        assert!(
+            text.contains("before") && text.contains("held back"),
+            "{text}"
+        );
+        // The sequence finishes there, as it would have.
+        taken.pane.process(b"1mred");
+        let (buf, _) = render(&taken.pane, PaneView::default());
+        let red = (0..30u16)
+            .find(|x| buf[(*x, 2)].symbol() == "r")
+            .map(|x| buf[(x, 2)].fg);
+        assert_eq!(red, Some(Color::Indexed(1)), "{}", taken.pane.text(100));
+        // The key queued is written by the pane that took it up.
+        taken.until_text("got:queued");
+        // The second ends the program, and the first, let go of, sees it
+        // end too.
+        taken.pane.kill();
+        assert_eq!(taken.until_exit(), None);
+        run.pane.resume();
+        assert_eq!(run.until_exit(), None);
     }
 
     #[test]

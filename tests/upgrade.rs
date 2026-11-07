@@ -140,9 +140,11 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
         );
     }
     let ticked = last_tick(&server.ok(&["capture-pane", "-t", &ticker])).unwrap();
-    // A key whose frame is half sent as the server hands over: the rest
-    // follows once it has, and the new build reads it whole.
-    let typed = proto::encode_client(&ClientMsg::Input(b"carried over".to_vec()));
+    // A paste begun, which the server holds for its end, and a frame half
+    // sent as the server hands over: the rest of both follows once it has,
+    // and the new build reads them whole.
+    client.type_text("\x1b[200~hello");
+    let typed = proto::encode_client(&ClientMsg::Input(b"world\x1b[201~ carried over".to_vec()));
     client.write_raw(&typed[..3]);
 
     let (code, out, err) = server.run(&["upgrade"]);
@@ -183,7 +185,7 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     client.wait_for("ticks on the terminal attached before", |s| {
         s.iter().any(|l| last_tick(l).is_some_and(|n| n > ticked))
     });
-    client.wait_text("carried over");
+    client.wait_text("helloworld carried over");
     assert!(client.exit.is_none(), "it was never told to end");
     client.resize(90, 30);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -199,14 +201,22 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     fresh.wait_for("ticks on a terminal attached after", |s| {
         s.iter().any(|l| last_tick(l).is_some_and(|n| n > ticked))
     });
-    // And a pane started now is numbered after those kept.
+    // And a pane started now is numbered after every one there has been,
+    // one closed before the upgrade too.
+    let gone = server
+        .ok(&["split", "-t", &beside, "-d"])
+        .trim()
+        .to_string();
+    server.ok(&["kill-pane", "-t", &gone]);
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}");
     let (_, pane) = server
         .ok(&["new-tab", "-d"])
         .split_once(' ')
         .map(|(t, p)| (t.to_string(), p.trim().to_string()))
         .unwrap();
     let n = |id: &str| id.trim_start_matches('%').parse::<u32>().unwrap();
-    assert!(n(&pane) > n(&beside), "{pane} after {beside}");
+    assert!(n(&pane) > n(&gone), "{pane} after {gone}");
     // An upgrade again goes as well.
     let (code, out, err) = server.run(&["upgrade"]);
     assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
@@ -218,7 +228,7 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     // how it went in a box.
     server.ok(&["press", "upgrade"]);
     fresh.wait_text("Switchboard restarted on");
-    assert_eq!(server.log().matches("Switchboard restarted on").count(), 3);
+    assert_eq!(server.log().matches("Switchboard restarted on").count(), 4);
     assert_eq!(server.pid(), Some(server_pid));
     assert_eq!(pids(&server.list()), pids(&again));
     assert!(client.exit.is_none());

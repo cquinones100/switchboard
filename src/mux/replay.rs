@@ -14,6 +14,10 @@
 //! Claude Code redrawing its prompt in place, or vim a line, lands where it
 //! would have.
 //!
+//! What the emulator holds of a sequence or a character whose last bytes
+//! haven't come yet (`unfinished`) is given after it, so the rest, which
+//! the program writes once the new build reads, finishes it there.
+//!
 //! What isn't carried: a scroll region, tab stops, character sets, a
 //! cursor the program saved, and the kitty keyboard flags of the screen
 //! that isn't up. A full-screen program that leans on them draws itself
@@ -65,6 +69,52 @@ pub fn replay<L: EventListener>(term: &mut Term<L>, title: &str, other_keys: u8)
     let mut pen = Pen::default();
     pen.set(&mut out, &term.grid().cursor.template);
     out
+}
+
+/// The end of what a program wrote that is still unfinished: an escape
+/// sequence whose final byte hasn't come (a CSI's, an OSC's BEL, a two-byte
+/// escape's second), or a character whose last UTF-8 bytes haven't. The
+/// emulator holds these, drawing nothing of them yet, so a new emulator
+/// given the screen must be given them too, or it would take the rest for
+/// text. `recent` is the last of what was written; a sequence that began
+/// before it is lost.
+pub fn unfinished(recent: &[u8]) -> &[u8] {
+    let n = recent.len();
+    // A character cut short: its lead byte, then fewer continuation bytes
+    // than it says.
+    let mut start = n;
+    let mut at = n;
+    while at > 0 && n - at < 3 && recent[at - 1] & 0xC0 == 0x80 {
+        at -= 1;
+    }
+    if at > 0 {
+        let lead = recent[at - 1];
+        let wants = match lead {
+            0xC0..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF7 => 4,
+            _ => 1,
+        };
+        if wants > n - (at - 1) {
+            start = at - 1;
+        }
+    }
+    if let Some(esc) = recent.iter().rposition(|&b| b == 0x1b) {
+        let rest = &recent[esc + 1..];
+        let finished = match rest.first() {
+            None => false,
+            Some(b'[') => rest[1..].iter().any(|b| (0x40..=0x7e).contains(b)),
+            // An OSC, DCS, APC or PM ends with BEL, or with an ST whose ESC
+            // would be the last one.
+            Some(b']' | b'P' | b'_' | b'^' | b'X') => rest[1..].contains(&0x07),
+            Some(b) if (0x20..=0x2f).contains(b) => rest.len() > 1,
+            Some(_) => true,
+        };
+        if !finished {
+            start = start.min(esc);
+        }
+    }
+    &recent[start..]
 }
 
 /// What text is written with, as last set.
@@ -512,6 +562,40 @@ mod tests {
         // Lines that don't wrap, and the cursor's line kept as it was.
         feed(&mut t, b"\x1b[?7l\x1b[3;1Habc");
         round_trip(&mut t, 10, 4);
+    }
+
+    #[test]
+    fn what_the_emulator_holds_unfinished_is_kept() {
+        assert_eq!(unfinished(b"plain text"), b"");
+        assert_eq!(unfinished(b"done\x1b[1m"), b"");
+        assert_eq!(unfinished(b"text\x1b[38;5"), b"\x1b[38;5");
+        assert_eq!(unfinished(b"text\x1b"), b"\x1b");
+        assert_eq!(unfinished(b"\x1b]2;a ti"), b"\x1b]2;a ti");
+        assert_eq!(unfinished(b"\x1b]2;title\x07after"), b"");
+        assert_eq!(unfinished(b"\x1b]2;title\x1b\\"), b"");
+        assert_eq!(unfinished(b"\x1b("), b"\x1b(");
+        assert_eq!(unfinished(b"\x1b(B"), b"");
+        let wide = "日".as_bytes();
+        assert_eq!(unfinished(&[b"ab", &wide[..2]].concat()), &wide[..2]);
+        assert_eq!(unfinished(&[b"ab", wide].concat()), b"");
+        assert_eq!(unfinished(&wide[..1]), &wide[..1]);
+        // A character cut short inside a sequence cut short: the sequence.
+        let title = [b"x\x1b]2;", &wide[..2]].concat();
+        assert_eq!(unfinished(&title), &title[1..]);
+        // Given after the replay, the rest finishes it as it would have.
+        let mut t = term(20, 3);
+        feed(&mut t, b"\x1b[31");
+        let mut again = term(20, 3);
+        let mut bytes = replay(&mut t, "", 0).into_bytes();
+        bytes.extend_from_slice(unfinished(b"\x1b[31"));
+        feed(&mut again, &bytes);
+        feed(&mut t, b"mred");
+        feed(&mut again, b"mred");
+        same(
+            &state_of(&mut again),
+            &state_of(&mut t),
+            "a sequence finished after",
+        );
     }
 
     #[test]

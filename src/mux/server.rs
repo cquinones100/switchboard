@@ -1892,6 +1892,18 @@ impl Server {
         Ok(())
     }
 
+    /// What a terminal sent that its parser holds unfinished (a paste not
+    /// yet ended, an ESC), as a frame to be read again first by the build a
+    /// handover gives the terminal to.
+    pub(super) fn held_keys(&self, id: ClientId) -> Vec<u8> {
+        match self.clients.get(&id).map(|c| c.parser.held()) {
+            Some(held) if !held.is_empty() => {
+                proto::encode_client(&ClientMsg::Input(held.to_vec()))
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// A terminal's connection given back for a handover that didn't
     /// happen, served again as it was, its screen drawn again whole.
     pub(super) fn resume_client(&mut self, id: ClientId, held: Held) {

@@ -129,6 +129,12 @@ pub struct Handover {
     /// The terminals attached.
     #[serde(default)]
     pub clients: Vec<HandedClient>,
+    /// The next pane's and tab's numbers, so one closed before isn't given
+    /// again.
+    #[serde(default)]
+    pub next_pane: u32,
+    #[serde(default)]
+    pub next_tab: u32,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -371,14 +377,25 @@ fn drain(server: &mut Server, lp: &mut Loop<'_>) {
     server.draw_dirty();
 }
 
-/// The server's loop, for up to `SETTLE`, until `done`: every pane (one
-/// started meanwhile too) paused, and the commands under way answered.
-async fn settle(server: &mut Server, lp: &mut Loop<'_>) -> bool {
+/// The server's loop, for up to `SETTLE`, until every pane is paused and
+/// the commands under way answered: a pane started meanwhile is paused
+/// too, and a terminal attached meanwhile stops reading (`paused` holds
+/// those told).
+async fn settle(
+    server: &mut Server,
+    lp: &mut Loop<'_>,
+    paused: &mut std::collections::HashSet<ClientId>,
+) -> bool {
     let deadline = Instant::now() + SETTLE;
     loop {
         drain(server, lp);
         for slot in server.panes.values() {
             slot.pane.pause();
+        }
+        for (id, c) in &server.clients {
+            if paused.insert(*id) {
+                let _ = c.hold.send(Hold::Pause);
+            }
         }
         let parked = server.panes.values().all(|s| s.pane.parked());
         let answered = lp.busy.load(Ordering::SeqCst) == 0;
@@ -452,10 +469,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         return;
     };
     // The terminals' keys wait in their sockets from here on.
-    for c in server.clients.values() {
-        let _ = c.hold.send(Hold::Pause);
-    }
-    let parked = settle(server, lp).await;
+    let mut paused = std::collections::HashSet::new();
+    let parked = settle(server, lp, &mut paused).await;
     let why_not = if server.quit {
         Some("the server is ending".to_string())
     } else if server.sessions.is_empty() {
@@ -489,6 +504,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         client: client.map(|c| c.0),
         cell: server.terminal.cell,
         agents: server.agents.records(),
+        next_pane: server.next_pane,
+        next_tab: server.next_tab,
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -500,7 +517,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
                     cols: c.cols,
                     rows: c.rows,
                     idle_ms: c.activity.elapsed().as_millis() as u64,
-                    input: held.input.clone(),
+                    // What its parser held came before the frame half read.
+                    input: [server.held_keys(*id), held.input.clone()].concat(),
                     output: held.output.clone(),
                 })
             })
@@ -639,6 +657,8 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             Err(e) => lost.push(format!("pane {id} ({e:#})")),
         }
     }
+    server.next_pane = server.next_pane.max(handover.next_pane);
+    server.next_tab = server.next_tab.max(handover.next_tab);
     super::persist::adopt_layout(server, handover.layout);
     for (id, agent) in handover.agents {
         if server.panes.contains_key(&id) {
@@ -742,6 +762,7 @@ fn adopt_pane(server: &Server, handed: HandedPane, extended_keys: bool) -> Resul
             input: handed.input,
             hung_up: handed.hung_up,
             screen: handed.screen,
+            tail: handed.tail,
         },
         server.pane_tx.clone(),
     )?;
@@ -793,6 +814,7 @@ mod tests {
                 input: b"typed\r".to_vec(),
                 hung_up: false,
                 screen: "\x1b[1mhello\x1b[0m\r\n$ ".into(),
+                tail: b"\x1b[3".to_vec(),
             }],
             asker: Some(11),
             client: Some(2),
@@ -808,6 +830,8 @@ mod tests {
                 input: vec![1, 0, 0],
                 output: b"\x1b[H".to_vec(),
             }],
+            next_pane: 9,
+            next_tab: 4,
         }
     }
 

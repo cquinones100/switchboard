@@ -460,6 +460,13 @@ impl Parser {
         !self.pending.is_empty()
     }
 
+    /// The bytes held waiting for the rest of a sequence (a paste's start
+    /// marker and what came after it, an ESC), as they came: what a new
+    /// build is given first when the server hands a terminal over.
+    pub fn held(&self) -> &[u8] {
+        &self.pending
+    }
+
     /// What is held, as it stands: a lone ESC as the Escape key, the rest as
     /// keys or `Unknown`. A paste that has begun stays held for its end, until
     /// `PASTE_TIMEOUT` passes with no more of it.
