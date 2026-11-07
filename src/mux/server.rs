@@ -256,6 +256,10 @@ pub struct Client {
     /// What is shown over the tab, the top one taking the input (src/ui).
     pub overlays: crate::ui::Stack,
     pub activity: Instant,
+    /// Counts the options taken in mission control's menus, so the keys read
+    /// with the one that took an option are dropped rather than reaching
+    /// what is in front next (the daemon's `optionsTaken`).
+    pub options_taken: u32,
 }
 
 pub struct Server {
@@ -1321,6 +1325,7 @@ impl Server {
             status_hits: Default::default(),
             overlays: Default::default(),
             activity: Instant::now(),
+            options_taken: 0,
         };
         // For the `system` theme: the terminal's background (src/status).
         Server::ask_background(&client.tx);
@@ -1442,8 +1447,15 @@ impl Server {
             None => return,
         };
         self.size_session_to(id);
+        let taken = |s: &Server| s.clients.get(&id).map(|c| c.options_taken);
         for p in parsed {
+            let before = taken(self);
             self.dispatch(id, p);
+            // An option taken: the rest of the same read was typed ahead of
+            // it, and goes nowhere.
+            if taken(self) != before {
+                break;
+            }
         }
         if self.clients.get(&id).is_some_and(|c| c.parser.pending()) {
             self.flush_later(id, input::ESC_TIMEOUT);

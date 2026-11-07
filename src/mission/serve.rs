@@ -1312,6 +1312,9 @@ impl Server {
             let Some(c) = chose.and_then(|i| list.into_iter().nth(i)) else {
                 return;
             };
+            if let Some(at) = server.clients.get_mut(&client) {
+                at.options_taken = at.options_taken.wrapping_add(1);
+            }
             if let Some(item) = &seen {
                 server.slack_item_acted(item);
             }

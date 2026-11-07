@@ -160,13 +160,21 @@ fn enter_on_a_tabs_card_and_go_to_tab_goes_there() {
     let screen = client.wait_text("Go to tab 1");
     assert!(screen.iter().any(|l| l.contains("Rename it")));
     assert!(screen.iter().any(|l| l.contains("Close the tab")));
-    client.type_text("\r");
+    // Keys typed with the Enter that takes an option go nowhere, rather
+    // than into the tab it went to.
+    client.type_text("\rxyz");
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !client.screen().iter().any(|l| l.contains("xyz")),
+        "{:#?}",
+        client.screen()
+    );
     // l to the second card, Enter twice goes there. A menu's letters take
     // nothing of their own: g there is no "Go to tab", and j moves.
     open(&mut client);
