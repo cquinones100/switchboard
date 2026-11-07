@@ -16,13 +16,14 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::mux::PaneId;
 
 /// What a pane's Claude is doing. Ordered by how much it needs you, so the
 /// most urgent of several is their `max`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum State {
     Working,
     Done,
@@ -67,8 +68,10 @@ const LOOPS: &[(&str, &str)] = &[
     ("preview-test", "deploy"),
 ];
 
-/// One pane's Claude: its state and what goes with it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// One pane's Claude: its state and what goes with it. Serialized only to
+/// hand it to a new build with its pane (src/mux/upgrade.rs).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PaneAgent {
     pub state: Option<State>,
     /// When it got to its state, in seconds since the epoch; 0 with none.
@@ -89,7 +92,21 @@ pub struct PaneAgent {
     /// How it was before an automatic compaction began, to hand it back
     /// after: `None` when it was working (nothing to hand back), `Some(None)`
     /// when it was idle, else its state and since.
+    #[serde(
+        deserialize_with = "some_even_if_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     compact_from: Option<Option<(State, i64)>>,
+}
+
+/// `null` read as `Some(None)`, which serde would read as `None`: an absent
+/// field is the `None`.
+fn some_even_if_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
 }
 
 impl PaneAgent {
@@ -293,6 +310,21 @@ impl Agents {
 
     pub fn state(&self, pane: PaneId) -> Option<State> {
         self.panes.get(&pane).and_then(|a| a.state)
+    }
+
+    /// Every pane's record, for handing them to a new build.
+    pub fn records(&self) -> Vec<(PaneId, PaneAgent)> {
+        let mut all: Vec<(PaneId, PaneAgent)> =
+            self.panes.iter().map(|(p, a)| (*p, a.clone())).collect();
+        all.sort_by_key(|(p, _)| *p);
+        all
+    }
+
+    /// A pane's record as a build before this one had it.
+    pub fn put(&mut self, pane: PaneId, agent: PaneAgent) {
+        if !agent.is_empty() {
+            self.panes.insert(pane, agent);
+        }
     }
 
     /// The panes that have a state.

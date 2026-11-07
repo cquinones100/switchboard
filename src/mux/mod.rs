@@ -24,6 +24,9 @@
 //! - `terminal`: what the attached terminal says of itself (its cell's
 //!   size, its colours), which the panes' programs are told when they ask.
 //! - `persist`: the layout saved as it changes and restored on start.
+//! - `replay`: what a pane shows, as the bytes that draw it again.
+//! - `upgrade`: the server restarted on a new build in place, its panes'
+//!   programs, its socket and its terminals handed over across an exec.
 
 pub mod client;
 pub mod commands;
@@ -38,10 +41,12 @@ pub mod persist;
 pub mod procinfo;
 pub mod proto;
 pub mod pty;
+pub mod replay;
 pub mod respawn;
 pub mod server;
 pub mod socket;
 pub mod terminal;
+pub mod upgrade;
 
 use serde::{Deserialize, Serialize};
 

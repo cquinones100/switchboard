@@ -89,7 +89,7 @@ pub fn open(cmd: CommandBuilder, size: PtySize) -> Result<(OwnedFd, Option<u32>)
 }
 
 /// A descriptor's copy, closed on exec.
-fn duplicate(fd: RawFd) -> io::Result<OwnedFd> {
+pub fn duplicate(fd: RawFd) -> io::Result<OwnedFd> {
     // SAFETY: F_DUPFD_CLOEXEC gives a new descriptor, owned from here on.
     let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if copy < 0 {
@@ -795,14 +795,16 @@ mod tests {
         second.write(b"after\r").unwrap();
         read_until(&mut rx, &mut seen, |s| s.contains("got:after"));
 
-        // The first lets go without hanging anything up; the second ends it.
-        drop(first);
+        // The second ends it; the first, let go of, reads the end and goes
+        // too, so nothing of it is left open.
         second.hang_up();
         let mut end = None;
         while end.is_none() {
             end = read_until(&mut rx, &mut seen, |_| false);
         }
         assert_eq!(end, Some(None), "ended by its hangup");
+        first.resume();
+        drop(first);
     }
 
     #[test]

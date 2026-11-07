@@ -13,7 +13,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
@@ -78,7 +79,7 @@ pub enum Event {
         cwd: PathBuf,
         pane: Option<String>,
         stdin: Option<Vec<u8>>,
-        reply: oneshot::Sender<Reply>,
+        reply: oneshot::Sender<Answer>,
     },
     /// Time for a client's held ESC to count as the Escape key.
     FlushInput(ClientId),
@@ -115,8 +116,19 @@ pub enum Event {
     Notes(crate::notes::serve::NotesEvent),
     /// What working a note continuously found off the task (src/autopilot).
     Autopilot(crate::autopilot::AutopilotEvent),
+    /// The check of a new build to restart on answered (src/mux/upgrade.rs).
+    Upgrade(super::upgrade::UpgradeEvent),
     Tick,
     Quit,
+}
+
+/// How a command is answered: with its reply, or, for `switchboard
+/// upgrade`, by handing its connection back to be answered by the build the
+/// server restarts on (src/mux/upgrade.rs).
+#[derive(Debug)]
+pub enum Answer {
+    Reply(Reply),
+    Keep(oneshot::Sender<tokio::net::UnixStream>),
 }
 
 /// A command's answer: its exit code, what it printed and what it said went wrong.
@@ -344,16 +356,29 @@ pub struct Server {
     /// What the terminal attached last says of itself: its cell's size
     /// (src/mux/terminal.rs).
     pub terminal: super::terminal::Terminal,
+    /// A restart on a new build under way (src/mux/upgrade.rs).
+    pub(super) upgrade: super::upgrade::Upgrade,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
 
-/// `switchboard server`.
+/// `switchboard server`; with `--handover <file>`, the server a running one
+/// replaced itself with (src/mux/upgrade.rs), taking up what it handed
+/// over; `--handover-version` prints the handover's version this build
+/// takes, which a running server asks before replacing itself with it.
 pub fn main(args: Vec<String>) -> ExitCode {
-    if !args.is_empty() {
-        eprintln!("Usage: switchboard server   (started for you by switchboard)");
-        return ExitCode::from(2);
-    }
+    let handover = match args.as_slice() {
+        [] => None,
+        [flag] if flag == "--handover-version" => {
+            println!("{}", super::upgrade::VERSION);
+            return ExitCode::SUCCESS;
+        }
+        [flag, file] if flag == "--handover" => Some(PathBuf::from(file)),
+        _ => {
+            eprintln!("Usage: switchboard server   (started for you by switchboard)");
+            return ExitCode::from(2);
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -364,7 +389,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(run()) {
+    match runtime.block_on(run(handover)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("switchboard server: {e}");
@@ -373,11 +398,21 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
-async fn run() -> Result<()> {
-    let listener = socket::bind()?;
+async fn run(handover: Option<PathBuf>) -> Result<()> {
+    super::upgrade::remember_binary();
+    let (listener, handed) = match handover {
+        None => (socket::bind()?, None),
+        Some(file) => {
+            let handed = super::upgrade::read_file(&file)
+                .map_err(|e| anyhow!("taking over from the server before: {e:#}"))?;
+            let listener = socket::adopt(handed.listener, handed.lock)?;
+            (listener, Some(handed))
+        }
+    };
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let (pane_tx, mut pane_rx) = mpsc::unbounded_channel::<PaneEvent>();
-    tokio::spawn(accept(listener, tx.clone()));
+    let busy = Arc::new(AtomicUsize::new(0));
+    let mut acceptor = Acceptor::start(listener, tx.clone(), busy.clone());
     spawn_signals(tx.clone());
     let ticker = tx.clone();
     tokio::spawn(async move {
@@ -418,7 +453,10 @@ async fn run() -> Result<()> {
     server.sidebar_load();
     // The status line's rows, before any tab is laid out.
     server.status_tick();
-    super::persist::restore(&mut server);
+    match handed {
+        Some(handed) => super::upgrade::adopt(&mut server, handed),
+        None => super::persist::restore(&mut server),
+    }
     loop {
         // A program holding a frame back (synchronized output) that never
         // says it is done gets it shown at its deadline.
@@ -446,6 +484,16 @@ async fn run() -> Result<()> {
             server.handle(event);
         }
         server.draw_dirty();
+        if server.upgrade_ready() {
+            let mut lp = Loop {
+                rx: &mut rx,
+                pane_rx: &mut pane_rx,
+                acceptor: &mut acceptor,
+                busy: &busy,
+            };
+            // Returns only when the new build couldn't take over.
+            super::upgrade::hand_over(&mut server, &mut lp).await;
+        }
         if server.quit {
             break;
         }
@@ -474,21 +522,117 @@ fn spawn_signals(tx: mpsc::UnboundedSender<Event>) {
 
 static NEXT_CLIENT: AtomicU32 = AtomicU32::new(1);
 
-async fn accept(listener: tokio::net::UnixListener, tx: mpsc::UnboundedSender<Event>) {
-    loop {
-        match listener.accept().await {
-            Ok((stream, _)) => {
-                tokio::spawn(connection(stream, tx.clone()));
-            }
-            Err(e) => {
-                eprintln!("switchboard server: accepting a connection: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+/// What the server's loop lends the handover (src/mux/upgrade.rs): its
+/// channels, to go on handling events while everything settles, the
+/// connections' acceptor, and how many connections are under way.
+pub(super) struct Loop<'a> {
+    pub rx: &'a mut mpsc::UnboundedReceiver<Event>,
+    pub pane_rx: &'a mut mpsc::UnboundedReceiver<PaneEvent>,
+    pub acceptor: &'a mut Acceptor,
+    pub busy: &'a AtomicUsize,
+}
+
+/// The task taking connections on the server's socket, which can be stopped
+/// and given the socket back, for handing it to a new build. A connection
+/// made meanwhile waits in the socket's queue for whoever takes it next.
+pub(super) struct Acceptor {
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<tokio::net::UnixListener>>,
+    tx: mpsc::UnboundedSender<Event>,
+    busy: Arc<AtomicUsize>,
+}
+
+impl Acceptor {
+    fn start(
+        listener: tokio::net::UnixListener,
+        tx: mpsc::UnboundedSender<Event>,
+        busy: Arc<AtomicUsize>,
+    ) -> Acceptor {
+        let mut acceptor = Acceptor {
+            stop: None,
+            task: None,
+            tx,
+            busy,
+        };
+        acceptor.run(listener);
+        acceptor
+    }
+
+    fn run(&mut self, listener: tokio::net::UnixListener) {
+        let (stop, stopped) = oneshot::channel();
+        self.stop = Some(stop);
+        self.task = Some(tokio::spawn(accept(
+            listener,
+            self.tx.clone(),
+            self.busy.clone(),
+            stopped,
+        )));
+    }
+
+    /// Stops taking connections, giving the socket back.
+    pub(super) async fn stop(&mut self) -> Option<std::os::unix::net::UnixListener> {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        let listener = self.task.take()?.await.ok()?;
+        listener.into_std().ok()
+    }
+
+    /// Takes connections again, on the socket given back (after a handover
+    /// that didn't happen).
+    pub(super) fn restart(&mut self, listener: Option<std::os::unix::net::UnixListener>) {
+        let Some(listener) = listener else {
+            return;
+        };
+        match tokio::net::UnixListener::from_std(listener) {
+            Ok(listener) => self.run(listener),
+            Err(e) => eprintln!("switchboard server: listening again: {e}"),
         }
     }
 }
 
-async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Event>) {
+/// A connection under way, counted until it is answered or attached, so a
+/// handover waits for the commands under way to be answered.
+struct Busy(Arc<AtomicUsize>);
+
+impl Busy {
+    fn new(count: &Arc<AtomicUsize>) -> Busy {
+        count.fetch_add(1, Ordering::SeqCst);
+        Busy(count.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+async fn accept(
+    listener: tokio::net::UnixListener,
+    tx: mpsc::UnboundedSender<Event>,
+    busy: Arc<AtomicUsize>,
+    mut stopped: oneshot::Receiver<()>,
+) -> tokio::net::UnixListener {
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut stopped => return listener,
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => {
+                    let busy = Busy::new(&busy);
+                    tokio::spawn(connection(stream, tx.clone(), busy));
+                }
+                Err(e) => {
+                    eprintln!("switchboard server: accepting a connection: {e}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            },
+        }
+    }
+}
+
+async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Event>, busy: Busy) {
     let (mut r, mut w) = stream.into_split();
     let Ok(Some(first)) = proto::read_client_async(&mut r).await else {
         return;
@@ -521,6 +665,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             if let Some((w, h)) = super::terminal::cell_of(cols, rows, xpixel, ypixel) {
                 let _ = tx.send(Event::Cell(w, h));
             }
+            drop(busy);
             let writer = tokio::spawn(async move {
                 while let Some(msg) = orx.recv().await {
                     let exit = matches!(msg, ServerMsg::Exit { .. });
@@ -572,9 +717,16 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             {
                 return;
             }
-            let reply = rrx
-                .await
-                .unwrap_or_else(|_| Reply::fail("the server ended"));
+            let reply = match rrx.await {
+                Ok(Answer::Reply(reply)) => reply,
+                Ok(Answer::Keep(back)) => {
+                    if let Ok(stream) = r.reunite(w) {
+                        let _ = back.send(stream);
+                    }
+                    return;
+                }
+                Err(_) => Reply::fail("the server ended"),
+            };
             let msg = ServerMsg::Reply {
                 code: reply.code,
                 stdout: reply.stdout.into_bytes(),
@@ -582,6 +734,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             };
             let _ = w.write_all(&proto::encode_server(&msg)).await;
             let _ = w.shutdown().await;
+            drop(busy);
         }
         _ => {}
     }
@@ -626,6 +779,7 @@ impl Server {
             extras: Default::default(),
             terminal: Default::default(),
             autopilot: Default::default(),
+            upgrade: Default::default(),
         }
     }
 
@@ -654,8 +808,13 @@ impl Server {
                 stdin,
                 reply,
             } => {
+                // Answered once the build it restarts on has taken over.
+                if super::upgrade::asks_upgrade(&args) {
+                    self.upgrade_asked(Some(reply), None);
+                    return;
+                }
                 let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref());
-                let _ = reply.send(answer);
+                let _ = reply.send(Answer::Reply(answer));
             }
             Event::FlushInput(id) => {
                 let parsed = match self.clients.get_mut(&id) {
@@ -686,6 +845,7 @@ impl Server {
             Event::Status(event) => self.status_event(event),
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
+            Event::Upgrade(event) => self.upgrade_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.reload_keys_if_changed();

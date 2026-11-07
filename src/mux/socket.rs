@@ -446,6 +446,49 @@ fn take_lock(path: &Path) -> Result<File> {
     Ok(file)
 }
 
+/// The descriptor of the lock this process holds, for handing it to the
+/// build the server replaces itself with (src/mux/upgrade.rs): the lock
+/// belongs to the open file, so the new build holds it from the start and
+/// no other server can take it in between.
+pub fn lock_fd() -> Option<std::os::fd::RawFd> {
+    LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .first()
+        .map(AsRawFd::as_raw_fd)
+}
+
+/// The listening socket and the lock a server handed over, by descriptor,
+/// for `switchboard server --handover`: both closed on exec again, the lock
+/// kept for the process's life, the socket listening on as it was, so no
+/// connection made meanwhile was refused. Like `bind`, it must be called on
+/// a tokio runtime.
+pub fn adopt(
+    listener: std::os::fd::RawFd,
+    lock: Option<std::os::fd::RawFd>,
+) -> Result<tokio::net::UnixListener> {
+    use std::os::fd::FromRawFd;
+    if tokio::runtime::Handle::try_current().is_err() {
+        bail!("the server's socket can only be taken up on a tokio runtime");
+    }
+    if let Some(lock) = lock.filter(|fd| super::pty::is_open(*fd)) {
+        let _ = super::pty::set_cloexec(lock, true);
+        // SAFETY: the descriptor was handed over open, and nothing else here
+        // owns it.
+        let file = unsafe { File::from_raw_fd(lock) };
+        LOCKS.lock().unwrap_or_else(|e| e.into_inner()).push(file);
+    }
+    if !super::pty::is_open(listener) {
+        bail!("the listening socket handed over (descriptor {listener}) isn't open");
+    }
+    super::pty::set_cloexec(listener, true).context("taking up the listening socket")?;
+    // SAFETY: as above.
+    let std = unsafe { std::os::unix::net::UnixListener::from_raw_fd(listener) };
+    std.set_nonblocking(true)
+        .context("taking up the listening socket")?;
+    tokio::net::UnixListener::from_std(std).context("taking up the listening socket")
+}
+
 /// Serializes the tests, here and in the other parts of `mux`, that change
 /// the environment, since tests run on parallel threads and the environment
 /// is the process's.

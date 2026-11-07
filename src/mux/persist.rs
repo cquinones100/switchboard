@@ -407,6 +407,16 @@ pub fn shutdown(server: &mut Server) {
     server.persist = p;
 }
 
+/// Waits for a save being written to be done, before the server hands
+/// itself to a new build (src/mux/upgrade.rs), which would end the thread
+/// writing it; the next save starts the thread again.
+pub fn finish_writing(server: &mut Server) {
+    if let Some(w) = server.persist.writer.take() {
+        drop(w.tx);
+        let _ = w.thread.join();
+    }
+}
+
 /// When the layout's last write was asked for; `None` before any.
 pub fn last_asked(server: &Server) -> Option<std::time::SystemTime> {
     server.persist.asked_at
@@ -843,6 +853,194 @@ fn restore_tab(
             .filter_map(|id| saved.remove(&id))
             .collect(),
     )
+}
+
+// ── Handing over ────────────────────────────────────────────────────────────
+
+/// The layout as it is, for handing the server to a new build
+/// (src/mux/upgrade.rs) in this file's shape: every tab, the Notifications
+/// window too, with its layout as it stands (a tool in a pane's place
+/// still in it) and every pane of it, those parked behind a tool too, each
+/// with its options. Nothing is read from the panes' processes, since the
+/// panes go on as they are.
+pub fn layout_now(server: &Server) -> Saved {
+    let sessions = server
+        .sessions
+        .iter()
+        .map(|s| SavedSession {
+            name: s.name.clone(),
+            cols: s.cols,
+            rows: s.rows,
+            current: s.current,
+            last: s.last,
+            tabs: s
+                .tabs
+                .iter()
+                .filter_map(|t| server.tabs.get(t))
+                .map(|tab| SavedTab {
+                    id: tab.id,
+                    name: tab.name.clone(),
+                    layout: tab.layout.clone(),
+                    active: tab.active,
+                    last_pane: tab.last_pane,
+                    zoomed: tab.zoomed,
+                    opts: tab.opts.clone(),
+                    panes: server
+                        .panes_with_parked(tab.id)
+                        .into_iter()
+                        .filter_map(|id| {
+                            let slot = server.panes.get(&id)?;
+                            Some(SavedPane {
+                                opts: slot.opts.clone(),
+                                ..SavedPane::new(id)
+                            })
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    Saved {
+        version: VERSION,
+        sessions,
+    }
+}
+
+/// Builds the sessions and tabs of a layout handed over (`layout_now`)
+/// around the panes already taken up into `server.panes`, each given its
+/// tab and options. A pane that wasn't taken up is left out of its tab's
+/// layout, a tab none of whose panes was is left out, and a pane taken up
+/// whose tab couldn't be built gets a tab of its own, so no running program
+/// is left without a place.
+pub fn adopt_layout(server: &mut Server, saved: Saved) {
+    let mut placed: HashSet<PaneId> = HashSet::new();
+    for ss in saved.sessions {
+        if ss.name.is_empty() || server.session(&ss.name).is_some() {
+            continue;
+        }
+        let cols = if ss.cols == 0 { 80 } else { ss.cols };
+        let rows = if ss.rows == 0 { 24 } else { ss.rows };
+        let mut tabs = Vec::new();
+        for st in ss.tabs {
+            if server.tabs.contains_key(&st.id) {
+                continue;
+            }
+            let ours: Vec<PaneId> = st
+                .panes
+                .iter()
+                .map(|p| p.id)
+                .filter(|id| server.panes.contains_key(id) && !placed.contains(id))
+                .collect();
+            let mut layout = st.layout;
+            layout.tidy();
+            for id in layout.panes() {
+                // The last of a layout can't be taken out; it is left out
+                // below instead.
+                if !ours.contains(&id) {
+                    layout.remove(id);
+                }
+            }
+            let mut in_layout: Vec<PaneId> = layout
+                .panes()
+                .into_iter()
+                .filter(|id| ours.contains(id))
+                .collect();
+            if in_layout.is_empty() {
+                // Only panes parked behind a tool that is gone: the first
+                // takes the tool's place.
+                let Some(&first) = ours.first() else {
+                    continue;
+                };
+                layout = Layout::new(first);
+                in_layout = vec![first];
+                if let Some(slot) = server.panes.get_mut(&first) {
+                    slot.opts.remove(crate::diff::in_place::PANE_PARKED);
+                }
+            }
+            let mut tab = new_tab(st.id, in_layout[0]);
+            tab.name = st.name;
+            tab.active = if in_layout.contains(&st.active) {
+                st.active
+            } else {
+                in_layout[0]
+            };
+            tab.last_pane = st
+                .last_pane
+                .filter(|p| in_layout.contains(p) && *p != tab.active);
+            tab.zoomed = st.zoomed && in_layout.len() > 1;
+            tab.opts = st.opts;
+            tab.layout = layout;
+            for id in &ours {
+                if let Some(slot) = server.panes.get_mut(id) {
+                    slot.tab = st.id;
+                }
+                placed.insert(*id);
+            }
+            server.tabs.insert(st.id, tab);
+            server.next_tab = server.next_tab.max(st.id.0.saturating_add(1));
+            tabs.push(st.id);
+        }
+        if tabs.is_empty() {
+            continue;
+        }
+        let current = if tabs.contains(&ss.current) {
+            ss.current
+        } else {
+            tabs[0]
+        };
+        let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
+        let sidebar = server.sidebar_columns(cols);
+        server.sessions.push(Session {
+            name: ss.name,
+            tabs,
+            current,
+            last,
+            cols,
+            rows,
+            sidebar,
+        });
+    }
+    // Panes whose tab couldn't be built, each in a tab of its own.
+    let mut homeless: Vec<PaneId> = server
+        .panes
+        .keys()
+        .copied()
+        .filter(|id| !placed.contains(id))
+        .collect();
+    homeless.sort();
+    for id in homeless {
+        if server.sessions.is_empty() {
+            server.sessions.push(Session {
+                name: super::server::DEFAULT_SESSION.to_string(),
+                tabs: Vec::new(),
+                current: TabId(0),
+                last: None,
+                cols: 80,
+                rows: 24,
+                sidebar: server.sidebar_columns(80),
+            });
+        }
+        let tab = TabId(server.next_tab);
+        server.next_tab += 1;
+        if let Some(slot) = server.panes.get_mut(&id) {
+            slot.tab = tab;
+            slot.opts.remove(crate::diff::in_place::PANE_PARKED);
+        }
+        server.tabs.insert(tab, new_tab(tab, id));
+        let s = &mut server.sessions[0];
+        if s.tabs.is_empty() {
+            s.current = tab;
+        }
+        s.tabs.push(tab);
+    }
+    for id in server.panes.keys() {
+        server.next_pane = server.next_pane.max(id.0.saturating_add(1));
+    }
+    let tabs: Vec<TabId> = server.tabs.keys().copied().collect();
+    for t in tabs {
+        server.relayout(t);
+        server.refresh_name(t);
+    }
 }
 
 #[cfg(test)]

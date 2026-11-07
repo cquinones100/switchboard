@@ -87,6 +87,44 @@ pub struct PaneSpawn {
     pub extended_keys: bool,
 }
 
+/// A pane taken up from a server that handed it over (src/mux/upgrade.rs):
+/// its terminal's master and the program on it, which go on as they were,
+/// and what is needed to show what it showed.
+#[derive(Debug)]
+pub struct PaneAdopt {
+    pub id: PaneId,
+    pub master: std::os::fd::OwnedFd,
+    pub pid: Option<u32>,
+    pub cols: u16,
+    pub rows: u16,
+    pub scrollback: usize,
+    pub extended_keys: bool,
+    /// What was still to be written to the program.
+    pub input: Vec<u8>,
+    /// Whether the program had already closed the terminal.
+    pub hung_up: bool,
+    /// What the pane showed, as the bytes that draw it again (`replay`).
+    pub screen: String,
+}
+
+/// What a pane hands over to a new build: `PaneAdopt`'s parts, the master
+/// by its descriptor's number, which the new build finds open.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HandedPane {
+    pub id: PaneId,
+    pub fd: i32,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    pub cols: u16,
+    pub rows: u16,
+    #[serde(default)]
+    pub input: Vec<u8>,
+    #[serde(default)]
+    pub hung_up: bool,
+    #[serde(default)]
+    pub screen: String,
+}
+
 /// How a pane is drawn this time.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PaneView {
@@ -247,7 +285,7 @@ impl Dimensions for Size {
 
 /// The kitty keyboard protocol's flags as the protocol numbers them, from
 /// the emulator's modes.
-fn kitty_flags(mode: TermMode) -> u8 {
+pub(super) fn kitty_flags(mode: TermMode) -> u8 {
     [
         (TermMode::DISAMBIGUATE_ESC_CODES, 1),
         (TermMode::REPORT_EVENT_TYPES, 2),
@@ -326,16 +364,67 @@ impl Pane {
             }
         };
 
+        Ok(Pane::around(
+            id,
+            generation,
+            pty,
+            (cols, rows),
+            spec.scrollback,
+            spec.extended_keys,
+        ))
+    }
+
+    /// Takes up a pane a server handed over as it replaced itself with a
+    /// new build: its terminal and program go on as they were, and what it
+    /// showed is drawn again in its emulator. Nothing is done to the
+    /// program if this fails.
+    pub fn adopt(spec: PaneAdopt, events: UnboundedSender<PaneEvent>) -> Result<Pane> {
+        NEXT_ID.fetch_max(spec.id.0.saturating_add(1), Ordering::Relaxed);
+        let (cols, rows) = clamp_size(spec.cols, spec.rows);
+        let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let pty = Pty::start(
+            spec.master,
+            spec.pid,
+            spec.input,
+            spec.hung_up,
+            spec.id,
+            generation,
+            events,
+        )
+        .context("taking up the pane's terminal")?;
+        let mut pane = Pane::around(
+            spec.id,
+            generation,
+            pty,
+            (cols, rows),
+            spec.scrollback,
+            spec.extended_keys,
+        );
+        // What the replay sets is the program's own doing, so what the
+        // emulator reports of it (the title) is taken as it would be.
+        pane.process(spec.screen.as_bytes());
+        Ok(pane)
+    }
+
+    /// A pane around a terminal: its emulator of the size given.
+    fn around(
+        id: PaneId,
+        generation: u64,
+        pty: Pty,
+        (cols, rows): (u16, u16),
+        scrollback: usize,
+        extended_keys: bool,
+    ) -> Pane {
         let queued = Arc::new(Mutex::new(Vec::new()));
         let config = Config {
-            scrolling_history: spec.scrollback,
+            scrolling_history: scrollback,
             // Programs may put text on the clipboard (OSC 52), and one that
             // asks for it is answered, with nothing: the clipboard is
             // yours, not every program's.
             osc52: Osc52::CopyPaste,
             // The emulator keeps the kitty keyboard protocol's flags a
             // program sets, and answers its query for them, only when told to.
-            kitty_keyboard: spec.extended_keys,
+            kitty_keyboard: extended_keys,
             ..Config::default()
         };
         let size = Size {
@@ -343,8 +432,7 @@ impl Pane {
             rows: rows.into(),
         };
         let term = Term::new(config, &size, Listener(queued.clone()));
-
-        Ok(Pane {
+        Pane {
             id,
             generation,
             term,
@@ -357,10 +445,40 @@ impl Pane {
             exited: None,
             anchor_side: Side::Left,
             graphics: None,
-            other_keys: spec.extended_keys.then(ModifyOtherKeys::default),
+            other_keys: extended_keys.then(ModifyOtherKeys::default),
             cell: CELL,
             colors: Default::default(),
-        })
+        }
+    }
+
+    /// What this pane hands to a new build: its terminal by descriptor, its
+    /// program, what was still to be written to it, and what it shows. It
+    /// is paused (`pause`) first, so nothing is read or written meanwhile.
+    pub fn hand_over(&mut self) -> HandedPane {
+        let other_keys = self.other_keys.as_ref().map_or(0, ModifyOtherKeys::level);
+        HandedPane {
+            id: self.id,
+            fd: self.pty.fd(),
+            pid: self.pty.pid(),
+            cols: self.cols,
+            rows: self.rows,
+            input: self.pty.pending_input(),
+            hung_up: self.pty.hung_up(),
+            screen: super::replay::replay(&mut self.term, &self.title, other_keys),
+        }
+    }
+
+    /// The terminal's master, by descriptor.
+    pub fn fd(&self) -> std::os::fd::RawFd {
+        self.pty.fd()
+    }
+
+    /// Tells the program its size again, as after a handover: the terminal
+    /// is given it, and the program in front SIGWINCH, so a full-screen
+    /// program draws itself again though its size is the same.
+    pub fn remind_size(&self) {
+        let _ = self.pty.resize(pty_size(self.cols, self.rows, self.cell));
+        self.pty.remind_size();
     }
 
     pub fn id(&self) -> PaneId {

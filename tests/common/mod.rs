@@ -56,6 +56,9 @@ pub struct TestServer {
     child: Option<Child>,
     /// More environment for the server, as a test's stand-in services' addresses.
     extra_env: Vec<(String, String)>,
+    /// The binary the server is started from: `BIN`, or a copy of the
+    /// test's own that it can put something else in place of.
+    bin: PathBuf,
 }
 
 impl TestServer {
@@ -81,9 +84,38 @@ impl TestServer {
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
+            bin: PathBuf::from(BIN),
         };
         server.launch();
         server
+    }
+
+    /// A server started from a copy of the binary in the test's own
+    /// directory (a hard link where it can be, else a copy), which the test
+    /// may replace, as `switchboard update` replaces yours; gives the copy's
+    /// path too.
+    pub fn start_from_copy() -> (TestServer, PathBuf) {
+        let dir = TempDir::new("sbt");
+        let home = dir.path().join("home");
+        let state = dir.path().join("s");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".profile"), "PS1='$ '\n").unwrap();
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("switchboard");
+        if std::fs::hard_link(BIN, &bin).is_err() {
+            std::fs::copy(BIN, &bin).expect("a copy of the binary");
+        }
+        let mut server = TestServer {
+            dir,
+            home,
+            state,
+            child: None,
+            extra_env: Vec::new(),
+            bin: bin.clone(),
+        };
+        server.launch();
+        (server, bin)
     }
 
     /// A server with no state directory of its own, as yours runs: its
@@ -100,6 +132,7 @@ impl TestServer {
             state,
             child: None,
             extra_env: vec![("SWITCHBOARD_STATE_DIR".into(), String::new())],
+            bin: PathBuf::from(BIN),
         };
         server.launch();
         server
@@ -120,7 +153,7 @@ impl TestServer {
             .append(true)
             .open(self.dir.path().join("server.log"))
             .unwrap();
-        let mut cmd = Command::new(BIN);
+        let mut cmd = Command::new(&self.bin);
         cmd.arg("server")
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
@@ -221,6 +254,11 @@ impl TestServer {
 
     pub fn attach(&self, cols: u16, rows: u16) -> TestClient {
         TestClient::attach(&self.socket(), None, cols, rows)
+    }
+
+    /// The server's process's pid.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.as_ref().map(Child::id)
     }
 
     /// Whether the server's process is still running.

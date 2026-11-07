@@ -42,6 +42,9 @@
 //! display [-t pane] pane|tab|session|cwd|command|title
 //! list-keys | detach [-s session] | kill-server
 //! save                                   the layout now; prints its file
+//! upgrade                                the server restarted on the build
+//!                                        installed now, keeping every pane
+//!                                        (src/mux/upgrade.rs)
 //! say [-t seconds] text...               a message in a box (src/ui)
 //! tip <name> | tip seen <name> | tip reset
 //!                                        a tip, once; marked shown; all again
@@ -84,6 +87,7 @@ pub const NAMES: &[&str] = &[
     "detach",
     "kill-server",
     "save",
+    "upgrade",
     "say",
     "tip",
     "press",
@@ -150,6 +154,10 @@ pub const USAGE: &[(&str, &str)] = &[
         "kill-server: ends the server and everything in it",
     ),
     ("save", "save: the layout now; prints its file"),
+    (
+        "upgrade",
+        "upgrade: restarts the server on the build installed now, keeping every pane and its program running",
+    ),
     ("say", "say [-t seconds] text...: a message in a box"),
     (
         "tip",
@@ -358,6 +366,8 @@ impl Server {
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| format!("{e:#}")),
+            // Taken before it reaches here, by the server's loop.
+            "upgrade" => Err("upgrade is answered by the server's loop".to_string()),
             other => Err(format!("no command named {other}")),
         };
         result.unwrap_or_else(Reply::fail)
