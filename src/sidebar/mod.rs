@@ -11,6 +11,7 @@
 //! - `model`: each tab, its group and its stage, in the order of need.
 //! - `render`: the sidebar's lines, a plain function of the model.
 //! - `walk`: M-a's walk through Needs you.
+//! - `notices`: the Notifications window's list, in a tab of its own.
 //! - `peek`: a look at a tab without going there.
 //! - `config`: sidebar.json.
 //! - `serve`: the server's side: reading, drawing, focus, keys, the mouse.
@@ -22,6 +23,7 @@
 pub mod claude;
 pub mod config;
 pub mod model;
+pub mod notices;
 pub mod peek;
 pub mod render;
 mod serve;
@@ -108,6 +110,9 @@ pub struct Sidebar {
     spin_pending: bool,
     /// Where M-a's walk got to.
     pub walk: walk::Walk,
+    /// Each session's Notifications window: its cursor, the tab it came
+    /// from, its focus and the mouse.
+    pub windows: notices::Windows,
     /// The tips asked for once this run (merged, loop, sidebar).
     tips_asked: HashSet<&'static str>,
 }

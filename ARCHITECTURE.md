@@ -61,7 +61,7 @@ The workspace:
 | `tabs` | What each tab is called and the color it wears, from git's files and lookups in the background |
 | `status` | The status line's button, health light and second line, and dark and light |
 | `ui` | The boxes over the workspace: messages, tips, questions, menus, pickers, the palette |
-| `sidebar` | Every tab on the left, most in need of you first, and the model mission control shares |
+| `sidebar` | Every tab on the left, most in need of you first, the Notifications window, and the model mission control shares |
 | `mission` | Mission control: every tab as a card and every view beside them |
 | `sources` | What GitHub and Linear say, looked up in the background on a schedule |
 | `day` | Your day: the calendar, Slack, the notes written for you |
@@ -137,7 +137,6 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
 - **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
-- **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now).
 - **The sidebar's tools**: its `d` and `L` on a tab (the tab's diff and lazygit in its pane's place), which mission control's menu on a tab offers.
 - **Elsewhere**: `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 

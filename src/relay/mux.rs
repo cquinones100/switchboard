@@ -255,6 +255,10 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                     .and_then(Value::as_str)
                     .map(str::to_string)
             };
+            // The Notifications window is no tab.
+            if opt("@notices_window").as_deref() == Some("1") {
+                continue;
+            }
             let label = text(tab, "label");
             let panes = tab
                 .get("panes")

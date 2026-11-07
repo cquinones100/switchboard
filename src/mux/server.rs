@@ -957,6 +957,8 @@ impl Server {
             s.last = Some(s.current);
             s.current = tab;
         }
+        // Opened from the Notifications window, it goes before it.
+        self.notices_last(session);
         self.refresh_name(tab);
         self.dirty_session(session);
         Ok((tab, pane))
@@ -1560,6 +1562,10 @@ impl Server {
         let Some(pane) = self.current_pane(id) else {
             return;
         };
+        // The Notifications window's list takes its pane's keys (src/sidebar).
+        if self.notices_key(id, pane, key) {
+            return;
+        }
         if self.panes.get(&pane).is_some_and(|s| s.copy.is_some()) {
             self.copy_key(id, pane, key);
             return;
@@ -1608,14 +1614,22 @@ impl Server {
                 }
             }
             Action::PrevTab | Action::NextTab => {
-                let at = tabs.iter().position(|t| *t == current_tab).unwrap_or(0);
+                // The Notifications window, last, is no tab to go round to.
+                let tabs: Vec<TabId> = tabs
+                    .iter()
+                    .copied()
+                    .filter(|t| !self.is_notices_tab(*t))
+                    .collect();
                 let n = tabs.len();
-                let next = if action == Action::NextTab {
-                    (at + 1) % n
-                } else {
-                    (at + n - 1) % n
+                let next = match tabs.iter().position(|t| *t == current_tab) {
+                    Some(at) if action == Action::NextTab => (at + 1) % n,
+                    Some(at) => (at + n - 1) % n,
+                    None if action == Action::NextTab => 0,
+                    None => n.saturating_sub(1),
                 };
-                self.select_tab(&session, tabs[next]);
+                if let Some(t) = tabs.get(next) {
+                    self.select_tab(&session, *t);
+                }
             }
             Action::LastTab => {
                 if let Some(last) = self.session(&session).and_then(|s| s.last) {
@@ -1623,7 +1637,10 @@ impl Server {
                 }
             }
             Action::SelectTab(n) => {
-                if let Some(t) = tabs.get(n.wrapping_sub(1)) {
+                if let Some(t) = tabs
+                    .get(n.wrapping_sub(1))
+                    .filter(|t| !self.is_notices_tab(**t))
+                {
                     self.select_tab(&session, *t);
                 }
             }
@@ -1959,6 +1976,10 @@ impl Server {
         let Some((pane, col, row)) = self.pane_at(id, m.col, m.row) else {
             return;
         };
+        // The Notifications window's list takes the mouse over its pane.
+        if self.notices_mouse(id, pane, row, m) {
+            return;
+        }
         let modes = match self.panes.get(&pane) {
             Some(s) => s.pane.modes(),
             None => return,
@@ -2116,15 +2137,23 @@ impl Server {
                 };
                 let active = *pid == tab.active && !side_focused;
                 let focused = active && c.overlays.is_empty();
-                let at = slot.pane.render(
-                    &mut frame.buf,
-                    rect,
-                    &PaneView {
-                        focused,
-                        dim: false,
-                    },
-                );
-                slot.pane.put_links(rect, frame.area(), &mut frame.links);
+                // The Notifications window's pane is drawn over with its
+                // list (src/sidebar/notices.rs).
+                let at = if self.is_notices_pane(*pid) {
+                    self.notices_draw(&mut frame.buf, rect, &s.name, c.id);
+                    None
+                } else {
+                    let at = slot.pane.render(
+                        &mut frame.buf,
+                        rect,
+                        &PaneView {
+                            focused,
+                            dim: false,
+                        },
+                    );
+                    slot.pane.put_links(rect, frame.area(), &mut frame.links);
+                    at
+                };
                 if active {
                     focused_rect = Some(rect);
                     if slot.copy.is_none() {

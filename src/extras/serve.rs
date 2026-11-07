@@ -237,15 +237,11 @@ impl Server {
         }
     }
 
-    /// "Go to the notifications": mission control's Notifications view,
-    /// every one with its whole message, with notice_list on; the sidebar's
-    /// first one with it off, as `sidebar.sh notices` chose.
+    /// "Go to the notifications", as `sidebar.sh notices` did: the
+    /// sidebar's cursor onto the first of them, which brings the
+    /// Notifications window to the front with notice_list on.
     fn go_to_notifications(&mut self, client: ClientId) {
-        if settings::is_on("notice_list") && settings::is_on("sidebar_notifications") {
-            self.open_mission(client, Opening::View("notifications".into()));
-        } else {
-            self.sidebar_to_notices(client);
-        }
+        self.sidebar_to_notices(client);
     }
 
     // ── Claude's last reply ─────────────────────────────────────────────────

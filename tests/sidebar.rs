@@ -1,8 +1,10 @@
 //! The sidebar as a person sees it, against a server of the test's own: on
 //! the left of a window wide enough for it and the panes beside it, a tab a
-//! hook marked waiting under Needs you, and M-s, its keys and a click moving
-//! between tabs (the tmux version's test/tmux-sidebar.test.js, for what the
-//! sidebar draws and how it is moved through).
+//! hook marked waiting under Needs you, M-s, its keys and a click moving
+//! between tabs, and the cursor onto a notification bringing the
+//! Notifications window to the front (the tmux version's
+//! test/tmux-sidebar.test.js, for what the sidebar draws and how it is
+//! moved through).
 //!
 //! As in tests/agent.rs, a pane counts as running Claude when a process in
 //! front on its terminal has a session file, so the tests write one for the
@@ -282,4 +284,93 @@ fn m_s_and_its_keys_move_between_tabs() {
     wait_list(&server, "the first in front", |l| {
         tabs(l)[0]["current"] == true && !focused(l)
     });
+}
+
+/// The Notifications window's tab, by its place in the list, if made.
+fn notices_tab(list: &Value) -> Option<usize> {
+    tabs(list)
+        .iter()
+        .position(|t| t["options"]["@notices_window"] == "1")
+}
+
+#[test]
+fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front() {
+    // A note written for you is a notification, as the meeting notes give one.
+    let notes = common::TempDir::new("sbnw");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("● Plan");
+
+    // M-s, then n: the cursor onto it, and the window in front, the focus
+    // still in the sidebar, the notification's whole message in it.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("n");
+    let list = wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    assert_eq!(notices_tab(&list), Some(1), "last, after the one tab");
+    let screen = client.wait_text("NOTIFICATIONS 1");
+    let has = |text: &str| screen.iter().any(|l| l.contains(text));
+    assert!(has("‹ tabs"), "{}", screen.join("\n"));
+    assert!(has("▌ Plan"));
+    assert!(has("Written from Fathom into Plan.md"), "whole");
+    let bar = screen.last().unwrap();
+    assert!(
+        bar.contains("Notifications"),
+        "in the tab bar while in front: {bar}"
+    );
+    // No tab in the sidebar or mission control: one tab under the heading.
+    assert!(
+        screen.iter().any(|l| l.starts_with(" OTHER 1")),
+        "{}",
+        screen.join("\n")
+    );
+
+    // k: back up to the tab, which comes to the front, the window out of
+    // the tab bar.
+    client.type_text("k");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    let screen = client.wait_for("the window out of the bar", |s| {
+        !s.last().unwrap().contains("Notifications")
+    });
+    assert!(screen.iter().any(|l| l.contains("● Plan")));
+
+    // Enter on the notification: into the window's pane; Enter there opens
+    // its menu over it, Esc closes that, and Esc goes back to the tab.
+    client.type_text("j");
+    wait_list(&server, "the window again", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    client.type_text("\r");
+    wait_list(&server, "the focus in the window", |l| {
+        !focused(l) && notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    client.type_text("\r");
+    client.wait_text("Open it in Notes");
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open it in Notes"))
+    });
+    client.type_text("\x1b");
+    wait_list(&server, "back on the tab it came from", |l| {
+        tabs(l)[0]["current"] == true && !focused(l)
+    });
+    // A new tab goes before the window, and `switchboard tabs` leaves it out.
+    server.ok(&["new-tab", "-n", "second"]);
+    let list = wait_list(&server, "the second tab", |l| tabs(l).len() == 3);
+    assert_eq!(notices_tab(&list), Some(2), "kept last");
+    let (code, out, _) = server.run(&["tabs"]);
+    assert_eq!(code, 0);
+    assert!(!out.contains("Notifications"), "no tab for `tabs`: {out}");
 }

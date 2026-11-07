@@ -946,7 +946,7 @@ mod tests {
             } }))
         };
         let choices = item_choices(&ViewId::Ci, &ci(true), &[], &ctx(&tabs, &repo));
-        assert_eq!(keys(&choices), "cglopy");
+        assert_eq!(keys(&choices), "cglovpy");
         assert_eq!(
             choices[2].label,
             "Read the failing log (test) in a pane beside"
@@ -959,7 +959,7 @@ mod tests {
             }
         );
         let choices = item_choices(&ViewId::Ci, &ci(false), &[], &ctx(&tabs, &repo));
-        assert_eq!(keys(&choices), "cgopy", "no log kept, nothing to read");
+        assert_eq!(keys(&choices), "cgovpy", "no log kept, nothing to read");
     }
 
     #[test]

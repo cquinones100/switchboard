@@ -35,6 +35,10 @@ pub fn lines(list: &Value) -> String {
     let mut out = String::new();
     for session in list["sessions"].as_array().into_iter().flatten() {
         for tab in session["tabs"].as_array().into_iter().flatten() {
+            // The Notifications window is no tab.
+            if tab["options"]["@notices_window"] == "1" {
+                continue;
+            }
             for pane in tab["panes"].as_array().into_iter().flatten() {
                 if pane["options"]["@pane_parked"] == "1" {
                     continue;

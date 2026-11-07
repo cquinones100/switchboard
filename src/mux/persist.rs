@@ -532,7 +532,13 @@ impl Persist {
         let mut sessions = Vec::new();
         for s in &server.sessions {
             let mut tabs = Vec::new();
-            for tab in s.tabs.iter().filter_map(|t| server.tabs.get(t)) {
+            // The Notifications window is made again when wanted, not restored.
+            for tab in s
+                .tabs
+                .iter()
+                .filter(|t| !server.is_notices_tab(**t))
+                .filter_map(|t| server.tabs.get(t))
+            {
                 // A pane waiting behind a tool is saved in its place.
                 let (layout, active, last_pane) = server.saved_layout(tab);
                 let mut panes = Vec::new();

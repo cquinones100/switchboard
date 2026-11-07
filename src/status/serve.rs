@@ -158,17 +158,24 @@ impl Server {
         let p = theme::palette();
         let n = lines().min(area.height);
         let row = Rect::new(0, area.height.saturating_sub(n), area.width, 1);
+        // The Notifications window is shown only while it is in front, in
+        // the notifications' yellow, as daemon.js's window formats had it.
         let tabs: Vec<TabStatus> = s
             .tabs
             .iter()
             .enumerate()
+            .filter(|(_, t)| **t == s.current || !self.is_notices_tab(**t))
             .filter_map(|(i, t)| {
                 self.tabs.get(t).map(|_| TabStatus {
                     index: i + 1,
                     name: self.tab_label(*t),
                     current: *t == s.current,
                     agent: self.tab_agent(*t),
-                    color: self.tab_color(*t).map(Into::into),
+                    color: if self.is_notices_tab(*t) {
+                        Some(theme::YELLOW)
+                    } else {
+                        self.tab_color(*t).map(Into::into)
+                    },
                 })
             })
             .collect();

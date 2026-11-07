@@ -287,6 +287,7 @@ impl Server {
             s.tabs.retain(|t| *t != tab);
             s.tabs.push(tab);
         }
+        self.notices_last(&name);
         self.dirty_session(&name);
     }
 

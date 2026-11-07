@@ -239,6 +239,11 @@ pub const COMMANDS: &[Command] = &[
         about: "The notes app: your notes in $NOTES_DIR or ~/Notes, drawn as Notes shows them and edited with Vim's keys",
     },
     Command {
+        name: "notifications",
+        run: crate::sidebar::notices::main,
+        about: "The Notifications window's pane, which the workspace draws its list over (started for you)",
+    },
+    Command {
         name: "open-url",
         run: crate::links::main,
         about: "Open a link in its site's Chrome profile (browser.json; --as <site> for another site's)",

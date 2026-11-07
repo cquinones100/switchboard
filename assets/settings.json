@@ -96,8 +96,8 @@
   {
     "key": "notice_list",
     "category": "Sidebar",
-    "label": "Notifications view",
-    "description": "M-p's \"Go to the notifications\" opens mission control's Notifications view: every one with its whole message, Enter opening its actions; off, it moves the sidebar's cursor onto the first one, as M-a does",
+    "label": "Notifications window",
+    "description": "Moving the sidebar's cursor onto a notification, or clicking one, brings the Notifications window to the front as moving onto a tab does: a tab of its own listing every one with its whole message, Enter opening its menu and Esc going back, which M-p's \"Go to the notifications\" brings to the front too; off, Enter or a click on one in the sidebar does what it leads to",
     "default": true
   },
   {

@@ -1153,6 +1153,29 @@ impl Server {
             }
             return;
         }
+        let list = self.item_choices(&view.id, &item, &view.data.items);
+        if list.is_empty() {
+            return;
+        }
+        // A Slack message is shown whole above its choices, since the row
+        // cuts it.
+        let body = (view.id == ViewId::Slack).then(|| {
+            if item.lines.is_empty() {
+                item.detail.clone()
+            } else {
+                item.lines.join("\n")
+            }
+        });
+        // A Slack message acted on, whatever was picked, is seen.
+        let seen = (view.id == ViewId::Slack
+            || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack"))
+            && item.data.get("message").is_some();
+        self.mission_menu(client, item.title.clone(), body, list, seen.then_some(item));
+    }
+
+    /// What an item's menu offers, with what the menus need to know of the
+    /// tabs, the repositories and the suggestions.
+    fn item_choices(&self, view: &ViewId, item: &Item, shown: &[Item]) -> Vec<Choice> {
         let repo_of = |p: &Path| crate::sources::repo::origin_of(p).map(|r| r.to_string());
         let tabs = self.sidebar_all_tabs();
         let suggestions: Vec<(String, Vec<crate::usage::habits::Choice>)> = self
@@ -1174,23 +1197,25 @@ impl Server {
             home: paths::home(),
             habit: &habit,
         };
-        let list = choices::item_choices(&view.id, &item, &view.data.items, &ctx);
+        choices::item_choices(view, item, shown, &ctx)
+    }
+
+    /// A notification's menu, over whatever is in front (the Notifications
+    /// window's Enter), as its row in the Notifications view opens it: its
+    /// whole message above what it leads to and putting it away. `item.id`
+    /// is `<source>\t<id>`, as that view gives it.
+    pub(crate) fn notice_menu(&mut self, client: ClientId, item: Item) {
+        let list = self.item_choices(&ViewId::Notifications, &item, &[]);
         if list.is_empty() {
             return;
         }
-        // A Slack message is shown whole above its choices, since the row
-        // cuts it.
-        let body = (view.id == ViewId::Slack).then(|| {
-            if item.lines.is_empty() {
-                item.detail.clone()
-            } else {
-                item.lines.join("\n")
-            }
-        });
-        // A Slack message acted on, whatever was picked, is seen.
-        let seen = (view.id == ViewId::Slack
-            || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack"))
-            && item.data.get("message").is_some();
+        let body = if item.lines.is_empty() {
+            item.detail.clone()
+        } else {
+            item.lines.join("\n")
+        };
+        let seen = choices::notice_of(&item).0 == "slack" && item.data.get("message").is_some();
+        let body = (!body.is_empty()).then_some(body);
         self.mission_menu(client, item.title.clone(), body, list, seen.then_some(item));
     }
 

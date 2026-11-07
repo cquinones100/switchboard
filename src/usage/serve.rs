@@ -429,6 +429,10 @@ impl Server {
     /// A tab is being taken out (`remove_tab`, before it goes): it is seen
     /// once more and logged, for the Closed view.
     pub fn tab_closing(&mut self, tab: TabId) {
+        // The Notifications window is no tab to reopen.
+        if self.is_notices_tab(tab) {
+            return;
+        }
         let index = self
             .session_of_tab(tab)
             .and_then(|s| s.tabs.iter().position(|t| *t == tab))

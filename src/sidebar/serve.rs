@@ -36,6 +36,8 @@ use crate::mux::{PaneId, TabId};
 use crate::ui::{Outcome, Theme};
 use crate::{paths, settings, util};
 
+mod window;
+
 /// How often the spinner turns.
 const SPIN: Duration = Duration::from_millis(text::SPINNER_MS);
 
@@ -279,9 +281,11 @@ impl Server {
             return Vec::new();
         };
         let attached = self.clients.values().any(|c| c.session == s.name);
+        // The Notifications window is no tab (src/sidebar/notices.rs).
         s.tabs
             .iter()
             .enumerate()
+            .filter(|(_, id)| !self.is_notices_tab(**id))
             .filter_map(|(i, id)| self.tab_model(s, attached, *id, i + 1))
             .collect()
     }
@@ -627,7 +631,13 @@ impl Server {
             side.top = None;
         }
         side.focused = true;
-        side.cursor = Some(cursor.unwrap_or(Owner::Tab(here)));
+        // In the Notifications window, the cursor starts on its notification.
+        let shown = self
+            .is_notices_tab(here)
+            .then(|| self.sidebar.windows.at.get(session).cloned())
+            .flatten();
+        let side = self.sidebar.side(session);
+        side.cursor = Some(cursor.or(shown).unwrap_or(Owner::Tab(here)));
         self.dirty_session(session);
         if self.sidebar.tips_asked.insert("sidebar") {
             let client = self.latest_client_of(session);
@@ -844,6 +854,11 @@ impl Server {
         if to >= order.len() as isize && !notices.is_empty() && !typing {
             let i = ((to - order.len() as isize) as usize).min(notices.len() - 1);
             self.sidebar.side(session).cursor = Some(notices[i].clone());
+            // Onto a notification, the Notifications window comes to the
+            // front on it, as a tab would (notice_list setting).
+            if settings::is_on("notice_list") {
+                self.show_notices(session, &notices[i]);
+            }
             self.dirty_session(session);
             return;
         }
@@ -959,7 +974,11 @@ impl Server {
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
                 if none || k.code == KeyCode::Enter =>
             {
-                if on_notice.is_some() {
+                if on_notice.is_some() && settings::is_on("notice_list") {
+                    // Into the Notifications window, as Enter goes into a
+                    // tab's pane.
+                    self.notices_enter(session, &cursor);
+                } else if on_notice.is_some() {
                     self.sidebar_open_notice(client, &cursor);
                 } else if let Some(t) = chosen {
                     self.sidebar_go(session, t);
@@ -1190,6 +1209,11 @@ impl Server {
             }
             (MouseKind::Press, MouseButton::Left) => match owner {
                 Some(Owner::Tab(t)) => self.sidebar_go(&session, t),
+                // A notification clicked: the Notifications window, on it.
+                Some(notice @ Owner::Notice { .. }) if settings::is_on("notice_list") => {
+                    self.sidebar_enter(&session, Some(notice.clone()));
+                    self.show_notices(&session, &notice);
+                }
                 Some(notice @ Owner::Notice { .. }) => self.sidebar_open_notice(client, &notice),
                 None => {}
             },
@@ -1292,8 +1316,9 @@ impl Server {
     }
 
     /// The cursor onto the first notification, in the sidebar of the
-    /// client's session (sidebar.sh notices with notice_list off); with no
-    /// sidebar there, it says why.
+    /// client's session, the Notifications window coming to the front on it
+    /// (goToNotices); with notice_list off and no sidebar there, it says
+    /// why.
     pub(crate) fn sidebar_to_notices(&mut self, client: ClientId) {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
@@ -1302,6 +1327,19 @@ impl Server {
             self.say(Some(client), "No notifications");
             return;
         };
+        // With the Notifications window, it comes to the front on the
+        // first, browsed from the sidebar, or from its own keys with no
+        // sidebar to browse from.
+        if settings::is_on("notice_list") {
+            if self.sidebar_shown(&session) {
+                self.sidebar.side(&session).filter = None;
+                self.sidebar_enter(&session, Some(first.owner.clone()));
+                self.show_notices(&session, &first.owner);
+            } else {
+                self.notices_enter(&session, &first.owner);
+            }
+            return;
+        }
         if !self.sidebar_shown(&session) {
             let why = if settings::is_on("sidebar") {
                 "The notifications are in the sidebar, which this window is too narrow for."
