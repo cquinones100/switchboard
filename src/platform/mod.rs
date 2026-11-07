@@ -119,3 +119,17 @@ pub fn open(target: &str) -> Result<()> {
 pub fn secrets_file() -> PathBuf {
     crate::paths::config_dir().join("secrets.json")
 }
+
+/// Saves the clipboard's image to `file` as a PNG, for a picture pasted
+/// into a note (src/notes/images.rs): macOS's pasteboard, through
+/// JavaScript for Automation; Wayland's or X's clipboard tool on Linux.
+/// Whether there was an image to save.
+pub fn paste_image(file: &std::path::Path) -> bool {
+    os::paste_image(file)
+}
+
+/// Shows a file without leaving the terminal for an app where the desktop
+/// can (Quick Look on macOS); elsewhere opens it as `open` does.
+pub fn preview(file: &std::path::Path) -> Result<()> {
+    os::preview(file)
+}

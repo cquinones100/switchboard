@@ -122,3 +122,43 @@ pub fn front_app() -> Option<String> {
 pub fn open(target: &str) -> Result<()> {
     util::run("open", [target]).map(|_| ())
 }
+
+/// The pasteboard's PNG, or its TIFF made a PNG, as a screenshot copied
+/// puts both there (notes/lua/notes/images.lua's `grab`). AppleScript's
+/// `the clipboard as «class PNGf»` can't read an image the screenshot tool
+/// hands over only when asked.
+const GRAB: &str = r#"
+ObjC.import("AppKit");
+function run(argv) {
+  const pb = $.NSPasteboard.generalPasteboard;
+  let data = pb.dataForType("public.png");
+  if (data.isNil()) {
+    const tiff = pb.dataForType("public.tiff");
+    if (tiff.isNil()) return "none";
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+    if (rep.isNil()) return "none";
+    data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({}));
+  }
+  return data.writeToFileAtomically(argv[0], true) ? "ok" : "none";
+}
+"#;
+
+pub fn paste_image(file: &std::path::Path) -> bool {
+    let path = file.to_string_lossy();
+    util::try_run("osascript", ["-l", "JavaScript", "-e", GRAB, &path])
+        .is_some_and(|out| out.trim() == "ok")
+        && file.is_file()
+}
+
+/// Quick Look, without leaving the terminal for an app.
+pub fn preview(file: &std::path::Path) -> Result<()> {
+    Command::new("qlmanage")
+        .arg("-p")
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| anyhow!("Couldn't show it: {e}"))
+}

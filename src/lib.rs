@@ -44,6 +44,8 @@
 //!   your tabs while you are away.
 //! - `update`: keeping Switchboard current: `switchboard update`, and the
 //!   hourly look for a new release, offered in a box.
+//! - `notes`: the notes app, `switchboard notes`, in place of the Neovim
+//!   plugin.
 
 pub mod agent;
 pub mod cmd;
@@ -57,6 +59,7 @@ pub mod links;
 pub mod mission;
 pub mod mux;
 pub mod net;
+pub mod notes;
 pub mod paths;
 pub mod platform;
 pub mod presence;

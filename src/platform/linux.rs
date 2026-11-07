@@ -389,3 +389,33 @@ pub fn open(target: &str) -> Result<()> {
     }
     Err(anyhow!("nothing here opens {target}: install xdg-utils"))
 }
+
+/// The clipboard's PNG, through Wayland's or X's clipboard tool.
+pub fn paste_image(file: &std::path::Path) -> bool {
+    let out = match clipboard_tool() {
+        Some(("wl-copy", _, _)) => Command::new("wl-paste")
+            .args(["--type", "image/png"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok(),
+        Some(("xclip", _, _)) => Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok(),
+        _ => None,
+    };
+    match out {
+        Some(out) if out.status.success() && out.stdout.starts_with(b"\x89PNG") => {
+            std::fs::write(file, out.stdout).is_ok()
+        }
+        _ => false,
+    }
+}
+
+/// Linux has no Quick Look: the file opens in what the desktop opens it with.
+pub fn preview(file: &std::path::Path) -> Result<()> {
+    open(&file.to_string_lossy())
+}
