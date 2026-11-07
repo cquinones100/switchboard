@@ -92,7 +92,9 @@ pub trait Connector: Sync {
     ) -> impl Future<Output = Result<String, ConnectorError>> + Send;
 }
 
-/// Claude's connectors, through a headless `claude -p`.
+/// Claude's connectors, through a headless `claude -p`, for the day's
+/// background looks: one whose connector isn't connected waits for Claude
+/// Code to say it is (`connector::call_in_background`).
 pub struct Claude;
 
 impl Connector for Claude {
@@ -103,7 +105,7 @@ impl Connector for Claude {
         timeout: Option<Duration>,
     ) -> impl Future<Output = Result<String, ConnectorError>> + Send {
         let tool = tool.to_string();
-        async move { crate::connector::call_connector(&tool, &input, timeout).await }
+        async move { crate::connector::call_in_background(&tool, &input, timeout).await }
     }
 }
 
