@@ -33,7 +33,8 @@
 //! --resume <session>` typed into that shell, as resurrect's
 //! `claude->claude-here` restored Claude through the shell, so the shell and
 //! its PATH are there once Claude ends; a pane that ran one of `RESTARTABLE`
-//! has that program typed the same way, and any other comes back as its shell,
+//! has that program typed the same way, as does a pane running Notes (`switchboard
+//! notes`, which was Neovim), and any other comes back as its shell,
 //! since running a command again (a deploy, a migration) can do harm. A file
 //! that can't be read or doesn't parse is said on stderr (the server's log)
 //! and set aside as `layout.json.bad`, and the server starts fresh.
@@ -310,7 +311,9 @@ fn command_line(pane: &SavedPane) -> Option<String> {
     }
     let argv = pane.command.as_ref()?;
     let name = program_name(argv.first()?);
-    RESTARTABLE.contains(&name).then(|| {
+    // Notes, which ran in Neovim, came back as resurrect brought Neovim back.
+    let notes = name == "switchboard" && argv.len() == 2 && argv[1] == "notes";
+    (notes || RESTARTABLE.contains(&name)).then(|| {
         argv.iter()
             .map(|w| shell_word(w))
             .collect::<Vec<_>>()
@@ -1007,6 +1010,22 @@ mod tests {
             command_line(&path).as_deref(),
             Some(r"/usr/bin/less 'it'\''s'")
         );
+        let notes = SavedPane {
+            command: Some(vec![
+                "/home/jo/.local/bin/switchboard".into(),
+                "notes".into(),
+            ]),
+            ..SavedPane::new(PaneId(0))
+        };
+        assert_eq!(
+            command_line(&notes).as_deref(),
+            Some("/home/jo/.local/bin/switchboard notes")
+        );
+        let other = SavedPane {
+            command: Some(vec!["switchboard".into(), "wt".into(), "feature".into()]),
+            ..SavedPane::new(PaneId(0))
+        };
+        assert_eq!(command_line(&other), None, "only Notes of the binary's own");
     }
 
     #[test]
