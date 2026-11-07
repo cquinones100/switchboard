@@ -104,6 +104,9 @@ pub fn keep_awake(_why: &str) -> Option<KeepAwake> {
         .map(KeepAwake)
 }
 
+pub const CLAUDE_MANAGED_SETTINGS: &str =
+    "/Library/Application Support/ClaudeCode/managed-settings.json";
+
 pub fn chrome_local_state() -> Option<PathBuf> {
     Some(crate::paths::home_join(
         "Library/Application Support/Google/Chrome/Local State",

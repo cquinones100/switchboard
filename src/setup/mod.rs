@@ -21,10 +21,11 @@
 //!
 //! Which way the middle three put Switchboard, as a plugin or in
 //! `~/.claude` as earlier versions did, is Settings' "Load Switchboard as a
-//! plugin" and Claude Code's version (`way`); `--move` runs the parts that
-//! move Switchboard over after the setting changes, as Settings does. The
-//! guided setup also says which optional parts are there (`optional`): the
-//! services and programs a feature needs, each with how to set it up.
+//! plugin", Claude Code's version and its managed settings (`way`);
+//! `--move` runs the parts that move Switchboard over after the setting
+//! changes, as Settings does. The guided setup also says which optional
+//! parts are there (`optional`): the services and programs a feature needs,
+//! each with how to set it up.
 //!
 //! As setup.sh did, running it again changes only what isn't in place yet:
 //! each part says what it changed, or that it was up to date, and `--check`
@@ -454,8 +455,9 @@ fn plugin_offered(check: bool, list: &mut List) {
 }
 
 /// The way Switchboard reaches Claude Code: a Claude Code too old for the
-/// plugin said, and an install an earlier version made in `~/.claude`, whose
-/// owner hasn't chosen, asked once whether to move into the plugin.
+/// plugin, or managed settings that keep it from loading one, said, and an
+/// install an earlier version made in `~/.claude`, whose owner hasn't
+/// chosen, asked once whether to move into the plugin.
 fn way_offered(check: bool, list: &mut List) -> Way {
     let (way, why) = way::settle(check);
     if let Some(why) = why {
@@ -493,7 +495,7 @@ fn way_offered(check: bool, list: &mut List) -> Way {
             }
         };
     }
-    if way == Way::Old && way::too_old().is_none() {
+    if way == Way::Old && way::blocked().is_none() {
         list.optional(
             "Switchboard as a plugin, which keeps its hooks, skills and instructions to the Claude in its panes: Settings' \"Load Switchboard as a plugin\"",
         );

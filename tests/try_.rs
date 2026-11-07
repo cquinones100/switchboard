@@ -88,6 +88,12 @@ impl Setup {
             .env("PATH", format!("{}:{path}", self.bin.display()))
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
+            // Claude Code's managed settings: none, rather than the
+            // computer's own.
+            .env(
+                "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS",
+                self._dir.path().join("managed-settings.json"),
+            )
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_STATE_DIR")

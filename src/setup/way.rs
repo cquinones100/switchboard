@@ -21,7 +21,13 @@
 //!   later Claude Code would load on top of the hooks in `~/.claude`.
 //!   `claude --version` is asked once a run, only here, never on the
 //!   drawing path; a version that can't be read leaves it to the setting.
+//! - Claude Code's managed settings (an organization's policy, in the file
+//!   `platform::claude_managed_settings` names) may set
+//!   `disableSideloadFlags`, with which a Claude whose environment names a
+//!   plugin directory refuses to start, so every pane's would. Setup keeps
+//!   the old way there too, turning the setting off and saying why.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -29,7 +35,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use serde_json::Value;
 
 use super::{claude_md, claude_settings, plugin, skills};
-use crate::{settings, util};
+use crate::{platform, settings, util};
 
 /// The setting.
 pub const SETTING: &str = "claude_plugin";
@@ -67,6 +73,58 @@ pub fn too_old() -> Option<(u64, u64, u64)> {
     claude_version().filter(|v| *v < plugin::CLAUDE_VERSION)
 }
 
+/// Whether Claude Code's managed settings in `file` set
+/// `disableSideloadFlags`, with which Claude refuses to start when its
+/// environment names a plugin directory (`plugin::ENV`). A file that is
+/// missing or isn't JSON sets nothing.
+pub fn sideload_disabled_in(file: &Path) -> bool {
+    util::read_json(file)
+        .and_then(|v| v.get("disableSideloadFlags").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
+/// Whether the computer's managed settings turn sideloading off.
+pub fn sideload_disabled() -> bool {
+    sideload_disabled_in(&platform::claude_managed_settings())
+}
+
+/// Why the plugin can't be loaded here, whatever the setting says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blocked {
+    /// Claude Code's managed settings set `disableSideloadFlags`.
+    Policy,
+    /// Claude Code older than `plugin::CLAUDE_VERSION`, as it says.
+    TooOld((u64, u64, u64)),
+}
+
+/// What keeps the plugin from loading, if anything: the managed settings
+/// first, a file read, then Claude Code's version, which runs it.
+pub fn blocked() -> Option<Blocked> {
+    if sideload_disabled() {
+        return Some(Blocked::Policy);
+    }
+    too_old().map(Blocked::TooOld)
+}
+
+impl Blocked {
+    /// Why Switchboard stays in `~/.claude`, with `off` saying where the
+    /// setting is (" and the setting is off", or why it couldn't be turned
+    /// off), and what to do once it no longer holds.
+    pub fn why(&self, off: &str) -> String {
+        match self {
+            Blocked::Policy => format!(
+                "Claude Code's managed settings ({}) set disableSideloadFlags, with which Claude won't start in a pane that names Switchboard's plugin, so its hooks, skills and instructions stay in ~/.claude{off}; if that policy is lifted, turn on Settings' \"Load Switchboard as a plugin\"",
+                platform::claude_managed_settings().display()
+            ),
+            Blocked::TooOld(v) => format!(
+                "Claude Code {} is older than {}, which loads Switchboard as a plugin, so its hooks, skills and instructions stay in ~/.claude{off}; once it is updated (claude update), turn on Settings' \"Load Switchboard as a plugin\"",
+                words(*v),
+                words(plugin::CLAUDE_VERSION)
+            ),
+        }
+    }
+}
+
 /// A version as Claude Code writes it.
 pub fn words(v: (u64, u64, u64)) -> String {
     format!("{}.{}.{}", v.0, v.1, v.2)
@@ -94,7 +152,7 @@ pub fn current() -> Way {
     match SETTLED.load(Ordering::Relaxed) {
         1 => Way::Plugin,
         2 => Way::Old,
-        _ if plugin_on() && too_old().is_none() => Way::Plugin,
+        _ if plugin_on() && blocked().is_none() => Way::Plugin,
         _ => Way::Old,
     }
 }
@@ -123,31 +181,64 @@ pub fn choose(way: Way, check: bool) -> anyhow::Result<()> {
 }
 
 /// The way for a run that changes things: the setting's, unless Claude Code
-/// is too old for the plugin, when the setting is turned off (but with
-/// `check`) and why is given to say.
+/// can't load the plugin here (`blocked`), when the setting is turned off
+/// (but with `check`) and why is given to say.
 pub fn settle(check: bool) -> (Way, Option<String>) {
     let way = current();
-    let why = match too_old() {
-        Some(v) if plugin_on() => {
-            if let Err(e) = choose(Way::Old, check) {
+    let why = match blocked() {
+        Some(blocked) if plugin_on() => Some(match choose(Way::Old, check) {
+            Err(e) => {
                 return (
                     Way::Old,
-                    Some(format!(
-                        "Claude Code {} is older than {}, which loads Switchboard as a plugin, so its hooks, skills and instructions stay in ~/.claude; the setting couldn't be turned off: {e:#}",
-                        words(v),
-                        words(plugin::CLAUDE_VERSION)
-                    )),
+                    Some(blocked.why(&format!("; the setting couldn't be turned off: {e:#}"))),
                 );
             }
-            Some(format!(
-                "Claude Code {} is older than {}, which loads Switchboard as a plugin, so its hooks, skills and instructions stay in ~/.claude{}; once it is updated (claude update), turn on Settings' \"Load Switchboard as a plugin\"",
-                words(v),
-                words(plugin::CLAUDE_VERSION),
-                if check { "" } else { " and the setting is off" }
-            ))
-        }
+            Ok(()) if check => blocked.why(""),
+            Ok(()) => blocked.why(" and the setting is off"),
+        }),
         _ => None,
     };
     set(way);
     (way, why)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sideloading_is_off_only_where_the_managed_settings_say_so() {
+        let dir = std::env::temp_dir().join(format!("sb-way-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("managed-settings.json");
+        assert!(!sideload_disabled_in(&file), "no file");
+        for (text, off) in [
+            (r#"{"disableSideloadFlags": true}"#, true),
+            (r#"{"disableSideloadFlags": false}"#, false),
+            (r#"{"disableSideloadFlags": "true"}"#, false),
+            (r#"{"permissions": {"deny": []}}"#, false),
+            ("not json", false),
+        ] {
+            std::fs::write(&file, text).unwrap();
+            assert_eq!(sideload_disabled_in(&file), off, "{text}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn why_says_what_keeps_the_plugin_off_and_what_to_do_after() {
+        let policy = Blocked::Policy.why(" and the setting is off");
+        assert!(policy.contains("disableSideloadFlags"), "{policy}");
+        assert!(
+            policy.contains("stay in ~/.claude and the setting is off;"),
+            "{policy}"
+        );
+        let old = Blocked::TooOld((2, 1, 100)).why("");
+        assert!(
+            old.starts_with("Claude Code 2.1.100 is older than 2.1.280"),
+            "{old}"
+        );
+        assert!(old.contains("claude update"), "{old}");
+    }
 }

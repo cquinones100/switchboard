@@ -475,11 +475,15 @@ impl Env {
     /// set now: those in `LEFT_OUT`, and the ones a Claude session or other
     /// agent passes on (`CLAUDE*`, `AI_AGENT`), which would make the try's
     /// Claude take itself for that session's child, and any other
-    /// `SWITCHBOARD_*`, left out.
+    /// `SWITCHBOARD_*`, left out, but `SWITCHBOARD_CLAUDE_MANAGED_SETTINGS`,
+    /// which names the computer's policy for Claude Code rather than a place
+    /// of yours (the tests set it, so a try's setup never reads the real
+    /// one).
     pub fn new(real: &Path, home: &Path, path: &str, vars: impl Iterator<Item = String>) -> Env {
         let mut unset: Vec<String> = LEFT_OUT.iter().map(|v| v.to_string()).collect();
         let mut present: Vec<String> = vars
             .filter(|v| v.starts_with("CLAUDE") || v == "AI_AGENT" || v.starts_with("SWITCHBOARD"))
+            .filter(|v| v != "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS")
             .filter(|v| v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
             .filter(|v| !unset.contains(v))
             .collect();
@@ -1403,9 +1407,15 @@ mod tests {
             Path::new("/home/me"),
             Path::new("/tmp/sb-1"),
             "/home/me/.cargo/bin:/usr/bin:~/go/bin",
-            ["CLAUDECODE", "AI_AGENT", "SWITCHBOARD_GITHUB_API", "EDITOR"]
-                .into_iter()
-                .map(String::from),
+            [
+                "CLAUDECODE",
+                "AI_AGENT",
+                "SWITCHBOARD_GITHUB_API",
+                "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS",
+                "EDITOR",
+            ]
+            .into_iter()
+            .map(String::from),
         );
         for name in [
             "SWITCHBOARD",
@@ -1418,6 +1428,12 @@ mod tests {
         }
         assert!(env.unset.iter().any(|v| v == "SWITCHBOARD_GITHUB_API"));
         assert!(!env.unset.iter().any(|v| v == "EDITOR"));
+        assert!(
+            !env.unset
+                .iter()
+                .any(|v| v == "SWITCHBOARD_CLAUDE_MANAGED_SETTINGS"),
+            "the computer's policy, kept"
+        );
         // .cargo isn't in the try, so it stays yours; nor ~/go/bin.
         assert_eq!(
             env.set[1].1,

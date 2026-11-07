@@ -330,6 +330,8 @@ pub fn keep_awake(why: &str) -> Option<KeepAwake> {
 
 // ── Apps ────────────────────────────────────────────────────────────────────
 
+pub const CLAUDE_MANAGED_SETTINGS: &str = "/etc/claude-code/managed-settings.json";
+
 pub fn chrome_local_state() -> Option<PathBuf> {
     [
         "google-chrome",

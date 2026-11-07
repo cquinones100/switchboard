@@ -95,6 +95,19 @@ pub fn keep_awake(why: &str) -> Option<KeepAwake> {
     os::keep_awake(why).map(|inner| KeepAwake { inner })
 }
 
+/// Claude Code's managed settings, the file an organization's policy puts
+/// on the computer for every user of it: `/Library/Application Support/
+/// ClaudeCode/managed-settings.json` on macOS, `/etc/claude-code/
+/// managed-settings.json` on Linux. `SWITCHBOARD_CLAUDE_MANAGED_SETTINGS`
+/// names another file in its place, which the tests set, so none reads the
+/// computer's own.
+pub fn claude_managed_settings() -> PathBuf {
+    match std::env::var_os("SWITCHBOARD_CLAUDE_MANAGED_SETTINGS") {
+        Some(f) if !f.is_empty() => PathBuf::from(f),
+        _ => PathBuf::from(os::CLAUDE_MANAGED_SETTINGS),
+    }
+}
+
 /// Chrome's `Local State` file, which lists its profiles, where Chrome (or
 /// Chromium) keeps it here.
 pub fn chrome_local_state() -> Option<PathBuf> {

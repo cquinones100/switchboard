@@ -52,6 +52,18 @@ impl Home {
         fs::write(file, settings.to_string()).unwrap();
     }
 
+    /// Where the test's Claude Code managed settings are, in place of the
+    /// computer's own (`/etc/claude-code`), which no test reads: none until
+    /// `managed` writes them.
+    fn managed_file(&self) -> PathBuf {
+        self._dir.path().join("managed-settings.json")
+    }
+
+    /// Claude Code's managed settings, as an organization's policy sets them.
+    fn managed(&self, settings: Value) {
+        fs::write(self.managed_file(), settings.to_string()).unwrap();
+    }
+
     /// Settings' "Load Switchboard as a plugin" off: the old way.
     fn old_way(&self) {
         self.settings(json!({ "claude_plugin": false }));
@@ -81,6 +93,7 @@ impl Home {
                 "SWITCHBOARD_STATE_DIR",
                 self.home.join(".local/state/switchboard"),
             )
+            .env("SWITCHBOARD_CLAUDE_MANAGED_SETTINGS", self.managed_file())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_AUTHOR_NAME", "t")
@@ -1207,6 +1220,38 @@ fn a_claude_code_too_old_for_the_plugin_keeps_the_old_way_whatever_the_setting()
 
     // Once Claude Code is new enough, turning it on moves Switchboard over.
     h.claude_version("2.1.280");
+    ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert_eq!(h.saved(), json!({}));
+    assert!(!read(&h.path(".claude/settings.json")).contains("switchboard hook"));
+}
+
+#[test]
+fn managed_settings_that_turn_sideloading_off_keep_the_old_way_whatever_the_setting() {
+    let h = Home::new("setup-managed");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    h.managed(json!({ "disableSideloadFlags": true }));
+
+    // A new install: setup keeps Switchboard in ~/.claude, turns the setting
+    // off, so no pane names the plugin, and says why.
+    let said = ok(&h.run_with(&["setup"], "\n\n\n"));
+    assert!(said.contains("set disableSideloadFlags"), "{said}");
+    assert!(
+        !said.contains("Load Switchboard as a plugin in its panes?"),
+        "{said}"
+    );
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert!(read(&h.path(".claude/settings.json")).contains("switchboard hook Stop"));
+    assert!(h.path(".claude/skills/wt/.switchboard-skill").is_file());
+    let installed = snapshot(&h.path(".claude"));
+
+    // Turned on, it stays off, saying why, and nothing moves.
+    let on = ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert!(on.contains("disableSideloadFlags"), "{on}");
+    assert_eq!(h.saved()["claude_plugin"], json!(false));
+    assert_eq!(snapshot(&h.path(".claude")), installed);
+
+    // A policy that allows it: turning it on moves Switchboard over.
+    h.managed(json!({ "disableSideloadFlags": false }));
     ok(&h.run(&["setting", "claude_plugin", "on"]));
     assert_eq!(h.saved(), json!({}));
     assert!(!read(&h.path(".claude/settings.json")).contains("switchboard hook"));

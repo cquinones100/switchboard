@@ -560,7 +560,7 @@
     "key": "claude_plugin",
     "category": "Sessions",
     "label": "Load Switchboard as a plugin",
-    "description": "Claude in Switchboard's panes loads its hooks (the tabs' Claude states), skills and instructions as a plugin, and setup keeps them out of ~/.claude, so Claude elsewhere has only your own; it needs Claude Code 2.1.280 or later. Off, setup puts them in ~/.claude as before, for every Claude of yours. Changing it moves them over",
+    "description": "Claude in Switchboard's panes loads its hooks (the tabs' Claude states), skills and instructions as a plugin, and setup keeps them out of ~/.claude, so Claude elsewhere has only your own; it needs Claude Code 2.1.280 or later, and managed settings that don't set disableSideloadFlags. Off, setup puts them in ~/.claude as before, for every Claude of yours. Changing it moves them over",
     "default": true
   },
   {
