@@ -443,6 +443,61 @@ fn ctrl_w_and_the_m_arrows_move_between_the_list_and_the_note() {
 }
 
 #[test]
+fn the_wheel_scrolls_a_note_and_the_list_past_where_their_cursors_were() {
+    let (_dir, mut store) = temp("wheel");
+    let long = store.create("", Some("Long"));
+    let body: String = (1..=120).map(|i| format!("line {i}\n")).collect();
+    write(&long, &format!("# Long\n{body}"));
+    for i in 0..40 {
+        let note = store.create("", Some(&format!("Short {i}")));
+        write(&note, &format!("# Short {i}\n"));
+    }
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&long, false, false);
+    screen(&mut app);
+    let wheel = |app: &mut App, in_list: bool, down: bool| {
+        let r = if in_list { app.geo.list } else { app.geo.note };
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: if down {
+                MouseButton::WheelDown
+            } else {
+                MouseButton::WheelUp
+            },
+            col: r.x + 2,
+            row: r.y + 2,
+            mods: Mods::NONE,
+        })
+    };
+    // Down and down again, never held back by the cursor, which keeps up.
+    let mut tops = Vec::new();
+    for _ in 0..12 {
+        wheel(&mut app, false, true);
+        screen(&mut app);
+        tops.push(app.editor.top);
+        let row = app.editor.doc.row;
+        assert!(row >= app.editor.top, "the cursor in the view: {row}");
+    }
+    assert!(tops.windows(2).all(|t| t[1] > t[0]), "{tops:?}");
+    wheel(&mut app, false, false);
+    screen(&mut app);
+    assert!(app.editor.top < *tops.last().unwrap(), "and back up");
+    // The list scrolls past its cursor, which stays where it was.
+    app.focus = Focus::List;
+    app.list_at = 0;
+    screen(&mut app);
+    for _ in 0..3 {
+        wheel(&mut app, true, true);
+    }
+    screen(&mut app);
+    assert_eq!((app.list_at, app.list_top), (0, 9));
+    keys(&mut app, "j");
+    screen(&mut app);
+    assert_eq!(app.list_top, 1, "a key brings the cursor back in sight");
+}
+
+#[test]
 fn only_one_app_opens_the_notes_and_another_says_so() {
     let (dir, store) = temp("locked");
     // Held by a live process: the test runner's parent.

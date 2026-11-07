@@ -329,6 +329,10 @@ pub struct App {
     /// The list's first row on the screen, and its width.
     list_top: usize,
     list_width: u16,
+    /// The list's row the cursor was on when the list last followed it:
+    /// the list scrolls to the cursor only when the cursor has moved, so
+    /// the wheel scrolls it past the cursor.
+    list_followed: Option<usize>,
     focus: Focus,
     /// The user has moved through the list, so a story arriving keeps the
     /// file shown.
@@ -414,6 +418,7 @@ impl App {
             at: 0,
             list_top: 0,
             list_width: LIST_WIDTH,
+            list_followed: None,
             focus: Focus::List,
             moved: false,
             files: HashMap::new(),
@@ -1382,6 +1387,9 @@ impl App {
         if self.order.is_empty() {
             return;
         }
+        // A key that moves it brings the cursor back in sight, where it
+        // was or not.
+        self.list_followed = None;
         let to = (self.at as isize + by).clamp(0, self.order.len() as isize - 1) as usize;
         if to != self.at {
             self.moved = true;
@@ -1996,6 +2004,11 @@ impl App {
                 return Act::Redraw;
             };
             match (first, c) {
+                ('g', 'g') => {
+                    if let Some(a) = &mut self.answer {
+                        a.cursor = 0;
+                    }
+                }
                 ('g', 'a') => {
                     self.close_answer();
                     self.open_ask();
@@ -2008,17 +2021,21 @@ impl App {
             return Act::Redraw;
         }
         let lines = self.answer_lines(self.answer_width()).len();
+        let half = (self.answer_body() / 2).max(1);
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(a) = &mut self.answer else {
             return Act::Same;
         };
+        let last = lines.saturating_sub(1);
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => self.close_answer(),
-            KeyCode::Char(c @ ('g' | 'y')) => self.pending = Some(c),
-            KeyCode::Char('j') | KeyCode::Down => {
-                a.cursor = (a.cursor + 1).min(lines.saturating_sub(1))
-            }
+            KeyCode::Char('d') if ctrl => a.cursor = (a.cursor + half).min(last),
+            KeyCode::Char('u') if ctrl => a.cursor = a.cursor.saturating_sub(half),
+            KeyCode::Char(c @ ('g' | 'y')) if !ctrl => self.pending = Some(c),
+            KeyCode::Char('j') | KeyCode::Down => a.cursor = (a.cursor + 1).min(last),
             KeyCode::Char('k') | KeyCode::Up => a.cursor = a.cursor.saturating_sub(1),
-            KeyCode::Char('G') => a.cursor = lines.saturating_sub(1),
+            KeyCode::Char('G') | KeyCode::End => a.cursor = last,
+            KeyCode::Home => a.cursor = 0,
             _ => return Act::Same,
         }
         Act::Redraw
@@ -2088,6 +2105,17 @@ impl App {
         }
     }
 
+    /// The answer window's rows of text: the window less its edges and its
+    /// row of buttons.
+    fn answer_body(&self) -> usize {
+        let h = self
+            .rows
+            .saturating_sub(2)
+            .max(5)
+            .min(self.rows.saturating_sub(1));
+        h.saturating_sub(3) as usize
+    }
+
     fn answer_width(&self) -> u16 {
         (self.cols / 2)
             .saturating_sub(2)
@@ -2151,14 +2179,21 @@ impl App {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = m.kind == MouseEventKind::ScrollDown;
                 if self.answer.is_some() {
+                    // The view moved and the cursor brought into it, as
+                    // the answer's window was a Neovim float's.
+                    let lines = self.answer_lines(self.answer_width()).len();
+                    let body = self.answer_body().max(1);
                     if let Some(a) = &mut self.answer {
+                        let last = lines.saturating_sub(1);
                         a.top = if down {
-                            a.top + 3
+                            (a.top + 3).min(lines.saturating_sub(body))
                         } else {
                             a.top.saturating_sub(3)
                         };
+                        a.cursor = a.cursor.clamp(a.top, a.top + body - 1).min(last);
                     }
                 } else if x < self.list_width {
+                    // The list alone moves; the cursor stays on its file.
                     self.list_top = if down {
                         self.list_top + 3
                     } else {
@@ -2986,6 +3021,50 @@ mod tests {
             screen(&mut app).iter().any(|l| l.contains("README.md")),
             "Esc shows the diff"
         );
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_list_and_the_answer_past_their_cursors() {
+        let mut app = app();
+        screen(&mut app);
+        let wheel = |app: &mut App, column: u16, down: bool| {
+            app.mouse(MouseEvent {
+                kind: if down {
+                    MouseEventKind::ScrollDown
+                } else {
+                    MouseEventKind::ScrollUp
+                },
+                column,
+                row: 3,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        wheel(&mut app, 2, true);
+        let shown = list(&screen(&mut app));
+        assert_eq!(app.list_top, 3, "{shown:?}");
+        assert!(!shown.iter().any(|l| l.contains("README.md")), "{shown:?}");
+        assert_eq!(app.current().unwrap().path, "README.md", "still chosen");
+        press(&mut app, "j");
+        screen(&mut app);
+        assert_eq!(app.list_top, 2, "a key brings the cursor back in sight");
+        // The answer's window: the view moves, the cursor along with it.
+        press(&mut app, "ga");
+        press(&mut app, "Why?");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let id = app.answer.as_ref().unwrap().id;
+        let long: String = (1..=60).map(|i| format!("Point {i}.\n\n")).collect();
+        app.event(Msg::Asked(id, Said::Done(Ok(long))));
+        screen(&mut app);
+        for _ in 0..4 {
+            wheel(&mut app, 90, true);
+        }
+        screen(&mut app);
+        let a = app.answer.as_ref().unwrap();
+        assert_eq!(a.top, 12);
+        assert!(a.cursor >= a.top, "{} {}", a.cursor, a.top);
+        press(&mut app, "gg");
+        screen(&mut app);
+        assert_eq!(app.answer.as_ref().unwrap().top, 0);
     }
 
     #[test]

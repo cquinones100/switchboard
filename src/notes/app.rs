@@ -325,6 +325,13 @@ pub struct App {
     pub list_rows: Vec<Row>,
     pub list_at: usize,
     list_top: usize,
+    /// The list's cursor when the list last followed it: the list scrolls
+    /// to the cursor only when the cursor has moved, so the wheel scrolls it
+    /// past the cursor.
+    list_followed: Option<usize>,
+    /// The wheel moved the note's view: the cursor is brought into it as
+    /// the note is next drawn, rather than the view back to the cursor.
+    scrolled: bool,
     pub list_shown: bool,
     list_pending: Option<char>,
     pub editor: Editor,
@@ -404,6 +411,8 @@ impl App {
             list_rows: Vec::new(),
             list_at: 0,
             list_top: 0,
+            list_followed: None,
+            scrolled: false,
             list_shown: opts.list,
             list_pending: None,
             editor,
@@ -2389,6 +2398,9 @@ impl App {
         }
     }
 
+    /// The wheel over the note: the view moves, and the cursor is brought
+    /// into it as it is drawn, at the scrolloff's distance from its edges,
+    /// as Vim moves it (`draw_note`).
     fn scroll(&mut self, by: usize, down: bool) {
         let last = self.editor.doc.text.len() - 1;
         self.editor.top = if down {
@@ -2396,14 +2408,7 @@ impl App {
         } else {
             self.editor.top.saturating_sub(by)
         };
-        let row = self.editor.doc.row;
-        let height = self.geo.text.height as usize;
-        if row < self.editor.top {
-            self.editor.doc.row = self.editor.top;
-        } else if row >= self.editor.top + height.max(1) {
-            self.editor.doc.row = self.editor.top + height.saturating_sub(1);
-        }
-        self.editor.clamp();
+        self.scrolled = true;
     }
 
     /// A toolbar button: on the selection when there is one, else on the

@@ -200,8 +200,14 @@ impl App {
         let w = self.list_width.min(self.cols.saturating_sub(10));
         let h = self.diff_area().height as usize;
         let rows = self.list_rows();
-        // The cursor's file in sight, with its heading where there's room.
-        if let Some(at) = rows.iter().position(|r| *r == ListRow::File(self.at)) {
+        // The cursor's file in sight, with its heading where there's room,
+        // once it has moved (or the story has moved its row): the wheel
+        // scrolls the list past it.
+        let row = rows.iter().position(|r| *r == ListRow::File(self.at));
+        if row != self.list_followed
+            && let Some(at) = row
+        {
+            self.list_followed = row;
             let mut first = at;
             while first > 0 && matches!(rows[first - 1], ListRow::Heading(..)) {
                 first -= 1;

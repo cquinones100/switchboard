@@ -838,14 +838,15 @@ With Settings' "Diff story told ahead" (`diff_story_ahead`) on, when a tab's bra
 | Key, in the answer | What it does |
 |---|---|
 | `j` `k`, `↓` `↑` | The line cursor down or up |
-| `G` | The last line |
+| `Ctrl-d` `Ctrl-u` | Half the window down or up |
+| `gg` `G`, `Home` `End` | The first or last line |
 | `gf` | The `path:line` on the cursor's line, in the diff, when the change has that file (else a box says it isn't changed, or isn't in the repository); a click on a `path:line` does the same |
 | `ga` | A new question |
 | `yy` | Copy the answer |
 | `yS` | Copy the story |
 | `q`, `Esc` | Close it, stopping Haiku if it is still answering |
 
-Its Close, Ask again and Copy buttons do the same, the wheel scrolls it, and a click outside it closes it.
+Its Close, Ask again and Copy buttons do the same, the wheel scrolls it (the line cursor kept in sight), and a click outside it closes it.
 
 ### The pane beside its diff
 
@@ -857,7 +858,7 @@ Its Close, Ask again and Copy buttons do the same, the wheel scrolls it, and a c
 
 ### The file list
 
-Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the diff without leaving it. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub. In a side of the diff, `v` or `V` starts selecting lines from the cursor, lit as the cursor moves; `yp` and `yl` then copy the lines selected (`path:12-20`, `#L12-L20`) and end the selection, as does `Esc` or `v` again. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it.
+Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the diff without leaving it. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub. In a side of the diff, `v` or `V` starts selecting lines from the cursor, lit as the cursor moves; `yp` and `yl` then copy the lines selected (`path:12-20`, `#L12-L20`) and end the selection, as does `Esc` or `v` again. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it, the list past the file chosen, which a key brings back in sight.
 
 With Settings' "Easy mode" (`easy_keys`, under Help) on, the diff has a row of buttons at the bottom, each pressing its keys in the list: ◀ Chapter, Chapter ▶, ◀ Page, Page ▶, Widen, Copy link, Ask (with Ask Claude about the diff on) and Close, followed, with "Key help line" (`key_help_line`) on, by a line naming the keys. With "Highlight on hover" (`hover_highlight`) on, the button under the mouse lights. Both take effect when the diff next opens.
 

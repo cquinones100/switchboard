@@ -140,11 +140,16 @@ impl App {
     fn draw_list(&mut self, buf: &mut Buffer) {
         let r = self.geo.list;
         let h = r.height as usize;
-        if self.list_at < self.list_top {
-            self.list_top = self.list_at;
-        } else if h > 0 && self.list_at >= self.list_top + h {
-            self.list_top = self.list_at + 1 - h;
+        // The cursor in sight once it has moved; the wheel scrolls past it.
+        if self.list_followed != Some(self.list_at) {
+            self.list_followed = Some(self.list_at);
+            if self.list_at < self.list_top {
+                self.list_top = self.list_at;
+            } else if h > 0 && self.list_at >= self.list_top + h {
+                self.list_top = self.list_at + 1 - h;
+            }
         }
+        self.list_top = self.list_top.min(self.list_rows.len().saturating_sub(1));
         for (i, row) in self
             .list_rows
             .iter()
@@ -315,7 +320,7 @@ impl App {
                 selected.insert(r, (s, e.max(s)));
             }
         }
-        let ctx = Ctx {
+        let mut ctx = Ctx {
             raw: self.focus == Focus::Note
                 && matches!(self.editor.mode, Mode::Insert | Mode::Visual { .. }),
             cursor_row,
@@ -329,10 +334,43 @@ impl App {
         };
         // Scrolled so the cursor's line shows with lines around it.
         let rows: Vec<usize> = visible.iter().map(|v| v.0).collect();
-        let ci = rows.iter().rposition(|&r| r <= cursor_row).unwrap_or(0);
+        let mut ci = rows.iter().rposition(|&r| r <= cursor_row).unwrap_or(0);
         let mut ti = rows.iter().position(|&r| r >= self.editor.top).unwrap_or(0);
         let so = SCROLLOFF.min((text.height as usize).saturating_sub(1) / 2);
         let mut heights = std::collections::HashMap::new();
+        // The wheel moved the view: the cursor comes into it, the
+        // scrolloff's distance from its edges (but at the note's own first
+        // and last lines), as Vim moves it, rather than the view going back
+        // to the cursor.
+        if std::mem::take(&mut self.scrolled) && !rows.is_empty() {
+            let low = if ti == 0 {
+                0
+            } else {
+                (ti + so).min(rows.len() - 1)
+            };
+            let (mut total, mut last) = (0, ti);
+            for (i, &r) in rows.iter().enumerate().skip(ti) {
+                total += *heights
+                    .entry(r)
+                    .or_insert_with(|| self.pieces(r, &ctx).len());
+                if total > text.height as usize {
+                    break;
+                }
+                last = i;
+            }
+            let high = if last + 1 >= rows.len() {
+                last
+            } else {
+                last.saturating_sub(so)
+            };
+            let want = ci.clamp(low, high.max(low));
+            if want != ci {
+                ci = want;
+                self.editor.doc.row = rows[want];
+                self.editor.clamp();
+                ctx.cursor_row = rows[want];
+            }
+        }
         if ci < ti + so {
             ti = ci.saturating_sub(so);
         } else {
