@@ -93,10 +93,13 @@ impl Setting {
 /// The list of options, as compiled in.
 pub const SCHEMA: &str = include_str!("../assets/settings.json");
 
-/// `SWITCHBOARD_SETTINGS`, else `~/.config/switchboard/settings.json`.
+/// `SWITCHBOARD_SETTINGS`, else `~/.config/switchboard/settings.json`. In
+/// the library's own unit tests, whose home is yours, a file that isn't
+/// there: every option reads its default, never what you have set.
 pub fn settings_file() -> PathBuf {
     match std::env::var_os("SWITCHBOARD_SETTINGS") {
         Some(f) if !f.is_empty() => PathBuf::from(f),
+        _ if cfg!(test) => PathBuf::from("/nonexistent/switchboard-unit-tests/settings.json"),
         _ => paths::config_dir().join("settings.json"),
     }
 }
