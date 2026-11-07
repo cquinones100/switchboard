@@ -9,7 +9,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 - macOS, with zsh as your shell. Linux isn't supported yet: the scripts use pbcopy, osascript, open and the Keychain, and `setup.sh` stops at its first check there.
 - [Homebrew](https://brew.sh)
 - A terminal that passes Option through as Alt and shows 24-bit color: [Ghostty](https://ghostty.org) (`brew install --cask ghostty`; setup links its config) or iTerm2. `setup.sh` makes Option act as Alt in Ghostty (a config of your own too), iTerm2 and Terminal, after asking, and says what to add for WezTerm, kitty or Alacritty; Terminal.app still has no 24-bit color.
-- [Claude Code](https://claude.com/claude-code), which every tab runs: `curl -fsSL https://claude.ai/install.sh | bash`
+- [Claude Code](https://claude.com/claude-code) 2.1.280 or newer, which every tab runs: `curl -fsSL https://claude.ai/install.sh | bash`
 
 ## Set up
 
@@ -70,7 +70,7 @@ Your own settings go in `~/.config/switchboard/`, which is never in this reposit
 | `nvim.lua` | Neovim, at the end of its config |
 | `ghostty` | Ghostty, after its config |
 | `lazygit.yml` | lazygit, over its config, in panes tmux starts |
-| `CLAUDE.md` | Claude Code, your own rules, imported with Switchboard's part into `~/.claude/CLAUDE.md` |
+| `CLAUDE.md` | Claude Code, your own rules, imported into `~/.claude/CLAUDE.md` |
 | `claude.json` | where your CLAUDE.md's rules come from, a file or a git repository |
 | `repos.json` | how each repository lands its work, through a PR or straight on its default branch, and a direct landing's tests, squash, review and command before the push |
 | `browser.json` | the Chrome profile each site's links open in (`hosts`), `awsapps.com` for the AWS login, and the `default` profile for any other site |
@@ -81,7 +81,7 @@ Your own settings go in `~/.config/switchboard/`, which is never in this reposit
 | `sidebar.json`, `sidebar-plugins/` | the sidebar's and mission control's sizes, and the plugins that load |
 | `trusted-dirs` | the directories whose own scripts may run |
 
-Claude Code reads no file after its own, so `setup.sh` adds what Switchboard needs (its hooks, statusline and the permissions its loops run with) to your `~/.claude/settings.json` and leaves the rest of it yours. Your `~/.claude/CLAUDE.md` imports Switchboard's part (`claude/switchboard.md`: the tabs, the notes app) and your own rules, from `~/.config/switchboard/CLAUDE.md`, or from where `~/.config/switchboard/claude.json` says: a file (`{"path": "~/somewhere/CLAUDE.md"}`) or a git repository of yours (`{"repo": "<url>", "file": "CLAUDE.md"}`, its CLAUDE.md at the root or in a folder found without `file`, cloned, signing in through `gh` when it is on GitHub or a gist, and pulled each hour with Switchboard's update check and on every setup run), so you can keep your rules in a repository of your own and share them across machines. Settings' "Your CLAUDE.md" sets it for you, and `./setup.sh claude_md` writes it again. Switchboard's skills (`/wt`, `/shape`, `/review-loop` and the rest) are linked one by one into `~/.claude/skills`, beside your own; a skill of yours with the same name is kept rather than Switchboard's.
+Switchboard's skills (`/wt`, `/shape`, `/review-loop` and the rest), the hooks that show each tab's state and its instructions for Claude (`claude/switchboard.md`: the tabs, the notes app) are a plugin, `claude/plugin`, which tmux hands every pane it starts (`CLAUDE_CODE_PLUGIN_DIRS`), so they load in Switchboard's tabs and in no other Claude session on your Mac: a Claude outside tmux works without them, and the Slack relay doesn't hear of it. A plugin can't carry a statusline or permissions, so `setup.sh` adds those (the statusline that gives the sidebar each session's context use, and the permissions its loops run with) to your `~/.claude/settings.json` and leaves the rest of it yours. An install from before, with them written into `~/.claude`, is asked once whether to move them; with Settings' "Load Switchboard as a plugin" off, `setup.sh` writes them into `~/.claude` instead, the hooks into `settings.json`, the instructions imported into `~/.claude/CLAUDE.md` and the skills linked one by one into `~/.claude/skills`, beside your own, a skill of yours with the same name kept rather than Switchboard's. Your `~/.claude/CLAUDE.md` imports your own rules, from `~/.config/switchboard/CLAUDE.md`, or from where `~/.config/switchboard/claude.json` says: a file (`{"path": "~/somewhere/CLAUDE.md"}`) or a git repository of yours (`{"repo": "<url>", "file": "CLAUDE.md"}`, its CLAUDE.md at the root or in a folder found without `file`, cloned, signing in through `gh` when it is on GitHub or a gist, and pulled each hour with Switchboard's update check and on every setup run), so you can keep your rules in a repository of your own and share them across machines. Settings' "Your CLAUDE.md" sets it for you, and `./setup.sh claude_md` writes it again.
 
 Settings (`M-p`) keeps what you change there in the same folder, as `settings.json`, and lists every setting in the files above too, under each file's name: Enter types a value in, or opens a whole file in Neovim. Setup moves these files here from where they were kept before (`~/.config/worktree-from-ticket`, `slack-relay`, `slack-updates`, `oncall`, `tmux-sidebar`, `aws-login`).
 

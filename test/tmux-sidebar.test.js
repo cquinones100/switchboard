@@ -483,6 +483,12 @@ test("compaction shows the tab working, keeps its state and loop through the ses
   const hook = (state, payload) => execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "set", state], { env: { ...process.env, TMUX_PANE: pane }, input: JSON.stringify({ session_id: "compact-test", ...payload }) });
   const opt = (name) => tmux("display", "-p", "-t", pane, `#{${name}}`);
 
+  // A loop named as Switchboard's plugin names its skills counts too.
+  hook("working", { hook_event_name: "UserPromptSubmit", prompt: "/switchboard:ci-loop" });
+  assert.equal(opt("@agent_loop"), "ci");
+  hook("working", { hook_event_name: "PreToolUse", tool_name: "Skill", tool_input: { skill: "switchboard:queue-and-clean" } });
+  assert.equal(opt("@agent_loop"), "queue");
+
   // Compacting in the middle of a review loop's turn.
   hook("working", { hook_event_name: "UserPromptSubmit", prompt: "/review-loop" });
   assert.equal(opt("@agent_loop"), "review");
@@ -2618,7 +2624,8 @@ test("Settings' Your CLAUDE.md says where your rules come from, and picking a fi
     assert.match(plain(sent.at(-1)), /› ~\/my-rules\.md/);
     await sidebar.missionKey(client, { key: "Enter" });
     assert.deepEqual(JSON.parse(fs.readFileSync(claudeJson, "utf8")), { path: "~/my-rules.md" });
-    assert.match(fs.readFileSync(path.join(home, ".claude/CLAUDE.md"), "utf8"), /\n@~\/my-rules\.md\n@~\/switchboard\/claude\/switchboard\.md\n$/);
+    // Switchboard's part comes with its plugin on a new install, so only your rules are imported.
+    assert.match(fs.readFileSync(path.join(home, ".claude/CLAUDE.md"), "utf8"), /\n@~\/my-rules\.md\n$/);
     assert.match(plain(sent.at(-1)), /Your CLAUDE\.md: ~\/my-rules\.md/);
 
     // Back to the local file: claude.json goes.

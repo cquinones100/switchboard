@@ -31,7 +31,7 @@ A walkthrough shows a feature with realistic data in it. Seed it first only wher
 
 ## Recording
 
-The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/.claude/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/.claude/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The video (its address bar and captions, the MP4) and the contact sheet need the system's `ffmpeg`; without it the recorder stops before recording and says so (`brew install ffmpeg`).
+The scripts need their packages: if `~/switchboard/claude/skills/walkthrough/scripts/node_modules` is missing, run `npm ci --prefix ~/switchboard/claude/skills/walkthrough/scripts`. Recording needs Playwright's own ffmpeg too; if a run says it is missing, run `node ~/switchboard/claude/skills/walkthrough/scripts/node_modules/playwright/cli.js install ffmpeg`. The video (its address bar and captions, the MP4) and the contact sheet need the system's `ffmpeg`; without it the recorder stops before recording and says so (`brew install ffmpeg`).
 
 1. **Write the steps** in the session's scratchpad, `<scratchpad>/walkthrough-<slug>/steps.js`, exporting one async function given `{ page, step, highlight, expect }` (`record.js` has an example):
    - Start each part with `step("<what this shows>")`, which captions it in a strip under the page, kept across navigations.
@@ -45,7 +45,7 @@ The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_m
 2. **Record it**:
 
    ```
-   node ~/.claude/skills/walkthrough/scripts/record.js <scratchpad>/walkthrough-<slug>/steps.js \
+   node ~/switchboard/claude/skills/walkthrough/scripts/record.js <scratchpad>/walkthrough-<slug>/steps.js \
      --url <site root> --out <scratchpad>/walkthrough-<slug> --pace demo \
      --name "<what it shows>"
    ```
@@ -53,7 +53,7 @@ The scripts need their packages: if `~/.claude/skills/walkthrough/scripts/node_m
    `--name` names the video: a few words you write saying what the feature does, as someone would look for it in a folder ("Filter orders by status", "Invite a teammate to a campaign"), never the branch or ticket ID. The recorder makes it a file name (`Filter-orders-by-status.mp4`). Without it, the video is named after the tmux tab.
 
    `--pace demo` holds each step long enough to read and carries on past an `expect` that fails, noting it in the log; `/deploy-test` and `/preview-test` record at the default `--pace test`, which stops at the first failure. A site whose host changes (a preview) takes `--profile`, as `/preview-test` says. It prints `{ passed, video, contact, screenshot, log, error }`.
-3. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/.claude/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
+3. **Signing in.** Each site keeps its own Chrome profile under `~/.cache/deploy-test/profiles/`. If the recording lands on a sign-in page, ask the user to sign in, then run `node ~/switchboard/claude/skills/walkthrough/scripts/record.js --login --url <url>` (with the same `--profile`, if any) in the background: it opens a visible window, and they close it once signed in. Then record again. Never type a password or a code yourself.
 
 ## Reviewing the video
 

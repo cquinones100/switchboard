@@ -219,8 +219,8 @@ DETAILS='
         elif $tool == "AskUserQuestion" then "asks: " + ((($in.questions // [])[0].question) // "") | short(80)
         else "" end),
       ( {"review-loop": "review", "ci-loop": "ci", "queue-and-clean": "queue", "deploy-test": "deploy", "preview-test": "deploy"}[
-          if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | capture("^\\s*/(?<s>[a-z-]+)")?.s // "")
-          elif $tool == "Skill" then ($in.skill // "")
+          if .hook_event_name == "UserPromptSubmit" then ((.prompt // "") | capture("^\\s*/(switchboard:)?(?<s>[a-z-]+)")?.s // "")
+          elif $tool == "Skill" then ($in.skill // "" | sub("^switchboard:"; ""))
           else "" end ] // ""),
       # What started a session (startup, resume, clear, compact) or a
       # compaction (manual, auto).

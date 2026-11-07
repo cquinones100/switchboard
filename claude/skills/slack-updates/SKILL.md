@@ -13,7 +13,7 @@ Collect what is new for the user on Slack and save it for mission control's Slac
 
 1. **Check the connector.** Load the Slack connector's search, read-channel and read-thread tools. If they are missing, or a call says it needs signing in, say to run `/mcp` and sign in to Slack, copy `/mcp` to the clipboard, and stop.
 
-2. **Since when.** Run `node ~/.claude/skills/slack-updates/scripts/save.js --since`. It prints when to look from (ISO and Unix), then the Unix time to look for the user's own messages from (step 3's **replied**): ten minutes before the last look, so nothing sent while that look ran, or not yet in Slack's search, is missed; or an hour ago the first time. Look for messages after it. The user's own member ID is in the search tool's description (and `slack_read_user_profile` with no user).
+2. **Since when.** Run `node ~/switchboard/claude/skills/slack-updates/scripts/save.js --since`. It prints when to look from (ISO and Unix), then the Unix time to look for the user's own messages from (step 3's **replied**): ten minutes before the last look, so nothing sent while that look ran, or not yet in Slack's search, is missed; or an hour ago the first time. Look for messages after it. The user's own member ID is in the search tool's description (and `slack_read_user_profile` with no user).
 
 3. **Gather**, leaving out messages the user wrote:
    - **mention**: messages that mention them. Slack's search has no filter for this (a bare `<@ID>` in its filters is ignored, and every message comes back), so search with `after` set to the Unix time, `sort: timestamp`, and no keywords, following its pages to the end, and keep only the messages whose text contains `<@ID>`.
@@ -28,7 +28,7 @@ Collect what is new for the user on Slack and save it for mission control's Slac
 4. **Save.** Pipe them to the script as JSON, each with its kind, the channel's ID, where it was (`#channel`, or the person for a DM), the author's ID and name, the text, its `ts`, its thread's `ts` (`thread`, when it is a reply in a thread; mission control uses it to bring back a message you dismissed when its thread gets a reply), and its permalink:
 
    ```
-   node ~/.claude/skills/slack-updates/scripts/save.js <<'EOF'
+   node ~/switchboard/claude/skills/slack-updates/scripts/save.js <<'EOF'
    {"items": [{"kind": "mention", "channel": "C…", "where": "#general", "user": "U…", "from": "Ada", "text": "…", "ts": "1761660000.000100", "thread": "1761650000.000200", "link": "https://….slack.com/archives/…"}]}
    EOF
    ```

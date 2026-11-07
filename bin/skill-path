@@ -6,7 +6,9 @@
 // (default the current directory): the worktree's own
 // .claude/skills/<name>/SKILL.md, else its main clone's (a branch cut before
 // the repository added the skill has none of its own), else the personal one,
-// ~/.claude/skills/<name>/SKILL.md. Outside a git repository, the personal one.
+// ~/.claude/skills/<name>/SKILL.md, else Switchboard's plugin's,
+// ~/switchboard/claude/plugin/skills/<name>/SKILL.md, which its tmux panes load
+// in place of personal ones. Outside a git repository, the last two.
 // Prints nothing and exits 1 when there is none.
 //
 // Every Switchboard skill runs it first and follows the repository's copy when
@@ -42,6 +44,7 @@ if (top) {
 }
 const candidates = roots.map((root) => path.join(root, ".claude/skills", name, "SKILL.md"));
 candidates.push(path.join(os.homedir(), ".claude/skills", name, "SKILL.md"));
+candidates.push(path.join(os.homedir(), "switchboard/claude/plugin/skills", name, "SKILL.md"));
 
 const found = candidates.find((file) => fs.existsSync(file));
 if (!found) process.exit(1);

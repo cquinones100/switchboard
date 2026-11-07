@@ -21,11 +21,11 @@ Arguments: the note, by title (`Editor Configs Notes`) or path. With none, the n
 
 ## Steps
 
-1. **Settle the note**, as `~/.claude/skills/note-watch/pick-note.md` says (the argument, or the note this conversation has been working from, confirmed; else a list of titles to pick from). Start nothing until the user has picked.
+1. **Settle the note**, as `~/switchboard/claude/skills/note-watch/pick-note.md` says (the argument, or the note this conversation has been working from, confirmed; else a list of titles to pick from). Start nothing until the user has picked.
 
 2. **Read it.** Read the note and say in a line how many items are still open. Ask whether to work those now, or only what is added from here.
 
-3. **Start watching.** Run the Monitor tool with `node ~/.claude/skills/note-watch/scripts/watch-note.js "<the note's path>"`, described as `new items in <title>`. It prints `NEW: <text>` for each item added after it starts, once its text has stopped changing, and `GONE: …` if the note is moved or deleted. Tell the user it is watching, and how to stop it ("stop watching").
+3. **Start watching.** Run the Monitor tool with `node ~/switchboard/claude/skills/note-watch/scripts/watch-note.js "<the note's path>"`, described as `new items in <title>`. It prints `NEW: <text>` for each item added after it starts, once its text has stopped changing, and `GONE: …` if the note is moved or deleted. Tell the user it is watching, and how to stop it ("stop watching").
 
 4. **Work each new item.** For each `NEW:` event, read the note again for the item's context, and any image in it or indented under it (`![name](path)`, its path from the note's folder, as Notes' Paste image writes it): read each with the Read tool, as part of the item, then do it the way this conversation has done its items: in the repository you are working in, following CLAUDE.md, a commit of its own when it changes code, asking first when it is unclear or would do something hard to undo. When it is done, tick it in the note (`- [x]`) and move it under the unticked items, with anything indented under it. Reply in a line or two: what you did, and the commit. Items that arrive while you work on one wait their turn, in order.
 

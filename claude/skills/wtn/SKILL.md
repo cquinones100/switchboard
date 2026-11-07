@@ -17,7 +17,7 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
 
 ## Steps
 
-1. **The note.** Settle it as `~/.claude/skills/note-watch/pick-note.md` says (read it and follow it), a note named in the arguments counting as already named. Its step 5 marks the tab with the note.
+1. **The note.** Settle it as `~/switchboard/claude/skills/note-watch/pick-note.md` says (read it and follow it), a note named in the arguments counting as already named. Its step 5 marks the tab with the note.
 
 2. **The item.** Read the note. Its items are its unticked top-level checklist lines (`- [ ] …` at the start of a line), each with the lines indented under it, leaving out any under a section named for parked work (`## Defered`, `## Later`).
    - **Named in the arguments**, by line number or by words only one item's first line holds: use it. Words that match several: ask which, as below, with those alone.

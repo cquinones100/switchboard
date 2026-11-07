@@ -136,6 +136,8 @@ test("setup.sh claude writes your CLAUDE.md to import your rules, from a file or
     fs.symlinkSync(repo, path.join(home, "switchboard"));
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.mkdirSync(path.dirname(config), { recursive: true });
+    // The old way, setup writing Switchboard's part into ~/.claude (the plugin's is below).
+    fs.writeFileSync(path.join(home, ".config/switchboard/settings.json"), JSON.stringify({ claude_plugin: false }));
 
     // A CLAUDE.md of your own, no rules named: only the import is added, once.
     fs.writeFileSync(file, "# Mine\n\n- be brief\n");
@@ -561,6 +563,7 @@ test("setup.sh claude turns a CLAUDE.md linked into the repo's old claude/CLAUDE
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     fs.symlinkSync(path.join(repo, "claude/CLAUDE.md"), path.join(home, ".claude/CLAUDE.md"));
     fs.mkdirSync(path.join(home, ".config/switchboard"), { recursive: true });
+    fs.writeFileSync(path.join(home, ".config/switchboard/settings.json"), JSON.stringify({ claude_plugin: false }));
     const result = spawnSync("bash", [script, "claude"], { env, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);
     const rules = fs.readFileSync(path.join(home, ".config/switchboard/CLAUDE.md"), "utf8");

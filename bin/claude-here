@@ -16,6 +16,22 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { spawnSync, spawn } = require("node:child_process");
+
+// Switchboard's plugin as tmux has it now, as the `claude` shell function
+// from `worktree-from-ticket init zsh` sets it: a shell open from before the
+// claude_plugin setting changed keeps the value it started with. Only the
+// Switchboard entry changes; any other plugin folder stays.
+const withPlugin = (env) => {
+  if (!env.TMUX) return env;
+  const ours = path.join(os.homedir(), "switchboard/claude/plugin");
+  const now = spawnSync("tmux", ["show-environment", "-g", "CLAUDE_CODE_PLUGIN_DIRS"], { encoding: "utf8" }).stdout?.trim() ?? "";
+  const fromTmux = now.startsWith("CLAUDE_CODE_PLUGIN_DIRS=") ? now.slice("CLAUDE_CODE_PLUGIN_DIRS=".length).split(":") : [];
+  const dirs = [...new Set([...fromTmux, ...(env.CLAUDE_CODE_PLUGIN_DIRS ?? "").split(":").filter((dir) => dir !== ours)].filter(Boolean))];
+  const next = { ...env };
+  if (dirs.length) next.CLAUDE_CODE_PLUGIN_DIRS = dirs.join(":");
+  else delete next.CLAUDE_CODE_PLUGIN_DIRS;
+  return next;
+};
 // Cut by the columns a terminal draws, wide characters as two, as the
 // sidebar does.
 const { cut } = require(path.join(__dirname, "../lib/sidebar/text"));
@@ -411,6 +427,7 @@ const main = async () => {
   status(`opening${match.cwd === targetDir ? "" : ` in ${printable(match.cwd)}`}`);
   const child = spawn("claude", ["--resume", match.id, ...args], {
     cwd: match.cwd,
+    env: withPlugin(process.env),
     stdio: "inherit",
   });
   child.on("error", (error) => {

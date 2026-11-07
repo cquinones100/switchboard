@@ -12,11 +12,15 @@ from nvm and `~/.local/bin` on the PATH, links the tmux, Neovim and lazygit
 configs and these scripts, adds the `wt`, `wtpr`, `wtr`, `wtb` and `wtn` functions
 to `~/.zshrc`, and installs Neovim's pinned plugins, asking
 before each install or change to `~/.zshrc`. Then come the optional parts, each asked for
-and off unless you say yes: Claude Code's hooks for tab states and `M-a`
-(only those hooks, added to your own settings, plus the statusline if you
-have none), the skills that ship with Switchboard (`./setup.sh skills`:
-`/wt`, `/shape`, `/review-loop`, `/ci-loop` and the rest, linked into
-`~/.claude/skills`, a skill of your own by the same name kept, and new ones
+and off unless you say yes: Switchboard's statusline and the permissions its
+loops need, added to your own `~/.claude/settings.json` (its skills, `/wt`,
+`/shape`, `/review-loop`, `/ci-loop` and the rest, its hooks for tab states
+and `M-a`, and its instructions come as a plugin, `claude/plugin`, which
+only the panes tmux starts load, through `CLAUDE_CODE_PLUGIN_DIRS`; an install
+from before, which has them in `~/.claude`, is asked once whether to move them,
+`./setup.sh plugin`; with the `claude_plugin` setting off, the hooks go in
+`settings.json` too and the skills are linked into `~/.claude/skills`,
+`./setup.sh skills`, a skill of your own by the same name kept, and new ones
 linked on later runs), this repo's whole Claude Code setup in place of yours (`./setup.sh
 claude`, its owner's settings and telemetry included), and this clone's git
 hooks (`./setup.sh git`, for committing to it). It also lists GitHub, the
@@ -1309,7 +1313,8 @@ doesn't say. Run types `/<skill> <arguments>` into the tab as a reply in its
 thread would be typed, and the answer goes there.
 The menu is the tab's own: the skills its session lists in its transcript,
 plus those only you can invoke (which that list leaves out), read from
-`~/.claude/skills` and `~/.claude/commands` and from `.claude` in the tab's
+`~/.claude/skills` and `~/.claude/commands`, from the plugins tmux hands its
+panes (Switchboard's own, counted as yours) and from `.claude` in the tab's
 directory and the ones above it. It is grouped frequently used, yours, the
 project's, then Claude Code's own commands that finish without asking
 anything (`compact`, `clear`, `context`, `cost`, `usage`; one that opens a
@@ -1810,8 +1815,9 @@ loop, when the file has no entry for it.
 `<name>` in the repository at `<dir>` (the current directory by default): the
 worktree's own `.claude/skills/<name>/SKILL.md`, else the main clone's (a
 branch cut before the repository added the skill has none of its own), else
-your personal `~/.claude/skills/<name>/SKILL.md`. Outside a git repository,
-the personal one. It prints nothing and exits 1 when there is none.
+your personal `~/.claude/skills/<name>/SKILL.md`, else Switchboard's plugin's
+(`~/switchboard/claude/plugin/skills/<name>/SKILL.md`). Outside a git
+repository, the last two. It prints nothing and exits 1 when there is none.
 
 Claude Code runs a personal skill over a project's of the same name, so every
 skill that ships with Switchboard starts by running it and follows the

@@ -91,6 +91,15 @@ const parts = Object.assign({},
 );
 
 if (require.main === module) {
+  // Its Haiku summaries need none of Switchboard's plugin, which a relay
+  // started from tmux has in its environment (tmux/settings.sh).
+  // Only Switchboard's entry goes: another plugin folder stays.
+  {
+    const ours = require("node:path").join(require("node:os").homedir(), "switchboard/claude/plugin");
+    const rest = (process.env.CLAUDE_CODE_PLUGIN_DIRS ?? "").split(":").filter((dir) => dir && dir !== ours);
+    if (rest.length) process.env.CLAUDE_CODE_PLUGIN_DIRS = rest.join(":");
+    else delete process.env.CLAUDE_CODE_PLUGIN_DIRS;
+  }
   const { start, stop } = parts;
   const { fail, supervise, relay, notify } = parts;
   const command = process.argv[2] ?? "start";

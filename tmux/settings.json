@@ -617,6 +617,13 @@
     "default": true
   },
   {
+    "key": "claude_plugin",
+    "category": "Sessions",
+    "label": "Load Switchboard as a plugin",
+    "description": "Switchboard's skills, hooks and instructions load only in its tmux panes, as a plugin (CLAUDE_CODE_PLUGIN_DIRS), rather than from ~/.claude in every Claude session on this Mac; the statusline and permissions stay in ~/.claude/settings.json. Off, setup writes them into ~/.claude",
+    "default": true
+  },
+  {
     "key": "review_rules",
     "category": "Safety",
     "label": "Rules in reviews",

@@ -16,6 +16,7 @@
 #   settings.sh theme            apply the theme setting (tmux.conf, after
 #                                the plugins, as theme.sh always ran)
 #   settings.sh set <key> <value>   change one setting, then apply
+#   settings.sh value <key>      print one setting's value (on/off or the choice)
 #   settings.sh toggle-theme     between dark and light, as the palette's
 #                                theme toggle does, keeping it as the setting
 
@@ -74,6 +75,44 @@ apply() {
       second_status) args+=(set -g status "$([ "$value" = on ] && echo 2 || echo on)" \;) ;;
       save_contents) args+=(set -g @resurrect-capture-pane-contents "$value" \;) ;;
       auto_restore) args+=(set -g @continuum-restore "$value" \;) ;;
+      # Switchboard's skills, hooks and instructions, for every pane tmux
+      # starts from now on, when they load as a plugin (claude/plugin/in-use.sh).
+      # Turned on here, that is your yes to moving them out of ~/.claude. On
+      # every apply, tmux starting included (the file may have changed while
+      # it was down), setup's plugin part runs in the background when what is
+      # in ~/.claude doesn't match: the old way still there while the plugin
+      # is in use, or Switchboard's hooks missing from settings.json while it
+      # isn't and you chose either way (the setting off, or a yes recorded
+      # before Claude Code turned out too old for it); with no choice made, as
+      # on a new install with an older Claude, the guided setup asks first. The hooks are what a move left half done (the CLAUDE.md
+      # step failing) may leave out while the import stays.
+      claude_plugin)
+        if [ -n "$prev" ] && [ "$prev" != "$value" ] && [ "$value" = on ]; then
+          mkdir -p ~/.local/state/switchboard && echo moved >~/.local/state/switchboard/claude-plugin
+        fi
+        local in_use=false old=false hooks=false asked=false
+        bash "$REPO/claude/plugin/in-use.sh" && in_use=true
+        bash "$REPO/claude/plugin/in-use.sh" --old && old=true
+        grep -qs agent-state.sh ~/.claude/settings.json && hooks=true
+        { [ "$value" = off ] || [ "$(cat ~/.local/state/switchboard/claude-plugin 2>/dev/null)" = moved ]; } && asked=true
+        if { [ -n "$prev" ] && [ "$prev" != "$value" ]; } || { $in_use && $old; } || { ! $in_use && $asked && ! $hooks; }; then
+          (bash "$REPO/setup.sh" plugin >/dev/null 2>&1 &)
+        fi
+        # Only Switchboard's entry changes: another plugin folder tmux was
+        # started with stays.
+        local ours="$REPO/claude/plugin" now entry dirs="" rest
+        now=$(tmux show-environment -g CLAUDE_CODE_PLUGIN_DIRS 2>/dev/null)
+        case $now in CLAUDE_CODE_PLUGIN_DIRS=*) rest=${now#*=} ;; *) rest="" ;; esac
+        while IFS= read -r -d : entry; do
+          [ -n "$entry" ] && [ "$entry" != "$ours" ] && dirs="${dirs:+$dirs:}$entry"
+        done <<<"$rest:"
+        $in_use && dirs="$ours${dirs:+:$dirs}"
+        if [ -n "$dirs" ]; then
+          args+=(set-environment -g CLAUDE_CODE_PLUGIN_DIRS "$dirs" \;)
+        else
+          args+=(set-environment -gu CLAUDE_CODE_PLUGIN_DIRS \;)
+        fi
+        ;;
       # Only when the setting itself changes, so M-s's hide-for-now holds.
       sidebar)
         if [ "$prev" != "$value" ]; then
@@ -156,13 +195,14 @@ set_one() {
 case "${1:-}" in
   apply) apply "${2:-}" ;;
   theme) apply_theme ;;
+  value) value_of "${2:-}" ;;
   set) set_one "${2:-}" "${3:-}" && apply ;;
   toggle-theme)
     current=$(cat "$script_dir/.theme-mode" 2>/dev/null || echo dark)
     set_one theme "$([ "$current" = dark ] && echo light || echo dark)" && apply
     ;;
   *)
-    echo "Usage: $0 apply [--load] | theme | set <key> <value> | toggle-theme" >&2
+    echo "Usage: $0 apply [--load] | theme | value <key> | set <key> <value> | toggle-theme" >&2
     exit 1
     ;;
 esac

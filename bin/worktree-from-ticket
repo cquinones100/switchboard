@@ -101,6 +101,28 @@ const shellFunction = () => `wt() {
   claude "$prompt"
 }`;
 
+// Emitted with `wt`, which every Switchboard shell evals: `claude` started from
+// a pane takes Switchboard's plugin as tmux has it now (tmux/settings.sh sets
+// CLAUDE_CODE_PLUGIN_DIRS in its global environment), since a shell open from
+// before the setting changed keeps the value it started with, so a Claude
+// typed there would lose Switchboard's hooks and skills once setup moved them
+// out of ~/.claude, or run them twice once it wrote them back. Only the
+// Switchboard entry changes; any other plugin folder in the variable stays.
+// One tmux call per launch, none outside tmux.
+const claudeFunction = () => `claude() {
+  if [ -n "\${TMUX:-}" ]; then
+    local ours now dirs
+    local -aU list
+    ours="$HOME/switchboard/claude/plugin"
+    now=$(command tmux show-environment -g CLAUDE_CODE_PLUGIN_DIRS 2>/dev/null)
+    case $now in CLAUDE_CODE_PLUGIN_DIRS=*) now=\${now#*=} ;; *) now="" ;; esac
+    list=(\${(s.:.)now} \${\${(s.:.)CLAUDE_CODE_PLUGIN_DIRS:-}:#$ours})
+    dirs=\${(j.:.)list}
+    if [ -n "$dirs" ]; then export CLAUDE_CODE_PLUGIN_DIRS="$dirs"; else unset CLAUDE_CODE_PLUGIN_DIRS; fi
+  fi
+  command claude "$@"
+}`;
+
 const parseIdentifier = (input) => {
   const fromUrl = input.match(/\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/);
   const raw = fromUrl ? fromUrl[1] : input;
@@ -201,6 +223,7 @@ const main = async () => {
       fail("init requires a shell: worktree-from-ticket init <zsh|bash>");
     }
     console.log(shellFunction());
+    if (shell === "zsh") console.log(claudeFunction());
     return;
   }
 

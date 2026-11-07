@@ -35,7 +35,7 @@ Read the PR and the repo: `gh pr view <number> --json number,url,state,title,bod
 Skip this when the deploy settled in "Settling" was **No deploy to wait for** or **Skip the deploy and the test**. Otherwise read the merge commit, `gh pr view <number> --json mergeCommit --jq .mergeCommit.oid`, and start the watch with the Bash tool's `run_in_background`, so the conversation is not blocked; you are re-invoked when it exits, so don't poll it:
 
 ```
-node ~/.claude/skills/deploy-test/scripts/wait-deploy.js --repo <owner>/<repo> --sha <merge commit> \
+node ~/switchboard/claude/skills/deploy-test/scripts/wait-deploy.js --repo <owner>/<repo> --sha <merge commit> \
   --environment <env>                                   # a GitHub environment, or
   --workflow <workflow> --branch <baseRefName>          # a deploy workflow on the base branch
 ```

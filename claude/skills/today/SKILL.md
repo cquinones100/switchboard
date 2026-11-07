@@ -23,7 +23,7 @@ Arguments: none for today, or `tomorrow`, or a date. The rest of this says "toda
    **Save the day for mission control**, only when the day asked for is today: its Calendar view draws what this saves, since it can't reach the calendar itself. Pass the events kept as JSON to the script beside this file:
 
    ```
-   node ~/.claude/skills/today/scripts/save.js <<'EOF'
+   node ~/switchboard/claude/skills/today/scripts/save.js <<'EOF'
    {"date": "2026-10-28", "events": [
      {"title": "Standup", "start": "2026-10-28T13:00:00-04:00", "end": "2026-10-28T13:15:00-04:00", "allDay": false, "you": "going", "join": "https://…zoom.us/j/…", "link": "<htmlLink>"}
    ]}

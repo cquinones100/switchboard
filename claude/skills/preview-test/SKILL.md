@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `skill-path preview-test`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
-Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read the file `skill-path deploy-test` prints and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/.claude/skills/walkthrough/scripts/record.js`), with the changes below, waiting with its `~/.claude/skills/deploy-test/scripts/wait-deploy.js`. Nothing here changes the repository or the PR.
+Test an open PR on its preview deploy before it merges, the way `/deploy-test` tests a merged one on the site it deploys to. This skill only says what differs: read the file `skill-path deploy-test` prints and follow its "Testing in a browser" and "Approval" sections as written (which record with `/walkthrough`'s recorder, `~/switchboard/claude/skills/walkthrough/scripts/record.js`), with the changes below, waiting with its `~/switchboard/claude/skills/deploy-test/scripts/wait-deploy.js`. Nothing here changes the repository or the PR.
 
 When it is done, the final message is `preview-test: approved (tested: <video>)`, `preview-test: approved (not tested: <why>)` or `preview-test: fail: <reason>`, and nothing else.
 
@@ -42,7 +42,7 @@ Skip this when the preview has no GitHub deployment to watch (a URL from a comme
 
 ```
 ref=$(gh pr view <number> --json headRefName --jq .headRefName)
-node ~/.claude/skills/deploy-test/scripts/wait-deploy.js --repo <owner>/<repo> --sha <headRefOid> --environment '<env>' --ref "$ref" --timeout 20
+node ~/switchboard/claude/skills/deploy-test/scripts/wait-deploy.js --repo <owner>/<repo> --sha <headRefOid> --environment '<env>' --ref "$ref" --timeout 20
 ```
 
 A deploy of the head commit counts, and so does one of a commit pushed after it, when that deploy is recorded under the branch (one recorded under its own commit is found by running this again for the new head); `--ref` keeps it to this PR's branch, since PRs share a preview environment and one branched from this PR would count too. On `deployed <sha> <url>`, test that URL, the one this commit's preview has, or, when it is `-` (a deploy that gave none), ask for the URL to test, offering the one settled above with the commit it was deployed from, since it may be an older build's; on `failed <url>`, reply `preview-test: fail: preview deploy failed: <url>`; on `timeout`, ask whether to keep waiting, test the last preview anyway, or stop.
@@ -53,7 +53,7 @@ As `/deploy-test`'s section says, with these changes:
 
 - **Files** go in `<scratchpad>/preview-test-<number>/`, the video too, and stay there, as `/deploy-test` says.
 - **Change nothing real, as `/deploy-test` says, preview or not**: a preview's own address says where the page runs, not which database or APIs it talks to, and many previews use production's. Submitting, saving or creating test data is fine only when the repository's docs say its previews have data of their own, or the user says so when asked. Never send real email or pay for anything.
-- **One profile per repository**: a preview's host changes with every PR, so record with `--profile preview-<owner>--<repo>` (two dashes, which no GitHub owner's name has, so no two repositories share it), and sign in with `node ~/.claude/skills/walkthrough/scripts/record.js --login --url <url> --profile preview-<owner>--<repo>` when the preview needs it (a Vercel or Netlify protection page is a sign-in page). Once signed in there, later PRs' previews of the same repository reuse it.
+- **One profile per repository**: a preview's host changes with every PR, so record with `--profile preview-<owner>--<repo>` (two dashes, which no GitHub owner's name has, so no two repositories share it), and sign in with `node ~/switchboard/claude/skills/walkthrough/scripts/record.js --login --url <url> --profile preview-<owner>--<repo>` when the preview needs it (a Vercel or Netlify protection page is a sign-in page). Once signed in there, later PRs' previews of the same repository reuse it.
 
 ## Approval
 

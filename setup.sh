@@ -58,10 +58,10 @@ esac
 if [[ $OS == macos ]]; then
   LAZYGIT_DIR="$HOME/Library/Application Support/lazygit"
   # Karabiner only exists on macOS.
-  PARTS=(lazygit neovim git claude claude_md skills karabiner tmux autosave config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills plugin karabiner tmux autosave config ghostty terminal pgcli bin)
 else
   LAZYGIT_DIR="$HOME/.config/lazygit"
-  PARTS=(lazygit neovim git claude claude_md skills tmux autosave config ghostty terminal pgcli bin)
+  PARTS=(lazygit neovim git claude claude_md skills plugin tmux autosave config ghostty terminal pgcli bin)
 fi
 
 # ── Parts ───────────────────────────────────────────────────────────────────
@@ -144,8 +144,29 @@ part_git() {
 # this repo, as the whole setup made one before, becomes your own file with
 # what it held first. Claude Code has no file it reads after yours, so this is
 # the user layer for Claude: your own settings are the file itself.
+# Whether Switchboard's skills, hooks and instructions load as a plugin in its
+# tmux panes (claude/plugin, which tmux/settings.sh points CLAUDE_CODE_PLUGIN_DIRS
+# at) rather than from ~/.claude: what claude/plugin/in-use.sh says, which
+# tmux asks too, so the two agree, a Claude Code too old to read the variable
+# included (claude_plugin_old says so in the guided setup).
+CLAUDE_PLUGIN_MIN=$(sed -n 's/^MIN_VERSION=//p' "$SRC/claude/plugin/in-use.sh" 2>/dev/null)
+claude_plugin_old() {
+  local version
+  version=$(claude --version 2>/dev/null | awk '{ print $1; exit }')
+  [[ -n $version && -n $CLAUDE_PLUGIN_MIN && $(printf '%s\n' "$CLAUDE_PLUGIN_MIN" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | head -1) != "$CLAUDE_PLUGIN_MIN" ]]
+}
+plugin_in_use() {
+  if [[ -z ${PLUGIN_IN_USE:-} ]]; then
+    PLUGIN_IN_USE=false
+    bash "$SRC/claude/plugin/in-use.sh" && PLUGIN_IN_USE=true
+  fi
+  $PLUGIN_IN_USE
+}
+PLUGIN_MOVED=~/.local/state/switchboard/claude-plugin
+
 claude_settings() {
-  local file=~/.claude/settings.json current merged
+  local file=~/.claude/settings.json current merged words plugin=false
+  plugin_in_use && plugin=true
   if [[ -L $file && $(readlink "$file") == */claude/settings.json ]]; then
     $CHECK || { cp -L "$file" "$file.tmp" && mv "$file.tmp" "$file"; } || return 1
     change "make $file your own, from the one it linked to"
@@ -155,21 +176,29 @@ claude_settings() {
   else
     current={}
   fi
-  merged=$(jq --slurpfile p "$SRC/claude/switchboard-settings.json" '
-    $p[0] as $p
+  # Switchboard's hooks, known by their commands, are taken out and, unless
+  # the plugin brings them, added again as switchboard-settings.json has them.
+  merged=$(jq --slurpfile p "$SRC/claude/switchboard-settings.json" --argjson plugin "$plugin" '
+    $p[0] as $p | . as $before
     | [$p.hooks[][].hooks[].command] as $ours
     | .hooks = (((.hooks // {}) | map_values(map(.hooks |= map(select(.command as $c | $ours | index($c) | not))) | map(select(.hooks | length > 0))))
-        as $mine | reduce ($p.hooks | keys[]) as $k ($mine; .[$k] = ((.[$k] // []) + $p.hooks[$k])) | with_entries(select(.value | length > 0)))
+        as $mine | reduce (if $plugin then empty else $p.hooks | keys[] end) as $k ($mine; .[$k] = ((.[$k] // []) + $p.hooks[$k])) | with_entries(select(.value | length > 0)))
     | if ((.statusLine.command // "statusline-command.sh") | contains("statusline-command.sh")) then .statusLine = $p.statusLine else . end
     | .permissions.allow = ((.permissions.allow // []) + ($p.permissions.allow - (.permissions.allow // [])))
+    | if .hooks == {} and $before.hooks == null then del(.hooks) else . end
     | .permissions.deny = ((.permissions.deny // []) + ($p.permissions.deny - (.permissions.deny // [])))
   ' <<<"$current") || return 1
   [[ $merged == "$current" ]] && return 0
+  words="add Switchboard's hooks, statusline and permissions to $file"
+  if $plugin; then
+    words="add Switchboard's statusline and permissions to $file"
+    grep -q agent-state.sh <<<"$current" && words="take Switchboard's hooks out of $file, since its plugin brings them, keeping its statusline and permissions"
+  fi
   if ! $CHECK; then
     [[ -e $file ]] && { cp "$file" "$file.bak.$(date +%Y%m%d%H%M%S)" || return 1; }
     printf '%s\n' "$merged" >"$file.tmp" && mv "$file.tmp" "$file" || return 1
   fi
-  change "add Switchboard's hooks, statusline and permissions to $file"
+  change "$words"
 }
 
 # Your ~/.claude/CLAUDE.md: your own rules and Switchboard's part
@@ -346,7 +375,12 @@ claude_md_now() {
     return 1
   fi
   if [[ -n $mine ]]; then
-    want=$(printf '%s\n\n@%s\n%s' "$WRITTEN_MARK" "${mine/#$HOME/~}" "$SWITCHBOARD_MD")
+    # Switchboard's part only when its plugin doesn't bring it.
+    if plugin_in_use; then
+      want=$(printf '%s\n\n@%s' "$WRITTEN_MARK" "${mine/#$HOME/~}")
+    else
+      want=$(printf '%s\n\n@%s\n%s' "$WRITTEN_MARK" "${mine/#$HOME/~}" "$SWITCHBOARD_MD")
+    fi
     [[ ! -L $file && $(cat "$file" 2>/dev/null) == "$want" ]] && return 0
     if [[ -e $file && ! -L $file ]] && ! grep -qF "$WRITTEN_MARK" "$file"; then
       backup="$file.bak.$(date +%Y%m%d%H%M%S)"
@@ -356,9 +390,21 @@ claude_md_now() {
     if ! $CHECK; then
       mkdir -p ~/.claude && rm -f "$file" && printf '%s\n' "$want" >"$file" || return 1
     fi
-    change "write ~/.claude/CLAUDE.md to import your rules (${mine/#$HOME/~}) and Switchboard's"
+    if plugin_in_use; then change "write ~/.claude/CLAUDE.md to import your rules (${mine/#$HOME/~})"; else change "write ~/.claude/CLAUDE.md to import your rules (${mine/#$HOME/~}) and Switchboard's"; fi
   elif [[ -L $file ]]; then
     return 0
+  elif plugin_in_use; then
+    # The plugin brings Switchboard's part: the import comes out of your own
+    # file, and a file that held nothing else goes.
+    grep -qxF "$SWITCHBOARD_MD" "$file" 2>/dev/null || return 0
+    if ! $CHECK; then
+      if grep -vxF "$SWITCHBOARD_MD" "$file" | grep -q "[^[:space:]]"; then
+        grep -vxF "$SWITCHBOARD_MD" "$file" >"$file.tmp" && mv "$file.tmp" "$file" || return 1
+      else
+        rm "$file" || return 1
+      fi
+    fi
+    change "take the line importing Switchboard's part out of your ~/.claude/CLAUDE.md, since its plugin brings it"
   elif [[ -f $file ]]; then
     grep -qxF "$SWITCHBOARD_MD" "$file" && return 0
     $CHECK || printf '\n%s\n' "$SWITCHBOARD_MD" >>"$file" || return 1
@@ -412,10 +458,15 @@ part_claude() {
   # personal skill wins over a project one of the same name, so each starts by
   # running skill-path, which comes with them, and following the repository's
   # copy when it prints one.
+  # Unless the plugin brings them.
   local skill hook
-  for skill in "$SRC"/claude/skills/*/; do
-    put_link "${skill%/}" ~/.claude/skills/
-  done
+  if plugin_in_use; then
+    unlink_skills || return 1
+  else
+    for skill in "$SRC"/claude/skills/*/; do
+      put_link "${skill%/}" ~/.claude/skills/
+    done
+  fi
   dir ~/.local/bin
   put_link "$SRC/bin/skill-path" ~/.local/bin/skill-path
   put_link "$SRC/bin/apply-actions" ~/.local/bin/apply-actions
@@ -432,14 +483,20 @@ part_claude() {
 # elsewhere, is yours and left as it is (own_skills names them for the guided
 # setup); only a link into a Switchboard clone's claude/skills (this one, or
 # one by another name) is pointed here.
+# With the plugin in use, it brings them instead, and the links into a
+# clone are taken out (unlink_skills).
 part_skills() {
-  dir ~/.claude/skills
-  # Every skill is tried, and the ones that couldn't be linked said at the end.
   local skill failed=()
-  for skill in "$SRC"/claude/skills/*/; do
-    skill=${skill%/}
-    own_skill "${skill##*/}" || put_link "$skill" ~/.claude/skills/"${skill##*/}" || failed+=("${skill##*/}")
-  done
+  if plugin_in_use; then
+    unlink_skills || failed+=("taking out the old links")
+  else
+    dir ~/.claude/skills
+    # Every skill is tried, and the ones that couldn't be linked said at the end.
+    for skill in "$SRC"/claude/skills/*/; do
+      skill=${skill%/}
+      own_skill "${skill##*/}" || put_link "$skill" ~/.claude/skills/"${skill##*/}" || failed+=("${skill##*/}")
+    done
+  fi
   # Every skill runs skill-path first, so it comes with them, bin or not, and
   # so do apply-actions, which queue-and-clean runs after a landing, and
   # landing, which it asks how a repository lands.
@@ -451,6 +508,39 @@ part_skills() {
   echo "  could not link these skills into ~/.claude/skills: ${failed[*]}" >&2
   return 1
 }
+# The links in ~/.claude/skills into a Switchboard clone, which the plugin
+# replaces; a skill of your own by the same name stays.
+unlink_skills() {
+  local skill name
+  for skill in "$SRC"/claude/skills/*/; do
+    skill=${skill%/}
+    name=${skill##*/}
+    from_switchboard "$name" || continue
+    $CHECK || rm ~/.claude/skills/"$name" || return 1
+    change "take out ~/.claude/skills/$name, since Switchboard's plugin brings it"
+  done
+}
+
+# Switchboard's skills, hooks and instructions, the way the claude_plugin
+# setting says: as a plugin in its tmux panes, taking them out of ~/.claude
+# (its hooks from settings.json, its import from CLAUDE.md, its skill links),
+# or written into ~/.claude as before. The statusline and permissions are in
+# ~/.claude/settings.json either way. Settings runs it when the setting changes.
+part_plugin() {
+  dir ~/.claude
+  if ! $CHECK && [[ ! -e ~/.claude/statusline-command.sh ]]; then
+    ln -s "$SRC/claude/statusline-command.sh" ~/.claude/statusline-command.sh || return 1
+  fi
+  # Each step whatever the one before did, so a CLAUDE.md whose rules can't be
+  # found (which Settings' "Your CLAUDE.md" and setup's check say, and which
+  # claude_md writes again once fixed) still leaves the hooks and skills right.
+  local failed=0
+  claude_settings || failed=1
+  claude_md || failed=1
+  part_skills || failed=1
+  return $failed
+}
+
 own_skill() {
   local dest=~/.claude/skills/$1
   [[ -e $dest || -L $dest ]] && ! from_switchboard "$1"
@@ -1002,7 +1092,8 @@ about_part() {
     git) echo "use this clone's git hooks" ;;
     claude) echo "link this repo's whole Claude Code setup in place of yours" ;;
     claude_md) echo "write ~/.claude/CLAUDE.md to import your rules and Switchboard's part" ;;
-    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills, and skill-path, apply-actions and landing into ~/.local/bin" ;;
+    skills) echo "link the skills that ship with Switchboard into ~/.claude/skills (or take those links out while its plugin brings them), and skill-path, apply-actions and landing into ~/.local/bin" ;;
+    plugin) echo "load Switchboard's skills, hooks and instructions as a plugin in its tmux panes, taking them out of ~/.claude, or write them there when the claude_plugin setting is off" ;;
     karabiner) echo "link Karabiner's config" ;;
     tmux) echo "link tmux's config and scripts, the plugins and lib's packages, and restart a sidebar daemon older than its code" ;;
     autosave) echo "put tmux-continuum's autosave back when it is missing" ;;
@@ -1348,6 +1439,26 @@ claude_settings_pending() (
 # The rules' clone brought up to date before anything here looks at it, since
 # a file just named, or moved, may be only in the repository's newest commits.
 $CHECK || claude_md_pull
+# Switchboard as a plugin (part_plugin, claude/plugin): a new install has it
+# from the start; one from before, with Switchboard's hooks, skills or import
+# in ~/.claude, is asked once, a yes recorded in $PLUGIN_MOVED and a no as
+# the claude_plugin setting off. An older Claude Code keeps the old way.
+if command -v claude >/dev/null && [[ $(bash "$SRC/tmux/settings.sh" value claude_plugin 2>/dev/null) == on ]]; then
+  if claude_plugin_old; then
+    optional "Claude Code $CLAUDE_PLUGIN_MIN or newer, to load Switchboard as a plugin only in its tmux panes: claude update (until then, its skills, hooks and instructions are in ~/.claude)"
+  elif plugin_in_use; then
+    ok "Switchboard's skills, hooks and instructions load as a plugin in its tmux panes"
+  elif $CHECK; then
+    todo "Switchboard can load as a plugin in its tmux panes rather than from ~/.claude: ./setup.sh asks"
+  elif ask "Load Switchboard's skills, hooks and instructions as a plugin, only in its tmux panes, and take them out of ~/.claude? A Claude outside tmux then works without them; the statusline and permissions stay in your settings.json."; then
+    mkdir -p "${PLUGIN_MOVED%/*}" && echo moved >"$PLUGIN_MOVED"
+    PLUGIN_IN_USE=""
+    apply plugin && ok "Switchboard loads as a plugin in its tmux panes; a claude started in an open tab takes it, once that tab's shell has read the claude function (a new tab, or exec zsh)" || todo "./setup.sh plugin failed"
+  else
+    bash "$SRC/tmux/settings.sh" set claude_plugin off >/dev/null 2>&1
+    optional "Switchboard as a plugin in its tmux panes: the \"Load Switchboard as a plugin\" setting in mission control's Settings"
+  fi
+fi
 if whole_claude; then
   if (( $(pending claude) == 0 )); then
     ok "Claude Code, with this repo's whole setup"
@@ -1357,16 +1468,25 @@ if whole_claude; then
     apply claude && ok "Claude Code, with this repo's whole setup, newly added skills and hooks linked" || todo "./setup.sh claude failed"
   fi
 elif [[ -e ~/.claude/settings.json ]] && (( $(claude_settings_pending) == 0 )); then
-  ok "Claude Code's hooks, statusline and permissions (tab states, the sidebar's Needs you, M-a, the loops)"
+  if plugin_in_use; then
+    ok "Claude Code's statusline and permissions (the sidebar's context use, the loops)"
+  else
+    ok "Claude Code's hooks, statusline and permissions (tab states, the sidebar's Needs you, M-a, the loops)"
+  fi
+elif plugin_in_use && grep -qs 'agent-state.sh' ~/.claude/settings.json && $CHECK; then
+  todo "Switchboard's hooks are still in ~/.claude/settings.json beside its plugin's: ./setup.sh plugin takes them out"
 elif grep -qs 'agent-state.sh' ~/.claude/settings.json && $CHECK; then
   todo "Switchboard's Claude Code settings have changed: ./setup.sh adds them to yours"
 elif ! command -v claude >/dev/null; then
   optional "Claude Code, which every tab here runs, for tab states, the sidebar's sessions and M-a: curl -fsSL https://claude.ai/install.sh | bash"
-elif grep -qs 'agent-state.sh' ~/.claude/settings.json || ask "Add Switchboard's hooks, statusline and permissions to your ~/.claude/settings.json? Yours are kept, and a copy is left beside it."; then
+elif grep -qs 'agent-state.sh' ~/.claude/settings.json || { plugin_in_use && ask "Add Switchboard's statusline and permissions to your ~/.claude/settings.json? Yours are kept, and a copy is left beside it."; } ||
+  { ! plugin_in_use && ask "Add Switchboard's hooks, statusline and permissions to your ~/.claude/settings.json? Yours are kept, and a copy is left beside it."; }; then
   mkdir -p ~/.claude
   [[ -e ~/.claude/statusline-command.sh ]] || ln -s "$SRC/claude/statusline-command.sh" ~/.claude/statusline-command.sh
   claude_settings >/dev/null && ok "added Switchboard's Claude Code settings to yours; your old ones are beside them as settings.json.bak.*" ||
     todo "adding Switchboard's settings to ~/.claude/settings.json failed"
+elif plugin_in_use; then
+  optional "Switchboard's statusline and permissions, for each session's context use and the loops: ./setup.sh adds them when you say yes"
 else
   optional "Claude Code's hooks, for tab states and M-a: ./setup.sh adds them when you say yes"
 fi
@@ -1378,7 +1498,17 @@ md_pending=$(claude_md_pending)
 if [[ $md_pending == error:* ]] && command -v claude >/dev/null; then
   todo "your CLAUDE.md: ${md_pending#error: }"
 elif ! whole_claude && command -v claude >/dev/null; then
-  if (( md_pending == 0 )); then
+  if plugin_in_use; then
+    # Switchboard's part comes with the plugin; only your rules, when
+    # claude.json names them, and the old import's removal are left.
+    if (( md_pending == 0 )); then
+      :
+    elif $CHECK; then
+      todo "your CLAUDE.md has changes to make: ./setup.sh claude_md"
+    else
+      claude_md >/dev/null && ok "your CLAUDE.md, written again" || todo "./setup.sh claude_md failed"
+    fi
+  elif (( md_pending == 0 )); then
     ok "your CLAUDE.md imports Switchboard's part (the tabs, the notes app)"
   elif ask "Add Switchboard's part (how to read the tabs, the notes app) to your ~/.claude/CLAUDE.md, with your own rules from ~/.config/switchboard/claude.json when it names them?"; then
     claude_md >/dev/null && ok "your CLAUDE.md imports Switchboard's part" || todo "./setup.sh claude failed"
@@ -1392,6 +1522,13 @@ fi
 # are linked already.
 if whole_claude || ! command -v claude >/dev/null; then
   :
+elif plugin_in_use; then
+  # The plugin brings them; links left from before go.
+  if has_skills && $CHECK; then
+    todo "Switchboard's skills are still linked in ~/.claude/skills beside its plugin's: ./setup.sh plugin takes them out"
+  elif ! $CHECK && (( $(pending skills) > 0 )); then
+    apply skills || todo "./setup.sh skills failed"
+  fi
 elif (( $(pending skills) == 0 )) && has_skills; then
   ok "Switchboard's skills (/wt, /shape, /review-loop, /ci-loop and the rest)"
 elif has_skills; then
@@ -1405,7 +1542,7 @@ elif ask "Install Switchboard's skills (/wt, /shape, /review-loop, /ci-loop and 
 else
   optional "Switchboard's skills (/wt, /shape, /review-loop, /ci-loop and the rest): ./setup.sh skills"
 fi
-if ! whole_claude && has_skills && [[ -n $(own_skills) ]]; then
+if ! whole_claude && ! plugin_in_use && has_skills && [[ -n $(own_skills) ]]; then
   optional "your own skills kept in place of Switchboard's of the same name: $(own_skills)"
 fi
 
