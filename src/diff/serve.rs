@@ -172,20 +172,24 @@ impl Server {
     }
 
     /// On the server's tick: the story of a tab's new commit told ahead,
-    /// when the settings want it.
+    /// when the settings want it, and not while you're away (the daemon's
+    /// `whenHere`). A tab's directory each, in the tabs' order, as
+    /// story-ahead.js walked `tab.path`.
     pub fn diff_tick(&mut self) {
-        if !ahead::due() || !ahead::wanted() || tokio::runtime::Handle::try_current().is_err() {
+        if !ahead::due()
+            || !ahead::wanted()
+            || self.away()
+            || tokio::runtime::Handle::try_current().is_err()
+        {
             return;
         }
         let mut dirs: Vec<PathBuf> = Vec::new();
         for s in &self.sessions {
             for tab in &s.tabs {
-                for pane in self.panes_with_parked(*tab) {
-                    if let Some(dir) = self.panes.get(&pane).and_then(|p| p.pane.cwd())
-                        && !dirs.contains(&dir)
-                    {
-                        dirs.push(dir);
-                    }
+                if let Some(dir) = self.tab_path(*tab).map(PathBuf::from)
+                    && !dirs.contains(&dir)
+                {
+                    dirs.push(dir);
                 }
             }
         }

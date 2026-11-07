@@ -308,7 +308,7 @@ impl Server {
     pub fn autopilot_summary(&self) -> Option<Summary> {
         let mode = &self.autopilot.mode;
         (settings::is_on("autopilot") && mode.on)
-            .then(|| self.autopilot.pilot.summary(mode, self.away()))
+            .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
     }
 
     // ── The check ───────────────────────────────────────────────────────────
@@ -333,7 +333,7 @@ impl Server {
         let mtime = (on && mode.on && !mode.note.is_empty())
             .then(|| modified_ms(&notes.join(&mode.note)))
             .flatten();
-        let away = self.away();
+        let away = self.away_now();
         let counts = self.autopilot.pilot.counts;
         let check = self
             .autopilot
@@ -541,7 +541,7 @@ impl Server {
     /// meanwhile: in the session used last, in the background, marked as
     /// the mode's.
     fn autopilot_open(&mut self, mode: &Mode, item: Item) {
-        if !settings::is_on("autopilot") || !mode.on || mode.paused || self.away() {
+        if !settings::is_on("autopilot") || !mode.on || mode.paused || self.away_now() {
             return;
         }
         let Some(client) = self.latest_client() else {

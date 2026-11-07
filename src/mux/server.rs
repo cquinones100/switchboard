@@ -741,9 +741,13 @@ impl Server {
     /// the desktop's reckoning, or, where the desktop can't say, by the last
     /// key pressed in a client.
     pub fn away(&self) -> bool {
-        if !crate::settings::is_on("pause_when_away") {
-            return false;
-        }
+        crate::settings::is_on("pause_when_away") && self.away_now()
+    }
+
+    /// Whether you're away, whatever `pause_when_away` says, for what the
+    /// daemon paused on its own reading of presence (working a note
+    /// continuously).
+    pub fn away_now(&self) -> bool {
         if self.clients.is_empty() {
             return true;
         }

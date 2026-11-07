@@ -346,8 +346,24 @@ impl Server {
                     continue;
                 };
                 let path = self.tab_path(*id).map(Path::to_path_buf);
-                let mut dirs: Vec<PathBuf> = path.iter().cloned().collect();
-                for pane in tab.layout.panes() {
+                // Where it works (landing.js's `dirsOf`): its Claude
+                // session's directory first, then its own, then its panes'.
+                let panes = tab.layout.panes();
+                let claude_dir = self
+                    .agents
+                    .leader(&panes)
+                    .map(|(p, _, _)| p)
+                    .into_iter()
+                    .chain(panes.iter().copied())
+                    .find_map(|p| {
+                        let cwd = self.sidebar.panes.get(&p)?.session.as_ref()?.cwd.as_ref()?;
+                        Some(PathBuf::from(cwd))
+                    });
+                let mut dirs: Vec<PathBuf> = claude_dir.into_iter().collect();
+                if let Some(p) = path.as_ref().filter(|p| !dirs.contains(p)) {
+                    dirs.push(p.clone());
+                }
+                for pane in panes {
                     let Some(slot) = self.panes.get(&pane) else {
                         continue;
                     };

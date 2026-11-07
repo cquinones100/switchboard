@@ -19,8 +19,9 @@
 //! so they come back after a restart, as tmux/window-options.sh carried
 //! them under tmux.
 //!
-//! It opens nothing while it is paused, while you're away (`Server::away`,
-//! which the pause_when_away setting governs), once today's Claude spend in
+//! It opens nothing while it is paused, while you're away (`Server::away_now`,
+//! whatever the pause_when_away setting says, as the daemon paused it on its
+//! own reading of presence), once today's Claude spend in
 //! the Usage view passes its limit, or while the note changed in the last
 //! minute (an item being typed is saved as it is typed); it says so, or
 //! that the note has nothing left, in the notifications
