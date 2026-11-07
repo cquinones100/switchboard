@@ -40,6 +40,13 @@ use crate::{platform, settings, util};
 /// The setting.
 pub const SETTING: &str = "claude_plugin";
 
+/// What a change of way leaves to the tabs already open: a pane's
+/// environment names the plugin or not as it started (src/mux/server.rs),
+/// and a shell left open keeps it, so a `claude` started again there would
+/// have none of Switchboard after a move into the plugin, and every hook
+/// twice after a move back. Said after every move.
+pub const OPEN_TABS: &str = "a tab open now takes the change once it is reopened or the workspace restarts (switchboard kill-server, then switchboard)";
+
 /// How Switchboard's parts reach Claude Code.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Way {

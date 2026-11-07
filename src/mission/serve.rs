@@ -2252,7 +2252,9 @@ impl Server {
     /// which moves Switchboard's hooks, skills and instructions into its
     /// plugin or back into ~/.claude (src/setup/way.rs); `said` is said with
     /// where they are now, or why it couldn't finish. Panes started from now
-    /// on follow the setting; a Claude already running keeps what it loaded.
+    /// on follow the setting; a Claude already running keeps what it loaded,
+    /// and a shell already open the environment it started with, which
+    /// setup's last line says how to take (`way::OPEN_TABS`).
     fn claude_plugin_setup(&mut self, client: ClientId, said: String) {
         self.mission_busy(client, "Moving Switchboard over", None, async move {
             let result = tokio::task::spawn_blocking(crate::setup::run_move)

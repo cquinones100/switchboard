@@ -1069,7 +1069,7 @@ fn the_guided_setup_asks_an_earlier_install_once_whether_to_load_switchboard_as_
     h.settings(json!({}));
     let yes = ok(&h.run_with(&["setup"], "y\n"));
     assert!(
-        yes.contains("✓ Switchboard loads as a plugin in its panes"),
+        yes.contains("✓ Switchboard loads as a plugin in its panes; a tab open now takes the change once it is reopened or the workspace restarts"),
         "{yes}"
     );
     assert!(yes.ends_with("Ready.\n"), "{yes}");
@@ -1131,12 +1131,15 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
     assert!(h.path(".claude/skills/wt/SKILL.md").is_file());
 
     // On: Switchboard moves into its plugin, and only Switchboard's parts.
+    // The tabs open now have the old environment, which it says how to
+    // leave.
+    const OPEN_TABS: &str = "a tab open now takes the change once it is reopened or the workspace restarts (switchboard kill-server, then switchboard)\n";
     let on = ok(&h.run(&["setting", "claude_plugin", "on"]));
     assert!(on.starts_with("on\n"), "{on}");
     assert!(
-        on.ends_with(
-            "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude\n"
-        ),
+        on.ends_with(&format!(
+            "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude; {OPEN_TABS}"
+        )),
         "{on}"
     );
     assert_eq!(h.saved(), json!({}));
@@ -1164,7 +1167,7 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
     // Off: back into ~/.claude, yours kept.
     let off = ok(&h.run(&["setting", "claude_plugin", "off"]));
     assert!(
-        off.ends_with("Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours\n"),
+        off.ends_with(&format!("Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours; {OPEN_TABS}")),
         "{off}"
     );
     assert_eq!(h.saved()["claude_plugin"], json!(false));

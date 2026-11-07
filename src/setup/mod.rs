@@ -477,14 +477,18 @@ fn way_offered(check: bool, list: &mut List) -> Way {
             check,
             "Load Switchboard as a plugin in its panes? Its hooks, skills and instructions move out of ~/.claude, so Claude elsewhere has only your own; Settings' \"Load Switchboard as a plugin\" moves them back.",
         ) {
-            list.ok("Switchboard loads as a plugin in its panes");
+            list.ok(&format!(
+                "Switchboard loads as a plugin in its panes; {}",
+                way::OPEN_TABS
+            ));
             return Way::Plugin;
         }
         return match way::choose(Way::Old, false) {
             Ok(()) => {
-                list.optional(
-                    "Switchboard stays in ~/.claude, for every Claude of yours: Settings' \"Load Switchboard as a plugin\" moves it into the plugin",
-                );
+                list.optional(&format!(
+                    "Switchboard stays in ~/.claude, for every Claude of yours: Settings' \"Load Switchboard as a plugin\" moves it into the plugin; {}",
+                    way::OPEN_TABS
+                ));
                 Way::Old
             }
             Err(e) => {
@@ -808,10 +812,11 @@ pub fn run_move() -> Result<String, String> {
 
 /// `switchboard setup --move`: Switchboard moved the way the setting now
 /// says, by the parts that do it, out loud, asking nothing, ending with a
-/// line saying where it is. Into the plugin, each part runs only when it
-/// has something of Switchboard's to take out, so nothing of yours is
-/// added; back into `~/.claude`, all three put it there, as the old way's
-/// whole setup did.
+/// line saying where it is and how the tabs open now take it (Settings and
+/// `switchboard setting` show that line). Into the plugin, each part runs
+/// only when it has something of Switchboard's to take out, so nothing of
+/// yours is added; back into `~/.claude`, all three put it there, as the
+/// old way's whole setup did.
 fn move_over() -> ExitCode {
     let (way, why) = way::settle(false);
     let mut report = Report::new(false);
@@ -849,8 +854,14 @@ fn move_over() -> ExitCode {
         "{}",
         match (way, why) {
             (_, Some(why)) => why,
-            (Way::Plugin, None) => "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude".to_string(),
-            (Way::Old, None) => "Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours".to_string(),
+            (Way::Plugin, None) => format!(
+                "Switchboard loads as a plugin in its panes, and none of it is in ~/.claude; {}",
+                way::OPEN_TABS
+            ),
+            (Way::Old, None) => format!(
+                "Switchboard's hooks, skills and instructions are in ~/.claude, for every Claude of yours; {}",
+                way::OPEN_TABS
+            ),
         }
     );
     ExitCode::SUCCESS
