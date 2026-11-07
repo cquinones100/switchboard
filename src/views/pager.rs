@@ -60,6 +60,9 @@ pub enum Content {
     /// Plain text, a line each, opened at its end, as `less +G` opened a
     /// CI job's log.
     Log(String),
+    /// Plain text, a line each, opened at a line (from 1), as `less +N`
+    /// opens a file: a file the diff's answer names, read beside it.
+    Text { text: String, line: usize },
 }
 
 /// What came of a key or the mouse.
@@ -142,6 +145,8 @@ impl Pager {
         self.top = match (anchor, &self.markdown) {
             (Some(anchor), Some(_)) => self.doc.line_at(anchor),
             _ if matches!(self.content, Content::Log(_)) => self.last_top(),
+            // A couple of lines above it, to read it in.
+            _ if let Content::Text { line, .. } = self.content => line.saturating_sub(3),
             _ => 0,
         };
         self.clamp();
@@ -197,7 +202,7 @@ impl Pager {
                 ));
                 Doc::plain(lines)
             }
-            (Content::Log(text), _) => Doc::plain(
+            (Content::Log(text) | Content::Text { text, .. }, _) => Doc::plain(
                 text.lines()
                     .map(|l| vec![Span::new(l.to_string(), Style::fg(252))])
                     .collect(),
@@ -626,6 +631,13 @@ mod tests {
         pager.key(key(KeyCode::Char('g')));
         assert_eq!(pager.screen()[0].trim(), "line 1");
         assert_eq!(pager.key(key(KeyCode::Char('q'))), Act::Quit);
+    }
+
+    #[test]
+    fn a_file_opens_at_its_line_with_two_above_it() {
+        let text: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        let pager = Pager::new(Content::Text { text, line: 20 }, 40, 10);
+        assert_eq!(pager.screen()[0].trim(), "line 18");
     }
 
     #[test]

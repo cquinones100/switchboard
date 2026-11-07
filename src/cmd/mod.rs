@@ -212,7 +212,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "view",
         run: crate::views::view_main,
-        about: "Page a Markdown file, drawn as the PR view draws one",
+        about: "Page a Markdown file, drawn as the PR view draws one, or any file from a line (+N)",
     },
     Command {
         name: "pr-view",

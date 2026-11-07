@@ -262,8 +262,19 @@ fn dir_arg(arg: Option<&String>) -> PathBuf {
 
 /// `switchboard view <file.md>`: a Markdown file, paged; `view --log
 /// <file>`, a CI job's log kept by the CI view, paged from its end, as
-/// mission control's "Read the failing log" showed it with `less +G`.
+/// mission control's "Read the failing log" showed it with `less +G`;
+/// `view +<line> <file>`, any file as plain text from that line, as the
+/// diff's `gf` opens one it doesn't change.
 pub fn view_main(args: Vec<String>) -> ExitCode {
+    if let [at, file] = args.as_slice()
+        && let Some(line) = at.strip_prefix('+').and_then(|n| n.parse().ok())
+    {
+        let content = match std::fs::read_to_string(file) {
+            Ok(text) => pager::Content::Text { text, line },
+            Err(e) => pager::Content::Failed(format!("Couldn't read {file}: {e}")),
+        };
+        return pager::run(content, None, None);
+    }
     if let [flag, file] = args.as_slice()
         && flag == "--log"
     {
@@ -274,7 +285,7 @@ pub fn view_main(args: Vec<String>) -> ExitCode {
         return pager::run(content, None, None);
     }
     let [file] = args.as_slice() else {
-        eprintln!("Usage: switchboard view <file.md> | --log <file>");
+        eprintln!("Usage: switchboard view <file.md> | --log <file> | +<line> <file>");
         return ExitCode::from(2);
     };
     let content = match std::fs::read_to_string(file) {

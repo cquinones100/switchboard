@@ -122,6 +122,9 @@ pub struct Options {
     /// The workspace's server is asked for the pane beside at the diff's
     /// edges (a pane of it); off in the tests.
     pub server: bool,
+    /// Outside the workspace, through the desktop's clipboard too; off in
+    /// the tests.
+    pub clipboard: bool,
 }
 
 impl Options {
@@ -151,6 +154,7 @@ impl Options {
             pane_arrows: on("pane_arrows"),
             haiku: true,
             server: crate::mux::socket::in_pane(),
+            clipboard: true,
         }
     }
 }
@@ -1172,6 +1176,19 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return Act::Same;
         }
+        // A message closes on the next key, which goes on to do what it
+        // does, as vim.notify's never held one up; Esc only closes it.
+        let closed = self.history.is_none() && self.message.take().is_some();
+        if closed && key.code == KeyCode::Esc {
+            return Act::Redraw;
+        }
+        match self.key_on(key) {
+            Act::Same if closed => Act::Redraw,
+            act => act,
+        }
+    }
+
+    fn key_on(&mut self, key: KeyEvent) -> Act {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // A commit of the history has the keys, but C-c, which closes the
         // whole diff.
@@ -1211,9 +1228,6 @@ impl App {
                     self.beside(dir);
                 }
             }
-            return Act::Redraw;
-        }
-        if self.message.take().is_some() {
             return Act::Redraw;
         }
         if self.failed.is_some() {
@@ -1823,7 +1837,7 @@ impl App {
         self.out.extend_from_slice(
             format!("\x1b]52;c;{}\x07", util::base64(text.as_bytes())).as_bytes(),
         );
-        if std::env::var_os("SWITCHBOARD").is_none() {
+        if self.opts.clipboard && std::env::var_os("SWITCHBOARD").is_none() {
             let text = text.to_string();
             std::thread::spawn(move || {
                 let _ = crate::platform::copy(&text);
@@ -2155,12 +2169,19 @@ impl App {
             .iter()
             .position(|&i| self.entries()[i].path == path);
         let Some(at) = found else {
-            let there = Path::new(&top).join(&path).exists();
-            return self.say(if there {
-                format!("{path} isn't changed in this diff")
-            } else {
-                format!("{path} isn't in the repository")
-            });
+            let file = Path::new(&top).join(&path);
+            let inside = file
+                .canonicalize()
+                .ok()
+                .zip(Path::new(&top).canonicalize().ok())
+                .is_some_and(|(f, t)| f.starts_with(t) && f.is_file());
+            if !inside {
+                return self.say(format!("{path} isn't in the repository"));
+            }
+            if !self.open_beside(&top, &file, cited.line) {
+                self.say(format!("{path} isn't changed in this diff"));
+            }
+            return;
         };
         self.moved = true;
         self.show_at(at);
@@ -2187,6 +2208,46 @@ impl App {
             .max(5)
             .min(self.rows.saturating_sub(1));
         h.saturating_sub(3) as usize
+    }
+
+    /// A file the diff doesn't change, opened in a pane below it at a line,
+    /// as the answer's `gf` opened one in a split below the diff: in your
+    /// `$VISUAL` or `$EDITOR` (`+<line>`, as Vim, Neovim, nano and Emacs
+    /// take it), else read as plain text (`switchboard view +<line>`). False
+    /// outside the workspace, which has no pane to open it in.
+    fn open_beside(&self, top: &str, file: &Path, line: usize) -> bool {
+        if !self.opts.server {
+            return false;
+        }
+        let file = file.to_string_lossy().into_owned();
+        let editor = ["VISUAL", "EDITOR"]
+            .iter()
+            .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()));
+        let mut args: Vec<String> = ["split", "-D", "-c", top, "--"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect();
+        match editor {
+            Some(editor) => args.extend([
+                "sh".to_string(),
+                "-c".into(),
+                format!("exec {editor} \"+$1\" \"$2\""),
+                "sh".into(),
+                line.to_string(),
+                file,
+            ]),
+            None => {
+                let exe = util::exe()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| "switchboard".into());
+                args.extend([exe, "view".into(), format!("+{line}"), file]);
+            }
+        }
+        std::thread::spawn(move || {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let _ = crate::mux::socket::ask(&args);
+        });
+        true
     }
 
     fn answer_width(&self) -> u16 {
@@ -2279,14 +2340,13 @@ impl App {
             }
             _ => return Act::Same,
         }
-        if self.message.take().is_some() {
-            return Act::Redraw;
-        }
+        // A click closes a message and goes on to do what it does.
+        let closed = self.message.take().is_some();
         if self.failed.is_some() {
             return Act::Quit;
         }
         if self.loading.is_some() || (self.cover.is_some() && self.telling == Telling::Waiting) {
-            return Act::Same;
+            return if closed { Act::Redraw } else { Act::Same };
         }
         if let Some(button) = hit {
             return self.press(button);
@@ -2633,6 +2693,7 @@ mod tests {
             pane_arrows: true,
             haiku: false,
             server: false,
+            clipboard: false,
         }
     }
 
@@ -3154,6 +3215,22 @@ mod tests {
         press(&mut app, "gg");
         screen(&mut app);
         assert_eq!(app.answer.as_ref().unwrap().top, 0);
+    }
+
+    #[test]
+    fn a_message_closes_on_the_next_key_which_goes_on_to_do_its_work() {
+        let mut app = app();
+        screen(&mut app);
+        press(&mut app, "yp");
+        assert!(app.message.is_some(), "Copied said");
+        press(&mut app, "j");
+        assert!(app.message.is_none());
+        assert_eq!(app.current().unwrap().path, "src/a.js", "and j moved");
+        // Esc only closes it, rather than closing the diff from the list.
+        press(&mut app, "yp");
+        let esc = app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(esc, Act::Redraw);
+        assert!(app.message.is_none());
     }
 
     #[test]

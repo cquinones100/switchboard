@@ -747,6 +747,7 @@ Mission control's menus read a link beside your work too: "Read it here" on a pu
 ```
 switchboard view notes.md               # page a Markdown file, drawn as the views draw one
 switchboard view --log ci.log           # page a CI job's log from its end
+switchboard view +42 src/main.rs        # page any file as plain text from line 42
 switchboard pr-view [dir]               # the branch's PR description
 switchboard pr-view --checks [dir]      # the PR's failing checks, as M-m shows them
 switchboard ticket-view [dir | ABC-123] # a ticket, by ID or from a directory's branch
@@ -842,7 +843,7 @@ With Settings' "Diff story told ahead" (`diff_story_ahead`) on, when a tab's bra
 | `j` `k`, `↓` `↑` | The line cursor down or up |
 | `Ctrl-d` `Ctrl-u` | Half the window down or up |
 | `gg` `G`, `Home` `End` | The first or last line |
-| `gf` | The `path:line` on the cursor's line, in the diff, when the change has that file (else a box says it isn't changed, or isn't in the repository); a click on a `path:line` does the same |
+| `gf` | The `path:line` on the cursor's line, in the diff, when the change has that file; a file of the repository the diff doesn't change opens in a pane below the diff at that line, in your `$VISUAL` or `$EDITOR` (given `+<line>`), else as plain text (`switchboard view`); a click on a `path:line` does the same |
 | `ga` | A new question |
 | `yy` | Copy the answer |
 | `yS` | Copy the story |
@@ -902,7 +903,7 @@ These work wherever the cursor is:
 | `q`, `Ctrl-c` | Close the diff |
 | A number | Repeats the move that follows (`5j`) |
 
-Under the cover, `Esc` or `q` shows the diff and `t` switches between the chapters and Haiku's answer. While the change is still being read, `q` or `Esc` closes the diff, and when it can't be read, any key does. A message box in the diff closes on the next key, which does nothing else, or by itself after five seconds.
+Under the cover, `Esc` or `q` shows the diff and `t` switches between the chapters and Haiku's answer. While the change is still being read, `q` or `Esc` closes the diff, and when it can't be read, any key does. A message box in the diff ("Copied …") closes on the next key or click, which goes on to do what it does (`Esc` only closes it), or by itself after five seconds.
 
 ### The diff by hand
 
