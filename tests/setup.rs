@@ -1282,6 +1282,42 @@ fn the_setting_moves_exactly_switchboard_s_parts_into_the_plugin_and_back() {
 }
 
 #[test]
+fn a_move_only_adds_or_takes_out_switchboard_s_import_in_a_claude_md_of_yours() {
+    let h = Home::new("setup-move-md");
+    // Your rules named, and a CLAUDE.md of yours that setup didn't write.
+    fs::write(h.path("rules.md"), "- my rules\n").unwrap();
+    fs::create_dir_all(h.path(".config/switchboard")).unwrap();
+    fs::write(
+        h.path(".config/switchboard/claude.json"),
+        json!({ "path": "~/rules.md" }).to_string(),
+    )
+    .unwrap();
+    fs::create_dir_all(h.path(".claude")).unwrap();
+    fs::write(h.path(".claude/CLAUDE.md"), "# Mine\n").unwrap();
+    let aside = || backups(&h.path(".claude"), "CLAUDE.md.bak");
+
+    // Off: back into ~/.claude, asking nothing, so yours only gets the line.
+    ok(&h.run(&["setting", "claude_plugin", "off"]));
+    assert_eq!(
+        read(&h.path(".claude/CLAUDE.md")),
+        "# Mine\n\n@~/.local/share/switchboard/switchboard.md\n"
+    );
+    assert_eq!(aside(), 0, "never moved aside");
+    assert!(h.path(".local/share/switchboard/switchboard.md").is_file());
+
+    // On: the line taken out, yours as it was.
+    ok(&h.run(&["setting", "claude_plugin", "on"]));
+    assert_eq!(read(&h.path(".claude/CLAUDE.md")), "# Mine\n");
+    assert_eq!(aside(), 0);
+
+    // The part run by name still writes the import of your rules, yours
+    // moved aside first.
+    ok(&h.run(&["setup", "claude-md"]));
+    assert_eq!(aside(), 1);
+    assert!(read(&h.path(".claude/CLAUDE.md")).contains("@~/rules.md"));
+}
+
+#[test]
 fn a_claude_code_too_old_for_the_plugin_keeps_the_old_way_whatever_the_setting() {
     let h = Home::new("setup-old-claude");
     h.claude_version("2.1.100");

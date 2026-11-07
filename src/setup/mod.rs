@@ -837,7 +837,8 @@ pub fn run_move() -> Result<String, String> {
 /// `switchboard setting` show that line). Into the plugin, each part runs
 /// only when it has something of Switchboard's to take out, so nothing of
 /// yours is added; back into `~/.claude`, all three put it there, as the
-/// old way's whole setup did.
+/// old way's whole setup did, but for moving a CLAUDE.md of yours aside,
+/// which isn't asked here (`claude_md::run_moving`).
 fn move_over() -> ExitCode {
     // The setting changed by you: a choice, which an install kept the old
     // way until asked needn't be asked again.
@@ -864,8 +865,18 @@ fn move_over() -> ExitCode {
         .map(|(name, _)| name)
         .collect(),
     };
+    // Your CLAUDE.md, which a move asks nothing about, is never moved aside.
+    const MOVING_CLAUDE_MD: Part = Part {
+        name: "claude-md",
+        about: "",
+        run: claude_md::run_moving,
+    };
     for name in parts {
-        let part = part_named(name).expect("a part");
+        let part = if name == MOVING_CLAUDE_MD.name {
+            &MOVING_CLAUDE_MD
+        } else {
+            part_named(name).expect("a part")
+        };
         if !run_part(&mut report, part, true) {
             failed.push(part.name);
         }

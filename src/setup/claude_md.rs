@@ -11,9 +11,11 @@
 //! `~/.config/switchboard/CLAUDE.md` when there is one. Then
 //! `~/.claude/CLAUDE.md` is a short file importing them, which Claude Code
 //! follows (`@path`), so an edit shows at once; a real file in its way that
-//! isn't one written here is moved aside first. A link into a clone's old
-//! `claude/CLAUDE.md` becomes `~/.config/switchboard/CLAUDE.md`, from what
-//! it linked to, else from git once the file is gone.
+//! isn't one written here is moved aside first, but never by a move between
+//! the plugin and `~/.claude` (`run_moving`), which asks nothing, so it
+//! only adds or takes out Switchboard's import there. A link into a clone's
+//! old `claude/CLAUDE.md` becomes `~/.config/switchboard/CLAUDE.md`, from
+//! what it linked to, else from git once the file is gone.
 //!
 //! Switchboard's part of the instructions (`assets/switchboard.md`: the
 //! tabs and talking to them, the notes app, repository skills) follows the
@@ -134,13 +136,26 @@ pub fn set_up() -> bool {
 
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
+    run_as(r, false)
+}
+
+/// The part as a move between the plugin and `~/.claude` runs it
+/// (`super::move_over`), which no one was asked about: a CLAUDE.md of yours
+/// in the way of your rules' import is never moved aside, and only gets
+/// Switchboard's import line added (back into `~/.claude`) or taken out
+/// (into the plugin); a link of yours is left as it is.
+pub fn run_moving(r: &mut Report) -> Result<()> {
+    run_as(r, true)
+}
+
+fn run_as(r: &mut Report, moving: bool) -> Result<()> {
     if r.check {
-        return now(r, false);
+        return now(r, false, moving);
     }
     pull();
     let lock_file = paths::state_dir().join("claude-md.lock");
     let _held = lock(&lock_file, Duration::from_secs(120))?;
-    now(r, true)
+    now(r, true, moving)
 }
 
 /// Holds `file` locked until the result is dropped (the run's end, however
@@ -421,8 +436,9 @@ pub fn migrate(r: &mut Report) -> Result<()> {
     remove_part(r, &file)
 }
 
-/// The locked part of the run (all of it with `--check`).
-fn now(r: &mut Report, pulled: bool) -> Result<()> {
+/// The locked part of the run (all of it with `--check`), `moving` as
+/// `run_moving` says.
+fn now(r: &mut Report, pulled: bool, moving: bool) -> Result<()> {
     let file = claude_md();
     let clone = clone_dir();
     let way = super::way::current();
@@ -502,7 +518,7 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
         // new one's work instead, so what it writes is what the setting
         // says.
         if config("repo") != repo {
-            return now(r, pulled);
+            return now(r, pulled, moving);
         }
         // gh's helper kept in the clone.
         if let Some(h) = &helper
@@ -571,12 +587,23 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
     } else {
         util::read_text(&file)
     };
+    // A CLAUDE.md of yours, which writing one to import your rules would
+    // move aside (or a link of yours, which it would replace).
+    let yours = is_link(&file) || current.as_ref().is_some_and(|t| !t.contains(MARK_START));
     if let Some(m) = &mine {
         let want = match way {
             Way::Plugin => format!("{MARK}\n\n@{}\n", home_tilde(m)),
             Way::Old => format!("{MARK_WITH_PART}\n\n@{}\n{IMPORT}\n", home_tilde(m)),
         };
-        if current.as_deref() != Some(want.as_str()) {
+        if moving && yours {
+            // A move asks nothing, so yours stays: only Switchboard's line
+            // goes in or out.
+            match (way, &current) {
+                (Way::Old, Some(text)) => add_import(r, &file, text)?,
+                (Way::Plugin, Some(text)) => take_out(r, &file, text)?,
+                (_, None) => {}
+            }
+        } else if current.as_deref() != Some(want.as_str()) {
             if let Some(text) = &current
                 && !text.contains(MARK_START)
             {
