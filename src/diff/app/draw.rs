@@ -711,25 +711,44 @@ impl App {
             inner,
             &[(Button::AskSend, "Ask"), (Button::AskCancel, "Cancel")],
         );
-        let text = self
+        let (text, pos) = self
             .ask_box
             .as_ref()
-            .map(|b| b.text.clone())
+            .map(|b| (b.text.clone(), b.pos))
             .unwrap_or_default();
-        let room = inner.width.saturating_sub(2) as usize;
-        let mut lines: Vec<String> = Vec::new();
-        for para in text.split('\n') {
-            let chars: Vec<char> = para.chars().collect();
-            if chars.is_empty() {
+        let room = (inner.width.saturating_sub(2) as usize).max(1);
+        // The text wrapped at the box's width, and the typing cursor's row
+        // and column in it, a character after a full row starting the next.
+        let mut lines = vec![String::new()];
+        let (mut row, mut col) = (0, 0);
+        let mut at = None;
+        for (i, ch) in text.char_indices() {
+            if i == pos {
+                at = Some(if col == room {
+                    (row + 1, 0)
+                } else {
+                    (row, col)
+                });
+            }
+            if ch == '\n' || col == room {
                 lines.push(String::new());
+                row += 1;
+                col = 0;
+                if ch == '\n' {
+                    continue;
+                }
             }
-            for piece in chars.chunks(room.max(1)) {
-                lines.push(piece.iter().collect());
-            }
+            lines[row].push(ch);
+            col += 1;
         }
+        let (row, col) = at.unwrap_or(if col == room {
+            (row + 1, 0)
+        } else {
+            (row, col)
+        });
         let shown = (inner.height.saturating_sub(1)) as usize;
-        let from = lines.len().saturating_sub(shown);
-        for (i, line) in lines[from..].iter().enumerate() {
+        let from = (row + 1).saturating_sub(shown);
+        for (i, line) in lines.iter().skip(from).take(shown).enumerate() {
             Self::put(
                 buf,
                 inner.x + 1,
@@ -739,11 +758,14 @@ impl App {
                 Style::new(),
             );
         }
-        let last = lines.last().map_or(0, |l| width(l)) as u16;
-        let row = (lines.len() - from).max(1) as u16;
+        let before: String = lines
+            .get(row)
+            .map(|l| l.chars().take(col).collect())
+            .unwrap_or_default();
+        let x = width(&before) as u16;
         Some((
-            inner.x + 1 + last.min(inner.width.saturating_sub(3)),
-            inner.y + row,
+            inner.x + 1 + x.min(inner.width.saturating_sub(3)),
+            inner.y + 1 + (row - from) as u16,
         ))
     }
 

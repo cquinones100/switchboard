@@ -261,10 +261,43 @@ enum Telling {
     Untold(String),
 }
 
-/// The box a question is typed in.
+/// The box a question is typed in: its text, the byte the typing cursor is
+/// at, and where the diff's cursor was.
 struct AskBox {
     text: String,
+    pos: usize,
     at: ask::Cursor,
+}
+
+impl AskBox {
+    fn insert(&mut self, text: &str) {
+        self.text.insert_str(self.pos, text);
+        self.pos += text.len();
+    }
+
+    /// The character before the cursor's start, or after it.
+    fn char_before(&self) -> Option<usize> {
+        self.text[..self.pos]
+            .char_indices()
+            .next_back()
+            .map(|(i, _)| i)
+    }
+
+    fn char_after(&self) -> Option<usize> {
+        let c = self.text[self.pos..].chars().next()?;
+        Some(self.pos + c.len_utf8())
+    }
+
+    /// The start of the cursor's line, and its end.
+    fn line_start(&self) -> usize {
+        self.text[..self.pos].rfind('\n').map_or(0, |i| i + 1)
+    }
+
+    fn line_end(&self) -> usize {
+        self.text[self.pos..]
+            .find('\n')
+            .map_or(self.text.len(), |i| self.pos + i)
+    }
 }
 
 /// The window an answer streams into.
@@ -1894,6 +1927,7 @@ impl App {
         let at = self.ask_cursor();
         self.ask_box = Some(AskBox {
             text: String::new(),
+            pos: 0,
             at,
         });
     }
@@ -1907,16 +1941,47 @@ impl App {
         match key.code {
             KeyCode::Esc => self.ask_box = None,
             KeyCode::Char('c') if ctrl => self.ask_box = None,
-            KeyCode::Enter if shift => b.text.push('\n'),
-            KeyCode::Char('j') if ctrl => b.text.push('\n'),
+            KeyCode::Enter if shift => b.insert("\n"),
+            KeyCode::Char('j') if ctrl => b.insert("\n"),
             KeyCode::Enter => self.send_question(),
             KeyCode::Backspace => {
-                b.text.pop();
+                if let Some(at) = b.char_before() {
+                    b.text.replace_range(at..b.pos, "");
+                    b.pos = at;
+                }
             }
-            KeyCode::Char('u') if ctrl => b.text.clear(),
-            KeyCode::Char(c) if !ctrl => b.text.push(c),
+            KeyCode::Delete => {
+                if let Some(end) = b.char_after() {
+                    b.text.replace_range(b.pos..end, "");
+                }
+            }
+            KeyCode::Left => b.pos = b.char_before().unwrap_or(b.pos),
+            KeyCode::Right => b.pos = b.char_after().unwrap_or(b.pos),
+            KeyCode::Home => b.pos = b.line_start(),
+            KeyCode::Char('a') if ctrl => b.pos = b.line_start(),
+            KeyCode::End => b.pos = b.line_end(),
+            KeyCode::Char('e') if ctrl => b.pos = b.line_end(),
+            KeyCode::Char('u') if ctrl => {
+                b.text.clear();
+                b.pos = 0;
+            }
+            KeyCode::Char(c) if !ctrl => b.insert(c.encode_utf8(&mut [0; 4])),
             _ => return Act::Same,
         }
+        Act::Redraw
+    }
+
+    /// Text pasted: into the question being typed, line breaks and all
+    /// (the terminal's bracketed paste), and nowhere else.
+    pub fn paste(&mut self, text: &str) -> Act {
+        if let Some(h) = &mut self.history {
+            let act = h.app.paste(text);
+            return self.after_history(act);
+        }
+        let Some(b) = &mut self.ask_box else {
+            return Act::Same;
+        };
+        b.insert(&text.replace("\r\n", "\n").replace('\r', "\n"));
         Act::Redraw
     }
 
@@ -2412,14 +2477,19 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, tx: Sender<Msg>) {
 
 /// The terminal as the diff wants it while it runs, and put back however
 /// it ends: raw, on the alternate screen, clicks, drags and the wheel
-/// reported, and every movement too with the hover on.
+/// reported, and every movement too with the hover on; text pasted
+/// bracketed, so a question pasted into `ga`'s box keeps its line breaks;
+/// and keys told apart (the kitty keyboard protocol's flag 1, which
+/// crossterm reads), so Shift-Enter there adds a line, as Neovim asked
+/// for them. In a pane the workspace sends keys so only while the diff
+/// asks.
 struct Term;
 
 impl Term {
     fn enter(motion: bool) -> io::Result<Term> {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h")?;
+        out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?2004h\x1b[>1u")?;
         if motion {
             out.write_all(b"\x1b[?1003h")?;
         }
@@ -2431,8 +2501,9 @@ impl Term {
 impl Drop for Term {
     fn drop(&mut self) {
         let mut out = io::stdout();
-        let _ = out
-            .write_all(b"\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out.write_all(
+            b"\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l",
+        );
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -2501,6 +2572,7 @@ pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
             Ok(true) => match event::read() {
                 Ok(TermEvent::Key(key)) => app.key(key),
                 Ok(TermEvent::Mouse(m)) => app.mouse(m),
+                Ok(TermEvent::Paste(text)) => app.paste(&text),
                 Ok(TermEvent::Resize(c, r)) => {
                     app.resize(c, r);
                     screen.invalidate();
@@ -3065,6 +3137,33 @@ mod tests {
         press(&mut app, "gg");
         screen(&mut app);
         assert_eq!(app.answer.as_ref().unwrap().top, 0);
+    }
+
+    #[test]
+    fn a_question_takes_a_paste_whole_and_shift_enter_adds_a_line() {
+        let mut app = app();
+        press(&mut app, "ga");
+        app.paste("Why this?\r\nAnd that?");
+        assert!(app.ask_box.is_some(), "a pasted line break doesn't send it");
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        press(&mut app, "More");
+        for _ in 0..4 {
+            app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        }
+        press(&mut app, "Even ");
+        app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        press(&mut app, "!");
+        let text = app.ask_box.as_ref().unwrap().text.clone();
+        assert_eq!(text, "Why this?\nAnd that?\nEven More!");
+        let shown = screen(&mut app);
+        for line in ["Why this?", "And that?", "Even More!"] {
+            assert!(
+                shown.iter().any(|l| l.contains(line)),
+                "{line} in {shown:?}"
+            );
+        }
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.answer.as_ref().unwrap().question, text);
     }
 
     #[test]

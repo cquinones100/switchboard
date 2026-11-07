@@ -197,6 +197,23 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
             .unwrap_or(false)
     });
 
+    // ga's box takes a question pasted whole, and Shift-Enter adds a line:
+    // the workspace passes both on as the diff asked for them (bracketed
+    // paste, keys told apart).
+    client.type_text("ga");
+    client.wait_text("Ask about this diff");
+    client.send(b"\x1b[200~First line\nSecond line\x1b[201~");
+    client.send(b"\x1b[13;2u");
+    client.type_text("Third");
+    let shown = client.wait_text("Third");
+    for line in ["First line", "Second line"] {
+        assert!(shown.iter().any(|l| l.contains(line)), "{line}: {shown:?}");
+    }
+    client.send(b"\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Ask about this diff"))
+    });
+
     client.type_text("q");
     wait_until("the pane back", || {
         let now = panes(&server);
