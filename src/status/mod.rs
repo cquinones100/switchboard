@@ -9,6 +9,7 @@
 //! - `theme`: the palettes for dark and light, and which is in use.
 //! - `health`: health.sh's checks, read on the server's tick.
 //! - `second`: the second status line, from what the server holds.
+//! - `push`: whether the PR has every commit made here, for that line.
 //! - `serve`: the server's side: the tick, drawing the bottom rows, a click
 //!   on the button, the terminal's answer about its background, M-p's
 //!   "Toggle light and dark theme".
@@ -18,6 +19,7 @@
 //! `second_status` setting, and lays every tab out again when it changes.
 
 pub mod health;
+pub mod push;
 pub mod second;
 mod serve;
 pub mod theme;
@@ -46,6 +48,18 @@ pub fn lines() -> u16 {
 pub struct Status {
     /// What the health light says is wrong, as last checked.
     pub health: Vec<String>,
+    /// The commits each directory has to push, for the second line.
+    pub push: push::Pushes,
+}
+
+/// What the status line's work off the server's task answers.
+#[derive(Debug)]
+pub enum StatusEvent {
+    /// The commits ahead of an upstream, counted (`None`: they couldn't be).
+    Counted {
+        pair: push::Pair,
+        count: Option<u32>,
+    },
 }
 
 /// What `status-left` shows after the Claude counts.

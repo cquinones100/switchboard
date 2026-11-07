@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::second::{self, Second};
-use super::{Hits, LINES, Left, health, lines, theme};
+use super::{Hits, LINES, Left, StatusEvent, health, lines, theme};
 use crate::mux::compose::{self, Frame, TabStatus};
 use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Server, Session};
@@ -52,7 +52,47 @@ impl Server {
             self.dirty_all();
         }
         if want == 2 {
+            self.push_look();
             self.dirty_all();
+        }
+    }
+
+    /// The commits each session's current tab has to push, read again from
+    /// git's files for a tab with a PR, as tab-status.sh counted them only
+    /// then; a pair of commits not counted yet is counted off the task.
+    fn push_look(&mut self) {
+        let dirs: Vec<std::path::PathBuf> = self
+            .sessions
+            .iter()
+            .map(|s| s.current)
+            .filter(|t| self.tab_pr(*t).is_some())
+            .filter_map(|t| self.tab_path(t).map(|p| p.to_path_buf()))
+            .collect();
+        for dir in dirs {
+            let Some(pair) = self.status.push.look(&dir) else {
+                continue;
+            };
+            if tokio::runtime::Handle::try_current().is_err() {
+                return;
+            }
+            let tx = self.tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let count = super::push::count(&dir, &pair);
+                let _ = tx.send(crate::mux::server::Event::Status(StatusEvent::Counted {
+                    pair,
+                    count,
+                }));
+            });
+        }
+    }
+
+    /// What the status line's work off the task answered.
+    pub fn status_event(&mut self, event: StatusEvent) {
+        match event {
+            StatusEvent::Counted { pair, count } => {
+                self.status.push.counted(pair, count);
+                self.dirty_all();
+            }
         }
     }
 
@@ -93,6 +133,9 @@ impl Server {
             label,
             own_name: self.tab_own_name(tab_id).is_some(),
             pr,
+            ahead: pr
+                .and(self.tab_path(tab_id))
+                .and_then(|d| self.status.push.ahead(d)),
             command: if claude.is_some() {
                 Some("claude".into())
             } else {

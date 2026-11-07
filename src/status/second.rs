@@ -1,20 +1,17 @@
 //! The second status line (tmux/tab-status.sh, tmux.conf's
 //! `status-format[1]`), under the tabs while the `second_status` setting is
 //! on: the current tab's label whole, where the tab may cut it short, its
-//! PR, the program in front of its pane, and in a Claude pane what the
-//! session is doing, its name and your last prompt.
+//! PR and whether it has every commit made here ("↑2 to push", "pushed"),
+//! the program in front of its pane, and in a Claude pane what the session
+//! is doing, its name and your last prompt.
 //!
 //! tab-status.sh ran on every redraw and kept its Claude summary in a cache,
 //! since working it out took seven processes. Here everything comes from
 //! what the server already holds: the tab's name and PR (src/tabs), the
-//! pane's state (src/agent), and its Claude session and last turn as the
-//! sidebar read them from Claude Code's files on the tick (src/sidebar), so
-//! drawing it starts nothing and reads nothing.
-//!
-//! tab-status.sh also said whether the PR had every commit made here
-//! ("↑2 to push", "pushed"), from `git rev-list --count`. Counting commits
-//! means walking git's object store, which isn't done without git, so that
-//! part is left out.
+//! commits to push as counted in the background (`push`), the pane's state
+//! (src/agent), and its Claude session and last turn as the sidebar read
+//! them from Claude Code's files on the tick (src/sidebar), so drawing it
+//! starts nothing and reads nothing.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -36,6 +33,8 @@ pub struct Second {
     /// Whether the tab has a name of its own, drawn bold.
     pub own_name: bool,
     pub pr: Option<u64>,
+    /// The commits the PR's branch has here and not upstream, once counted.
+    pub ahead: Option<u32>,
     /// The program in front of the pane; `claude` for a Claude pane.
     pub command: Option<String>,
     /// The tab's color, the program drawn in it.
@@ -101,6 +100,17 @@ pub fn pieces(s: &Second, p: &Palette, now: i64) -> Vec<(String, Style)> {
     if let Some(pr) = s.pr {
         out.push(("   ".into(), Style::new()));
         out.push((format!("#{pr}"), Style::new().fg(p.status_fg)));
+        match s.ahead {
+            Some(0) => {
+                out.push((" ".into(), Style::new()));
+                out.push(("pushed".into(), Style::new().fg(p.dim)));
+            }
+            Some(n) => {
+                out.push((" ".into(), Style::new()));
+                out.push((format!("↑{n} to push"), Style::new().fg(YELLOW)));
+            }
+            None => {}
+        }
     }
     if let Some(command) = s.command.as_deref().filter(|c| !c.is_empty()) {
         out.push(("  ".into(), Style::new()));
@@ -198,6 +208,7 @@ mod tests {
             label: "ENG-1: Fix it".into(),
             own_name: false,
             pr: Some(12),
+            ahead: Some(2),
             command: Some("claude".into()),
             color: Some(green),
             state: Some((State::Waiting, 1000)),
@@ -210,9 +221,14 @@ mod tests {
         draw(&mut buf, area, &pieces, p);
         assert_eq!(
             row(&buf),
-            "  ENG-1: Fix it   #12  claude waiting on you for 4m   \"make the tests pass\""
+            "  ENG-1: Fix it   #12 ↑2 to push  claude waiting on you for 4m   \"make the tests pass\""
         );
-        let at = |text: &str| row(&buf).find(text).unwrap() as u16;
+        // The column a piece starts at: one per character, all narrow here.
+        let at = |text: &str| {
+            let r = row(&buf);
+            r[..r.find(text).unwrap()].chars().count() as u16
+        };
+        assert_eq!(buf[(at("↑2"), 0)].fg, YELLOW);
         assert_eq!(buf[(at("claude"), 0)].fg, green);
         assert_eq!(buf[(at("waiting"), 0)].fg, YELLOW);
         assert_eq!(buf[(at("\"make"), 0)].fg, p.dim);
@@ -236,5 +252,25 @@ mod tests {
         assert_eq!(row(&buf), "  Shaping: things  zsh");
         assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD));
         assert_eq!(buf[(2, 0)].bg, Palette::LIGHT.status_bg);
+    }
+
+    #[test]
+    fn a_pr_with_every_commit_pushed_says_so_and_one_not_counted_says_nothing() {
+        let p = &Palette::DARK;
+        let mut s = Second {
+            label: "fix".into(),
+            pr: Some(7),
+            ahead: Some(0),
+            ..Second::default()
+        };
+        let text = |s: &Second| {
+            pieces(s, p, 0)
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect::<String>()
+        };
+        assert_eq!(text(&s), "  fix   #7 pushed");
+        s.ahead = None;
+        assert_eq!(text(&s), "  fix   #7");
     }
 }

@@ -236,7 +236,7 @@ Settings' "Health light" (`health_light`) turns it off.
 
 ### The second status line
 
-Settings' "Second status line" (`second_status`, off by default) adds a line under the tabs about the current tab: its name in full, where the tab may cut it short, its PR, the program in front of its pane, and in a Claude pane, what the session is doing ("waiting on you for 4m", "finished 2m ago", "working"), its name and your last prompt to it.
+Settings' "Second status line" (`second_status`, off by default) adds a line under the tabs about the current tab: its name in full, where the tab may cut it short, its PR and whether it has every commit made here ("↑2 to push" in yellow, the commits on the branch that its upstream, or origin's copy of it, hasn't got as last fetched or pushed; "pushed" when it has them all), the program in front of its pane, and in a Claude pane, what the session is doing ("waiting on you for 4m", "finished 2m ago", "working"), its name and your last prompt to it.
 
 ### Theme
 

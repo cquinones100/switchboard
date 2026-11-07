@@ -99,6 +99,8 @@ pub enum Event {
     Views(crate::views::ViewsEvent),
     /// A look for a new release answered (src/update).
     Update(crate::update::UpdateEvent),
+    /// The status line's counts answered (src/status).
+    Status(crate::status::StatusEvent),
     /// The rest of what a Notes key does, back from off the task
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::NotesEvent),
@@ -616,6 +618,7 @@ impl Server {
             Event::Mission(event) => self.mission_event(event),
             Event::Views(event) => self.views_event(event),
             Event::Update(event) => self.update_event(event),
+            Event::Status(event) => self.status_event(event),
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Tick => {
