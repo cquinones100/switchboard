@@ -113,7 +113,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 
 | Key | What it does |
 |---|---|
-| `M-Left` `M-Down` `M-Up` `M-Right` | Move to the pane on that side, coming round to the far side past an edge, as tmux did; `M-Left` from the leftmost pane, and `M-Right` from the rightmost, go into the sidebar, the leftmost of all |
+| `M-Left` `M-Down` `M-Up` `M-Right` | Move to the pane on that side, coming round to the far side past an edge, as tmux did; `M-Left` from the leftmost pane, and `M-Right` from the rightmost, go into the sidebar, the leftmost of all. In the diff and Notes they move between the app's own windows first |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to the left, below, above or to the right |
 | `M-w` | Close the pane, asking first when a program runs in it |
 | `M-=` | Zoom the pane in or out |
@@ -122,7 +122,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-Tab` | Go back to the tab you were on before |
 | `M-1` … `M-9` | Go to the tab with that number |
 | `M-0` | Go to a tab by its number, typed in a box, for the tabs past 9 |
-| `C-w` then `h` `j` `k` `l` | Move to the pane on that side, as in Vim; in Vim itself `C-w` is Vim's, and `C-w C-w` sends one `C-w` to the pane |
+| `C-w` then `h` `j` `k` `l` | Move to the pane on that side, as in Vim; in Vim, the diff and Notes `C-w` is theirs, and `C-w C-w` sends one `C-w` to the pane |
 | `M-t`, `M-n` | New tab running Claude, in a directory you pick |
 | `M-j` | Find a tab by typing its name, and go to it |
 | `M-o` | Reopen a worktree no tab has open, resuming its Claude |
@@ -170,6 +170,8 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 `M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line.
 
 `C-w` waits for the next key: `h`, `j`, `k` or `l` moves to the pane on that side (from the sidebar too), `C-w` again sends `C-w` itself to the pane (deleting a word in a shell or in Claude's prompt), and any other key does what it would have done. Settings' "C-w then h, j, k or l moves between panes" (`ctrl_w_panes`) off leaves `C-w` to the pane, and Settings' "Alt-arrows move between panes" (`pane_arrows`) off hands Alt-arrows to the pane.
+
+Vim takes `C-w` for its own windows. The diff (`M-d`) and Notes take both `C-w` and the Alt-arrows: they move between their own windows (the file list and the diff's two sides; the notes list and the note) and, at their edge, on to the pane on that side, as Neovim with vim-tmux-navigator did; in Notes, `C-w` while typing deletes a word, as in Vim.
 
 ### Option as Alt on a Mac
 
@@ -885,7 +887,8 @@ These work wherever the cursor is:
 | `zo`, `za`, `zv` | Open the fold under the diff's cursor |
 | `zR` `zM` | Open every fold of the file, or fold them again |
 | `Tab`, `Shift-Tab` | Between the list and the diff |
-| `Ctrl-w h` `Ctrl-w l`, `Ctrl-w w` | The pane of the diff to the left or right, or the next one |
+| `Ctrl-w h` `j` `k` `l`, `M-Left` `M-Down` `M-Up` `M-Right` | The list or side of the diff that way, else the workspace's pane on that side (the sidebar past the list), as `M-Left` and the rest move between panes |
+| `Ctrl-w w` | The next window of the diff |
 | `]p` `[p` | The next or previous page of the story, or commit of the branch's |
 | `c` | The branch's commits one at a time, and back to the whole branch |
 | `E` | Widen or narrow the list |
@@ -948,7 +951,7 @@ Nothing in a note is sent anywhere. Squashing notes, after you say yes, is the o
 | Ctrl-F | find a note (in a note too) |
 | Ctrl-B | put the list away, for the note to have the room; Ctrl-B in a note shows it again |
 | Ctrl-Shift-P | every command, in a palette (in a note too) |
-| Tab, or Ctrl-W `l` | go to the note |
+| Tab, or Ctrl-W `l`, or `M-Right` | go to the note; Ctrl-W `h` or `M-Left` goes on to the pane on the list's left, Ctrl-W `j` `k` or `M-Down` `M-Up` to the pane below or above |
 | `q` / `?` | quit / these keys |
 
 The list has Folders (All Notes, Notes for the top folder, your folders, Recently Deleted, each with its count), then Tags, each with how many notes have it, then the notes in what is chosen: pinned first, then newest first, each with when it changed and how it starts, and in All Notes, which folder it is in. The wheel scrolls it.
@@ -975,7 +978,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Commands | `:<line>`, `:s/a/b/g` and `:%s/a/b/g`, `:w`, `:q`, `:wq` or `:x`, `:noh`; `ZZ`, `ZQ` |
 | Insert mode | Ctrl-W, Ctrl-U, Ctrl-H, Backspace, Delete, the arrows, Home, End; Ctrl-V then a key types the key itself |
 | Visual mode | the motions and text objects grow the selection; `d` `x` `c` `s` `y` `>` `<` `~` `u` `U` `J` `p` `r` `o` act on it, `v` and `V` switch between characters and lines, Ctrl-C copies it |
-| Windows | Ctrl-W `h` goes to the list |
+| Windows | Ctrl-W `h` or `M-Left` (typing too) goes to the list, saving the note and leaving Insert mode; Ctrl-W `l` or `M-Right` goes on to the pane on the note's right, and Ctrl-W `j` `k`, `M-Down` `M-Up` to the pane below or above, as the Alt-arrows move between panes |
 
 Marks, macros and named registers aren't there: `"+y` and the like yank to the one register, which is the clipboard. A drag with the mouse selects; a click puts the cursor there; the wheel scrolls. Ctrl-F and Ctrl-B take the place of Vim's page down and page up in a note; PageDown and PageUp still page.
 
@@ -1814,7 +1817,11 @@ switchboard send-keys [-t pane] [-l|-p] key...
 switchboard capture-pane [-t pane] [-S lines]
                                          the pane's screen, with that many lines
                                          of history above it
-switchboard select-pane -t pane          focus a pane
+switchboard select-pane [-t pane] [-L|-R|-U|-D]
+                                         focus a pane, or the one beside it on
+                                         that side (the sidebar past the left
+                                         edge), as the diff and Notes ask at
+                                         their edges
 switchboard select-tab -t tab            bring a tab to the front
 switchboard switch-client -t tab         bring a tab to the front and show it
                                          in the terminal you used last, moving

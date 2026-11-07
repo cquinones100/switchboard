@@ -115,6 +115,9 @@ pub struct Options {
     /// Ticked items move under the rest, a blank line between.
     pub move_checked_to_bottom: bool,
     pub gap_before_checked: bool,
+    /// The M-arrows move between the list, the note and the panes beside
+    /// (pane_arrows).
+    pub pane_arrows: bool,
     /// Through the system clipboard; off in the tests.
     pub clipboard: bool,
     /// The workspace's server is told of notes moving (a pane of it).
@@ -138,6 +141,7 @@ impl Default for Options {
             strike_checked: true,
             move_checked_to_bottom: true,
             gap_before_checked: true,
+            pane_arrows: true,
             clipboard: false,
             server: false,
         }
@@ -166,6 +170,7 @@ impl Options {
                 .iter()
                 .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
             list: std::env::var("NOTES_SIDEBAR").map_or(true, |v| v != "off"),
+            pane_arrows: on("pane_arrows"),
             clipboard: true,
             server: crate::mux::socket::in_pane(),
             ..Options::default()
@@ -1601,6 +1606,14 @@ impl App {
         if self.message.is_some() && self.focus == Focus::Note && self.editor.mode == Mode::Normal {
             self.message = None;
         }
+        if let Some(dir) = alt_arrow(&key) {
+            // With pane_arrows off the workspace passes them on unasked,
+            // and they do nothing here, as Neovim's mapping fed them back.
+            if self.opts.pane_arrows {
+                self.window_move(dir);
+            }
+            return;
+        }
         let palette_key = key.mods.ctrl
             && matches!(key.code, KeyCode::Char(c) if c == 'P' || (c == 'p' && key.mods.shift));
         if palette_key {
@@ -1657,10 +1670,7 @@ impl App {
             return;
         }
         if pending == Some('w') {
-            if matches!(c, Some('l' | 'w')) || key.code == KeyCode::Right {
-                self.focus = Focus::Note;
-            }
-            return;
+            return self.window_key(key);
         }
         let last = self.list_rows.len().saturating_sub(1);
         match key.code {
@@ -1698,6 +1708,54 @@ impl App {
                 _ => {}
             },
         }
+    }
+
+    /// The key after C-w: a side (h, j, k, l or an arrow), or w and p for
+    /// the other window.
+    fn window_key(&mut self, key: Key) {
+        let dir = match key.code {
+            KeyCode::Left => 'h',
+            KeyCode::Down => 'j',
+            KeyCode::Up => 'k',
+            KeyCode::Right => 'l',
+            KeyCode::Char('w') if key.mods.ctrl => 'w',
+            KeyCode::Char(c) if !key.mods.ctrl && !key.mods.alt => c,
+            _ => return,
+        };
+        self.window_move(dir);
+    }
+
+    /// C-w with a side, and the M-arrows: the list or the note beside,
+    /// else the workspace's pane on that side, as vim-tmux-navigator moved
+    /// between Neovim's windows and handed off to tmux at the edges. Going
+    /// from the note to the list stops typing and saves it, as leaving its
+    /// buffer did.
+    fn window_move(&mut self, dir: char) {
+        let list = self.focus == Focus::List && self.list_shown;
+        match dir {
+            'h' | 'w' | 'p' if !list && self.list_shown => {
+                self.leave_modes();
+                self.save();
+                self.focus = Focus::List;
+            }
+            'l' | 'w' | 'p' if list => self.focus = Focus::Note,
+            'h' => self.beside("-L"),
+            'l' => self.beside("-R"),
+            'j' => self.beside("-D"),
+            'k' => self.beside("-U"),
+            _ => {}
+        }
+    }
+
+    /// The workspace's pane on a side of this one (`select-pane -L`), off
+    /// the screen's thread; nothing outside the workspace.
+    fn beside(&self, side: &'static str) {
+        if !self.opts.server {
+            return;
+        }
+        std::thread::spawn(move || {
+            let _ = crate::mux::socket::ask(&["select-pane", side]);
+        });
     }
 
     fn palette(&mut self) {
@@ -1828,10 +1886,13 @@ impl App {
     /// then Vim's.
     fn note_key(&mut self, key: Key) {
         if self.open.is_none() {
+            if self.list_pending.take() == Some('w') {
+                return self.window_key(key);
+            }
             match key.code {
                 KeyCode::Char('b') if key.mods.ctrl => self.toggle_list(),
                 KeyCode::Char('f') if key.mods.ctrl => self.finder(),
-                KeyCode::Char('w') if key.mods.ctrl => self.focus = Focus::List,
+                KeyCode::Char('w') if key.mods.ctrl => self.list_pending = Some('w'),
                 KeyCode::Char('q') => self.quit = true,
                 _ => {}
             }
@@ -2208,11 +2269,7 @@ impl App {
                     self.quit = true;
                 }
                 Effect::Prompt(c) => self.prompt = Some((c, String::new())),
-                Effect::Window(dir) => {
-                    if matches!(dir, 'h' | 'w' | 'p') && self.list_shown {
-                        self.focus = Focus::List;
-                    }
-                }
+                Effect::Window(dir) => self.window_move(dir),
             }
         }
     }
@@ -2361,6 +2418,21 @@ impl App {
             None => self.push(Box::<FormatMenu>::default(), Then::Format(from)),
             Some(item) => self.run_format(item.act, from),
         }
+    }
+}
+
+/// The side an M-arrow moves to (h, j, k or l), for an arrow with Alt
+/// alone.
+fn alt_arrow(key: &Key) -> Option<char> {
+    if key.mods != Mods::ALT {
+        return None;
+    }
+    match key.code {
+        KeyCode::Left => Some('h'),
+        KeyCode::Down => Some('j'),
+        KeyCode::Up => Some('k'),
+        KeyCode::Right => Some('l'),
+        _ => None,
     }
 }
 

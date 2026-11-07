@@ -12,8 +12,8 @@
 //! What each does is said by its `Command`, as the other parts' are, so the
 //! palette lists them with tmux.conf's descriptions and tags; `serve` puts
 //! them on the server, with the keys that change what a key does there
-//! (Alt-arrows with pane_arrows off, the characters Option types where it
-//! isn't Alt).
+//! (Alt-arrows with pane_arrows off or the diff or Notes in front, the
+//! characters Option types where it isn't Alt).
 //!
 //! - `text`: a box of lines to read, scrolled with j and k, for what a
 //!   command has to show at length (the habits report, setup's output).
@@ -308,6 +308,22 @@ pub fn is_vim(command: &str) -> bool {
     VIM.is_match(&command.to_lowercase())
 }
 
+/// Whether a pane's program is the diff or Notes (`switchboard diff`,
+/// `switchboard notes`, by their arguments), which take `C-w` and the
+/// M-arrows to move between their own windows and ask for the pane beside
+/// them at their edges, as Neovim with vim-tmux-navigator did when both ran
+/// in it. Vim itself takes only `C-w` (`is_vim`): no navigator of
+/// Switchboard's runs in it to hand the M-arrows back.
+pub fn takes_pane_keys(args: &[String]) -> bool {
+    let name = |a: &String| a.rsplit('/').next().unwrap_or(a).to_string();
+    match args {
+        [program, app, rest @ ..] if name(program) == "switchboard" => {
+            app == "diff" || (app == "notes" && rest.first().is_none_or(|a| a != "away"))
+        }
+        _ => false,
+    }
+}
+
 /// The characters Option+h, j, k and l type on a US layout where the
 /// terminal doesn't send Option as Alt (tmux.conf's `˙ ∆ ˚ ¬` bindings).
 pub const OPTION_CHARS: [char; 4] = ['˙', '∆', '˚', '¬'];
@@ -460,6 +476,28 @@ mod tests {
         }
         for other in ["zsh", "claude", "node", "vimx-thing", "less", "nview2"] {
             assert!(!is_vim(other), "{other}");
+        }
+    }
+
+    #[test]
+    fn the_diff_and_notes_take_the_pane_keys() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(takes_pane_keys(&args(&[
+            "/home/u/.local/bin/switchboard",
+            "diff",
+            "/r"
+        ])));
+        assert!(takes_pane_keys(&args(&["switchboard", "notes"])));
+        // Notes' placeholder in its own tab, the views, a shell, and Vim
+        // (which takes C-w alone) don't.
+        for other in [
+            &["switchboard", "notes", "away"][..],
+            &["switchboard", "pr-view"],
+            &["zsh"],
+            &["diff", "a", "b"],
+            &["nvim", "x"],
+        ] {
+            assert!(!takes_pane_keys(&args(other)), "{other:?}");
         }
     }
 

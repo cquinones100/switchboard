@@ -811,14 +811,6 @@ impl Server {
         }
     }
 
-    /// M-Left from the leftmost pane: into the sidebar, which was the pane
-    /// on the left in tmux.
-    pub fn sidebar_from_left(&mut self, client: ClientId) {
-        if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
-            self.sidebar_enter(&session, None);
-        }
-    }
-
     // ── Keys ────────────────────────────────────────────────────────────────
 
     /// A key while the sidebar has the focus (after the bindings); gives

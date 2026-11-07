@@ -1124,6 +1124,13 @@ impl Pane {
             .or_else(|| self.pid.and_then(super::procinfo::command_of))
     }
 
+    /// The arguments of the program in front, its own name first.
+    pub fn foreground_args(&self) -> Option<Vec<String>> {
+        self.foreground_pgid()
+            .and_then(super::procinfo::args_of)
+            .or_else(|| self.pid.and_then(super::procinfo::args_of))
+    }
+
     /// Every process in front on the PTY (the foreground process group), for
     /// finding which runs Claude (it has a session file by its pid).
     pub fn foreground_pids(&self) -> Vec<u32> {

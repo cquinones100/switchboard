@@ -26,7 +26,12 @@
 //!                                        when the pane asks), as tmux's
 //!                                        paste-buffer -p
 //! capture-pane [-t pane] [-S lines]      the screen (and that much history)
-//! select-pane -t pane | select-tab -t tab
+//! select-pane [-t pane] [-L|-R|-U|-D]   that pane; with a side, the pane
+//!                                        beside it there (the sidebar past
+//!                                        the left edge), as an app moving
+//!                                        between its own windows hands off
+//!                                        at its edges
+//! select-tab -t tab
 //! switch-client -t tab                   the client used last shown the
 //!                                        tab, in its session (tmux's
 //!                                        switch-client)
@@ -186,10 +191,7 @@ impl Server {
             "respawn-pane" => self.cmd_respawn(rest, cwd, caller),
             "send-keys" => self.cmd_send_keys(rest, caller),
             "capture-pane" => self.cmd_capture(rest, caller),
-            "select-pane" => self.target_pane(rest, caller).map(|p| {
-                self.focus_pane(p);
-                Reply::ok("")
-            }),
+            "select-pane" => self.cmd_select_pane(rest, caller),
             "select-tab" => self.target_tab(rest, caller).map(|t| {
                 if let Some(s) = self.session_of_tab(t).map(|s| s.name.clone()) {
                     self.select_tab(&s, t);
@@ -464,6 +466,33 @@ impl Server {
             self.tab_to_end(tab);
         }
         Ok(Reply::ok(format!("{tab} {pane}\n")))
+    }
+
+    /// `select-pane`: the pane named, or with `-L`, `-R`, `-U` or `-D` the
+    /// one beside it on that side, as `M-Left` and the rest move from the
+    /// pane in front: the diff and Notes ask this at their own edges, as
+    /// vim-tmux-navigator ran `tmux select-pane -L`.
+    fn cmd_select_pane(
+        &mut self,
+        rest: &[String],
+        caller: Option<PaneId>,
+    ) -> Result<Reply, String> {
+        let a = Args::parse(rest, "t")?;
+        let pane = self.pane_from(&a, caller)?;
+        let side = [
+            ('L', Direction::Left),
+            ('R', Direction::Right),
+            ('U', Direction::Up),
+            ('D', Direction::Down),
+        ]
+        .into_iter()
+        .find(|(f, _)| a.has(*f))
+        .map(|(_, d)| d);
+        match side {
+            Some(dir) => self.select_pane_toward(pane, dir),
+            None => self.focus_pane(pane),
+        }
+        Ok(Reply::ok(""))
     }
 
     fn cmd_split(

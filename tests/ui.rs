@@ -232,6 +232,27 @@ fn ctrl_w_then_a_direction_moves_between_panes() {
 }
 
 #[test]
+fn select_pane_with_a_side_moves_from_a_pane_to_the_one_beside_it() {
+    // What the diff and Notes ask at their edges.
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let left = active_pane(&server.list());
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("a second pane, focused", |_| {
+        active_pane(&server.list()) != left
+    });
+    let right = active_pane(&server.list());
+    server.ok(&["select-pane", "-t", &right, "-L"]);
+    assert_eq!(active_pane(&server.list()), left);
+    server.ok(&["select-pane", "-t", &left, "-R"]);
+    assert_eq!(active_pane(&server.list()), right);
+    // Nothing above: the pane stays.
+    server.ok(&["select-pane", "-t", &right, "-U"]);
+    assert_eq!(active_pane(&server.list()), right);
+}
+
+#[test]
 fn the_palette_renames_the_tab_and_reports_how_it_is_used() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);

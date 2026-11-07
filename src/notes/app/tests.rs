@@ -419,6 +419,30 @@ fn the_list_is_put_away_and_shown_again_and_notes_sidebar_off_starts_without_it(
 }
 
 #[test]
+fn ctrl_w_and_the_m_arrows_move_between_the_list_and_the_note() {
+    let (_dir, mut app) = started("panes");
+    app.focus = Focus::List;
+    keys(&mut app, "<C-w>l");
+    assert_eq!(app.focus, Focus::Note);
+    keys(&mut app, "<C-w>h");
+    assert_eq!(app.focus, Focus::List);
+    let alt = |code| Key::new(code, Mods::ALT);
+    app.key(alt(KeyCode::Right));
+    assert_eq!(app.focus, Focus::Note);
+    // Typing too, as vim-tmux-navigator's mapping was.
+    keys(&mut app, "i");
+    app.key(alt(KeyCode::Left));
+    assert_eq!(app.focus, Focus::List);
+    // Past the list's edge the workspace's pane is asked for (not here,
+    // with no server), and the focus stays.
+    app.key(alt(KeyCode::Left));
+    assert_eq!(app.focus, Focus::List);
+    app.opts.pane_arrows = false;
+    app.key(alt(KeyCode::Right));
+    assert_eq!(app.focus, Focus::List, "off, they do nothing");
+}
+
+#[test]
 fn only_one_app_opens_the_notes_and_another_says_so() {
     let (dir, store) = temp("locked");
     // Held by a live process: the test runner's parent.

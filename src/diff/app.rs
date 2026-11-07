@@ -112,8 +112,14 @@ pub struct Options {
     pub hover: bool,
     /// The light theme's colours (theme).
     pub light: bool,
+    /// The M-arrows move between the list, the sides and the panes beside
+    /// (pane_arrows).
+    pub pane_arrows: bool,
     /// Whether Haiku may be asked at all; off in the tests.
     pub haiku: bool,
+    /// The workspace's server is asked for the pane beside at the diff's
+    /// edges (a pane of it); off in the tests.
+    pub server: bool,
 }
 
 impl Options {
@@ -138,7 +144,9 @@ impl Options {
             key_help: on("key_help_line"),
             hover: on("hover_highlight"),
             light: all.iter().any(|s| s.key == "theme" && s.value == "light"),
+            pane_arrows: on("pane_arrows"),
             haiku: true,
+            server: crate::mux::socket::in_pane(),
         }
     }
 }
@@ -1143,6 +1151,23 @@ impl App {
         if ctrl && key.code == KeyCode::Char('n') && self.ask_box.is_none() {
             return Act::Same;
         }
+        if let Some(dir) = alt_arrow(&key) {
+            // With pane_arrows off the workspace passes them on unasked, and
+            // they do nothing here, as nvim/diff.lua fed them back.
+            if self.opts.pane_arrows {
+                let windows = self.loading.is_none()
+                    && self.failed.is_none()
+                    && self.ask_box.is_none()
+                    && self.answer.is_none()
+                    && !(self.cover.is_some() && self.telling == Telling::Waiting);
+                if windows {
+                    self.window_move(dir);
+                } else {
+                    self.beside(dir);
+                }
+            }
+            return Act::Redraw;
+        }
         if self.message.take().is_some() {
             return Act::Redraw;
         }
@@ -1291,19 +1316,7 @@ impl App {
             ('z', 'o' | 'a' | 'v') => self.open_fold(),
             ('z', 'R') => self.all_folds(true),
             ('z', 'M') => self.all_folds(false),
-            ('w', 'h') => {
-                self.focus = match self.focus {
-                    Focus::New if self.side_widths().0 > 0 => Focus::Old,
-                    _ => Focus::List,
-                }
-            }
-            ('w', 'l') => {
-                self.focus = match self.focus {
-                    Focus::List => self.first_side(),
-                    _ if self.side_widths().1 > 0 => Focus::New,
-                    other => other,
-                }
-            }
+            ('w', dir @ ('h' | 'j' | 'k' | 'l')) => self.window_move(dir),
             ('w', 'w') => {
                 self.focus = match self.focus {
                     Focus::List => self.first_side(),
@@ -1314,6 +1327,38 @@ impl App {
             _ => {}
         }
         Act::Redraw
+    }
+
+    /// C-w with h, j, k or l, and the M-arrows: the list or the side of
+    /// the diff that way, else the workspace's pane there, as nvim/diff.lua
+    /// moved between diffview's windows and handed off to tmux at the
+    /// edges.
+    fn window_move(&mut self, dir: char) {
+        let (old, new) = self.side_widths();
+        self.focus = match (dir, self.focus) {
+            ('h', Focus::New) if old > 0 => Focus::Old,
+            ('h', Focus::New | Focus::Old) => Focus::List,
+            ('l', Focus::List) => self.first_side(),
+            ('l', Focus::Old) if new > 0 => Focus::New,
+            _ => return self.beside(dir),
+        };
+    }
+
+    /// The workspace's pane on a side of the diff's (`select-pane -L`),
+    /// off the screen's thread; nothing outside the workspace.
+    fn beside(&self, dir: char) {
+        if !self.opts.server {
+            return;
+        }
+        let side = match dir {
+            'h' => "-L",
+            'j' => "-D",
+            'k' => "-U",
+            _ => "-R",
+        };
+        std::thread::spawn(move || {
+            let _ = crate::mux::socket::ask(&["select-pane", side]);
+        });
     }
 
     /// The side a file's diff is read on: the new, or the old one alone.
@@ -2243,6 +2288,21 @@ impl App {
     }
 }
 
+/// The side an M-arrow moves to (h, j, k or l), for an arrow with Alt
+/// alone.
+fn alt_arrow(key: &KeyEvent) -> Option<char> {
+    if key.modifiers != KeyModifiers::ALT {
+        return None;
+    }
+    match key.code {
+        KeyCode::Left => Some('h'),
+        KeyCode::Down => Some('j'),
+        KeyCode::Up => Some('k'),
+        KeyCode::Right => Some('l'),
+        _ => None,
+    }
+}
+
 /// Lines as `yp` and `yl` name them: one line alone, else the first and
 /// the last, the last after `mark` (GitHub's `#L12-L20`).
 fn span(first: usize, last: usize, mark: &str) -> String {
@@ -2446,7 +2506,9 @@ mod tests {
             key_help: true,
             hover: true,
             light: false,
+            pane_arrows: true,
             haiku: false,
+            server: false,
         }
     }
 
@@ -2809,6 +2871,32 @@ mod tests {
             app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
             Act::Quit
         );
+    }
+
+    #[test]
+    fn c_w_and_the_m_arrows_move_between_the_list_and_the_sides() {
+        let mut app = app();
+        screen(&mut app);
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        app.key(ctrl_w);
+        press(&mut app, "l");
+        assert_eq!(app.focus, Focus::Old);
+        app.key(ctrl_w);
+        press(&mut app, "l");
+        assert_eq!(app.focus, Focus::New);
+        let alt = |code| KeyEvent::new(code, KeyModifiers::ALT);
+        app.key(alt(KeyCode::Left));
+        assert_eq!(app.focus, Focus::Old);
+        app.key(alt(KeyCode::Left));
+        assert_eq!(app.focus, Focus::List);
+        // At the edge the workspace's pane is asked for (not here, with no
+        // server), and the focus stays.
+        app.key(alt(KeyCode::Left));
+        assert_eq!(app.focus, Focus::List);
+        // With pane_arrows off they do nothing, not even move as an arrow.
+        app.opts.pane_arrows = false;
+        app.key(alt(KeyCode::Right));
+        assert_eq!(app.focus, Focus::List);
     }
 
     #[test]

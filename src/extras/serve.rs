@@ -102,10 +102,13 @@ impl Server {
             key.code,
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
         );
+        // The diff and Notes take them too, moving between their own windows
+        // first, as tmux.conf's is_vim passed them on to Neovim.
         if arrow
             && key.mods == Mods::ALT
             && matches!(self.bindings.root.get(&key), Some(Action::SelectPane(_)))
-            && is_off("pane_arrows")
+            && (is_off("pane_arrows")
+                || self.pane_takes_keys(client, self.current_pane(client), false))
         {
             return KeyFate::ToPane;
         }
@@ -268,18 +271,39 @@ impl Server {
         );
     }
 
-    /// C-w: the next key moves between panes, unless Vim is in front, which
-    /// takes C-w for its own windows, or the ctrl_w_panes setting is off.
+    /// Whether the pane in front takes `C-w` itself (Vim, the diff, Notes),
+    /// or with `vim` false the M-arrows (the diff, Notes), with the sidebar
+    /// not holding the focus.
+    fn pane_takes_keys(&self, client: ClientId, pane: Option<PaneId>, vim: bool) -> bool {
+        let sidebar = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| self.sidebar.focused(&c.session));
+        let Some(slot) = pane.and_then(|p| self.panes.get(&p)).filter(|_| !sidebar) else {
+            return false;
+        };
+        if vim
+            && slot
+                .pane
+                .foreground_command()
+                .is_some_and(|c| super::is_vim(&c))
+        {
+            return true;
+        }
+        let args = slot.pane.foreground_args().unwrap_or_default();
+        super::takes_pane_keys(&args)
+    }
+
+    /// C-w: the next key moves between panes, unless Vim, the diff or Notes
+    /// is in front, which takes C-w for its own windows, or the
+    /// ctrl_w_panes setting is off.
     fn pane_nav(&mut self, client: ClientId, pane: Option<PaneId>) {
         let sidebar = self
             .clients
             .get(&client)
             .is_some_and(|c| self.sidebar.focused(&c.session));
-        let vim = pane
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.foreground_command())
-            .is_some_and(|c| super::is_vim(&c));
-        if !sidebar && (vim || is_off("ctrl_w_panes")) {
+        let takes = self.pane_takes_keys(client, pane, true);
+        if !sidebar && (takes || is_off("ctrl_w_panes")) {
             if let Some(pane) = pane {
                 self.key_to_pane(pane, ctrl_w());
             }

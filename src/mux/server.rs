@@ -1260,6 +1260,32 @@ impl Server {
         self.dirty_tab(tab_id);
     }
 
+    /// Moves from a pane to the one beside it on `dir`'s side, or past the
+    /// left edge of a tab that isn't zoomed into its session's sidebar: what
+    /// `M-Left` and `C-w h` do, and what the diff and Notes ask at their
+    /// edges (`switchboard select-pane -L`).
+    pub fn select_pane_toward(&mut self, pane: PaneId, dir: super::Direction) {
+        let Some(tab_id) = self.panes.get(&pane).map(|s| s.tab) else {
+            return;
+        };
+        let (Some(tab), Some(s)) = (self.tabs.get(&tab_id), self.session_of_tab(tab_id)) else {
+            return;
+        };
+        // Past the edge, round to the far side, as tmux's select-pane
+        // wrapped: the sidebar is the leftmost, so left from the left edge
+        // and right from the right one reach it.
+        let sidebar = s.sidebar > 0 && !tab.zoomed;
+        let side_ways = matches!(dir, super::Direction::Left | super::Direction::Right);
+        let name = s.name.clone();
+        if let Some(next) = tab.layout.neighbor(s.main_area(), pane, dir) {
+            self.focus_pane(next);
+        } else if sidebar && side_ways {
+            self.sidebar_enter(&name, None);
+        } else if let Some(next) = tab.layout.wrap(s.main_area(), pane, dir) {
+            self.focus_pane(next);
+        }
+    }
+
     fn send_focus(&mut self, pane: PaneId, focused: bool) {
         if let Some(slot) = self.panes.get_mut(&pane)
             && let Some(bytes) = input::encode_focus(focused, &slot.pane.modes())
@@ -1643,22 +1669,8 @@ impl Server {
         let after = action.clone();
         match action {
             Action::SelectPane(dir) => {
-                let (Some(pane), Some(tab), Some(s)) =
-                    (pane, self.tabs.get(&current_tab), self.session(&session))
-                else {
-                    return;
-                };
-                // Past the edge, round to the far side, as tmux's
-                // select-pane wrapped: the sidebar is the leftmost, so left
-                // from the left edge and right from the right one reach it.
-                let sidebar = s.sidebar > 0 && !tab.zoomed;
-                let side_ways = matches!(dir, super::Direction::Left | super::Direction::Right);
-                if let Some(next) = tab.layout.neighbor(s.main_area(), pane, dir) {
-                    self.focus_pane(next);
-                } else if sidebar && side_ways {
-                    self.sidebar_from_left(id);
-                } else if let Some(next) = tab.layout.wrap(s.main_area(), pane, dir) {
-                    self.focus_pane(next);
+                if let Some(pane) = pane {
+                    self.select_pane_toward(pane, dir);
                 }
             }
             Action::PrevTab | Action::NextTab => {
