@@ -9,7 +9,9 @@
 //! the file that is neither is ignored, and the default used. A setting
 //! renamed since it was saved (`RENAMED`) is read once as its new key and
 //! dropped from the file when the server starts (`migrate`), as the sidebar
-//! daemon's `migrateSettings` did.
+//! daemon's `migrateSettings` did; an on/off setting that became a choice
+//! (`REVALUED`) has its saved on or off read as the choice that means the
+//! same, and written over as that choice then.
 
 use std::fs;
 use std::path::PathBuf;
@@ -122,14 +124,31 @@ fn saved() -> Map<String, Value> {
     util::read_json_object(settings_file())
 }
 
+/// Settings that were on/off and became choices: each old value's choice.
+pub const REVALUED: &[(&str, &str, &str)] = &[("autopilot_close", "seen", "off")];
+
+/// A saved value as its setting reads it now: an on/off of one that became
+/// a choice (`REVALUED`) is the choice that means the same.
+pub fn revalued(key: &str, value: &Value) -> Value {
+    match (REVALUED.iter().find(|(k, _, _)| *k == key), value) {
+        (Some((_, on, _)), Value::Bool(true)) => Value::String(on.to_string()),
+        (Some((_, _, off)), Value::Bool(false)) => Value::String(off.to_string()),
+        _ => value.clone(),
+    }
+}
+
 /// Every option with its value now.
 pub fn read_settings() -> Vec<Setting> {
     let mine = saved();
     schema()
         .into_iter()
         .map(|mut option| {
-            if let Some(v) = mine.get(&option.key).filter(|v| option.valid(v)) {
-                option.value = v.clone();
+            if let Some(v) = mine
+                .get(&option.key)
+                .map(|v| revalued(&option.key, v))
+                .filter(|v| option.valid(v))
+            {
+                option.value = v;
             }
             option
         })
@@ -232,17 +251,37 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
 }
 
 /// Settings renamed since they were saved, old key first: the Merge queues
-/// view became the Landing view.
+/// view became the Landing view. A setting that became a choice is in
+/// `REVALUED`.
 pub const RENAMED: &[(&str, &str)] = &[("view_merge_queues", "view_landing")];
 
 /// Your file with what an earlier version saved read as this one names it:
 /// a renamed key's off kept under its new name (unless that is set already),
 /// the old key dropped. `None` when there is nothing to change.
 pub fn migrated(mine: &Map<String, Value>) -> Option<Map<String, Value>> {
-    if !RENAMED.iter().any(|(old, _)| mine.contains_key(*old)) {
+    let stale: Vec<&str> = REVALUED
+        .iter()
+        .map(|(k, _, _)| *k)
+        .filter(|k| mine.get(*k).is_some_and(Value::is_boolean))
+        .collect();
+    if stale.is_empty() && !RENAMED.iter().any(|(old, _)| mine.contains_key(*old)) {
         return None;
     }
     let mut out = mine.clone();
+    // An on/off saved for a setting that became a choice is written as its
+    // choice, the default's dropped.
+    for key in stale {
+        let value = revalued(key, &out[key]);
+        let default = schema()
+            .into_iter()
+            .find(|o| o.key == key)
+            .map(|o| o.default);
+        if default.as_ref() == Some(&value) {
+            out.shift_remove(key);
+        } else {
+            out.insert(key.to_string(), value);
+        }
+    }
     for (old, new) in RENAMED {
         if let Some(value) = out.shift_remove(*old)
             && value == Value::Bool(false)
@@ -297,6 +336,25 @@ mod tests {
             "on, the default, it is only dropped"
         );
         assert_eq!(migrated(&mine(json!({ "tips": false }))), None);
+    }
+
+    #[test]
+    fn an_on_or_off_saved_for_a_setting_that_became_a_choice_reads_as_its_choice() {
+        let mine = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(revalued("autopilot_close", &json!(true)), json!("seen"));
+        assert_eq!(revalued("autopilot_close", &json!(false)), json!("off"));
+        assert_eq!(revalued("autopilot_close", &json!("5m")), json!("5m"));
+        assert_eq!(revalued("tips", &json!(false)), json!(false));
+        assert_eq!(
+            migrated(&mine(json!({ "autopilot_close": false }))),
+            Some(mine(json!({ "autopilot_close": "off" }))),
+            "off is written as never"
+        );
+        assert_eq!(
+            migrated(&mine(json!({ "autopilot_close": true }))),
+            Some(Map::new()),
+            "on, the default's when seen, is dropped"
+        );
     }
 
     fn option(choices: Option<Vec<Choice>>, value: Value) -> Setting {

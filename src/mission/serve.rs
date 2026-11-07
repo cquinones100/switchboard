@@ -1420,6 +1420,7 @@ impl Server {
         match source {
             "inbox" => self.inbox_dismiss(item),
             "autopilot" => self.autopilot_dismiss(),
+            "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "habits" => {}
             _ => self.day_dismiss(source, item),
         }

@@ -1503,6 +1503,9 @@ impl Server {
             "calendar" => self.open_mission(client, view("calendar")),
             "habits" => self.open_mission(client, crate::mission::Opening::Settings),
             "autopilot" => self.open_mission(client, crate::mission::Opening::Tabs),
+            // The landed tabs closed unseen are only to be read: Enter
+            // dismisses them.
+            "landed" => self.autopilot_dismiss_closed(None),
             other => self.open_mission(client, view(other)),
         }
     }

@@ -15,11 +15,13 @@
 //! the time it opened, `@autopilot_item` with the item's first line, and
 //! `@autopilot_in` once seen in its worktree; a tab whose pane
 //! queue-and-clean has moved back to the main clone leaves the mode, and,
-//! with the autopilot_close setting on, is marked landed
+//! unless the autopilot_close setting says never, is marked landed
 //! (`@autopilot_left`), shown "landed" in the sidebar instead of "auto",
 //! marked seen once you have had it in front (`@autopilot_seen`), and
-//! closed as soon as you leave it, or half an hour after it landed if you
-//! never look. Those are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
+//! closed as the setting says: once seen and left, or half an hour after it
+//! landed (when seen); as soon as it lands (at once); or five minutes after
+//! (after 5 minutes). One closed unseen leaves a notification, "Closed
+//! <item>: landed <short hash>", kept in `autopilot.json`'s `closed`. Those are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
 //! so they come back after a restart, as tmux/window-options.sh carried
 //! them under tmux.
 //!

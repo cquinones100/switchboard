@@ -90,8 +90,26 @@
     "key": "autopilot_close",
     "category": "Sessions",
     "label": "Close a worked note's landed tabs",
-    "description": "A tab the mode working a note opened closes once queue-and-clean has landed it and moved it back to the main clone, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; a prompt typed in it after landing keeps it open. Off, landed tabs stay open for you to close",
-    "default": true
+    "description": "When a tab the mode working a note opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification",
+    "choices": [
+      {
+        "value": "seen",
+        "label": "when seen"
+      },
+      {
+        "value": "now",
+        "label": "at once"
+      },
+      {
+        "value": "5m",
+        "label": "after 5 minutes"
+      },
+      {
+        "value": "off",
+        "label": "never"
+      }
+    ],
+    "default": "seen"
   },
   {
     "key": "sidebar_notifications",

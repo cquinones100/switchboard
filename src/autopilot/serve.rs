@@ -52,6 +52,30 @@ pub const SEEN: &str = "@autopilot_seen";
 /// Every mark of the mode's, taken off as a tab leaves it.
 const MARKS: [&str; 5] = [OPENED, IN, ITEM, LEFT, SEEN];
 
+/// The commit `HEAD` is at in the checkout `dir` is in, read from git's
+/// files: a loose ref, `packed-refs`, or a detached `HEAD`'s own.
+fn head_of(dir: &Path) -> Option<String> {
+    let place = crate::tabs::git::locate(dir)?;
+    let head = std::fs::read_to_string(place.git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    let Some(name) = head.strip_prefix("ref:").map(str::trim) else {
+        return Some(head.to_string());
+    };
+    for at in [&place.git_dir, &place.common_dir] {
+        if let Ok(sha) = std::fs::read_to_string(at.join(name)) {
+            return Some(sha.trim().to_string());
+        }
+    }
+    let packed = std::fs::read_to_string(place.common_dir.join("packed-refs")).ok()?;
+    packed
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+        .find_map(|l| {
+            let (sha, r) = l.split_once(' ')?;
+            (r.trim() == name).then(|| sha.to_string())
+        })
+}
+
 /// When a file last changed, in ms; `None` when it isn't there.
 fn modified_ms(path: &Path) -> Option<i64> {
     let at = std::fs::metadata(path).ok()?.modified().ok()?;
@@ -293,7 +317,12 @@ impl Server {
     /// with j and k as mission control's other menus are.
     pub fn autopilot_menu(&mut self, client: ClientId) {
         let mode = Mode::read(&paths::state_dir());
-        let list = line::choices(&mode, &self.autopilot.pilot.next.text);
+        let close = settings::current_settings()
+            .into_iter()
+            .find(|o| o.key == "autopilot_close")
+            .map(|o| o.value_words())
+            .unwrap_or_default();
+        let list = line::choices(&mode, &self.autopilot.pilot.next.text, &close);
         let options = list
             .iter()
             .map(|(_, label, _)| MenuOption::new(label.clone()))
@@ -323,6 +352,26 @@ impl Server {
             Act::Dismiss => {
                 self.autopilot_say("");
                 self.mission_note(client, "Dismissed.");
+            }
+            // The autopilot_close setting to its next choice, as Settings
+            // changes it.
+            Act::CycleClose => {
+                let Some(option) = settings::read_settings()
+                    .into_iter()
+                    .find(|o| o.key == "autopilot_close")
+                else {
+                    return;
+                };
+                if let Err(e) = settings::write_setting("autopilot_close", option.next_value()) {
+                    self.mission_note(client, format!("Couldn't save it: {e}"));
+                    return;
+                }
+                let now = settings::reload_settings()
+                    .into_iter()
+                    .find(|o| o.key == "autopilot_close")
+                    .map(|o| o.value_words())
+                    .unwrap_or_default();
+                self.mission_note(client, format!("Landed tabs close: {now}"));
             }
             act => {
                 let mut said = None;
@@ -371,7 +420,8 @@ impl Server {
             .flatten();
         let away = self.away_now();
         let counts = self.autopilot.pilot.counts;
-        let close = settings::is_on("autopilot_close");
+        let close = settings::cached("autopilot_close")
+            .and_then(|v| v.as_str().and_then(super::pilot::close_after));
         let check = self.autopilot.pilot.check(
             &mode,
             on,
@@ -384,7 +434,7 @@ impl Server {
         );
         let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
         self.autopilot.mode = mode;
-        self.autopilot_marks(&check.marks);
+        self.autopilot_marks(&check.marks, &mine);
         if let Some(said) = check.said {
             self.autopilot_say(&said);
         }
@@ -533,12 +583,16 @@ impl Server {
     }
 
     /// Its tabs marked as they reach their worktree, land and are seen,
-    /// unmarked as they leave the mode, and closed once landed and left.
-    fn autopilot_marks(&mut self, marks: &[Mark]) {
+    /// unmarked as they leave the mode, and closed once landed and left,
+    /// one closed without your having seen it kept for the notifications.
+    fn autopilot_marks(&mut self, marks: &[Mark], mine: &[Mine]) {
         for mark in marks {
             let tab = match *mark {
                 Mark::In(t) | Mark::Left(t) | Mark::Landed(t, _) | Mark::Seen(t) => t,
                 Mark::Close(t) => {
+                    if let Some(m) = mine.iter().find(|m| m.tab == t && !m.seen) {
+                        self.autopilot_closed_unseen(m);
+                    }
                     self.autopilot_close_tab(t);
                     continue;
                 }
@@ -563,6 +617,65 @@ impl Server {
                 }
             }
             self.dirty_tab(tab);
+        }
+    }
+
+    /// A landed tab about to close unseen, kept in its file for the
+    /// notifications: "Closed <item>: landed <short hash>", the hash the
+    /// main clone's commit as its Claude's pane finds it there.
+    fn autopilot_closed_unseen(&mut self, m: &Mine) {
+        let panes = self
+            .tabs
+            .get(&m.tab)
+            .map(|t| t.layout.panes())
+            .unwrap_or_default();
+        let dir = self
+            .agents
+            .leader(&panes)
+            .map(|(p, _, _)| p)
+            .into_iter()
+            .chain(panes.iter().copied())
+            .find_map(|p| self.panes.get(&p)?.pane.cwd());
+        let hash = dir
+            .and_then(|d| head_of(&d))
+            .map(|h| h.chars().take(7).collect())
+            .unwrap_or_default();
+        let item = m.item.clone().unwrap_or_else(|| self.tab_label(m.tab));
+        let id = format!("{}@{}", m.tab.0, m.since);
+        let written = Mode::update(&paths::state_dir(), |mode| {
+            if mode.closed.iter().any(|c| c.id == id) {
+                return;
+            }
+            mode.closed.push(mode::Closed {
+                id,
+                item,
+                hash,
+                at: util::now_ms(),
+            });
+            let over = mode.closed.len().saturating_sub(mode::CLOSED_KEPT);
+            mode.closed.drain(..over);
+        });
+        match written {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+            }
+            Err(e) => eprintln!("autopilot: couldn't keep the tab it closed: {e}"),
+        }
+    }
+
+    /// The landed tabs it closed unseen, put away: the one with this id, or
+    /// every one.
+    pub fn autopilot_dismiss_closed(&mut self, id: Option<&str>) {
+        match Mode::update(&paths::state_dir(), |m| match id {
+            Some(id) => m.closed.retain(|c| c.id != id),
+            None => m.closed.clear(),
+        }) {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+            }
+            Err(e) => eprintln!("autopilot: couldn't save it: {e}"),
         }
     }
 
@@ -707,14 +820,32 @@ impl Server {
         }
     }
 
-    /// Its notification: what it said, while the autopilot setting is on.
+    /// Its notifications, while the autopilot setting is on: what it said,
+    /// and each landed tab it closed without your seeing it.
     fn autopilot_notices(&mut self, mode: &Mode) {
-        let items = if settings::is_on("autopilot") && !mode.said.is_empty() {
+        let on = settings::is_on("autopilot");
+        let items = if on && !mode.said.is_empty() {
             vec![crate::items::Item::new("said", &mode.said).detail("working a note continuously")]
         } else {
             Vec::new()
         };
         self.set_notices("autopilot", items);
+        let closed = if on {
+            mode.closed
+                .iter()
+                .map(|c| {
+                    let mut item = crate::items::Item::new(&c.id, c.title())
+                        .detail("working a note continuously");
+                    item.lines = vec![
+                        "Closed by working a note continuously once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
+                    ];
+                    item
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.set_notices("landed", closed);
     }
 
     /// Mission control drawn again wherever it is open, for its line.

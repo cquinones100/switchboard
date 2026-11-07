@@ -1,9 +1,11 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, repo, slots,
-//! cap, paused, readyOnly, skipped, spendLimit, said }`. `note` is the
-//! note's path within the notes directory, `repo` the main clone its items
-//! are worked in, `skipped` the first lines of the items skipped, and `said`
-//! what the notifications show for it.
+//! cap, paused, readyOnly, skipped, spendLimit, said, closed }`. `note` is
+//! the note's path within the notes directory, `repo` the main clone its
+//! items are worked in, `skipped` the first lines of the items skipped,
+//! `said` what the notifications show for it, and `closed` the landed tabs
+//! it closed without your having seen them, `[{ id, item, hash, at }]`,
+//! each `id` the tab's and its `@autopilot` time, for the notifications.
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (src/notes/store.rs's `relink_mode`), so it is read again on every
@@ -44,7 +46,38 @@ pub struct Mode {
     pub spend_limit: f64,
     /// What it has to say, in the notifications; empty for nothing.
     pub said: String,
+    /// The landed tabs it closed without your seeing them, the last
+    /// `CLOSED_KEPT`, oldest first.
+    pub closed: Vec<Closed>,
 }
+
+/// A landed tab closed without your having seen it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Closed {
+    /// The tab and when it opened (`@autopilot`), since a tab's id comes
+    /// round again after a restart.
+    pub id: String,
+    /// The item's first line, else the tab's name.
+    pub item: String,
+    /// The main clone's commit as its Claude's pane found it there, short.
+    pub hash: String,
+    /// When it closed (ms).
+    pub at: i64,
+}
+
+impl Closed {
+    /// "Closed <item>: landed <short hash>".
+    pub fn title(&self) -> String {
+        if self.hash.is_empty() {
+            format!("Closed {}", self.item)
+        } else {
+            format!("Closed {}: landed {}", self.item, self.hash)
+        }
+    }
+}
+
+/// The tabs closed unseen kept for the notifications.
+pub const CLOSED_KEPT: usize = 20;
 
 impl Default for Mode {
     fn default() -> Mode {
@@ -59,6 +92,7 @@ impl Default for Mode {
             skipped: Vec::new(),
             spend_limit: 0.0,
             said: String::new(),
+            closed: Vec::new(),
         }
     }
 }
@@ -102,6 +136,22 @@ impl Mode {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
             said: text("said").unwrap_or_default(),
+            closed: match map.get("closed") {
+                Some(Value::Array(list)) => list
+                    .iter()
+                    .filter_map(|c| {
+                        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("");
+                        let id = text("id");
+                        (!id.is_empty()).then(|| Closed {
+                            id: id.to_string(),
+                            item: text("item").to_string(),
+                            hash: text("hash").to_string(),
+                            at: c.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
         }
     }
 
@@ -128,6 +178,20 @@ impl Mode {
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
         map.insert("said".into(), self.said.into());
+        map.insert(
+            "closed".into(),
+            Value::Array(
+                self.closed
+                    .into_iter()
+                    .map(|c| {
+                        serde_json::json!({
+                            "id": c.id, "item": c.item, "hash": c.hash,
+                            "at": util::js_number(c.at as f64),
+                        })
+                    })
+                    .collect(),
+            ),
+        );
     }
 
     /// Reads the file, changes the mode with `change`, and writes it back
@@ -239,6 +303,29 @@ mod tests {
         assert_eq!(written["readyOnly"], false);
         assert_eq!(written["skipped"][0], "One");
         assert_eq!(written["note"], "Work.md");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_landed_tabs_closed_unseen_are_kept_and_said_with_what_landed() {
+        let dir = temp("closed");
+        Mode::update(&dir, |m| {
+            m.closed.push(Closed {
+                id: "3@1700000000".into(),
+                item: "Copy the reply".into(),
+                hash: "abc1234".into(),
+                at: 1,
+            })
+        })
+        .unwrap();
+        let mode = Mode::read(&dir);
+        assert_eq!(mode.closed.len(), 1);
+        assert_eq!(
+            mode.closed[0].title(),
+            "Closed Copy the reply: landed abc1234"
+        );
+        fs::write(Mode::file(&dir), r#"{"closed":{}}"#).unwrap();
+        assert!(Mode::read(&dir).closed.is_empty(), "a list or none");
         let _ = fs::remove_dir_all(&dir);
     }
 

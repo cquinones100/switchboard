@@ -5,7 +5,8 @@
 //! it is paused; the cursor's -1 is on it, and Enter there opens the menu
 //! `choices` gives, which pauses or resumes it, skips the next item or
 //! takes the skipped ones again, narrows it to items with a settled plan or
-//! widens it again, sets it up again, or stops it. Its notification's menu
+//! widens it again, cycles when its landed tabs close (the autopilot_close
+//! setting, as Settings changes it), sets it up again, or stops it. Its notification's menu
 //! (`notice_choices`) goes to that line or puts the notification away.
 
 use ratatui::style::{Color, Modifier, Style};
@@ -135,11 +136,14 @@ pub enum Act {
     ToTabs,
     /// Its notification put away.
     Dismiss,
+    /// The autopilot_close setting to its next choice.
+    CycleClose,
 }
 
-/// The menu Enter on its line opens, given the item it takes next: each
-/// option's key, label and what it does.
-pub fn choices(mode: &Mode, next: &str) -> Vec<(char, String, Act)> {
+/// The menu Enter on its line opens, given the item it takes next and the
+/// autopilot_close setting's choice in words: each option's key, label and
+/// what it does.
+pub fn choices(mode: &Mode, next: &str, close: &str) -> Vec<(char, String, Act)> {
     let mut out = vec![if mode.paused {
         ('r', "Resume".to_string(), Act::Resume)
     } else {
@@ -180,6 +184,7 @@ pub fn choices(mode: &Mode, next: &str) -> Vec<(char, String, Act)> {
             Act::PlannedOnly(true),
         )
     });
+    out.push(('l', format!("Close landed tabs: {close}"), Act::CycleClose));
     out.push((
         'n',
         "Change its note, slots, cap or spend limit…".to_string(),
@@ -226,7 +231,7 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
             mode.said.clear();
             "Stopped: no more tabs open for the note; those open carry on".to_string()
         }
-        Act::Change | Act::ToTabs | Act::Dismiss => return None,
+        Act::Change | Act::ToTabs | Act::Dismiss | Act::CycleClose => return None,
     })
 }
 
@@ -300,21 +305,25 @@ mod tests {
             ..Mode::default()
         };
         let labels = |mode: &Mode, next: &str| -> Vec<String> {
-            choices(mode, next).into_iter().map(|(_, l, _)| l).collect()
+            choices(mode, next, "when seen")
+                .into_iter()
+                .map(|(_, l, _)| l)
+                .collect()
         };
         assert_eq!(
             labels(&mode, ""),
             vec![
                 "Pause: open no more tabs for now",
                 "Take only items with a settled plan",
+                "Close landed tabs: when seen",
                 "Change its note, slots, cap or spend limit…",
                 "Stop working the note"
             ]
         );
-        let (_, _, pause) = choices(&mode, "").remove(0);
+        let (_, _, pause) = choices(&mode, "", "when seen").remove(0);
         assert_eq!(apply(&pause, &mut mode).as_deref(), Some("Paused"));
         assert!(mode.paused);
-        let (_, label, skip) = choices(&mode, "One").remove(1);
+        let (_, label, skip) = choices(&mode, "One", "when seen").remove(1);
         assert_eq!(label, "Skip the next item: One");
         apply(&skip, &mut mode);
         assert_eq!(

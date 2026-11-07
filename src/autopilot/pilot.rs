@@ -20,14 +20,15 @@
 //! item a worktree had comes back once that worktree is removed.
 //!
 //! A tab back in the main clone once queue-and-clean has landed it leaves
-//! the mode, and, with the autopilot_close setting on, is closed for you
+//! the mode, and, unless the autopilot_close setting says never, is closed for you
 //! (autopilot.js's `afterLanding`): marked landed (`@autopilot_left`, the
 //! time) once its Claude's pane is idle in a main clone, marked seen
 //! (`@autopilot_seen`) once it has been in front for `SEEN_MS`, and closed
-//! as soon as you leave it, or `CLOSE_AFTER_S` after it landed if you never
-//! look. Never while it is in front or while a tool stands in for one of
-//! its panes; a prompt typed in it after it landed makes it yours, out of
-//! the mode, so it stays open. Off, it leaves the mode as it lands.
+//! as soon as you leave it, or the setting's delay after it landed if you
+//! never look (`close_after`: when seen, half an hour; at once; after five
+//! minutes). Never while it is in front or while a tool stands in for one
+//! of its panes; a prompt typed in it after it landed makes it yours, out
+//! of the mode, so it stays open. Never, it leaves the mode as it lands.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -51,8 +52,16 @@ pub const LANDED_MS: i64 = 10 * 60_000;
 /// The next item is read again at most this often, and when the note, the
 /// items skipped or the kind of items taken change.
 pub const QUEUE_MS: i64 = 30_000;
-/// A landed tab you never look at is closed this long after it landed.
-pub const CLOSE_AFTER_S: f64 = 30.0 * 60.0;
+/// A landed tab you never look at is closed this long after it landed, by
+/// the autopilot_close setting's choice; `off` never closes one.
+pub fn close_after(choice: &str) -> Option<f64> {
+    match choice {
+        "seen" => Some(30.0 * 60.0),
+        "5m" => Some(5.0 * 60.0),
+        "now" => Some(0.0),
+        _ => None,
+    }
+}
 /// A landed tab in front this long counts as seen, so passing over it, as
 /// moving the sidebar's cursor does, doesn't.
 pub const SEEN_MS: i64 = 1_000;
@@ -74,7 +83,7 @@ pub enum Mark {
     /// Seen in its worktree: `@autopilot_in`.
     In(TabId),
     /// Its marks taken off, so it leaves the mode: landed, with the
-    /// autopilot_close setting off, or made yours by a prompt.
+    /// autopilot_close setting at never, or made yours by a prompt.
     Left(TabId),
     /// Found back in a main clone once landed, at this time (seconds):
     /// `@autopilot_left`.
@@ -242,8 +251,9 @@ impl Pilot {
     }
 
     /// What becomes of a tab back in the main clone once landed, as the
-    /// module's comment says, at `now_ms`.
-    fn after_landing(&mut self, m: &Mine, now_ms: i64) -> Option<Mark> {
+    /// module's comment says, at `now_ms`, one never looked at closed
+    /// `close_after` seconds after it landed.
+    fn after_landing(&mut self, m: &Mine, now_ms: i64, close_after: f64) -> Option<Mark> {
         let now = now_ms as f64 / 1000.0;
         let Some(landed) = m.landed else {
             return m.home.then_some(Mark::Landed(m.tab, now as i64));
@@ -256,15 +266,16 @@ impl Pilot {
             return (!m.seen && now_ms - first >= SEEN_MS).then_some(Mark::Seen(m.tab));
         }
         self.fronts.remove(&m.tab);
-        if m.stand_in || !(m.seen || now - landed >= CLOSE_AFTER_S) {
+        if m.stand_in || !(m.seen || now - landed >= close_after) {
             return None;
         }
         Some(Mark::Close(m.tab))
     }
 
     /// One check, at `now_ms`: marks the mode's tabs as they reach their
-    /// worktree or leave the mode (closing a landed one with `close`, the
-    /// autopilot_close setting, on), then, while fewer than `slots` work
+    /// worktree or leave the mode (closing a landed one `close` seconds after
+    /// it landed when never seen, the autopilot_close setting's choice, none
+    /// for never), then, while fewer than `slots` work
     /// and fewer than `cap` are open, looks for the next item to open. `on`
     /// is the autopilot setting, `away` whether you're away, `mtime` when
     /// the note last changed (ms), `None` when it isn't there, and `notes`
@@ -275,7 +286,7 @@ impl Pilot {
         &mut self,
         mode: &Mode,
         on: bool,
-        close: bool,
+        close: Option<f64>,
         mine: &[Mine],
         away: bool,
         now_ms: i64,
@@ -291,9 +302,9 @@ impl Pilot {
         let placed: Vec<(&Mine, Kind)> = mine.iter().map(|m| (m, kind_of(m, now))).collect();
         let mut marks = Vec::new();
         for (m, kind) in &placed {
-            match kind {
-                Kind::Left if close => marks.extend(self.after_landing(m, now_ms)),
-                Kind::Left => marks.push(Mark::Left(m.tab)),
+            match (kind, close) {
+                (Kind::Left, Some(after)) => marks.extend(self.after_landing(m, now_ms, after)),
+                (Kind::Left, None) => marks.push(Mark::Left(m.tab)),
                 _ if m.in_worktree && !m.was_in => marks.push(Mark::In(m.tab)),
                 _ => {}
             }
@@ -551,7 +562,7 @@ mod tests {
             let check = self.pilot.check(
                 &self.mode,
                 true,
-                false,
+                None,
                 &self.tabs,
                 false,
                 self.now,
@@ -701,24 +712,17 @@ mod tests {
         let none = Path::new("/nowhere");
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], true, w.now, Some(w.mtime), none);
+            .check(&w.mode, true, None, &[], true, w.now, Some(w.mtime), none);
         assert_eq!(check.open, None, "away");
-        let check = w.pilot.check(
-            &w.mode,
-            false,
-            false,
-            &[],
-            false,
-            w.now,
-            Some(w.mtime),
-            none,
-        );
+        let check = w
+            .pilot
+            .check(&w.mode, false, None, &[], false, w.now, Some(w.mtime), none);
         assert_eq!(check.open, None, "the setting off");
 
         w.mode.spend_limit = 5.0;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, w.now, Some(w.mtime), none);
+            .check(&w.mode, true, None, &[], false, w.now, Some(w.mtime), none);
         let job = check.open.expect("a look, which sums the spend");
         assert_eq!(job.spend_limit, 5.0);
         let opened = w.pilot.opened(&w.mode, Found::Spent, w.mtime, w.now);
@@ -729,18 +733,18 @@ mod tests {
         let later = w.now + 60_000;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, later, Some(w.mtime), none);
+            .check(&w.mode, true, None, &[], false, later, Some(w.mtime), none);
         assert_eq!(check.open, None, "not summed again today");
         w.mode.spend_limit = 50.0;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, later, Some(w.mtime), none);
+            .check(&w.mode, true, None, &[], false, later, Some(w.mtime), none);
         assert!(check.open.is_some(), "a new limit is looked at again");
         w.pilot.cancel();
 
         let missing = |w: &mut World, at: i64| {
             w.pilot
-                .check(&w.mode, true, false, &[], false, at, None, none)
+                .check(&w.mode, true, None, &[], false, at, None, none)
                 .said
         };
         assert_eq!(
@@ -769,7 +773,7 @@ mod tests {
         let mut tab = mine(1, (now / 1000) as f64 - 3_600.0, TabState::Idle, false);
         tab.was_in = true;
         let mut check = |tabs: &[Mine], at: i64, mtime: i64| {
-            pilot.check(&mode, true, false, tabs, false, at, Some(mtime), &dir);
+            pilot.check(&mode, true, None, tabs, false, at, Some(mtime), &dir);
             pilot.skip(&mode, at)
         };
         assert!(
@@ -805,7 +809,7 @@ mod tests {
         let secs = (now / 1000) as f64;
         let mut tab = mine(1, secs - 3_600.0, TabState::Idle, false);
         tab.was_in = true;
-        let marks = |pilot: &mut Pilot, tab: &Mine, at: i64, close: bool| {
+        let marks = |pilot: &mut Pilot, tab: &Mine, at: i64, close: Option<f64>| {
             pilot
                 .check(
                     &mode,
@@ -820,57 +824,73 @@ mod tests {
                 .marks
         };
         assert_eq!(
-            marks(&mut pilot, &tab, now, false),
+            marks(&mut pilot, &tab, now, None),
             [Mark::Left(TabId(1))],
             "with the setting off, it leaves the mode as it lands"
         );
         assert!(
-            marks(&mut pilot, &tab, now, true).is_empty(),
+            marks(&mut pilot, &tab, now, close_after("seen")).is_empty(),
             "not marked landed while its Claude isn't idle in a main clone"
         );
         tab.home = true;
         assert_eq!(
-            marks(&mut pilot, &tab, now, true),
+            marks(&mut pilot, &tab, now, close_after("seen")),
             [Mark::Landed(TabId(1), secs as i64)]
         );
         tab.landed = Some(secs);
         assert!(
-            marks(&mut pilot, &tab, now + 1_000, true).is_empty(),
+            marks(&mut pilot, &tab, now + 1_000, close_after("seen")).is_empty(),
             "not yet"
         );
 
         // In front: seen after a second, never closed while there.
         tab.front = true;
-        assert!(marks(&mut pilot, &tab, now + 2_000, true).is_empty());
+        assert!(marks(&mut pilot, &tab, now + 2_000, close_after("seen")).is_empty());
         assert_eq!(
-            marks(&mut pilot, &tab, now + 3_500, true),
+            marks(&mut pilot, &tab, now + 3_500, close_after("seen")),
             [Mark::Seen(TabId(1))]
         );
         tab.seen = true;
-        assert!(marks(&mut pilot, &tab, now + 4_000, true).is_empty());
+        assert!(marks(&mut pilot, &tab, now + 4_000, close_after("seen")).is_empty());
         // Left: closed, unless a tool stands in for its pane.
         tab.front = false;
         tab.stand_in = true;
-        assert!(marks(&mut pilot, &tab, now + 5_000, true).is_empty());
+        assert!(marks(&mut pilot, &tab, now + 5_000, close_after("seen")).is_empty());
         tab.stand_in = false;
         assert_eq!(
-            marks(&mut pilot, &tab, now + 5_000, true),
+            marks(&mut pilot, &tab, now + 5_000, close_after("seen")),
             [Mark::Close(TabId(1))]
         );
 
         // Never looked at: closed half an hour after it landed.
         let mut unseen = tab.clone();
         unseen.seen = false;
-        assert!(marks(&mut pilot, &unseen, now + 60_000, true).is_empty());
+        assert!(marks(&mut pilot, &unseen, now + 60_000, close_after("seen")).is_empty());
         assert_eq!(
-            marks(&mut pilot, &unseen, now + 1_800_000, true),
+            marks(&mut pilot, &unseen, now + 1_800_000, close_after("seen")),
             [Mark::Close(TabId(1))]
         );
         // A prompt typed in it since makes it yours.
         unseen.prompted_since = true;
         assert_eq!(
-            marks(&mut pilot, &unseen, now + 1_800_000, true),
+            marks(&mut pilot, &unseen, now + 1_800_000, close_after("seen")),
             [Mark::Left(TabId(1))]
         );
+
+        // At once: as soon as it lands, unless in front; after five minutes,
+        // or sooner once seen and left.
+        let mut fresh = tab.clone();
+        fresh.seen = false;
+        fresh.landed = Some(secs);
+        assert_eq!(
+            marks(&mut pilot, &fresh, now, close_after("now")),
+            [Mark::Close(TabId(1))]
+        );
+        assert!(marks(&mut pilot, &fresh, now + 60_000, close_after("5m")).is_empty());
+        assert_eq!(
+            marks(&mut pilot, &fresh, now + 300_000, close_after("5m")),
+            [Mark::Close(TabId(1))]
+        );
+        assert_eq!(close_after("off"), None, "never");
     }
 }
