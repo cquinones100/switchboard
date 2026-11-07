@@ -89,11 +89,12 @@ impl Server {
             return;
         }
         let title = title_of(&note);
-        // The open tabs, as the tab bar names them, but Notes' own.
+        // The open tabs, as the tab bar names them, but Notes' own and the
+        // Notifications window, which is no tab (note-tab.sh's `choose`).
         let mut items = vec![PickItem::new("+ New tab, in a directory you pick", "new")];
         for s in &self.sessions {
             for (i, t) in s.tabs.iter().enumerate() {
-                if self.tab_opt(*t, "@notes").as_deref() == Some("1") {
+                if self.tab_opt(*t, "@notes").as_deref() == Some("1") || self.is_notices_tab(*t) {
                     continue;
                 }
                 items.push(PickItem::new(
