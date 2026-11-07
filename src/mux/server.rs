@@ -2399,6 +2399,7 @@ impl Server {
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
+            Action::Upgrade => self.upgrade_asked(None, Some(id)),
             Action::Notes(command) => self.notes_command(id, command, pane),
             Action::Extra(command) => self.extras_command(id, command, pane),
             Action::Autopilot(command) => self.autopilot_command(id, command, pane),

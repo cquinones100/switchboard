@@ -135,6 +135,9 @@ pub enum Action {
     StopSlackRelay,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
+    /// Restart the server on the build installed now, keeping every pane,
+    /// tab and terminal attached (src/mux/upgrade.rs).
+    Upgrade,
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::Command),
@@ -162,6 +165,7 @@ impl Action {
     /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
     /// `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`,
     /// `clear-image-cache`), updates' (`update-switchboard`, `run-setup`),
+    /// `upgrade`,
     /// Notes' (`notes`, `notes-beside`, `note-tab`, `choose-tab-note`), and
     /// the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
@@ -237,6 +241,7 @@ impl Action {
             "settings" => Action::Settings,
             "remind-tab" => Action::RemindTab,
             "tab-title" => Action::TabTitle,
+            "upgrade" => Action::Upgrade,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -310,6 +315,7 @@ impl Action {
             Action::SlackRelay => "slack-relay".into(),
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
+            Action::Upgrade => "upgrade".into(),
             Action::Notes(command) => command.name().into(),
             Action::Extra(command) => command.name(),
             Action::Autopilot(command) => command.name().into(),
@@ -398,6 +404,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
+            Action::Upgrade => "Restart Switchboard on the new build, keeping every pane".into(),
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about().into(),
             Action::Autopilot(command) => command.about().into(),
@@ -453,6 +460,7 @@ impl Action {
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
+            Action::Upgrade => &["switchboard", "update", "restart", "upgrade"],
             Action::Notes(command) => command.tags(),
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
@@ -522,6 +530,7 @@ impl Action {
             Action::Settings,
             Action::RemindTab,
             Action::StopSlackRelay,
+            Action::Upgrade,
         ]
         .into_iter()
         .chain(views)
@@ -766,6 +775,7 @@ mod tests {
             Action::Settings,
             Action::RemindTab,
             Action::TabTitle,
+            Action::Upgrade,
             Action::ShapeNote,
             Action::ShapeNewTicket,
             Action::PrImage,

@@ -12,8 +12,8 @@
 //! "Update now" opens a tab running `switchboard update --tag <tag>
 //! --hold`, which downloads, checks and swaps the binary and then runs the
 //! guided setup with that tab's terminal, as the popup ran setup.sh; the
-//! server itself goes on with the code it started with until it starts
-//! again, which the tab says. M-p's "Update Switchboard" looks at once
+//! server itself goes on with the code it started with until it restarts
+//! on the new one, which the tab offers to do in place (src/mux/upgrade.rs). M-p's "Update Switchboard" looks at once
 //! whatever the setting says and says when there is nothing new or GitHub
 //! can't be reached; its "Run Switchboard's setup" opens the guided setup
 //! in a tab the same way. Each look also pulls the git repository your

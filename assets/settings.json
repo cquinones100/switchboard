@@ -743,6 +743,13 @@
     "default": "hourly"
   },
   {
+    "key": "upgrade_after_update",
+    "category": "Updates",
+    "label": "Offer to restart after an update",
+    "description": "Once switchboard update has put a new release in place, ask whether to restart the workspace on it now, keeping every tab and what runs in it; off, it only says how (switchboard upgrade)",
+    "default": true
+  },
+  {
     "key": "haiku_summaries",
     "category": "Slack relay",
     "label": "Haiku summaries",

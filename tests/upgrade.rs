@@ -213,6 +213,15 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     assert_eq!(server.pid(), Some(server_pid));
     let again = server.list();
     assert_eq!(pids(&again).len(), 4);
+
+    // As M-p's action does it, in the terminal used last, which is told
+    // how it went in a box.
+    server.ok(&["press", "upgrade"]);
+    fresh.wait_text("Switchboard restarted on");
+    assert_eq!(server.log().matches("Switchboard restarted on").count(), 3);
+    assert_eq!(server.pid(), Some(server_pid));
+    assert_eq!(pids(&server.list()), pids(&again));
+    assert!(client.exit.is_none());
 }
 
 #[test]

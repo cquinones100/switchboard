@@ -263,6 +263,34 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
     );
 }
 
+#[test]
+fn a_running_workspace_is_told_how_to_restart_on_the_release() {
+    let fake = Fake::start();
+    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    let server = TestServer::start();
+    let pid = server.pid();
+    let dir = TempDir::new("sbu");
+    let copy = own_copy(dir.path());
+    // No terminal to answer the question: it isn't asked, nothing restarts,
+    // and it says how.
+    let out = command(&copy, &fake, dir.path())
+        .env("SWITCHBOARD", server.socket())
+        .args(["update", "--force"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{said}");
+    assert!(
+        said.contains(
+            "The workspace runs 9.9.9 once its server restarts on it: `switchboard upgrade`"
+        ),
+        "{said}"
+    );
+    assert!(!said.contains("[Y/n]"), "{said}");
+    assert_eq!(server.pid(), pid);
+    assert!(!server.log().contains("restarting on"), "{}", server.log());
+}
+
 /// A state directory of the test process's own: `install_release` runs in
 /// this process, not in a `switchboard` given a home of its own, and counts
 /// its downloads in the request audit, which would otherwise be yours.

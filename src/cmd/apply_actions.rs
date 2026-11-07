@@ -169,7 +169,7 @@ fn switchboard(list: &mut List, cx: &Context) {
     }
     list.add(
         "restart",
-        "Restart the workspace yourself once the new build is in place, since the server, Notes, M-d's diff and the views run the build they started with: switchboard kill-server, then switchboard (the tabs come back as they were)",
+        "Restart the workspace yourself once the new build is in place, since the server, Notes, M-d's diff and the views run the build they started with: switchboard upgrade restarts the server on it keeping every tab and what runs in it, and Notes, the diff and the views take it when next opened",
         &built,
         "",
     );
@@ -519,7 +519,7 @@ fn install(repo: &Path) -> Result<String, String> {
         .status()
         .is_ok_and(|s| s.success());
     Ok(format!(
-        "Put switchboard {version} in place of {}{}. The server, Notes, M-d's diff and the views run the build they started with until the workspace restarts: switchboard kill-server, then switchboard.",
+        "Put switchboard {version} in place of {}{}. The server, Notes, M-d's diff and the views run the build they started with: switchboard upgrade restarts the server on it keeping every tab and what runs in it, and Notes, the diff and the views take it when next opened.",
         paths::tilde(&target),
         if refreshed {
             ", and brought its setup up to date"

@@ -5,6 +5,10 @@
 //! is a release (`release`), downloaded, checked and put in place of the
 //! binary (`install`), then `switchboard setup` run for what the new
 //! version brings, as repo-update.sh ran the guided setup.sh after a pull.
+//! The workspace's server goes on with the build it started with, so a
+//! running one is then offered a restart on the new one in place, keeping
+//! every pane (`switchboard upgrade`, src/mux/upgrade.rs), while Settings'
+//! "Offer to restart after an update" (`upgrade_after_update`) is on.
 //!
 //! As before, the look runs in the background and never on a key press; it
 //! records when it last looked (`update-checked`) and which release you
@@ -306,14 +310,41 @@ fn update(check: bool, force: bool, tag: Option<&str>) -> Result<ExitCode> {
         &binary,
         "Running the setup, for what the new version brings…",
     );
-    if crate::mux::socket::socket_path().exists() {
-        println!(
-            "\nThe workspace runs {} once its server starts again: `switchboard kill-server`, \
-             then `switchboard`, and your tabs come back as they were.",
-            chosen.version
-        );
-    }
+    offer_upgrade(&chosen.version);
     Ok(code)
+}
+
+/// The setting that has `switchboard update` offer the running workspace a
+/// restart on the release it put in place.
+pub const OFFER_UPGRADE: &str = "upgrade_after_update";
+
+/// After a release is put in place: a workspace running asks whether to
+/// restart its server on it now, keeping every tab and what runs in it
+/// (`switchboard upgrade`), while `OFFER_UPGRADE` is on and there is a
+/// terminal to answer; Enter is yes, a closed input no. Otherwise it says
+/// how to.
+fn offer_upgrade(version: &Version) {
+    if std::os::unix::net::UnixStream::connect(crate::mux::socket::socket_path()).is_err() {
+        return;
+    }
+    let how = format!(
+        "The workspace runs {version} once its server restarts on it: `switchboard upgrade` \
+         (M-p's \"Restart Switchboard on the new build\") does that, keeping every tab and \
+         what runs in it."
+    );
+    if !crate::settings::is_on(OFFER_UPGRADE) || !std::io::stdin().is_terminal() {
+        println!("\n{how}");
+        return;
+    }
+    println!();
+    if !crate::setup::ask(
+        false,
+        &format!("Restart the workspace on {version} now, keeping every tab and what runs in it?"),
+    ) {
+        println!("\n{how}");
+        return;
+    }
+    let _ = crate::mux::socket::run_command(vec!["upgrade".to_string()]);
 }
 
 /// Downloads a release's archive for `target` and its checksum, checks one
