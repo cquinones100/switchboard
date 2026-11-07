@@ -12,11 +12,15 @@ pub mod claude_reply;
 pub mod codex_review;
 pub mod land_lock;
 pub mod platform;
+pub mod respawn;
+pub mod setting;
 pub mod shape;
 pub mod shape_batch;
 pub mod skill_path;
 pub mod slack_relay;
 pub mod slack_updates_save;
+pub mod statusline;
+pub mod tabs;
 pub mod today_save;
 pub mod update_main;
 pub mod wait_deploy;
@@ -50,6 +54,26 @@ pub const COMMANDS: &[Command] = &[
         name: "hook",
         run: crate::agent::hook::main,
         about: "Tell the workspace what a Claude session is doing (run by Claude Code's hooks)",
+    },
+    Command {
+        name: "statusline",
+        run: statusline::main,
+        about: "Claude Code's statusline, which keeps each session's context and spend (run by Claude Code)",
+    },
+    Command {
+        name: "tabs",
+        run: tabs::main,
+        about: "A line per pane of every tab: its number, place, name, Claude's state, program and directory",
+    },
+    Command {
+        name: "respawn",
+        run: respawn::main,
+        about: "Replace a pane's program with another, as /wt hands a tab over",
+    },
+    Command {
+        name: "setting",
+        run: setting::main,
+        about: "One of the workspace's settings, as Settings reads it",
     },
     Command {
         name: "platform",

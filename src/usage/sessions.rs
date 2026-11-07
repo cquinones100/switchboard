@@ -20,10 +20,10 @@
 //! computer, as `requests::tally` counts them: the total by protocol, then
 //! each service with its own protocols, busiest first.
 //!
-//! Both read `paths::state_dir()`. Today claude/statusline-command.sh still
-//! writes these files under `~/.local/state/tmux-sidebar`, where the sidebar
-//! daemon read them; the Rust statusline (`switchboard setup`'s, a later step
-//! of the port) writes them here, and until then these views find nothing.
+//! Both read `paths::state_dir()`, where `switchboard statusline`
+//! (src/cmd/statusline.rs, which `switchboard setup` makes Claude Code's
+//! statusline) writes them; claude/statusline-command.sh wrote them under
+//! `~/.local/state/tmux-sidebar`, where the sidebar daemon read them.
 //!
 //! Which pane runs which session is found from Claude Code's session files,
 //! `~/.claude/sessions/<pid>.json`, by the pid's process group being the one
