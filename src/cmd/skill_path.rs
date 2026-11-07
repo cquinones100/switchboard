@@ -1,6 +1,8 @@
 //! `skill-path <name> [<dir>]`: the SKILL.md to follow for the skill `<name>`
 //! in the repository at `<dir>` (the current directory when none is given).
-//! Ported from `bin/skill-path`.
+//! Ported from `bin/skill-path`. `skill-path --own <name>` prints the text of
+//! Switchboard's own copy, which the binary carries, where the Node version's
+//! skills read it from `~/switchboard/claude/skills`.
 //!
 //! The worktree's own `.claude/skills/<name>/SKILL.md` comes first, then its
 //! main clone's (a branch cut before the repository added the skill has none
@@ -19,6 +21,9 @@ use std::process::ExitCode;
 use crate::{paths, worktree};
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    if args.first().map(String::as_str) == Some("--own") {
+        return own(args.get(1).map(String::as_str));
+    }
     let Some(name) = args
         .first()
         .filter(|n| !n.is_empty() && !n.starts_with('-'))
@@ -34,6 +39,24 @@ pub fn main(args: Vec<String>) -> ExitCode {
     match find(name, &dir) {
         Some(found) => {
             println!("{}", found.display());
+            ExitCode::SUCCESS
+        }
+        None => ExitCode::from(1),
+    }
+}
+
+/// `--own <name>`: Switchboard's own SKILL.md, as the binary carries it, for
+/// a hand-off that needs Switchboard's text whatever copy is installed
+/// (queue-and-clean reading ci-loop's "When queue-and-clean runs this"),
+/// since `~/.claude/skills/<name>` may be a skill of your own by that name.
+fn own(name: Option<&str>) -> ExitCode {
+    let Some(name) = name.filter(|n| !n.is_empty() && !n.starts_with('-')) else {
+        eprintln!("usage: skill-path --own <name>");
+        return ExitCode::from(2);
+    };
+    match crate::setup::skills::shipped_file(&format!("{name}/SKILL.md")) {
+        Some(text) => {
+            print!("{}", String::from_utf8_lossy(text));
             ExitCode::SUCCESS
         }
         None => ExitCode::from(1),

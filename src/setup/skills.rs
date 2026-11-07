@@ -14,6 +14,11 @@
 //! without that list or a link elsewhere, is yours and kept as it is; a link
 //! into a Switchboard clone's skills, as setup.sh made, is replaced by the
 //! folder.
+//!
+//! Beside them, `skill-path` and `codex-review` are linked into
+//! `~/.local/bin` to the binary (`link_commands`), as setup.sh linked its
+//! scripts there, since a repository's own copy of a skill, written for the
+//! tmux version, runs them by those names.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -156,6 +161,9 @@ pub fn run(r: &mut Report) -> Result<()> {
             failed.push(name);
         }
     }
+    if let Err(e) = link_commands(r) {
+        bail!("could not link the commands skills run into ~/.local/bin: {e}");
+    }
     if failed.is_empty() {
         return Ok(());
     }
@@ -164,6 +172,46 @@ pub fn run(r: &mut Report) -> Result<()> {
         home_tilde(&dir),
         failed.join(" ")
     )
+}
+
+/// The commands a repository's own copy of a skill, written for the tmux
+/// version, runs by their bare names: setup.sh linked them into
+/// `~/.local/bin`, and the binary runs the command a link is named after.
+const COMMAND_LINKS: [&str; 2] = ["skill-path", "codex-review"];
+
+/// Each of `COMMAND_LINKS` in `~/.local/bin` as a link to this binary: made
+/// where nothing is, and in place of a link that leads nowhere (one into a
+/// clone of the tmux version, whose script is gone). A file there, or a link
+/// to something that is there, is yours and left alone.
+fn link_commands(r: &mut Report) -> Result<()> {
+    let exe = crate::util::exe()?;
+    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    let bin = paths::home_join(".local/bin");
+    for name in COMMAND_LINKS {
+        let link = bin.join(name);
+        let shown = home_tilde(&link);
+        if fs::canonicalize(&link).is_ok_and(|to| to == exe) {
+            continue;
+        }
+        if exists(&link) {
+            if !is_link(&link) || link.exists() {
+                continue;
+            }
+            r.change(format!(
+                "replace {shown}, a link leading nowhere, with one to switchboard"
+            ));
+            if !r.check {
+                fs::remove_file(&link)?;
+            }
+        } else {
+            r.change(format!("link {shown} to switchboard"));
+        }
+        if !r.check {
+            fs::create_dir_all(&bin)?;
+            std::os::unix::fs::symlink(&exe, &link)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_skill(r: &mut Report, dest: &Path, name: &str, files: &[(&str, &[u8])]) -> Result<()> {

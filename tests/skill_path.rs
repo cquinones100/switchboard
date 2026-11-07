@@ -56,15 +56,11 @@ fn every_skill_opens_by_running_skill_path_with_its_own_name() {
 }
 
 #[test]
-fn no_skill_names_another_skill_s_skill_md_by_a_fixed_path_but_the_exceptions() {
-    // Hand-offs that need Switchboard's own text rather than the
-    // repository's copy.
-    let exceptions = ["`~/.claude/skills/ci-loop/SKILL.md`, which a repository's copy leaves out"];
+fn no_skill_names_another_skill_s_skill_md_by_a_fixed_path() {
+    // A hand-off that needs Switchboard's own text rather than the
+    // repository's copy reads `switchboard skill-path --own`.
     let fixed = regex::Regex::new(r"[^\s`(]*skills/[a-z-]+/SKILL\.md").unwrap();
-    for (name, mut text) in skills() {
-        for exception in exceptions {
-            text = text.replacen(exception, "", 1);
-        }
+    for (name, text) in skills() {
         let found: Vec<&str> = fixed.find_iter(&text).map(|m| m.as_str()).collect();
         assert!(
             found.is_empty(),
@@ -192,4 +188,21 @@ fn every_switchboard_command_a_skill_names_is_one_the_binary_has_and_none_names_
         assert!(!text.contains("tmux "), "{name} still names tmux");
         assert!(!text.contains("TMUX"), "{name} still reads TMUX");
     }
+}
+
+#[test]
+fn switchboard_s_own_copy_is_printed_whatever_is_installed() {
+    let tmp = TempDir::new("sb-skill-own");
+    let run = |name: &str| {
+        Command::new(BIN)
+            .args(["skill-path", "--own", name])
+            .env("HOME", tmp.path())
+            .output()
+            .unwrap()
+    };
+    let out = run("ci-loop");
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("When queue-and-clean runs this"), "{text}");
+    assert_eq!(run("no-such-skill").status.code(), Some(1));
 }

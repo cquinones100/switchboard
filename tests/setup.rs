@@ -610,6 +610,13 @@ fn skills_are_written_keeping_one_of_your_own_and_brought_up_to_date() {
     .unwrap();
     fs::create_dir_all(h.path("dotfiles/claude/skills/today")).unwrap();
     std::os::unix::fs::symlink("../../dotfiles/claude/skills/today", skills.join("today")).unwrap();
+    // setup.sh's link to a script the tmux version's clone no longer has.
+    fs::create_dir_all(h.path(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(
+        "/somewhere/editor-configs/bin/codex-review",
+        h.path(".local/bin/codex-review"),
+    )
+    .unwrap();
 
     let check = stdout(&h.run(&["setup", "--check", "skills"]));
     assert!(
@@ -664,6 +671,16 @@ fn skills_are_written_keeping_one_of_your_own_and_brought_up_to_date() {
         "the scripts that stay with their skills"
     );
     assert!(!skills.join("today/scripts").exists());
+    // The commands a repository's own skill may run by their bare names run
+    // this binary, the link that led nowhere replaced.
+    let bin = fs::canonicalize(common::BIN).unwrap();
+    for name in ["skill-path", "codex-review"] {
+        assert_eq!(
+            fs::canonicalize(h.path(".local/bin").join(name)).unwrap(),
+            bin,
+            "{name}: {first}"
+        );
+    }
     assert_eq!(ok(&h.run(&["setup", "skills"])), "skills: up to date\n");
 
     // One changed by hand, a file a newer version no longer ships, and the
