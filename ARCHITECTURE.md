@@ -131,6 +131,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (hooks, statusline, skills, the terminal, the leftovers, the optional report), a new build's first run, and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
+| `bin/switchboard-try` (a worktree tried under a home of its own) | a build run with a state directory of its own (CLAUDE.md's "Testing in the workspace in use") |
 | `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
 | `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`) |
 | `bin/*` Node programs, `lib/` | `src/cmd/`, `src/integrations/`, `src/relay/`, ... |

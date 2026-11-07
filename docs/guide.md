@@ -1106,7 +1106,7 @@ The ones marked "you" run only when you type them; Claude may also pick up the o
 | `/ci-loop` | Watches the branch's PR checks in the background and fixes what fails, pushing each fix, until every check passes; stops and asks when a fix isn't the branch's to make | you |
 | `/clean-worktree` | Removes a worktree and its local branch once nothing in them would be lost (no uncommitted changes, every commit on GitHub), then prunes deleted remote branches | you |
 | `/deploy-test` | Waits for a merged PR to deploy, tests its feature on the deployed site in a real browser, records a captioned video of the test and asks you to approve it | you |
-| `/diff-screenshots` | Renders a branch's or PR's diff with git delta as side-by-side PNG screenshots, one set per file, core code first and tests last, and opens them in Preview | you or Claude |
+| `/diff-screenshots` | Renders a branch's or PR's diff with git delta as side-by-side PNG screenshots, one set per file, core code first and tests last, and opens them (in Preview on a Mac); it needs git-delta, Node and Chrome | you or Claude |
 | `/note-tickets` | Reads the open checklist items in the notes you name, checks Linear for tickets that already cover each, and suggests tickets for the rest, creating only the ones you pick | you |
 | `/note-watch` | Watches one note for new checklist items while the session runs, and works each as it appears, ticking it when done | you |
 | `/oncall` | Watches your team's Slack alert channels while you're on call, and reaches you through the Slack relay only about what needs you | you or Claude |
@@ -1178,7 +1178,7 @@ Each of the first six asks which directory first, in a list: the one you are in,
 - `M-W` asks for the tickets, IDs or Linear URLs separated by commas or spaces, filled in from the clipboard when it holds only tickets. Every one is checked before any tab opens, so a typo leaves none half-started. The tabs go at the end of the tab bar in the order given, so no open tab is renumbered, and the first comes to the front.
 - `M-B` lists the repository's branches, local and remote, the most recently committed first. Enter works on the one picked; a name no branch matches is a new branch, and Alt-Enter takes the name typed even when some branch matches it.
 - "Start work on a PR" asks for its number or URL, filled in from the clipboard when it holds one. A URL names its repository, which `wtpr` finds a clone of, so it asks for no directory; a bare number asks which repository it is a PR of.
-- "Start work on a note's checklist items" asks for the repository, then the note, the most recently changed first, then which of its unticked items to work on. Items under a section for parked work (`## Later`, `## Deferred`) and items a worktree already works on are left out, and one whose plan still needs a choice is marked so; with more than one, the first row takes them all. Each item gets a tab, named after it and linked to the note.
+- "Start work on a note's checklist items" asks for the repository, then the note, the most recently changed first, then which of its unticked items to work on. Items under a section for parked work (`## Later`, `## Deferred`) and items a worktree already works on are left out, and one whose plan still needs a choice is marked so; with more than one, the first row takes them all. The lower half of the list shows the item under the cursor whole, its full text and what is indented under it, since a row cuts it to one line (Settings' "Show a note's item whole in wtn's list", `wtn_item_preview`). Each item gets a tab, named after it and linked to the note.
 - "Continue shaping Linear tickets" asks for the tickets, then the directory, which must be in a repository so `shape` has code to read.
 
 `M-p`'s "Shape the note's checklist items" opens a tab running `/shape` for each unticked checklist item of a note you pick.
@@ -1286,7 +1286,7 @@ switchboard shape ABC-123 split out the API part
 switchboard shape --continue ABC-123
 ```
 
-`shape` is the step before `wt`. It starts Claude with `/shape` in the repository's main checkout, even when run from a worktree, since a ticket being shaped has no branch yet. It fetches first and warns when the local branch is behind its upstream, since Claude reads the files on disk, and it names the tab "Shaping: <first words>". The skill does the rest: it reads the code, checks Linear for a ticket that already covers the idea, drafts the ticket in the form the team's recent tickets use, writes it to Linear only once you approve, and names the tab "Shaping <ID>: <title>" once there is a ticket. Words after a ticket are your direction for the shaping. Given a ticket, it asks whether to run the repository's review loop on it or keep shaping; `--continue` keeps shaping without asking. `/wt` afterwards hands the same tab to the ticket's worktree. `/shape` works the same in a session you already have.
+`shape` is the step before `wt`. It starts Claude with `/shape` in the repository's main checkout, even when run from a worktree, since a ticket being shaped has no branch yet. It fetches first and warns when the local branch is behind its upstream, since Claude reads the files on disk, and it names the tab "Shaping: <first words>". The skill does the rest: it reads the code, checks Linear for a ticket that already covers the idea, drafts the ticket in the form the team's recent tickets use, writes it to Linear only once you approve, reviews what it wrote with the repository's `/review-loop` in ticket mode (Codex reading the ticket against the code, its edits saved to Linear only once you say so), and names the tab "Shaping <ID>: <title>" once there is a ticket. Words after a ticket are your direction for the shaping. Given a ticket, it asks whether to run the repository's review loop on it or keep shaping; `--continue` keeps shaping without asking. `/wt` afterwards hands the same tab to the ticket's worktree. `/shape` works the same in a session you already have.
 
 ### Cleaning up
 
@@ -1356,7 +1356,7 @@ The lock never expires with time, since a landing may wait on you while it holds
 
 `/deploy-test` waits for a merged PR to deploy, tests the feature it adds on the deployed site in a real browser, records a captioned video of the test, and asks you to approve it. `/queue-and-clean` runs it before removing a worktree, and you can run it on any merged PR. It changes nothing real on the site unless the environment is a test one or you say so. `/preview-test` does the same before the merge, on an open PR's preview deploy, found from the branch's GitHub deployments, a bot's comment or the repository's docs.
 
-Both wait with `switchboard wait-deploy`, which prints one line once the deploy settles: `deployed <sha> <url>`, `failed <url>` or `timeout`.
+Both wait with `switchboard wait-deploy`, which prints one line once the deploy settles: `deployed <sha> <url>` (`deployed <sha> -` when it watched a deploy workflow, which has no address), `failed <url>` or `timeout`.
 
 ```
 switchboard wait-deploy --repo owner/name --sha <commit> --environment production
@@ -1392,7 +1392,7 @@ Each site keeps a Chrome profile of its own in `~/.cache/deploy-test/profiles/<h
 
 `switchboard skill-path <name> [<dir>]` prints the `SKILL.md` to follow for a skill in the repository at `<dir>`, the current directory by default: the worktree's own `.claude/skills/<name>/SKILL.md`, else the main clone's (a branch cut before the repository added the skill has none of its own), else your personal `~/.claude/skills/<name>/SKILL.md`. It prints nothing and exits 1 when there is none.
 
-`/today` and `/slack-updates` save what they read for mission control's Calendar and Slack views, which can't reach Claude's connectors themselves. `switchboard today-save` takes the day as JSON on stdin and keeps it in `~/.local/state/switchboard/calendar.json`. `switchboard slack-updates-save --since` prints when to look back to (ten minutes before the last look, or an hour ago the first time), and `switchboard slack-updates-save` takes what the look found as JSON on stdin and adds it to `~/.local/state/switchboard/slack.json`. `switchboard setting <key>` prints one of the workspace's settings as Settings reads it (`on`, `off` or a choice's value), which is how `/review-loop` reads `review_security`.
+`/today` and `/slack-updates` save what they read for mission control's Calendar and Slack views, which can't reach Claude's connectors themselves. `switchboard today-save` takes the day as JSON on stdin and keeps it in `~/.local/state/switchboard/calendar.json`. `switchboard slack-updates-save --since` prints when to look back to (ten minutes before the last look, or an hour ago the first time) as three fields: that time in ISO 8601, the same in seconds, and how far back to look for your own messages, in seconds, and `switchboard slack-updates-save` takes what the look found as JSON on stdin and adds it to `~/.local/state/switchboard/slack.json`. `switchboard setting <key>` prints one of the workspace's settings as Settings reads it (`on`, `off` or a choice's value), which is how `/review-loop` reads `review_security`.
 
 ## The Slack relay
 
@@ -1818,7 +1818,8 @@ switchboard tip <name> | tip seen <name> | tip reset
                                          show a tip once, mark it shown, or
                                          show every tip again
 switchboard press <action> [arg]         run an action as its key would, by its
-                                         name in keys.json
+                                         name in keys.json (only note-tab takes
+                                         an arg, the note)
 switchboard sources [refresh [view]]     mission control's GitHub and Linear
                                          data as JSON, or looked up again now
 switchboard list-keys                    every key and what it does
@@ -1827,7 +1828,7 @@ switchboard detach [-s session]          detach every terminal, or a session's
 switchboard kill-server                  save, then end the server and its panes
 ```
 
-`set` and `show` without `-t` put an option whose name starts with `@tab_`, or is `@agent`, on the caller's tab, and any other on its pane. A few are the workspace's own: `@tab_name` names the tab; `show` gives `@tab_label`, the name the tab bar shows, PR number included, `@tab_path`, the directory it is named after, and `@agent`, the tab's most urgent state. On a pane, `@agent_state` and `@agent_since` are Claude's state there and since when (seconds), `@agent_activity` its tool call in a few words and `@agent_wait` what it waits on.
+`set` and `show` without `-t` put an option whose name starts with `@tab_`, or is `@agent`, on the caller's tab, and any other on its pane. A few are the workspace's own: `@tab_name` names the tab; `show` gives `@tab_label`, the name the tab bar shows, PR number included, `@tab_path`, the directory it is named after, and `@agent`, the tab's most urgent state. On a pane, `@agent_state` and `@agent_since` are Claude's state there and since when (seconds), `@agent_activity` its tool call in a few words, `@agent_wait` what it waits on, `@agent_loop` the loop it runs (review, ci, queue or deploy) and `@agent_phase` the step a loop says it is at, which `land-lock` sets as it lands on the default branch.
 
 ```sh
 # A tab in the background for a build, its pane's id kept for later
