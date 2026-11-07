@@ -435,6 +435,9 @@ fn start_detached(env: &Env, bin: &Path, home: &Path, wt: &Path) -> Result<()> {
         cols: 200,
         rows: 50,
         term: "xterm-256color".into(),
+        // No terminal: its cell's size in pixels is unknown.
+        xpixel: 0,
+        ypixel: 0,
     }))?;
     // The first thing drawn says the session is there.
     match proto::read_server(&mut stream) {
