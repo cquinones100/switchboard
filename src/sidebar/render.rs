@@ -16,6 +16,7 @@ use ratatui::text::Span;
 
 use super::model::{self, Group, Rules, TabModel, TabState};
 use super::text::{self, Badge, SPINNER, width};
+use crate::items::{Item, State};
 use crate::mux::TabId;
 use crate::ui::Theme;
 
@@ -48,6 +49,31 @@ pub struct Notice {
     pub owner: Owner,
     pub title: String,
     pub detail: String,
+}
+
+/// A plugin's short list under the tabs (its `sidebar` count of items, from
+/// sidebar.json or what it prints): its title, how many items it has and
+/// how many need you, why its last run failed, and its first items.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Section {
+    pub title: String,
+    pub count: usize,
+    pub attention: usize,
+    pub error: Option<String>,
+    pub items: Vec<Item>,
+}
+
+impl Section {
+    /// A plugin's list as the sidebar shows it: its first `shown` items.
+    pub fn of(title: &str, items: &[Item], error: Option<&str>, shown: usize) -> Section {
+        Section {
+            title: title.to_string(),
+            count: items.len(),
+            attention: items.iter().filter(|i| i.state == State::Attention).count(),
+            error: error.map(str::to_string),
+            items: items.iter().take(shown).cloned().collect(),
+        }
+    }
 }
 
 /// A / filter on the tabs, being typed or kept.
@@ -204,6 +230,15 @@ fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
 
+/// An item's mark by its state, as mission control's lists draw it.
+fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
+    match item.state {
+        State::Attention => Span::styled("●", bold(YELLOW)),
+        State::Active => Span::styled("●", bold(Color::Indexed(67))),
+        State::Idle => Span::styled("○", fg(theme.faint)),
+    }
+}
+
 fn bold(c: Color) -> Style {
     Style::new().fg(c).add_modifier(Modifier::BOLD)
 }
@@ -256,13 +291,14 @@ fn counts(row: &mut Row, tabs: &[TabModel], r: &Rules, theme: &Theme) {
 }
 
 /// The sidebar for one tab of a session: its session's tabs, most in need of
-/// you first, then the notifications. `tabs` are the session's (filtered
+/// you first, the plugins' lists, then the notifications. `tabs` are the session's (filtered
 /// already, when a filter is kept), `frozen` the layout held while browsing.
 #[allow(clippy::too_many_arguments)]
 pub fn sidebar_lines(
     tabs: &[TabModel],
     frozen: Option<&model::Frozen>,
     notices: &[Notice],
+    sections: &[Section],
     session: &str,
     cols: usize,
     rows: usize,
@@ -463,6 +499,39 @@ pub fn sidebar_lines(
         owners.push(None);
     }
 
+    // Each plugin that asks for it, its first items under its title, after
+    // the tabs and scrolling with them.
+    for section in sections {
+        let mut heading = Row::default();
+        heading
+            .put(" ", Style::new())
+            .put(section.title.to_uppercase(), fg(theme.dim))
+            .put(format!(" {}", section.count), fg(theme.faint));
+        if section.attention > 0 {
+            heading.put(format!(" ! {}", section.attention), bold(YELLOW));
+        }
+        lines.push(heading.fit(cols, None));
+        owners.push(None);
+        if let Some(error) = &section.error {
+            let mut row = Row::default();
+            row.put("  ", Style::new())
+                .put(error.clone(), fg(Color::Indexed(167)));
+            lines.push(row.fit(cols, None));
+            owners.push(None);
+        }
+        for item in &section.items {
+            let mut row = Row::default();
+            row.put("  ", Style::new());
+            row.spans.push(item_mark(item, theme));
+            row.put(" ", Style::new())
+                .put(item.title.clone(), fg(theme.text));
+            lines.push(row.fit(cols, None));
+            owners.push(None);
+        }
+        lines.push(Line::blank(cols));
+        owners.push(None);
+    }
+
     // Notifications, pinned to the bottom under a double rule and their own
     // heading, so they read as no tab and never scroll away.
     let mut notice_lines: Vec<Line> = Vec::new();
@@ -620,7 +689,18 @@ mod tests {
     }
 
     fn lines(tabs: &[TabModel], cols: usize, rows: usize, v: &View<'_>) -> Lines {
-        sidebar_lines(tabs, None, &[], "s", cols, rows, v, &rules(), &Theme::DARK)
+        sidebar_lines(
+            tabs,
+            None,
+            &[],
+            &[],
+            "s",
+            cols,
+            rows,
+            v,
+            &rules(),
+            &Theme::DARK,
+        )
     }
 
     #[test]
@@ -686,7 +766,18 @@ mod tests {
         let mut waiting = tab(1, "Fix #7 regressions", TabState::Waiting);
         waiting.pr = Some(7);
         let tabs = vec![waiting, failing, tab(3, "busy", TabState::Working)];
-        let out = sidebar_lines(&tabs, None, &[], "main", 40, 30, &view(1), &r, &Theme::DARK);
+        let out = sidebar_lines(
+            &tabs,
+            None,
+            &[],
+            &[],
+            "main",
+            40,
+            30,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
         let text = texts(&out).join("\n");
         assert!(
             text.lines()
@@ -730,7 +821,18 @@ mod tests {
         let mut later = tab(7, "later", TabState::Idle);
         later.remind_at = Some(NOW_MS / 1000 + 3600);
         let tabs = vec![queued, landed, pinned, reviewing, later];
-        let out = sidebar_lines(&tabs, None, &[], "s", 40, 40, &view(2), &r, &Theme::DARK);
+        let out = sidebar_lines(
+            &tabs,
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            40,
+            &view(2),
+            &r,
+            &Theme::DARK,
+        );
         let text = texts(&out).join("\n");
         assert!(text.contains("IN MERGE QUEUE 1"));
         assert!(text.contains(" »  2 queued third"), "{text}");
@@ -747,6 +849,7 @@ mod tests {
         let turned = sidebar_lines(
             &tabs,
             None,
+            &[],
             &[],
             "s",
             40,
@@ -776,6 +879,7 @@ mod tests {
             std::slice::from_ref(&t),
             None,
             std::slice::from_ref(&notice),
+            &[],
             "s",
             40,
             20,
@@ -800,6 +904,7 @@ mod tests {
             std::slice::from_ref(&t),
             None,
             std::slice::from_ref(&notice),
+            &[],
             "s",
             40,
             20,
@@ -815,6 +920,45 @@ mod tests {
         assert_eq!(chosen.lines[18].fill, Some(Theme::DARK.highlight));
         let none = lines(&[t], 40, 20, &view(1));
         assert!(!texts(&none).iter().any(|l| l.contains("NOTIFICATIONS")));
+    }
+
+    #[test]
+    fn a_plugins_first_items_sit_under_the_tabs_with_its_count() {
+        let t = tab(1, "work", TabState::Idle);
+        let items = vec![
+            Item::new("1", "api rolling out").state(State::Attention),
+            Item::new("2", "web").state(State::Active),
+            Item::new("3", "jobs"),
+        ];
+        let section = Section::of("Deploys", &items, Some("one failed"), 2);
+        assert_eq!(section.count, 3);
+        assert_eq!(section.attention, 1);
+        let out = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            std::slice::from_ref(&section),
+            "s",
+            40,
+            20,
+            &view(1),
+            &rules(),
+            &Theme::DARK,
+        );
+        let text = texts(&out);
+        let at = text.iter().position(|l| l.starts_with(" DEPLOYS")).unwrap();
+        assert_eq!(
+            text[at..at + 4],
+            [
+                " DEPLOYS 3 ! 1",
+                "  one failed",
+                "  ● api rolling out",
+                "  ● web",
+            ]
+        );
+        assert_eq!(text[at + 4], "", "a blank line after it");
+        assert!(at > 2, "under the tabs");
+        assert!(out.owners[at..at + 4].iter().all(Option::is_none));
     }
 
     #[test]

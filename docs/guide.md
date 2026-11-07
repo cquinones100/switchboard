@@ -309,7 +309,7 @@ Menus and questions take a click too: one click takes an option or answers Yes o
 
 ## The sidebar
 
-The sidebar runs down the left of every tab: the session's tabs, most in need of you first, what each one's Claude is doing, and under them the notifications. It is 34 columns wide, and a window narrower than 90 columns has none (both are set in `sidebar.json`, below); a zoomed pane covers it. Settings' "Sidebar" (`sidebar`) turns it off and on, as does "Turn the sidebar on or off" in `M-p`.
+The sidebar runs down the left of every tab: the session's tabs, most in need of you first, what each one's Claude is doing, under them the first items of each plugin that asks for a place there (see "Plugins"), and the notifications. It is 34 columns wide, and a window narrower than 90 columns has none (both are set in `sidebar.json`, below); a zoomed pane covers it. Settings' "Sidebar" (`sidebar`) turns it off and on, as does "Turn the sidebar on or off" in `M-p`.
 
 At its top are the session's name, in a pill of the current tab's color, and its counts: failing builds first, in red (`✗ 2`), then the tabs waiting on you (`! 1`), finished (`✓ 3`) and working (`⋯ 4`). Below them are the tabs in their groups, each group under its heading with how many it holds.
 
@@ -627,7 +627,7 @@ Anything with an API can be a view of its own in mission control: a plugin fetch
 }
 ```
 
-It is run every `intervalSeconds` (five minutes when nothing says), never through a shell, with its options as JSON on its input, and prints its items as JSON: a list, or an object with `items` and, if it likes, `title` and `intervalSeconds`, which the config's own win over. Each item has a `title`, and may have an `id`, a `detail` line, a `state` (`attention` marks it as needing you, `active`, or `idle`), a `url` (an `http` or `https` link, which Enter opens) and a `time` in milliseconds:
+It is run every `intervalSeconds` (five minutes when nothing says), never through a shell, with its options as JSON on its input, and prints its items as JSON: a list, or an object with `items` and, if it likes, `title`, `intervalSeconds` and `sidebar`, which the config's own win over. `sidebar` is how many of its items the sidebar lists under the tabs (none when nothing says): its title in capitals with how many items it has and how many need you ("DEPLOYS 3 ! 1"), its error when its last run failed, and its first items, each marked by its state. Each item has a `title`, and may have an `id`, a `detail` line, a `state` (`attention` marks it as needing you, `active`, or `idle`), a `url` (an `http` or `https` link, which Enter opens) and a `time` in milliseconds:
 
 ```python
 #!/usr/bin/env python3

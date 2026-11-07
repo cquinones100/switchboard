@@ -510,6 +510,15 @@ impl Server {
         let focused = side.is_some_and(|x| x.focused);
         let tabs = self.sidebar_listed(&s.name);
         let notices = self.sidebar_notices();
+        // Each plugin that asks for a list under the tabs (plugins.js's
+        // `sidebar` count), from what its last run gave.
+        let sections: Vec<render::Section> = self
+            .usage
+            .plugins
+            .iter()
+            .filter(|p| p.sidebar > 0)
+            .map(|p| render::Section::of(&p.title, &p.items, p.error.as_deref(), p.sidebar))
+            .collect();
         let view = View {
             focused,
             cursor: side.and_then(|x| x.cursor.as_ref()),
@@ -523,6 +532,7 @@ impl Server {
             &tabs,
             side.and_then(|x| x.frozen.as_ref()),
             &notices,
+            &sections,
             &s.name,
             area.width as usize,
             area.height as usize,
