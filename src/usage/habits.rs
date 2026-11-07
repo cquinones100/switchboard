@@ -268,7 +268,12 @@ pub const VIEWS: &[View] = &[
     view("Closed", "view_closed"),
     service_view("PRs", "pr_board", "github"),
     service_view("CI", "view_ci", "github"),
-    service_view("Merge queues", "view_merge_queues", "github"),
+    View {
+        title: "Landing",
+        key: "view_landing",
+        needs: None,
+        lookups: true,
+    },
     service_view("Tickets", "ticket_board", "linear"),
     service_view("Inbox", "view_inbox", "linear"),
     view("Sessions", "view_sessions"),

@@ -12,10 +12,12 @@
 //!   git's config file rather than by running git.
 //! - `prs`: every tab's pull request, in one GraphQL query, into
 //!   `Server.facts` (lib/sidebar/prs.js).
-//! - `landing`: each tab's place in its repository's landing queue, from the
-//!   files land-lock keeps (lib/sidebar/landing.js).
+//! - `landing`: what lands in each repository a tab is in, and each tab's
+//!   place in it: the files land-lock keeps (lib/sidebar/landing.js), and
+//!   the merge queues; mission control's Landing view.
 //! - `prboard`, `ciboard`, `queues`, `tickets`, `inbox`: mission control's
-//!   PRs, CI, Merge queues, Tickets and Inbox views, as `ViewData`.
+//!   PRs and CI views, the merge queues the Landing view shows, and the
+//!   Tickets and Inbox views, as `ViewData`.
 //! - `setup`: what a view says when GitHub or Linear isn't set up
 //!   (lib/sidebar/setup-help.js).
 //! - `serve`: the server's side: starting the lookups on its tick, taking
@@ -55,10 +57,12 @@ pub use serve::Answer;
 /// takes.
 pub const PRS: &str = "prs";
 pub const CI: &str = "ci";
-pub const QUEUES: &str = "queues";
+/// What is landing: each repository's landing queue and merge queue (the
+/// Merge queues view before).
+pub const LANDING: &str = "landing";
 pub const TICKETS: &str = "tickets";
 pub const INBOX: &str = "inbox";
-pub const VIEWS: [&str; 5] = [PRS, CI, QUEUES, TICKETS, INBOX];
+pub const VIEWS: [&str; 5] = [PRS, CI, LANDING, TICKETS, INBOX];
 
 /// What a lookup knows of a tab, taken from the server when it is asked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -110,8 +114,9 @@ pub struct Sources {
     /// (the daemon's `untabbed` stand-ins for tabs).
     untabbed: HashMap<PathBuf, PrKey>,
     /// Each tab's place in the landing queue, and where its worktree is
-    /// when it waits, for moving it.
-    landing: HashMap<TabId, landing::Place>,
+    /// when it waits, for moving it; each repository the tabs are in, with
+    /// what lands there straight on its default branch.
+    landing: landing::Read,
     board: prboard::Board,
     queues: queues::Queues,
     views: BTreeMap<&'static str, ViewData>,
@@ -123,9 +128,11 @@ pub struct Sources {
 
 impl Sources {
     /// A view's data, or `None` while its settings keep it out of mission
-    /// control (the service off, or the view): `PRS`, `CI`, `QUEUES`,
-    /// `TICKETS` or `INBOX`. Before its first answer it is an empty
-    /// `ViewData` with no `at`, for a view to say it is still looking.
+    /// control (the service off, or the view): `PRS`, `CI`, `TICKETS` or
+    /// `INBOX`; `LANDING`'s is only how its merge queues were last asked,
+    /// the view itself put together on the server (`Server::landing_view`).
+    /// Before its first answer it is an empty `ViewData` with no `at`, for a
+    /// view to say it is still looking.
     pub fn view(&self, name: &str) -> Option<&ViewData> {
         if !enabled(name) {
             return None;
@@ -145,7 +152,7 @@ impl Sources {
     /// The landing queue's place for a waiting tab's worktree, for its menu
     /// (Move up, Move down, Move to the front through `land-lock move`).
     pub fn landing_waiter(&self, tab: TabId) -> Option<&Waiter> {
-        self.landing.get(&tab)?.waiter.as_ref()
+        self.landing.places.get(&tab)?.waiter.as_ref()
     }
 
     /// What GitHub last said of the PR of a worktree no tab is in, by its
@@ -166,12 +173,14 @@ impl Sources {
     }
 }
 
-/// Whether a view is on: its service's setting and its own.
+/// Whether a view is on: its service's setting and its own. The Landing
+/// view needs no service, since its landing queues are files; its merge
+/// queues are asked of GitHub only with the github setting on too.
 pub fn enabled(name: &str) -> bool {
     let (service, own) = match name {
         PRS => ("github", "pr_board"),
         CI => ("github", "view_ci"),
-        QUEUES => ("github", "view_merge_queues"),
+        LANDING => return settings::is_on("view_landing"),
         TICKETS => ("linear", "ticket_board"),
         INBOX => ("linear", "view_inbox"),
         _ => return false,

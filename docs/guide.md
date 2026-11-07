@@ -218,7 +218,7 @@ The actions, by the names the file uses:
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
 - Claude and work: `next-needs-you`, `next-idle`, `focus-claude`, `copy-reply`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
-- The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
+- The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-landing` (`mission-merge-queues`, its name before, still works), `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `clear-image-cache`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `clear-diff-cache`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
@@ -278,7 +278,7 @@ While GitHub or Linear is off in Settings, the commands tagged `#github` or `#li
 These are in `M-p` alone, with no key unless you give them one in `keys.json`:
 
 - **Rename the tab**: a name typed in a box, starting from the one it has; empty gives the tab its own name back, as "Rename it" in mission control's menu does.
-- **Mission control: \<view\>**, one for each view (Work map, Calendar, Slack, Closed, PRs, Tickets, Inbox, CI, Merge queues, Sessions, Usage, Resources): mission control opened on that view. A view turned off in Settings is said so at the bottom of mission control, which opens on the tabs.
+- **Mission control: \<view\>**, one for each view (Work map, Calendar, Slack, Closed, PRs, Tickets, Inbox, CI, Landing, Sessions, Usage, Resources): mission control opened on that view. A view turned off in Settings is said so at the bottom of mission control, which opens on the tabs.
 - **Go to the notifications**: the Notifications window, every notification with its whole message and Enter opening its actions; with Settings' "Notifications window" (`notice_list`) off, the sidebar's cursor on the first notification instead, as `M-a` reaches them, or, in a window with no sidebar, mission control on the first one's view (its Slack, Inbox or Calendar view, Settings for a suggestion), else a box saying why there is nowhere to show them.
 - **How you use Switchboard**: what [Suggestions from how you work](#suggestions-from-how-you-work) has counted, in a box: the keys you press most this week and month, the commands you pick in `M-p`, the views you open, and the suggestions now. `j` and `k` scroll it, and any other key closes it.
 - **Send Claude's last reply to another tab**: the last thing this tab's Claude said in its last turn, from its transcript, pasted into the Claude of a tab you pick (its active pane when it runs none) without Enter, and that tab brought to the front, so you can add to it before sending. Its line breaks stay in the text.
@@ -347,8 +347,8 @@ Each tab is in one group, and the groups come in this order:
 | Build failing | Its open pull request has a failing check and isn't in a merge queue. The heading is in red. |
 | Working | Claude is working, or its turn ended with background tasks still running, which Claude carries on from when they end. |
 | Monitoring | Claude's only background work is `Monitor` watches, each named ("monitoring · CI on #12"). |
-| In merge queue | Its pull request is in the merge queue, in queue order. |
-| Landing | It holds or waits for the landing lock of `/queue-and-clean`'s "Land on the default branch", in the landing queue's order. |
+| In merge queue | Its pull request is in the merge queue, in queue order, with Settings' "Show the landing queue" off. |
+| Landing | It holds or waits for the landing lock of `/queue-and-clean`'s "Land on the default branch", in the landing queue's order, or its pull request is in the merge queue ("merging" at its head, else "2nd in line to merge"). |
 | Testing Deploy | Its pull request merged and the tab is still at work on it: `/deploy-test` waiting for the deploy or recording its test, or Claude working under `/deploy-test` or the `/queue-and-clean` that follows the merge. |
 | Merged | Its pull request merged. |
 | Idle | A Claude session with nothing to do. |
@@ -356,9 +356,9 @@ Each tab is in one group, and the groups come in this order:
 | Reminders | A reminder still to come, while nothing else places the tab. |
 | Other | No Claude in it: Notes, the Slack relay, a shell. |
 
-Needs you always wins: a tab whose Claude waits on you stays there even while its pull request is queued. After it, the landing queue and the pull request's place win over what Claude is doing, so a tab whose PR is queued stays under In merge queue while `/queue-and-clean` watches it; then a failing build; then the work running; then a reminder still to come. A tab's pull request, its checks and whether it is queued or merged come from one GitHub query for every tab's PR (see "How often mission control looks"), so a group can lag GitHub by that long. A tab whose worktree has been removed, as `/queue-and-clean` leaves it once its PR merges, is found by the worktree's branch and keeps its PR.
+Needs you always wins: a tab whose Claude waits on you stays there even while its pull request is queued. After it, the landing queue and the pull request's place win over what Claude is doing, so a tab whose PR is queued stays under Landing while `/queue-and-clean` watches it; then a failing build; then the work running; then a reminder still to come. A tab's pull request, its checks and whether it is queued or merged come from one GitHub query for every tab's PR (see "How often mission control looks"), so a group can lag GitHub by that long. A tab whose worktree has been removed, as `/queue-and-clean` leaves it once its PR merges, is found by the worktree's branch and keeps its PR.
 
-Settings' "Build failing" (`build_failing`) off leaves such tabs in Working or Idle, the failing count still in their words. Settings' "Show the landing queue" (`landing_queue`) off leaves landing tabs where their work puts them; the queue still orders the landings.
+Settings' "Build failing" (`build_failing`) off leaves such tabs in Working or Idle, the failing count still in their words. Settings' "Show the landing queue" (`landing_queue`) off leaves landing tabs where their work puts them, and a tab whose PR is queued under In merge queue; the queue still orders the landings.
 
 ### What each tab shows
 
@@ -443,7 +443,7 @@ A peek shows a tab without going there, in a box over most of the screen: its la
 
 ### The Landing group
 
-`/queue-and-clean` in a repository that commits straight to its default branch lands each worktree's work one at a time, behind a landing lock, the others waiting in a landing queue. The tab holding the lock is first under Landing, saying "landing" or the step it is at; the tabs waiting follow in the queue's order ("2nd in line to land"). A tab counts only while its worktree is there and a Claude session runs in it, so a landing that ended without a word leaves the group. Enter on a waiting tab's card in mission control offers "Land it next", "Move it up in the landing queue" and "Move it down in the landing queue", which reorder the queue as `switchboard land-lock move` does; the landing tab can't be passed.
+`/queue-and-clean` in a repository that lands straight on its default branch lands each worktree's work one at a time, behind a landing lock, the others waiting in a landing queue. The tab holding the lock is first under Landing, saying "landing" or the step it is at; the tabs waiting follow in the queue's order ("2nd in line to land"). A tab counts only while its worktree is there and a Claude session runs in it, so a landing that ended without a word leaves the group. Enter on a waiting tab's card in mission control offers "Land it next", "Move it up in the landing queue" and "Move it down in the landing queue", which reorder the queue as `switchboard land-lock move` does; the landing tab can't be passed. A tab whose pull request is in the merge queue joins the group too, "merging" at the queue's head, else "2nd in line to merge".
 
 ### sidebar.json
 
@@ -518,7 +518,7 @@ On a tab, the menu offers:
 
 ### The views
 
-After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, CI, Merge queues, Tickets, Inbox, Sessions, Resources, Usage, Keys and Settings, then each plugin's view, each only while its setting is on. The ones that read a service ask it again when you go to them.
+After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, CI, Landing (while something lands), Tickets, Inbox, Sessions, Resources, Usage, Keys and Settings, then each plugin's view, each only while its setting is on. The ones that read a service ask it again when you go to them.
 
 **Notifications** is every notification the sidebar shows, one by one and whole. Enter's menu does what each leads to ("Open it in Notes" for a new note, "Open the Calendar view" for a calendar change, the Calendar view's menu for the next meeting, the Slack view's for a message and the Inbox's for an Inbox notification), and offers to dismiss it: a meeting, a Slack message (until its thread gets more), a calendar change (taking today's calendar as seen), a new note, or an Inbox notification (from the notifications alone: it stays unread in Linear and in the Inbox view). Whatever is picked dismisses it too; a suggestion gets its own choices instead. It is there while the sidebar's notifications are on.
 
@@ -530,7 +530,7 @@ After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, 
 
 **CI** is your open pull requests whose checks are failing, in the repositories your tabs are in, each with the checks that failed and the line of the first failing job's log that says why. Enter offers to start a CI loop on it (typing `/ci-loop` into the tab already on it when its Claude is idle or finished, else opening a new tab on its worktree with `wtpr`), go to its tab, read the failing job's log in a pane beside yours (the log of each failing job is kept in `ci-logs/` in the state directory once the view has read why it failed, and goes when the job no longer fails; it opens at its end, without the timestamps Actions puts on every line), open the failing check in the browser, read the pull request here in a pane beside the one you were in or open it in the browser, or copy its link. Settings' "CI" (`view_ci`).
 
-**Merge queues** is every pull request in the merge queue of each repository your tabs are in, everyone's, in queue order: its place, number and title, the repository, where it stands, about how long until it merges as GitHub estimates it, its author, and the tab it is open in; one of your tabs' that can't merge is marked as needing you. A repository with no merge queue is left out. Enter offers to go to the tab, read the pull request here in a pane beside the one you were in, open it or the queue in the browser, or copy its link. Settings' "Merge queues" (`view_merge_queues`).
+**Landing** (`M-p`, "Mission control: Landing") is there only while something lands in a repository a tab is in, or while it is in front, saying "Nothing is landing now" once the last landing ends until you leave it; a client stays on the view it was on when Landing comes or goes. It has a section per repository, headed "<repo> · straight to <branch>" for its landing queue or "<repo> · merge queue", its rows in queue order. A landing-queue row is the tab landing or waiting (the worktree's folder when no tab has it), with its step ("landing · pushing") or "waiting", how long since it took the lock or joined, and its tab; Enter offers to go to the tab, Land it next, move it up or down, take it out of the queue after asking (`switchboard land-lock leave`, which stops its wait), or copy its directory. A merge-queue row is every pull request in it, everyone's: its place, number and title, the repository, where it stands, about how long until it merges as GitHub estimates it, its author, and the tab it is open in; one of your tabs' that can't merge is marked as needing you. Enter offers to go to the tab, read the pull request here in a pane beside the one you were in, open it or the queue in the browser, or copy its link. The merge queues are asked of GitHub with the `github` setting on; the landing queues are read from files. Settings' "Landing view" (`view_landing`); a "Merge queues" turned off before is read as it turned off.
 
 **Tickets** is a board of the Linear issues assigned to you, in columns: Todo (urgent first), In progress, In review (a started state whose name says review), and Done in the last 7 days, each with its state, priority, project and the tab working on it, an urgent one marked as needing you. `h` `l` move between columns. Enter offers to go to the tab it is open in, start work on it in a new tab (`wt`), shape it in a new tab (`shape`), close it in Linear (moving it to its team's first completed state, after asking), read it here in a pane beside the one you were in, open it in the browser, or copy its ID. A new tab starts in the directory of a tab working on a ticket of the same team, else your home directory. Settings' "Ticket board" (`ticket_board`).
 
@@ -538,7 +538,7 @@ After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, 
 
 **Keys** is below, as are **Settings**; each plugin's view comes last (see "Plugins").
 
-Settings' "GitHub" (`github`) off takes out the PRs, CI and Merge queues views, and Settings' "Linear" (`linear`) off the Tickets and Inbox views.
+Settings' "GitHub" (`github`) off takes out the PRs and CI views and the Landing view's merge queues, and Settings' "Linear" (`linear`) off the Tickets and Inbox views.
 
 ### When a view isn't set up
 
@@ -546,7 +546,7 @@ A view that is on is always there to go to, and before what it reads from is set
 
 ### How often mission control looks
 
-GitHub and Linear are asked every 15 seconds, and the PR board every 30, with Settings' "Look often" (`poll_fast`) on; off, every tab's pull request and the merge queues are asked every minute and the rest every two minutes. The merged column of the PR board is asked for only every ten minutes. A lookup still waiting on its answer when the next is due is skipped rather than started twice. Going to the Inbox, CI or Merge queues view asks again at once, and so does `M-m`, for the views that show pull requests, so they agree with what it says.
+GitHub and Linear are asked every 15 seconds, and the PR board every 30, with Settings' "Look often" (`poll_fast`) on; off, every tab's pull request and the merge queues are asked every minute and the rest every two minutes. The merged column of the PR board is asked for only every ten minutes. A lookup still waiting on its answer when the next is due is skipped rather than started twice. Going to the Inbox, CI or Landing view asks again at once, and so does `M-m`, for the views that show pull requests, so they agree with what it says.
 
 While you are away (no terminal attached, the screen locked, or the computer idle for 10 minutes; where the desktop can't say, 10 minutes since a key was pressed in Switchboard) the GitHub and Linear lookups, the calendar feed, the Slack look and the diff's stories told ahead pause, and all ask again when you are back. Settings' "Pause lookups while away" (`pause_when_away`) off keeps them going. Working a note continuously opens no tabs while you are away, whatever that setting says.
 
@@ -758,7 +758,7 @@ The same list does two more things. "Open a link from this pane in the browser, 
 
 "Open an image or video from this pane in its app, or show it in its folder" lists the pictures and videos the pane names, newest first: a file's path (absolute, from `~`, or from the pane's directory, listed only when the file is there; png, jpg, gif, webp, heic, svg, bmp, tiff, mp4, mov, webm, mkv, m4v and avi), then the links among the pane's whose address ends in one. Enter opens a file in the app the desktop opens it with (Preview or QuickTime on a Mac) and a link in the browser; `Ctrl-O` shows a file in Finder, or opens its folder on Linux.
 
-Mission control's menus read a link beside your work too: "Read it here" on a pull request or ticket on the boards and in the Inbox, "Read the PR here" in the CI and Merge queues views, and an event's linked tickets and pull requests in the Calendar view, each in a pane beside the one you were in when mission control opened.
+Mission control's menus read a link beside your work too: "Read it here" on a pull request or ticket on the boards and in the Inbox, "Read the PR here" in the CI and Landing views, and an event's linked tickets and pull requests in the Calendar view, each in a pane beside the one you were in when mission control opened.
 
 ### The views by hand
 
@@ -1392,9 +1392,17 @@ The reviewer is given the rules you work under, and reports a change that breaks
 
 ### Landing: `/queue-and-clean`
 
-`/queue-and-clean` takes a branch from finished to gone. With a PR, it queues it for merge (the merge queue, or auto-merge), watches it in the background, and hands a failing check, a conflict or a drop from the queue to `/ci-loop` to fix, three times at most. Once it merges, it waits for the deploy and tests it as `/deploy-test` does. Once you approve the video, it marks the Linear ticket done, ticks the item in your note, removes the worktree and its local branch, and starts the tab's pane again in the main clone with the same conversation resumed, keeping the tab's name. With no PR, it checks whether the default branch already holds the work, a squash included, and cleans up if so. If not, it offers to open a PR, or, in a repository whose `CLAUDE.md` says its work is committed straight to the default branch, to land it there. A branch `/wtn` opened asks neither: its prompt names the note, and, in such a repository, settles that it lands on the default branch (the branch's `wtnItem` in git's config marks it).
+`/queue-and-clean` takes a branch from finished to gone. With a PR, it queues it for merge (the merge queue, or auto-merge), watches it in the background, and hands a failing check, a conflict or a drop from the queue to `/ci-loop` to fix, three times at most. Once it merges, it waits for the deploy and tests it as `/deploy-test` does. Once you approve the video, it marks the Linear ticket done, ticks the item in your note, removes the worktree and its local branch, and starts the tab's pane again in the main clone with the same conversation resumed, keeping the tab's name. With no PR, it checks whether the default branch already holds the work, a squash included, and cleans up if so. If not, it offers to open a PR, or, in a repository that lands straight on its default branch, as `switchboard landing` says (below), to land it there. A branch `/wtn` opened asks neither: its prompt names the note, and, in such a repository, settles that it lands on the default branch (the branch's `wtnItem` in git's config marks it).
 
-Landing on the default branch makes the branch one commit on top of the default branch as it is now, runs the tests, runs `/review-loop` on it and asks before pushing, all in each worktree at once. Only the push waits its turn: the worktree takes the landing lock, rebases onto what landed meanwhile and runs the tests again, and pushes with no second review while its change keeps the review's `patchId`, reviewing and asking again when it doesn't. Then it fast-forwards the main clone, ticks the note's item and cleans up as above.
+`switchboard landing [--json] [--refresh] [<dir>]` says how the repository at `<dir>` (the current directory by default) lands its work: `pr` (through a pull request) or `direct` (straight on its default branch) on the first line, then a direct landing's steps as JSON, `test`, `squash`, `review` and `beforePush`, with where the answer came from (`source`) and why; `--json` prints both as one object, and it fails when `repos.json` can't be read. The answer is the repository's entry in `~/.config/switchboard/repos.json`, by its origin's `owner/name`:
+
+```json
+{ "owner/name": { "landing": "direct", "test": "npm test", "squash": true, "review": "review-loop", "beforePush": "" } }
+```
+
+`landing` is `pr` or `direct`; the rest is a direct landing's steps: `test` runs before the review and again after the last rebase (empty, none; not set, the tests the repository's `CLAUDE.md` names), `squash` lands the branch as one commit (off, its commits land as they are), `review` is `review-loop` or `none`, and `beforePush` must pass before the push (empty, none). With no `landing` set, it works one out: a pull request when GitHub says the default branch needs one (a ruleset, branch protection, or a merge queue), else straight on it when the repository's `CLAUDE.md` says its work goes there with no PR, as a headless Haiku reads that file alone (never one that links out of the repository), else a pull request. That answer is kept a day in `~/.local/state/switchboard/repos-landing.json`, `--refresh` asking again; off the network, or with Settings' "GitHub" off, the last answer stands, and with none it is a pull request. Settings lists each repository a tab is in under "Landing (repos.json)", with what was worked out for it (going to Settings works out those not known yet, in the background), and Enter changes its entry: how it lands (automatic, through a PR, straight on the default branch), and, landing straight, its tests, squash, review and command before the push.
+
+Landing on the default branch makes the branch one commit on top of the default branch as it is now, runs the tests, runs `/review-loop` on it and asks before pushing, all in each worktree at once, each step only as the repository's steps say. A `beforePush` command must pass before the push. Only the push waits its turn: the worktree takes the landing lock, rebases onto what landed meanwhile and runs the tests again, and pushes with no second review while its change keeps the review's `patchId`, reviewing and asking again when it doesn't. Then it fast-forwards the main clone, ticks the note's item and cleans up as above.
 
 Once the main clone has the landed change (after a PR's merge too, which fast-forwards it first when it has the base branch checked out), it asks which of what the change needs to take effect to do, each named with the file that calls for it, and does the ones you pick; what only you can do it names in the question, and the note's item's `Done:` line says what was applied or when it takes effect. The list comes from `switchboard apply-actions <repo> <from> <to>`, which prints one action a line, `<key>`, `<label>`, `<why>` and `<command>` tab-separated, an empty command being yours to do, and each listed once however many files call for it:
 
@@ -1408,7 +1416,7 @@ The lock, and the queue of worktrees waiting for it, live in the main clone's gi
 | Command | What it does |
 |---|---|
 | `land-lock take` | Takes the lock for this worktree: exits 0 when taken (or held here already), or 3 when another holds it or others wait ahead, printing which, and joins the queue |
-| `land-lock wait` | Takes it, waiting in the queue for this worktree's turn |
+| `land-lock wait` | Takes it, waiting in the queue for this worktree's turn; exits 4 when taken out of the queue meanwhile (mission control's Landing view) |
 | `land-lock release` | Lets it go when this worktree holds it, and leaves the queue |
 | `land-lock leave` | Leaves the queue |
 | `land-lock holder` | Prints which worktree holds it, nothing when none does |
@@ -1678,7 +1686,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `slack-updates.json` | The Slack channels the Slack view shows in full | "The Slack view" |
 | `slack-relay.json` | Your Slack member ID, the one person the relay listens to | "The Slack app, and keeping it yours" |
 | `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules | "On call: `/oncall`" |
-| `repos.json` | Each repository's own settings by its origin's `owner/name`: the `apply` list of what a change landed there needs to take effect | "Landing: `/queue-and-clean`" |
+| `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests, squash, review and command before the push, and the `apply` list of what a change landed there needs to take effect | "Landing: `/queue-and-clean`" |
 | `trusted-dirs` | The directories whose own code may run, one a line: `switchboard try` builds a worktree holding someone else's commits only once it is listed, and `/queue-and-clean` offers to run a landed repository's install or migrate script only in one listed | "Trying a change" |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you | "GitHub and Linear access" |
 
@@ -1777,7 +1785,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Ticket board (`ticket_board`) | on | Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes |
 | Inbox (`view_inbox`) | on | Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear |
 | CI (`view_ci`) | on | Mission control's CI view: your pull requests with failing checks and why, asked of GitHub every two minutes #github |
-| Merge queues (`view_merge_queues`) | on | Mission control's Merge queues view: every pull request in the merge queue of each repository your tabs are in, in queue order, with the tab that has it open, asked of GitHub every minute #github |
+| Landing view (`view_landing`) | on | While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out |
 
 ### Tabs and status bar
 
@@ -1924,7 +1932,7 @@ Five more commands are programs of their own:
 
 - `switchboard tabs` prints a line per pane of every tab, tab-separated: the tab's number, the pane's place (`main:@3.%12`), the tab's name as the tab bar shows it, Claude's state there (blank when idle), the program in front, and the directory. Claude reads it to see what the other tabs are doing.
 - `switchboard respawn [-t pane] [-c dir] <command> [args...]` replaces a pane's program with another in the same pane, which keeps its id, place and tab, and leaves a shell there when it ends. `wt`, `wtn`, `wtb` and `wtpr` run as the worktree commands' shell functions. The arguments are words of their own, never read by a shell. Skills use it to hand a tab over to the work it opens.
-- `switchboard apply-actions <repo> <from> <to>` prints what a landed change needs to take effect, and `switchboard apply install <repo>` or `switchboard apply relay` does Switchboard's part of it ("Landing: `/queue-and-clean`").
+- `switchboard landing [<dir>]` says how a repository lands its work, through a PR or straight on its default branch, and `switchboard apply-actions <repo> <from> <to>` prints what a landed change needs to take effect, and `switchboard apply install <repo>` or `switchboard apply relay` does Switchboard's part of it ("Landing: `/queue-and-clean`").
 - `switchboard setting <key>` prints one of Settings' values as it stands, `on` or `off`, or the choice (`switchboard setting update_check` prints `hourly`); `switchboard setting <key> <value>` changes it as Settings would, and `switchboard setting <key> --reset` gives it its default back.
 - `switchboard platform <what>` does what differs between macOS and Linux, for shell scripts: `name`, `secret <service> [-a account]`, `secret-set <service> [-a account]` (the secret read from stdin), `copy` (stdin to the clipboard), `paste`, `notify <title> <text>`, `presence` (idle milliseconds and whether the screen is locked), `open <file or link>`, `front-app` and `chrome-local-state`.
 

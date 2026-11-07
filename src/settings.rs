@@ -6,7 +6,10 @@
 //! here, and the server reads them again whenever the file changes.
 //!
 //! An option is on/off (a boolean default) or one of its `choices`. A value in
-//! the file that is neither is ignored, and the default used.
+//! the file that is neither is ignored, and the default used. A setting
+//! renamed since it was saved (`RENAMED`) is read once as its new key and
+//! dropped from the file when the server starts (`migrate`), as the sidebar
+//! daemon's `migrateSettings` did.
 
 use std::fs;
 use std::path::PathBuf;
@@ -228,10 +231,73 @@ pub fn write_setting(key: &str, value: Value) -> Result<()> {
     Ok(())
 }
 
+/// Settings renamed since they were saved, old key first: the Merge queues
+/// view became the Landing view.
+pub const RENAMED: &[(&str, &str)] = &[("view_merge_queues", "view_landing")];
+
+/// Your file with what an earlier version saved read as this one names it:
+/// a renamed key's off kept under its new name (unless that is set already),
+/// the old key dropped. `None` when there is nothing to change.
+pub fn migrated(mine: &Map<String, Value>) -> Option<Map<String, Value>> {
+    if !RENAMED.iter().any(|(old, _)| mine.contains_key(*old)) {
+        return None;
+    }
+    let mut out = mine.clone();
+    for (old, new) in RENAMED {
+        if let Some(value) = out.shift_remove(*old)
+            && value == Value::Bool(false)
+            && !out.contains_key(*new)
+        {
+            out.insert(new.to_string(), value);
+        }
+    }
+    Some(out)
+}
+
+/// Writes your file as `migrated` reads it, when it changes anything, the
+/// version before kept as `settings.json.bak`; a file that can't be read
+/// as a JSON object is left alone.
+pub fn migrate() -> Result<()> {
+    let file = settings_file();
+    let Some(Value::Object(mine)) = fs::read_to_string(&file)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return Ok(());
+    };
+    let Some(out) = migrated(&mine) else {
+        return Ok(());
+    };
+    let mut bak = file.clone().into_os_string();
+    bak.push(".bak");
+    fs::copy(&file, PathBuf::from(bak))?;
+    util::write_atomic(
+        &file,
+        format!("{}\n", util::json_pretty(&Value::Object(out))),
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_setting_saved_under_its_old_name_is_read_as_its_new_one_once() {
+        let mine = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(
+            migrated(&mine(json!({ "view_merge_queues": false, "tips": false }))),
+            Some(mine(json!({ "tips": false, "view_landing": false }))),
+            "Merge queues off is the Landing view off"
+        );
+        assert_eq!(
+            migrated(&mine(json!({ "view_merge_queues": true }))),
+            Some(Map::new()),
+            "on, the default, it is only dropped"
+        );
+        assert_eq!(migrated(&mine(json!({ "tips": false }))), None);
+    }
 
     fn option(choices: Option<Vec<Choice>>, value: Value) -> Setting {
         Setting {

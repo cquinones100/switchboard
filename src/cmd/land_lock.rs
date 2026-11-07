@@ -13,7 +13,9 @@
 //!                     ahead in the queue, which it prints, this worktree
 //!                     joining the queue
 //! land-lock wait      takes it, waiting in the queue for its turn
-//!                     (every LAND_LOCK_POLL seconds, 5 by default)
+//!                     (every LAND_LOCK_POLL seconds, 5 by default); exit 4
+//!                     when taken out of the queue meanwhile (mission
+//!                     control's Landing view), rather than joining again
 //! land-lock release   lets it go, when this worktree holds it, and takes
 //!                     this worktree out of the queue
 //! land-lock leave     takes this worktree out of the queue
@@ -89,12 +91,31 @@ pub fn main(args: Vec<String>) -> ExitCode {
                 .and_then(|p| p.trim().parse::<f64>().ok())
                 .filter(|p| p.is_finite() && *p >= 0.0)
                 .unwrap_or(5.0);
+            // A waiter taken out of the queue by someone else (mission
+            // control's Landing view) stops, rather than joining again at
+            // the back.
+            let here = lock.here.to_string_lossy().into_owned();
+            let mut waited = false;
             loop {
+                if waited {
+                    match lock.with_queue(|queue| {
+                        let there = queue.iter().any(|e| entry_path(e) == Some(here.as_str()));
+                        (None, there)
+                    }) {
+                        Ok(false) => {
+                            println!("taken out of the landing queue");
+                            break Ok(ExitCode::from(4));
+                        }
+                        Ok(true) => {}
+                        Err(e) => break Err(e),
+                    }
+                }
                 match lock.take(true) {
                     Ok(0) => break Ok(ExitCode::SUCCESS),
                     Ok(_) => std::thread::sleep(Duration::from_secs_f64(poll)),
                     Err(e) => break Err(e),
                 }
+                waited = true;
             }
         }
         // Every way out of a landing runs release, so it leaves the queue

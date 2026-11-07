@@ -51,7 +51,7 @@ Shared by every part:
 | `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for where gh looked (`gh repo set-default`, else upstream when origin is a fork) |
 | `worktree` | What the worktree commands share |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
-| `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name` |
+| `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name`: how its work lands (through a PR or straight on its default branch, worked out from GitHub's rules and its CLAUDE.md when not set) and what a landed change needs |
 
 The workspace:
 
@@ -85,7 +85,7 @@ The workspace:
 | What | Where |
 | --- | --- |
 | Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `repos.json`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
-| State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), setup's note that an earlier install kept in `~/.claude` hasn't been asked about the plugin yet (`claude-plugin-unasked`), and the statusline's `context/` and `usage/` |
+| State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), how each repository lands as last worked out (`repos-landing.json`), setup's note that an earlier install kept in `~/.claude` hasn't been asked about the plugin yet (`claude-plugin-unasked`), and the statusline's `context/` and `usage/` |
 | The Slack relay's state | `~/.local/state/slack-relay/`, where the Node relay kept it |
 | Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies, what the PR and ticket image views load and draw (`assets/`, `pr-image/pages/`, held to 300 MB together), the PRs and ticket titles the tabs show (`tab-names.json`); `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |
 | What setup writes for Claude Code | `~/.local/share/switchboard/`: `plugin/` (Switchboard's plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json` made from `assets/claude-settings.json`'s hooks, `skills/`; written by setup and by the server as it starts, unless it has a state directory of its own), `switchboard.md` (Switchboard's part of CLAUDE.md, imported from `~/.claude/CLAUDE.md` the old way), `claude-md/` (the clone of your rules' repository), `setup-build` (the build whose parts were last put in place) |

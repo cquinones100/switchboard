@@ -153,6 +153,26 @@ fn a_bracket_moves_to_the_next_view_and_round() {
 }
 
 #[test]
+fn the_landing_view_opens_with_nothing_landing_saying_so_and_goes_once_left() {
+    let (server, mut client) = two_tabs(json!({}));
+    // M-p's "Mission control: Landing", by its name in keys.json.
+    server.ok(&["press", "mission-landing"]);
+    let screen = client.wait_text("Nothing is landing now.");
+    assert!(
+        screen[0].contains("Landing"),
+        "kept while in front: {:?}",
+        screen[0]
+    );
+    // Left for Settings, it goes, nothing landing: back is the
+    // notifications.
+    client.type_text("]");
+    client.wait_text("INTEGRATIONS");
+    client.type_text("[");
+    let screen = client.wait_text("No notifications.");
+    assert!(!screen[0].contains("Landing"), "{:?}", screen[0]);
+}
+
+#[test]
 fn enter_on_a_tabs_card_and_go_to_tab_goes_there() {
     let (server, mut client) = two_tabs(json!({}));
     open(&mut client);

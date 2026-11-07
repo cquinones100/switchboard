@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use super::claude::{LoopRun, Scheduled, SessionRef, Turn};
 use super::text::{self, Badge};
-use crate::facts::{Checks, Landing, PrState};
+use crate::facts::{Checks, Landing, Method, PrState};
 use crate::mux::{PaneId, TabId};
 use crate::tabs::Rgb;
 
@@ -779,10 +779,15 @@ pub fn merge_words(tab: &TabModel) -> String {
     }
 }
 
-/// Its place in the landing queue: `landing`, `3rd in line to land`.
+/// Its place in what lands: `landing`, `3rd in line to land`, or, its PR
+/// in the merge queue, `merging`, `2nd in line to merge`.
 pub fn landing_words(tab: &TabModel) -> String {
     match tab.landing {
         None => String::new(),
+        Some(l) if l.method == Method::Pr && l.holding => "merging".into(),
+        Some(l) if l.method == Method::Pr => {
+            format!("{} in line to merge", text::ordinal(l.line))
+        }
         Some(l) if l.holding => "landing".into(),
         Some(l) => format!("{} in line to land", text::ordinal(l.line)),
     }
@@ -837,7 +842,18 @@ fn state_only(tab: &TabModel, r: &Rules) -> String {
     }
     let now = r.now_secs();
     let since = text::ago(tab.since, now);
-    let merge = joined([landing_words(tab), merge_words(tab)]);
+    // A PR landing through the merge queue says its place once, as landing
+    // words.
+    let through_queue = tab.landing.is_some_and(|l| l.method == Method::Pr)
+        && tab.merge == Some(MergeState::Queued);
+    let merge = joined([
+        landing_words(tab),
+        if through_queue {
+            String::new()
+        } else {
+            merge_words(tab)
+        },
+    ]);
     let and = |words: String| joined([words, merge.clone()]);
     let opt = |o: &Option<String>| o.clone().unwrap_or_default();
     match tab.state {
@@ -1179,7 +1195,11 @@ pub(crate) mod tests {
         let r = rules();
         let landing = |n, name: &str, holding, line| {
             let mut t = tab(n, name, TabState::Working);
-            t.landing = Some(Landing { holding, line });
+            t.landing = Some(Landing {
+                holding,
+                line,
+                method: Method::Direct,
+            });
             t
         };
         let tabs = vec![
@@ -1198,6 +1218,27 @@ pub(crate) mod tests {
         assert_eq!(state_words(&tabs[1], &r), "working · 3rd in line to land");
         assert_eq!(state_words(&tabs[2], &r), "working · landing");
         assert_eq!(badge_state(&tabs[2], &r), Badge::Landing);
+
+        // A tab whose PR is in the merge queue lands too, by its place.
+        let mut queued = tab(5, "queued pr", TabState::Idle);
+        queued.merge = Some(MergeState::Queued);
+        queued.position = Some(2);
+        queued.landing = Some(Landing {
+            holding: false,
+            line: 2,
+            method: Method::Pr,
+        });
+        assert_eq!(state_words(&queued, &r), "2nd in line to merge");
+        let mut all = tabs.clone();
+        all.push(queued);
+        assert_eq!(
+            names(&grouped(&all, None, &r)),
+            vec![
+                ("Working", v(&["elsewhere"])),
+                ("Landing", v(&["lander", "first", "queued pr", "second"])),
+            ],
+            "landing either way is one group"
+        );
     }
 
     #[test]

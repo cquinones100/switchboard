@@ -174,6 +174,9 @@ pub struct Mission {
     /// When the cards' spinners last turned (ms), which a box over mission
     /// control holds them to for `BOXED_SPIN_MS`.
     pub(crate) spun_at: i64,
+    /// The Landing view kept while this client has it in front, or opens
+    /// on it, with nothing landing.
+    pub keep_landing: bool,
 }
 
 impl Mission {
@@ -194,6 +197,7 @@ impl Mission {
             size: (0, 0),
             came: None,
             spun_at: 0,
+            keep_landing: false,
         }
     }
 
@@ -316,4 +320,6 @@ pub struct MissionState {
     pub(crate) revived_busy: bool,
     /// Your own files' Settings rows, read at most every few seconds.
     pub(crate) own: Option<(Instant, Vec<Item>)>,
+    /// When each repository's landing was last worked out from Settings.
+    pub(crate) landing_asked: HashMap<String, Instant>,
 }

@@ -1159,7 +1159,7 @@ fn hints(m: &Mission, view: Option<&View>) -> String {
             format!("hl column  jk move  ↵ what to do with it  {next}  ? keys  esc close")
         }
         ViewId::Plugin(_) => format!("jk move  ↵ open  r refresh  {next}  ? keys  esc close"),
-        _ if view.data.items.iter().any(views::is_header) => {
+        _ if view.data.items.iter().any(|i| i.id == views::MERGED_HEADER) => {
             format!("jk move  ↵ actions, or show merged  {next}  ? keys  esc close")
         }
         _ => format!("jk move  ↵ actions  / filter  {next}  ? keys  esc close"),

@@ -183,12 +183,28 @@ fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
     let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
     let views = wait("the PR board and the merge queue", sources, |s| {
         s["views"]["prs"]["items"][0]["title"] == "#12 Fix the login"
-            && s["views"]["queues"]["items"][0]["title"].is_string()
+            && s["views"]["landing"]["items"][1]["title"].is_string()
     });
     assert_eq!(views["views"]["prs"]["items"][0]["group"], "In merge queue");
+    // The Landing view, while the PR is in the merge queue: a section for
+    // the repository's merge queue, in order.
     assert_eq!(
-        views["views"]["queues"]["items"][0]["detail"],
+        views["views"]["landing"]["items"][0]["title"],
+        "acme/widgets · merge queue"
+    );
+    assert_eq!(
+        views["views"]["landing"]["items"][1]["detail"],
         "widgets · awaiting checks · merges in ~10m · me · tab 1"
+    );
+    // The tab whose PR is queued lands, by its place.
+    let facts = wait(
+        "the tab's place in the merge queue",
+        || tab()["facts"].clone(),
+        |f| !f["landing"].is_null(),
+    );
+    assert_eq!(
+        facts["landing"],
+        json!({"holding": false, "line": 2, "method": "pr"})
     );
     assert_eq!(views["views"]["tickets"], Value::Null);
     assert_eq!(views["views"]["inbox"], Value::Null);

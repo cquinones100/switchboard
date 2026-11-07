@@ -21,16 +21,16 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::landing::{self, Place};
+use super::landing::{self, Read};
 use super::repo::{self, PrKey};
 use super::schedule::GITHUB_LOOKUPS;
 use super::{
-    CI, INBOX, PRS, QUEUES, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, prboard, prs, queues,
-    repos_of, setup, tickets,
+    CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, prboard, prs,
+    queues, repos_of, setup, tickets,
 };
-use crate::facts::{Facts, PrFacts, TabFacts};
+use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
 use crate::integrations::github::Repo;
-use crate::items::Item;
+use crate::items::{Item, ViewData};
 use crate::mux::TabId;
 use crate::mux::server::{Event, Reply, Server};
 use crate::{paths, settings, util};
@@ -53,7 +53,7 @@ pub enum Answer {
     },
     Tickets(anyhow::Result<Vec<Value>>),
     Inbox(anyhow::Result<Vec<Value>>),
-    Landing(HashMap<TabId, Place>),
+    Landing(Read),
 }
 
 /// The lookup that fills a view.
@@ -61,7 +61,7 @@ fn lookup_of(view: &str) -> Option<&'static str> {
     Some(match view {
         PRS => "board",
         CI => "checks",
-        QUEUES => "mergeQueues",
+        LANDING => "mergeQueues",
         TICKETS => "tickets",
         INBOX => "linearInbox",
         _ => return None,
@@ -167,12 +167,12 @@ impl Server {
             }
             Answer::Queues { repos, result } => {
                 self.sources.schedule.done("mergeQueues");
-                let view = self.sources.views.entry(QUEUES).or_default();
+                // How the merge queues were last asked, for the Landing view.
+                let view = self.sources.views.entry(LANDING).or_default();
                 match result {
                     Ok((data, failed)) => {
                         self.sources.queues.take(&repos, &data, &failed);
                         setup::answered(view);
-                        self.sources.queues.view_into(view, &tabs);
                     }
                     Err(e) => setup::failed(view, &e, "the merge queues"),
                 }
@@ -201,9 +201,9 @@ impl Server {
                 }
                 self.inbox_notices();
             }
-            Answer::Landing(places) => {
+            Answer::Landing(read) => {
                 self.sources.kept.landing_busy = false;
-                self.sources.landing = places;
+                self.sources.landing = read;
             }
         }
         if let Some(name) = for_todo {
@@ -275,12 +275,12 @@ impl Server {
     }
 
     /// Mission control went to a view: the Inbox and CI views ask again at
-    /// most a minute apart, the Merge queues view at most 15 seconds apart,
-    /// as the daemon's `cameTo` did.
+    /// most a minute apart, the Landing view its merge queues at most 15
+    /// seconds apart, as the daemon's `cameTo` did.
     pub fn came_to_view(&mut self, view: &str) {
         let every = match view {
             INBOX | CI => Duration::from_secs(60),
-            QUEUES => Duration::from_secs(15),
+            LANDING => Duration::from_secs(15),
             _ => return,
         };
         let Some(view) = super::VIEWS.into_iter().find(|v| *v == view) else {
@@ -306,9 +306,12 @@ impl Server {
                 let views: serde_json::Map<String, Value> = VIEWS
                     .iter()
                     .map(|v| {
-                        let data = self
-                            .sources
-                            .view(v)
+                        let data = if *v == LANDING {
+                            self.landing_view(true)
+                        } else {
+                            self.sources.view(v).cloned()
+                        };
+                        let data = data
                             .map(|d| serde_json::to_value(d).unwrap_or(Value::Null))
                             .unwrap_or(Value::Null);
                         (v.to_string(), data)
@@ -338,7 +341,7 @@ impl Server {
     // ── The tabs as the lookups see them ────────────────────────────────────
 
     /// Every tab, in its session's order, with what the lookups need of it.
-    fn source_tabs(&mut self) -> Vec<TabInfo> {
+    pub(crate) fn source_tabs(&mut self) -> Vec<TabInfo> {
         let mut tabs = Vec::new();
         for session in &self.sessions {
             for (i, id) in session.tabs.iter().enumerate() {
@@ -526,15 +529,15 @@ impl Server {
                 tokio::spawn(async move { send(Answer::Checks(ciboard::fetch(repos).await)) });
             }
             "mergeQueues" => {
-                if !enabled(QUEUES) {
+                if !enabled(LANDING) || !settings::is_on("github") {
                     return false;
                 }
                 repos.sort();
+                // No repository to ask about is nothing wrong: nothing lands
+                // through a merge queue.
                 if repos.is_empty() {
                     self.sources.queues = queues::Queues::default();
-                    let view = self.sources.views.entry(QUEUES).or_default();
-                    setup::no_repos(view);
-                    view.empty = None;
+                    setup::answered(self.sources.views.entry(LANDING).or_default());
                     return false;
                 }
                 tokio::spawn(async move {
@@ -560,11 +563,12 @@ impl Server {
         true
     }
 
-    // Reads the landing queue on a blocking thread, unless a read is still
-    // under way; with the landing_queue setting off, forgets it.
+    // Reads the landing queues on a blocking thread, unless a read is still
+    // under way; with neither the landing_queue setting nor the Landing
+    // view on, forgets them.
     fn start_landing(&mut self, tabs: &[TabInfo]) {
-        if !settings::is_on("landing_queue") {
-            self.sources.landing.clear();
+        if !settings::is_on("landing_queue") && !enabled(LANDING) {
+            self.sources.landing = Read::default();
             return;
         }
         if self.sources.kept.landing_busy || tokio::runtime::Handle::try_current().is_err() {
@@ -576,8 +580,8 @@ impl Server {
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let running = landing::running_sessions(&crate::agent::sessions::sessions_dir());
-            let places = landing::landing_of(&dirs, &running);
-            let _ = tx.send(Event::Sources(Answer::Landing(places)));
+            let read = landing::landing_of(&dirs, &running);
+            let _ = tx.send(Event::Sources(Answer::Landing(read)));
         });
     }
 
@@ -591,11 +595,6 @@ impl Server {
             return;
         }
         self.sources.kept.tabs_seen = seen;
-        if let Some(view) = self.sources.views.get_mut(QUEUES)
-            && view.setup.is_none()
-        {
-            self.sources.queues.view_into(view, tabs);
-        }
         if let (Some(view), Some(issues)) = (
             self.sources.views.get_mut(TICKETS),
             &self.sources.kept.ticket_issues,
@@ -606,9 +605,12 @@ impl Server {
     }
 
     // Every tab's facts from what is known, the PR's only with the github
-    // setting on and the landing queue's only with landing_queue on.
+    // setting on and the landing queue's only with landing_queue on: its
+    // place in the landing queue, else its PR's in the merge queue, from
+    // the merge queues last asked about, else from the PR's own lookup.
     fn update_facts(&mut self, tabs: &[TabInfo]) {
         let github = settings::is_on("github");
+        let landing_queue = settings::is_on("landing_queue");
         let mut facts = Facts::new();
         for tab in tabs {
             let pr = tab
@@ -617,7 +619,14 @@ impl Server {
                 .filter(|_| github)
                 .and_then(|k| self.sources.known.get(k))
                 .cloned();
-            let landing = self.sources.landing.get(&tab.id).map(|p| p.landing);
+            let landing = self
+                .sources
+                .landing
+                .places
+                .get(&tab.id)
+                .map(|p| p.landing)
+                .or_else(|| pr.as_ref().and_then(|p| merging(p, &self.sources.queues)))
+                .filter(|_| landing_queue);
             if pr.is_some() || landing.is_some() {
                 facts.insert(tab.id, TabFacts { pr, landing });
             }
@@ -646,6 +655,106 @@ impl Server {
         for client in self.clients.values_mut() {
             client.dirty = true;
         }
+    }
+}
+
+/// A PR's place in its repository's merge queue, as landing there: from the
+/// merge queue last asked about, else the PR's own lookup; none once GitHub
+/// has said it merged, whatever the queue said last.
+fn merging(pr: &PrFacts, queues: &queues::Queues) -> Option<Landing> {
+    if pr.state == PrState::Merged || pr.merge == Some(Merge::Merged) {
+        return None;
+    }
+    let listed = queues
+        .by_repo
+        .iter()
+        .find(|(repo, _)| repo.eq_ignore_ascii_case(&pr.repo))
+        .and_then(|(_, q)| {
+            q.entries.iter().find(|e| {
+                e.pointer("/pullRequest/number").and_then(Value::as_u64) == Some(pr.number)
+            })
+        })
+        .and_then(|e| e.get("position").and_then(Value::as_u64))
+        .map(|p| p as u32);
+    let line = listed.or(match pr.merge {
+        Some(Merge::Queued { position }) => Some(position),
+        _ => None,
+    })?;
+    (line > 0).then_some(Landing {
+        holding: line == 1,
+        line,
+        method: Method::Pr,
+    })
+}
+
+impl Server {
+    /// Mission control's Landing view, with the view_landing setting on:
+    /// there only while something lands in a repository a tab is in, while
+    /// `keep` (a client has it in front, so it doesn't vanish under you once
+    /// the last landing ends), or while the merge queues can't be asked of
+    /// GitHub, saying why. Built from what the server holds: the landing
+    /// queues last read, the merge queues last asked about, and the tabs.
+    pub fn landing_view(&mut self, keep: bool) -> Option<ViewData> {
+        if !enabled(LANDING) {
+            return None;
+        }
+        let github = settings::is_on("github");
+        let status = self.sources.views.get(LANDING).cloned().unwrap_or_default();
+        let infos = self.source_tabs();
+        let models = self.sidebar_all_tabs();
+        let tabs: Vec<landing::ViewTab> = models
+            .iter()
+            .map(|t| landing::ViewTab {
+                id: t.id,
+                index: t.index,
+                name: t.name.clone(),
+                phase: t.phase.clone(),
+                waiting: t.state == crate::sidebar::model::TabState::Waiting,
+            })
+            .collect();
+        let by_repo = &self.sources.queues.by_repo;
+        let queued = |repo: &str| -> Vec<Item> {
+            if !github {
+                return Vec::new();
+            }
+            let one: std::collections::BTreeMap<String, queues::Queue> = by_repo
+                .iter()
+                .filter(|(r, _)| r.eq_ignore_ascii_case(repo))
+                .map(|(r, q)| (r.clone(), q.clone()))
+                .collect();
+            queues::queue_items(&one, &infos)
+        };
+        let items = landing::view_items(
+            &self.sources.landing.repos,
+            &queued,
+            &tabs,
+            &self.sources.landing.roots,
+        );
+        let unanswered = &self.sources.queues.unanswered;
+        let error = github
+            .then(|| {
+                status.error.clone().or_else(|| {
+                    (!unanswered.is_empty()).then(|| {
+                        format!(
+                            "GitHub couldn't say what is in the merge queue of {}.",
+                            unanswered.join(", ")
+                        )
+                    })
+                })
+            })
+            .flatten();
+        let setup = status.setup.clone().filter(|_| github);
+        if items.is_empty() && !keep && error.is_none() && setup.is_none() {
+            return None;
+        }
+        Some(ViewData {
+            items,
+            setup,
+            error,
+            empty: Some("Nothing is landing now.".into()),
+            at: Some(status.at.unwrap_or(1)),
+            ..ViewData::default()
+        })
     }
 }
 

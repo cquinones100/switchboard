@@ -878,6 +878,10 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
         "its plan, found in a folder"
     );
     assert!(prompt.contains("/queue-and-clean"), "told how to land it");
+    assert!(
+        prompt.contains("as `switchboard landing` says for the repository"),
+        "as landing says for the repository"
+    );
     assert!(prompt.ends_with("from me for this item: start small"));
 
     w.ok(

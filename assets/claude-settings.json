@@ -16,6 +16,8 @@
       "Bash(switchboard setting review_security)",
       "Bash(switchboard setting apply_after_landing)",
       "Bash(switchboard apply-actions *)",
+      "Bash(switchboard landing)",
+      "Bash(switchboard landing *)",
       "Bash(switchboard respawn *)",
       "Bash(switchboard land-lock *)",
       "Bash(switchboard wait-deploy *)",

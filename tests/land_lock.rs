@@ -275,6 +275,28 @@ fn waiters_take_it_in_the_queue_s_order_which_a_take_cant_jump_and_move_reorders
         "a waiter whose session is gone is dropped"
     );
 
+    // A waiter taken out of the queue from elsewhere (mission control's
+    // Landing view) stops waiting rather than joining again.
+    let waiting = Command::new(BIN)
+        .args(["land-lock", "wait"])
+        .current_dir(&two)
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("LAND_LOCK_POLL", "0.1")
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(code(&lock(home, &two, &["leave"])), 0);
+    let waited = waiting.wait_with_output().unwrap();
+    assert_eq!(code(&waited), 4, "wait exits 4");
+    assert_eq!(stdout(&waited).trim(), "taken out of the landing queue");
+    assert_eq!(paths(), vec![s(&three)], "and stays out");
+    assert_eq!(code(&lock(home, &two, &["take"])), 3);
+
     // The main clone queued with no session of its own: one in a worktree
     // nested inside it doesn't keep it.
     let nested = repo.join(".claude/worktrees/nested");
@@ -356,4 +378,86 @@ fn the_landing_s_phase_marks_the_pane_with_its_step_and_queue_and_clean_s_loop()
     );
     assert_eq!(shown(), "|queue");
     std::thread::sleep(Duration::from_millis(10));
+}
+
+/// `switchboard landing`, as queue-and-clean asks it how a repository lands.
+fn landing(home: &Path, dir: &Path, args: &[&str]) -> Output {
+    Command::new(BIN)
+        .arg("landing")
+        .args(args)
+        .arg(dir)
+        .env("HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .env_remove("SWITCHBOARD_STATE_DIR")
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_github_off() {
+    let tmp = TempDir::new("landing");
+    let home = tmp.path();
+    let repo = repo(home);
+    git(
+        &repo,
+        &["remote", "add", "origin", "git@github.com:acme/direct.git"],
+    );
+    let own = home.join(".config/switchboard");
+    std::fs::create_dir_all(&own).unwrap();
+    // Nothing asks GitHub or Claude here: the github setting is off.
+    std::fs::write(own.join("settings.json"), r#"{"github": false}"#).unwrap();
+    std::fs::write(
+        own.join("repos.json"),
+        r#"{"acme/direct": {"landing": "direct", "test": "npm test", "squash": false}}"#,
+    )
+    .unwrap();
+    let out = landing(home, &repo, &[]);
+    assert_eq!(code(&out), 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let text = stdout(&out);
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some("direct"));
+    let steps: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
+    assert_eq!(
+        (
+            &steps["test"],
+            &steps["squash"],
+            &steps["review"],
+            &steps["source"]
+        ),
+        (
+            &json!("npm test"),
+            &json!(false),
+            &json!("review-loop"),
+            &json!("repos.json")
+        )
+    );
+    let json_of =
+        |out: Output| -> serde_json::Value { serde_json::from_str(&stdout(&out)).unwrap() };
+    assert_eq!(
+        json_of(landing(home, &repo, &["--json"]))["landing"],
+        "direct"
+    );
+
+    std::fs::write(own.join("repos.json"), "{}").unwrap();
+    let all = json_of(landing(home, &repo, &["--json"]));
+    assert_eq!(all["landing"], "pr", "with GitHub not to be asked, a PR");
+    assert!(
+        all["why"]
+            .as_str()
+            .unwrap()
+            .contains("github setting is off")
+    );
+    assert_eq!(
+        all["test"],
+        serde_json::Value::Null,
+        "a test command not set"
+    );
+
+    std::fs::write(own.join("repos.json"), "{ broken").unwrap();
+    let broken = landing(home, &repo, &[]);
+    assert_eq!(code(&broken), 1, "a repos.json that can't be read stops it");
 }

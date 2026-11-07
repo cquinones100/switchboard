@@ -769,7 +769,7 @@ mod tests {
             Action::Notes(crate::notes::serve::Command::NoteTab),
             Action::Extra(crate::extras::Command::GoToTab),
             Action::Extra(crate::extras::Command::Mission(
-                crate::extras::MissionView::Queues,
+                crate::extras::MissionView::Landing,
             )),
             Action::Autopilot(crate::autopilot::Command::WorkNote),
         ] {

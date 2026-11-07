@@ -54,12 +54,26 @@ pub struct PrFacts {
     pub deletions: u64,
 }
 
-/// A tab's place in its repository's landing queue: the one landing holds
-/// the lock (line 1), the rest wait in order.
+/// A tab's place in what lands in its repository: straight on the default
+/// branch, the one landing holding the landing lock (line 1) and the rest
+/// waiting in its queue in order; or its PR in the merge queue, the one at
+/// its head merging (`holding`), the rest by their place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Landing {
     pub holding: bool,
     pub line: u32,
+    #[serde(default)]
+    pub method: Method,
+}
+
+/// How a tab's work lands: straight on the default branch behind the
+/// landing lock, or through its PR in the merge queue.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Method {
+    #[default]
+    Direct,
+    Pr,
 }
 
 /// Everything known of one tab from outside.

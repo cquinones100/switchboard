@@ -581,6 +581,152 @@ fn short_of(
     }
 }
 
+/// Settings' words for how a repository's work lands.
+pub fn landing_words(method: &str) -> &'static str {
+    match method {
+        "pr" => "through a PR",
+        "direct" => "straight to the branch",
+        _ => "automatic",
+    }
+}
+
+/// The category Settings lists each repository's landing under.
+pub const LANDING: &str = "Landing (repos.json)";
+
+/// Settings' rows for `~/.config/switchboard/repos.json` (src/repos.rs), as
+/// own-config.js's `landingItems` gave them: for each repository a tab is
+/// in, how its work lands (automatic, through a PR, or straight on its
+/// default branch), and, landing straight, its steps. The automatic row
+/// says what the default found, as last worked out. Each row's
+/// `repo_setting` says what Enter changes.
+pub fn landing_items(repos: &[String]) -> Vec<Item> {
+    let cache = crate::repos::cache_file();
+    landing_rows(repos, crate::repos::read(), &|repo| {
+        crate::repos::cached_in(&cache, repo)
+    })
+}
+
+/// `landing_items` from the file as read and the answers worked out.
+pub fn landing_rows(
+    repos: &[String],
+    data: Result<Map<String, Value>, String>,
+    cached: &dyn Fn(&str) -> Option<crate::repos::Cached>,
+) -> Vec<Item> {
+    let mut list: Vec<&String> = Vec::new();
+    for r in repos {
+        if !list.iter().any(|l| l.eq_ignore_ascii_case(r)) {
+            list.push(r);
+        }
+    }
+    list.sort();
+    let (data, broken) = match data {
+        Ok(d) => (d, None),
+        Err(e) => (Map::new(), Some(e)),
+    };
+    let mut items = Vec::new();
+    for repo in list {
+        let entry = crate::repos::landing_entry(&data, repo);
+        let set = entry.get("landing").and_then(Value::as_str);
+        let worked = cached(repo);
+        let method = set.or(worked.as_ref().map(|c| c.landing.as_str()));
+        let (detail, value) = match (&broken, set, &worked) {
+            (Some(e), _, _) => (
+                format!("~/.config/switchboard/repos.json can't be read: {e}"),
+                "unreadable".to_string(),
+            ),
+            (None, Some(m), _) => (
+                "How its work lands, set in repos.json".to_string(),
+                landing_words(m).to_string(),
+            ),
+            (None, None, Some(c)) => (
+                format!("Worked out: {}, since {}", landing_words(&c.landing), c.why),
+                format!("auto: {}", c.landing),
+            ),
+            (None, None, None) => (
+                "Worked out the first time it lands, or when you come to Settings".to_string(),
+                "auto: ?".to_string(),
+            ),
+        };
+        let row = |field: &str, title: String, value: String, detail: String, now: Value| {
+            Item::new(format!("repo:{repo}:{field}"), title)
+                .detail(detail)
+                .group(LANDING)
+                .state(if field != "landing" || set.is_some() {
+                    State::Active
+                } else {
+                    State::Idle
+                })
+                .data(json!({
+                    "value": value,
+                    "repo_setting": { "repo": repo, "field": field, "value": now },
+                    "search": format!("Landing repos.json {repo} {field} {value}"),
+                }))
+        };
+        items.push(row(
+            "landing",
+            repo.clone(),
+            value,
+            detail,
+            json!(set.unwrap_or("automatic")),
+        ));
+        if method != Some("direct") || broken.is_some() {
+            continue;
+        }
+        let steps = crate::repos::steps_of(&entry);
+        let (test_value, test_detail) = match steps.test.as_deref() {
+            None => (
+                "not set".to_string(),
+                "The command run before the review and after the last rebase; not set, a landing runs what its CLAUDE.md names".to_string(),
+            ),
+            Some("") => (
+                "none".to_string(),
+                "The command run before the review and after the last rebase; none".to_string(),
+            ),
+            Some(t) => (
+                t.to_string(),
+                format!("Run before the review and after the last rebase: {t}"),
+            ),
+        };
+        items.push(row(
+            "test",
+            "  Tests".into(),
+            test_value,
+            test_detail,
+            json!(steps.test),
+        ));
+        items.push(row(
+            "squash",
+            "  Squash".into(),
+            if steps.squash { "on" } else { "off" }.into(),
+            "Land the branch as one commit; off, its commits land as they are".into(),
+            json!(steps.squash),
+        ));
+        items.push(row(
+            "review",
+            "  Review".into(),
+            steps.review.clone(),
+            "review-loop reviews it before the push; none doesn't".into(),
+            json!(steps.review),
+        ));
+        items.push(row(
+            "beforePush",
+            "  Before push".into(),
+            if steps.before_push.is_empty() {
+                "none".into()
+            } else {
+                steps.before_push.clone()
+            },
+            if steps.before_push.is_empty() {
+                "A command that must pass before the push; none set".into()
+            } else {
+                format!("Must pass before the push: {}", steps.before_push)
+            },
+            json!(steps.before_push),
+        ));
+    }
+    items
+}
+
 /// The Settings view's rows for your own files, in `OWN_FILES`' order of
 /// categories, each row under its category (`group`). Its data says what
 /// Enter does: `own` holds the file, key, kind, least number, label and
@@ -679,6 +825,52 @@ pub fn own_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_repository_s_landing_is_a_row_and_landing_straight_its_steps() {
+        let data =
+            json!({ "acme/direct": { "landing": "direct", "test": "npm test", "squash": false } });
+        let worked = |repo: &str| {
+            (repo == "acme/auto").then(|| crate::repos::Cached {
+                landing: "pr".into(),
+                why: "main has a merge queue".into(),
+                at: 1,
+            })
+        };
+        let repos = vec![
+            "acme/auto".to_string(),
+            "acme/direct".into(),
+            "acme/new".into(),
+            "acme/direct".into(),
+        ];
+        let rows = landing_rows(&repos, Ok(data.as_object().unwrap().clone()), &worked);
+        let shown: Vec<(&str, &str)> = rows
+            .iter()
+            .map(|i| (i.title.as_str(), i.data["value"].as_str().unwrap_or("")))
+            .collect();
+        assert_eq!(
+            shown,
+            vec![
+                ("acme/auto", "auto: pr"),
+                ("acme/direct", "straight to the branch"),
+                ("  Tests", "npm test"),
+                ("  Squash", "off"),
+                ("  Review", "review-loop"),
+                ("  Before push", "none"),
+                ("acme/new", "auto: ?"),
+            ],
+            "each repository once, its steps only when it lands straight"
+        );
+        assert_eq!(
+            rows[0].detail,
+            "Worked out: through a PR, since main has a merge queue"
+        );
+        assert_eq!(rows[0].data["repo_setting"]["value"], "automatic");
+        assert_eq!(rows[3].data["repo_setting"]["field"], "squash");
+        assert!(rows.iter().all(|r| r.group.as_deref() == Some(LANDING)));
+        let broken = landing_rows(&repos[..1], Err("bad".into()), &worked);
+        assert_eq!(broken[0].data["value"], "unreadable");
+    }
 
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

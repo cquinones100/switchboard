@@ -508,10 +508,10 @@
     "default": true
   },
   {
-    "key": "view_merge_queues",
+    "key": "view_landing",
     "category": "Mission control",
-    "label": "Merge queues",
-    "description": "Mission control's Merge queues view: every pull request in the merge queue of each repository your tabs are in, in queue order, with the tab that has it open, asked of GitHub every minute #github",
+    "label": "Landing view",
+    "description": "While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out",
     "default": true
   },
   {

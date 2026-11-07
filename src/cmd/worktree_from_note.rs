@@ -2,9 +2,9 @@
 //! a git worktree on a new branch named after a checklist item of one of
 //! your notes (the notes app's Markdown files, in `$NOTES_DIR` or
 //! `~/Notes`), with Claude opened in it, told to work on the item and its
-//! plan and to land it with /queue-and-clean once the work is done: straight
-//! on the default branch in a repository whose CLAUDE.md commits there with
-//! no PR, as Switchboard's does, else through a PR. Ported from
+//! plan and to land it with /queue-and-clean once the work is done, as
+//! `switchboard landing` says for the repository (src/repos.rs): straight
+//! on the default branch, or through a PR. Ported from
 //! `bin/worktree-from-note`.
 //!
 //! `<note>` is the note's path, absolute or within the notes directory,
@@ -607,7 +607,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     let mut prompt = format!(
         "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open.",
+         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on the default branch, with the steps it gives, or else through a PR it offers to open.",
         file.display()
     );
     if !extra.is_empty() {

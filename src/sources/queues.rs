@@ -1,13 +1,15 @@
-//! Mission control's Merge queues view, ported from lib/sidebar/queues.js:
-//! every pull request in the merge queue of each repository your tabs are
-//! in, everyone's, in queue order, the ones a tab of yours has open marked
-//! with that tab. One GraphQL query asks for every repository's default
-//! branch's queue. A repository GitHub reports an error for keeps its last
-//! answer rather than dropping out of the view; one with nothing from
-//! before is said above the list rather than taken as having no queue.
+//! The merge queue of each repository your tabs are in, for mission
+//! control's Landing view (`landing`), ported from lib/sidebar/queues.js:
+//! every pull request in it, everyone's, in queue order, the ones a tab of
+//! yours has open marked with that tab. One GraphQL query asks for every
+//! repository's default branch's queue, only while the github and
+//! view_landing settings are on. A repository GitHub reports an error for
+//! keeps its last answer rather than dropping out of the view; one with
+//! nothing from before is said above the list rather than taken as having
+//! no queue.
 //!
-//! The tabs are matched as the view is built, on every tick, so a tab
-//! opened or renumbered since the last answer shows at once.
+//! The tabs are matched as the view is built, so a tab opened or renumbered
+//! since the last answer shows at once.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -15,7 +17,7 @@ use serde_json::{Value, json};
 
 use super::{TabInfo, ms_of, text};
 use crate::integrations::github;
-use crate::items::{Item, State, Target, ViewData};
+use crate::items::{Item, State, Target};
 
 const ENTRY: &str = "position state enqueuedAt estimatedTimeToMerge pullRequest { number title url author { login } }";
 
@@ -158,24 +160,6 @@ impl Queues {
         self.by_repo = by_repo;
         self.unanswered = unanswered;
     }
-
-    /// The view as it stands for these tabs: its rows, what it says when it
-    /// has none, and the repositories GitHub couldn't answer for.
-    pub fn view_into(&self, view: &mut ViewData, tabs: &[TabInfo]) {
-        view.items = queue_items(&self.by_repo, tabs);
-        view.empty = Some(if self.by_repo.is_empty() {
-            "None of the repositories your tabs are in uses a merge queue.".into()
-        } else {
-            let names: Vec<&str> = self.by_repo.keys().map(String::as_str).collect();
-            format!("Nothing in the merge queue of {}.", names.join(", "))
-        });
-        if !self.unanswered.is_empty() && view.setup.is_none() {
-            view.error = Some(format!(
-                "GitHub couldn't say what is in the merge queue of {}.",
-                self.unanswered.join(", ")
-            ));
-        }
-    }
 }
 
 /// Asks for every repository's queue (sorted, as `r0`, `r1`, ...): the data
@@ -229,9 +213,10 @@ mod tests {
     }
 
     #[test]
-    fn each_repository_s_queue_in_order_a_tab_s_pr_marked_and_what_it_says_when_there_is_none() {
-        // lib/sidebar's "the Merge queues view lists each repository's queue
-        // in order, marking a tab's PR, and says when there is none".
+    fn each_repository_s_queue_in_order_a_tab_s_pr_marked_and_a_failed_answer_keeping_the_last() {
+        // lib/sidebar's "the merge queues are each repository's in order,
+        // marking a tab's PR, and a repository GitHub fails to answer for
+        // keeps its last answer".
         let repos = vec!["acme/noqueue".to_string(), "acme/queued".to_string()];
         let tabs = vec![
             tab(3, 3, "acme/queued", Some(41)),
@@ -246,10 +231,8 @@ mod tests {
         ] } } } });
         let mut queues = Queues::default();
         queues.take(&repos, &answer, &HashSet::new());
-        let mut view = ViewData::default();
-        queues.view_into(&mut view, &tabs);
-        let rows: Vec<(&str, &str, State)> = view
-            .items
+        let items = queue_items(&queues.by_repo, &tabs);
+        let rows: Vec<(&str, &str, State)> = items
             .iter()
             .map(|i| (i.title.as_str(), i.detail.as_str(), i.state))
             .collect();
@@ -269,14 +252,11 @@ mod tests {
             ]
         );
         assert_eq!(
-            view.items[1].data["queue"]["queueUrl"],
+            items[1].data["queue"]["queueUrl"],
             "https://github.com/acme/queued/queue/main"
         );
-        let mut untabbed = ViewData::default();
-        queues.view_into(&mut untabbed, &[]);
         assert!(
-            untabbed
-                .items
+            queue_items(&queues.by_repo, &[])
                 .iter()
                 .all(|i| i.data["queue"]["tab"].is_null()),
             "the tab is matched as it is built"
@@ -289,39 +269,19 @@ mod tests {
             &json!({ "r0": { "mergeQueue": null }, "r1": null }),
             &failed,
         );
-        let mut view = ViewData::default();
-        queues.view_into(&mut view, &tabs);
-        assert_eq!(view.items.len(), 2);
-        assert_eq!(view.error, None);
+        assert_eq!(queue_items(&queues.by_repo, &tabs).len(), 2);
+        assert!(queues.unanswered.is_empty());
 
-        queues.take(
-            &repos,
-            &json!({ "r0": { "mergeQueue": null }, "r1": { "mergeQueue": { "url": "u", "entries": { "nodes": [] } } } }),
-            &HashSet::new(),
-        );
-        queues.view_into(&mut view, &tabs);
-        assert_eq!(
-            view.empty.as_deref(),
-            Some("Nothing in the merge queue of acme/queued.")
-        );
-        queues.take(
-            &repos,
-            &json!({ "r0": { "mergeQueue": null }, "r1": { "mergeQueue": null } }),
-            &HashSet::new(),
-        );
-        queues.view_into(&mut view, &tabs);
-        assert!(view.empty.unwrap().contains("None of the repositories"));
+        queues.by_repo.clear();
         queues.take(
             &repos,
             &json!({ "r0": { "mergeQueue": null }, "r1": null }),
             &failed,
         );
-        let mut view = ViewData::default();
-        queues.view_into(&mut view, &tabs);
         assert_eq!(
-            view.error.as_deref(),
-            Some("GitHub couldn't say what is in the merge queue of acme/queued."),
-            "with nothing from before, it says so"
+            queues.unanswered,
+            ["acme/queued"],
+            "with nothing from before, it is said as unanswered"
         );
     }
 

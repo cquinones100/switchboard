@@ -44,7 +44,7 @@ pub enum MissionView {
     Tickets,
     Inbox,
     Ci,
-    Queues,
+    Landing,
     Sessions,
     Usage,
     Resources,
@@ -60,7 +60,7 @@ impl MissionView {
         MissionView::Tickets,
         MissionView::Inbox,
         MissionView::Ci,
-        MissionView::Queues,
+        MissionView::Landing,
         MissionView::Sessions,
         MissionView::Usage,
         MissionView::Resources,
@@ -77,7 +77,7 @@ impl MissionView {
             MissionView::Tickets => "Tickets",
             MissionView::Inbox => "Inbox",
             MissionView::Ci => "CI",
-            MissionView::Queues => "Merge queues",
+            MissionView::Landing => "Landing",
             MissionView::Sessions => "Sessions",
             MissionView::Usage => "Usage",
             MissionView::Resources => "Resources",
@@ -104,8 +104,8 @@ impl MissionView {
                 "Mission control: Inbox, your unread Linear mentions, comments and assignments"
             }
             MissionView::Ci => "Mission control: CI, your pull requests with failing checks",
-            MissionView::Queues => {
-                "Mission control: Merge queues, the PRs in your repositories' merge queues and which tabs have them"
+            MissionView::Landing => {
+                "Mission control: Landing, what is landing in each repository, its landing queue or merge queue, and which tabs have them"
             }
             MissionView::Sessions => {
                 "Mission control: Sessions, each Claude session's context and age"
@@ -129,7 +129,7 @@ impl MissionView {
             MissionView::Tickets => &["mission", "linear", "ticket"],
             MissionView::Inbox => &["mission", "linear", "inbox"],
             MissionView::Ci => &["mission", "github", "ci"],
-            MissionView::Queues => &["mission", "github", "queue"],
+            MissionView::Landing => &["mission", "queue", "landing"],
             MissionView::Sessions => &["mission", "claude", "context"],
             MissionView::Usage => &["mission", "claude", "usage", "cost"],
             MissionView::Resources => &["mission", "cpu", "memory", "processes"],
@@ -188,7 +188,7 @@ impl Command {
         Command::Mission(MissionView::Tickets),
         Command::Mission(MissionView::Inbox),
         Command::Mission(MissionView::Ci),
-        Command::Mission(MissionView::Queues),
+        Command::Mission(MissionView::Landing),
         Command::Mission(MissionView::Sessions),
         Command::Mission(MissionView::Usage),
         Command::Mission(MissionView::Resources),
@@ -229,6 +229,13 @@ impl Command {
     }
 
     pub fn parse(name: &str) -> Option<Command> {
+        // The Merge queues view became the Landing view; a binding to its
+        // old name in keys.json still opens it.
+        let name = if name == "mission-merge-queues" {
+            "mission-landing"
+        } else {
+            name
+        };
         Command::ALL.into_iter().find(|c| c.name() == name)
     }
 
@@ -444,8 +451,13 @@ mod tests {
             assert_eq!(Command::parse(&c.name()), Some(c), "{}", c.name());
         }
         assert_eq!(
-            Command::Mission(MissionView::Queues).name(),
-            "mission-merge-queues"
+            Command::Mission(MissionView::Landing).name(),
+            "mission-landing"
+        );
+        assert_eq!(
+            Command::parse("mission-merge-queues"),
+            Some(Command::Mission(MissionView::Landing)),
+            "the Merge queues view's old name opens the Landing view"
         );
         let keyed: Vec<_> = Command::ALL.iter().filter_map(|c| c.key()).collect();
         assert_eq!(keyed, ["M-0", "C-w", "M-/"]);

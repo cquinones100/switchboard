@@ -135,7 +135,7 @@ pub struct ViewData {
     #[serde(default)]
     pub error: Option<String>,
     /// What to say when it has no items, in place of a bare "nothing" (the
-    /// Merge queues view naming the repositories it looked at).
+    /// Landing view saying nothing is landing).
     #[serde(default)]
     pub empty: Option<String>,
     /// For a table: its columns, and a totals row under it.

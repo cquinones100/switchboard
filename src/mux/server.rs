@@ -399,6 +399,12 @@ async fn run() -> Result<()> {
             }
         });
     }
+    // A setting saved under its old name is read as its new one once,
+    // before anything reads them.
+    if let Err(e) = crate::settings::migrate() {
+        eprintln!("switchboard server: settings: {e:#}");
+    }
+    crate::settings::reload_settings();
     let mut server = Server::new(tx, pane_tx);
     let (bindings, problems) = Bindings::load();
     server.bindings = bindings;

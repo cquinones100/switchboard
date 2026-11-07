@@ -15,6 +15,7 @@ pub mod claude_here;
 pub mod claude_reply;
 pub mod codex_review;
 pub mod land_lock;
+pub mod landing;
 pub mod platform;
 pub mod respawn;
 pub mod setting;
@@ -195,6 +196,11 @@ pub const COMMANDS: &[Command] = &[
         name: "land-lock",
         run: land_lock::main,
         about: "The landing lock and queue",
+    },
+    Command {
+        name: "landing",
+        run: landing::main,
+        about: "How the repository here lands its work: through a PR or straight on its default branch, and a direct landing's steps",
     },
     Command {
         name: "apply-actions",

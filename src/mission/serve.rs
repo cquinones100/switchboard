@@ -8,8 +8,8 @@
 //! (`mission_prepare`), so a tab closing or a lookup answering while it is
 //! open shows at once, and a key always acts on what is on the screen.
 //! Bringing a view to the front counts it for the habits and tells its
-//! source, as the daemon's `cameTo` did: the Inbox, CI and Merge queues
-//! views ask again, the Calendar reads its feed, Slack looks, the usage
+//! source, as the daemon's `cameTo` did: the Inbox and CI views and the
+//! Landing view's merge queues ask again, the Calendar reads its feed, Slack looks, the usage
 //! views are kept up to date while in front.
 //!
 //! The keys and the mouse come here before the overlays see them
@@ -50,6 +50,9 @@ const REVIVED_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long your own files' Settings rows are kept before they are read
 /// again.
 const OWN_EVERY: Duration = Duration::from_secs(3);
+/// How long before a repository's landing is worked out again after a look
+/// that failed.
+const LANDING_RETRY: Duration = Duration::from_secs(5 * 60);
 /// How long after a tab opens its shell is typed into: it has drawn its
 /// prompt by then.
 const TYPE_AFTER: Duration = Duration::from_millis(500);
@@ -201,6 +204,8 @@ impl Server {
         m.scope = None;
         m.picker = false;
         m.cursor = 0;
+        // The Landing view opens even with nothing landing, saying so.
+        m.keep_landing = how == Opening::View("landing".into());
         if let Opening::Picker(scope) = how {
             m.scope = Some(scope);
             m.picker = true;
@@ -336,18 +341,32 @@ impl Server {
                 .any(|f| !f.is_empty() && f.contains(&text))
             });
         }
-        let all = self.mission_views(m.scope.is_some());
+        // The Landing view stays while the client has it in front, or is
+        // opening on it, so it doesn't vanish under you once the last
+        // landing ends.
+        let keep_landing = m.keep_landing || m.current().is_some_and(|v| v.id == ViewId::Landing);
+        let all = self.mission_views(m.scope.is_some(), keep_landing);
         let views: Vec<View> = all
             .iter()
             .map(|v| views::shown(v, &text, m.scope, m.show_merged))
             .collect();
-        // A view turned on or off before the one in front leaves it in
-        // front, where it now is.
+        // A view turned on or off before the one in front (or coming and
+        // going, as Landing does) leaves it in front, where it now is, and
+        // Tab's focus on a view's name on that view.
         let was = m.current().map(|v| v.id.clone());
         if let Some(id) = was
             && views.get(m.view.wrapping_sub(1)).map(|v| &v.id) != Some(&id)
         {
             m.view = views.iter().position(|v| v.id == id).map_or(0, |i| i + 1);
+        }
+        if let Some(Focus::View(at)) = m.focus
+            && at > 0
+            && let Some(id) = m.snap.views.get(at - 1).map(|v| v.id.clone())
+            && views.get(at - 1).map(|v| &v.id) != Some(&id)
+        {
+            m.focus = Some(Focus::View(
+                views.iter().position(|v| v.id == id).map_or(0, |i| i + 1),
+            ));
         }
         let now = util::now_ms();
         // The spinners' frame by the clock, held behind a box until
@@ -383,6 +402,7 @@ impl Server {
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
+        m.keep_landing = m.current().is_some_and(|v| v.id == ViewId::Landing);
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
@@ -438,8 +458,9 @@ impl Server {
         match id {
             ViewId::Inbox => self.came_to_view(crate::sources::INBOX),
             ViewId::Ci => self.came_to_view(crate::sources::CI),
-            ViewId::Queues => self.came_to_view(crate::sources::QUEUES),
+            ViewId::Landing => self.came_to_view(crate::sources::LANDING),
             ViewId::Calendar => self.calendar_opened(),
+            ViewId::Settings => self.work_out_landing(),
             ViewId::Slack => self.slack_opened(),
             ViewId::WorkMap => {
                 self.mission_worktrees(true);
@@ -450,8 +471,10 @@ impl Server {
     }
 
     /// Every view after the tabs, each only while its setting is on (the
-    /// Work map for M-j's and M-o's pickers whatever its setting).
-    fn mission_views(&mut self, picker: bool) -> Vec<View> {
+    /// Work map for M-j's and M-o's pickers whatever its setting), Landing
+    /// only while something lands or `keep_landing` (the client has it in
+    /// front).
+    fn mission_views(&mut self, picker: bool, keep_landing: bool) -> Vec<View> {
         let on = settings::is_on;
         let mut out: Vec<View> = Vec::new();
         let view = |id: ViewId, title: &str, data: ViewData, loaded: bool| View {
@@ -512,10 +535,16 @@ impl Server {
         for (id, name, title) in [
             (ViewId::Prs, crate::sources::PRS, "PRs"),
             (ViewId::Ci, crate::sources::CI, "CI"),
-            (ViewId::Queues, crate::sources::QUEUES, "Merge queues"),
+            (ViewId::Landing, crate::sources::LANDING, "Landing"),
             (ViewId::Tickets, crate::sources::TICKETS, "Tickets"),
             (ViewId::Inbox, crate::sources::INBOX, "Inbox"),
         ] {
+            if id == ViewId::Landing {
+                if let Some(d) = self.landing_view(keep_landing) {
+                    out.push(view(id, title, d, true));
+                }
+                continue;
+            }
             if let Some(d) = self.sources.view(name) {
                 let d = d.clone();
                 let loaded = views::loaded(&d);
@@ -567,14 +596,21 @@ impl Server {
         out
     }
 
-    /// Your own files' Settings rows, read again at most every `OWN_EVERY`.
+    /// Your own files' Settings rows, each repository's landing first (from
+    /// repos.json), read again at most every `OWN_EVERY`.
     fn mission_own(&mut self) -> Vec<Item> {
         if let Some((at, items)) = &self.mission.own
             && at.elapsed() < OWN_EVERY
         {
             return items.clone();
         }
-        let items = crate::usage::own::own_items(&crate::usage::own::own_dir());
+        let repos = self
+            .tab_repos()
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect::<Vec<_>>();
+        let mut items = crate::usage::own::landing_items(&repos);
+        items.extend(crate::usage::own::own_items(&crate::usage::own::own_dir()));
         self.mission.own = Some((Instant::now(), items.clone()));
         items
     }
@@ -1250,6 +1286,10 @@ impl Server {
             self.change_own(client, m, &item);
             return;
         }
+        if item.data.get("repo_setting").is_some() {
+            self.change_repo(client, m, &item);
+            return;
+        }
         if let ViewId::Plugin(_) = view.id {
             match item.target.clone() {
                 Target::Tab(t) => self.mission_go(client, t),
@@ -1440,6 +1480,41 @@ impl Server {
                         Err(e) => Some(format!("Couldn't move it: {e}")),
                     }
                 });
+            }
+            Do::LeaveQueue(root) => {
+                let Ok(exe) = crate::util::exe() else {
+                    return;
+                };
+                let folder = root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let label = label.to_string();
+                self.ask(
+                    client,
+                    Confirm::new("Take it out of the landing queue?")
+                        .list(vec![paths::tilde(&root)]),
+                    move |server, client, yes| {
+                        if !yes {
+                            return;
+                        }
+                        server.mission_busy(client, &label, None, async move {
+                            let out = tokio::task::spawn_blocking(move || {
+                                util::output_of(
+                                    std::process::Command::new(exe)
+                                        .args(["land-lock", "leave"])
+                                        .current_dir(&root),
+                                )
+                            })
+                            .await;
+                            Some(match out {
+                                Ok(Ok(_)) => format!("Took {folder} out of the landing queue."),
+                                Ok(Err(e)) => format!("Couldn't take it out: {e}"),
+                                Err(e) => format!("Couldn't take it out: {e}"),
+                            })
+                        });
+                    },
+                );
             }
             Do::CloseTab(tab) => {
                 let name = self
@@ -2218,6 +2293,141 @@ impl Server {
                     })),
                 );
             }
+        }
+    }
+
+    /// Enter on a repository's landing row in Settings: how its work lands
+    /// from a menu (automatic leaves it to the default), its review from a
+    /// menu, squash on or off, and a command typed in, written to
+    /// ~/.config/switchboard/repos.json (`repos::set_repo`), as the daemon's
+    /// `changeRepo` did.
+    fn change_repo(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
+        let r = &item.data["repo_setting"];
+        let repo = r["repo"].as_str().unwrap_or("").to_string();
+        let field = r["field"].as_str().unwrap_or("").to_string();
+        let now = r["value"].clone();
+        let save = move |server: &mut Server, client: ClientId, value: Value| {
+            let said = match crate::repos::set_repo(&repo, &field, value) {
+                Ok(()) => format!("Saved {repo}'s {field} in ~/.config/switchboard/repos.json"),
+                Err(e) => format!("Not saved: {e}"),
+            };
+            server.mission.own = None;
+            server.mission_note(client, said);
+        };
+        let name = r["repo"].as_str().unwrap_or("").to_string();
+        match r["field"].as_str().unwrap_or("") {
+            "landing" | "review" => {
+                let landing = r["field"] == "landing";
+                let options: Vec<(&str, &str)> = if landing {
+                    vec![
+                        ("automatic", "Automatic: GitHub's rules, else its CLAUDE.md"),
+                        ("pr", "Through a PR"),
+                        ("direct", "Straight on the default branch"),
+                    ]
+                } else {
+                    crate::repos::REVIEWS.iter().map(|r| (*r, *r)).collect()
+                };
+                let at = options
+                    .iter()
+                    .position(|(v, _)| now.as_str() == Some(v))
+                    .unwrap_or(0);
+                let values: Vec<String> = options.iter().map(|(v, _)| v.to_string()).collect();
+                let title = if landing {
+                    format!("{name}: how its work lands")
+                } else {
+                    format!("{name}: the review before the push")
+                };
+                let menu = Menu::new(
+                    title,
+                    options.iter().map(|(_, l)| MenuOption::new(*l)).collect(),
+                )
+                .at(at);
+                self.choose(client, menu, move |server, client, chose| {
+                    if let Some(v) = chose.and_then(|i| values.get(i)) {
+                        save(server, client, Value::String(v.clone()));
+                    }
+                });
+            }
+            "squash" => {
+                let on = now.as_bool().unwrap_or(true);
+                let said = match crate::repos::set_repo(&name, "squash", Value::Bool(!on)) {
+                    Ok(()) => format!("Saved {name}'s squash in ~/.config/switchboard/repos.json"),
+                    Err(e) => format!("Not saved: {e}"),
+                };
+                self.mission.own = None;
+                m.note = Some(said);
+            }
+            field => {
+                let title = if field == "test" {
+                    format!("{name}: the tests")
+                } else {
+                    format!("{name}: the command before the push")
+                };
+                let ask = Ask::new(
+                    title,
+                    "A shell command run in the worktree; empty for none.",
+                )
+                .text(now.as_str().unwrap_or("").to_string())
+                .empty_ok();
+                self.open(
+                    client,
+                    Box::new(ask),
+                    Some(Box::new(move |server: &mut Server, client, outcome| {
+                        if let Outcome::Picked(p) = outcome {
+                            save(server, client, Value::String(p.value.trim().to_string()));
+                        }
+                    })),
+                );
+            }
+        }
+    }
+
+    /// Each GitHub repository the tabs are in, once, with a directory of it.
+    fn tab_repos(&mut self) -> Vec<(String, PathBuf)> {
+        let mut out: Vec<(String, PathBuf)> = Vec::new();
+        for tab in self.source_tabs() {
+            if let (Some(repo), Some(path)) = (tab.repo, tab.path)
+                && !out
+                    .iter()
+                    .any(|(r, _)| r.eq_ignore_ascii_case(&repo.to_string()))
+            {
+                out.push((repo.to_string(), path));
+            }
+        }
+        out
+    }
+
+    /// Going to Settings works out, in the background, how each repository
+    /// a tab is in lands, for its Landing rows, where neither repos.json
+    /// nor the last day says; only with the github setting on, since it asks
+    /// GitHub first, and each repository at most every `LANDING_RETRY`.
+    fn work_out_landing(&mut self) {
+        if !settings::is_on("github") || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let data = crate::repos::read_safely();
+        let cache = crate::repos::cache_file();
+        let now = util::now_ms();
+        for (repo, dir) in self.tab_repos() {
+            let set = crate::repos::landing_entry(&data, &repo).contains_key("landing");
+            let fresh = crate::repos::cached_in(&cache, &repo)
+                .is_some_and(|c| now - c.at < crate::repos::DAY_MS);
+            let asked = self
+                .mission
+                .landing_asked
+                .get(&repo)
+                .is_some_and(|at| at.elapsed() < LANDING_RETRY);
+            if set || fresh || asked {
+                continue;
+            }
+            self.mission
+                .landing_asked
+                .insert(repo.clone(), Instant::now());
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = crate::repos::landing_for(&dir, false) {
+                    eprintln!("landing: {repo}: {e}");
+                }
+            });
         }
     }
 

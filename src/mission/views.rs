@@ -4,9 +4,9 @@
 //! already keeps, so building them reads no network and starts no process.
 //! In the daemon's order, each only while its setting is on: the
 //! Notifications (the sidebar's, whole), the Work map, the Calendar, Slack,
-//! Closed, the PR board, CI, the Merge queues, the ticket board, the Inbox,
-//! Sessions, Resources, Usage, Keys (`keymap`), Settings, then each
-//! plugin's.
+//! Closed, the PR board, CI, Landing (while something lands), the ticket
+//! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
+//! then each plugin's.
 //!
 //! Two are put together here. The Work map is every piece of work in the
 //! repositories the tabs are in, one row each: each worktree, and a main
@@ -46,7 +46,7 @@ pub enum ViewId {
     Closed,
     Prs,
     Ci,
-    Queues,
+    Landing,
     Tickets,
     Inbox,
     Sessions,
@@ -109,10 +109,11 @@ pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
 }
 
 /// Whether a view lists its rows under headings to pass over (Settings'
-/// categories, the Keys view's groups): the cursor never rests on one, and
-/// a filter leaves out those with nothing under them.
+/// categories, the Keys view's groups, Landing's repositories): the cursor
+/// never rests on one, and a filter leaves out those with nothing under
+/// them.
 pub fn grouped(id: &ViewId) -> bool {
-    matches!(id, ViewId::Settings | ViewId::Keys)
+    matches!(id, ViewId::Settings | ViewId::Keys | ViewId::Landing)
 }
 
 /// What a `/` filter matches an item by.
