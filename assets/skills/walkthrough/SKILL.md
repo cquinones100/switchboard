@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 This is Switchboard's personal copy, installed for repositories that have none. Before anything else, run `switchboard skill-path walkthrough`: if it prints a path other than this file's, read that file and follow it instead, with the same arguments, and stop reading here.
 
-Record a video of a feature as someone would show it to a teammate: start where they would start, click through to it, and say what each part shows. The recorder is `scripts/record.js` beside this file, a Node program using Playwright that stays a script of this skill's own rather than a command of `switchboard`'s, with its packages in `scripts/package.json`; it `/deploy-test` and `/preview-test` use too, so a change to how it records reaches all three; those skills read this file's "Recording" and "Reviewing the video" sections.
+Record a video of a feature as someone would show it to a teammate: start where they would start, click through to it, and say what each part shows. The recorder is `scripts/record.js` beside this file, a Node program using Playwright that stays a script of this skill's own rather than a command of `switchboard`'s, with its packages in `scripts/package.json`, which `/deploy-test` and `/preview-test` use too, so a change to how it records reaches all three; those skills read this file's "Recording" and "Reviewing the video" sections.
 
 When it is done, the final message is `walkthrough: <video>` or `walkthrough: fail: <reason>`, and nothing else. The questions below still get asked, because they pause the work rather than end it.
 
@@ -64,7 +64,7 @@ Before showing anyone the video, look at it:
 
 Fix what is wrong in `steps.js` and record again, at most three times. A feature that doesn't do what it should is something to tell the user, not to hide by leaving it out of the video.
 
-Then open the video with `open <video>`, so it plays in QuickTime, and ask with `AskUserQuestion`, saying in the question what it shows, in a line, anything the log caught, and the video's full path. The options:
+Then open the video with `switchboard platform open <video>`, so it plays in the video player, and ask with `AskUserQuestion`, saying in the question what it shows, in a line, anything the log caught, and the video's full path. The options:
 
 - **Keep it**: copy it to `~/Movies/Walkthroughs/` (made if missing), keeping its name, with `-2`, `-3` and so on before the extension when a video there already has it, then tidy that folder as below, and reply `walkthrough: <its path there>`.
 - **Record again**: with what the user says to change (their notes on the option), change the steps and record again.
@@ -72,6 +72,6 @@ Then open the video with `open <video>`, so it plays in QuickTime, and ask with 
 
 ### Tidying the kept videos
 
-Each time a video is kept, look at what `~/Movies/Walkthroughs/` holds: each video's name, when it was made and its size (`ls -lhtT`). When any is over 30 days old, ask with `AskUserQuestion`, listing those with their dates and sizes and the folder's total size, whether to move them to the Trash: **Move them all**, **Choose which** (then a second question, `multiSelect`, the old ones as options, four at a time), or **Keep them**. Move a video with Finder, so it can be taken back from the Trash (`osascript -e 'tell application "Finder" to delete POSIX file "<path>"'`), never with `rm`, and only ones in that folder. With none over 30 days old, ask nothing.
+Each time a video is kept, look at what `~/Movies/Walkthroughs/` holds: each video's name, when it was made and its size (`ls -lht`). When any is over 30 days old, ask with `AskUserQuestion`, listing those with their dates and sizes and the folder's total size, whether to move them to the Trash: **Move them all**, **Choose which** (then a second question, `multiSelect`, the old ones as options, four at a time), or **Keep them**. Move a video to the desktop's Trash, so it can be taken back from there, never with `rm`, and only ones in that folder: on macOS (`switchboard platform name` says which) with Finder, `osascript -e 'tell application "Finder" to delete POSIX file "<path>"'`; on Linux with `gio trash "<path>"`, and where there is no `gio`, ask the user to move them instead. With none over 30 days old, ask nothing.
 
 Putting the video anywhere outside this Mac (a PR, a ticket, Slack) is outward-facing: offer it only when the user asks.

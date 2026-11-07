@@ -54,7 +54,7 @@ For each file, it runs `git diff <range> -- <file> | delta --paging=never --widt
 - Unified: delta has no `--side-by-side=false`, so the only way to get a unified diff is `--no-gitconfig`, which `--unified` passes. Use it only when the user asks for unified.
 - Colour: with `--paging=never`, delta colours its output even into a pipe, so no colour flag is needed.
 
-Playwright comes from the diffed repo's own `@playwright/test` when it has one, otherwise from `scripts/node_modules`. The browser is the system Chrome (`channel: "chrome"`), because Playwright's own browsers often aren't downloaded, and the default launch fails with "Executable doesn't exist". Both `playwright` (1.63.0) and `ansi-to-html` (0.7.2) are pinned in `scripts/package.json`, so the `npm ci` above installs them. Never use npx.
+Playwright comes from the diffed repo's own `@playwright/test` when it has one, otherwise from `scripts/node_modules`. The browser is the system Chrome (`channel: "chrome"`), because Playwright's own browsers often aren't downloaded, and the default launch fails with "Executable doesn't exist"; on Linux that means Google Chrome itself installed (Chromium is not the `chrome` channel), so when the launch fails there, say so rather than downloading a browser. Both `playwright` (1.63.0) and `ansi-to-html` (0.7.2) are pinned in `scripts/package.json`, so the `npm ci` above installs them. Never use npx.
 
 ## 4. Check the images
 
@@ -70,7 +70,7 @@ If something is off, fix it and render again, into a fresh folder, so old images
 ## 5. Show them
 
 ```bash
-open "$OUT"/*.png
+for png in "$OUT"/*.png; do switchboard platform open "$png"; done
 ```
 
-opens them in Preview. In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.
+opens them in the desktop's image viewer (Preview on macOS). In the final message, list every PNG with its full absolute path, in order, each with its label. Mention any files the plan skipped.

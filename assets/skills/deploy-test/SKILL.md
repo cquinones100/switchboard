@@ -59,7 +59,7 @@ Skip this when there is nothing a browser can show, or the test was skipped, and
 
 ## Approval
 
-Look the video over as `/walkthrough`'s "Reviewing the video" says, then open it with `open <video>` (`xdg-open` on Linux), so it plays in the video player, and ask with `AskUserQuestion`. Say in the question what the test showed, in a line, whether it passed, anything the log caught, and the video's full path; or, when there was no test, why not. The options:
+Look the video over as `/walkthrough`'s "Reviewing the video" says, then open it with `switchboard platform open <video>`, so it plays in the video player, and ask with `AskUserQuestion`. Say in the question what the test showed, in a line, whether it passed, anything the log caught, and the video's full path; or, when there was no test, why not. The options:
 
 - **Approve**: reply `deploy-test: approved (tested: <video>)`, or `deploy-test: approved (not tested: <why>)`.
 - **Record again**: with what the user says to change (their notes on the option), change the test and go back to recording.
