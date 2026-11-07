@@ -46,7 +46,8 @@ const RED: u8 = 203;
 pub enum Content {
     /// Still being read: what it says meanwhile ("Reading the PR...").
     Loading(String),
-    /// It can't be read, and why; any key closes it.
+    /// It can't be read, and why; o opens the page in the browser when
+    /// there is one, and any other key closes it.
     Failed(String),
     /// Markdown; `place` says where a diagram that can't be drawn here is
     /// shown properly ("M-r on GitHub").
@@ -112,6 +113,10 @@ impl Pager {
     /// The page being read, which o opens in the browser.
     pub fn with_url(mut self, url: Option<String>) -> Pager {
         self.url = url;
+        // A failure's keys depend on whether there is a page to open.
+        if matches!(self.content, Content::Failed(_)) {
+            self.lay_out();
+        }
         self
     }
 
@@ -166,7 +171,12 @@ impl Pager {
                     lines.push(said(&line, style));
                 }
                 lines.push(vec![]);
-                lines.push(said("Press any key to close.", Style::fg(DIM)));
+                let keys = if self.url.is_some() {
+                    "o opens it in the browser · any other key closes"
+                } else {
+                    "Press any key to close."
+                };
+                lines.push(said(keys, Style::fg(DIM)));
                 Doc::plain(lines)
             }
             (Content::Offer { text, .. }, _) => {
@@ -313,7 +323,12 @@ impl Pager {
             return self.typing_key(key);
         }
         match &self.content {
-            Content::Failed(_) => return Act::Quit,
+            Content::Failed(_) => {
+                return match (key.code, &self.url) {
+                    (KeyCode::Char('o'), Some(url)) => Act::OpenAndQuit(url.clone()),
+                    _ => Act::Quit,
+                };
+            }
             Content::Offer { url, .. } => {
                 return match key.code {
                     KeyCode::Char('o') => Act::OpenAndQuit(url.clone()),
@@ -662,6 +677,28 @@ mod tests {
                 .any(|l| l.contains("No PR for this branch"))
         );
         assert_eq!(failed.key(key(KeyCode::Char('x'))), Act::Quit);
+        assert_eq!(failed.key(key(KeyCode::Char('o'))), Act::Quit);
+        assert!(
+            failed
+                .screen()
+                .iter()
+                .any(|l| l.contains("any key to close"))
+        );
+        // A page that couldn't be read, with a link: o opens it, as it says.
+        let url = "https://example.com/a";
+        let mut unread = Pager::new(Content::Failed("Couldn't read it: 404.".into()), 80, 10)
+            .with_url(Some(url.into()));
+        assert!(
+            unread
+                .screen()
+                .iter()
+                .any(|l| l.contains("o opens it in the browser · any other key closes"))
+        );
+        assert_eq!(
+            unread.key(key(KeyCode::Char('o'))),
+            Act::OpenAndQuit(url.into())
+        );
+        assert_eq!(unread.key(key(KeyCode::Char('q'))), Act::Quit);
         let mut offer = Pager::new(
             Content::Offer {
                 text: "A Slack message can't be read here, only in Slack.".into(),

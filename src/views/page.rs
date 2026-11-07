@@ -386,9 +386,8 @@ pub fn main(url: &str) -> ExitCode {
                         text,
                         place: "the page in the browser (o)".into(),
                     },
-                    Err(why) => Content::Failed(format!(
-                        "Couldn't read it: {why}. o in a view, or M-p's \"Open the link being read beside this pane in the browser\", opens it there."
-                    )),
+                    // The pager says o opens it in the browser, under this.
+                    Err(why) => Content::Failed(format!("Couldn't read it: {why}.")),
                 });
             });
             pager::run(Content::Loading(loading), Some(rx), browser)

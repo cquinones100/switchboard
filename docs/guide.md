@@ -706,7 +706,7 @@ A source that fails shows a row saying why, which reads nothing when chosen. Git
 - a Slack message, which can't be read without Slack's connector, so its pane offers only to open it: `o` opens it, any other key closes;
 - any other web page, fetched, its main text turned into Markdown under its title and address.
 
-`o` in the link view opens the page in the browser, and `M-p`'s "Open the link being read beside this pane in the browser" does the same from any pane in the tab. `q` closes it.
+`o` in the link view opens the page in the browser, and `M-p`'s "Open the link being read beside this pane in the browser" does the same from any pane in the tab. `q` closes it. A page that can't be read says why: `o` then opens it in the browser and closes the pane, and any other key closes it.
 
 ### The views by hand
 
