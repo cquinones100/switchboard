@@ -711,3 +711,48 @@ fn m_y_copies_the_latest_reply_of_the_tabs_claude() {
     client.type_text(&format!("{ALT}yafter\r"));
     client.wait_text("^[yafter");
 }
+
+#[test]
+fn m_shift_a_walks_the_idle_tabs_wrapping_round() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // The first two tabs' shells stand in for an idle Claude; the third
+    // runs none, so it is no idle tab.
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    server.ok(&["new-tab", "-n", "plain"]);
+    client.wait_text("3:plain");
+    for (n, t) in tabs(&server.list()).iter().take(2).enumerate() {
+        let pid = t["panes"][0]["pid"].as_u64().unwrap();
+        session_file(&server.home, pid, json!({"sessionId": format!("s-{n}")}));
+    }
+    wait_list(&server, "both sessions read", |l| {
+        tabs(l)
+            .iter()
+            .take(2)
+            .all(|t| t["panes"][0]["claude"]["session"].is_string())
+    });
+    let at = |n: usize| move |l: &Value| tabs(l)[n]["current"] == true;
+    client.type_text(&format!("{ALT}A"));
+    wait_list(&server, "the first idle tab", at(0));
+    client.type_text(&format!("{ALT}A"));
+    wait_list(&server, "the next one", at(1));
+    client.type_text(&format!("{ALT}A"));
+    wait_list(&server, "round to the first again", at(0));
+
+    // Off, the key reaches the pane.
+    settings(&server, json!({"idle_walk": false, "sidebar": false}));
+    wait_list(&server, "the settings read", |l| {
+        l["sessions"][0]["sidebar"]["columns"] == 0
+    });
+    let pane = tabs(&server.list())[0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["send-keys", "-t", &pane, "-l", "cat -v"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.type_text(&format!("{ALT}Aafter\r"));
+    client.wait_text("^[Aafter");
+}

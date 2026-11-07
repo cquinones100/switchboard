@@ -53,6 +53,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line opens it too |
 | `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a workspace key |
 | `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
+| `M-A` | Go to the next idle tab, in the sidebar's Idle order |
 | `M-Space` | Mission control: every tab as a card, the Work map, PRs, CI, tickets, your day, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
 | `M-j` | Find a tab by typing its name |

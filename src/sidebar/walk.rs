@@ -1,6 +1,7 @@
 //! M-a's walk through what needs you, in the sidebar's order: the tabs under
 //! Needs you (pinned and reminders come due first, then waiting, then done),
-//! then the notifications while there are any (`needs_notices` setting).
+//! then the notifications while there are any (`needs_notices` setting);
+//! and M-A's through the tabs under Idle (`next_idle`).
 //! What tmux/agent-state.sh's `next` did with the list the sidebar daemon
 //! wrote (`writeNeeds`), kept in `@agent_walk_window`, `@agent_walk_rest`,
 //! `@agent_walk_after` and `@agent_notices_from`; here the same rules on the
@@ -146,9 +147,34 @@ impl Walk {
     }
 }
 
+/// M-A's walk through the idle tabs, in the sidebar's order (agent-state.sh's
+/// `idle-next`): the tab after `here`, wrapping at the end, or the first
+/// from a tab not among them. Nothing is kept between presses: an idle tab
+/// stays idle when visited, so the next press from it goes on to the next.
+pub fn next_idle(idle: &[TabId], here: TabId) -> Next {
+    let n = idle.len();
+    match idle.iter().position(|t| *t == here) {
+        _ if n == 0 => Next::Nothing,
+        Some(_) if n == 1 => Next::OnlyHere,
+        Some(at) => Next::Go((at + 1) % n),
+        None => Next::Go(0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_idle_walk_goes_to_the_next_wrapping_and_from_elsewhere_to_the_first() {
+        let idle = [TabId(4), TabId(2), TabId(9)];
+        assert_eq!(next_idle(&idle, TabId(4)), Next::Go(1));
+        assert_eq!(next_idle(&idle, TabId(9)), Next::Go(0), "wrapping");
+        assert_eq!(next_idle(&idle, TabId(7)), Next::Go(0), "from a busy tab");
+        assert_eq!(next_idle(&[TabId(4)], TabId(4)), Next::OnlyHere);
+        assert_eq!(next_idle(&[TabId(4)], TabId(1)), Next::Go(0));
+        assert_eq!(next_idle(&[], TabId(1)), Next::Nothing);
+    }
 
     fn tab(n: u32, why: Why) -> Stop {
         Stop {

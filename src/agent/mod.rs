@@ -19,7 +19,7 @@
 //! Claude's first start
 //! in a worktree (its PR keys, with GitHub on), bring their tips. M-a walks
 //! the sidebar's Needs you (src/sidebar), which alone can tell a tab that
-//! looks done is still working in the background.
+//! looks done is still working in the background, and M-A its Idle.
 
 pub mod hook;
 mod serve;

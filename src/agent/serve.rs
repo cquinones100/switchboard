@@ -326,6 +326,16 @@ impl Server {
         self.sidebar_next_needs_you(client);
     }
 
+    /// M-A: the next idle tab, in the sidebar's Idle order (src/sidebar has
+    /// the walk); with the idle_walk setting off, the key reaches the pane.
+    pub fn next_idle(&mut self, client: ClientId) {
+        if !settings::is_on("idle_walk") {
+            self.key_back_to_pane(client, &crate::mux::keys::Action::NextIdle);
+            return;
+        }
+        self.sidebar_next_idle(client);
+    }
+
     /// M-c: into the pane running Claude in this tab (tmux/claude-focus.sh),
     /// or, with none, saying so.
     pub fn focus_claude(&mut self, tab: TabId) {

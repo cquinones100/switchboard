@@ -101,7 +101,7 @@ A tab shows the most urgent of its panes' states, waiting before done before wor
 
 Whatever the workspace types into a tab's Claude (`M-m`'s `/resolve-conflicts`, the Slack tab's `/slack-updates`, a CI loop started from mission control, a message answering a tab from mission control, the sidebar or the Slack relay, a reply sent from another tab) presses `i` first when Claude Code's vim mode has left the prompt in Normal mode (its mode line reading `-- NORMAL --`), where the first letters typed would otherwise be taken as vim commands and what is typed would arrive cut off.
 
-`M-a` goes to the next tab that needs you: pinned tabs and reminders that have come due first, then the ones waiting on you, then the finished ones, and last the sidebar's notifications while there are any (Settings' "M-a goes to notifications", `needs_notices`). Pressed again, it goes on to the next, wrapping round, so pressing it repeatedly visits each one. It says "Nothing needs you." when nothing does. `M-c` goes to the pane running Claude in the current tab.
+`M-a` goes to the next tab that needs you: pinned tabs and reminders that have come due first, then the ones waiting on you, then the finished ones, and last the sidebar's notifications while there are any (Settings' "M-a goes to notifications", `needs_notices`). Pressed again, it goes on to the next, wrapping round, so pressing it repeatedly visits each one. It says "Nothing needs you." when nothing does. `M-A` walks the idle tabs the same way (see "What needs you, one tab at a time"). `M-c` goes to the pane running Claude in the current tab.
 
 `M-y` copies the latest reply of the tab's Claude to the clipboard, from any pane of the tab or its sidebar: the last message Claude wrote text in, read from its session's transcript, its parts joined as written, reaching back past a prompt not answered yet and passing over subagents, API errors and Claude Code's own stand-in messages. A Claude parked behind the diff or lazygit in its pane's place counts. A box says how many lines were copied, and that Claude is still working when it is, or that the tab has no Claude or no reply yet. Settings' "Copy Claude's reply" (`copy_reply`) off hands `M-y` to the pane.
 
@@ -133,6 +133,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-W` | Start work on Linear tickets, each in a new tab (`wt`) |
 | `M-B` | Start work on a branch, new or existing, in a new tab (`wtb`) |
 | `M-a` | Go to the next tab that needs you |
+| `M-A` | Go to the next idle tab, in the sidebar's Idle order |
 | `M-c` | Go to the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin or unpin the tab, keeping it at the top of Needs you |
@@ -216,7 +217,7 @@ The actions, by the names the file uses:
 
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
-- Claude and work: `next-needs-you`, `focus-claude`, `copy-reply`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
+- Claude and work: `next-needs-you`, `next-idle`, `focus-claude`, `copy-reply`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `clear-image-cache`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
@@ -402,7 +403,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 
 ### Into the sidebar and its keys
 
-`M-s` moves into the sidebar, on the tab you are in, and back out; `M-Left` from the leftmost pane moves in too, and `M-Right` back out. While it has the focus, its cursor moves through the tabs and each comes to the front as the cursor reaches it, with the list held still so tabs don't move about as you look at them. Leaving keeps the tab you are on. A key that acts on "the pane" (a split, `M-w`, zoom) gives the focus back to your pane first and acts there; `M-a`, `M-1`…`M-9`, `M-f`, `M-y` and `M-p` keep it, and pressed from the sidebar `M-a` and `M-1`…`M-9` leave the cursor on the tab they went to.
+`M-s` moves into the sidebar, on the tab you are in, and back out; `M-Left` from the leftmost pane moves in too, and `M-Right` back out. While it has the focus, its cursor moves through the tabs and each comes to the front as the cursor reaches it, with the list held still so tabs don't move about as you look at them. Leaving keeps the tab you are on. A key that acts on "the pane" (a split, `M-w`, zoom) gives the focus back to your pane first and acts there; `M-a`, `M-A`, `M-1`…`M-9`, `M-f`, `M-y` and `M-p` keep it, and pressed from the sidebar `M-a`, `M-A` and `M-1`…`M-9` leave the cursor on the tab they went to.
 
 | Key | In the sidebar |
 | --- | --- |
@@ -431,6 +432,8 @@ A peek shows a tab without going there, in a box over most of the screen: its la
 ### What needs you, one tab at a time
 
 `M-a` goes to the next of what needs you, across every session, in the sidebar's order: the tabs under Needs you, pinned ones and reminders come due first, then those waiting on you, then those that finished, and last, while there are any, the notifications (Settings' "M-a goes to notifications", `needs_notices`), where it puts the sidebar's cursor on the first one. Each press goes on to the stop after the one you are at, wrapping round, so pressing it again and again walks the whole list, though a tab stays waiting until you answer it. A finished tab leaves the list once seen, so pressed again from there the walk carries on where it was. From a tab that only finished, or one not on the list, a tab pinned or waiting on you comes first. With nothing to go to it says "Nothing needs you."
+
+`M-A` goes to the next idle tab the same way: the tabs under Idle, in the sidebar's order, across every session, the one after the tab you are at, wrapping at the end, or the first from a tab that isn't idle. Only the sidebar's grouping can tell an idle Claude from one working in the background or looping, so those aren't on it, nor a tab with no Claude. It says "No idle tabs." when there are none, and "This is the only idle tab." from the only one. Settings' "M-A cycles idle tabs" (`idle_walk`) off hands `M-A` to the pane.
 
 ### Pinning and reminders
 
@@ -1769,6 +1772,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 
 | Setting | Default | What it does |
 |---|---|---|
+| M-A cycles idle tabs (`idle_walk`) | on | M-A goes to the next idle tab, in the sidebar's Idle order, wrapping at the end, as M-a walks the tabs that need you; off, M-A reaches the pane |
 | One Claude to a tab (`one_claude_per_tab`) | on | A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane |
 | Name new tabs (`name_new_tabs`) | on | M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory |
 | Messages in a box (`message_boxes`) | on | What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment |

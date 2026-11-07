@@ -1,7 +1,8 @@
 //! Key bindings: which key does what. The defaults are the multiplexer keys
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
-//! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
-//! tab's Claude, M-y to copy its latest reply, M-f to pin a tab), M-s into the sidebar and the views'
+//! zooming, resizing), its Claude keys (M-a to what needs you, M-A to the
+//! next idle tab, M-c to the tab's Claude, M-y to copy its latest reply,
+//! M-f to pin a tab), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
@@ -66,6 +67,8 @@ pub enum Action {
     ListKeys,
     /// The next tab that needs you: pinned, then waiting, then done.
     NextNeedsYou,
+    /// The next idle tab, in the sidebar's Idle order (M-A).
+    NextIdle,
     /// Into the pane running Claude in this tab.
     FocusClaude,
     /// The latest reply of this tab's Claude, copied (M-y).
@@ -144,8 +147,9 @@ impl Action {
     /// `prev-tab`, `next-tab`, `last-tab`, `select-tab-3`, `new-tab`,
     /// `split-right`, `close-pane`, `zoom`, `resize-left-5`, `detach`,
     /// `copy-mode`, `send-prefix`, `list-keys`, `next-needs-you`,
-    /// `focus-claude`, `copy-reply`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
-    /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
+    /// `next-idle`, `focus-claude`, `copy-reply`, `toggle-pin`, `palette`,
+    /// `reset-tips`, `toggle-theme`, `focus-sidebar`, `toggle-sidebar`,
+    /// `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
     /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
     /// `ticket-image`, `mission-control`, `find-tab`,
@@ -203,6 +207,7 @@ impl Action {
             "send-prefix" => Action::SendPrefix,
             "list-keys" => Action::ListKeys,
             "next-needs-you" => Action::NextNeedsYou,
+            "next-idle" => Action::NextIdle,
             "focus-claude" => Action::FocusClaude,
             "copy-reply" => Action::CopyReply,
             "toggle-pin" => Action::TogglePin,
@@ -271,6 +276,7 @@ impl Action {
             Action::SendPrefix => "send-prefix".into(),
             Action::ListKeys => "list-keys".into(),
             Action::NextNeedsYou => "next-needs-you".into(),
+            Action::NextIdle => "next-idle".into(),
             Action::FocusClaude => "focus-claude".into(),
             Action::CopyReply => "copy-reply".into(),
             Action::TogglePin => "toggle-pin".into(),
@@ -345,6 +351,7 @@ impl Action {
             Action::SendPrefix => "Send the prefix key to the pane".into(),
             Action::ListKeys => "List the keys".into(),
             Action::NextNeedsYou => "Go to the next tab that needs you".into(),
+            Action::NextIdle => "Go to the next idle tab".into(),
             Action::FocusClaude => "Jump to the pane running Claude in this tab".into(),
             Action::CopyReply => "Copy the latest reply of this tab's Claude".into(),
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
@@ -410,7 +417,9 @@ impl Action {
             Action::CopyMode => &["panes", "scroll", "history"],
             Action::SendPrefix => &["keys"],
             Action::ListKeys => &["help", "keys"],
-            Action::NextNeedsYou | Action::FocusClaude => &["claude", "tabs", "navigate"],
+            Action::NextNeedsYou | Action::NextIdle | Action::FocusClaude => {
+                &["claude", "tabs", "navigate"]
+            }
             Action::CopyReply => &["claude", "copy"],
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
@@ -565,6 +574,7 @@ impl Default for Bindings {
         bind("M-W", WorkOnTickets);
         bind("M-B", WorkOnBranch);
         bind("M-a", NextNeedsYou);
+        bind("M-A", NextIdle);
         bind("M-c", FocusClaude);
         bind("M-y", CopyReply);
         bind("M-f", TogglePin);
@@ -733,6 +743,7 @@ mod tests {
             Action::NextPane,
             Action::LastPane,
             Action::NextNeedsYou,
+            Action::NextIdle,
             Action::FocusClaude,
             Action::CopyReply,
             Action::TogglePin,

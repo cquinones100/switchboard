@@ -801,6 +801,7 @@ impl Server {
                 (true, true)
             }
             Action::NextNeedsYou
+            | Action::NextIdle
             | Action::SelectTab(_)
             | Action::Palette
             | Action::ListKeys
@@ -1636,6 +1637,43 @@ impl Server {
                     }
                 }
             },
+        }
+    }
+
+    /// M-A: the next tab under Idle, in the sidebar's order, wrapping at the
+    /// end (agent-state.sh's `idle-next` on the list the daemon wrote,
+    /// `writeIdle`); pressed from a sidebar, its cursor stays in the new
+    /// tab's sidebar, as with M-a.
+    pub fn sidebar_next_idle(&mut self, client: ClientId) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let Some(here) = self.session(&session).map(|s| s.current) else {
+            return;
+        };
+        let all = self.sidebar_all_tabs();
+        let idle: Vec<TabId> = model::idle_tabs(&all, &Rules::now())
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        let from_sidebar = self.sidebar.focused(&session);
+        match super::walk::next_idle(&idle, here) {
+            Next::Nothing => self.say(Some(client), "No idle tabs."),
+            Next::OnlyHere => self.say(Some(client), "This is the only idle tab."),
+            Next::Go(i) => {
+                let Some(tab) = all.iter().find(|m| m.id == idle[i]) else {
+                    return;
+                };
+                if let Some(pane) = tab.claude_pane.or(tab.active) {
+                    self.focus_pane(pane);
+                }
+                if tab.session != session {
+                    self.switch_client(client, &tab.session);
+                }
+                if from_sidebar {
+                    self.sidebar_enter(&tab.session, Some(Owner::Tab(tab.id)));
+                }
+            }
         }
     }
 }

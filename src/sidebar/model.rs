@@ -501,6 +501,18 @@ pub fn needs_you<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
     needs
 }
 
+/// The tabs under Idle, in the order the sidebar lists them: what M-A
+/// walks (model.js's `idleTabs`). Only the model can tell an idle tab from
+/// one working in the background or looping.
+pub fn idle_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
+    let mut idle: Vec<&TabModel> = tabs
+        .iter()
+        .filter(|t| group_of(t, r) == Group::Idle)
+        .collect();
+    idle.sort_by(|a, b| Group::Idle.order(a, b, r));
+    idle
+}
+
 /// Each tab's group and place as `grouped` lays them out now.
 pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
     grouped(tabs, None, r)
@@ -1002,6 +1014,25 @@ pub(crate) mod tests {
         assert_eq!(state_words(&notes, &r), "Notes is beside tab 3 · api");
         notes.notes_owner = None;
         assert_eq!(state_words(&notes, &r), "Notes isn't open");
+    }
+
+    #[test]
+    fn the_idle_tabs_are_the_idle_group_in_its_order() {
+        let r = rules();
+        let mut later = tab(1, "later", TabState::Idle);
+        later.index = 7;
+        let mut working = tab(2, "working", TabState::Working);
+        working.index = 1;
+        let mut bare = tab(3, "no claude", TabState::Idle);
+        bare.claude = None;
+        let mut first = tab(4, "first", TabState::Idle);
+        first.index = 2;
+        let tabs = vec![later, working, bare, first];
+        let idle: Vec<&str> = idle_tabs(&tabs, &r)
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect();
+        assert_eq!(idle, ["first", "later"]);
     }
 
     #[test]

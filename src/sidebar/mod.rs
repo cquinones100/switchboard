@@ -10,7 +10,7 @@
 //! - `claude`: what each Claude session is doing, from Claude Code's files.
 //! - `model`: each tab, its group and its stage, in the order of need.
 //! - `render`: the sidebar's lines, a plain function of the model.
-//! - `walk`: M-a's walk through Needs you.
+//! - `walk`: M-a's walk through Needs you, and M-A's through Idle.
 //! - `notices`: the Notifications window's list, in a tab of its own.
 //! - `peek`: a look at a tab without going there.
 //! - `config`: sidebar.json.
