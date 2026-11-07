@@ -416,7 +416,10 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
 
     let mut client = server.attach(120, 30);
     client.wait_text("$");
-    client.type_text(&format!("cd {}\r", work.display()));
+    // The shell's prompt waited for, so the next line isn't typed into the
+    // middle of it.
+    client.type_text(&format!("cd {} && echo in''-work\r", work.display()));
+    client.wait_text("in-work");
     // Nothing listens on port 9, so reading a link fails at once, reaching
     // nothing.
     client.type_text(
@@ -430,7 +433,13 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     // Copy: the newest first, a hyperlink with its text.
     server.ok(&["press", "copy-link"]);
     let screen = client.wait_text("the docs  http://127.0.0.1:9/docs");
-    let row = |s: &[String], text: &str| s.iter().position(|l| l.contains(text)).unwrap();
+    // In the picker's box, not the typed line above it, which holds the
+    // same links.
+    let row = |s: &[String], text: &str| {
+        s.iter()
+            .position(|l| l.contains('│') && l.contains(text))
+            .unwrap()
+    };
     assert!(
         row(&screen, "the docs  http") < row(&screen, "http://127.0.0.1:9/plain"),
         "newest first:\n{}",

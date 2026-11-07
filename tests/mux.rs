@@ -459,14 +459,17 @@ fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let pane = first_pane(&server);
-    // Written with printf's octal escapes, so the line typed holds no ESC.
+    // Written with printf's octal escapes, so the line typed holds no ESC,
+    // and the word it ends with split by quotes, so what is waited for is
+    // what the command printed, never its line being typed.
     let print = |payload: &str, done: &str| {
+        let (head, tail) = done.split_at(done.len() / 2);
         server.ok(&[
             "send-keys",
             "-t",
             &pane,
             "-l",
-            &format!("printf '\\033_Ga=T,q=2;{payload}\\033\\\\'; echo {done}"),
+            &format!("printf '\\033_Ga=T,q=2;{payload}\\033\\\\'; echo {head}''{tail}"),
         ]);
         server.ok(&["send-keys", "-t", &pane, "Enter"]);
     };

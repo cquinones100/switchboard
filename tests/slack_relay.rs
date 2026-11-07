@@ -128,14 +128,13 @@ fn the_relay_reads_and_types_into_tabs_through_the_server() {
     // A message goes in as one paste, its line break kept, then Enter.
     mux.paste(&pane, "hello\nworld").unwrap();
     mux.send_keys(&pane, &["Enter"]).unwrap();
-    let screen = wait("the paste echoed", || {
+    // Each line of the paste on a line of its own, waited for whole: cat
+    // prints the first line while the terminal still echoes the second, so
+    // "worldhello" is on the way there.
+    wait("each line of the paste on a line of its own", || {
         mux.capture(&pane, 60)
-            .filter(|s| s.contains("hello") && s.contains("world"))
+            .filter(|s| s.lines().any(|l| l == "hello") && s.lines().any(|l| l == "world"))
     });
-    assert!(
-        screen.lines().any(|l| l == "hello") && screen.lines().any(|l| l == "world"),
-        "each line of the paste on a line of its own: {screen:?}"
-    );
     mux.type_text(&pane, "2").unwrap();
     wait("a number typed", || {
         mux.capture(&pane, 60)
