@@ -39,6 +39,7 @@ tmux new-session -A -s main
 | `M-p` | Find any command by what it does, Settings included; what you picked after typing the same words comes first; the ⌘ Commands button in the status bar opens it too |
 | `M-/` | Every key, in mission control's Keys view: tmux's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a tmux key |
 | `M-a` | Go to the next tab that needs you, one waiting on you before one that finished, and last the notifications |
+| `M-A` | Go to the next idle tab, in the sidebar's Idle order |
 | `M-j` | Find a tab by typing its name |
 | `M-S-f` | Search your notes, Linear, GitHub and Slack at once |
 | `M-Space` | Mission control: every tab, the Work map, PRs, Settings |

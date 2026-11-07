@@ -3402,6 +3402,90 @@ test("M-a goes from a finished tab to one waiting on you before the next finishe
   });
 });
 
+test("the idle tabs M-A walks are the sidebar's Idle group, in its order, none working in the background or looping", () => {
+  const base = { session: "$1", sessionName: "test", panes: [], sidebars: [], since: undefined, command: "claude", claude: { sessionId: "s" } };
+  const tabs = [
+    { ...base, id: "@1", index: 1, name: "loop", state: "background", loop: { kind: "scheduled", prompt: "/today", at: Date.now() + 60_000 } },
+    { ...base, id: "@2", index: 2, name: "resting", state: "idle" },
+    { ...base, id: "@3", index: 3, name: "background", state: "background" },
+    { ...base, id: "@4", index: 4, name: "Notes", state: "idle", command: "nvim", claude: undefined },
+    { ...base, id: "@5", index: 5, name: "done", state: "done", since: 1 },
+    { ...base, id: "@6", index: 6, name: "also resting", state: "idle" },
+  ];
+  assert.deepEqual(sidebar.idleTabs(tabs).map((t) => t.name), ["resting", "also resting"]);
+  assert.deepEqual(sidebar.idleTabs(tabs).map((t) => t.name), sidebar.grouped(tabs).find((g) => g.title === "Idle").tabs.map((t) => t.name), "as the sidebar lists them");
+});
+
+test("M-A goes to the next idle tab, wrapping, and from a tab that isn't idle to the first", (t) => {
+  const stateDir = path.join(home, ".local/state/tmux-sidebar");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const windows = ["cat", "cat", "cat", "cat"].map(() => tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", tmp, "cat"));
+  const [idleA, idleB, idleC, busy] = windows;
+  const pane = (w) => tmux("display", "-p", "-t", w, "#{pane_id}");
+  const session = tmux("display", "-p", "-t", idleA, "#{session_id}");
+  // The daemon's Idle, as it writes it, and its pid, alive (this test's own
+  // process), so the walk reads the list.
+  const idle = path.join(stateDir, "idle");
+  const pid = path.join(stateDir, "daemon.pid");
+  const hadPid = fs.existsSync(pid) ? fs.readFileSync(pid, "utf8") : undefined;
+  fs.writeFileSync(idle, [idleA, idleB, idleC].map((w) => [w, pane(w), session].join("\t")).join("\n") + "\n");
+  fs.writeFileSync(pid, String(process.pid));
+  t.after(() => {
+    windows.forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} });
+    fs.rmSync(idle, { force: true });
+    if (hadPid === undefined) fs.rmSync(pid, { force: true }); else fs.writeFileSync(pid, hadPid);
+  });
+  const press = (from) => {
+    tmux("select-window", "-t", from);
+    execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "idle-next"], { env: { ...process.env, TMUX_PANE: pane(from) } });
+    return tmux("display", "-p", "-t", session, "#{window_id}");
+  };
+  assert.equal(press(idleA), idleB);
+  assert.equal(press(idleB), idleC);
+  assert.equal(press(idleC), idleA, "wrapping at the end");
+  assert.equal(press(busy), idleA, "from a tab not idle, the first");
+
+  // With none idle, it stays where it is.
+  fs.writeFileSync(idle, "");
+  assert.equal(press(busy), busy);
+});
+
+test("without the daemon, M-A walks the windows whose Claude has no state, and no other node pane", async (t) => {
+  const pid = path.join(home, ".local/state/tmux-sidebar/daemon.pid");
+  const hadPid = fs.existsSync(pid) ? fs.readFileSync(pid, "utf8") : undefined;
+  fs.rmSync(pid, { force: true });
+  const node = () => tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", tmp, "node -e 'setTimeout(() => {}, 60000)'");
+  const [claudeA, claudeB, working, server] = [node(), node(), node(), node()];
+  const start = tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", tmp, "cat");
+  const sessions = [];
+  t.after(() => {
+    [claudeA, claudeB, working, server, start].forEach((w) => { try { tmux("kill-window", "-t", w); } catch {} });
+    sessions.forEach((f) => fs.rmSync(f, { force: true }));
+    if (hadPid !== undefined) fs.writeFileSync(pid, hadPid);
+  });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const pane = (w) => tmux("display", "-p", "-t", w, "#{pane_id}");
+  // Claude, as claude-pane.sh tells it: a session file for the pane's node.
+  fs.mkdirSync(path.join(home, ".claude/sessions"), { recursive: true });
+  [claudeA, claudeB, working].forEach((w) => {
+    const tty = tmux("display", "-p", "-t", w, "#{pane_tty}");
+    const node = execFileSync("ps", ["-t", tty.replace("/dev/", ""), "-o", "pid=,comm="], { encoding: "utf8" }).split("\n").find((l) => /node/.test(l)).trim().split(/\s+/)[0];
+    const file = path.join(home, ".claude/sessions", `${node}.json`);
+    fs.writeFileSync(file, JSON.stringify({ pid: Number(node), sessionId: `idle-${w}` }));
+    sessions.push(file);
+  });
+  tmux("set", "-p", "-t", pane(working), "@agent_state", "working");
+  const session = tmux("display", "-p", "-t", start, "#{session_id}");
+  const press = (from) => {
+    tmux("select-window", "-t", from);
+    execFileSync("bash", [path.join(__dirname, "../tmux/agent-state.sh"), "idle-next"], { env: { ...process.env, TMUX_PANE: pane(from) } });
+    return tmux("display", "-p", "-t", session, "#{window_id}");
+  };
+  assert.equal(press(start), claudeA);
+  assert.equal(press(claudeA), claudeB);
+  assert.equal(press(claudeB), claudeA, "past the working one and the node server, round again");
+});
+
 test("M-c puts the cursor in the pane running Claude in the tab, and says so when there is none", async (t) => {
   const script = path.join(__dirname, "../tmux/claude-focus.sh");
   const window = tmux("new-window", "-d", "-P", "-F", "#{window_id}", "-c", tmp, "cat");

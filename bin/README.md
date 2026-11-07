@@ -892,6 +892,7 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | --- | --- | --- |
 | `M-s` | jump in from any pane, on the tab you are in, and back out | |
 | `M-c` | into the pane running Claude in the tab you are in, from the sidebar or a pane beside it | |
+| `M-a` / `M-A` | go to the next tab that needs you, or the next idle tab (the Idle group's tabs in order, wrapping at the end, from `~/.local/state/tmux-sidebar/idle`, which the daemon writes; without the daemon, every tab whose Claude has no state; the `idle_walk` setting, under Tabs and status bar, hands `M-A` back to the pane), the cursor staying in the new tab's sidebar | |
 | `M-y` | copy the latest reply of the Claude in the tab you are in, the last message it wrote text in, read from its session transcript (`tmux/reply-copy.sh`, `lib/claude-reply.js`; the `copy_reply` setting, under Sessions) | |
 | `M-T` | the whole title of the tab you are in, in a box, which the sidebar cuts at three lines and the status line at its width: the title as the tab bar has it, wrapped, then its branch, directory, PR and Linear ticket as far as they are known, read from tmux and the tab name's cache alone; its Copy the title option (or `y`) copies the title, moved to with `j`/`k` or Tab and taken with Enter or a click, and Close, Esc or a click off the options closes it (`tmux/tab-title.sh`; the `tab_title` setting, under Tabs and status bar) | |
 | `C-w h` / `C-w l` | move in, on the tab you are in, and back out, as between any panes | |

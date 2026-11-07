@@ -354,6 +354,13 @@
     "default": true
   },
   {
+    "key": "idle_walk",
+    "category": "Tabs and status bar",
+    "label": "M-A cycles idle tabs",
+    "description": "M-A goes to the next idle tab, in the sidebar's Idle order, wrapping at the end, as M-a walks the tabs that need you; off, M-A reaches the pane",
+    "default": true
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and status bar",
     "label": "One Claude to a tab",

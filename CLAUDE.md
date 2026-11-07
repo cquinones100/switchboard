@@ -185,7 +185,7 @@ going to a pinned or waiting one first, from the list the
 sidebar daemon writes to `~/.local/state/tmux-sidebar/needs` (each tab's window, Claude pane, session and why it needs you) whenever it
 changes, since only the daemon knows a tab that looks done is still looping
 or working in the background; without the daemon it falls back to the panes'
-own states. `agent-state.sh` runs before every tool call of every Claude
+own states. `M-A` walks the sidebar's Idle the same way (`agent-state.sh idle-next`), from `~/.local/state/tmux-sidebar/idle`, which the daemon writes beside `needs` (`writeIdle`, `idleTabs` in `model.js`), wrapping at the end and from a tab not in it going to the first; without the daemon, every window whose Claude pane has no state (`idle_walk` setting). `agent-state.sh` runs before every tool call of every Claude
 session, so a syntax error in it blocks them all, the fix included: check a
 change with `bash -n` on a copy before it replaces the file. `wt-jump` and the
 second status line show the same state.

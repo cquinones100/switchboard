@@ -9,6 +9,7 @@
 #   agent-state.sh seen <window_id>           from the pane-focus-in hook
 #   agent-state.sh interrupted <pane> <time>  from the sidebar daemon: a turn interrupted on a wait
 #   agent-state.sh next                       from M-a: go to the tab most in need of you
+#   agent-state.sh idle-next                  from M-A: go to the next idle tab
 #
 # Each pane running Claude carries @agent_state (working, waiting, or done) and
 # @agent_since (when it got there). Its window carries @agent, the most urgent
@@ -390,6 +391,55 @@ case "${1:-}" in
     [ "${state:-}" = waiting ] && [[ ${since:-} =~ ^[0-9]+$ ]] && [ "$since" -le "$at" ] || exit 0
     tmux set -pu -t "$pane" @agent_state \; set -pu -t "$pane" @agent_since \; set -pu -t "$pane" @agent_wait 2>/dev/null
     refresh "$window"
+    ;;
+
+  idle-next)
+    # M-A: the tab after this one among the idle ones, wrapping at the end,
+    # or the first when this one isn't idle. The sidebar's Idle, as its daemon
+    # writes it (lib/sidebar/daemon.js, writeIdle), when the daemon runs, since
+    # only it can tell an idle tab from one working in the background or
+    # looping; else every window whose Claude pane has no state, in order.
+    # Pressed from a sidebar, the cursor stays in a sidebar, as with M-a.
+    from_sidebar=$(tmux display -p '#{@sidebar}')
+    here=$(tmux display -p '#{window_id}')
+    idle_file=~/.local/state/tmux-sidebar/idle
+    daemon=$(cat ~/.local/state/tmux-sidebar/daemon.pid 2>/dev/null)
+    if [ -n "$daemon" ] && kill -0 "$daemon" 2>/dev/null && [ -f "$idle_file" ]; then
+      list=$(cat "$idle_file")
+    else
+      # A node pane counts only when Claude runs there (claude-pane.sh), so a
+      # dev server or the Slack relay is no idle tab.
+      # Fields split on \x1f rather than a tab, which read would close up
+      # around an empty @agent_state, @sidebar or @pane_parked.
+      list=$(tmux list-panes -a -F $'#{window_id}\x1f#{pane_id}\x1f#{session_id}\x1f#{@agent_state}\x1f#{pane_current_command}\x1f#{@sidebar}\x1f#{@pane_parked}\x1f#{pane_tty}' |
+        while IFS=$'\x1f' read -r w p s state command sidebar parked tty; do
+          [ -z "$state" ] && [ "$sidebar" != 1 ] && [ "$parked" != 1 ] && runs_claude "$command" "$tty" && printf '%s\t%s\t%s\n' "$w" "$p" "$s"
+        done | awk -F'\t' '!seen[$1]++')
+    fi
+    windows=() panes=() sessions=()
+    while IFS=$'\t' read -r w p s; do
+      [ -n "$w" ] && windows+=("$w") && panes+=("$p") && sessions+=("$s")
+    done <<<"$list"
+    n=${#windows[@]}
+    if [ "$n" -eq 0 ]; then
+      "${0%/*}/say.sh" "No idle tabs."
+      exit 0
+    fi
+    at=-1
+    for i in "${!windows[@]}"; do [ "${windows[$i]}" = "$here" ] && at=$i; done
+    if [ "$at" -ge 0 ] && [ "$n" -eq 1 ]; then
+      "${0%/*}/say.sh" "This is the only idle tab."
+      exit 0
+    fi
+    to=$(( (at + 1) % n ))
+    tmux select-window -t "${windows[$to]}"
+    if [ "$from_sidebar" = 1 ]; then
+      "${0%/*}/sidebar.sh" refocus "${windows[$to]}" &
+    elif [ "${panes[$to]}" != - ]; then
+      tmux select-pane -t "${panes[$to]}"
+    fi
+    [ "${sessions[$to]}" != "$(tmux display -p '#{session_id}')" ] && tmux switch-client -t "${sessions[$to]}"
+    exit 0
     ;;
 
   next)
