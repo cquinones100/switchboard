@@ -166,3 +166,130 @@ pub fn preview(file: &std::path::Path) -> Result<()> {
         .map(|_| ())
         .map_err(|e| anyhow!("Couldn't show it: {e}"))
 }
+
+// ── Option as Alt ───────────────────────────────────────────────────────────
+
+const PLISTBUDDY: &str = "/usr/libexec/PlistBuddy";
+
+/// An app's preferences, exported to a file of their own for PlistBuddy to
+/// read and change, removed when dropped.
+struct Exported {
+    domain: &'static str,
+    file: PathBuf,
+}
+
+impl Exported {
+    fn of(app: super::TerminalApp) -> Option<Exported> {
+        let domain = match app {
+            super::TerminalApp::Terminal => "com.apple.Terminal",
+            super::TerminalApp::ITerm => "com.googlecode.iterm2",
+        };
+        let file =
+            std::env::temp_dir().join(format!("switchboard-{domain}-{}.plist", std::process::id()));
+        let exported = Exported { domain, file };
+        util::run(
+            "defaults",
+            ["export", domain, &exported.file.to_string_lossy()],
+        )
+        .ok()?;
+        Some(exported)
+    }
+
+    /// PlistBuddy's answer to one command, trimmed.
+    fn ask(&self, command: &str) -> Option<String> {
+        util::try_run(PLISTBUDDY, ["-c", command, &self.file.to_string_lossy()])
+            .map(|s| s.trim().to_string())
+    }
+
+    /// Sets an entry, adding it as `kind` when it isn't there.
+    fn set(&self, at: &str, kind: &str, value: &str) -> Result<()> {
+        let file = self.file.to_string_lossy();
+        if util::run(PLISTBUDDY, ["-c", &format!("Set {at} {value}"), &file]).is_err() {
+            util::run(
+                PLISTBUDDY,
+                ["-c", &format!("Add {at} {kind} {value}"), &file],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn import(&self) -> Result<()> {
+        util::run(
+            "defaults",
+            ["import", self.domain, &self.file.to_string_lossy()],
+        )
+        .map(|_| ())
+    }
+}
+
+impl Drop for Exported {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.file);
+    }
+}
+
+/// PlistBuddy wants a space in a key escaped.
+fn plist_key(key: &str) -> String {
+    key.replace(' ', "\\ ")
+}
+
+/// The default profile's entries that make Option act as Alt, its name,
+/// and whether they are set.
+fn option_entries(
+    prefs: &Exported,
+    app: super::TerminalApp,
+) -> Option<(Vec<String>, String, bool)> {
+    match app {
+        super::TerminalApp::Terminal => {
+            let profile = prefs.ask("Print :Default\\ Window\\ Settings")?;
+            let at = format!(
+                ":Window\\ Settings:{}:useOptionAsMetaKey",
+                plist_key(&profile)
+            );
+            let set = prefs.ask(&format!("Print {at}")).as_deref() == Some("true");
+            Some((vec![at], profile, set))
+        }
+        super::TerminalApp::ITerm => {
+            let guid = prefs.ask("Print :Default\\ Bookmark\\ Guid")?;
+            let mut i = 0;
+            loop {
+                let found = prefs.ask(&format!("Print :New\\ Bookmarks:{i}:Guid"))?;
+                if found == guid {
+                    let at = format!(":New\\ Bookmarks:{i}");
+                    let name = prefs
+                        .ask(&format!("Print {at}:Name"))
+                        .unwrap_or_else(|| "Default".into());
+                    let keys: Vec<String> =
+                        ["Option\\ Key\\ Sends", "Right\\ Option\\ Key\\ Sends"]
+                            .iter()
+                            .map(|k| format!("{at}:{k}"))
+                            .collect();
+                    let set = keys
+                        .iter()
+                        .all(|k| prefs.ask(&format!("Print {k}")).as_deref() == Some("2"));
+                    return Some((keys, name, set));
+                }
+                i += 1;
+            }
+        }
+    }
+}
+
+pub fn option_as_alt(app: super::TerminalApp) -> Option<(bool, String)> {
+    let prefs = Exported::of(app)?;
+    let (_, profile, set) = option_entries(&prefs, app)?;
+    Some((set, profile))
+}
+
+pub fn set_option_as_alt(app: super::TerminalApp) -> Result<()> {
+    let prefs = Exported::of(app).ok_or_else(|| anyhow!("couldn't read its preferences"))?;
+    let (entries, _, _) =
+        option_entries(&prefs, app).ok_or_else(|| anyhow!("couldn't find its default profile"))?;
+    for at in entries {
+        match app {
+            super::TerminalApp::Terminal => prefs.set(&at, "bool", "true")?,
+            super::TerminalApp::ITerm => prefs.set(&at, "integer", "2")?,
+        }
+    }
+    prefs.import()
+}

@@ -1,8 +1,8 @@
 //! `switchboard setup [--check] [part...]`: what the binary sets up for
 //! Claude Code, and nothing beside it. Ported from setup.sh's Claude steps;
 //! the dotfiles it linked (tmux, Neovim, lazygit, Ghostty and the rest) are
-//! gone with the programs they configured, so these three parts are all
-//! that is left of it:
+//! gone with the programs they configured, so these parts are all that is
+//! left of it:
 //!
 //! - `claude` (`claude_settings`): Switchboard's hooks, statusline and
 //!   permissions merged into your own `~/.claude/settings.json`.
@@ -10,6 +10,12 @@
 //!   rules and Switchboard's part of them.
 //! - `skills` (`skills`): the skills that ship with Switchboard, written
 //!   into `~/.claude/skills` from the copies compiled into the binary.
+//! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal.
+//! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
+//!   your home that leads nowhere now, tidied.
+//!
+//! The guided setup also says which optional parts are there (`optional`):
+//! the services and programs a feature needs, each with how to set it up.
 //!
 //! As setup.sh did, running it again changes only what isn't in place yet:
 //! each part says what it changed, or that it was up to date, and `--check`
@@ -29,7 +35,10 @@
 
 pub mod claude_md;
 pub mod claude_settings;
+pub mod leftovers;
+pub mod optional;
 pub mod skills;
+pub mod terminal;
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -37,7 +46,7 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 
-use crate::{paths, util};
+use crate::{paths, platform, util};
 
 /// What a part changed, said as it goes: setup.sh's `change`. The part's
 /// name is printed above its first change, so a part with nothing to do says
@@ -101,6 +110,16 @@ pub const PARTS: &[Part] = &[
         name: "skills",
         about: "write the skills that ship with Switchboard into ~/.claude/skills",
         run: skills::run,
+    },
+    Part {
+        name: "terminal",
+        about: "make Option act as Alt in your terminal (a Mac's Ghostty, Terminal or iTerm2)",
+        run: terminal::run,
+    },
+    Part {
+        name: "leftovers",
+        about: "remove the tmux version's links that lead nowhere, and run its ~/.zshrc lines through switchboard",
+        run: leftovers::run,
     },
 ];
 
@@ -229,6 +248,8 @@ pub fn ask(check: bool, question: &str) -> bool {
 /// The guided setup's list: a line per part, and what is left at the end.
 struct List {
     left: Vec<String>,
+    /// The optional parts not there, said again at the end.
+    wanted: Vec<String>,
 }
 
 impl List {
@@ -249,7 +270,92 @@ impl List {
 
 /// `switchboard setup` alone: each part offered in turn.
 fn guided(check: bool) -> ExitCode {
-    let mut list = List { left: Vec::new() };
+    let mut list = List {
+        left: Vec::new(),
+        wanted: Vec::new(),
+    };
+    leftovers_offered(check, &mut list);
+    claude_code(check, &mut list);
+    println!("\nThe terminal");
+    terminal_offered(check, &mut list);
+    println!("\nOptional, each for what it names");
+    for part in optional::all() {
+        if part.there {
+            list.ok(&part.what);
+        } else {
+            list.optional(&part.what);
+            list.wanted.push(part.name);
+        }
+    }
+    finish(check, list)
+}
+
+/// What the tmux version left, said only when there is any.
+fn leftovers_offered(check: bool, list: &mut List) {
+    let part = part_named("leftovers").expect("a part");
+    match pending(part) {
+        Err(e) => {
+            println!("From the tmux version");
+            list.todo(format!("what the tmux version left: {e:#}"));
+        }
+        Ok(0) => return,
+        Ok(n) => {
+            println!("From the tmux version");
+            if check {
+                list.todo(format!(
+                    "{n} of the tmux version's links or ~/.zshrc lines lead nowhere: switchboard setup leftovers"
+                ));
+            } else if ask(
+                check,
+                "Remove the tmux version's links that lead nowhere now, and run its worktree lines in ~/.zshrc or ~/.bashrc through switchboard? A copy of each file changed is left beside it.",
+            ) {
+                if apply(part) {
+                    list.ok("tidied what the tmux version left");
+                } else {
+                    list.todo("switchboard setup leftovers failed");
+                }
+            } else {
+                list.optional(
+                    "the tmux version's links that lead nowhere, and its ~/.zshrc lines: switchboard setup leftovers",
+                );
+            }
+        }
+    }
+    println!();
+}
+
+/// Option as Alt: changed after asking where setup can, a line to add said
+/// for any other terminal.
+fn terminal_offered(check: bool, list: &mut List) {
+    let part = part_named("terminal").expect("a part");
+    match pending(part) {
+        Err(e) => list.todo(format!("Option as Alt: {e:#}")),
+        Ok(n) if n > 0 => {
+            if ask(
+                check,
+                "Make Option act as Alt in your terminal, which every M- key needs?",
+            ) {
+                if apply(part) {
+                    list.ok("Option acts as Alt; open a new window for it to take");
+                } else {
+                    list.todo("switchboard setup terminal failed");
+                }
+            } else {
+                list.optional("Option as Alt, which every M- key needs: switchboard setup terminal");
+            }
+        }
+        Ok(_) => match terminal::hint() {
+            Some(hint) => list.optional(&format!("Option as Alt, which every M- key needs, in {hint}")),
+            None if platform::NAME == "macOS" => list.ok("Option acts as Alt in your terminal"),
+            None => list.optional(
+                "the M- keys are Alt, which a Linux terminal sends as it is; one your desktop takes for itself can be moved in ~/.config/switchboard/keys.json",
+            ),
+        },
+    }
+}
+
+/// Claude Code's three parts, offered when Claude Code is there.
+fn claude_code(check: bool, list: &mut List) {
     println!("Claude Code");
     if util::which("switchboard").is_some() {
         list.ok("switchboard on your PATH, which Claude Code's hooks and statusline run");
@@ -262,7 +368,7 @@ fn guided(check: bool) -> ExitCode {
         list.optional(
             "Claude Code, which every tab here runs, for tab states, the sidebar's sessions and M-a: curl -fsSL https://claude.ai/install.sh | bash",
         );
-        return finish(check, list);
+        return;
     }
     let [settings, md, skills] = [&PARTS[0], &PARTS[1], &PARTS[2]];
 
@@ -371,13 +477,18 @@ fn guided(check: bool) -> ExitCode {
             own.join(" ")
         ));
     }
-    finish(check, list)
 }
 
 /// The end of the guided setup: every ✗ again, so none has to be found
 /// among the ticks.
 fn finish(check: bool, list: List) -> ExitCode {
     println!();
+    if !list.wanted.is_empty() {
+        println!(
+            "Left to do when you want what each is for (Optional, above): {}.",
+            list.wanted.join("; ")
+        );
+    }
     if !list.left.is_empty() {
         println!("Left to do:");
         for what in &list.left {

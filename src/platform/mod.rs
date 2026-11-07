@@ -140,3 +140,27 @@ pub fn paste_image(file: &std::path::Path) -> bool {
 pub fn preview(file: &std::path::Path) -> Result<()> {
     os::preview(file)
 }
+
+/// A terminal app whose own preferences can make Option act as Alt, which
+/// every `M-` key needs on a Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalApp {
+    /// macOS's Terminal: its default profile's "Use Option as Meta key".
+    Terminal,
+    /// iTerm2: its default profile's Option keys sending Esc+.
+    ITerm,
+}
+
+/// Whether `app`'s default profile makes Option act as Alt, with that
+/// profile's name; `None` where its preferences can't be read (it was never
+/// opened, or this isn't a Mac).
+pub fn option_as_alt(app: TerminalApp) -> Option<(bool, String)> {
+    os::option_as_alt(app)
+}
+
+/// Makes Option act as Alt in `app`'s default profile, through macOS's own
+/// preferences (`defaults export` and `import`, as setup.sh did), so the
+/// app takes the change in its next window, or once it starts again.
+pub fn set_option_as_alt(app: TerminalApp) -> Result<()> {
+    os::set_option_as_alt(app)
+}

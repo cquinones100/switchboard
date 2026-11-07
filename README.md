@@ -10,7 +10,7 @@ It is opinionated: the defaults are how it is meant to be used, and Settings (`M
 
 - Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
 - [Claude Code](https://claude.com/claude-code), which the tabs run, and git.
-- A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty.
+- A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". `switchboard setup` offers to set it in Ghostty, Terminal and iTerm2. Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty.
 
 Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex each turn on a part of it when you have them; the [guide](docs/guide.md) says what each needs.
 
@@ -40,7 +40,7 @@ Then start it:
 switchboard
 ```
 
-`switchboard setup` puts in place what Claude Code needs for the workspace: the hooks that tell each tab what its Claude is doing, the statusline, the permissions its skills run with, a `~/.claude/CLAUDE.md` that imports Switchboard's part beside your own rules, and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). It merges into your own `~/.claude/settings.json` rather than replacing it, keeps a copy of the file before, and keeps a skill of your own by the same name. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
+`switchboard setup` puts in place what Claude Code needs for the workspace: the hooks that tell each tab what its Claude is doing, the statusline, the permissions its skills run with, a `~/.claude/CLAUDE.md` that imports Switchboard's part beside your own rules, and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest). It merges into your own `~/.claude/settings.json` rather than replacing it, keeps a copy of the file before, and keeps a skill of your own by the same name. It also offers to make Option act as Alt in a Mac's terminal, to tidy the links and `~/.zshrc` lines a tmux version of Switchboard left, and says which optional parts are missing (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
 
 ## First keys
 

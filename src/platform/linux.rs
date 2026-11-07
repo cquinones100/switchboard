@@ -426,3 +426,14 @@ pub fn paste_image(file: &std::path::Path) -> bool {
 pub fn preview(file: &std::path::Path) -> Result<()> {
     open(&file.to_string_lossy())
 }
+
+// ── Option as Alt ───────────────────────────────────────────────────────────
+
+/// Option is a Mac's key: a Linux terminal sends Alt as it is.
+pub fn option_as_alt(_app: super::TerminalApp) -> Option<(bool, String)> {
+    None
+}
+
+pub fn set_option_as_alt(_app: super::TerminalApp) -> Result<()> {
+    Err(anyhow!("Option as Alt is a Mac terminal's setting"))
+}

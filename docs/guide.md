@@ -165,7 +165,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 
 ### Option as Alt on a Mac
 
-On a Mac, every `M-` key needs the terminal to send Option as Alt; otherwise Option types a character (`˙`, `∆`, `∫`) into the pane and nothing happens. Set it in the terminal:
+On a Mac, every `M-` key needs the terminal to send Option as Alt; otherwise Option types a character (`˙`, `∆`, `∫`) into the pane and nothing happens. `switchboard setup` sets it in Ghostty, Terminal and iTerm2 after asking (its `terminal` part, [below](#option-as-alt-and-the-tmux-versions-leftovers)); by hand, set it in the terminal:
 
 - Ghostty: `macos-option-as-alt = true` in its config (`left` keeps the right Option for typing accented characters).
 - iTerm2: Settings, Profiles, Keys, then "Left Option key" (and the right one) set to "Esc+".
@@ -1044,15 +1044,24 @@ switchboard setup                  the guided setup
 switchboard setup --check          say what would change, and change nothing
 switchboard setup claude skills    only those parts, asking nothing
 switchboard setup --parts          list the parts
+switchboard setup --refresh        bring the parts already set up up to date, quietly
 ```
 
-Alone, it is the guided setup. It first checks that `switchboard` is on your PATH, since Claude Code's hooks and statusline run it by name, and that Claude Code is installed; without Claude Code it says how to install it and stops. Then it takes each part in turn. The first time, it asks before the part changes anything (`[Y/n]`: Enter is yes, and a closed input is no, so nothing piped or unattended says yes); once a part is set up, it brings it up to date without asking. It ends with what is left to do, every ✗ again, or "Ready." Running it again changes only what isn't in place yet, and each part says what it changed or that it was up to date. With parts named, it does only those.
+Alone, it is the guided setup. When the tmux version of Switchboard left anything behind (below), it offers to tidy it first. It checks that `switchboard` is on your PATH, since Claude Code's hooks and statusline run it by name, and that Claude Code is installed; without Claude Code it says how to install it and goes on to the terminal. Then it takes each part in turn. The first time, it asks before the part changes anything (`[Y/n]`: Enter is yes, and a closed input is no, so nothing piped or unattended says yes); once a part is set up, it brings it up to date without asking. After Claude Code's parts it looks at the terminal (Option as Alt, below) and then says which optional parts are there, each for what it names, with how to set up the ones that aren't: the GitHub sign-in (`M-v`, the PR views, PR numbers in tab names), the Linear key (`M-i`, the Tickets and Inbox views, ticket titles) and the Linear team `/shape` files tickets in (`linearTeam` in `linear.json`), your calendar's address (the Calendar view), the Slack relay's tokens and owner (`M-S`), Chrome (the PR and ticket views as images, `/walkthrough`'s videos), ffmpeg and Node (`/walkthrough`, `/deploy-test`, `/preview-test`), git-delta, Node and Chrome (`/diff-screenshots`), and Codex (`/review-loop`'s reviewer; Claude reviews without it). GitHub and Linear are left out while Settings turns them off. It ends with the optional parts not there named on one line, then what is left to do, every ✗ again, or "Ready." Running it again changes only what isn't in place yet, and each part says what it changed or that it was up to date. With parts named, it does only those.
 
 | Part | What it does |
 |---|---|
 | `claude` | Adds Switchboard's hooks, statusline and permissions to `~/.claude/settings.json` |
 | `claude-md` | Writes `~/.claude/CLAUDE.md` to import your rules and Switchboard's part |
 | `skills` | Writes the skills that ship with Switchboard into `~/.claude/skills` |
+| `terminal` | Makes Option act as Alt in a Mac's terminal: Ghostty's config, Terminal's or iTerm2's default profile |
+| `leftovers` | Removes the tmux version's links that lead nowhere, and runs its `~/.zshrc` lines through `switchboard` |
+
+### Option as Alt, and the tmux version's leftovers
+
+Every `M-` key needs a Mac's terminal to send Option as Alt ([Option as Alt on a Mac](#option-as-alt-on-a-mac)). The `terminal` part sets it where it can: a Ghostty config of yours (`~/.config/ghostty/config`, or the one in `~/Library/Application Support/com.mitchellh.ghostty/`) gets `macos-option-as-alt = true` unless it already sets `macos-option-as-alt`, and one is made when you run it in Ghostty with none; and when it runs in Terminal or iTerm2, that app's default profile is changed through macOS's own preferences (`defaults export` and `import`): "Use Option as Meta key" in Terminal, both Option keys sending Esc+ in iTerm2. Open a new window, or the app again, for it to take. The guided setup asks first, and for another terminal it says the line to add to its config. On Linux a terminal sends Alt as it is, so the part changes nothing there; under xterm the guided setup says to add `XTerm*metaSendsEscape: true` to `~/.Xresources`, and otherwise reminds you that a key your desktop takes for itself can be moved in `keys.json`.
+
+A clone of the tmux version pulled past the rewrite leaves links into files it no longer has: the scripts setup.sh linked into `~/.local/bin` and `~/.config/tmux`, and `~/.claude/commands`, `~/.claude/hooks/*`, `~/.claude/statusline-command.sh` and `~/.claude/otel-headers.sh`. Its `~/.zshrc` lines, `eval "$(worktree-from-ticket init zsh)"` and the rest, then fail on every new shell. The `leftovers` part removes each such link that leads nowhere into a Switchboard clone (a link that still leads somewhere, or anywhere else, is left alone), and turns each of those lines in `~/.zshrc` or `~/.bashrc` whose script no longer runs into the same line through the binary (`eval "$(switchboard worktree-from-ticket init zsh)"`), so the functions stay; the file is changed through a link to it, with a copy as it was left beside it as `<name>.bak.<time>`. The guided setup offers it only when there is something to tidy.
 
 ### Claude Code's settings
 

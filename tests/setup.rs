@@ -56,7 +56,19 @@ impl Home {
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")
-            .env_remove("SWITCHBOARD_PULL_ONLY");
+            .env_remove("SWITCHBOARD_PULL_ONLY")
+            // The terminal and the services the guided setup looks at are
+            // the test's: none.
+            .env_remove("TERM_PROGRAM")
+            .env_remove("LC_TERMINAL")
+            .env_remove("KITTY_WINDOW_ID")
+            .env_remove("ALACRITTY_WINDOW_ID")
+            .env_remove("ALACRITTY_SOCKET")
+            .env_remove("XTERM_VERSION")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("LINEAR_API_KEY");
         cmd
     }
 
@@ -751,7 +763,8 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     let before = snapshot(&h.home);
     let second = ok(&h.run(&["setup"]));
     assert!(!second.contains("[Y/n]"), "{second}");
-    assert_eq!(second.matches('✓').count(), 4, "{second}");
+    let claude = second.split("\n\n").next().unwrap();
+    assert_eq!(claude.matches('✓').count(), 4, "{second}");
     assert_eq!(snapshot(&h.home), before, "nothing changed");
     for part in ["claude", "claude-md", "skills"] {
         assert_eq!(
@@ -817,6 +830,107 @@ fn a_new_build_brings_its_parts_to_what_is_set_up_once() {
 }
 
 #[test]
+fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
+    use std::os::unix::fs::symlink;
+    let h = Home::new("setup-leftovers");
+    // A clone of the tmux version pulled past the rewrite: its bin/, tmux/
+    // and claude/ gone, and the links setup.sh made into them left.
+    let clone = h.path("switchboard");
+    fs::create_dir_all(clone.join("assets/skills")).unwrap();
+    fs::write(clone.join("Cargo.toml"), "").unwrap();
+    for dir in [".local/bin", ".config/tmux", ".claude/hooks"] {
+        fs::create_dir_all(h.path(dir)).unwrap();
+    }
+    symlink(
+        clone.join("bin/worktree-from-ticket"),
+        h.path(".local/bin/worktree-from-ticket"),
+    )
+    .unwrap();
+    symlink(
+        clone.join("bin/skill-path"),
+        h.path(".local/bin/skill-path"),
+    )
+    .unwrap();
+    symlink(
+        clone.join("tmux/agent-state.sh"),
+        h.path(".config/tmux/agent-state.sh"),
+    )
+    .unwrap();
+    symlink(
+        clone.join("claude/hooks/enforce.sh"),
+        h.path(".claude/hooks/enforce.sh"),
+    )
+    .unwrap();
+    symlink(clone.join("claude/commands"), h.path(".claude/commands")).unwrap();
+    symlink(
+        clone.join("claude/statusline-command.sh"),
+        h.path(".claude/statusline-command.sh"),
+    )
+    .unwrap();
+    // A link of your own leading nowhere, and one into the clone that still
+    // leads somewhere, are left alone.
+    symlink(h.path("elsewhere/bin/tool"), h.path(".local/bin/tool")).unwrap();
+    fs::write(clone.join("Cargo.lock"), "").unwrap();
+    symlink(clone.join("Cargo.lock"), h.path(".local/bin/kept")).unwrap();
+    // ~/.zshrc as setup.sh left it, through a link into your dotfiles.
+    fs::create_dir_all(h.path("dotfiles")).unwrap();
+    let zshrc = "export A=1\neval \"$(worktree-from-ticket init zsh)\"\neval \"$(worktree-from-note init zsh)\"\n";
+    fs::write(h.path("dotfiles/zshrc"), zshrc).unwrap();
+    symlink(h.path("dotfiles/zshrc"), h.path(".zshrc")).unwrap();
+
+    let check = ok(&h.run(&["setup", "--check", "leftovers"]));
+    assert!(
+        check.contains("would: remove ~/.local/bin/worktree-from-ticket"),
+        "{check}"
+    );
+    assert!(check.contains("~/.zshrc"), "{check}");
+    assert!(h.path(".local/bin/skill-path").symlink_metadata().is_ok());
+
+    // The guided setup asks, and a closed input says no.
+    let closed = String::from_utf8_lossy(&h.run(&["setup"]).stdout).into_owned();
+    assert!(closed.contains("From the tmux version"), "{closed}");
+    assert!(closed.contains("[Y/n]"), "{closed}");
+    assert!(h.path(".claude/commands").symlink_metadata().is_ok());
+    assert_eq!(read(&h.path("dotfiles/zshrc")), zshrc);
+
+    // Yes, and each goes.
+    let yes = String::from_utf8_lossy(&h.run_with(&["setup"], "y\n").stdout).into_owned();
+    assert!(yes.contains("✓ tidied what the tmux version left"), "{yes}");
+    for gone in [
+        ".local/bin/worktree-from-ticket",
+        ".local/bin/skill-path",
+        ".config/tmux/agent-state.sh",
+        ".claude/hooks/enforce.sh",
+        ".claude/commands",
+        ".claude/statusline-command.sh",
+    ] {
+        assert!(h.path(gone).symlink_metadata().is_err(), "{gone}");
+    }
+    assert!(h.path(".local/bin/tool").symlink_metadata().is_ok());
+    assert!(h.path(".local/bin/kept").symlink_metadata().is_ok());
+    assert!(
+        h.path(".zshrc")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        read(&h.path("dotfiles/zshrc")),
+        "export A=1\neval \"$(switchboard worktree-from-ticket init zsh)\"\neval \"$(switchboard worktree-from-note init zsh)\"\n"
+    );
+    assert_eq!(backups(&h.path("dotfiles"), "zshrc.bak."), 1);
+
+    // Nothing left: the part is up to date and the guided setup says nothing of it.
+    assert_eq!(
+        ok(&h.run(&["setup", "leftovers"])),
+        "leftovers: up to date\n"
+    );
+    let again = String::from_utf8_lossy(&h.run(&["setup"]).stdout).into_owned();
+    assert!(!again.contains("From the tmux version"), "{again}");
+}
+
+#[test]
 fn parts_are_listed_and_an_unknown_one_refused() {
     let h = Home::new("setup-parts");
     let parts = ok(&h.run(&["setup", "--parts"]));
@@ -824,7 +938,10 @@ fn parts_are_listed_and_an_unknown_one_refused() {
         .lines()
         .map(|l| l.split('\t').next().unwrap())
         .collect();
-    assert_eq!(names, ["claude", "claude-md", "skills"]);
+    assert_eq!(
+        names,
+        ["claude", "claude-md", "skills", "terminal", "leftovers"]
+    );
     assert!(
         parts
             .lines()

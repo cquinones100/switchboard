@@ -72,7 +72,7 @@ The workspace:
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
-| `setup` | `switchboard setup`: Claude Code's hooks, statusline, permissions, CLAUDE.md and skills |
+| `setup` | `switchboard setup`: Claude Code's hooks, statusline, permissions, CLAUDE.md and skills; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
 | `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
 | `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `wait-deploy` and the rest) |
@@ -127,7 +127,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | `gh` | GitHub's API over reqwest; the token from `GH_TOKEN` or `GITHUB_TOKEN`, `gh auth token` when gh is there, else a stored secret |
 | `security`, `pbcopy`, `osascript`, `ioreg`, `open` | `src/platform/` |
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
-| `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (hooks, statusline, skills) and release downloads |
+| `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (hooks, statusline, skills, the terminal, the leftovers, the optional report), a new build's first run, and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
 | `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
 | `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`) |
@@ -147,5 +147,5 @@ Decisions left to the maintainer before the rewrite is merged:
 
 - **The release repository.** `src/update/release.rs`'s `REPO`, `install.sh`'s `REPO` and the line in its opening comment, and README's install line and clone URL all name the repository the rewrite was made in. They change together, to the repository it lands in.
 - **The modifier on Linux.** Every key is Alt, as on a Mac with Option as Alt. Whether Linux, where desktops and terminals take some Alt keys for themselves, gets a choice (a `modifier` setting, Alt by default, was proposed) is undecided.
-- **Clones of the tmux version.** Their hourly update fast-forwards `main` and runs `./setup.sh`, which is gone, leaving their tmux, Neovim and `bin/` links pointing at removed files. Whether they get a last tmux-version commit saying to install the binary, or something else, is undecided. `switchboard setup` already turns a `~/.claude/settings.json` or `~/.claude/CLAUDE.md` linked into such a clone into files of your own, from the clone's history once the files are gone.
+- **Clones of the tmux version.** Their hourly update fast-forwards `main` and runs `./setup.sh`, which is gone, leaving their tmux, Neovim and `bin/` links pointing at removed files. Whether they get a last tmux-version commit saying to install the binary, or something else, is undecided. `switchboard setup` already turns a `~/.claude/settings.json` or `~/.claude/CLAUDE.md` linked into such a clone into files of your own, from the clone's history once the files are gone, and its `leftovers` part removes the links into the clone's removed `bin/`, `tmux/` and `claude/` and runs the `~/.zshrc` lines that ran its worktree scripts through the binary.
 - **The review loop over the branch** (`/review-loop`, Claude reviewing where Codex isn't installed), offered before the PR.
