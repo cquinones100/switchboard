@@ -56,6 +56,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Tell the workspace what a Claude session is doing (run by Claude Code's hooks)",
     },
     Command {
+        name: "setup",
+        run: crate::setup::main,
+        about: "Set Claude Code up for Switchboard: its hooks, statusline, CLAUDE.md and skills",
+    },
+    Command {
         name: "statusline",
         run: statusline::main,
         about: "Claude Code's statusline, which keeps each session's context and spend (run by Claude Code)",

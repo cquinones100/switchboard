@@ -173,6 +173,13 @@ Each step is a commit (or a few) on the branch, with its tests.
 9. **The notes app**.
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.
+    `switchboard setup` done (src/setup: the `claude`, `claude-md` and
+    `skills` parts and the guided run, `assets/claude-settings.json` with
+    hooks running `switchboard hook <Event>`, the skills compiled in from
+    `assets/skills` by build.rs and moved off tmux onto `switchboard`'s
+    commands, `respawn`, `tabs` and `setting` among them), and `switchboard
+    statusline` done (src/cmd/statusline.rs); left: CI and release builds,
+    self-update.
 11. **Docs and removal**: README, CLAUDE.md, user docs; the old files removed;
     the PR.
 

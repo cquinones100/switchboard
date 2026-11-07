@@ -1,0 +1,282 @@
+//! The `claude` part: Switchboard's part of Claude Code's settings
+//! (`assets/claude-settings.json`: the hooks that run `switchboard hook`, the
+//! statusline, and the permissions its skills and loops need to run
+//! unattended) merged into your own `~/.claude/settings.json`. Ported from
+//! setup.sh's `claude_settings`, whose jq this follows step for step.
+//!
+//! Your file is never a link and stays yours: Claude Code writes `/model`
+//! and "always allow" there, and nothing else in it is touched. Its hooks
+//! replace any hook running the same command, and any the tmux version's
+//! setup added (those running `agent-state.sh`); the statusline takes the
+//! place of none, of the old `statusline-command.sh` or of Switchboard's
+//! own; its permissions are added to yours. So running it again changes
+//! nothing, and a copy of the file before is left beside it. A settings file
+//! that is a link into a clone's `claude/settings.json`, as the whole setup
+//! once made it, becomes your own file with what it held first. Claude Code
+//! reads no settings file after yours, so this is the user layer for Claude:
+//! your own settings are the file itself.
+
+use std::fs;
+use std::path::PathBuf;
+
+use anyhow::{Result, bail};
+use serde_json::{Map, Value};
+
+use super::{Report, home_tilde, is_link, stamp};
+use crate::{paths, util};
+
+/// Switchboard's part, as compiled in.
+pub const ASSET: &str = include_str!("../../assets/claude-settings.json");
+
+/// Switchboard's part, read.
+pub fn ours() -> Value {
+    serde_json::from_str(ASSET).expect("assets/claude-settings.json is JSON")
+}
+
+/// `~/.claude/settings.json`.
+pub fn settings_file() -> PathBuf {
+    paths::claude_dir().join("settings.json")
+}
+
+/// A hook the tmux version's setup added, which Switchboard's replace.
+fn retired(command: &str) -> bool {
+    command.contains("agent-state.sh")
+}
+
+/// Every hook's command in a `hooks` object: `[.[][].hooks[].command]`.
+fn hook_commands(hooks: &Value) -> Vec<String> {
+    let mut commands = Vec::new();
+    for groups in hooks.as_object().into_iter().flat_map(Map::values) {
+        for group in groups.as_array().into_iter().flatten() {
+            for hook in group["hooks"].as_array().into_iter().flatten() {
+                if let Some(c) = hook["command"].as_str() {
+                    commands.push(c.to_string());
+                }
+            }
+        }
+    }
+    commands
+}
+
+/// Whether `settings` already has Switchboard's hooks, or the tmux
+/// version's: set up before, so the guided setup brings it up to date
+/// without asking.
+pub fn has_ours(settings: &Value) -> bool {
+    let ours = hook_commands(&ours()["hooks"]);
+    hook_commands(&settings["hooks"])
+        .iter()
+        .any(|c| retired(c) || ours.contains(c))
+}
+
+/// Whether your settings file has Switchboard's hooks.
+pub fn set_up() -> bool {
+    util::read_json(settings_file()).is_some_and(|s| has_ours(&s))
+}
+
+/// Your settings with Switchboard's merged in, as the jq did.
+pub fn merge(current: &Map<String, Value>, ours: &Value) -> Map<String, Value> {
+    let mut out = current.clone();
+    let our_commands = hook_commands(&ours["hooks"]);
+    let replaced = |c: &str| retired(c) || our_commands.iter().any(|o| o == c);
+
+    // Hooks: yours without any running one of Switchboard's commands (or
+    // the old setup's), groups left empty dropped, then Switchboard's
+    // appended under each event, events in order of their names.
+    let mut hooks = match out.get("hooks") {
+        Some(Value::Object(m)) => m.clone(),
+        _ => Map::new(),
+    };
+    for groups in hooks.values_mut() {
+        let Value::Array(list) = groups else { continue };
+        for group in list.iter_mut() {
+            if let Some(Value::Array(each)) = group.get_mut("hooks") {
+                each.retain(|h| !h["command"].as_str().is_some_and(replaced));
+            }
+        }
+        list.retain(|g| !matches!(g.get("hooks"), Some(Value::Array(each)) if each.is_empty()));
+    }
+    if let Some(theirs) = ours["hooks"].as_object() {
+        let mut events: Vec<&String> = theirs.keys().collect();
+        events.sort();
+        for event in events {
+            let slot = hooks
+                .entry(event.clone())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if !slot.is_array() {
+                *slot = Value::Array(Vec::new());
+            }
+            if let (Value::Array(list), Some(add)) = (slot, theirs[event].as_array()) {
+                list.extend(add.iter().cloned());
+            }
+        }
+    }
+    hooks.retain(|_, v| match v {
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
+        Value::Null => false,
+        _ => true,
+    });
+    out.insert("hooks".into(), Value::Object(hooks));
+
+    // The statusline: Switchboard's, unless you have one of your own.
+    let command = out
+        .get("statusLine")
+        .and_then(|s| s.get("command"))
+        .and_then(Value::as_str)
+        .unwrap_or("statusline-command.sh");
+    if command.contains("statusline-command.sh") || command.starts_with("switchboard statusline") {
+        out.insert("statusLine".into(), ours["statusLine"].clone());
+    }
+
+    // Permissions: yours first, then each of Switchboard's you don't have.
+    let mut permissions = match out.get("permissions") {
+        Some(Value::Object(m)) => m.clone(),
+        _ => Map::new(),
+    };
+    for key in ["allow", "deny"] {
+        let mut list = permissions
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let add: Vec<Value> = ours["permissions"][key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| !list.contains(p))
+            .cloned()
+            .collect();
+        list.extend(add);
+        permissions.insert(key.into(), Value::Array(list));
+    }
+    out.insert("permissions".into(), Value::Object(permissions));
+    out
+}
+
+/// The part.
+pub fn run(r: &mut Report) -> Result<()> {
+    let file = settings_file();
+    let shown = home_tilde(&file);
+    if is_link(&file)
+        && fs::read_link(&file)
+            .is_ok_and(|t| t.to_string_lossy().ends_with("/claude/settings.json"))
+    {
+        if !r.check {
+            let held = fs::read(&file)?;
+            fs::remove_file(&file)?;
+            util::write_atomic(&file, held)?;
+        }
+        r.change(format!("make {shown} your own, from the one it linked to"));
+    }
+    let current = match fs::read_to_string(&file) {
+        Ok(text) if text.trim().is_empty() => Map::new(),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(map)) => map,
+            _ => bail!("{shown} isn't a JSON object; left alone"),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
+        Err(e) => bail!("{shown} can't be read: {e}"),
+    };
+    let merged = merge(&current, &ours());
+    if merged == current {
+        return Ok(());
+    }
+    if !r.check {
+        if file.exists() {
+            let backup = file.with_file_name(format!("settings.json.bak.{}", stamp()));
+            fs::copy(&file, &backup)?;
+        }
+        let text = format!("{}\n", util::json_pretty(&Value::Object(merged)));
+        util::write_atomic(&file, text)?;
+    }
+    r.change(format!(
+        "add Switchboard's hooks, statusline and permissions to {shown}"
+    ));
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn object(v: Value) -> Map<String, Value> {
+        v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn yours_are_kept_and_switchboard_s_added_once() {
+        let product = ours();
+        let yours = object(json!({
+            "model": "sonnet",
+            "permissions": { "allow": ["Bash(make *)", "Bash(git log *)"] },
+            "statusLine": { "type": "command", "command": "my-statusline" },
+            "hooks": { "Stop": [{ "hooks": [
+                { "type": "command", "command": "say done" },
+                { "type": "command", "command": "bash ~/.config/tmux/agent-state.sh set done" }
+            ] }] }
+        }));
+        let merged = merge(&yours, &product);
+        assert_eq!(merged["model"], "sonnet");
+        assert_eq!(
+            merged["statusLine"], yours["statusLine"],
+            "a statusline of your own stays"
+        );
+        let mut allow = vec![json!("Bash(make *)"), json!("Bash(git log *)")];
+        allow.extend(
+            product["permissions"]["allow"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|p| *p != "Bash(git log *)")
+                .cloned(),
+        );
+        assert_eq!(merged["permissions"]["allow"], Value::Array(allow));
+        assert_eq!(
+            merged["permissions"]["deny"],
+            product["permissions"]["deny"]
+        );
+        let mut stop = vec![json!({ "hooks": [{ "type": "command", "command": "say done" }] })];
+        stop.extend(product["hooks"]["Stop"].as_array().unwrap().iter().cloned());
+        assert_eq!(
+            merged["hooks"]["Stop"],
+            Value::Array(stop),
+            "your hook kept, the old setup's gone, Switchboard's once"
+        );
+        assert_eq!(
+            merged["hooks"]["PreToolUse"],
+            product["hooks"]["PreToolUse"]
+        );
+        assert_eq!(
+            merge(&merged, &product),
+            merged,
+            "a second merge changes nothing"
+        );
+        assert!(has_ours(&Value::Object(merged)));
+        assert!(!has_ours(&json!({ "hooks": { "Stop": [] } })));
+    }
+
+    #[test]
+    fn the_old_statusline_and_none_are_replaced() {
+        let product = ours();
+        for before in [
+            json!({}),
+            json!({ "statusLine": { "type": "command", "command": "bash ~/.claude/statusline-command.sh" } }),
+        ] {
+            let merged = merge(&object(before), &product);
+            assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
+        }
+    }
+
+    #[test]
+    fn every_hook_runs_switchboard_hook_with_its_event() {
+        let product = ours();
+        for (event, groups) in product["hooks"].as_object().unwrap() {
+            for group in groups.as_array().unwrap() {
+                for hook in group["hooks"].as_array().unwrap() {
+                    assert_eq!(hook["command"], format!("switchboard hook {event}"));
+                }
+            }
+        }
+    }
+}

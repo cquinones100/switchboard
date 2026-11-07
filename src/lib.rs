@@ -36,6 +36,8 @@
 //!   ticket, any link, search everything, and whether the PR can merge.
 //! - `status`: the status line's button, health light and second line, and
 //!   dark and light.
+//! - `setup`: what `switchboard setup` puts in place for Claude Code: its
+//!   hooks, statusline and permissions, your CLAUDE.md, and the skills.
 
 pub mod agent;
 pub mod cmd;
@@ -53,6 +55,7 @@ pub mod platform;
 pub mod presence;
 pub mod requests;
 pub mod settings;
+pub mod setup;
 pub mod sidebar;
 pub mod sources;
 pub mod status;
