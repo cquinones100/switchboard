@@ -415,3 +415,35 @@ test("working a note continuously takes items with a settled plan first, then th
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("working a note continuously never takes an item wtn started in the last 30 minutes, even once its worktree and branch are gone, and takes it again after", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-claims-")));
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const popup = path.join(__dirname, "../tmux/wtn-open.zsh");
+  try {
+    const repo = path.join(tmp, "repo");
+    fs.mkdirSync(path.join(tmp, "Notes"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "Notes/Work.md"), "# Work\n\n- [ ] Landed\n- [ ] Other\n");
+    fs.writeFileSync(path.join(tmp, "Notes/Elsewhere.md"), "# Elsewhere\n\n- [ ] Landed\n");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "3"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    // queue-and-clean's cleanup: the worktree and its branch removed.
+    execFileSync("git", ["-C", repo, "worktree", "remove", path.join(repo, ".claude/worktrees/note-landed")], { env });
+    execFileSync("git", ["-C", repo, "branch", "-q", "-D", "note/landed"], { env });
+    const queue = (note) => execFileSync("zsh", [popup, "queue", note], { cwd: repo, env, encoding: "utf8" }).trim().split("\n");
+    assert.deepEqual(queue("Work.md"), ["4\tOther"], "still taken, from wtn's claims file");
+    assert.deepEqual(queue("Elsewhere.md"), ["3\tLanded"], "the same words in another note are another item");
+
+    const claims = path.join(tmp, ".local/state/switchboard/wtn-claims.tsv");
+    const old = Math.floor(Date.now() / 1000) - 31 * 60;
+    fs.writeFileSync(claims, fs.readFileSync(claims, "utf8").replace(/^\d+/m, String(old)));
+    assert.deepEqual(queue("Work.md"), ["3\tLanded", "4\tOther"], "offered again after 30 minutes");
+
+    fs.writeFileSync(claims, fs.readFileSync(claims, "utf8").replace(/^\d+/m, String(old - 2 * 24 * 60 * 60)));
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "4"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    assert.deepEqual(fs.readFileSync(claims, "utf8").trim().split("\n").map((row) => row.split("\t").slice(1).join("\t")), ["Work.md\tOther"], "a claim over a day old dropped by the next");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});

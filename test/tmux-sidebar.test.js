@@ -4508,6 +4508,79 @@ test("k from the top row of tabs reaches the line of the note worked continuousl
   }
 });
 
+test("a tab of the mode whose worktree queue-and-clean has removed is landing, not left, until its pane is back in the main clone", () => {
+  const repo = path.join(tmp, "autopilot-landing");
+  const worktree = path.join(repo, ".claude/worktrees/x");
+  fs.mkdirSync(path.join(repo, ".git/worktrees/x"), { recursive: true });
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${path.join(repo, ".git/worktrees/x")}\n`);
+  fs.writeFileSync(path.join(repo, ".git/worktrees/x/commondir"), "../..\n");
+  const now = Date.now() / 1000;
+  const at = (dir) => ({ id: "@1", state: "idle", path: dir, claude: { cwd: dir }, panes: [{ pane_id: "%1", pane_current_path: dir }], autopilot: { since: now - 600, inWorktree: true, item: "One" } });
+  assert.equal(sidebar.placeOf({ ...at(worktree), state: "working" }, repo, now).kind, "busy");
+  fs.rmSync(worktree, { recursive: true });
+  assert.equal(sidebar.placeOf(at(worktree), repo, now).kind, "landing", "its pane still in the removed worktree, which would read as the main clone around it");
+  assert.equal(sidebar.placeOf(at(os.tmpdir()), repo, now).kind, "landing", "anywhere but a main clone");
+  assert.equal(sidebar.placeOf(at(repo), repo, now).kind, "left", "back in the main clone");
+});
+
+test("the mode holds a landed tab's item while it lands and once it has left, until the note shows it ticked or 10 minutes pass", async () => {
+  const dir = path.join(tmp, "autopilot-held");
+  const repo = path.join(dir, "repo");
+  const worktree = path.join(repo, ".claude/worktrees/x");
+  const notes = path.join(dir, "Notes");
+  const note = path.join(notes, "Work.md");
+  fs.mkdirSync(path.join(repo, ".git/worktrees/x"), { recursive: true });
+  fs.mkdirSync(worktree, { recursive: true });
+  fs.mkdirSync(notes, { recursive: true });
+  fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${path.join(repo, ".git/worktrees/x")}\n`);
+  fs.writeFileSync(path.join(repo, ".git/worktrees/x/commondir"), "../..\n");
+  // Changed long enough ago to have settled; each change set a different time, so it reads as changed.
+  const settled = (text, ago) => {
+    fs.writeFileSync(note, text);
+    fs.utimesSync(note, new Date(Date.now() - ago), new Date(Date.now() - ago));
+  };
+  settled("# Work\n\n- [ ] One\n- [ ] Two\n", 120_000);
+  // A stand-in for wtn-open.zsh's next, which says what it was told to skip and opens nothing real.
+  const stub = path.join(dir, "wtn-open.zsh");
+  const skipFile = path.join(dir, "skip");
+  fs.writeFileSync(stub, ["[[ $1 == queue ]] && exit 0", `print -r -- "$WTN_SKIP" > ${JSON.stringify(skipFile)}`, "print -r -- $'9\\t@99\\tother'"].join("\n"));
+  const saved = { ...process.env };
+  const realNow = Date.now;
+  Object.assign(process.env, { TMUX_SIDEBAR_WTN_OPEN: stub, NOTES_DIR: notes });
+  const batches = [];
+  const pilot = sidebar.autopilot({ batch: (cmds) => batches.push(...cmds), gapMs: 0 });
+  const tab = (dir, marked = true) => ({ id: "@1", state: "idle", path: dir, claude: { cwd: dir }, panes: [{ pane_id: "%1", pane_current_path: dir }], autopilot: marked ? { since: realNow() / 1000 - 600, inWorktree: true, item: "One" } : undefined });
+  const skipped = async (tabs) => {
+    fs.rmSync(skipFile, { force: true });
+    pilot.check(tabs, { away: false });
+    for (let i = 0; i < 100 && !fs.existsSync(skipFile); i++) await wait(50);
+    await wait(50);
+    return fs.readFileSync(skipFile, "utf8").split("\n");
+  };
+  try {
+    sidebar.writeAutopilot({ on: true, note: "Work.md", repo, slots: 1, cap: 5, paused: false, said: "" });
+    fs.rmSync(worktree, { recursive: true });
+    assert.ok((await skipped([tab(worktree)])).includes("One"), "landing, its slot free but its item held");
+    assert.ok((await skipped([tab(repo)])).includes("One"), "the check it leaves on");
+    assert.ok(batches.some((cmd) => cmd.includes("@autopilot_left") || (cmd.includes("@autopilot") && cmd.includes("-u"))), "marked landed as it leaves");
+    assert.ok((await skipped([tab(repo, false)])).includes("One"), "still held once it has left, while the note lists it unticked");
+    settled("# Work\n\n- [ ] Two\n\n- [x] One\n", 130_000);
+    assert.ok(!(await skipped([tab(repo, false)])).includes("One"), "let go once the note shows it ticked");
+
+    settled("# Work\n\n- [ ] One\n- [ ] Two\n", 140_000);
+    await skipped([tab(repo)]);
+    assert.ok((await skipped([tab(repo, false)])).includes("One"), "held again for another landing");
+    Date.now = () => realNow() + 11 * 60_000;
+    assert.ok(!(await skipped([tab(repo, false)])).includes("One"), "let go after 10 minutes with no tick");
+  } finally {
+    Date.now = realNow;
+    Object.keys(process.env).filter((key) => !(key in saved)).forEach((key) => delete process.env[key]);
+    Object.assign(process.env, saved);
+    sidebar.writeAutopilot({ on: false });
+  }
+});
+
 test("a tab of the mode working a note still counts as working while M-d or lazygit stands in for its Claude, from the parked window's state", () => {
   const repo = path.join(tmp, "autopilot-inplace");
   const worktree = path.join(repo, ".claude/worktrees/x");

@@ -83,6 +83,26 @@ const shellFunction = () => `wtn() {
   claude "$prompt"
 }`;
 
+// Each item wtn starts, kept a day, `<seconds>\t<note>\t<item's first line>`:
+// the work-a-note mode (wtn-open.zsh next) takes an item claimed in the last
+// 30 minutes as taken even once its worktree is gone, since queue-and-clean
+// may remove it a moment before ticking the item.
+const CLAIMS = () => path.join(os.homedir(), ".local/state/switchboard/wtn-claims.tsv");
+// Appended, since M-p's popup starts several wtn at once and a line appended
+// is written whole; rewritten without the rows over a day old only when its
+// first row is that old, at most once a day.
+const DAY_S = 24 * 60 * 60;
+const claim = (note, item) => {
+  const now = Math.floor(Date.now() / 1000);
+  fs.mkdirSync(path.dirname(CLAIMS()), { recursive: true });
+  fs.appendFileSync(CLAIMS(), `${now}\t${note}\t${item}\n`);
+  const text = fs.readFileSync(CLAIMS(), "utf8");
+  if (now - Number(text.split("\t")[0]) < DAY_S) return;
+  const kept = text.split("\n").filter((row) => row && now - Number(row.split("\t")[0]) < DAY_S);
+  fs.writeFileSync(`${CLAIMS()}.${process.pid}`, kept.map((row) => `${row}\n`).join(""));
+  fs.renameSync(`${CLAIMS()}.${process.pid}`, CLAIMS());
+};
+
 const notesDir = () => fs.realpathSync(process.env.NOTES_DIR || path.join(os.homedir(), "Notes"));
 
 // The note's file: a path, absolute or within the notes directory, ".md"
@@ -240,6 +260,7 @@ const main = () => {
   })();
   ensureWorktree(worktreePath, branch, { work: "item", command: "wtn", start });
   gitRun(["-C", root, "config", `branch.${branch}.wtnItem`, identity]);
+  claim(path.relative(dir, file), first);
   linkLocalSettings(root, worktreePath);
 
   const extra = prompts.join(" ").replace(/\s+/g, " ").trim();

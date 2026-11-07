@@ -273,11 +273,17 @@ an item whose plan needs a choice is never taken. A tab waiting on you, or
 finished and waiting for your answer, frees its place among those working but
 still counts toward the most open, and a tab queue-and-clean has landed and
 moved back to the main clone leaves the mode, so the next item opens in its
-place. That landed tab says `landed` and closes itself once you leave it
-after having it in front for a moment, or half an hour after landing if you
-never look; a prompt typed in it after landing keeps it open as yours
-(Settings' "Close a worked note's landed tabs", `autopilot_close`). Its
-tabs say `auto` in the sidebar, and while it is on, mission
+place. While it lands, its worktree removed but the tab not back in a main
+clone yet, it holds its place as a tab waiting on you does, and its item stays
+held until the note shows it ticked (or for 10 minutes), so the item is never
+opened again in the moment between the cleanup and the tick. `wtn` also keeps
+each item it starts in `~/.local/state/switchboard/wtn-claims.tsv`, and the
+mode never takes an item started in the last 30 minutes, worktree or not. The
+landed tab says `landed` and closes itself once you leave it after having it
+in front for a moment, or half an hour after landing if you never look; a
+prompt typed in it after landing keeps it open as yours (Settings' "Close a
+worked note's landed tabs", `autopilot_close`). Its tabs say `auto` in the
+sidebar, and while it is on, mission
 control's Tabs view leads with its line: the note, how many work and are open,
 and the item it takes next. `k` from the top row of tabs (or a click) reaches
 it, and Enter there pauses or resumes it, skips the next item, takes only

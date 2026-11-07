@@ -17,7 +17,8 @@
 # (a "Plan: [[…]]" line, no "needs a choice" on it and no "## Decision needed"
 # in the plan note, plan_of) first, then those with no plan, or a plan note
 # that isn't there, each in the note's order; an item whose plan needs a choice is never
-# taken, nor one under a parked section, nor one a worktree has, nor one whose
+# taken, nor one under a parked section, nor one a worktree has or wtn started
+# in the last 30 minutes (its claims file), nor one whose
 # first line is a line of WTN_SKIP (the items skipped, and those the daemon
 # opened a moment ago, before wtn has made their branch). --ready-only takes
 # only the first kind. Each line of queue is the item's line number, a tab
@@ -114,12 +115,26 @@ plan_of() {
   if grep -qiE '^#+[[:space:]]+decisions?[[:space:]]+needed' "${found[1]}"; then print choice; else print settled; fi
 }
 
+# The items wtn started in the last 30 minutes, from its claims file
+# (bin/worktree-from-note), one a line, for the note at path $1 within the
+# notes directory: taken even once their worktree is gone, since
+# queue-and-clean may remove it a moment before it ticks the item.
+claimed_lately() {
+  local claims=$HOME/.local/state/switchboard/wtn-claims.tsv row
+  [[ -r $claims ]] || return 0
+  for row in ${(f)"$(<$claims)"}; do
+    [[ ${row#*$'\t'} == "$1"$'\t'* ]] || continue
+    (( EPOCHSECONDS - ${row%%$'\t'*} < 1800 )) && print -r -- "${row#*$'\t'*$'\t'}"
+  done
+}
+
 # The items the mode would take, in its order (see the top).
 queue() {
   local file=$1 ready_only=$2 row line text
   local -a settled unplanned
   local -A skip
   for text in ${(f)WTN_SKIP:-}; do skip[$text]=1; done
+  for text in ${(f)"$(claimed_lately "${file#${NOTES_DIR:-$HOME/Notes}/}")"}; do skip[$text]=1; done
   for row in ${(f)"$(unclaimed "$file")"}; do
     [[ $row == *' (needs a choice)' ]] && continue
     line=${row%%$'\t'*} text=${row#*$'\t'}

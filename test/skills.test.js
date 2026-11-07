@@ -72,3 +72,15 @@ test("skill-path finds the worktree's copy, then the main clone's, then the pers
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("queue-and-clean ticks the note's item before its cleanup removes the worktree, after a PR, a direct landing and with no PR, so the work-a-note mode never sees the item free", () => {
+  const text = fs.readFileSync(path.join(skillsDir, "queue-and-clean", "SKILL.md"), "utf8");
+  const order = (line, ...steps) => {
+    const at = steps.map((step) => line.indexOf(step));
+    assert.ok(at.every((i) => i >= 0) && at.every((i, n) => n === 0 || i > at[n - 1]), `${steps.join(", then ")} in: ${line.slice(0, 120)}`);
+  };
+  const line = (start) => text.split("\n").find((l) => l.startsWith(start));
+  for (const start of ["- `deploy-test: approved", "14. **Then as work already in the default branch**", "2. **When it is**"]) order(line(start), '"Cleanup"', '"Closing out"', "before the worktree goes");
+  order(text.split("## Cleanup")[1], "step 2 has found nothing would be lost", '"Closing out"', "clean-worktree: success");
+  assert.match(text, /## Closing out\n\nInside the cleanup, once clean-worktree's step 2 has found nothing would be lost and before its step 3 removes the worktree/);
+});
