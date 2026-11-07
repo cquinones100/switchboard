@@ -783,6 +783,40 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
 }
 
 #[test]
+fn a_new_build_brings_its_parts_to_what_is_set_up_once() {
+    let h = Home::new("setup-refresh");
+    // Nothing set up: nothing is written but the build's mark.
+    ok(&h.run(&["setup", "--refresh"]));
+    assert!(!h.path(".claude").exists());
+    assert!(h.path(".local/share/switchboard/setup-build").is_file());
+
+    // Set up by an older build, whose skills and part of CLAUDE.md differ.
+    ok(&h.run(&["setup", "skills"]));
+    ok(&h.run(&["setup", "claude-md"]));
+    fs::write(h.path(".claude/skills/wt/SKILL.md"), "an older wt\n").unwrap();
+    fs::write(h.path(".local/share/switchboard/switchboard.md"), "older\n").unwrap();
+    fs::write(
+        h.path(".local/share/switchboard/setup-build"),
+        "0.0.1 (old)\n",
+    )
+    .unwrap();
+    let said = ok(&h.run(&["setup", "--refresh"]));
+    assert_eq!(said, "", "quiet");
+    assert_ne!(read(&h.path(".claude/skills/wt/SKILL.md")), "an older wt\n");
+    assert_ne!(
+        read(&h.path(".local/share/switchboard/switchboard.md")),
+        "older\n"
+    );
+    // Claude Code's settings, never set up, are left for setup to ask about.
+    assert!(!h.path(".claude/settings.json").exists());
+
+    // Once per build: what is changed after is left alone.
+    fs::write(h.path(".claude/skills/wt/SKILL.md"), "edited\n").unwrap();
+    ok(&h.run(&["setup", "--refresh"]));
+    assert_eq!(read(&h.path(".claude/skills/wt/SKILL.md")), "edited\n");
+}
+
+#[test]
 fn parts_are_listed_and_an_unknown_one_refused() {
     let h = Home::new("setup-parts");
     let parts = ok(&h.run(&["setup", "--parts"]));

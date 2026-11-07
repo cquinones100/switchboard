@@ -1561,7 +1561,7 @@ A release build of Switchboard looks for a new release by itself: each time a te
 
 When `~/.config/switchboard/claude.json` names a git repository for your Claude rules, each look the setting allows (as a terminal attaches, every hour, or asked for) also pulls that repository's clone, fast-forward only, with `switchboard setup claude-md`, which writes `~/.claude/CLAUDE.md` again if it must. This happens whether or not your build looks for releases, since your rules change apart from Switchboard. It never asks for a password: git's prompt and askpass are off, and so is ssh's askpass, so a pull that needs one fails quietly and is tried again at the next look.
 
-A `switchboard` you built from source with cargo is kept current by git and cargo: its server never looks for releases, and `switchboard update` leaves it alone unless you add `--force`.
+A `switchboard` you built from source with cargo is kept current by git and cargo: its server never looks for releases, and `switchboard update` (and `M-p`'s "Update Switchboard", which says what is out and how to take it) leaves it alone unless you add `--force`. After each build, run `switchboard setup`: the skills, Claude Code's settings and Switchboard's part of CLAUDE.md are compiled into the binary and reach `~/.claude` only through the setup. The first time a new build attaches (`switchboard`), it does this by itself, quietly, for the parts you have set up, and records the build in `~/.local/share/switchboard/setup-build` so it does it once; a part you said no to is left for the guided setup to ask about. A run with a state directory of its own (`SWITCHBOARD_STATE_DIR`, as a try of a build is) leaves `~/.claude` as it is. `switchboard setup --refresh` does the same by hand.
 
 ### Trying a change
 

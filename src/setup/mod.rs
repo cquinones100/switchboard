@@ -18,6 +18,14 @@
 //! before a part changes anything the first time (Enter is yes, a closed
 //! input no, so nothing piped or unattended says yes), brings a part already
 //! set up up to date without asking, and ends with what is left to do.
+//!
+//! What the parts write is compiled into the binary, so a binary built from
+//! a clone brings new skills, hooks and a new part of CLAUDE.md that reach
+//! `~/.claude` only through a run of setup. The setup.sh version had git's
+//! post-merge hook run it after every pull; here the first run of a new
+//! build (`switchboard` attaching, `refresh`) brings the parts already set
+//! up up to date quietly, as the guided setup would without asking, and
+//! `switchboard setup` after a build does the same out loud.
 
 pub mod claude_md;
 pub mod claude_settings;
@@ -109,6 +117,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
     for arg in &args {
         match arg.as_str() {
             "--check" => check = true,
+            "--refresh" => {
+                refresh_now();
+                return ExitCode::SUCCESS;
+            }
             "--parts" => {
                 for part in PARTS {
                     println!("{}\t{}", part.name, part.about);
@@ -153,7 +165,8 @@ fn usage() {
     println!("Usage: switchboard setup [--check] [part...]\n");
     println!("Sets Claude Code up for Switchboard. Alone, it asks before each part the first");
     println!("time; with parts named, it does just those. --check says what would change and");
-    println!("changes nothing; --parts lists the parts:\n");
+    println!("changes nothing; --refresh brings the parts already set up up to date, quietly,");
+    println!("as the first run of a new build does; --parts lists the parts:\n");
     for part in PARTS {
         println!("  {:10} {}", part.name, part.about);
     }
@@ -375,6 +388,77 @@ fn finish(check: bool, list: List) -> ExitCode {
     }
     println!("{}", if check { "Nothing to do." } else { "Ready." });
     ExitCode::SUCCESS
+}
+
+// ── A new build ─────────────────────────────────────────────────────────────
+
+/// Where the build whose parts were last put in place is recorded.
+fn build_file() -> std::path::PathBuf {
+    paths::home_join(".local/share/switchboard/setup-build")
+}
+
+/// What this build would put in place, in one line: its version and a hash
+/// of everything the parts write, so a build from a clone with changed
+/// skills counts as new though its commit is the same. FNV-1a, which stays
+/// the same from one Rust to the next, as the std hasher needn't.
+fn build_mark() -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut add = |bytes: &[u8]| {
+        for b in bytes.iter().chain([0u8].iter()) {
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    };
+    add(claude_settings::ASSET.as_bytes());
+    add(claude_md::PART.as_bytes());
+    for (path, bytes) in skills::FILES {
+        add(path.as_bytes());
+        add(bytes);
+    }
+    format!("{} {hash:016x}", crate::update::version_line())
+}
+
+/// The first run of a new build: the parts already set up brought up to
+/// date, quietly, as `switchboard` attaches. Not in a run with a state
+/// directory of its own (a try of a worktree's build, or a test's), which
+/// shares your home and would put its version of the skills in it.
+pub fn refresh() {
+    if std::env::var_os("SWITCHBOARD_STATE_DIR").is_some() {
+        return;
+    }
+    refresh_now();
+}
+
+/// `refresh` whatever the state directory (`switchboard setup --refresh`):
+/// once per build, recorded only once every part it ran worked, so one
+/// that failed is tried again on the next run. A part you said no to, or
+/// never ran, is left for the guided setup to ask about; your CLAUDE.md
+/// gets only Switchboard's part written again, with no pull of your rules'
+/// repository, which the update look does.
+pub fn refresh_now() {
+    let file = build_file();
+    let mark = build_mark();
+    if util::read_text(&file).is_some_and(|t| t.trim() == mark) {
+        return;
+    }
+    let mut report = Report::new(false);
+    report.silent = true;
+    let mut worked = true;
+    if claude_settings::set_up() {
+        worked &= claude_settings::run(&mut report).is_ok();
+    }
+    if claude_md::set_up() {
+        worked &= claude_md::write_part(&mut report).is_ok();
+    }
+    if skills::installed() {
+        worked &= skills::run(&mut report).is_ok();
+    }
+    if worked {
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = util::write_atomic(&file, format!("{mark}\n"));
+    }
 }
 
 // ── What the parts share ────────────────────────────────────────────────────

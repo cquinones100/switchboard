@@ -72,7 +72,7 @@ Vim's keys are the default in Notes and the diff, and you don't need to know the
 
 ## Staying up to date
 
-A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings. `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull` and `cargo build --release` again.
+A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings. `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary, so the setup is what takes a new build's to `~/.claude`; the first time a new build attaches, it brings the parts you have set up up to date by itself, and `switchboard setup` says what it did.
 
 ## Making it yours
 

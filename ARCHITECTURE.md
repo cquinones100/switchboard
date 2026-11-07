@@ -98,7 +98,7 @@ Debug builds keep only line tables, and the crates no debug info, since every in
 
 ## Releases
 
-A tag `v<version>` matching `Cargo.toml`'s version builds the three targets (`.github/workflows/release.yml`) with `SWITCHBOARD_RELEASE` set, and publishes each as `switchboard-<version>-<target>.tar.gz` with its SHA-256. `install.sh` installs the newest into `~/.local/bin`; `src/update` finds a newer one, checks it, swaps the binary only once it runs, and runs `switchboard setup`. Only a release build looks by itself (`SWITCHBOARD_UPDATES` says otherwise), so a binary built from a clone is never offered a release in its place. `switchboard --version` names the commit it was built from.
+A tag `v<version>` matching `Cargo.toml`'s version builds the three targets (`.github/workflows/release.yml`) with `SWITCHBOARD_RELEASE` set, and publishes each as `switchboard-<version>-<target>.tar.gz` with its SHA-256. `install.sh` installs the newest into `~/.local/bin`; `src/update` finds a newer one, checks it, swaps the binary only once it runs, and runs `switchboard setup`. Only a release build looks by itself (`SWITCHBOARD_UPDATES` says otherwise), so a binary built from a clone is never offered a release in its place, nor given one by `M-p`'s "Update Switchboard" without `--force`. What the setup writes is compiled in, so the first run of a new build (`switchboard` attaching, `setup::refresh`) brings the parts already set up up to date, once per build (`~/.local/share/switchboard/setup-build`), where `.githooks`' post-merge once ran setup.sh. `switchboard --version` names the commit it was built from.
 
 ## Conventions
 

@@ -15,6 +15,9 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // A new build's skills, hooks and part of CLAUDE.md, for the parts
+    // already set up, before anything in the workspace runs Claude.
+    crate::setup::refresh();
     // The client's errors are whole sentences that name Switchboard where
     // it matters ("switchboard needs a terminal", "already inside
     // Switchboard"), so they are printed as they are.

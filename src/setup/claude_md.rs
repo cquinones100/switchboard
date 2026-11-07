@@ -284,12 +284,11 @@ fn rules_from_link(target: &Path) -> Option<String> {
     (!kept.trim().is_empty()).then_some(kept)
 }
 
-/// The locked part of the run (all of it with `--check`).
-fn now(r: &mut Report, pulled: bool) -> Result<()> {
-    let file = claude_md();
-    let clone = clone_dir();
-
-    // Switchboard's part, as this binary carries it.
+/// Switchboard's part, as this binary carries it, written where your
+/// CLAUDE.md imports it from. Alone, it is what a new build brings to a
+/// CLAUDE.md already set up (`super::refresh`), with no pull and no lock,
+/// since it touches only that one file, written whole.
+pub fn write_part(r: &mut Report) -> Result<()> {
     let part = part_file();
     if util::read_text(&part).as_deref() != Some(PART) {
         if !r.check {
@@ -297,6 +296,15 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
         }
         r.change(format!("write Switchboard's part to {}", home_tilde(&part)));
     }
+    Ok(())
+}
+
+/// The locked part of the run (all of it with `--check`).
+fn now(r: &mut Report, pulled: bool) -> Result<()> {
+    let file = claude_md();
+    let clone = clone_dir();
+
+    write_part(r)?;
 
     if is_link(&file)
         && let Ok(target) = fs::read_link(&file)
@@ -304,6 +312,11 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
         && !exists(&own_rules())
     {
         if !r.check {
+            // A relative link leads from the folder it is in.
+            let target = match file.parent() {
+                Some(dir) => dir.join(&target),
+                None => target,
+            };
             let rules = rules_from_link(&target)
                 .ok_or_else(|| anyhow!("could not copy your rules from {}", target.display()))?;
             util::write_atomic(own_rules(), rules)?;
@@ -479,7 +492,7 @@ fn now(r: &mut Report, pulled: bool) -> Result<()> {
             }
             r.change(format!(
                 "point your {shown}'s import of Switchboard's part at {}",
-                home_tilde(&part)
+                home_tilde(&part_file())
             ));
         } else {
             if !r.check {
