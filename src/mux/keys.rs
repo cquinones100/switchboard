@@ -88,6 +88,12 @@ pub enum Action {
     WorkOnNote,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
+    /// Shape a note's checklist items as Linear tickets, each in a new tab
+    /// (note-shape.sh; src/cmd/shape_note.rs).
+    ShapeNote,
+    /// Shape a new Linear ticket from an idea typed in (note-shape.sh's
+    /// `prompt`).
+    ShapeNewTicket,
     /// Mission control, or closed when it is open (M-Space; src/mission).
     MissionControl,
     /// The Work map as a picker of the open tabs (M-j).
@@ -123,7 +129,8 @@ impl Action {
     /// `focus-claude`, `toggle-pin`, `palette`, `reset-tips`, `toggle-theme`,
     /// `focus-sidebar`, `toggle-sidebar`, `new-claude-tab`,
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
-    /// `continue-shaping`, `mission-control`, `find-tab`,
+    /// `continue-shaping`, `shape-note`, `shape-new-ticket`,
+    /// `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`), updates'
@@ -176,6 +183,8 @@ impl Action {
             "work-on-pr" => Action::WorkOnPr,
             "work-on-note" => Action::WorkOnNote,
             "continue-shaping" => Action::ContinueShaping,
+            "shape-note" => Action::ShapeNote,
+            "shape-new-ticket" => Action::ShapeNewTicket,
             "mission-control" => Action::MissionControl,
             "find-tab" => Action::FindTab,
             "revive-worktree" => Action::ReviveWorktree,
@@ -234,6 +243,8 @@ impl Action {
             Action::WorkOnPr => "work-on-pr".into(),
             Action::WorkOnNote => "work-on-note".into(),
             Action::ContinueShaping => "continue-shaping".into(),
+            Action::ShapeNote => "shape-note".into(),
+            Action::ShapeNewTicket => "shape-new-ticket".into(),
             Action::MissionControl => "mission-control".into(),
             Action::FindTab => "find-tab".into(),
             Action::ReviveWorktree => "revive-worktree".into(),
@@ -297,6 +308,10 @@ impl Action {
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
             Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
+            Action::ShapeNote => "Shape a note's checklist items as Linear tickets".into(),
+            Action::ShapeNewTicket => {
+                "Shape a new Linear ticket from what you type, in a new tab".into()
+            }
             Action::MissionControl => "Open or close mission control".into(),
             Action::FindTab => "Search and jump to a tab".into(),
             Action::ReviveWorktree => {
@@ -345,6 +360,8 @@ impl Action {
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
+            Action::ShapeNote => &["notes", "linear", "shape"],
+            Action::ShapeNewTicket => &["linear", "ticket", "shape"],
             Action::MissionControl => &["sidebar", "overview", "tabs"],
             Action::FindTab => &["tabs", "navigate", "find"],
             Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
@@ -409,6 +426,8 @@ impl Action {
             Action::WorkOnPr,
             Action::WorkOnNote,
             Action::ContinueShaping,
+            Action::ShapeNote,
+            Action::ShapeNewTicket,
             Action::Settings,
             Action::RemindTab,
             Action::StopSlackRelay,
@@ -615,6 +634,8 @@ mod tests {
             Action::ReviveWorktree,
             Action::Settings,
             Action::RemindTab,
+            Action::ShapeNote,
+            Action::ShapeNewTicket,
             Action::View(crate::views::Command::PrView),
             Action::View(crate::views::Command::OpenLinkRead),
             Action::Diff(crate::diff::Command::Diff),

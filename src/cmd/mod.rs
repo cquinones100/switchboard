@@ -17,6 +17,7 @@ pub mod respawn;
 pub mod setting;
 pub mod shape;
 pub mod shape_batch;
+pub mod shape_note;
 pub mod skill_path;
 pub mod slack_relay;
 pub mod slack_updates_save;

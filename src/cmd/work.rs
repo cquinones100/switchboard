@@ -299,7 +299,7 @@ impl Server {
 
     /// Runs `work` off the server's task and `then` with what it gives,
     /// back on it.
-    fn off_task<T: Send + 'static>(
+    pub(crate) fn off_task<T: Send + 'static>(
         &self,
         client: ClientId,
         work: impl FnOnce() -> T + Send + 'static,
