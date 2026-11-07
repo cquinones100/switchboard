@@ -67,14 +67,14 @@ The workspace:
 | `day` | Your day: the calendar, Slack, the notes written for you |
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |
-| `views` | Reading beside your work: the PR description, the ticket, a link, a pane's links and images, search everything, whether a PR can merge |
+| `views` | Reading beside your work: the PR description, the ticket, a link, a pane's links and images, search everything, whether a PR can merge, and the branch's merge queue, Linear project, ticket and PR opened or copied |
 | `diff` | `M-d`'s diff in a pane's place, told as a story, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
 | `setup` | `switchboard setup`: Claude Code's hooks, statusline, permissions, CLAUDE.md and skills; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
-| `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
+| `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab and naming a new one, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
 | `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `wait-deploy` and the rest) |
 
 `src/lib.rs` lists them with a line each, and every module opens with a comment saying what it is and why it works as it does.
