@@ -104,7 +104,7 @@ pub const OWN_FILES: &[OwnFile] = &[
             "file",
             "Rules file in the repo",
             Kind::Text,
-            "With your rules in a git repository (Your CLAUDE.md, above), the file in it that holds them (CLAUDE.md when not set); setup writes ~/.claude/CLAUDE.md again when it changes, and the repository is pulled each hour with Switchboard's update check",
+            "With your rules in a git repository (Your CLAUDE.md, above), the file in it that holds them (CLAUDE.md when not set); setup writes ~/.claude/CLAUDE.md again when it changes, and the repository is pulled each time setup runs, an update's included",
         )],
     },
     OwnFile {
@@ -147,7 +147,7 @@ pub const OWN_FILES: &[OwnFile] = &[
                 "hosts",
                 "Chrome profiles",
                 Kind::Map,
-                "The Chrome profile each site's links open in (site=Profile 2, the profile's folder as chrome://version names it), awsapps.com for M-A's AWS login; any other site opens in the default profile",
+                "The Chrome profile each site's links open in (site=Profile 2, the profile's folder as chrome://version names it); any other site opens in the default profile",
             ),
             row(
                 "default",
