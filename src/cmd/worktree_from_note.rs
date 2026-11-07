@@ -33,6 +33,69 @@ use crate::worktree::{self, Given, Purpose};
 /// A branch name short enough to read in a tab and a prompt.
 const SLUG_LENGTH: usize = 50;
 
+/// Each item wtn starts, kept a day, `<seconds>\t<note>\t<item's first
+/// line>`: the work-a-note mode's queue takes an item claimed in the last
+/// `CLAIMED_S` as taken even once its worktree is gone, since
+/// queue-and-clean may remove it a moment before ticking the item.
+pub fn claims_file() -> PathBuf {
+    claims_in(&paths::state_dir())
+}
+
+/// The claims file in a state directory.
+pub fn claims_in(state: &Path) -> PathBuf {
+    state.join("wtn-claims.tsv")
+}
+/// An item claimed this recently is taken, whatever its worktree.
+pub const CLAIMED_S: i64 = 30 * 60;
+const DAY_S: i64 = 24 * 60 * 60;
+
+/// Appends an item's claim, as M-p's popup starts several wtn at once and
+/// a line appended is written whole; the file is written again without the
+/// rows over a day old only when its first row is that old.
+fn claim(note: &str, item: &str) {
+    let file = claims_file();
+    let now = crate::util::now_secs();
+    if let Some(dir) = file.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    crate::util::append_quietly(&file, format!("{now}\t{note}\t{item}\n"));
+    let Ok(text) = fs::read_to_string(&file) else {
+        return;
+    };
+    let first = text
+        .split('\t')
+        .next()
+        .and_then(|t| t.trim().parse::<i64>().ok())
+        .unwrap_or(now);
+    if now - first < DAY_S {
+        return;
+    }
+    let kept: String = text
+        .lines()
+        .filter(|row| {
+            row.split('\t')
+                .next()
+                .and_then(|t| t.parse::<i64>().ok())
+                .is_some_and(|at| now - at < DAY_S)
+        })
+        .map(|row| format!("{row}\n"))
+        .collect();
+    let _ = crate::util::write_atomic(&file, kept);
+}
+
+/// The items of a note (its path within the notes directory) wtn started
+/// in the last `CLAIMED_S` before `now` (seconds), by their first line.
+pub fn claimed_lately(text: &str, note: &str, now: i64) -> HashSet<String> {
+    text.lines()
+        .filter_map(|row| {
+            let mut fields = row.splitn(3, '\t');
+            let at: i64 = fields.next()?.trim().parse().ok()?;
+            (fields.next()? == note && now - at < CLAIMED_S)
+                .then(|| fields.next().map(str::to_string))?
+        })
+        .collect()
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "Usage: worktree-from-note [path] --note <note> --item <line> [--prompt <text>]\n       \
@@ -340,23 +403,35 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
 /// whose plan is settled first, then those with no plan (or a plan note
 /// that isn't there), each in the note's order. An item whose plan needs a
 /// choice is never taken, nor one under a parked section, nor one a
-/// worktree has, nor an empty one, nor one whose first line is in `skip`
-/// (the items skipped, and those opened a moment ago, before wtn has made
-/// their branch). `ready_only` takes only the first kind. `note` is the
-/// note's path within the notes directory; `repo` the note's repository.
+/// worktree has or wtn started in the last half hour (its claims file),
+/// nor an empty one, nor one whose first line is in `skip` (the items
+/// skipped, and those opened a moment ago, before wtn has made their
+/// branch). `ready_only` takes only the first kind. `note` is the
+/// note's path within the notes directory; `repo` the note's repository;
+/// `claims` wtn's claims file (`claims_file`).
 pub fn queue(
     notes: &Path,
     repo: &Path,
     note: &str,
     skip: &HashSet<String>,
     ready_only: bool,
+    claims: &Path,
 ) -> Result<Vec<Item>, String> {
     let file = notes.join(note);
     let text = fs::read_to_string(&file).map_err(|_| format!("No note at {}", file.display()))?;
     let mut settled = Vec::new();
     let mut unplanned = Vec::new();
+    let lately = claimed_lately(
+        &fs::read_to_string(claims).unwrap_or_default(),
+        note,
+        crate::util::now_secs(),
+    );
     for item in unclaimed(repo, note, &text) {
-        if item.needs_choice || skip.contains(&item.text) || item.text.trim().is_empty() {
+        if item.needs_choice
+            || skip.contains(&item.text)
+            || lately.contains(&item.text)
+            || item.text.trim().is_empty()
+        {
             continue;
         }
         match plan_of(notes, &item_text(&text, item.line)) {
@@ -588,6 +663,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     if !worktree::git_ok(&root, &["config", &key, &identity]) {
         return Err(format!("could not record the item in git config ({key})"));
     }
+    claim(&relative, &first);
     worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
 
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
@@ -636,6 +712,19 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_item_wtn_started_in_the_last_half_hour_counts_as_taken() {
+        let now = 1_700_000_000;
+        let claims = format!(
+            "{}\tWork.md\tFresh\n{}\tWork.md\tStale\n{}\tOther.md\tElsewhere\nbroken row\n",
+            now - 60,
+            now - CLAIMED_S - 1,
+            now - 60
+        );
+        let lately = claimed_lately(&claims, "Work.md", now);
+        assert_eq!(lately, HashSet::from(["Fresh".to_string()]));
+    }
 
     // tmux/wtn-open.zsh's `items`, from test/worktree-from-note.test.js.
     #[test]

@@ -366,16 +366,22 @@ impl Server {
             Vec::new()
         };
         let notes = worktree_from_note::notes_dir();
-        let mtime = (on && mode.on && !mode.note.is_empty())
+        let mtime = (mode.set_up() && !mode.note.is_empty())
             .then(|| modified_ms(&notes.join(&mode.note)))
             .flatten();
         let away = self.away_now();
         let counts = self.autopilot.pilot.counts;
         let close = settings::is_on("autopilot_close");
-        let check =
-            self.autopilot
-                .pilot
-                .check(&mode, on, close, &mine, away, util::now_ms(), mtime);
+        let check = self.autopilot.pilot.check(
+            &mode,
+            on,
+            close,
+            &mine,
+            away,
+            util::now_ms(),
+            mtime,
+            &notes,
+        );
         let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
         self.autopilot.mode = mode;
         self.autopilot_marks(&check.marks);
@@ -488,6 +494,7 @@ impl Server {
                     item: tab.opts.get(ITEM).filter(|v| !v.is_empty()).cloned(),
                     state,
                     in_worktree: in_worktree_of(&dirs, repo),
+                    in_main: in_main_clone(&dirs),
                     landed,
                     seen: marked(SEEN),
                     front: self.tab_in_front(*id),
@@ -591,9 +598,10 @@ impl Server {
             return;
         }
         let tx = self.tx.clone();
+        let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
             let text = job
-                .first(&notes)
+                .first(&notes, &state)
                 .ok()
                 .flatten()
                 .map(|i| i.text)

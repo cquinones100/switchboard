@@ -41,4 +41,4 @@ If a command in steps 3 to 5 errors, stop there and reply `clean-worktree: fail:
 
 ## From queue-and-clean
 
-`/queue-and-clean` records the paths in step 1 before it watches, while the worktree certainly exists, and follows steps 2 to 5 once the PR has merged and the user has approved its test, with the PR's number for step 2. It turns this skill's `fail` into its own and goes on to close out the ticket and note only after a `success`.
+`/queue-and-clean` records the paths in step 1 before it watches, while the worktree certainly exists, and follows steps 2 to 5 once the PR has merged and the user has approved its test, with the PR's number for step 2. It turns this skill's `fail` into its own, and closes out the ticket and note between steps 2 and 3, once step 2 has found nothing would be lost and before the worktree is removed.

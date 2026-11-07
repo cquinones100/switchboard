@@ -1261,7 +1261,8 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     );
     let taken = |skip: &[&str], ready| {
         let skip: HashSet<String> = skip.iter().map(|s| s.to_string()).collect();
-        rows(queue(&notes, &repo, "Work.md", &skip, ready).unwrap())
+        let claims = w.path("state/wtn-claims.tsv");
+        rows(queue(&notes, &repo, "Work.md", &skip, ready, &claims).unwrap())
     };
     assert_eq!(
         taken(&[], false),
@@ -1283,5 +1284,29 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         taken(&["Planned", "Plain"], false),
         vec!["11\tAlso planned", "13\tAlso plain", "16\tLost plan"],
         "the skipped ones left out"
+    );
+
+    // An item wtn started is taken for half an hour, even once its worktree
+    // and branch are gone, since queue-and-clean may remove them a moment
+    // before it ticks the item.
+    w.ok(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--note",
+            "Work",
+            "--item",
+            "3",
+        ],
+    );
+    let claims = read(&w.path("state/wtn-claims.tsv"));
+    assert!(claims.contains("\tWork.md\tPlain\n"), "{claims}");
+    let tree = repo.join(".claude/worktrees/note-plain");
+    w.git(&repo, &["worktree", "remove", tree.to_str().unwrap()]);
+    w.git(&repo, &["branch", "-D", "note/plain"]);
+    assert!(
+        !taken(&[], false).contains(&"3\tPlain".to_string()),
+        "claimed lately, so still taken"
     );
 }

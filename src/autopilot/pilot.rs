@@ -10,7 +10,9 @@
 //! the new Claude sessions don't race. An item is never taken again while
 //! a tab of the mode's is open for it (`held`, from `@autopilot_item`), nor
 //! for `RECENT_MS` after it was opened (`recent`), before `wtn` has made its
-//! branch, which is what claims it; a tab whose `wtn` failed before making
+//! branch, which is what claims it, nor, once its tab has landed and left,
+//! until the note shows it ticked or for `LANDED_MS` (`landed`), since
+//! queue-and-clean may remove the worktree a moment before it ticks it; a tab whose `wtn` failed before making
 //! its branch holds its item until it is closed. A note changed in the last
 //! `SETTLE_MS` isn't taken from, since an item being typed is saved as it
 //! is typed and its first words would be opened as an item. A note found
@@ -43,6 +45,9 @@ pub const GAP_MS: i64 = 5_000;
 pub const RECENT_MS: i64 = 60_000;
 /// A note changed this recently isn't taken from.
 pub const SETTLE_MS: i64 = 60_000;
+/// A landed tab's item is held until the note shows it ticked, or this
+/// long, so a tick that never comes doesn't hold it for good.
+pub const LANDED_MS: i64 = 10 * 60_000;
 /// The next item is read again at most this often, and when the note, the
 /// items skipped or the kind of items taken change.
 pub const QUEUE_MS: i64 = 30_000;
@@ -96,10 +101,18 @@ pub struct Job {
 }
 
 impl Job {
-    /// The first item the queue gives, if any.
-    pub fn first(&self, notes: &Path) -> Result<Option<Item>, String> {
-        queue(notes, &self.repo, &self.note, &self.skip, self.ready_only)
-            .map(|items| items.into_iter().next())
+    /// The first item the queue gives, if any; `state` is the state
+    /// directory, whose claims file says which items wtn started lately.
+    pub fn first(&self, notes: &Path, state: &Path) -> Result<Option<Item>, String> {
+        queue(
+            notes,
+            &self.repo,
+            &self.note,
+            &self.skip,
+            self.ready_only,
+            &crate::cmd::worktree_from_note::claims_in(state),
+        )
+        .map(|items| items.into_iter().next())
     }
 
     /// The look for the next item to open: nothing once today's spend has
@@ -110,7 +123,7 @@ impl Job {
         {
             return Found::Spent;
         }
-        match self.first(notes) {
+        match self.first(notes, state) {
             Ok(item) => Found::Item(item),
             Err(e) => Found::Failed(e),
         }
@@ -172,6 +185,11 @@ pub struct Pilot {
     missing_said: String,
     /// The items of its tabs still open, never taken again while there.
     held: Vec<String>,
+    /// The items of its tabs that landed and left, and when each was first
+    /// found so (ms).
+    landed: HashMap<String, i64>,
+    /// The note's unticked items as last read, and the time it was read for.
+    unticked: (Option<i64>, HashSet<String>),
     /// How many of its tabs work and how many are open, at the last check.
     pub counts: (usize, usize),
     /// When each landed tab was first found in front (ms), for `SEEN_MS`.
@@ -192,6 +210,8 @@ impl Default for Pilot {
             spent: None,
             missing_said: String::new(),
             held: Vec::new(),
+            landed: HashMap::new(),
+            unticked: (None, HashSet::new()),
             counts: (0, 0),
             fronts: HashMap::new(),
             gap_ms: GAP_MS,
@@ -247,7 +267,9 @@ impl Pilot {
     /// autopilot_close setting, on), then, while fewer than `slots` work
     /// and fewer than `cap` are open, looks for the next item to open. `on`
     /// is the autopilot setting, `away` whether you're away, `mtime` when
-    /// the note last changed (ms), `None` when it isn't there.
+    /// the note last changed (ms), `None` when it isn't there, and `notes`
+    /// the notes directory, whose note is read for its ticked items only
+    /// while a landed tab's item is held.
     #[allow(clippy::too_many_arguments)]
     pub fn check(
         &mut self,
@@ -258,6 +280,7 @@ impl Pilot {
         away: bool,
         now_ms: i64,
         mtime: Option<i64>,
+        notes: &Path,
     ) -> Check {
         let mut out = Check::default();
         if !mode.set_up() {
@@ -277,10 +300,42 @@ impl Pilot {
         }
         out.marks = marks;
         self.fronts.retain(|t, _| mine.iter().any(|m| m.tab == *t));
+        // A landed tab stays marked until it closes, so its item's time is
+        // when it was first found left, forgotten once ticked, or once past
+        // LANDED_MS with its tab gone.
+        let left: HashSet<String> = placed
+            .iter()
+            .filter(|(_, kind)| *kind == Kind::Left)
+            .filter_map(|(m, _)| m.item.clone())
+            .collect();
+        for item in &left {
+            self.landed.entry(item.clone()).or_insert(now_ms);
+        }
+        if !self.landed.is_empty() {
+            if self.unticked.0 != mtime || mtime.is_none() {
+                let text = std::fs::read_to_string(notes.join(&mode.note)).unwrap_or_default();
+                let open = text
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("- [ ] "))
+                    .map(|l| l.trim().to_string())
+                    .collect();
+                self.unticked = (mtime, open);
+            }
+            let open = &self.unticked.1;
+            self.landed.retain(|item, at| {
+                open.contains(item) && (now_ms - *at < LANDED_MS || left.contains(item))
+            });
+        }
         self.held = placed
             .iter()
             .filter(|(_, kind)| *kind != Kind::Left)
             .filter_map(|(m, _)| m.item.clone())
+            .chain(
+                self.landed
+                    .iter()
+                    .filter(|(_, at)| now_ms - **at < LANDED_MS)
+                    .map(|(item, _)| item.clone()),
+            )
             .collect();
         let open = placed.iter().filter(|(_, k)| *k != Kind::Left).count();
         let busy = placed.iter().filter(|(_, k)| *k == Kind::Busy).count();
@@ -501,6 +556,7 @@ mod tests {
                 false,
                 self.now,
                 Some(self.mtime),
+                Path::new("/nowhere"),
             );
             for mark in check.marks {
                 match mark {
@@ -599,8 +655,14 @@ mod tests {
             "the items of the tabs still open are never taken again"
         );
 
-        // queue-and-clean's landing moves the pane back to the main clone.
+        // queue-and-clean's cleanup takes the worktree away under the pane:
+        // landing, it keeps its place and its item.
         w.tab(first).in_worktree = false;
+        w.tab(first).in_main = false;
+        assert_eq!(w.settle(), 5, "a tab landing holds its place");
+        assert!(w.skip.contains("item 1"), "and its item");
+        // Then it moves the pane back to the main clone.
+        w.tab(first).in_main = true;
         w.settle();
         assert!(
             !w.tabs.iter().any(|m| m.tab == first),
@@ -636,19 +698,27 @@ mod tests {
     #[test]
     fn it_opens_nothing_while_away_or_past_the_spend_limit_and_says_a_missing_note_once() {
         let mut w = World::new();
+        let none = Path::new("/nowhere");
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], true, w.now, Some(w.mtime));
+            .check(&w.mode, true, false, &[], true, w.now, Some(w.mtime), none);
         assert_eq!(check.open, None, "away");
-        let check = w
-            .pilot
-            .check(&w.mode, false, false, &[], false, w.now, Some(w.mtime));
+        let check = w.pilot.check(
+            &w.mode,
+            false,
+            false,
+            &[],
+            false,
+            w.now,
+            Some(w.mtime),
+            none,
+        );
         assert_eq!(check.open, None, "the setting off");
 
         w.mode.spend_limit = 5.0;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, w.now, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, w.now, Some(w.mtime), none);
         let job = check.open.expect("a look, which sums the spend");
         assert_eq!(job.spend_limit, 5.0);
         let opened = w.pilot.opened(&w.mode, Found::Spent, w.mtime, w.now);
@@ -659,18 +729,18 @@ mod tests {
         let later = w.now + 60_000;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, later, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, later, Some(w.mtime), none);
         assert_eq!(check.open, None, "not summed again today");
         w.mode.spend_limit = 50.0;
         let check = w
             .pilot
-            .check(&w.mode, true, false, &[], false, later, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, later, Some(w.mtime), none);
         assert!(check.open.is_some(), "a new limit is looked at again");
         w.pilot.cancel();
 
         let missing = |w: &mut World, at: i64| {
             w.pilot
-                .check(&w.mode, true, false, &[], false, at, None)
+                .check(&w.mode, true, false, &[], false, at, None, none)
                 .said
         };
         assert_eq!(
@@ -678,6 +748,46 @@ mod tests {
             Some("Can't find the note Work: set the mode up again from M-p")
         );
         assert_eq!(missing(&mut w, later + 20_000), None, "said once");
+    }
+
+    // test/tmux-sidebar.test.js's "a tab that left keeps its item held until
+    // the note shows it ticked, or for ten minutes".
+    #[test]
+    fn a_landed_tabs_item_is_held_until_the_note_ticks_it_or_ten_minutes_pass() {
+        let dir = std::env::temp_dir().join(format!("sb-autopilot-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Work.md"), "- [ ] item 1\n- [ ] item 2\n").unwrap();
+        let mut pilot = Pilot::default();
+        let mode = Mode {
+            on: true,
+            note: "Work.md".into(),
+            repo: "/repo".into(),
+            ..Mode::default()
+        };
+        let now = 1_700_000_000_000_i64;
+        let mut tab = mine(1, (now / 1000) as f64 - 3_600.0, TabState::Idle, false);
+        tab.was_in = true;
+        let mut check = |tabs: &[Mine], at: i64, mtime: i64| {
+            pilot.check(&mode, true, false, tabs, false, at, Some(mtime), &dir);
+            pilot.skip(&mode, at)
+        };
+        assert!(
+            check(std::slice::from_ref(&tab), now, 1).contains("item 1"),
+            "held as it leaves"
+        );
+        assert!(check(&[], now + 60_000, 1).contains("item 1"), "and after");
+        assert!(
+            !check(&[], now + LANDED_MS, 1).contains("item 1"),
+            "for ten minutes at most"
+        );
+        assert!(check(std::slice::from_ref(&tab), now + LANDED_MS, 1).contains("item 1"));
+        std::fs::write(dir.join("Work.md"), "- [ ] item 2\n- [x] item 1\n").unwrap();
+        assert!(
+            !check(&[], now + LANDED_MS + 1_000, 2).contains("item 1"),
+            "or until the note shows it ticked"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // test/tmux-sidebar.test.js's "a landed tab of the mode working a note
@@ -705,6 +815,7 @@ mod tests {
                     false,
                     at,
                     None,
+                    Path::new("/nowhere"),
                 )
                 .marks
         };

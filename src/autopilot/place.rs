@@ -1,8 +1,13 @@
 //! Where each of the mode's tabs is (autopilot.js's `placeOf` and
 //! `stateOf`): busy, working in its worktree or still opening; waiting on
-//! you, which frees its slot but still counts toward the cap; or landed,
-//! back in the main clone once queue-and-clean has landed it, which leaves
-//! the mode, and what then becomes of it (`pilot`'s after landing). Worked
+//! you, which frees its slot but still counts toward the cap; landing, out
+//! of its worktree but not back in a main clone, as while queue-and-clean
+//! removes the worktree its pane is still in, which holds its place and its
+//! item as waiting does; or landed, back in the main clone once
+//! queue-and-clean has landed it, which leaves the mode, and what then
+//! becomes of it (`pilot`'s after landing). A directory that is gone counts
+//! for nothing, since a removed worktree under the main clone's
+//! `.claude/worktrees` would otherwise read as the main clone itself. Worked
 //! out from plain data, which `serve` gathers from the server's tabs, so the
 //! rules are tested without one.
 
@@ -27,6 +32,9 @@ pub enum Kind {
     /// Waiting on you (a question, a turn ended, or `wtn` failed): it frees
     /// its slot but counts toward the cap.
     Waiting,
+    /// Out of its worktree but not back in a main clone, as while
+    /// queue-and-clean removes it: as waiting, its item still held.
+    Landing,
     /// Back in the main clone once landed: it leaves the mode.
     Left,
 }
@@ -46,6 +54,8 @@ pub struct Mine {
     pub state: TabState,
     /// Whether it is in a worktree of the note's repository now.
     pub in_worktree: bool,
+    /// Whether it is in a main clone now (any repository's).
+    pub in_main: bool,
     /// When it was found back in a main clone once landed
     /// (`@autopilot_left`), in seconds.
     pub landed: Option<f64>,
@@ -78,7 +88,7 @@ pub fn in_main_clone(dirs: &[PathBuf]) -> bool {
 /// a worktree of `repo` other than `repo` itself, the main clone. Read from
 /// git's files, with no process.
 pub fn in_worktree_of(dirs: &[PathBuf], repo: &Path) -> bool {
-    let Some((root, common)) = dirs.iter().find_map(|d| git_of(d)) else {
+    let Some((root, common)) = dirs.iter().filter(|d| d.exists()).find_map(|d| git_of(d)) else {
         return false;
     };
     let main = if common.file_name().is_some_and(|n| n == ".git") {
@@ -100,8 +110,10 @@ pub fn kind_of(mine: &Mine, now: f64) -> Kind {
         } else {
             Kind::Waiting
         }
-    } else if mine.was_in {
+    } else if mine.was_in && mine.in_main {
         Kind::Left
+    } else if mine.was_in {
+        Kind::Landing
     } else if age < OPENING_S {
         Kind::Busy
     } else {
@@ -122,6 +134,7 @@ pub(crate) mod tests {
             item: Some(format!("item {tab}")),
             state,
             in_worktree,
+            in_main: !in_worktree,
             landed: None,
             seen: false,
             front: false,
@@ -173,6 +186,12 @@ pub(crate) mod tests {
         let mut landed = mine(1, old, TabState::Idle, false);
         landed.was_in = true;
         assert_eq!(kind_of(&landed, now), Kind::Left, "back in the main clone");
+        landed.in_main = false;
+        assert_eq!(
+            kind_of(&landed, now),
+            Kind::Landing,
+            "out of its worktree, its directory gone, and not back yet"
+        );
     }
 
     #[test]
@@ -200,6 +219,11 @@ pub(crate) mod tests {
             "nor a directory in no repository"
         );
         assert!(in_main_clone(std::slice::from_ref(&repo)));
+        let gone = repo.join(".claude/worktrees/gone");
+        assert!(
+            !in_main_clone(std::slice::from_ref(&gone)),
+            "a removed worktree under the main clone isn't the main clone"
+        );
         assert!(
             !in_main_clone(&[tree.join("src")]),
             "a worktree is no main clone"
