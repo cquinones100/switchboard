@@ -4259,6 +4259,43 @@ test("the sidebar's list holds at the line it was scrolled to while the cursor s
   assert.equal(sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 10, view: { focused: true, cursor: "@8", frame: 0, here: "@1", top: 99 } }).scroll.top, last.length - last.room, "never past the end");
 });
 
+test("on a short screen the sidebar's header stays at the top, says how many tabs are out of sight, and the list holds still from window to window", () => {
+  const strip = (line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+  // Three groups of two-line tabs: 3 waiting, 4 working, 5 idle.
+  const tabs = Array.from({ length: 12 }, (_, i) => ({ id: `@${i + 1}`, index: i + 1, name: `tab ${i + 1}`, state: i < 3 ? "waiting" : i < 7 ? "working" : "idle", since: Math.floor(Date.now() / 1000) - 60, session: "$1", sessionName: "main", panes: [], sidebars: [] }));
+  const draw = (here, more = {}) => sidebar.sidebarLines({ tabs, sections: [], cols: 30, rows: 16, view: { focused: false, cursor: here, frame: 0, here, ...more } });
+  for (const here of ["@1", "@5", "@7", "@12"]) assert.match(strip(draw(here).lines[0]), /main/, `the session's pill first, in ${here}'s window`);
+  const first = draw("@1");
+  assert.equal(strip(first.lines[1]).trim(), "", "at the top, the filter line is blank");
+  assert.match(strip(first.lines[15]), /▼ 8 more/, "and the last row says how many tabs are cut below");
+  assert.equal(first.owners[15], "scroll:down");
+  // A window whose tab is in sight at the top draws the same list, but for
+  // which tab is its own.
+  const unmarked = (out) => out.lines.slice(1).map((line) => strip(line).replace(/[▌▏]/g, ""));
+  assert.deepEqual(unmarked(draw("@2")), unmarked(first), "two windows whose tabs are in sight show the same list");
+  const low = draw("@7");
+  assert.match(strip(low.lines[2]), /^ WORKING 4/, "a tab below the fold scrolls the list to its group's heading");
+  assert.deepEqual(unmarked(draw("@5")), unmarked(low), "and every window in that group shows it the same");
+  assert.match(strip(low.lines[1]), /▲ 3 more/, "the filter line says how many tabs are above");
+  assert.equal(low.owners[1], "scroll:up");
+  assert.match(strip(low.lines[15]), /▼ 5 more/);
+  // Each tab's rows still name it, shifted under the header.
+  low.owners.forEach((owner, i) => {
+    if (owner?.startsWith("@") && /tab \d+/.test(strip(low.lines[i]))) assert.match(strip(low.lines[i]), new RegExp(`tab ${owner.slice(1)}\\b`), `row ${i} belongs to ${owner}`);
+  });
+  assert.ok(low.owners.includes("@7"), "the window's own tab in sight");
+  const typed = draw("@7", { filter: { text: "tab", typing: false } });
+  assert.match(strip(typed.lines[1]), /\/tab/, "a typed filter keeps its line");
+  // A group taller than the list: a window whose tab is in sight where the
+  // window in front left the list (keep) shows it there too.
+  const many = Array.from({ length: 20 }, (_, i) => ({ ...tabs[0], id: `@${i + 1}`, index: i + 1, name: `tab ${i + 1}`, state: "working" }));
+  const tall = (here, keep) => sidebar.sidebarLines({ tabs: many, sections: [], cols: 30, rows: 40, view: { focused: false, cursor: here, frame: 0, here, keep } });
+  const front = tall("@15").scroll.top;
+  assert.ok(front > 0);
+  assert.equal(tall("@14", front).scroll.top, front, "going to a tab in sight leaves the list where it was");
+  assert.ok(tall("@20", front).scroll.top > front, "and a tab out of sight still scrolls it");
+});
+
 test("C-d and C-u in the sidebar scroll its list half a screen and move the cursor onto the tab there, stopping at the last tab", async (t) => {
   const windows = Array.from({ length: 3 }, () => tmux("new-window", "-d", "-t", "test", "-c", tmp, "-P", "-F", "#{window_id}"));
   const side = tmux("split-window", "-hb", "-d", "-t", windows[0], "-P", "-F", "#{pane_id}");

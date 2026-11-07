@@ -910,7 +910,14 @@ Mission control's views, which `]` and `[` go through, are its tabs, then the bu
 | `?` | these keys, in a popup over the window, until the next key | these keys, in a box over mission control, until the next key |
 | the mouse | a click on a tab goes there, a right click peeks at it, the wheel moves | a click on a view's name switches to it; a click on a card or row chooses it, a second click goes there (Enter); the wheel moves |
 
-A click on a tab in the sidebar goes there, and the wheel scrolls it. Each
+A click on a tab in the sidebar goes there, and the wheel scrolls it. On a
+screen too short for every tab, the session line at the top and the
+notifications at the bottom stay put and only the tabs scroll: the line under
+the session line says how many tabs are above (`▲ 3 more`) and the last row how
+many are below (`▼ 2 more`), and a click on either scrolls half a screen, as
+`C-u` and `C-d` do. A sidebar you are not in keeps the list where the last tab
+left it while its tab is in sight there, and otherwise scrolls to the top or to
+that tab's group, so going from tab to tab doesn't move the list. Each
 mission control card shows a tab's state, PR and session name, your last
 prompt, the end of Claude's last reply, and, when it is waiting on a
 permission prompt or a question, what it is asking. The sidebar is turned off
