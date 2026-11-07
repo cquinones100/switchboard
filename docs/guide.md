@@ -279,7 +279,7 @@ These are in `M-p` alone, with no key unless you give them one in `keys.json`:
 - **Open the repository's merge queue in the browser**: GitHub's merge queue for the branch's PR's base branch, or for the repository's default branch when the branch has no PR. Needs GitHub.
 - **Open the branch's Linear project in the browser**: the project the ticket in the branch (or the tab's name) is in, as Linear says, or a box saying why there is none. Needs Linear.
 - **Copy the branch's ticket ID**, **ticket URL**, **PR number** and **PR URL**: copied, and a box saying what was. The ticket's link is the workspace's in `linear.json` when it names one, else the one Linear gives. Each needs its service.
-- **Log in to AWS (aws sso login) in your Chrome profile**: `switchboard aws-login` in a pane beside yours, which logs in to the one `[sso-session]` in `~/.aws/config` and opens AWS's login page in the Chrome profile `browser.json` gives `awsapps.com` (else its default profile), whatever host the page is on. The pane stays until the login is done and a key is pressed, so its code and any error can be read. It needs the AWS CLI (`aws`), which Switchboard doesn't install.
+- **Log in to AWS (aws sso login) in your Chrome profile**: `switchboard aws-login` in a pane beside yours, which logs in to the one `[sso-session]` in `~/.aws/config` and opens AWS's login page in the Chrome profile `browser.json` gives `awsapps.com` (else its default profile, else the one Chrome picks itself, while Settings' `chrome_profiles` is on), whatever host the page is on. The pane stays until the login is done and a key is pressed, so its code and any error can be read. It needs the AWS CLI (`aws`), which Switchboard doesn't install.
 
 ### Messages
 

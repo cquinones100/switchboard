@@ -147,17 +147,23 @@ pub fn open_url_as(url: &str, as_site: Option<&str>) -> Result<()> {
     let config = util::read_json(browser_file()).unwrap_or(Value::Null);
     let profiles = platform::chrome_local_state().and_then(|f| profiles_in(&f));
     let chosen_by = as_site.map(|site| format!("https://{site}/"));
+    let profiles_on = settings::is_on("chrome_profiles");
     match choose(
         chosen_by.as_deref().unwrap_or(url),
         &config,
         profiles.as_deref(),
-        settings::is_on("chrome_profiles"),
+        profiles_on,
     ) {
         Browser::Chrome(profile) => match open_in_chrome(url, &profile) {
             Ok(()) => Ok(()),
             // No Chrome to run: the link still opens, in the default browser.
             Err(_) => platform::open(url),
         },
+        // The AWS login with no profile named for it still opens in Chrome,
+        // in the profile Chrome picks, as aws-login.sh's BROWSER did.
+        Browser::Default if as_site.is_some() && profiles_on => {
+            open_in_chrome(url, "").or_else(|_| platform::open(url))
+        }
         Browser::Default => platform::open(url),
     }
 }
@@ -176,17 +182,14 @@ pub fn open_in_background(url: String) {
 
 #[cfg(target_os = "macos")]
 fn open_in_chrome(url: &str, profile: &str) -> Result<()> {
-    util::run(
-        "open",
-        [
-            "-na",
-            "Google Chrome",
-            "--args",
-            &format!("--profile-directory={profile}"),
-            url,
-        ],
-    )
-    .map(|_| ())
+    // No profile: the one Chrome picks itself.
+    let chosen = format!("--profile-directory={profile}");
+    let mut args = vec!["-na", "Google Chrome", "--args"];
+    if !profile.is_empty() {
+        args.push(&chosen);
+    }
+    args.push(url);
+    util::run("open", args).map(|_| ())
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -205,8 +208,12 @@ fn open_in_chrome(url: &str, profile: &str) -> Result<()> {
     let Some(chrome) = names.iter().find_map(|n| util::which(n)) else {
         bail!("Chrome isn't installed");
     };
-    let mut child = Command::new(chrome)
-        .arg(format!("--profile-directory={profile}"))
+    let mut command = Command::new(chrome);
+    // No profile: the one Chrome picks itself.
+    if !profile.is_empty() {
+        command.arg(format!("--profile-directory={profile}"));
+    }
+    let mut child = command
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

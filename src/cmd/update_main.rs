@@ -55,6 +55,9 @@ pub fn update(dir: &Path) -> Result<String, String> {
     .replacen(&format!("{remote}/"), "", 1);
 
     worktree::count_fetch(&root, &remote, "update main");
+    // git's own reason for a refused fetch goes in what is said, as the
+    // popup showed update-main.sh's stderr, rather than only in the log of
+    // whatever ran this.
     let fetched = Command::new("git")
         .arg("-C")
         .arg(&root)
@@ -66,11 +69,19 @@ pub fn update(dir: &Path) -> Result<String, String> {
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !fetched {
-        return Err(format!("could not fetch {branch} from {remote}"));
+        .stderr(Stdio::piped())
+        .output();
+    match fetched {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => {
+            let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(if why.is_empty() {
+                format!("could not fetch {branch} from {remote}")
+            } else {
+                format!("could not fetch {branch} from {remote}:\n{why}")
+            });
+        }
+        Err(e) => return Err(format!("could not fetch {branch} from {remote}: {e}")),
     }
     let git = |args: &[&str]| git_at(&root, args).map_err(|e| e.to_string());
     let theirs = git(&["rev-parse", &format!("{remote}/{branch}")])?;
