@@ -1418,7 +1418,44 @@ impl Server {
                 self.mission_note(client, "Dismissed.");
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
+            Do::ReadLog { job, name } => self.read_ci_log(client, &job, &name),
         }
+    }
+
+    /// A CI job's kept log in a pane beside the one you're in, in place of
+    /// one read there before, paged from its end (`switchboard view --log`),
+    /// as the CI view's "Read the failing log" showed it in a popup with
+    /// `less +G`.
+    fn read_ci_log(&mut self, client: ClientId, job: &str, name: &str) {
+        const MARK: &str = "@ci_log";
+        let file = crate::sources::ciboard::log_file(job);
+        if !file.is_file() {
+            self.mission_note(client, format!("{name}'s log is no longer kept."));
+            return;
+        }
+        self.mission_close(client);
+        let Some(pane) = self.current_pane(client) else {
+            return;
+        };
+        let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
+            return;
+        };
+        let mut beside = pane;
+        if let Some(old) = self.marked_in(tab, MARK) {
+            self.kill_pane(old);
+            if old == pane {
+                match self.tabs.get(&tab) {
+                    Some(t) => beside = t.active,
+                    None => return,
+                }
+            }
+        }
+        let args = vec![
+            "view".into(),
+            "--log".into(),
+            file.to_string_lossy().into_owned(),
+        ];
+        self.open_beside(beside, MARK, args, 50);
     }
 
     /// Runs `work` in a task of its own under the busy box, which closes

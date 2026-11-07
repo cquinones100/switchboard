@@ -216,10 +216,21 @@ fn dir_arg(arg: Option<&String>) -> PathBuf {
     }
 }
 
-/// `switchboard view <file.md>`: a Markdown file, paged.
+/// `switchboard view <file.md>`: a Markdown file, paged; `view --log
+/// <file>`, a CI job's log kept by the CI view, paged from its end, as
+/// mission control's "Read the failing log" showed it with `less +G`.
 pub fn view_main(args: Vec<String>) -> ExitCode {
+    if let [flag, file] = args.as_slice()
+        && flag == "--log"
+    {
+        let content = match std::fs::read_to_string(file) {
+            Ok(log) => pager::Content::Log(crate::sources::ciboard::readable(&log)),
+            Err(e) => pager::Content::Failed(format!("Couldn't read {file}: {e}")),
+        };
+        return pager::run(content, None, None);
+    }
     let [file] = args.as_slice() else {
-        eprintln!("Usage: switchboard view <file.md>");
+        eprintln!("Usage: switchboard view <file.md> | --log <file>");
         return ExitCode::from(2);
     };
     let content = match std::fs::read_to_string(file) {

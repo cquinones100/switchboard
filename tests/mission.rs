@@ -249,3 +249,40 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
         screen.join("\n")
     );
 }
+
+/// What a line of the screen shows right of the sidebar's edge, if any.
+fn pane_text(line: &str) -> &str {
+    line.rsplit('│').next().unwrap_or(line).trim()
+}
+
+#[test]
+fn a_ci_jobs_kept_log_reads_from_its_end_without_its_timestamps() {
+    // What the CI view's "Read the failing log" runs beside the pane.
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let log = server.dir.path().join("77.log");
+    let lines: String = (1..=60)
+        .map(|n| format!("2026-11-02T10:00:{:02}.0000000Z step {n}\n", n % 60))
+        .collect();
+    std::fs::write(
+        &log,
+        lines + "2026-11-02T10:01:00.0000000Z ##[error]it broke\n",
+    )
+    .unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{} view --log {}\r", common::BIN, log.display()));
+    let screen = client.wait_text("Error: it broke");
+    assert!(
+        screen.iter().any(|l| pane_text(l) == "step 60"),
+        "{}",
+        screen.join("\n")
+    );
+    assert!(!screen.iter().any(|l| l.contains("2026-11-02T")));
+    assert!(
+        !screen.iter().any(|l| pane_text(l) == "step 1"),
+        "opened at its end"
+    );
+    client.type_text("q");
+    client.wait_text("$");
+}

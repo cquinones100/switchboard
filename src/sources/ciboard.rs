@@ -142,7 +142,8 @@ pub fn item_of(pr: &Value, failing: &[Failing], why: Option<&str>) -> Option<Ite
         detail.push_str(why);
     }
     let first = failing.first();
-    let job = failing.iter().find_map(|f| f.job.clone());
+    let job = failing.iter().find(|f| f.job.is_some());
+    let (job, job_name) = (job.and_then(|f| f.job.clone()), job.map(|f| f.name.clone()));
     Some(
         Item::new(url, format!("#{number} {}", text(pr, "/title")))
             .detail(detail)
@@ -154,6 +155,8 @@ pub fn item_of(pr: &Value, failing: &[Failing], why: Option<&str>) -> Option<Ite
                     "branch": text(pr, "/headRefName"),
                     "check": first.map(|f| json!({ "name": f.name, "url": f.url, "job": f.job })),
                     "job": job,
+                    "logged": why.is_some(),
+                    "jobName": job_name,
                 },
                 "search": repo,
             })),
@@ -237,9 +240,39 @@ pub async fn fetch(repos: Vec<String>) -> anyhow::Result<Vec<Item>> {
     Ok(items)
 }
 
+/// A job's log as "Read the failing log" shows it: less showed the file
+/// with its colors, which a pane drawn as plain text can't, so the color
+/// escapes go, as do the timestamp Actions puts first on every line and its
+/// group marks; its error and warning marks are said in words.
+pub fn readable(log: &str) -> String {
+    static COLOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;]*[A-Za-z]").unwrap());
+    static STAMP: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?m)^\d{4}-\d\d-\d\dT[\d:.]+Z ?").unwrap());
+    let clean = COLOR.replace_all(log, "");
+    let clean = STAMP.replace_all(&clean, "");
+    clean
+        .replace("\r\n", "\n")
+        .replace("##[group]", "")
+        .replace("##[endgroup]", "")
+        .replace("##[error]", "Error: ")
+        .replace("##[warning]", "Warning: ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_log_reads_without_its_colors_timestamps_and_marks() {
+        let log = "2026-10-28T10:00:00.0000000Z ##[group]Run tests\n\
+                   2026-10-28T10:00:01.0000000Z \x1b[31mFAIL\x1b[0m a test\n\
+                   2026-10-28T10:00:02.0000000Z ##[endgroup]\n\
+                   2026-10-28T10:00:03.0000000Z ##[error]Process completed with exit code 1.";
+        assert_eq!(
+            readable(log),
+            "Run tests\nFAIL a test\n\nError: Process completed with exit code 1."
+        );
+    }
 
     #[test]
     fn a_pull_request_s_failing_checks_and_the_log_line_that_says_why() {

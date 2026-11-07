@@ -106,6 +106,11 @@ pub enum Do {
     },
     /// What working a note continuously offers (src/autopilot).
     Autopilot(crate::autopilot::Act),
+    /// A CI job's kept log, read in a pane beside the one you're in.
+    ReadLog {
+        job: String,
+        name: String,
+    },
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -489,6 +494,19 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     'g',
                     format!("Go to tab {}, where it is open", t.index),
                     Do::GoTo(t.id),
+                ));
+            }
+            // The failing job's log, kept when the view read why it failed.
+            let job = text(ci, "/job");
+            if !job.is_empty() && ci.get("logged").and_then(Value::as_bool) == Some(true) {
+                let name = text(ci, "/jobName");
+                out.push(choice(
+                    'l',
+                    format!("Read the failing log ({name}) in a pane beside"),
+                    Do::ReadLog {
+                        job: job.to_string(),
+                        name: name.to_string(),
+                    },
                 ));
             }
             let check = text(ci, "/check/url");
@@ -882,6 +900,37 @@ mod tests {
         let shape = Work::Shape("AB-3".into()).command();
         assert!(runs(&shape, " shape \"$@\""), "{shape:?}");
         assert_eq!(shape.last().map(String::as_str), Some("AB-3"));
+    }
+
+    #[test]
+    fn a_failing_pr_reads_its_kept_log_beside_when_there_is_one() {
+        let mut open = tab(2, "#12 the fix");
+        open.pr = Some(12);
+        let tabs = vec![open];
+        let repo = |_: &Path| Some("acme/app".to_string());
+        let url = "https://github.com/acme/app/pull/12";
+        let ci = |logged: bool| {
+            Item::new(url, "#12 the fix").data(json!({ "ci": {
+                "number": 12, "repo": "acme/app", "url": url, "job": "77",
+                "jobName": "test", "logged": logged,
+                "check": { "name": "test", "url": "https://github.com/acme/app/actions/runs/1/job/77" },
+            } }))
+        };
+        let choices = item_choices(&ViewId::Ci, &ci(true), &[], &ctx(&tabs, &repo));
+        assert_eq!(keys(&choices), "cglopy");
+        assert_eq!(
+            choices[2].label,
+            "Read the failing log (test) in a pane beside"
+        );
+        assert_eq!(
+            choices[2].act,
+            Do::ReadLog {
+                job: "77".into(),
+                name: "test".into()
+            }
+        );
+        let choices = item_choices(&ViewId::Ci, &ci(false), &[], &ctx(&tabs, &repo));
+        assert_eq!(keys(&choices), "cgopy", "no log kept, nothing to read");
     }
 
     #[test]

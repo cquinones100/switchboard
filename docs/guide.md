@@ -500,7 +500,7 @@ After the cards come Notifications, the Work map, Calendar, Slack, Closed, PRs, 
 
 **PRs** is a board of your pull requests in the repositories your tabs are in, in columns: Draft, In review, Approved, In merge queue, and Merged in the last 7 days, each with its checks, review and place in the queue, failing checks or changes requested marked as needing you. `h` `l` move between columns. Enter offers to go to the tab it is open in, work on it in a new tab (`wtpr`), read it here in a pane beside the one you were in, open it in the browser, or copy its link. Settings' "PR board" (`pr_board`).
 
-**CI** is your open pull requests whose checks are failing, in the repositories your tabs are in, each with the checks that failed and the line of the first failing job's log that says why. Enter offers to start a CI loop on it (typing `/ci-loop` into the tab already on it when its Claude is idle or finished, else opening a new tab on its worktree with `wtpr`), go to its tab, open the failing check in the browser, read the pull request here in a pane beside the one you were in or open it in the browser, or copy its link. Settings' "CI" (`view_ci`).
+**CI** is your open pull requests whose checks are failing, in the repositories your tabs are in, each with the checks that failed and the line of the first failing job's log that says why. Enter offers to start a CI loop on it (typing `/ci-loop` into the tab already on it when its Claude is idle or finished, else opening a new tab on its worktree with `wtpr`), go to its tab, read the failing job's log in a pane beside yours (the log of each failing job is kept in `ci-logs/` in the state directory once the view has read why it failed, and goes when the job no longer fails; it opens at its end, without the timestamps Actions puts on every line), open the failing check in the browser, read the pull request here in a pane beside the one you were in or open it in the browser, or copy its link. Settings' "CI" (`view_ci`).
 
 **Merge queues** is every pull request in the merge queue of each repository your tabs are in, everyone's, in queue order: its place, number and title, the repository, where it stands, about how long until it merges as GitHub estimates it, its author, and the tab it is open in; one of your tabs' that can't merge is marked as needing you. A repository with no merge queue is left out. Enter offers to go to the tab, read the pull request here in a pane beside the one you were in, open it or the queue in the browser, or copy its link. Settings' "Merge queues" (`view_merge_queues`).
 
@@ -730,6 +730,7 @@ Mission control's menus read a link beside your work too: "Read it here" on a pu
 
 ```
 switchboard view notes.md               # page a Markdown file, drawn as the views draw one
+switchboard view --log ci.log           # page a CI job's log from its end
 switchboard pr-view [dir]               # the branch's PR description
 switchboard pr-view --checks [dir]      # the PR's failing checks, as M-m shows them
 switchboard ticket-view [dir | ABC-123] # a ticket, by ID or from a directory's branch

@@ -56,6 +56,9 @@ pub enum Content {
     /// Something that can't be read here, with a link o opens (a Slack
     /// message); any other key closes it.
     Offer { text: String, url: String },
+    /// Plain text, a line each, opened at its end, as `less +G` opened a
+    /// CI job's log.
+    Log(String),
 }
 
 /// What came of a key or the mouse.
@@ -137,6 +140,7 @@ impl Pager {
         self.lay_out();
         self.top = match (anchor, &self.markdown) {
             (Some(anchor), Some(_)) => self.doc.line_at(anchor),
+            _ if matches!(self.content, Content::Log(_)) => self.last_top(),
             _ => 0,
         };
         self.clamp();
@@ -192,6 +196,11 @@ impl Pager {
                 ));
                 Doc::plain(lines)
             }
+            (Content::Log(text), _) => Doc::plain(
+                text.lines()
+                    .map(|l| vec![Span::new(l.to_string(), Style::fg(252))])
+                    .collect(),
+            ),
             (Content::Markdown { .. }, None) => Doc::default(),
         };
     }
@@ -601,6 +610,18 @@ mod tests {
         pager.resize(50, 20);
         let after = pager.screen()[0].clone();
         assert!(after.contains(&first), "{after:?} still shows {first}");
+    }
+
+    #[test]
+    fn a_log_opens_at_its_end_a_line_each() {
+        let log: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        let mut pager = Pager::new(Content::Log(log), 40, 10);
+        let screen = pager.screen();
+        assert_eq!(screen[8].trim(), "line 50", "{screen:?}");
+        assert_eq!(screen[0].trim(), "line 42");
+        pager.key(key(KeyCode::Char('g')));
+        assert_eq!(pager.screen()[0].trim(), "line 1");
+        assert_eq!(pager.key(key(KeyCode::Char('q'))), Act::Quit);
     }
 
     #[test]
