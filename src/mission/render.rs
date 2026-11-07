@@ -1115,6 +1115,16 @@ fn hints(m: &Mission, view: Option<&View>) -> String {
     if m.jump.is_some() {
         return "type a view's name  ↵ go there  esc cancel".into();
     }
+    // While a filter types, letters are the filter's, not keys, and what
+    // is typed leads the line: the bar it ends may be too wide to show it.
+    if let Some(f) = m.filter.as_ref().filter(|f| f.typing) {
+        let enter = if m.picker {
+            "↵ actions  esc close"
+        } else {
+            "↵ keep it  esc clear"
+        };
+        return format!("/{}▏  ↑↓ move  {enter}", f.text);
+    }
     let next = if m.snap.tab_focus {
         "[ ] views  tab focus"
     } else {
@@ -1419,6 +1429,23 @@ mod tests {
             .iter()
             .map(|l| l.text().trim_end().to_string())
             .collect()
+    }
+
+    #[test]
+    fn a_filter_being_typed_leads_the_keys_line() {
+        let mut m = mission(vec![tab(1, "one"), tab(2, "two")], Vec::new());
+        m.filter = Some(crate::sidebar::render::Filter {
+            text: "tw".into(),
+            typing: true,
+        });
+        let (lines, _) = screen(&m, 60, 20);
+        let keys = texts(&lines).last().cloned().unwrap();
+        assert!(keys.starts_with(" /tw▏  ↑↓ move  ↵ keep it"), "{keys:?}");
+        m.picker = true;
+        let (lines, _) = screen(&m, 60, 20);
+        let keys = texts(&lines).last().cloned().unwrap();
+        assert!(keys.contains("↵ actions  esc close"), "{keys:?}");
+        assert!(!keys.contains("jk"), "j and k are typed: {keys:?}");
     }
 
     #[test]
