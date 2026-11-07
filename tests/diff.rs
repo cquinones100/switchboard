@@ -325,12 +325,26 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
         panes(&server)[0]["id"] == first.as_str()
     });
 
-    // Mission control's menu on the tab: lazygit, then the diff.
+    // Mission control's menu on the tab: lazygit, then the diff, each
+    // reached with j, since a menu's options have no letters of their own.
+    let take = |client: &mut common::TestClient, label: &str| {
+        for _ in 0..20 {
+            let screen = client.wait_text(label);
+            if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
+                client.type_text("\r");
+                return;
+            }
+            let before = screen.join("\n");
+            client.type_text("j");
+            client.wait_for("the cursor to move", |s| s.join("\n") != before);
+        }
+        panic!("{label} not reached");
+    };
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
     client.type_text("\r");
     client.wait_text("Go to tab 1");
-    client.type_text("L");
+    take(&mut client, "lazygit");
     client.wait_text("stand-in lazygit in");
     assert_eq!(panes(&server)[0]["options"]["@in_place"], "lazygit");
     server.ok(&["press", "lazygit"]);
@@ -340,8 +354,7 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
     client.type_text("\x1b ");
     client.wait_text("MISSION CONTROL");
     client.type_text("\r");
-    client.wait_text("Its diff (M-d)");
-    client.type_text("d");
+    take(&mut client, "Its diff (M-d)");
     wait_until("the diff in the pane's place", || {
         panes(&server)[0]["options"]["@in_place"] == "diff"
     });
