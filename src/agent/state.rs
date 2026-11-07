@@ -423,6 +423,29 @@ impl Agents {
         changed
     }
 
+    /// A turn you interrupted at `at` (seconds) while the pane waited: a
+    /// permission request denied, or Esc pressed on it, which runs no hook,
+    /// so the pane would wait on the request until the next prompt
+    /// (agent-state.sh's `interrupted`, run by the sidebar daemon from the
+    /// transcript). It goes idle, waiting on nothing, unless it has moved on
+    /// since: it isn't waiting, or began waiting after (a new request). What
+    /// it was doing and its loop are kept. Gives whether it changed.
+    pub fn interrupted(&mut self, pane: PaneId, at: i64) -> bool {
+        let Some(agent) = self.panes.get_mut(&pane) else {
+            return false;
+        };
+        if agent.state != Some(State::Waiting) || agent.since > at {
+            return false;
+        }
+        agent.state = None;
+        agent.since = 0;
+        agent.wait = None;
+        if agent.is_empty() {
+            self.panes.remove(&pane);
+        }
+        true
+    }
+
     /// Drops the state of a pane no longer running Claude, so a session that
     /// died without its SessionEnd hook leaves no mark behind. What it was
     /// doing is kept, as agent-state.sh kept it.
@@ -921,6 +944,38 @@ mod tests {
         assert_eq!(a.state(P), None);
         assert!(a.marked().is_empty());
         assert!(!a.drop_state(P));
+    }
+
+    #[test]
+    fn a_wait_you_interrupted_is_handed_back_unless_the_pane_moved_on() {
+        let mut a = Agents::default();
+        on(
+            &mut a,
+            "UserPromptSubmit",
+            json!({"prompt": "/ci-loop"}),
+            90,
+        );
+        on(
+            &mut a,
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
+            100,
+        );
+        assert!(!a.interrupted(P, 99), "a request made after it waits on");
+        assert_eq!(a.state(P), Some(State::Waiting));
+        assert!(a.interrupted(P, 100));
+        let agent = a.get(P).unwrap();
+        assert_eq!(
+            (agent.state, agent.since, agent.wait.as_ref()),
+            (None, 0, None)
+        );
+        assert_eq!(agent.loop_name.as_deref(), Some("ci"), "the loop goes on");
+        assert!(!a.interrupted(P, 100), "once");
+        // Working again since, it has moved on.
+        on(&mut a, "UserPromptSubmit", json!({}), 110);
+        assert!(!a.interrupted(P, 120));
+        assert_eq!(a.state(P), Some(State::Working));
+        assert!(!a.interrupted(PaneId(9), 120));
     }
 
     #[test]

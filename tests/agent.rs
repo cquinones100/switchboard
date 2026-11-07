@@ -270,6 +270,87 @@ fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
     });
 }
 
+/// A line of a Claude transcript, said now, as Claude Code appends one.
+fn say(file: &Path, entry: Value) {
+    let mut entry = entry;
+    entry["timestamp"] = json!(jiff::Timestamp::now().to_string());
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)
+        .unwrap();
+    writeln!(f, "{entry}").unwrap();
+}
+
+#[test]
+fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let lazygit = bin.join("lazygit");
+    std::fs::write(&lazygit, "#!/bin/sh\nexec sleep 60\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "denied", "cwd": "/work"}),
+    );
+    let dir = server.home.join(".claude/projects/-work");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("denied.jsonl");
+    let interrupted = json!({"type": "user", "message": {"content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}});
+    let request = json!({"tool_name": "Bash", "tool_input": {"command": "git push"}});
+
+    say(
+        &file,
+        json!({"type": "user", "message": {"content": "push it"}}),
+    );
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "push it"}),
+    );
+    hook(&server, &pane, "PermissionRequest", request.clone());
+    let agent = pane_of(&server.list(), &pane)["agent"].clone();
+    assert_eq!(agent["state"], "waiting");
+    assert_eq!(agent["wait"], "permission: Bash git push");
+    // With no interruption, it waits, past the sidebar's next read.
+    std::thread::sleep(Duration::from_millis(2_500));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "waiting");
+
+    // Denied: no hook runs, but the transcript says so.
+    say(&file, interrupted.clone());
+    let list = wait_list(&server, "the pane handed back", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
+    });
+    assert_eq!(pane_of(&list, &pane)["agent"]["wait"], Value::Null);
+    assert_eq!(tabs(&list)[0]["agent"], Value::Null);
+
+    // Asked again, with lazygit in its place: denied from elsewhere (the
+    // Slack relay), the parked Claude is handed back too.
+    say(
+        &file,
+        json!({"type": "user", "message": {"content": "push it to a branch"}}),
+    );
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    hook(&server, &pane, "PermissionRequest", request);
+    server.ok(&["press", "lazygit"]);
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    assert_eq!(tabs(&server.list())[0]["agent"], "waiting");
+    say(&file, interrupted);
+    wait_list(&server, "the parked pane handed back", |l| {
+        tabs(l)[0]["agent"].is_null()
+    });
+}
+
 #[test]
 fn a_pane_not_running_claude_keeps_no_state() {
     let server = TestServer::start();

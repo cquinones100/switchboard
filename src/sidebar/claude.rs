@@ -227,6 +227,10 @@ static CRON_JOB: LazyLock<Regex> = LazyLock::new(|| {
 static MAY_MATTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"background with ID|moved to the background|agentId|<task-id>|run_in_background|review-loop|ci-loop|queue-and-clean|deploy-test|preview-test|"Monitor"|Monitor started|"TaskStop"|"ScheduleWakeup"|"CronCreate"|"CronDelete"|Scheduled [A-Za-z0-9_-]* ?job"#).expect("a regex")
 });
+/// How Claude Code records a turn you interrupted, as a message of yours:
+/// "[Request interrupted by user for tool use]" after a denied permission
+/// request, "[Request interrupted by user]" after Esc.
+const INTERRUPTED: &str = "[Request interrupted by user";
 static LOCAL_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*<(local-command-|command-name>|command-message>|bash-)").expect("a regex")
 });
@@ -398,6 +402,9 @@ pub struct Work {
     /// The message of a turn an API error cut short, while nothing has been
     /// said since, and when it came (ms).
     pub api_error: Option<(String, i64)>,
+    /// When a turn you interrupted (a permission request denied, Esc) was
+    /// (ms), while nothing has been said since.
+    pub interrupted_at: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -437,6 +444,8 @@ struct Seen {
     crons: IndexMap<String, Cron>,
     wakeup: Option<Wakeup>,
     api_error: Option<(String, i64)>,
+    /// When a turn you interrupted was, while nothing has been said since.
+    interrupted: Option<i64>,
 }
 
 fn timestamp_ms(entry: &Value) -> i64 {
@@ -518,6 +527,40 @@ impl Seen {
                 && !report
             {
                 self.api_error = None;
+            }
+        }
+        // A turn you interrupted: a permission request denied, or Esc
+        // pressed, which Claude Code records as a message of yours
+        // ("[Request interrupted by user for tool use]") and runs no hook
+        // for, so the pane can be left waiting on the request. It stands
+        // until anything else is said, by you or Claude, as an API error
+        // does; a tool's result (a denied call's) doesn't carry it on.
+        let interrupt = !sidechain && line.contains(INTERRUPTED);
+        if (self.interrupted.is_some() || interrupt)
+            && !sidechain
+            && (line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""))
+            && let Ok(entry) = serde_json::from_str::<Value>(line)
+        {
+            let kind = str_of(entry.get("type"));
+            let flag = |k: &str| entry.get(k) == Some(&Value::Bool(true));
+            let content = entry.pointer("/message/content");
+            let text = match content {
+                Some(Value::String(s)) => Some(s.as_str()),
+                Some(Value::Array(parts)) => parts
+                    .iter()
+                    .find(|p| str_of(p.get("type")) == "text")
+                    .and_then(|p| p.get("text").and_then(Value::as_str)),
+                _ => None,
+            };
+            let conversation =
+                (kind == "user" || kind == "assistant") && !flag("isSidechain") && !flag("isMeta");
+            let results_only = content
+                .and_then(Value::as_array)
+                .is_some_and(|parts| parts.iter().all(|p| str_of(p.get("type")) == "tool_result"));
+            if conversation && kind == "user" && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
+                self.interrupted = Some(timestamp_ms(&entry));
+            } else if conversation && !results_only {
+                self.interrupted = None;
             }
         }
         if !MAY_MATTER.is_match(line) {
@@ -772,6 +815,7 @@ impl Seen {
             _ => from_cron,
         };
         let api_error = self.api_error.clone().filter(|(_, at)| *at >= since);
+        let interrupted_at = self.interrupted.filter(|at| *at >= since);
         let loop_run = running_loop.map(|l| {
             let from = since.max(self.loop_at.get(l.kind).copied().unwrap_or(0));
             let runs = self
@@ -790,6 +834,7 @@ impl Seen {
             monitors,
             scheduled,
             api_error,
+            interrupted_at,
         }
     }
 }
@@ -1339,6 +1384,54 @@ mod tests {
                 .api_error,
             None
         );
+    }
+
+    #[test]
+    fn an_interrupted_turn_stands_until_the_conversation_goes_on() {
+        let t = Transcript::new("interrupted");
+        let now = crate::util::now_ms();
+        let at = |ago: i64| iso(now - ago);
+        t.add(&[
+            json!({"type": "user", "timestamp": at(9_000), "message": {"content": "push it"}}),
+            json!({"type": "assistant", "timestamp": at(8_000), "message": {"content": [{"type": "tool_use", "id": "p1", "name": "Bash", "input": {"command": "git push"}}]}}),
+            json!({"type": "user", "timestamp": at(7_000), "message": {"content": [{"type": "tool_result", "tool_use_id": "p1", "is_error": true, "content": "The user doesn't want to proceed with this tool use."}]}}),
+            json!({"type": "user", "timestamp": at(7_000), "message": {"content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}}),
+        ]);
+        let mut r = Reader::default();
+        let interrupted = |r: &mut Reader, since: i64| {
+            r.background_work(&t.file, since, now)
+                .unwrap()
+                .interrupted_at
+        };
+        assert_eq!(interrupted(&mut r, now - 60_000), Some(now - 7_000));
+        assert_eq!(
+            interrupted(&mut r, now - 1_000),
+            None,
+            "not one from before the session"
+        );
+        t.add(&[
+            json!({"type": "assistant", "isSidechain": true, "timestamp": at(6_000), "message": {"content": [{"type": "text", "text": "a subagent"}]}}),
+            json!({"type": "user", "isMeta": true, "timestamp": at(5_000), "message": {"content": "Caveat"}}),
+            json!({"type": "user", "timestamp": at(4_000), "message": {"content": [{"type": "tool_result", "tool_use_id": "p2", "content": "[Request interrupted by user for tool use]"}]}}),
+        ]);
+        assert_eq!(
+            interrupted(&mut r, now - 60_000),
+            Some(now - 7_000),
+            "a subagent's lines, a note of Claude Code's or a tool's result don't clear it"
+        );
+        t.add(&[
+            json!({"type": "user", "timestamp": at(1_000), "message": {"content": "push it to a branch instead"}}),
+        ]);
+        assert_eq!(
+            interrupted(&mut r, now - 60_000),
+            None,
+            "said something after it, it is gone"
+        );
+        // Esc on its own, as a plain string.
+        t.add(&[
+            json!({"type": "user", "timestamp": at(500), "message": {"content": "[Request interrupted by user]"}}),
+        ]);
+        assert_eq!(interrupted(&mut r, now - 60_000), Some(now - 500));
     }
 
     #[test]

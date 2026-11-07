@@ -119,6 +119,8 @@ pub struct Sidebar {
     pub windows: notices::Windows,
     /// The tips asked for once this run (merged, loop, sidebar).
     tips_asked: HashSet<&'static str>,
+    /// The interruption each pane was last handed back after (ms).
+    handed_back: HashMap<PaneId, i64>,
 }
 
 impl Sidebar {

@@ -210,11 +210,36 @@ impl Server {
             reads.insert(*id, read);
         }
         reader.retain(&files);
+        let interrupted: Vec<(PaneId, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| Some((*p, r.work.interrupted_at?)))
+            .collect();
         let changed = reads != self.sidebar.panes;
         self.sidebar.panes = reads;
         self.sidebar.stale = false;
+        self.sidebar_hand_back(&interrupted);
         if changed {
             self.dirty_sidebars();
+        }
+    }
+
+    /// A turn you interrupted on a permission request runs no hook, so its
+    /// pane is left waiting: each pane whose transcript says so is handed
+    /// back as idle (`agent_interrupted`, the daemon's `handBack`), once for
+    /// each interruption (`at`, ms), a parked one included, as every pane is
+    /// read.
+    fn sidebar_hand_back(&mut self, interrupted: &[(PaneId, i64)]) {
+        let panes = &self.panes;
+        self.sidebar
+            .handed_back
+            .retain(|p, _| panes.contains_key(p));
+        for &(pane, at) in interrupted {
+            if self.sidebar.handed_back.get(&pane) != Some(&at)
+                && self.agent_interrupted(pane, at.div_euclid(1000))
+            {
+                self.sidebar.handed_back.insert(pane, at);
+                self.dirty_sidebars();
+            }
         }
     }
 
