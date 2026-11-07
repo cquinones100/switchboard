@@ -410,6 +410,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | `a` | answer the chosen tab's Claude, or send it a message, in mission control's box (see [Answering a tab](#answering-a-tab)) |
 | `n` | to the notifications, or a box saying there are none |
 | `t` | a new tab running Claude, as `M-t` opens one, from the chosen tab, so its directory is first in the list |
+| `d` `L` | the chosen tab gone to, its diff (as `M-d`) or lazygit in its pane's place |
 | any other Alt or Ctrl key | goes to the chosen tab and runs there |
 | `?` | these keys |
 

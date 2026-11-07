@@ -105,6 +105,13 @@ impl Server {
     /// already.
     pub fn tool_in_tab(&mut self, client: ClientId, tab: TabId, lazygit: bool) {
         self.mission_go(client, tab);
+        self.tool_in_front(client, lazygit);
+    }
+
+    /// The diff or lazygit in the place of the pane in front, unless it is
+    /// there already: what mission control's menu on a tab and the
+    /// sidebar's `d` and `L` do once at the tab.
+    pub fn tool_in_front(&mut self, client: ClientId, lazygit: bool) {
         let name = if lazygit { LAZYGIT } else { TOOL };
         if self.tool_here(client, name).is_some() {
             return;

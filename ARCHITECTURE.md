@@ -131,7 +131,6 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (hooks, statusline, skills, the terminal, the leftovers, the optional report), a new build's first run, and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
-| `bin/switchboard-try` (a worktree tried under a home of its own) | a build run with a state directory of its own (CLAUDE.md's "Testing in the workspace in use") |
 | `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
 | `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`) |
 | `bin/*` Node programs, `lib/` | `src/cmd/`, `src/integrations/`, `src/relay/`, ... |
@@ -141,7 +140,6 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
 - **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name, and the shortcuts are in the name asked for after `M-t` alone (`src/extras/naming.rs`).
-- **The sidebar's tools**: its `d` and `L` on a tab (the tab's diff and lazygit in its pane's place), which mission control's menus on a tab and on a Work map row offer.
 - **Elsewhere**: `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 
 ### Before this lands

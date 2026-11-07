@@ -299,6 +299,46 @@ fn m_s_and_its_keys_move_between_tabs() {
     });
 }
 
+#[test]
+fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    // A stand-in lazygit, as tests/diff.rs has.
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let lazygit = bin.join("lazygit");
+    std::fs::write(
+        &lazygit,
+        "#!/bin/sh\necho stand-in lazygit\nexec sleep 60\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let first = tabs(&server.list())[0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+
+    // L on the first tab: gone to, lazygit in its pane's place.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("1");
+    client.type_text("L");
+    client.wait_text("stand-in lazygit");
+    let list = wait_list(&server, "lazygit in the first tab's pane's place", |l| {
+        tabs(l)[0]["current"] == true && tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    assert_eq!(
+        tabs(&list)[0]["panes"][0]["options"]["@parked_pane"],
+        first.as_str()
+    );
+    assert!(!focused(&list), "the focus in the tool");
+}
+
 /// The Notifications window's tab, by its place in the list, if made.
 fn notices_tab(list: &Value) -> Option<usize> {
     tabs(list)

@@ -60,6 +60,7 @@ const KEYS: &[(&str, &str)] = &[
     ("a", "answer it, or send it a message"),
     ("n", "to the notifications, when there are any"),
     ("t", "new tab running Claude there (M-t)"),
+    ("d L", "its diff, or lazygit, in its pane's place"),
     ("M-x C-x", "run that key there"),
     ("M-s", "back to your pane"),
     ("?", "these keys"),
@@ -1130,6 +1131,15 @@ impl Server {
                     self.say(Some(client), "No notifications");
                 } else {
                     self.sidebar_move(session, order.len() as isize);
+                }
+            }
+            // d and L: the chosen tab gone to, its diff or lazygit in its
+            // pane's place, as the tmux version's sidebar and mission
+            // control's menu on a tab do.
+            KeyCode::Char(c @ ('d' | 'L')) if none => {
+                if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
+                    self.sidebar_go(session, t);
+                    self.tool_in_front(client, c == 'L');
                 }
             }
             // t: a new tab running Claude, as M-t opens one, from the chosen
