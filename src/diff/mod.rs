@@ -19,7 +19,8 @@
 //! - `app`: the program on the screen.
 //! - `ahead`: the story told ahead of time for each tab's new commit.
 //! - `in_place`: a tool in a pane's place, in the server.
-//! - `serve`: the server's keys: M-d and the palette's commands.
+//! - `serve`: the server's keys: M-d, lazygit in a pane's place, and the
+//!   palette's commands.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -50,15 +51,18 @@ pub enum Command {
     CopyStory,
     /// ga pressed in the diff: a question about it.
     Ask,
+    /// lazygit in place of this pane, or quit.
+    Lazygit,
 }
 
 impl Command {
-    pub const ALL: [Command; 5] = [
+    pub const ALL: [Command; 6] = [
         Command::Diff,
         Command::Side,
         Command::Full,
         Command::CopyStory,
         Command::Ask,
+        Command::Lazygit,
     ];
 
     /// Its name in keys.json.
@@ -69,6 +73,7 @@ impl Command {
             Command::Full => "tool-alone",
             Command::CopyStory => "copy-diff-story",
             Command::Ask => "ask-about-diff",
+            Command::Lazygit => "lazygit",
         }
     }
 
@@ -82,11 +87,16 @@ impl Command {
             Command::Diff => {
                 "Open the branch's diff against its PR's base in place of this pane, or close it"
             }
-            Command::Side => "Show the pane a tool stands in for (the diff) beside it, on its left",
+            Command::Side => {
+                "Show the pane a tool stands in for (the diff, lazygit) beside it, on its left"
+            }
             Command::Full => "Show a tool in place of a pane alone again, full width",
             Command::CopyStory => "Copy the diff's story (M-d) as Markdown, to share it",
             Command::Ask => {
                 "Ask Claude about the diff (M-d), with its story, reading the repository as needed"
+            }
+            Command::Lazygit => {
+                "Open lazygit in place of this pane, or quit it; quitting brings the pane back"
             }
         }
     }
@@ -99,6 +109,7 @@ impl Command {
             Command::Side | Command::Full => &["panes", "split"],
             Command::CopyStory => &["git", "diff", "review", "story", "diffview"],
             Command::Ask => &["git", "diff", "review", "story", "ai", "diffview"],
+            Command::Lazygit => &["git", "commit", "stage"],
         }
     }
 

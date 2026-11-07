@@ -5,7 +5,9 @@
 //! answer (test/diff-story.test.js's stand-in), the list headed by its
 //! chapters; q ends the diff and the pane is back, its shell as it was.
 //! And `switchboard diff --ahead` tells the same story with nothing drawn,
-//! keeping it where M-d finds it, once per commit.
+//! keeping it where M-d finds it, once per commit. lazygit (a stand-in)
+//! takes a pane's place the same way, from M-p's command and from mission
+//! control's menu on a tab, as the diff does from that menu.
 
 mod common;
 
@@ -268,4 +270,77 @@ fn the_story_is_told_ahead_once_per_commit_where_m_d_finds_it() {
         1,
         "once per commit"
     );
+}
+
+#[test]
+fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+
+    // With no lazygit installed, the command says so.
+    let installed = Command::new("sh")
+        .args(["-c", "command -v lazygit"])
+        .stdout(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !installed {
+        server.ok(&["press", "lazygit"]);
+        client.wait_text("lazygit isn't installed");
+        client.type_text("x");
+    }
+
+    // A stand-in lazygit, which waits until C-c, lazygit's own quit.
+    let bin = server.home.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let lazygit = bin.join("lazygit");
+    std::fs::write(
+        &lazygit,
+        "#!/bin/sh\necho \"stand-in lazygit in $(pwd)\"\nexec sleep 60\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit in");
+    let shown = panes(&server);
+    assert_eq!(shown.len(), 1, "in the pane's place: {shown:?}");
+    assert_eq!(shown[0]["options"]["@in_place"], "lazygit");
+    assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
+    server.ok(&["press", "lazygit"]);
+    wait_until("the pane back after C-c", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+
+    // Mission control's menu on the tab: lazygit, then the diff.
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("\r");
+    client.wait_text("Go to tab 1");
+    client.type_text("L");
+    client.wait_text("stand-in lazygit in");
+    assert_eq!(panes(&server)[0]["options"]["@in_place"], "lazygit");
+    server.ok(&["press", "lazygit"]);
+    wait_until("the pane back again", || {
+        panes(&server)[0]["id"] == first.as_str()
+    });
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("\r");
+    client.wait_text("Its diff (M-d)");
+    client.type_text("d");
+    wait_until("the diff in the pane's place", || {
+        panes(&server)[0]["options"]["@in_place"] == "diff"
+    });
+    client.wait_text("export const a = 2;");
 }

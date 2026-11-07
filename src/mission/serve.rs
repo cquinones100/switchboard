@@ -1231,6 +1231,8 @@ impl Server {
             Do::GoTo(tab) => self.mission_go(client, tab),
             Do::Answer(tab) => self.open_answer(client, tab, None),
             Do::Peek(tab) => self.mission_peek(client, tab),
+            Do::Diff(tab) => self.tool_in_tab(client, tab, false),
+            Do::Lazygit(tab) => self.tool_in_tab(client, tab, true),
             Do::Rename(tab) => self.rename_tab(client, tab),
             Do::Pin(tab) => self.toggle_pin(tab),
             Do::Remind(tab) => self.remind_tab(client, tab),

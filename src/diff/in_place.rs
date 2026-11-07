@@ -1,7 +1,8 @@
 //! A tool in a pane's place, leaving the rest of the tab, sidebar
 //! included, as it is; the tool ending puts the pane back. Ported from
-//! tmux/pane-in-place.sh, which M-d's diff opened through (and lazygit and
-//! the PR and ticket images, which can open through `open_in_place` too).
+//! tmux/pane-in-place.sh, which M-d's diff and M-p's lazygit open through
+//! (and the PR and ticket images, which can open through `open_in_place`
+//! too).
 //!
 //! Under tmux the tool started in a window of its own and `swap-pane`
 //! traded places, the pane waiting in that window. Here the pane is parked

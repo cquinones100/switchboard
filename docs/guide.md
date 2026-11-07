@@ -194,10 +194,10 @@ The actions, by the names the file uses:
 - Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
-- The diff: `diff`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
+- The diff: `diff`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
 
-These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one.
+These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one, `lazygit`.
 
 ## Tabs and the status line
 
@@ -466,6 +466,7 @@ On a tab, the menu offers:
 - go to the tab;
 - answer it here, or send it a message (below);
 - peek at its last turn, or at its screen for a tab with no Claude;
+- its diff, as `M-d` opens it, or lazygit (below), in its pane's place, going to the tab;
 - the `M-p` palette in that tab;
 - rename it (empty names it after its directory again);
 - pin or unpin it;
@@ -816,7 +817,11 @@ Its Close, Ask again and Copy buttons do the same, the wheel scrolls it, and a c
 
 ### The pane beside its diff
 
-`M-p`'s "Show the pane a tool stands in for (the diff) beside it, on its left" brings the pane the diff stands in for back on the diff's left, half the width, so a Claude session and its diff sit side by side, and "Show a tool in place of a pane alone again, full width" puts it away again. Both are listed only where the diff stands in for a pane. `M-d` in either pane closes the diff, and the pane takes back its whole place. A restart saves the pane in the diff's place, so a Claude session waiting behind it is resumed.
+`M-p`'s "Show the pane a tool stands in for (the diff, lazygit) beside it, on its left" brings the pane the diff stands in for back on the diff's left, half the width, so a Claude session and its diff sit side by side, and "Show a tool in place of a pane alone again, full width" puts it away again. Both are listed only where a tool stands in for a pane. `M-d` in either pane closes the diff, and the pane takes back its whole place. A restart saves the pane in the diff's place, so a Claude session waiting behind it is resumed.
+
+### lazygit in a pane's place
+
+`M-p`'s "Open lazygit in place of this pane, or quit it; quitting brings the pane back" runs [lazygit](https://github.com/jesseduffield/lazygit) in the pane's directory in its place, as `M-d` puts the diff there, the pane waiting behind it until lazygit quits. The command again, in lazygit or in the pane beside it, sends lazygit `Ctrl-c`, its own quit, rather than `q`, which would be typed into a commit message. lazygit is a program of its own, not part of Switchboard: where it isn't installed, the command says so. Mission control's menu on a tab offers it too.
 
 ### The file list
 

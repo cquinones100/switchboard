@@ -1,8 +1,14 @@
 //! The server's side of the diff: what M-d and the palette's diff commands
 //! do, as tmux.conf bound them (M-d to pane-in-place.sh's `open diffview`,
-//! the palette's to `side`, `full`, and the keys pressed in the diff for
-//! its story and a question), and the story told ahead for each tab's new
-//! commit, looked for on the server's tick.
+//! the palette's to `open lazygit`, `side`, `full`, and the keys pressed in
+//! the diff for its story and a question), mission control's "Its diff" and
+//! "lazygit" on a tab (daemon.js's `openTool`), and the story told ahead for
+//! each tab's new commit, looked for on the server's tick.
+//!
+//! lazygit stands in a pane's place as the diff does, when it is installed
+//! (it is a program of its own, which Switchboard doesn't ship); asked for
+//! again in it, or in the pane beside it, it is sent C-c, its own quit,
+//! rather than closed, since q would be typed into a commit message.
 //!
 //! M-d opens `switchboard diff` in the pane's place, in the pane's
 //! directory; the program works out the base itself (fetching it while it
@@ -14,13 +20,15 @@ use std::path::PathBuf;
 
 use super::in_place::IN_PLACE;
 use super::{Command, ahead};
-use crate::mux::PaneId;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Server};
-use crate::{paths, settings};
+use crate::mux::{PaneId, TabId};
+use crate::{paths, settings, util};
 
 /// The diff's name in `@in_place`.
 pub const TOOL: &str = "diff";
+/// lazygit's.
+pub const LAZYGIT: &str = "lazygit";
 
 /// The program to run in the diff's pane: this binary.
 fn exe() -> String {
@@ -43,15 +51,60 @@ impl Server {
             // entries pressed them in Neovim.
             Command::CopyStory => self.press_in_diff(client, b"\x1c\x0eyS"),
             Command::Ask => self.press_in_diff(client, b"\x1c\x0ega"),
+            Command::Lazygit => self.toggle_lazygit(client),
         }
     }
 
-    /// The diff's pane for the pane a client is in: itself, or the diff
-    /// standing in for it beside it.
-    fn diff_here(&self, client: ClientId) -> Option<PaneId> {
+    /// The pane of tool `name` for the pane a client is in: itself, or the
+    /// tool standing in for it beside it.
+    fn tool_here(&self, client: ClientId, name: &str) -> Option<PaneId> {
         let pane = self.current_pane(client)?;
         let tool = self.tool_for(pane)?;
-        (self.panes.get(&tool)?.opts.get(IN_PLACE)? == TOOL).then_some(tool)
+        (self.panes.get(&tool)?.opts.get(IN_PLACE)? == name).then_some(tool)
+    }
+
+    /// The diff's pane for the pane a client is in.
+    fn diff_here(&self, client: ClientId) -> Option<PaneId> {
+        self.tool_here(client, TOOL)
+    }
+
+    /// lazygit in place of the pane, or quit with its own C-c.
+    fn toggle_lazygit(&mut self, client: ClientId) {
+        if let Some(lazygit) = self.tool_here(client, LAZYGIT) {
+            if let Some(slot) = self.panes.get_mut(&lazygit) {
+                let _ = slot.pane.write(b"\x03");
+            }
+            return;
+        }
+        if util::which(LAZYGIT).is_none() {
+            self.say(
+                Some(client),
+                "lazygit isn't installed.\n\nIt is at github.com/jesseduffield/lazygit (brew install lazygit on a Mac), and opens here once it is on your PATH.",
+            );
+            return;
+        }
+        let Some(pane) = self.current_pane(client) else {
+            return;
+        };
+        if let Err(e) = self.open_in_place(pane, LAZYGIT, vec![LAZYGIT.into()], Some(client)) {
+            self.say(Some(client), &format!("Couldn't open lazygit: {e}"));
+        }
+    }
+
+    /// Mission control's "Its diff" and "lazygit" on a tab: the tab gone
+    /// to, and the tool put in its pane's place, unless it is there
+    /// already.
+    pub fn tool_in_tab(&mut self, client: ClientId, tab: TabId, lazygit: bool) {
+        self.mission_go(client, tab);
+        let name = if lazygit { LAZYGIT } else { TOOL };
+        if self.tool_here(client, name).is_some() {
+            return;
+        }
+        if lazygit {
+            self.toggle_lazygit(client);
+        } else {
+            self.toggle_diff(client);
+        }
     }
 
     /// Which of the diff's commands the palette lists for a client: those

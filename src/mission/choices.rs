@@ -33,6 +33,10 @@ pub enum Do {
     Answer(TabId),
     /// A look at it without going there.
     Peek(TabId),
+    /// The tab, and its diff in its pane's place (M-d).
+    Diff(TabId),
+    /// The tab, and lazygit in its pane's place.
+    Lazygit(TabId),
     /// Its name typed in.
     Rename(TabId),
     Pin(TabId),
@@ -193,6 +197,8 @@ pub fn tab_choices(
         },
         Do::Peek(tab.id),
     ));
+    out.push(choice('d', "Its diff (M-d)", Do::Diff(tab.id)));
+    out.push(choice('L', "lazygit", Do::Lazygit(tab.id)));
     out.push(choice('p', "Actions (M-p) in the tab", Do::Palette(tab.id)));
     out.push(choice('r', "Rename it", Do::Rename(tab.id)));
     out.push(choice(
@@ -778,7 +784,7 @@ mod tests {
     fn a_tabs_menu_goes_there_first_then_answers_peeks_renames_pins_and_reminds() {
         let mut t = tab(3, "fix");
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, true);
-        assert_eq!(keys(&choices), "gavprfex");
+        assert_eq!(keys(&choices), "gavdLprfex");
         assert_eq!(choices[0].label, "Go to tab 3");
         assert_eq!(choices[0].act, Do::GoTo(TabId(3)));
         t.claude_pane = None;
@@ -787,11 +793,13 @@ mod tests {
         let choices = tab_choices(&t, std::slice::from_ref(&t), None, false);
         assert_eq!(
             keys(&choices),
-            "gvprfx",
+            "gvdLprfx",
             "no answer without a Claude, no reminder when off"
         );
         assert_eq!(choices[1].label, "Peek at its screen");
-        assert_eq!(choices[4].label, "Unpin it");
+        assert_eq!(choices[2].act, Do::Diff(TabId(3)));
+        assert_eq!(choices[3].act, Do::Lazygit(TabId(3)));
+        assert_eq!(choices[6].label, "Unpin it");
     }
 
     #[test]
