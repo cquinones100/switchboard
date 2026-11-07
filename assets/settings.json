@@ -630,7 +630,7 @@
     "key": "update_check",
     "category": "Updates",
     "label": "Update check",
-    "description": "Offer new commits on GitHub to ~/switchboard: when tmux opens and every hour, only when it opens, or never",
+    "description": "Offer a new release of Switchboard: when a terminal attaches and every hour, only when one attaches, or never",
     "choices": [
       {
         "value": "hourly",

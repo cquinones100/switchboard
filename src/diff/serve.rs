@@ -24,7 +24,7 @@ pub const TOOL: &str = "diff";
 
 /// The program to run in the diff's pane: this binary.
 fn exe() -> String {
-    std::env::current_exe()
+    crate::util::exe()
         .ok()
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().into_owned())

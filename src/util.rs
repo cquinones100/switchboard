@@ -356,6 +356,22 @@ pub fn js_string(value: &Value) -> String {
     }
 }
 
+// ── This program ────────────────────────────────────────────────────────────
+
+/// The path of the running binary, for starting another of its programs (a
+/// pane's `switchboard diff`, a hook). Once `switchboard update` has put a
+/// new binary in its place, Linux names the running one's file
+/// "<path> (deleted)", since the file it started from is gone; the path
+/// without that is where the new binary is, which is the one to start.
+pub fn exe() -> io::Result<PathBuf> {
+    let path = std::env::current_exe()?;
+    let text = path.to_string_lossy();
+    match text.strip_suffix(" (deleted)") {
+        Some(kept) if !path.exists() => Ok(PathBuf::from(kept)),
+        _ => Ok(path),
+    }
+}
+
 /// Standard base64 with padding, for the clipboard sequence (OSC 52) and the
 /// few places a protocol wants it.
 pub fn base64(bytes: &[u8]) -> String {

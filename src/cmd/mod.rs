@@ -62,6 +62,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Set Claude Code up for Switchboard: its hooks, statusline, CLAUDE.md and skills",
     },
     Command {
+        name: "update",
+        run: crate::update::main,
+        about: "Install the newest release of Switchboard, then its setup (--check only says whether there is one)",
+    },
+    Command {
         name: "statusline",
         run: statusline::main,
         about: "Claude Code's statusline, which keeps each session's context and spend (run by Claude Code)",
@@ -237,7 +242,7 @@ pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("version" | "-V" | "--version") => {
-            println!("switchboard {}", env!("CARGO_PKG_VERSION"));
+            println!("switchboard {}", crate::update::version_line());
             ExitCode::SUCCESS
         }
         Some(name) if crate::mux::commands::NAMES.contains(&name) => {

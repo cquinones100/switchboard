@@ -42,6 +42,8 @@
 //!   about it answered.
 //! - `relay`: the Slack relay, a Slack app talking to you in its DM about
 //!   your tabs while you are away.
+//! - `update`: keeping Switchboard current: `switchboard update`, and the
+//!   hourly look for a new release, offered in a box.
 
 pub mod agent;
 pub mod cmd;
@@ -67,6 +69,7 @@ pub mod sources;
 pub mod status;
 pub mod tabs;
 pub mod ui;
+pub mod update;
 pub mod usage;
 pub mod util;
 pub mod views;

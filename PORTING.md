@@ -193,8 +193,13 @@ Each step is a commit (or a few) on the branch, with its tests.
     hooks running `switchboard hook <Event>`, the skills compiled in from
     `assets/skills` by build.rs and moved off tmux onto `switchboard`'s
     commands, `respawn`, `tabs` and `setting` among them), and `switchboard
-    statusline` done (src/cmd/statusline.rs); left: CI and release builds,
-    self-update.
+    statusline` done (src/cmd/statusline.rs), and releases and updates
+    done (`.github/workflows/ci.yml` and `release.yml`: a `v<version>` tag
+    matching Cargo.toml's version builds the three targets and publishes
+    each archive with its SHA-256; install.sh installs the newest into
+    `~/.local/bin`; src/update: `switchboard update`, the hourly look and
+    the box on attaching, the binary swapped only once its checksum
+    matches and it runs; `switchboard --version` names its commit).
 11. **Docs and removal**: README, CLAUDE.md, user docs; the old files removed;
     the PR.
 

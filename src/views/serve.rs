@@ -72,7 +72,7 @@ pub fn links_in(text: &str) -> Vec<String> {
 
 /// The program to run in a view's pane: this binary.
 fn exe() -> String {
-    std::env::current_exe()
+    crate::util::exe()
         .ok()
         .filter(|p| p.exists())
         .map(|p| p.to_string_lossy().into_owned())

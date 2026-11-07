@@ -97,6 +97,8 @@ pub enum Event {
     Mission(crate::mission::MissionEvent),
     /// What the views' lookups found (src/views).
     Views(crate::views::ViewsEvent),
+    /// A look for a new release answered (src/update).
+    Update(crate::update::UpdateEvent),
     Tick,
     Quit,
 }
@@ -299,6 +301,8 @@ pub struct Server {
     pub views: crate::views::Views,
     /// What the health light says (src/status).
     pub status: crate::status::Status,
+    /// The look for a new release, and its box (src/update).
+    pub update: crate::update::Updates,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -542,6 +546,7 @@ impl Server {
             mission: Default::default(),
             views: Default::default(),
             status: Default::default(),
+            update: Default::default(),
         }
     }
 
@@ -594,6 +599,7 @@ impl Server {
             Event::Work(event) => self.work_event(event),
             Event::Mission(event) => self.mission_event(event),
             Event::Views(event) => self.views_event(event),
+            Event::Update(event) => self.update_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.status_tick();
@@ -606,6 +612,7 @@ impl Server {
                 self.usage_tick();
                 self.mission_tick();
                 self.diff_tick();
+                self.update_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -1210,6 +1217,7 @@ impl Server {
         if let Some(tab) = self.session(&name).map(|s| s.current) {
             self.agent_focus(tab);
         }
+        self.update_attached(id);
     }
 
     fn resize_client(&mut self, id: ClientId, cols: u16, rows: u16) {
@@ -1587,6 +1595,7 @@ impl Server {
             Action::Diff(command) => self.diff_command(id, command),
             Action::SlackRelay => self.slack_relay(true),
             Action::StopSlackRelay => self.slack_relay(false),
+            Action::Update(command) => self.update_command(id, command),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

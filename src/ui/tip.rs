@@ -106,7 +106,7 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
         "updates" => vec![
             "Updates.".into(),
             String::new(),
-            "A git pull links what it adds too,".into(),
+            "M-p's Update Switchboard looks any time,".into(),
             "and the update check is in Settings.".into(),
         ],
         "github_off" => vec![

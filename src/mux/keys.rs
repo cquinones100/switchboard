@@ -108,6 +108,8 @@ pub enum Action {
     SlackRelay,
     /// Stop the Slack relay.
     StopSlackRelay,
+    /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
+    Update(crate::update::Command),
 }
 
 impl Action {
@@ -121,7 +123,8 @@ impl Action {
     /// `continue-shaping`, `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
-    /// `search-everything`, `read-link`, `open-link-being-read`).
+    /// `search-everything`, `read-link`, `open-link-being-read`), and
+    /// updates' (`update-switchboard`, `run-setup`).
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -132,6 +135,9 @@ impl Action {
         };
         if let Some(command) = crate::views::Command::parse(name) {
             return Some(Action::View(command));
+        }
+        if let Some(command) = crate::update::Command::parse(name) {
+            return Some(Action::Update(command));
         }
         if let Some(command) = crate::diff::Command::parse(name) {
             return Some(Action::Diff(command));
@@ -230,6 +236,7 @@ impl Action {
             Action::Diff(command) => command.name().into(),
             Action::SlackRelay => "slack-relay".into(),
             Action::StopSlackRelay => "stop-slack-relay".into(),
+            Action::Update(command) => command.name().into(),
         }
     }
 
@@ -295,6 +302,7 @@ impl Action {
             Action::Diff(command) => command.about().into(),
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
+            Action::Update(command) => command.about().into(),
         }
     }
 
@@ -336,6 +344,7 @@ impl Action {
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
+            Action::Update(command) => command.tags(),
         }
     }
 
@@ -393,6 +402,7 @@ impl Action {
         .into_iter()
         .chain(views)
         .chain(diff)
+        .chain(crate::update::Command::ALL.map(Action::Update))
         .collect()
     }
 }

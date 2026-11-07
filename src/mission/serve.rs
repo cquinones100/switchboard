@@ -573,7 +573,7 @@ impl Server {
         {
             return;
         }
-        let Ok(exe) = std::env::current_exe() else {
+        let Ok(exe) = crate::util::exe() else {
             return;
         };
         self.mission.revived_busy = true;
@@ -1229,7 +1229,7 @@ impl Server {
                 self.open_palette(client);
             }
             Do::Land { root, way } => {
-                let Ok(exe) = std::env::current_exe() else {
+                let Ok(exe) = crate::util::exe() else {
                     return;
                 };
                 self.mission_busy(client, label, None, async move {
@@ -1372,7 +1372,7 @@ impl Server {
                 self.mission_close(client);
                 // The same handoff wtr makes: the worktree's last Claude
                 // session resumed, or a new one when it has none.
-                let exe = std::env::current_exe()
+                let exe = crate::util::exe()
                     .map(|e| e.to_string_lossy().replace('\'', "'\\''"))
                     .unwrap_or_else(|_| "switchboard".into());
                 self.start_in(client, &dir, None, &format!("'{exe}' claude-here"));

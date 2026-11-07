@@ -52,6 +52,11 @@ syntect = { version = "5.3.0", default-features = false, features = ["default-fa
 similar = "3.2.1"
 # The Slack relay's tall screenshots, cut into slices: PNG's zlib, in Rust.
 miniz_oxide = "0.9"
+# Updates (src/update): a release's archive unpacked (flate2 on miniz_oxide,
+# Rust's own inflate) and checked against the SHA-256 published beside it.
+sha2 = "0.11"
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

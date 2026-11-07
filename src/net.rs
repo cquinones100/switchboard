@@ -23,7 +23,6 @@
 //! support, so no caller needs a `cfg` of its own.
 
 use std::fmt;
-#[cfg(feature = "net")]
 use std::time::Duration;
 
 use anyhow::Result;
@@ -257,6 +256,67 @@ pub async fn request_json(
         audit.service,
         format!(
             "Switchboard was built without network support, so it can't reach {}.",
+            audit.service
+        ),
+    )
+    .into())
+}
+
+/// A GET whose answer is a file rather than JSON (a release's archive): its
+/// status and its bytes, redirects followed (GitHub sends a release's files
+/// from another host), given `timeout` to arrive whole rather than the
+/// usual 30 seconds, since a file can be large and a connection slow.
+/// Counted in the request audit as it is sent, and failing only when no
+/// answer comes, as `request_json` does.
+#[cfg(feature = "net")]
+pub async fn get_bytes(
+    url: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+    audit: Audit<'_>,
+) -> Result<(u16, Vec<u8>)> {
+    let mut request = client()?.get(url).timeout(timeout);
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    requests::count(audit.service, audit.protocol, audit.source);
+    let unreachable = |e: reqwest::Error| {
+        let why = if e.is_timeout() {
+            "it took too long to arrive".to_string()
+        } else {
+            let mut why = e.to_string();
+            let mut source = std::error::Error::source(&e);
+            while let Some(cause) = source {
+                why = cause.to_string();
+                source = cause.source();
+            }
+            why
+        };
+        ServiceError::new(
+            ErrorKind::Unreachable,
+            audit.service,
+            format!("Couldn't download from {}: {why}", audit.service),
+        )
+    };
+    let response = request.send().await.map_err(unreachable)?;
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.map_err(unreachable)?;
+    Ok((status, bytes.to_vec()))
+}
+
+/// Without the `net` feature: the same function, which never reaches out.
+#[cfg(not(feature = "net"))]
+pub async fn get_bytes(
+    _url: &str,
+    _headers: &[(&str, &str)],
+    _timeout: Duration,
+    audit: Audit<'_>,
+) -> Result<(u16, Vec<u8>)> {
+    Err(ServiceError::new(
+        ErrorKind::Unreachable,
+        audit.service,
+        format!(
+            "Switchboard was built without network support, so it can't download from {}.",
             audit.service
         ),
     )
