@@ -298,6 +298,13 @@ test("a plugin's items are fetched, kept when a later fetch fails, and only name
 
 // The daemon itself, with the sidebar panes running the real zsh client.
 const plain = (text) => text.replace(/\x1b\][^\x07]*\x07|\x1b\[[0-9;?]*[A-Za-z]/g, "");
+// What a mission control client's screen shows after every write it was sent:
+// each write is a whole frame or only the rows that changed, each put in place.
+const screen = (writes) => {
+  const rows = [];
+  for (const text of writes) for (const [, row, line] of text.matchAll(/\x1b\[(\d+);1H((?:(?!\x1b\[\d+;1H)[\s\S])*)/g)) rows[row - 1] = line;
+  return plain(rows.join("\n"));
+};
 const sidebarPane = (target) => panes(target).find((p) => p.sidebar)?.id;
 
 test("an idle tab says how long since its pane last printed anything", async () => {
@@ -1879,9 +1886,9 @@ test("Space peeks at a tab from mission control: its screen, or its whole last t
     client.choose.cursor = client.choose.choices.findIndex((c) => c.key === "v");
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(client.peek.mode, "screen");
-    assert.match(plain(sent.at(-1)), /Peek.*60/s);
+    assert.match(screen(sent), /Peek.*60/s);
     await sidebar.missionKey(client, { key: "g" });
-    assert.match(plain(sent.at(-1)), /Peek +\d+ [\s\S]*│ 1 +│[\s\S]*│ 2 +│[\s\S]*│ 3 +│/, "g goes to the top");
+    assert.match(screen(sent), /Peek +\d+ [\s\S]*│ 1 +│[\s\S]*│ 2 +│[\s\S]*│ 3 +│/, "g goes to the top");
     await sidebar.missionKey(client, { key: "Escape" });
     assert.equal(client.peek, undefined);
     assert.equal(tmux("display", "-p", "#{window_id}") === window, false, "never went there");
@@ -1924,18 +1931,18 @@ test("/ filters mission control's cards, and X closes every merged tab and remov
 
     // / then "landed": only that card is left; Esc puts them all back.
     for (const key of ["/", "l", "a", "n", "d", "e", "d", "Enter"]) await sidebar.missionKey(client, { key });
-    assert.match(plain(sent.at(-1)), /\/landed/);
-    assert.match(plain(sent.at(-1)), /feat landed/);
-    assert.doesNotMatch(plain(sent.at(-1)), /something else/);
+    assert.match(screen(sent), /\/landed/);
+    assert.match(screen(sent), /feat landed/);
+    assert.doesNotMatch(screen(sent), /something else/);
     await sidebar.missionKey(client, { key: "Escape" });
-    assert.match(plain(sent.at(-1)), /something else/);
+    assert.match(screen(sent), /something else/);
 
     // From Enter's menu on the merged tab: X asks first; n leaves everything as it was.
     client.view.cursor = sidebar.missionGrid(sidebar.state.tabs).order.findIndex((t) => t.id === landed);
     await sidebar.missionKey(client, { key: "Enter" });
     client.choose.cursor = client.choose.choices.findIndex((c) => c.key === "X");
     await sidebar.missionKey(client, { key: "Enter" });
-    assert.match(plain(sent.at(-1)), /Close 1 merged tab and remove their worktrees\? \[Y\/n\][\s\S]*feat landed/);
+    assert.match(screen(sent), /Close 1 merged tab and remove their worktrees\? \[Y\/n\][\s\S]*feat landed/);
     await sidebar.missionKey(client, { key: "n" });
     assert.ok(fs.existsSync(worktree));
     // y closes the tab and removes its worktree, and says so.
@@ -4202,7 +4209,7 @@ test("a burst of the mouse's moves draws once, sending only the rows it changed,
   await wait(50);
   const rows = sent.at(-1).match(/\x1b\[\d+;1H/g) ?? [];
   assert.ok(rows.length > 0 && rows.length < client.rows / 2, `${rows.length} rows sent of ${client.rows}`);
-  assert.match(sent.at(-1), /^\x1b\[\d+;1H/, "starting with a move to its row");
+  assert.match(sent.at(-1), /^\x1b\[\?2026h\x1b\[\d+;1H/, "synchronized, starting with a move to its row");
 
   // A box opened since the last frame: the whole frame.
   client.confirm = { text: "Close it?", yes() {} };
@@ -4479,4 +4486,80 @@ test("a tab of the mode working a note still counts as working while M-d or lazy
   const young = { ...tab, panes: [{ pane_id: "%3", pane_current_path: worktree }], autopilot: { since: Date.now() / 1000, inWorktree: true } };
   assert.equal(sidebar.placeOf({ ...young, state: "idle" }, repo, Date.now() / 1000).kind, "busy", "a tab just opened counts as busy while its Claude starts");
   assert.equal(sidebar.placeOf({ ...young, state: "waiting" }, repo, Date.now() / 1000).kind, "waiting", "but one waiting on you frees its slot at once");
+});
+
+test("mission control sends each frame synchronized, a spinner's tick only its changed rows with a box merged into them, and behind a box ticks twice a second at most", async (t) => {
+  await sidebar.refresh();
+  const tab = sidebar.state.tabs[0];
+  const was = tab.state;
+  tab.state = "working";
+  const sent = [];
+  const client = { kind: "mission", socket: { write: (text) => sent.push(text), end() {} }, view: { view: 0, cursor: 0 }, cols: 120, rows: 30, tmuxClient: "none" };
+  sidebar.state.clients.add(client);
+  t.after(() => {
+    sidebar.state.clients.delete(client);
+    tab.state = was;
+  });
+  const moves = (text) => (text.match(/\x1b\[\d+;1H/g) ?? []).length;
+  sidebar.draw(client);
+  assert.ok(moves(sent.at(-1)) >= client.rows, "the first frame whole");
+
+  // A tick with no box: only the rows its spinner changed.
+  let before = sent.length;
+  sidebar.spin();
+  assert.equal(sent.length - before, 1);
+  assert.ok(moves(sent.at(-1)) > 0 && moves(sent.at(-1)) < client.rows / 2, `${moves(sent.at(-1))} rows sent`);
+
+  // A box opening: the whole frame, the box merged into its rows.
+  client.choose = { title: "Pick one", cursor: 0, choices: [{ label: "First" }, { label: "Second" }] };
+  sidebar.draw(client);
+  assert.ok(moves(sent.at(-1)) >= client.rows, "the whole frame when a box opens");
+  assert.ok(!/\x1b\[\d+;\d{2,}H/.test(sent.at(-1).replace(/\x1b\[\d+;1H/g, "")), "the box isn't drawn over the frame afterwards");
+
+  // Behind it, a tick at most every half second, sending the changed rows
+  // whole with the box in them, so the box shows as it was.
+  before = sent.length;
+  for (let i = 0; i < 4; i++) {
+    sidebar.spin();
+    await wait(110);
+  }
+  assert.ok(sent.length - before <= 1, `${sent.length - before} draws in about 440ms behind a box`);
+  await wait(500);
+  sidebar.spin();
+  const tick = sent.at(-1);
+  assert.ok(moves(tick) > 0 && moves(tick) < client.rows / 2, "a tick sends only its rows");
+  const { top, lines } = client.modal;
+  for (const [, row, line] of tick.matchAll(/\x1b\[(\d+);1H((?:(?!\x1b\[\d+;1H)[\s\S])*)/g)) {
+    if (row >= top && row < top + lines.length) assert.ok(plain(line).includes(plain(lines[row - top])), `row ${row} keeps the box`);
+  }
+  // A draw for anything else meanwhile doesn't turn the spinners sooner.
+  sidebar.state.frame += 3;
+  before = sent.length;
+  sidebar.draw(client);
+  assert.equal(sent.length, before, "nothing to send: the spinners wait for the next tick");
+  for (const text of sent) assert.match(text, /^\x1b\[\?2026h[\s\S]*\x1b\[\?2026l$/, "every write synchronized");
+
+  // The box closing: the whole frame again.
+  client.choose = undefined;
+  sidebar.draw(client);
+  assert.ok(moves(sent.at(-1)) >= client.rows, "the whole frame when the box closes");
+  assert.doesNotMatch(screen(sent), /Pick one/);
+});
+
+test("the note menu of working a note continuously lists the notes holding an unticked item, the rest apart", () => {
+  const notes = path.join(tmp, "note-menu");
+  fs.mkdirSync(path.join(notes, "Meetings"), { recursive: true });
+  fs.writeFileSync(path.join(notes, "Work.md"), "# Work\n\n- [x] Done\n- [ ] Left\n");
+  fs.writeFileSync(path.join(notes, "Done.md"), "# Done\n\n- [x] All of it\n");
+  fs.writeFileSync(path.join(notes, "Meetings", "Sync.md"), "# Sync\n\nWe talked.\n");
+  const was = process.env.NOTES_DIR;
+  process.env.NOTES_DIR = notes;
+  try {
+    const { open, rest } = sidebar.noteChoices();
+    assert.deepEqual(open, ["Work.md"]);
+    assert.deepEqual(rest.sort(), ["Done.md", path.join("Meetings", "Sync.md")]);
+  } finally {
+    if (was === undefined) delete process.env.NOTES_DIR;
+    else process.env.NOTES_DIR = was;
+  }
 });
