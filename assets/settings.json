@@ -125,7 +125,7 @@
     "key": "chrome_profiles",
     "category": "Integrations",
     "label": "Chrome profiles",
-    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, gh's --web) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser",
+    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, switchboard open-url) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser",
     "default": true
   },
   {
@@ -203,7 +203,7 @@
     "key": "diff_order",
     "category": "Diff",
     "label": "Files in reading order",
-    "description": "M-d lists the changed files flat, documentation first and tests last, with Haiku ordering the code from most abstract to most concrete; off, the folder tree, A to Z",
+    "description": "M-d lists the changed files flat, documentation first and tests last, with Haiku ordering the code from most abstract to most concrete; off, flat, A to Z",
     "default": true
   },
   {
@@ -259,7 +259,7 @@
     "key": "diff_story_pages",
     "category": "Diff",
     "label": "Diff story a page at a time",
-    "description": "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they are Vim's own",
+    "description": "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they do nothing",
     "default": true
   },
   {
