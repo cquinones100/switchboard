@@ -756,6 +756,15 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
     h.stand_in("claude", "#!/bin/sh\n");
 
+    // --check says what the setup would offer, and writes nothing.
+    let check = ok(&h.run(&["setup", "--check"]));
+    assert!(
+        // A Mac's terminal may be offered after them.
+        check.contains("switchboard setup would offer: claude, claude-md, skills"),
+        "{check}"
+    );
+    assert!(!h.path(".claude").exists(), "nothing written: {check}");
+
     // A closed input says no to everything.
     let closed = ok(&h.run(&["setup"]));
     assert!(closed.contains("[Y/n]"), "{closed}");
@@ -770,8 +779,8 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     let yes = h.run_with(&["setup"], "\ny\nY\n");
     let said = ok(&yes);
     assert!(
-        said.contains("✓ added Switchboard's Claude Code settings"),
-        "{said}"
+        said.contains("✓ made ~/.claude/settings.json with Switchboard's Claude Code settings"),
+        "no settings of yours to keep a copy of: {said}"
     );
     assert!(
         said.contains("✓ your CLAUDE.md imports Switchboard's part"),

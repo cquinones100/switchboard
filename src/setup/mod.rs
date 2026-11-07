@@ -250,6 +250,9 @@ struct List {
     left: Vec<String>,
     /// The optional parts not there, said again at the end.
     wanted: Vec<String>,
+    /// The parts offered and not set up: said no to, or, with --check,
+    /// what the setup would offer.
+    skipped: Vec<&'static str>,
 }
 
 impl List {
@@ -266,6 +269,12 @@ impl List {
     fn optional(&self, what: &str) {
         println!("  – {what}");
     }
+
+    /// A part offered and not set up, now.
+    fn not_now(&mut self, part: &'static str, what: &str) {
+        println!("  – {what}");
+        self.skipped.push(part);
+    }
 }
 
 /// `switchboard setup` alone: each part offered in turn.
@@ -273,6 +282,7 @@ fn guided(check: bool) -> ExitCode {
     let mut list = List {
         left: Vec::new(),
         wanted: Vec::new(),
+        skipped: Vec::new(),
     };
     leftovers_offered(check, &mut list);
     claude_code(check, &mut list);
@@ -315,7 +325,8 @@ fn leftovers_offered(check: bool, list: &mut List) {
                     list.todo("switchboard setup leftovers failed");
                 }
             } else {
-                list.optional(
+                list.not_now(
+                    "leftovers",
                     "the tmux version's links that lead nowhere, and its ~/.zshrc lines: switchboard setup leftovers",
                 );
             }
@@ -341,7 +352,10 @@ fn terminal_offered(check: bool, list: &mut List) {
                     list.todo("switchboard setup terminal failed");
                 }
             } else {
-                list.optional("Option as Alt, which every M- key needs: switchboard setup terminal");
+                list.not_now(
+                    "terminal",
+                    "Option as Alt, which every M- key needs: switchboard setup terminal",
+                );
             }
         }
         Ok(_) => match terminal::hint() {
@@ -403,13 +417,19 @@ fn claude_code(check: bool, list: &mut List) {
                 check,
                 "Add Switchboard's hooks, statusline and permissions to your ~/.claude/settings.json? Yours are kept, and a copy is left beside it.",
             ) {
+                let had = paths::claude_dir().join("settings.json").exists();
                 if apply(settings) {
-                    list.ok("added Switchboard's Claude Code settings to yours; your old ones are beside them as settings.json.bak.*");
+                    list.ok(if had {
+                        "added Switchboard's Claude Code settings to yours; your old ones are beside them as settings.json.bak.*"
+                    } else {
+                        "made ~/.claude/settings.json with Switchboard's Claude Code settings"
+                    });
                 } else {
                     list.todo("adding Switchboard's settings to ~/.claude/settings.json failed");
                 }
             } else {
-                list.optional(
+                list.not_now(
+                    "claude",
                     "Claude Code's hooks, for tab states and M-a: switchboard setup claude adds them",
                 );
             }
@@ -440,7 +460,8 @@ fn claude_code(check: bool, list: &mut List) {
                     list.todo("switchboard setup claude-md failed");
                 }
             } else {
-                list.optional(
+                list.not_now(
+                    "claude-md",
                     "Switchboard's part of CLAUDE.md, for the tabs and the notes app: switchboard setup claude-md",
                 );
             }
@@ -475,7 +496,8 @@ fn claude_code(check: bool, list: &mut List) {
                     list.todo("switchboard setup skills failed");
                 }
             } else {
-                list.optional(
+                list.not_now(
+                    "skills",
                     "Switchboard's skills (/wt, /shape, /review-loop, /ci-loop and the rest): switchboard setup skills",
                 );
             }
@@ -508,7 +530,14 @@ fn finish(check: bool, list: List) -> ExitCode {
         println!("Run switchboard setup again once they're done.");
         return ExitCode::from(1);
     }
-    println!("{}", if check { "Nothing to do." } else { "Ready." });
+    if check && !list.skipped.is_empty() {
+        println!(
+            "switchboard setup would offer: {}.",
+            list.skipped.join(", ")
+        );
+    } else {
+        println!("{}", if check { "Nothing to do." } else { "Ready." });
+    }
     ExitCode::SUCCESS
 }
 
