@@ -262,6 +262,39 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 /// Runs the program `name` with `args`; the workspace with no name.
+/// The programs that say how they are used themselves when asked with
+/// `--help`; any other asked so says what it is (its line in `help`)
+/// rather than taking `--help` for a file, a link, a tab or a note.
+const OWN_HELP: &[&str] = &[
+    "respawn",
+    "setting",
+    "platform",
+    "codex-review",
+    "shape",
+    "shape-batch",
+    "skill-path",
+    "slack-relay",
+    "update-main",
+    "worktree-done",
+    "worktree-from-branch",
+    "worktree-from-note",
+    "worktree-from-pr",
+    "worktree-from-ticket",
+    "worktree-resume",
+    "wt-batch",
+    "wt-jump",
+    "wt-revive",
+    "land-lock",
+    "wait-deploy",
+    "diff",
+    "notes",
+    "notifications",
+    "aws-login",
+    "try",
+    "update",
+    "setup",
+];
+
 pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
     match name {
         None => workspace::main(args),
@@ -277,6 +310,13 @@ pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
             crate::mux::socket::run_command(std::iter::once(name.to_string()).chain(args).collect())
         }
         Some(name) => match COMMANDS.iter().find(|c| c.name == name) {
+            Some(command)
+                if !OWN_HELP.contains(&name)
+                    && matches!(args.as_slice(), [a] if a == "--help" || a == "-h") =>
+            {
+                println!("switchboard {name}: {}", command.about);
+                ExitCode::SUCCESS
+            }
             Some(command) => (command.run)(args),
             None => {
                 eprintln!("switchboard: no command named {name} (switchboard help lists them)");
@@ -303,4 +343,19 @@ fn help() {
 pub fn not_yet(name: &str) -> ExitCode {
     eprintln!("switchboard: {name} isn't ported to Rust yet");
     ExitCode::from(70)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_program_with_its_own_help_is_one_of_the_commands() {
+        for name in OWN_HELP {
+            assert!(
+                COMMANDS.iter().any(|c| c.name == *name),
+                "{name} isn't a command"
+            );
+        }
+    }
 }
