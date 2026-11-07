@@ -363,7 +363,9 @@ pub fn shares_today(state: &Path, today: &str) -> Vec<(String, f64)> {
 /// What Claude has cost today, in dollars, as the Usage view sums it.
 pub fn spent_today(state: &Path, now_ms: i64) -> f64 {
     let today = util::ymd(&util::local_at_ms(now_ms));
-    shares_today(state, &today).iter().map(|(_, s)| s).sum()
+    shares_today(state, &today)
+        .iter()
+        .fold(0.0, |all, (_, s)| all + s)
 }
 
 /// `1,234`, as `toLocaleString("en-US")` writes a whole number.
@@ -421,7 +423,8 @@ pub fn request_items(day: &Tally) -> Vec<Item> {
 pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<Item> {
     let today = util::ymd(&util::local_at_ms(now_ms));
     let shares = shares_today(state, &today);
-    let spent: f64 = shares.iter().map(|(_, s)| s).sum();
+    // Folded from 0: an f64 sum of nothing is -0, which prints as $-0.00.
+    let spent = shares.iter().fold(0.0, |all, (_, s)| all + s);
     let limits = util::read_json(usage_dir(state).join("limits")).unwrap_or(Value::Null);
     let now = now_ms.div_euclid(1000);
     let mut rows = vec![
@@ -624,6 +627,12 @@ mod tests {
         );
         assert!((spent_today(&state, now_ms) - 29.75).abs() < 1e-9);
         let _ = fs::remove_dir_all(&state);
+
+        // Nothing spent yet is $0.00, not the -0 an empty sum gives.
+        let none = temp("usage-none");
+        let rows = usage_items(&none, now_ms, None);
+        assert_eq!(rows[0].title, "Spent today $0.00");
+        let _ = fs::remove_dir_all(&none);
     }
 
     #[test]
