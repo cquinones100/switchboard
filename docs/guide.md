@@ -1619,7 +1619,7 @@ What Switchboard keeps for itself is in `~/.local/state/switchboard/` (the socke
 
 ## Every setting
 
-Mission control's Settings view (`M-p`, then "Settings: turn the workspace's options on and off") lists every option below under its category; Enter or Space changes one, and `/` filters them. A new feature comes with a setting, on unless it sends something of yours somewhere, so each part can be turned off for a plain workspace. `switchboard setting <key>` prints one's value.
+Mission control's Settings view (`M-p`, then "Settings: turn the workspace's options on and off") lists every option below under its category; Enter or Space changes one, and `/` filters them. A new feature comes with a setting, on unless it sends something of yours somewhere, so each part can be turned off for a plain workspace. `switchboard setting <key>` prints one's value, `switchboard setting <key> <value>` changes it (`on` or `off`, or one of its choices; anything else is refused), and `--reset` gives it its default back.
 
 ### Integrations
 
@@ -1843,7 +1843,7 @@ Four more commands are programs of their own:
 
 - `switchboard tabs` prints a line per pane of every tab, tab-separated: the tab's number, the pane's place (`main:@3.%12`), the tab's name as the tab bar shows it, Claude's state there (blank when idle), the program in front, and the directory. Claude reads it to see what the other tabs are doing.
 - `switchboard respawn [-t pane] [-c dir] <command> [args...]` replaces a pane's program with another in the same pane, which keeps its id, place and tab, and leaves a shell there when it ends. `wt`, `wtn`, `wtb` and `wtpr` run as the worktree commands' shell functions. The arguments are words of their own, never read by a shell. Skills use it to hand a tab over to the work it opens.
-- `switchboard setting <key>` prints one of Settings' values as it stands, `on` or `off`, or the choice (`switchboard setting update_check` prints `hourly`).
+- `switchboard setting <key>` prints one of Settings' values as it stands, `on` or `off`, or the choice (`switchboard setting update_check` prints `hourly`); `switchboard setting <key> <value>` changes it as Settings would, and `switchboard setting <key> --reset` gives it its default back.
 - `switchboard platform <what>` does what differs between macOS and Linux, for shell scripts: `name`, `secret <service> [-a account]`, `secret-set <service> [-a account]` (the secret read from stdin), `copy` (stdin to the clipboard), `paste`, `notify <title> <text>`, `presence` (idle milliseconds and whether the screen is locked), `open <file or link>`, `front-app` and `chrome-local-state`.
 
 `switchboard help` lists every command, and `switchboard --version` prints the version and the commit it was built from.

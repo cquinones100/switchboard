@@ -21,6 +21,43 @@ fn wait_until(what: &str, check: impl Fn() -> bool) {
 }
 
 #[test]
+fn a_setting_is_changed_from_the_command_line() {
+    let dir = common::TempDir::new("sb-setting");
+    let file = dir.path().join("settings.json");
+    let run = |args: &[&str]| {
+        let out = std::process::Command::new(common::BIN)
+            .arg("setting")
+            .args(args)
+            .env("HOME", dir.path())
+            .env("SWITCHBOARD_SETTINGS", &file)
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        )
+    };
+    std::fs::write(&file, "{\"tips\": true}\n").unwrap();
+    assert_eq!(run(&["review_security", "off"]), (0, "off".into()));
+    assert_eq!(run(&["review_security"]), (0, "off".into()));
+    let mine: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(mine["review_security"], false);
+    assert!(dir.path().join("settings.json.bak").exists());
+    // What isn't a value is refused, and the file left as it was.
+    assert_eq!(run(&["review_security", "maybe"]).0, 2);
+    assert_eq!(run(&["no_such_setting", "on"]).0, 2);
+    assert_eq!(run(&["review_security", "--reset"]), (0, "on".into()));
+    let mine: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(mine.get("review_security").is_none(), "{mine}");
+    // A file that can't be read as JSON is never written over.
+    std::fs::write(&file, "not json").unwrap();
+    assert_eq!(run(&["review_security", "off"]).0, 1);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "not json");
+}
+
+#[test]
 fn a_closed_tab_is_logged_with_its_name_and_directory() {
     let server = TestServer::start();
     let dir = server.home.join("work");

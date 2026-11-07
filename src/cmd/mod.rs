@@ -92,7 +92,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "setting",
         run: setting::main,
-        about: "One of the workspace's settings, as Settings reads it",
+        about: "One of the workspace's settings, as Settings reads it; with a value (or --reset), changes it",
     },
     Command {
         name: "platform",

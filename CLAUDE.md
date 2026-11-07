@@ -93,7 +93,7 @@ A repository may define its own skill by one of these names, and Claude Code run
 
 `.githooks/pre-push` refuses a push to `main` that `/review-loop` hasn't found clean (below). It runs only where the clone's `core.hooksPath` points at `.githooks`, so run `git config core.hooksPath .githooks` on every new clone. It asks `switchboard` (the one on the PATH, else the clone's own build) for the `review_before_push` setting and the reviewed patch.
 
-This repository's `.claude/settings.json` runs `.claude/hooks/enforce-push-review.sh`, which refuses `git push --no-verify` and a push that names `hooksPath`, and `.claude/hooks/enforce-git-hooks-run.sh`, which refuses `git commit --no-verify` (or `-n`) and any change to `core.hooksPath`, before every command, so they apply to any Claude working here and nowhere else. They read Claude Code's JSON with `jq`, which a clone working on Switchboard needs.
+This repository's `.claude/settings.json` runs `.claude/hooks/enforce-push-review.sh`, which refuses `git push --no-verify`, a push that names `hooksPath` and `switchboard setting review_before_push` with a value, and `.claude/hooks/enforce-git-hooks-run.sh`, which refuses `git commit --no-verify` (or `-n`) and any change to `core.hooksPath`, before every command, so they apply to any Claude working here and nowhere else. They read Claude Code's JSON with `jq`, which a clone working on Switchboard needs.
 
 A release is a tag `v<version>` matching `Cargo.toml`'s version: bump `Cargo.toml` in a commit of its own (`cargo check` updates `Cargo.lock`), then tag that commit. Pushing the tag is a push, and asked about as one.
 

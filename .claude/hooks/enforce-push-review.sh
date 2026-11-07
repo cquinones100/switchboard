@@ -23,4 +23,10 @@ if echo "$BARE" | grep -qE '(^|[^A-Za-z0-9_.-])git([^A-Za-z0-9_.-].*)?[^A-Za-z0-
   echo "Do not skip git hooks, with --no-verify or core.hooksPath. This repository's pre-push hook wants a clean /review-loop first: run it." >&2
   exit 2
 fi
+# Nor turning the hook's setting off: `switchboard setting review_before_push`
+# with a value or --reset after it. Reading it is fine.
+if echo "$BARE" | grep -qE 'setting[[:space:]]+review_before_push[[:space:]]+[^[:space:];|&]'; then
+  echo "Do not change review_before_push: it is the user's to turn off, in Settings. This repository's pre-push hook wants a clean /review-loop first: run it." >&2
+  exit 2
+fi
 exit 0

@@ -13,7 +13,7 @@
       "Bash(switchboard tabs)",
       "Bash(switchboard show *)",
       "Bash(switchboard set *)",
-      "Bash(switchboard setting *)",
+      "Bash(switchboard setting review_security)",
       "Bash(switchboard respawn *)",
       "Bash(switchboard land-lock *)",
       "Bash(switchboard wait-deploy *)",
