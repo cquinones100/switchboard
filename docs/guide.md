@@ -1105,7 +1105,7 @@ eval "$(switchboard worktree-from-pr init zsh)"
 eval "$(switchboard worktree-resume init zsh)"
 ```
 
-For bash, put the same lines with `init bash` in `~/.bashrc`; zsh and bash are the shells `init` writes for. Setup doesn't add these lines. The workspace's own keys don't need them, since each tab they open defines its function from `init` before running it, and neither do `/wt` and `/wtn`. You need them to type the functions yourself, and for mission control's "Start work on it in a new tab (wt)" and "Work on it in a new tab (wtpr)", which type the function into a new tab's shell.
+For bash, put the same lines with `init bash` in `~/.bashrc`; zsh and bash are the shells `init` writes for. Setup doesn't add these lines. The workspace's own keys don't need them, since each tab they open defines its function from `init` before running it, and neither do mission control's menus ("Start work on it in a new tab (wt)", "Work on it in a new tab (wtpr)", "Shape it in a new tab", "Start a CI loop on it in a new tab"), which start the work the same way, or `/wt` and `/wtn`. You need them only to type the functions yourself.
 
 ### Where the worktrees go
 

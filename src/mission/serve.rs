@@ -1293,9 +1293,9 @@ impl Server {
                 self.to_clipboard(Some(client), &text);
                 self.mission_note(client, format!("Copied {text}"));
             }
-            Do::StartIn { dir, command } => {
+            Do::StartIn { dir, work } => {
                 self.mission_close(client);
-                self.start_in(client, &dir, None, &command);
+                self.mission_new_tab(client, &dir, Some(work.command()), None);
             }
             Do::TypeInto { tab, pane, text } => {
                 self.press(

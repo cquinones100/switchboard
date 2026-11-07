@@ -22,6 +22,7 @@ use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{MergeState, TabModel, TabState};
 use crate::sources::Waiter;
 use crate::usage::habits;
+use crate::worktree;
 
 /// What an option does.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,11 +51,11 @@ pub enum Do {
     CloseMerged(Vec<TabId>),
     Open(String),
     Copy(String),
-    /// A new tab in a directory, its shell typing a command (`wtpr`, `wt`,
-    /// `shape`): only a PR's address or a ticket's ID is ever put in one.
+    /// A new tab in a directory, starting work on a ticket or a PR as its
+    /// own command.
     StartIn {
         dir: PathBuf,
-        command: String,
+        work: Work,
     },
     /// Text typed into a tab's Claude, then the tab gone to (/ci-loop).
     TypeInto {
@@ -98,6 +99,50 @@ pub enum Do {
     },
     /// What working a note continuously offers (src/autopilot).
     Autopilot(crate::autopilot::Act),
+}
+
+/// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
+/// did, typed into a new shell by the tmux version, run here as the tab's
+/// own command through the binary (`command`), as the workspace's keys
+/// start work (src/cmd/work.rs), so nothing needs the shell functions in
+/// your rc and nothing races the shell's prompt. Only a ticket's ID or a
+/// PR's address is ever in one, each a word of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Work {
+    /// A worktree for the ticket, and Claude in it (`wt`).
+    Ticket(String),
+    /// Claude shaping the ticket with you (`shape`).
+    Shape(String),
+    /// A worktree on the PR's branch, and Claude in it (`wtpr`), with a
+    /// first prompt of its own when there is one (WTPR_PROMPT).
+    Pr { url: String, prompt: Option<String> },
+}
+
+impl Work {
+    /// The new tab's command: an interactive shell of yours that runs the
+    /// work and stays a shell once it ends.
+    pub fn command(&self) -> Vec<String> {
+        match self {
+            Work::Ticket(ticket) => {
+                worktree::tab_running("worktree-from-ticket", "wt", std::slice::from_ref(ticket))
+            }
+            Work::Shape(ticket) => {
+                let script = format!("{} \"$@\"", worktree::self_command("shape"));
+                worktree::tab_command(&script, "shape", std::slice::from_ref(ticket))
+            }
+            Work::Pr { url, prompt } => {
+                let run =
+                    worktree::tab_running("worktree-from-pr", "wtpr", std::slice::from_ref(url));
+                match prompt {
+                    Some(prompt) => ["env".to_string(), format!("WTPR_PROMPT={prompt}")]
+                        .into_iter()
+                        .chain(run)
+                        .collect(),
+                    None => run,
+                }
+            }
+        }
+    }
 }
 
 /// One option: the key that takes it at once, its label, and what it does.
@@ -288,7 +333,10 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             "Work on it in a new tab (wtpr)",
             Do::StartIn {
                 dir,
-                command: format!("wtpr {url}"),
+                work: Work::Pr {
+                    url: url.clone(),
+                    prompt: None,
+                },
             },
         ));
     }
@@ -314,7 +362,7 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             "Start work on it in a new tab (wt)",
             Do::StartIn {
                 dir: dir.clone(),
-                command: format!("wt {ticket}"),
+                work: Work::Ticket(ticket.clone()),
             },
         ));
         out.push(choice(
@@ -322,7 +370,7 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             "Shape it in a new tab (shape)",
             Do::StartIn {
                 dir,
-                command: format!("shape {ticket}"),
+                work: Work::Shape(ticket.clone()),
             },
         ));
         out.push(choice(
@@ -414,7 +462,10 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     "Start a CI loop on it in a new tab",
                     Do::StartIn {
                         dir,
-                        command: format!("WTPR_PROMPT=/ci-loop wtpr {url}"),
+                        work: Work::Pr {
+                            url: url.clone(),
+                            prompt: Some("/ci-loop".into()),
+                        },
                     },
                 )),
                 _ => {}
@@ -764,9 +815,41 @@ mod tests {
             choices[1].act,
             Do::StartIn {
                 dir: "/r2".into(),
-                command: "wtpr https://github.com/acme/app/pull/12".into()
+                work: Work::Pr {
+                    url: "https://github.com/acme/app/pull/12".into(),
+                    prompt: None,
+                },
             }
         );
+    }
+
+    #[test]
+    fn work_starts_as_the_tabs_own_command_through_the_binary() {
+        let runs = |command: &[String], what: &str| command.iter().any(|w| w.contains(what));
+        let wt = Work::Ticket("AB-3".into()).command();
+        assert!(runs(&wt, "worktree-from-ticket init"), "{wt:?}");
+        assert!(runs(&wt, "wt \"$@\""), "{wt:?}");
+        assert_eq!(wt.last().map(String::as_str), Some("AB-3"));
+
+        let url = "https://github.com/acme/app/pull/12";
+        let pr = Work::Pr {
+            url: url.into(),
+            prompt: None,
+        }
+        .command();
+        assert!(runs(&pr, "worktree-from-pr init") && runs(&pr, "wtpr \"$@\""));
+        assert_eq!(pr.last().map(String::as_str), Some(url));
+        let ci = Work::Pr {
+            url: url.into(),
+            prompt: Some("/ci-loop".into()),
+        }
+        .command();
+        assert_eq!(&ci[..2], ["env", "WTPR_PROMPT=/ci-loop"]);
+        assert_eq!(&ci[2..], &pr[..]);
+
+        let shape = Work::Shape("AB-3".into()).command();
+        assert!(runs(&shape, " shape \"$@\""), "{shape:?}");
+        assert_eq!(shape.last().map(String::as_str), Some("AB-3"));
     }
 
     #[test]

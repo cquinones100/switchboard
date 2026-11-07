@@ -140,7 +140,7 @@ What the tmux version did that the binary doesn't yet, so a part that brings one
 - **Reading beside your work**: the notes pane's links in "Read a link", the pickers that open, copy or show a pane's links, images and videos, mission control's "Read it here", and OSC 8 links passed through to the terminal. Only the diff stands in a pane's place; lazygit there, and the diff and lazygit from a tab's menu, are gone.
 - **The diff**: a branch's commits one at a time (diffview's `c`), visual-mode ranges for `yp` and `yl`, and a working tree's changes, which `M-d` never showed.
 - **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now), a new note's notification opening the note and a calendar change's opening the Calendar view, the Calendar drawn as a day, plugins' counts in the sidebar, the CI menu's failing log (the logs are kept), and the second status line's push count.
-- **Elsewhere**: keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (mission control's menus type `wt`, `wtpr` and `shape` into a new shell, so they need them, and `shape` is a `switchboard` command, not a program on the PATH).
+- **Elsewhere**: keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 
 ### Before this lands
 
