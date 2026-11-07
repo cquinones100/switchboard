@@ -95,10 +95,13 @@ pub fn session_of(all: &[SessionInfo], front: &[&SessionInfo]) -> Option<Session
     let mut current = *session;
     let mut seen: HashSet<&str> = HashSet::from([current.session_id.as_str()]);
     while !current.parked_job_id.is_empty() {
+        // Only a job whose process is still running, as tabs.js took it: a
+        // session file left behind would lead to an old transcript.
         let Some(job) = all.iter().find(|o| {
             o.job_id == current.parked_job_id
                 && !o.session_id.is_empty()
                 && !seen.contains(o.session_id.as_str())
+                && o.pid.is_some_and(|p| crate::util::is_alive(i64::from(p)))
         }) else {
             break;
         };
@@ -1610,9 +1613,14 @@ mod tests {
         );
         assert_eq!(session_of(&all, &[]), None);
         let parked = file(10, "tab", "cli", "", "j1");
-        let job = file(20, "job", "cli", "j1", "");
+        // The job's process is this test's, so it is running.
+        let job = file(std::process::id(), "job", "cli", "j1", "");
         let all = vec![parked.clone(), job];
         assert_eq!(session_of(&all, &[&parked]).unwrap().session_id, "job");
+        // A job whose process has ended is no longer followed.
+        let gone = file(99_999_999, "old-job", "cli", "j1", "");
+        let all = vec![parked.clone(), gone];
+        assert_eq!(session_of(&all, &[&parked]).unwrap().session_id, "tab");
         // A name given, not derived, is shown.
         let named = SessionInfo::from_json(
             &json!({"pid": 111, "sessionId": "s1", "cwd": "/work", "name": "Login retry", "nameSource": "user", "startedAt": 1_700_000_000_000_i64}),

@@ -67,9 +67,11 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
         if !cx.state.borrow().closed_homes.contains_key(ts) {
             continue;
         }
-        let done: Result<usize> = async {
+        // Your replies are counted as they are found, whether or not the
+        // thread then goes, as cleanup.js counted them.
+        let mut yours = 0;
+        let done: Result<()> = async {
             let messages = thread_messages(cx, ts).await?;
-            let mut yours = 0;
             for message in messages
                 .iter()
                 .filter(|m| m.get("ts").and_then(Value::as_str) != Some(ts.as_str()))
@@ -105,11 +107,12 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
             {
                 return Err(e);
             }
-            Ok(yours)
+            Ok(())
         }
         .await;
+        result.yours += yours;
         match done {
-            Ok(yours) => {
+            Ok(()) => {
                 let mut state = cx.state.borrow_mut();
                 state.closed_homes.shift_remove(ts);
                 state.threads.shift_remove(ts);
@@ -119,7 +122,6 @@ pub async fn delete_threads(cx: &Relay, threads: &[String]) -> Deleted {
                     .retain(|key, a| key != ts && a.thread.as_deref() != Some(ts.as_str()));
                 drop(state);
                 result.deleted += 1;
-                result.yours += yours;
                 cx.log(&format!("deleted thread {ts}"));
             }
             Err(e) => cx.log(&format!("deleting thread {ts} failed: {e}")),

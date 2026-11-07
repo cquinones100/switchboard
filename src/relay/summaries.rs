@@ -337,6 +337,18 @@ fn last_chars(text: &str, n: usize) -> String {
     chars[chars.len().saturating_sub(n)..].iter().collect()
 }
 
+/// 👀 on the request, added beside the work rather than before it, as
+/// summaries.js did, so reading the tab and asking Haiku don't wait on a
+/// round trip to Slack.
+fn eyes(cx: &Cx, request: Option<&str>) {
+    let (cx, request) = (cx.clone(), request.map(str::to_string));
+    super::run::spawn(async move {
+        if let Err(e) = react(&cx, request.as_deref(), "eyes").await {
+            cx.log(&format!("👀 failed: {e}"));
+        }
+    });
+}
+
 /// `progress` for one tab: its facts and a summary, in reply.
 pub async fn progress(
     cx: &Cx,
@@ -344,9 +356,7 @@ pub async fn progress(
     reply: &Reply,
     request: Option<&str>,
 ) -> Result<Option<String>> {
-    if let Err(e) = react(cx, request, "eyes").await {
-        cx.log(&format!("👀 failed: {e}"));
-    }
+    eyes(cx, request);
     let name = label(tab.index, &tab.name);
     let Some(current) = tabs::tab(cx, &tab.id) else {
         return say(
@@ -412,9 +422,7 @@ pub async fn progress(
 /// activity and screen as `progress` for each, kept short per tab so the
 /// whole fleet fits.
 pub async fn fleet(cx: &Cx, reply: &Reply, request: Option<&str>) -> Result<Option<String>> {
-    if let Err(e) = react(cx, request, "eyes").await {
-        cx.log(&format!("👀 failed: {e}"));
-    }
+    eyes(cx, request);
     let tabs = tabs::claude_tabs(cx);
     if tabs.is_empty() {
         return say(cx, reply, "No Claude tabs are open.", vec![]).await;

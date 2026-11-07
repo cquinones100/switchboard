@@ -164,8 +164,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
         "relay" => super::run::relay(),
         "notify" => {
             let mut rest: Vec<String> = args[1..].to_vec();
-            let from = rest.iter().position(|a| a == "--from").map(|at| {
-                let value = rest.get(at + 1).cloned().unwrap_or_default();
+            // `--from` with nothing after it names no one, so the notice
+            // goes out under `notice`, as it did.
+            let from = rest.iter().position(|a| a == "--from").and_then(|at| {
+                let value = rest.get(at + 1).cloned();
                 rest.drain(at..(at + 2).min(rest.len()));
                 value
             });
@@ -194,9 +196,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        other => {
-            eprintln!("Error: unknown command \"{other}\"; use start, stop, status, run or notify");
-            ExitCode::from(1)
-        }
+        // Said in the relay's log too, as bin/slack-relay's `fail` did.
+        other => super::log::fail(
+            &paths,
+            &format!("unknown command \"{other}\"; use start, stop, status, run or notify"),
+            1,
+        ),
     }
 }

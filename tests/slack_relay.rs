@@ -240,6 +240,18 @@ fn start_opens_the_relays_tab_once_and_the_rest_say_it_isnt_running() {
     let (code, _, err) = relay(&server, &["notify", "--from", "oncall", "hello"]);
     assert_eq!(code, 1);
     assert!(err.contains("the relay isn't running"), "{err}");
+    // `--from` with no name after it falls back to `notice` rather than
+    // being refused as an empty name.
+    let (code, _, err) = relay(&server, &["notify", "hello", "--from"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("the relay isn't running"), "{err}");
+    // An unknown command is said, and written in the relay's log.
+    let (code, _, err) = relay(&server, &["frobnicate"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("unknown command \"frobnicate\""), "{err}");
+    let log = std::fs::read_to_string(server.home.join(".local/state/slack-relay/relay.log"))
+        .unwrap_or_default();
+    assert!(log.contains("unknown command \"frobnicate\""), "{log}");
 
     let marked = |list: &Value| {
         list["sessions"][0]["tabs"]

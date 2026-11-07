@@ -113,12 +113,25 @@ pub fn as_markdown(body: &str, buttons: &[Button]) -> Value {
 /// Text longer than Slack shows in one message, as several, split at
 /// paragraph breaks (or lines, or anywhere as a last resort), each under
 /// `MAX_POST_CHARS`. A code block split across two is closed in the first
-/// and opened again in the second.
+/// and opened again in the second. Lengths are counted in UTF-16 units, as
+/// Slack counts them and post.js did, so text full of emoji splits as soon
+/// as plain text would.
 pub fn chunks(text: &str) -> Vec<String> {
+    let units = |cs: &[char]| cs.iter().map(|c| c.len_utf16()).sum::<usize>();
     let mut parts = Vec::new();
     let mut rest: Vec<char> = text.chars().collect();
-    while rest.len() > MAX_POST_CHARS {
-        let window = &rest[..MAX_POST_CHARS];
+    while units(&rest) > MAX_POST_CHARS {
+        // The most characters that fit, never half of one.
+        let mut fit = 0;
+        let mut used = 0;
+        for c in &rest {
+            if used + c.len_utf16() > MAX_POST_CHARS {
+                break;
+            }
+            used += c.len_utf16();
+            fit += 1;
+        }
+        let window = &rest[..fit];
         let last = |pattern: &[char]| {
             (0..=window.len().saturating_sub(pattern.len()))
                 .rev()
@@ -127,8 +140,8 @@ pub fn chunks(text: &str) -> Vec<String> {
         let cut = [last(&['\n', '\n']), last(&['\n'])]
             .into_iter()
             .flatten()
-            .find(|&i| i > MAX_POST_CHARS / 2)
-            .unwrap_or(MAX_POST_CHARS);
+            .find(|&i| units(&window[..i]) > MAX_POST_CHARS / 2)
+            .unwrap_or(fit);
         let mut part: String = rest[..cut].iter().collect();
         let mut after: Vec<char> = rest[cut..].to_vec();
         while after.first() == Some(&'\n') {
@@ -458,6 +471,19 @@ mod tests {
             );
         }
         assert_eq!(parts.join("\n").replace("\n```\n```\n", "\n"), text);
+    }
+
+    #[test]
+    fn long_text_is_measured_as_slack_measures_it() {
+        // Each of these is two UTF-16 units, so 2,000 of them are 4,000
+        // units, over what one message takes, though only 2,000 characters.
+        let text = "🙂".repeat(2_000);
+        let parts = chunks(&text);
+        assert_eq!(parts.len(), 2);
+        for part in &parts {
+            assert!(part.encode_utf16().count() <= MAX_POST_CHARS);
+        }
+        assert_eq!(parts.concat(), text);
     }
 
     #[test]

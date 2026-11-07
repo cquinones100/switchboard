@@ -197,8 +197,11 @@ pub fn resolve_place(cx: &Relay, spec: &str) -> Result<(PathBuf, String), String
             }
             _ => PathBuf::from(spec),
         };
+        // Its `.` and `..` worked out, but a link in it kept as typed, as
+        // `path.resolve` did: the reply names, and the tab starts in, the
+        // path you gave.
+        let dir = crate::worktree::normalize(&dir);
         return if dir.is_dir() {
-            let dir = dir.canonicalize().unwrap_or(dir);
             let said = format!("`{}`", cx.paths.short(&dir));
             Ok((dir, said))
         } else {

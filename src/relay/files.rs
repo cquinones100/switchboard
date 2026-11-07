@@ -67,12 +67,19 @@ pub enum Got {
     },
 }
 
-/// The host of an https link, or `None` for another kind of link.
+/// The host of an https link, without its port (as `URL.hostname` gives
+/// it), or `None` for another kind of link.
 fn https_host(url: &str) -> Option<&str> {
     let rest = url.strip_prefix("https://")?;
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let host = &rest[..end];
-    (!host.contains('@')).then_some(host)
+    if host.contains('@') {
+        return None;
+    }
+    Some(match host.rsplit_once(':') {
+        Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+        _ => host,
+    })
 }
 
 /// Downloads one attached file. An event may carry only the file's ID, so
@@ -429,6 +436,11 @@ mod tests {
         assert_eq!(
             https_host("https://files.slack.com/f/x.png"),
             Some(FILE_HOST)
+        );
+        assert_eq!(
+            https_host("https://files.slack.com:443/f/x.png"),
+            Some(FILE_HOST),
+            "a port is no part of the host"
         );
         assert_eq!(https_host("http://files.slack.com/x"), None);
         assert_eq!(https_host("https://evil@files.slack.com/x"), None);

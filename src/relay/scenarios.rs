@@ -272,6 +272,25 @@ fn new_in_a_place_that_isnt_one_starts_nothing() {
 }
 
 #[test]
+fn new_in_a_typed_path_starts_there_as_typed_links_and_all() {
+    let rig = Rig::new();
+    let real = rig.root.join("elsewhere");
+    std::fs::create_dir_all(&real).unwrap();
+    std::os::unix::fs::symlink(&real, rig.home().join("linked")).unwrap();
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(11), "new ~/linked/./: look around", None),
+    ))
+    .unwrap();
+    assert_eq!(
+        rig.mux.opened.borrow()[0].0,
+        rig.home().join("linked"),
+        "the link kept, its `.` worked out"
+    );
+    assert!(rig.posts()[0].body.contains("`~/linked`"));
+}
+
+#[test]
 fn events_carry_on_from_the_saved_offset_and_leave_half_written_lines() {
     let rig = Rig::new();
     std::fs::write(
@@ -2397,6 +2416,45 @@ fn a_closed_tabs_thread_is_deleted_on_request_and_a_live_tabs_cant_be() {
     );
     assert_eq!(rig.calls("files.delete")[0]["file"], "F7");
     assert!(super::cleanup::closed_threads(&rig.cx).is_empty());
+}
+
+#[test]
+fn your_replies_are_counted_in_a_thread_that_then_fails_to_go() {
+    let rig = Rig::new();
+    let closed = "1791500000.000200";
+    {
+        let mut state = rig.cx.state.borrow_mut();
+        state.dm.as_mut().unwrap().bot = Some("B1".into());
+        state.closed_homes.insert(
+            closed.into(),
+            super::state::ClosedHome {
+                label: "2, gone".into(),
+                at: 1,
+            },
+        );
+    }
+    rig.slack.answers.borrow_mut().insert(
+        "conversations.replies".into(),
+        Box::new(|p| {
+            Ok(json!({ "ok": true, "messages": [
+                { "ts": p["ts"], "bot_id": "B1" },
+                { "ts": "1791500000.000400", "user": "U1" }
+            ] }))
+        }),
+    );
+    rig.slack.answers.borrow_mut().insert(
+        "chat.delete".into(),
+        Box::new(|_| Err(anyhow::anyhow!("chat.delete: cant_delete_message"))),
+    );
+    let done = rig.block_on(super::cleanup::delete_threads(&rig.cx, &[closed.into()]));
+    assert_eq!(
+        done,
+        super::cleanup::Deleted {
+            deleted: 0,
+            yours: 1
+        }
+    );
+    assert_eq!(super::cleanup::closed_threads(&rig.cx), [closed]);
 }
 
 #[test]
