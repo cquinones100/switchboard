@@ -594,7 +594,8 @@ impl Server {
     }
 
     /// Asks each source, the list filled in as they answer; Enter reads
-    /// the one chosen beside the pane the search started from.
+    /// the one chosen beside the pane the search started from, and Ctrl-O
+    /// opens a web link in the browser instead, as search.sh's did.
     fn start_search(&mut self, client: ClientId, pane: Option<PaneId>, query: String) {
         self.views.searches += 1;
         let id = self.views.searches;
@@ -620,17 +621,22 @@ impl Server {
         );
         let picker = Picker::new(search_title(&query, &waiting), Vec::new())
             .named("search")
-            .prompt("Narrow: ");
-        self.pick(client, picker, move |server, client, picked| {
+            .prompt("Narrow: ")
+            .also("read it beside the pane", "open it in the browser");
+        self.pick_also(client, picker, move |server, client, picked| {
             let running = server.views.found.remove(&client);
-            let Some(picked) = picked.filter(|p| !p.value.is_empty()) else {
+            let Some((picked, browser)) = picked.filter(|(p, _)| !p.value.is_empty()) else {
                 return;
             };
+            let web = picked.value.starts_with("https://") || picked.value.starts_with("http://");
             // What can't be read here (a Slack message) opens instead.
-            if page::kind_of(&picked.value, &page::notes_dir()) == Ok(page::Kind::Slack) {
+            if (browser && web)
+                || page::kind_of(&picked.value, &page::notes_dir()) == Ok(page::Kind::Slack)
+            {
                 links::open_in_background(picked.value);
                 return;
             }
+
             let pane = running
                 .and_then(|r| r.pane)
                 .filter(|p| server.panes.contains_key(p))

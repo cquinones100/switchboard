@@ -26,8 +26,14 @@
 //! ctrl-o` let link-view.sh open a link it would otherwise read: Ctrl-O
 //! takes the row for that, and the keys row names both.
 //!
-//! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab, the wheel)
-//! move; Enter picks; Esc or C-c closes; Backspace, C-w and C-u edit what is
+//! A list may take several rows (`multi`, as fzf's `--multi`): Tab marks
+//! the chosen row, or unmarks it, and moves down, Shift-Tab the same moving
+//! up, and Enter takes the rows marked, in the list's order, or the chosen
+//! one when none is. The marks stay while what is typed changes.
+//!
+//! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab but in a list
+//! that marks, the wheel) move; Enter picks; Esc or C-c closes; Backspace,
+//! C-w and C-u edit what is
 //! typed. A click moves to a row and a second click on it picks it, as fzf
 //! does; a click outside closes the list; the row under the mouse is lit.
 
@@ -124,6 +130,10 @@ pub struct Picker {
     previews: Vec<String>,
     /// Lines said under the count, dimmed, as fzf's `--header`.
     header: Vec<String>,
+    /// Whether rows can be marked and taken together, and the items marked,
+    /// by their place in `items`.
+    multi: bool,
+    marked: Vec<usize>,
 }
 
 impl Picker {
@@ -148,6 +158,8 @@ impl Picker {
             room: 10,
             previews: Vec::new(),
             header: Vec::new(),
+            multi: false,
+            marked: Vec::new(),
         };
         picker.refilter();
         picker
@@ -199,6 +211,17 @@ impl Picker {
     /// chosen while it is there.
     pub fn set_items(&mut self, items: Vec<PickItem>) {
         let chosen = self.chosen().map(|i| i.value.clone());
+        let marked: Vec<String> = self
+            .marked
+            .iter()
+            .filter_map(|i| self.items.get(*i).map(|it| it.value.clone()))
+            .collect();
+        self.marked = items
+            .iter()
+            .enumerate()
+            .filter(|(_, it)| marked.contains(&it.value))
+            .map(|(i, _)| i)
+            .collect();
         self.items = items;
         self.refilter();
         if let Some(value) = chosen
@@ -224,6 +247,34 @@ impl Picker {
     pub fn previews(mut self, previews: Vec<String>) -> Picker {
         self.previews = previews;
         self
+    }
+
+    /// Rows marked with Tab and taken together with Enter, as fzf's
+    /// `--multi` (`Outcome::PickedMany`).
+    pub fn multi(mut self) -> Picker {
+        self.multi = true;
+        self
+    }
+
+    /// The chosen row marked, or unmarked when it was, and the cursor moved
+    /// on toward `down` or up.
+    fn mark(&mut self, down: bool) -> Step {
+        let Some((i, _)) = self.shown.get(self.cursor) else {
+            return Step::Same;
+        };
+        match self.marked.iter().position(|m| m == i) {
+            Some(at) => {
+                self.marked.remove(at);
+            }
+            None => self.marked.push(*i),
+        }
+        let to = if down {
+            self.cursor + 1
+        } else {
+            self.cursor.saturating_sub(1)
+        };
+        self.move_to(to);
+        Step::Redraw
     }
 
     /// A line said under the count, dimmed, as fzf's `--header`.
@@ -311,6 +362,20 @@ impl Picker {
     }
 
     fn pick(&self) -> Step {
+        if !self.marked.is_empty() {
+            let mut marked = self.marked.clone();
+            marked.sort_unstable();
+            return Step::Close(Outcome::PickedMany(
+                marked
+                    .into_iter()
+                    .map(|i| Picked {
+                        index: i,
+                        value: self.items[i].value.clone(),
+                        query: self.query.clone(),
+                    })
+                    .collect(),
+            ));
+        }
         match self.shown.get(self.cursor) {
             Some((i, _)) => Step::Close(Outcome::Picked(Picked {
                 index: *i,
@@ -423,10 +488,19 @@ impl Picker {
         } else {
             hit
         };
-        let mut spans: Vec<Span<'static>> = if chosen {
-            vec![Span::raw(" "), look.pointer(), Span::raw(" ")]
+        // A row marked shows a + before it, as fzf's marker.
+        let mark = if self.marked.contains(i) {
+            Span::styled(
+                "+",
+                Style::new().fg(draw::EDGE).add_modifier(Modifier::BOLD),
+            )
         } else {
-            vec![Span::raw("   ")]
+            Span::raw(" ")
+        };
+        let mut spans: Vec<Span<'static>> = if chosen {
+            vec![mark, look.pointer(), Span::raw(" ")]
+        } else {
+            vec![mark, Span::raw("  ")]
         };
         // Each part cut to its column, its matched letters lit; the
         // haystack's graphemes run text, space, tags, space, key.
@@ -513,7 +587,16 @@ impl Overlay for Picker {
                 Span::styled("▏", look.dim()),
             ]),
             BoxLine::text(
-                format!("   {}/{}", self.shown.len(), self.items.len()),
+                if self.marked.is_empty() {
+                    format!("   {}/{}", self.shown.len(), self.items.len())
+                } else {
+                    format!(
+                        "   {}/{} ({} marked)",
+                        self.shown.len(),
+                        self.items.len(),
+                        self.marked.len()
+                    )
+                },
                 look.dim(),
             ),
         ];
@@ -556,6 +639,9 @@ impl Overlay for Picker {
             None if self.free => {
                 "type to filter  ↑↓ move  ↵ choose  alt-↵ take what's typed  esc close".into()
             }
+            None if self.multi => {
+                "type to filter  ↑↓ move  tab mark  ↵ choose the marked  esc close".into()
+            }
             None => "type to filter  ↑↓ move  ↵ choose  esc close".into(),
         };
         let mut spec = BoxSpec::new(&self.title, &lines);
@@ -578,6 +664,8 @@ impl Overlay for Picker {
             KeyCode::Char('o') if ctrl && self.also.is_some() => self.pick_also(),
             KeyCode::Esc => Step::Close(Outcome::Dismissed),
             KeyCode::Char('c' | 'g') if ctrl => Step::Close(Outcome::Dismissed),
+            KeyCode::Tab if self.multi => self.mark(true),
+            KeyCode::BackTab if self.multi => self.mark(false),
             KeyCode::Down | KeyCode::Tab => self.move_to(self.cursor + 1),
             KeyCode::Char('n' | 'j') if ctrl => self.move_to(self.cursor + 1),
             KeyCode::Up | KeyCode::BackTab => self.move_to(self.cursor.saturating_sub(1)),
@@ -815,6 +903,49 @@ mod tests {
             ..click
         };
         assert_eq!(p.mouse(outside, &look), Step::Close(Outcome::Dismissed));
+    }
+
+    #[test]
+    fn tab_marks_rows_in_a_list_that_takes_several_and_enter_takes_them() {
+        let look = Look::default();
+        let tab = |p: &mut Picker, mods| p.key(Key::new(KeyCode::Tab, mods), &look);
+        let mut p = Picker::new("Pick", items()).multi();
+        tab(&mut p, Mods::NONE);
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        tab(&mut p, Mods::NONE);
+        assert_eq!(p.chosen().unwrap().text, "Zoom the pane in or out");
+        // Typing keeps the marks; Tab on a row marks it, and again unmarks
+        // it.
+        typed(&mut p, "zoom");
+        tab(&mut p, Mods::NONE);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        p.draw(&mut buf, &look);
+        assert!(screen(&buf).iter().any(|l| l.contains("(3 marked)")));
+        p.key(Key::new(KeyCode::Char('u'), Mods::CTRL), &look);
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        tab(&mut p, Mods::NONE);
+        let Step::Close(Outcome::PickedMany(many)) =
+            p.key(Key::new(KeyCode::Enter, Mods::NONE), &look)
+        else {
+            panic!("the marked rows taken");
+        };
+        assert_eq!(
+            many.iter().map(|m| m.index).collect::<Vec<_>>(),
+            vec![0, 2],
+            "in the list's order"
+        );
+        // None marked: Enter takes the chosen row alone; a plain list's Tab
+        // moves.
+        let mut p = Picker::new("Pick", items()).multi();
+        assert!(matches!(
+            p.key(Key::new(KeyCode::Enter, Mods::NONE), &look),
+            Step::Close(Outcome::Picked(_))
+        ));
+        let mut plain = Picker::new("Pick", items());
+        tab(&mut plain, Mods::NONE);
+        assert_eq!(plain.chosen().unwrap().text, "Close the pane");
     }
 
     #[test]

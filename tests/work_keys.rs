@@ -234,3 +234,38 @@ fn a_key_of_a_service_turned_off_shows_its_tip_once_and_does_nothing() {
         "{screen:#?}"
     );
 }
+
+#[test]
+fn tab_marks_a_few_of_a_note_s_items_and_each_marked_gets_a_tab() {
+    let (server, _repo, mut client) = world();
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Plan.md"),
+        "# Plan\n\n- [ ] Fix the login\n- [ ] Speed up the build\n- [ ] Write the docs\n",
+    )
+    .unwrap();
+    let before = tabs(&server).len();
+    server.ok(&["press", "work-on-note"]);
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    client.wait_text("note>");
+    client.send(b"\r");
+    client.wait_text("Every item listed (3)");
+    client.wait_text("tab mark");
+    // Down past "Every item listed", then the first and third marked.
+    client.send(b"\x1b[B");
+    client.send(b"\t");
+    client.send(b"\x1b[B");
+    client.send(b"\t");
+    client.wait_text("(2 marked)");
+    client.send(b"\r");
+    wait("a tab for each item marked", || {
+        tabs(&server).len() == before + 2
+    });
+    let names: Vec<String> = tabs(&server)[before..]
+        .iter()
+        .map(|t| t["options"]["@tab_name"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(names, ["Fix the login", "Write the docs"]);
+}

@@ -193,6 +193,9 @@ pub enum Outcome {
     /// A picker's item taken with its second key (`Picker::also`), for
     /// what the list does besides what Enter does.
     PickedAlso(Picked),
+    /// A list's items marked with Tab and taken together (`Picker::multi`),
+    /// in the list's order.
+    PickedMany(Vec<Picked>),
 }
 
 /// What came of a key or a mouse event given to an overlay.

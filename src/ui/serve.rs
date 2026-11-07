@@ -105,6 +105,26 @@ impl Server {
         self.open(client, Box::new(picker), Some(then));
     }
 
+    /// As `pick`, for a list whose rows can be marked with Tab and taken
+    /// together (`Picker::multi`): `then` is told the rows marked, or the
+    /// one chosen when none is, or nothing.
+    pub fn pick_many(
+        &mut self,
+        client: ClientId,
+        picker: Picker,
+        then: impl FnOnce(&mut Server, ClientId, Vec<Picked>) + Send + 'static,
+    ) {
+        let then: Then = Box::new(move |s, c, o| {
+            let picked = match o {
+                Outcome::Picked(p) => vec![p],
+                Outcome::PickedMany(many) => many,
+                _ => Vec::new(),
+            };
+            then(s, c, picked)
+        });
+        self.open(client, Box::new(picker), Some(then));
+    }
+
     /// As `pick`, for a list that does a second thing with a row
     /// (`Picker::also`): `then` is told the item, and whether it was taken
     /// with Ctrl-O for that.

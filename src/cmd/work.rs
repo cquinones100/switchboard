@@ -764,6 +764,8 @@ impl Server {
                         "all",
                     ));
                 }
+                // The item's text alone shown and matched, as wtn-open.zsh's
+                // `--with-nth=2`; its line is what picking it gives.
                 rows.extend(items.iter().map(|i| PickItem {
                     text: i.text.clone(),
                     tags: if i.needs_choice {
@@ -771,7 +773,7 @@ impl Server {
                     } else {
                         String::new()
                     },
-                    key: i.line.to_string(),
+                    key: String::new(),
                     value: i.line.to_string(),
                 }));
                 let short = Path::new(&title)
@@ -790,22 +792,23 @@ impl Server {
                 } else {
                     wholes
                 };
+                // Tab marks several, as wtn-open.zsh's fzf --multi did.
                 let picker = Picker::new(format!("Work on {short}'s items"), rows)
                     .named("items")
                     .prompt(format!("{short}> "))
-                    .previews(previews);
-                server.pick(client, picker, move |server, client, picked| {
-                    let Some(picked) = picked else {
-                        return;
-                    };
-                    let chosen: Vec<&worktree_from_note::Item> = if picked.value == "all" {
+                    .previews(previews)
+                    .multi();
+                server.pick_many(client, picker, move |server, client, picked| {
+                    let values: Vec<&str> = picked.iter().map(|p| p.value.as_str()).collect();
+                    let chosen: Vec<&worktree_from_note::Item> = if values.contains(&"all") {
                         items.iter().collect()
                     } else {
                         items
                             .iter()
-                            .filter(|i| i.line.to_string() == picked.value)
+                            .filter(|i| values.contains(&i.line.to_string().as_str()))
                             .collect()
                     };
+
                     let tabs: Vec<TabId> = chosen
                         .into_iter()
                         .filter_map(|item| server.open_item_tab(client, &repo, &note, item))
