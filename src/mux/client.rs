@@ -174,6 +174,9 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
         term,
         xpixel: size.xpixel,
         ypixel: size.ypixel,
+        cwd: std::env::current_dir()
+            .ok()
+            .map(|d| d.to_string_lossy().into_owned()),
     };
     let end = run(stream, libc::STDIN_FILENO, hello, signal_pipe, size, || {
         measure(libc::STDOUT_FILENO)
@@ -1011,6 +1014,7 @@ mod tests {
             term: "xterm-256color".into(),
             xpixel: 0,
             ypixel: 0,
+            cwd: None,
         }
     }
 

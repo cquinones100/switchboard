@@ -57,6 +57,9 @@ pub enum Event {
         session: Option<String>,
         cols: u16,
         rows: u16,
+        /// Where the terminal's `switchboard` ran: a session made for it
+        /// starts there.
+        cwd: Option<PathBuf>,
         tx: mpsc::UnboundedSender<ServerMsg>,
     },
     Input(ClientId, Vec<u8>),
@@ -476,6 +479,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             term: _,
             xpixel,
             ypixel,
+            cwd,
         } => {
             let id = ClientId(NEXT_CLIENT.fetch_add(1, Ordering::Relaxed));
             let (otx, mut orx) = mpsc::unbounded_channel::<ServerMsg>();
@@ -485,6 +489,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     session,
                     cols,
                     rows,
+                    cwd: cwd.map(PathBuf::from),
                     tx: otx,
                 })
                 .is_err()
@@ -609,8 +614,9 @@ impl Server {
                 session,
                 cols,
                 rows,
+                cwd,
                 tx,
-            } => self.attach(id, session, cols, rows, tx),
+            } => self.attach(id, session, cols, rows, cwd, tx),
             Event::Input(id, bytes) => self.input(id, &bytes),
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
             Event::Cell(w, h) => self.terminal_cell((w, h)),
@@ -945,7 +951,13 @@ impl Server {
     }
 
     /// Makes a session with one tab, unless it is there.
-    pub fn ensure_session(&mut self, name: &str, cols: u16, rows: u16) -> Result<()> {
+    pub fn ensure_session(
+        &mut self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        cwd: Option<PathBuf>,
+    ) -> Result<()> {
         if self.session(name).is_some() {
             return Ok(());
         }
@@ -961,7 +973,9 @@ impl Server {
             sidebar: self.sidebar_columns(cols),
         };
         let area = session.main_area();
-        let pane = self.spawn_pane(tab, Some(paths::home()), None, area.width, area.height)?;
+        // In the directory asked from, while it is still there, else home.
+        let dir = cwd.filter(|d| d.is_dir()).unwrap_or_else(paths::home);
+        let pane = self.spawn_pane(tab, Some(dir), None, area.width, area.height)?;
         self.tabs.insert(tab, new_tab(tab, pane));
         self.sessions.push(session);
         self.refresh_name(tab);
@@ -1359,6 +1373,7 @@ impl Server {
         session: Option<String>,
         cols: u16,
         rows: u16,
+        cwd: Option<PathBuf>,
         tx: mpsc::UnboundedSender<ServerMsg>,
     ) {
         let name = session.unwrap_or_else(|| {
@@ -1367,7 +1382,7 @@ impl Server {
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| DEFAULT_SESSION.to_string())
         });
-        if let Err(e) = self.ensure_session(&name, cols, rows) {
+        if let Err(e) = self.ensure_session(&name, cols, rows, cwd) {
             let _ = tx.send(ServerMsg::Exit {
                 message: Some(format!("couldn't start a shell: {e}")),
             });

@@ -40,6 +40,8 @@ pub enum ClientMsg {
     /// (made when it isn't there), the terminal's size and what it is. The
     /// window's size in pixels, where the terminal says it (0 where not, or
     /// from a client a version behind), gives the cell's (src/mux/terminal.rs).
+    /// The directory it was run in is where a session made for it starts,
+    /// as tmux's new-session started in its client's.
     Attach {
         session: Option<String>,
         cols: u16,
@@ -49,6 +51,8 @@ pub enum ClientMsg {
         xpixel: u16,
         #[serde(default)]
         ypixel: u16,
+        #[serde(default)]
+        cwd: Option<String>,
     },
     /// Bytes typed.
     Input(Vec<u8>),
@@ -292,6 +296,7 @@ mod tests {
                 term: "xterm-ghostty".into(),
                 xpixel: 3376,
                 ypixel: 2088,
+                cwd: Some("/home/jo/code".into()),
             },
             ClientMsg::Attach {
                 session: None,
@@ -300,6 +305,7 @@ mod tests {
                 term: String::new(),
                 xpixel: 0,
                 ypixel: 0,
+                cwd: None,
             },
             ClientMsg::Input(b"\x1b[A\x00\xffhi".to_vec()),
             ClientMsg::Input(Vec::new()),

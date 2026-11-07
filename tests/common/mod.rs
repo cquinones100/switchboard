@@ -249,6 +249,17 @@ pub struct TestClient {
 
 impl TestClient {
     pub fn attach(socket: &Path, session: Option<&str>, cols: u16, rows: u16) -> TestClient {
+        TestClient::attach_in(socket, session, cols, rows, None)
+    }
+
+    /// A terminal attaching from a directory, as `switchboard` run there.
+    pub fn attach_in(
+        socket: &Path,
+        session: Option<&str>,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+    ) -> TestClient {
         let mut stream = UnixStream::connect(socket).expect("the server answers");
         stream
             .write_all(&proto::encode_client(&ClientMsg::Attach {
@@ -258,6 +269,7 @@ impl TestClient {
                 term: "xterm-256color".into(),
                 xpixel: 0,
                 ypixel: 0,
+                cwd: cwd.map(|d| d.to_string_lossy().into_owned()),
             }))
             .unwrap();
         let mut reader = stream.try_clone().unwrap();

@@ -195,6 +195,38 @@ fn send_keys_and_capture_pane() {
 }
 
 #[test]
+fn the_first_tab_starts_where_switchboard_was_run() {
+    let server = TestServer::start();
+    let project = server.dir.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let mut client = common::TestClient::attach_in(&server.socket(), None, 80, 24, Some(&project));
+    client.wait_text("$");
+    let list = server.list();
+    assert_eq!(
+        list["sessions"][0]["tabs"][0]["panes"][0]["cwd"],
+        project.to_string_lossy().as_ref(),
+        "{list}"
+    );
+    // A second session from a directory that has gone starts at home.
+    let gone = server.dir.path().join("gone");
+    let mut other =
+        common::TestClient::attach_in(&server.socket(), Some("work"), 80, 24, Some(&gone));
+    other.wait_text("$");
+    let list = server.list();
+    let work = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "work")
+        .expect("the work session");
+    assert_eq!(
+        work["tabs"][0]["panes"][0]["cwd"],
+        server.home.to_string_lossy().as_ref(),
+        "{list}"
+    );
+}
+
+#[test]
 fn switch_client_takes_the_terminal_to_another_session_s_tab() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);
