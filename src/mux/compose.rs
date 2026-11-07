@@ -398,35 +398,149 @@ pub fn draw_status(
     }
     let (after, button) = crate::status::draw_left(buf, x, area, left, p);
     x = after;
-    let mut spans = Vec::new();
     // Each tab in its project's color, as window-names.sh's
     // window-status-format and update-colors.sh's current one drew it: the
     // current tab bold on colour238, the rest on the status line's own.
-    for tab in tabs {
-        let style = if tab.current {
-            Style::new()
-                .bg(p.current_bg)
-                .fg(tab.color.unwrap_or(colors::ACCENT))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            base.fg(tab.color.unwrap_or(p.tab_fg))
-        };
-        let start = x;
-        x = put(buf, x, area, &format!(" {}:", tab.index), style);
-        if let Some(state) = tab.agent {
-            let (symbol, marker) = badge(state);
-            x = put(buf, x, area, &format!("  {symbol}  "), marker);
-            x = put(buf, x, area, " ", style);
+    let labels: Vec<Vec<(String, Style)>> = tabs
+        .iter()
+        .map(|tab| {
+            let style = if tab.current {
+                Style::new()
+                    .bg(p.current_bg)
+                    .fg(tab.color.unwrap_or(colors::ACCENT))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                base.fg(tab.color.unwrap_or(p.tab_fg))
+            };
+            let mut pieces = vec![(format!(" {}:", tab.index), style)];
+            if let Some(state) = tab.agent {
+                let (symbol, marker) = badge(state);
+                pieces.push((format!("  {symbol}  "), marker));
+                pieces.push((" ".into(), style));
+            }
+            pieces.push((format!("{} ", tab.name), style));
+            pieces
+        })
+        .collect();
+    let widths: Vec<u16> = labels
+        .iter()
+        .map(|l| {
+            l.iter()
+                .map(|(t, _)| UnicodeWidthStr::width(t.as_str()) as u16)
+                .sum()
+        })
+        .collect();
+    let room = area.right().saturating_sub(x);
+    let current = tabs.iter().position(|t| t.current).unwrap_or(0);
+    let shown = scroll_tabs(&widths, current, room);
+    if shown.left {
+        put(buf, x, area, "<", base);
+    }
+    if shown.right {
+        put(buf, area.right() - 1, area, ">", base);
+    }
+    // The tabs as one line, `shown.offset` columns of it skipped and
+    // `shown.width` drawn from `shown.at` on.
+    let start = x + shown.at;
+    let end = start + shown.width;
+    let mut spans = Vec::new();
+    let mut col: u16 = 0;
+    for (tab, label) in tabs.iter().zip(&labels) {
+        let first = col;
+        for (text, style) in label {
+            for ch in text.chars() {
+                let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+                let at = start as i32 + col as i32 - shown.offset as i32;
+                col += w;
+                if w == 0 || at < start as i32 || at + w as i32 > end as i32 {
+                    // A wide character cut by either edge leaves blanks.
+                    for c in at.max(start as i32)..(at + w as i32).min(end as i32) {
+                        buf[(c as u16, area.y)].set_symbol(" ").set_style(*style);
+                    }
+                    continue;
+                }
+                buf.set_stringn(
+                    at as u16,
+                    area.y,
+                    ch.encode_utf8(&mut [0; 4]),
+                    w as usize,
+                    *style,
+                );
+            }
         }
-        x = put(buf, x, area, &format!("{} ", tab.name), style);
-        spans.push((start, x, tab.index));
-        if x >= area.right() {
-            break;
+        let from = (start as i32 + first as i32 - shown.offset as i32).max(start as i32);
+        let to = (start as i32 + col as i32 - shown.offset as i32).min(end as i32);
+        if to > from {
+            spans.push((from as u16, to as u16, tab.index));
         }
     }
     Hits {
         button,
         tabs: spans,
+    }
+}
+
+/// Which part of the tab list fits in `room` columns, as tmux's status line
+/// chose it: all of it when it fits, else a stretch with the current tab in
+/// it, as near the middle as the ends allow, and a `<` or `>` at either end
+/// where tabs are cut off on that side.
+#[derive(Debug, PartialEq, Eq)]
+struct Shown {
+    /// Columns of the whole list skipped before the first one drawn.
+    offset: u16,
+    /// Columns drawn.
+    width: u16,
+    /// Where the first is drawn, after the list's start.
+    at: u16,
+    left: bool,
+    right: bool,
+}
+
+fn scroll_tabs(widths: &[u16], current: usize, room: u16) -> Shown {
+    let total: u16 = widths.iter().sum();
+    if total <= room || room < 3 {
+        return Shown {
+            offset: 0,
+            width: room,
+            at: 0,
+            left: false,
+            right: false,
+        };
+    }
+    let begin: u16 = widths[..current.min(widths.len())].iter().sum();
+    let end = begin + widths.get(current).copied().unwrap_or(0);
+    // The current tab near the start: only the right end cut.
+    if end < room {
+        return Shown {
+            offset: 0,
+            width: room - 1,
+            at: 0,
+            left: false,
+            right: true,
+        };
+    }
+    // Near the end: only the left end cut.
+    if total - begin < room {
+        return Shown {
+            offset: total - (room - 1),
+            width: room - 1,
+            at: 1,
+            left: true,
+            right: false,
+        };
+    }
+    let inner = room - 2;
+    let middle = begin + (end - begin) / 2;
+    let offset = middle
+        .saturating_sub(inner / 2)
+        .clamp(1, total - inner - 1)
+        .min(begin);
+    Shown {
+        offset,
+        width: inner,
+        at: 1,
+        left: true,
+        right: true,
     }
 }
 
@@ -603,6 +717,67 @@ mod tests {
             spans.tabs[0].1 - spans.tabs[0].0,
             " 1:  !   api ".chars().count() as u16
         );
+    }
+
+    #[test]
+    fn tabs_that_do_not_fit_scroll_to_keep_the_current_one_shown() {
+        let tabs = |current: usize| -> Vec<TabStatus> {
+            (1..=12)
+                .map(|index| TabStatus {
+                    index,
+                    name: format!("tab{index}"),
+                    current: index == current,
+                    agent: None,
+                    color: None,
+                })
+                .collect()
+        };
+        let draw = |current: usize| {
+            let mut frame = Frame::new(40, 1);
+            let area = frame.area();
+            let hits = draw_status(
+                &mut frame.buf,
+                area,
+                "main",
+                &Left::default(),
+                &tabs(current),
+                &Palette::DARK,
+            );
+            (row(&frame.buf, 0), hits)
+        };
+        // The first: the list cut on the right alone.
+        let (line, hits) = draw(1);
+        assert!(line.starts_with("  main   1:tab1  2:tab2"), "{line:?}");
+        assert!(line.ends_with('>'), "{line:?}");
+        assert_eq!(hits.tabs[0].2, 1);
+        // One in the middle: cut on both sides, the current tab whole.
+        let (line, hits) = draw(7);
+        assert!(line.contains(" 7:tab7 "), "{line:?}");
+        assert!(line.starts_with("  main  <"), "{line:?}");
+        assert!(line.ends_with('>'), "{line:?}");
+        let seven = hits.tabs.iter().find(|t| t.2 == 7).unwrap();
+        assert_eq!(seven.1 - seven.0, " 7:tab7 ".len() as u16);
+        assert!(hits.tabs.iter().all(|t| t.0 > 8 && t.1 < 40));
+        // The last: cut on the left alone.
+        let (line, _) = draw(12);
+        assert!(line.trim_end().ends_with("12:tab12"), "{line:?}");
+        assert!(line.starts_with("  main  <"), "{line:?}");
+    }
+
+    #[test]
+    fn scrolling_keeps_the_current_tab_in_the_room() {
+        let widths = [10, 10, 10, 10, 10];
+        for current in 0..5 {
+            let shown = scroll_tabs(&widths, current, 25);
+            let begin = current as u16 * 10;
+            assert!(shown.offset <= begin, "{current}: {shown:?}");
+            assert!(
+                begin + 10 <= shown.offset + shown.width,
+                "{current}: {shown:?}"
+            );
+            assert_eq!(shown.at + shown.width + shown.right as u16, 25);
+        }
+        assert!(!scroll_tabs(&widths, 2, 50).left);
     }
 
     #[test]

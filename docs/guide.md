@@ -210,7 +210,7 @@ These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note
 
 ## Tabs and the status line
 
-The status line along the bottom starts with the session's name on a badge in the current tab's color, then how many tabs wait on you (`!`, yellow), have finished unseen (`✓`, green) and are working (`⋯`, blue), each count shown only while it isn't zero. Then come the ⌘ Commands button, the health light when something is wrong, and the tabs, each with its number, its state's badge and its name, in its project's color, the current one bold.
+The status line along the bottom starts with the session's name on a badge in the current tab's color, then how many tabs wait on you (`!`, yellow), have finished unseen (`✓`, green) and are working (`⋯`, blue), each count shown only while it isn't zero. Then come the ⌘ Commands button, the health light when something is wrong, and the tabs, each with its number, its state's badge and its name, in its project's color, the current one bold. When the tabs don't all fit, the list scrolls to keep the current one in view, as near the middle as the ends allow, with a `<` or `>` at the end where more are hidden.
 
 ### What a tab is called
 
