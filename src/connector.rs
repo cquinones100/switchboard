@@ -104,7 +104,7 @@ fn record(service: &str, ok: bool, message: Option<&str>) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    let _ = std::fs::write(
+    let _ = util::write_atomic(
         status_file(),
         util::json_compact(&Value::Object(status.clone())),
     );
@@ -121,7 +121,7 @@ fn record(service: &str, ok: bool, message: Option<&str>) {
             )
         })
         .collect();
-    let _ = std::fs::write(dir.join("connectors-down"), down);
+    let _ = util::write_atomic(dir.join("connectors-down"), down);
 }
 
 /// What a view shows when its service is down, or `None`.
@@ -220,35 +220,73 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped())
     .kill_on_drop(true);
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(failed("Claude Code isn't installed"));
         }
         Err(e) => return Err(failed(format!("Claude didn't answer ({e})"))),
     };
+    // What Claude printed is gathered as it comes, so a run that runs out of
+    // time still has what it printed before, as Node's execFile handed it on.
+    let printed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gather = |pipe: Option<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
+                  into: std::sync::Arc<std::sync::Mutex<Vec<u8>>>| {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let Some(mut pipe) = pipe else {
+                return;
+            };
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk).await {
+                if n == 0 {
+                    break;
+                }
+                into.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(&chunk[..n]);
+            }
+        })
+    };
+    let stderr_text = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let out_reader = gather(
+        child.stdout.take().map(|p| Box::new(p) as Box<_>),
+        printed.clone(),
+    );
+    let err_reader = gather(
+        child.stderr.take().map(|p| Box::new(p) as Box<_>),
+        stderr_text.clone(),
+    );
+    let waited = tokio::time::timeout(timeout, async {
+        let status = child.wait().await;
+        let _ = out_reader.await;
+        let _ = err_reader.await;
+        status
+    })
+    .await;
+    if waited.is_err() {
+        let _ = child.start_kill();
+    }
     // Counted once Claude ran, and the connector once Claude called it, a run
     // that then failed or ran out of time included.
-    let waited = tokio::time::timeout(timeout, child.wait_with_output()).await;
     requests::count("Anthropic", "claude -p", "connector");
-    let (stdout, err) = match waited {
-        Ok(Ok(out)) => {
-            let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            let err = (!out.status.success()).then(|| {
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                format!(
-                    "Command failed: claude{}",
-                    stderr
-                        .lines()
-                        .next()
-                        .map(|l| format!(" ({l})"))
-                        .unwrap_or_default()
-                )
-            });
-            (text, err)
-        }
-        Ok(Err(e)) => (String::new(), Some(e.to_string())),
-        Err(_) => (String::new(), Some("timed out".to_string())),
+    let take = |buf: &std::sync::Mutex<Vec<u8>>| {
+        String::from_utf8_lossy(&buf.lock().unwrap_or_else(|e| e.into_inner())).into_owned()
+    };
+    let stdout = take(&printed);
+    let err = match waited {
+        Ok(Ok(status)) => (!status.success()).then(|| {
+            format!(
+                "Command failed: claude{}",
+                take(&stderr_text)
+                    .lines()
+                    .next()
+                    .map(|l| format!(" ({l})"))
+                    .unwrap_or_default()
+            )
+        }),
+        Ok(Err(e)) => Some(e.to_string()),
+        Err(_) => Some("timed out".to_string()),
     };
     let parts = content_parts(&stdout);
     // Each call by its own ID, a retry counted as one more.

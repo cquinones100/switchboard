@@ -444,7 +444,13 @@ pub fn relay_dm(relay: &Path) -> (Option<String>, Option<String>) {
     let dm = util::read_json(relay.join("state.json"))
         .and_then(|v| v.get("dm").cloned())
         .unwrap_or(Value::Null);
-    let get = |k: &str| dm.get(k).and_then(Value::as_str).map(str::to_string);
+    // An empty one is none, as save.js's `relay.channel &&` read it.
+    let get = |k: &str| {
+        dm.get(k)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+    };
     (get("channel"), get("bot"))
 }
 
@@ -519,7 +525,7 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
     }
     replied.retain(|_, v| {
         let ts = util::js_string(v).parse::<f64>().unwrap_or(0.0);
-        now - (ts * 1000.0) as i64 <= KEEP_MS
+        now - ((ts * 1000.0) as i64) < KEEP_MS
     });
     let mut merged: indexmap::IndexMap<String, Message> = indexmap::IndexMap::new();
     for m in saved.items.into_iter().chain(items) {
@@ -527,7 +533,7 @@ pub fn save(state: &Path, relay: &Path, found: &Value, now: i64) -> std::io::Res
     }
     let mut kept: Vec<Message> = merged
         .into_values()
-        .filter(|m| now - (m.ts() * 1000.0) as i64 <= KEEP_MS)
+        .filter(|m| now - ((m.ts() * 1000.0) as i64) < KEEP_MS)
         .collect();
     kept.sort_by(|a, b| b.ts().total_cmp(&a.ts()));
     kept.truncate(MAX_ITEMS);

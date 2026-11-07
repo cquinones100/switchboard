@@ -9,10 +9,9 @@
 //! under "claude -p", once a run however many turns it takes), "git" and
 //! "HTTPS" for a plain page. Counting never fails what it counts.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -74,30 +73,6 @@ pub fn count_n(service: &str, protocol: &str, source: &str, n: usize) {
         util::append_quietly(file_for(&util::local_now()), line.repeat(n.max(1)));
         Ok(())
     })();
-}
-
-// A request made by running a command (gh), counted only when the command is
-// there to run, since one that isn't makes no request. Where it is is looked
-// up on the PATH and kept a minute.
-static FOUND: LazyLock<Mutex<HashMap<String, (bool, i64)>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// Counts a request made by running `command`, when `command` is installed.
-pub fn count_run(command: &str, service: &str, protocol: &str, source: &str) {
-    let there = {
-        let mut found = FOUND.lock().unwrap_or_else(|e| e.into_inner());
-        match found.get(command) {
-            Some(&(there, at)) if util::now_ms() - at < 60_000 => there,
-            _ => {
-                let there = util::which(command).is_some();
-                found.insert(command.to_string(), (there, util::now_ms()));
-                there
-            }
-        }
-    };
-    if there {
-        count(service, protocol, source);
-    }
 }
 
 /// One service's count for a day.
