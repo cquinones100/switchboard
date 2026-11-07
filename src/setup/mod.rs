@@ -57,7 +57,7 @@ pub mod skills;
 pub mod terminal;
 pub mod way;
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -284,24 +284,60 @@ struct List {
     skipped: Vec<&'static str>,
 }
 
+/// Whether the guided setup's list is drawn in colour: on a terminal, unless
+/// `NO_COLOR` asks for none. Piped or redirected, it is plain text.
+fn colour() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
+    })
+}
+
+/// `text` in an SGR style when the list is in colour.
+fn paint(style: &str, text: &str) -> String {
+    if colour() {
+        format!("\x1b[{style}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A heading over a group of the list's lines, in bold.
+fn heading(text: &str) {
+    println!("{}", paint("1", text));
+}
+
+/// The marks: in place, green; to do, red; optional or not now, dim.
+fn ok_mark() -> String {
+    paint("32", "✓")
+}
+
+fn todo_mark() -> String {
+    paint("31", "✗")
+}
+
+fn dim_mark() -> String {
+    paint("2", "–")
+}
+
 impl List {
     fn ok(&self, what: &str) {
-        println!("  ✓ {what}");
+        println!("  {} {what}", ok_mark());
     }
 
     fn todo(&mut self, what: impl Into<String>) {
         let what = what.into();
-        println!("  ✗ {what}");
+        println!("  {} {what}", todo_mark());
         self.left.push(what);
     }
 
     fn optional(&self, what: &str) {
-        println!("  – {what}");
+        println!("  {} {what}", dim_mark());
     }
 
     /// A part offered and not set up, now.
     fn not_now(&mut self, part: &'static str, what: &str) {
-        println!("  – {what}");
+        println!("  {} {what}", dim_mark());
         self.skipped.push(part);
     }
 }
@@ -315,9 +351,11 @@ fn guided(check: bool) -> ExitCode {
     };
     leftovers_offered(check, &mut list);
     claude_code(check, &mut list);
-    println!("\nThe terminal");
+    println!();
+    heading("The terminal");
     terminal_offered(check, &mut list);
-    println!("\nOptional, each for what it names");
+    println!();
+    heading("Optional, each for what it names");
     for part in optional::all() {
         if part.there {
             list.ok(&part.what);
@@ -334,12 +372,12 @@ fn leftovers_offered(check: bool, list: &mut List) {
     let part = part_named("leftovers").expect("a part");
     match pending(part) {
         Err(e) => {
-            println!("From the tmux version");
+            heading("From the tmux version");
             list.todo(format!("what the tmux version left: {e:#}"));
         }
         Ok(0) => return,
         Ok(n) => {
-            println!("From the tmux version");
+            heading("From the tmux version");
             if check {
                 list.todo(format!(
                     "{n} of the tmux version's links or ~/.zshrc lines lead nowhere: switchboard setup leftovers"
@@ -401,7 +439,7 @@ fn terminal_offered(check: bool, list: &mut List) {
 /// Claude Code is there, the way Switchboard reaches it and the parts that
 /// way puts in place.
 fn claude_code(check: bool, list: &mut List) {
-    println!("Claude Code");
+    heading("Claude Code");
     if util::which("switchboard").is_some() {
         list.ok("switchboard on your PATH, which Claude Code's hooks and statusline run");
     } else {
@@ -769,9 +807,9 @@ fn finish(check: bool, list: List) -> ExitCode {
         );
     }
     if !list.left.is_empty() {
-        println!("Left to do:");
+        heading("Left to do:");
         for what in &list.left {
-            println!("  ✗ {what}");
+            println!("  {} {what}", todo_mark());
         }
         println!("Run switchboard setup again once they're done.");
         return ExitCode::from(1);
