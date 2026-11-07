@@ -190,12 +190,24 @@ pub fn offer_text(newer: &[Release], current: &Version, now_secs: i64) -> String
     text
 }
 
+/// What a binary built from source says of a newer release rather than
+/// installing it: how it is kept current instead, and how to take the
+/// release all the same.
+pub fn from_source_text(version: &Version) -> String {
+    format!(
+        "Switchboard {version} is out. This switchboard was built from source, so git and cargo \
+         keep it current (git pull, cargo build --release, then switchboard setup); \
+         `switchboard update --force` puts the release in its place."
+    )
+}
+
 // ── switchboard update ──────────────────────────────────────────────────────
 
 fn usage() -> ExitCode {
     eprintln!(
         "Usage: switchboard update            install the newest release, then the guided setup\n\
          \x20      switchboard update --check    say whether there is a newer release, changing nothing\n\
+         \x20      switchboard update --force    install it in place of a switchboard built from source\n\
          \n\
          Releases come from github.com/{REPO}. A switchboard built from source\n\
          is replaced only with --force."
@@ -206,7 +218,9 @@ fn usage() -> ExitCode {
 /// `switchboard update [--check] [--force]`, and what the server's box runs
 /// in a tab of its own: `--tag <tag>` installs that release (the one the box
 /// offered), `--hold` waits for Enter before the tab closes, and `--setup`
-/// runs the guided setup alone (M-p's "Run Switchboard's setup").
+/// runs the guided setup alone (M-p's "Run Switchboard's setup"). A binary
+/// built from source is replaced only with `--force`, `--tag` or not, so
+/// the box never swaps a cargo build for a release unasked.
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut check = false;
     let mut force = false;
@@ -230,7 +244,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
     let code = if setup_only {
         run_setup(&exe_or_self(), "Running Switchboard's setup…")
     } else {
-        match update(check, force || tag.is_some(), tag.as_deref()) {
+        match update(check, force, tag.as_deref()) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("switchboard update: {e:#}");
@@ -281,11 +295,7 @@ fn update(check: bool, force: bool, tag: Option<&str>) -> Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if !is_release_build() && !force {
-        println!(
-            "This switchboard was built from source, so git and cargo keep it current; \
-             `switchboard update --force` puts release {} in its place.",
-            chosen.version
-        );
+        println!("{}", from_source_text(&chosen.version));
         return Ok(ExitCode::SUCCESS);
     }
     let binary = install::installed_binary()?;

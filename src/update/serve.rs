@@ -233,6 +233,12 @@ impl Server {
                     env!("SWITCHBOARD_COMMIT")
                 ),
             ),
+            // A build from source isn't offered a release in its place
+            // unless its looks were turned on (SWITCHBOARD_UPDATES=on): it
+            // is told how to take it instead, as `switchboard update` says.
+            Decision::Offer(newer) if !super::is_release_build() && !super::looks_by_itself() => {
+                self.say(client, &super::from_source_text(&newer[0].version));
+            }
             Decision::Offer(newer) => {
                 if let Some(client) = client {
                     self.offer(client, &newer, &current);
@@ -277,7 +283,13 @@ impl Server {
             s.update.prompt = None;
             super::mark_offered(&tag);
             if outcome == Outcome::Chose(UPDATE_NOW) {
-                s.update_tab(c, &["update", "--tag", &tag, "--hold"]);
+                // Offered to a build from source only when its looks were
+                // turned on, which is the asking `--force` stands for.
+                if super::is_release_build() {
+                    s.update_tab(c, &["update", "--tag", &tag, "--hold"]);
+                } else {
+                    s.update_tab(c, &["update", "--tag", &tag, "--force", "--hold"]);
+                }
             } else {
                 debug_assert!(matches!(
                     outcome,

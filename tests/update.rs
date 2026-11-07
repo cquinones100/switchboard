@@ -229,6 +229,13 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("built from source"));
     assert_ne!(std::fs::read(&copy).unwrap(), stub("9.9.9"));
+    // Nor with the release named, as M-p's "Update Switchboard" box runs it.
+    let out = command(&copy, &fake, dir.path())
+        .args(["update", "--tag", "v9.9.9"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("built from source"));
+    assert_ne!(std::fs::read(&copy).unwrap(), stub("9.9.9"));
 
     let out = command(&copy, &fake, dir.path())
         .args(["update", "--force"])
