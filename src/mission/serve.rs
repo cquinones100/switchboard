@@ -1511,16 +1511,23 @@ impl Server {
                 let name: String = format!("Slack: {who}").chars().take(60).collect();
                 // M-t's list, so you pick the thread's tab's directory.
                 self.mission_close(client);
+                // As the daemon opened new-tab.zsh with NEW_TAB_PROMPT and
+                // NEW_TAB_NAME: a directory asked for as M-t asks, Claude run
+                // from your shell, which the tab is left at when it exits,
+                // and the tab at the end and in front.
                 self.pick_dir_for(
                     client,
-                    "A tab for a Slack thread",
+                    "A tab for the Slack thread",
                     move |server, client, dir| {
-                        server.mission_new_tab(
-                            client,
-                            &dir,
-                            Some(vec!["claude".into(), prompt]),
-                            Some(name),
-                        );
+                        let command =
+                            crate::worktree::tab_command("claude \"$@\"", "claude", &[prompt]);
+                        if let Some(tab) = server.work_tab(client, &dir, command, true) {
+                            if let Some(t) = server.tabs.get_mut(&tab) {
+                                t.opts.insert("@tab_name".into(), name);
+                            }
+                            server.name_tab(tab);
+                            server.front(client, &[tab]);
+                        }
                     },
                 );
             }
