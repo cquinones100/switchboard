@@ -260,7 +260,7 @@ impl Server {
         let list = line::choices(&mode, &self.autopilot.pilot.next.text);
         let options = list
             .iter()
-            .map(|(key, label, _)| MenuOption::new(label.clone()).key(*key))
+            .map(|(_, label, _)| MenuOption::new(label.clone()))
             .collect();
         let menu = Menu::new(format!("Working {}", note_title(&mode.note)), options);
         self.choose(client, menu, move |server, client, chose| {

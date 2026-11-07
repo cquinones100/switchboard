@@ -85,6 +85,22 @@ fn open(client: &mut TestClient) -> Vec<String> {
     client.wait_text("MISSION CONTROL")
 }
 
+/// Takes a menu's option by its label, as the daemon's menus were used:
+/// j down to it, Enter. Its options have no letters of their own.
+fn pick(client: &mut TestClient, label: &str) {
+    for _ in 0..20 {
+        let screen = client.wait_text(label);
+        if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
+            client.type_text("\r");
+            return;
+        }
+        let before = screen.join("\n");
+        client.type_text("j");
+        client.wait_for("the cursor to move", |s| s.join("\n") != before);
+    }
+    panic!("{label} not reached");
+}
+
 #[test]
 fn m_space_opens_it_over_the_screen_and_q_closes_it() {
     let (_server, mut client) = two_tabs(json!({}));
@@ -151,12 +167,28 @@ fn enter_on_a_tabs_card_and_go_to_tab_goes_there() {
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
-    // l to the second card, then its menu's key for going there.
+    // l to the second card, Enter twice goes there. A menu's letters take
+    // nothing of their own: g there is no "Go to tab", and j moves.
     open(&mut client);
     client.type_text("l");
     client.type_text("\r");
     client.wait_text("Go to tab 2");
     client.type_text("g");
+    client.type_text("j");
+    client.wait_for("the cursor on the second option", |s| {
+        s.iter().any(|l| l.contains('›') && l.contains("Peek at"))
+    });
+    assert_eq!(
+        tabs(&server.list())[0]["current"],
+        true,
+        "still on the first"
+    );
+    client.type_text("k");
+    client.wait_for("the cursor back on the first", |s| {
+        s.iter()
+            .any(|l| l.contains('›') && l.contains("Go to tab 2"))
+    });
+    client.type_text("\r");
     wait_list(&server, "the second tab in front", |l| {
         tabs(l)[1]["current"] == true
     });
@@ -270,8 +302,7 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
     let (server, mut client) = two_tabs(json!({}));
     open(&mut client);
     client.type_text("\r");
-    client.wait_text("Remind me about it later");
-    client.type_text("e");
+    pick(&mut client, "Remind me about it later");
     client.wait_text("In 20 minutes");
     client.type_text("\r");
     client.wait_text("What for?");

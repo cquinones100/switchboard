@@ -297,7 +297,7 @@ Any key closes a tip and then does what it would have done, so nothing you type 
 
 ### Menus and questions
 
-Every menu, question and list looks the same: a rounded blue edge with the title in its top, the chosen option highlighted with a yellow `›`, and the keys dim along the bottom. In a menu, `j` and `k` (the arrows, the wheel) move, Tab and Shift-Tab go round, Enter or Space takes the chosen option, a number or an option's own key takes that one, and Esc or `q` goes back. In a list to type in, such as the palette, the arrows (`C-p` and `C-n`, Tab and Shift-Tab) move, Enter picks, and Esc closes.
+Every menu, question and list looks the same: a rounded blue edge with the title in its top, the chosen option highlighted with a yellow `›`, and the keys dim along the bottom. In a menu, `j` and `k` (the arrows, and the wheel with Settings' "Click in menus" on) move, `g` and `G` go to the first and last, Tab and Shift-Tab go round, Enter or Space takes the chosen option, a number takes that one, as does an option's own key where one has it (never one the menu moves or closes with), and Esc or `q` goes back. In a list to type in, such as the palette, the arrows (`C-p` and `C-n`, Tab and Shift-Tab) move, Enter picks, and Esc closes.
 
 A question shows `[Y/n]` and takes Enter as yes; `y` says yes too, and `n`, Esc or any other key says no. Space answers only once Tab has moved between Yes and No, so a stray Space is still no.
 
@@ -468,7 +468,7 @@ A click on a view's name goes to that view, a click on the filter starts typing 
 
 ### Menus
 
-Enter on a card or row opens a menu of what can be done with it, its usual action first, so Enter twice does it. `j` `k` move, Enter takes the chosen option, a number takes that option, and the letter shown at the end of an option's row takes it at once; Esc goes back. With Settings' "Click in menus" (`menu_mouse`) on, a click takes an option and a click outside closes the menu. An option that takes a moment (opening a link, asking Linear, removing a worktree) shows a box with a spinner until it is done, and what it did is said at the bottom of the screen.
+Enter on a card or row opens a menu of what can be done with it, its usual action first, so Enter twice does it. `j` `k` move, Enter or Space takes the chosen option and a number takes that option; its options have no letters of their own, as the tmux version's had none, so a letter never acts ahead of moving. Esc or `q` goes back. With Settings' "Click in menus" (`menu_mouse`) on, a click takes an option and a click outside closes the menu. An option that takes a moment (opening a link, asking Linear, removing a worktree) shows a box with a spinner until it is done, and what it did is said at the bottom of the screen.
 
 On a tab, the menu offers:
 

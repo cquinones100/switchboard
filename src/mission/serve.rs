@@ -1247,7 +1247,7 @@ impl Server {
     ) {
         let options: Vec<MenuOption> = list
             .iter()
-            .map(|c| MenuOption::new(c.label.clone()).key(c.key))
+            .map(|c| MenuOption::new(c.label.clone()))
             .collect();
         let mut menu = Menu::new(title, options);
         if let Some(body) = body {

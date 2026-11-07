@@ -191,8 +191,11 @@ impl Overlay for Menu {
         if n == 0 {
             return Step::Close(Outcome::Dismissed);
         }
+        // An option's own key, but never one the menu moves or closes with.
         if key.mods == Mods::NONE
             && let KeyCode::Char(c) = key.code
+            && !"jkgGq ".contains(c)
+            && !c.is_ascii_digit()
             && let Some(i) = self.options.iter().position(|o| o.key == Some(c))
         {
             return Step::Close(Outcome::Chose(i));
@@ -261,11 +264,13 @@ impl Overlay for Menu {
                 (Hit::Close | Hit::Outside, _) => Step::Close(Outcome::Dismissed),
                 _ => Step::Same,
             },
-            Gesture::WheelDown if n > 0 => {
+            // The wheel too only with menu_mouse on, as the daemon left
+            // the mouse alone over a box with it off.
+            Gesture::WheelDown if n > 0 && look.mouse => {
                 self.cursor = (self.cursor + 1).min(n - 1);
                 Step::Redraw
             }
-            Gesture::WheelUp => {
+            Gesture::WheelUp if look.mouse => {
                 self.cursor = self.cursor.min(n).saturating_sub(1);
                 Step::Redraw
             }
@@ -343,6 +348,41 @@ mod tests {
         assert_eq!(m.cursor(), 2, "Shift-Tab goes round to the last");
         m.key(key(KeyCode::Tab), &look);
         assert_eq!(m.cursor(), 0);
+    }
+
+    #[test]
+    fn an_options_own_key_never_takes_one_the_menu_moves_with_nor_the_wheel_without_clicks() {
+        let look = Look::default();
+        let mut m = Menu::new(
+            "Event",
+            vec![
+                MenuOption::new("Open it").key('o'),
+                MenuOption::new("Join its call").key('j'),
+                MenuOption::new("Read AB-1 here").key('1'),
+            ],
+        );
+        assert_eq!(m.key(key(KeyCode::Char('j')), &look), Step::Redraw);
+        assert_eq!(m.cursor(), 1, "j moves rather than joining");
+        assert_eq!(
+            m.key(key(KeyCode::Char('1')), &look),
+            Step::Close(Outcome::Chose(0)),
+            "a number is the option's place"
+        );
+        let off = Look {
+            mouse: false,
+            ..Look::default()
+        };
+        let mut m = menu();
+        let wheel = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::WheelDown,
+            col: 0,
+            row: 0,
+            mods: Mods::NONE,
+        };
+        m.draw(&mut Buffer::empty(Rect::new(0, 0, 80, 20)), &off);
+        assert_eq!(m.mouse(wheel, &off), Step::Same);
+        assert_eq!(m.mouse(wheel, &look), Step::Redraw);
     }
 
     #[test]
