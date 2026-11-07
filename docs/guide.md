@@ -77,7 +77,7 @@ Each pane keeps 10,000 lines of history. The wheel scrolls back through it, and 
 
 While a pane is scrolled back, its top-right corner shows how many lines back it is (`[120]`), and other keys do nothing. A key in the wheel's scrolling brings up copy mode's cursor, and it then stays until `q`. A paste takes it back to the bottom and goes to the program.
 
-A click focuses a pane. Dragging selects text and copies it when you let go; a double click selects a word, a triple click a line, and Alt-drag selects a rectangle. A program that asks for the mouse, such as an editor, gets the clicks, drags and wheel instead. In a full-screen program that doesn't take the mouse, the wheel sends it arrow keys. A click on a tab in the status line goes to it.
+A click focuses a pane. Dragging selects text and copies it when you let go; a double click selects a word, a triple click a line, and Alt-drag selects a rectangle. A program that asks for the mouse, such as an editor, gets the clicks, drags and wheel instead. In a full-screen program that doesn't take the mouse, the wheel sends it arrow keys. Dragging the line between two panes moves it, resizing them. A click on a tab in the status line goes to it.
 
 What you copy goes to the computer's clipboard and to your terminal's (OSC 52), which reaches the computer you are at even over SSH, as long as your terminal lets programs set its clipboard. A program in a pane can copy the same way. One that asks to read the clipboard gets nothing back: the clipboard is yours, not every program's.
 

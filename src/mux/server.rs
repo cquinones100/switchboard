@@ -237,6 +237,15 @@ enum Drag {
     Select(PaneId),
     /// A pane that takes the mouse gets the drag.
     Forward(PaneId),
+    /// A line between panes, moved with the mouse: its tab, the panes
+    /// before and after it, whether it runs down, and where it is now.
+    Border {
+        tab: TabId,
+        before: PaneId,
+        after: PaneId,
+        vertical: bool,
+        at: u16,
+    },
 }
 
 pub struct Client {
@@ -1956,6 +1965,16 @@ impl Server {
         }
         let drag = c.drag;
         match (m.kind, drag) {
+            (MouseKind::Drag, Some(Drag::Border { .. })) => {
+                self.drag_border(id, m);
+                return;
+            }
+            (MouseKind::Release, Some(Drag::Border { .. })) => {
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = None;
+                }
+                return;
+            }
             (MouseKind::Drag, Some(Drag::Select(pane))) => {
                 if let Some((p, col, row)) = self
                     .pane_at(id, m.col, m.row)
@@ -1999,6 +2018,9 @@ impl Server {
             _ => {}
         }
         let Some((pane, col, row)) = self.pane_at(id, m.col, m.row) else {
+            if m.kind == MouseKind::Press && m.button == MouseButton::Left {
+                self.press_border(id, m.col, m.row);
+            }
             return;
         };
         // The Notifications window's list takes the mouse over its pane.
@@ -2085,6 +2107,84 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// A press on a line between panes, which a drag then moves.
+    fn press_border(&mut self, id: ClientId, col: u16, row: u16) {
+        let Some(s) = self.clients.get(&id).and_then(|c| self.session(&c.session)) else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(&s.current).filter(|t| !t.zoomed) else {
+            return;
+        };
+        let Some((before, after, vertical)) = tab.layout.place(s.main_area()).border_at(col, row)
+        else {
+            return;
+        };
+        let drag = Drag::Border {
+            tab: tab.id,
+            before,
+            after,
+            vertical,
+            at: if vertical { col } else { row },
+        };
+        if let Some(c) = self.clients.get_mut(&id) {
+            c.drag = Some(drag);
+        }
+    }
+
+    /// The line a press took, moved to where the mouse is: the pane on the
+    /// side it moves toward grown into the other, by the cells the other can
+    /// spare, as tmux's MouseDrag1Border resized them.
+    fn drag_border(&mut self, id: ClientId, m: Mouse) {
+        let Some(c) = self.clients.get(&id) else {
+            return;
+        };
+        let Some(Drag::Border {
+            tab,
+            before,
+            after,
+            vertical,
+            at,
+        }) = c.drag
+        else {
+            return;
+        };
+        let Some(area) = self
+            .session(&c.session)
+            .filter(|s| s.current == tab)
+            .map(Session::main_area)
+        else {
+            return;
+        };
+        let to = if vertical { m.col } else { m.row };
+        if to == at {
+            return;
+        }
+        let (pane, dir) = match (to > at, vertical) {
+            (true, true) => (before, super::Direction::Right),
+            (false, true) => (after, super::Direction::Left),
+            (true, false) => (before, super::Direction::Down),
+            (false, false) => (after, super::Direction::Up),
+        };
+        let Some(t) = self.tabs.get_mut(&tab) else {
+            return;
+        };
+        t.layout.resize(area, pane, dir, to.abs_diff(at));
+        // Where the line went: the cells the other side could spare may
+        // have stopped it short of the mouse.
+        let now = t
+            .layout
+            .place(area)
+            .rect(before)
+            .map(|r| if vertical { r.right() } else { r.bottom() });
+        if let (Some(now), Some(c)) = (now, self.clients.get_mut(&id))
+            && let Some(Drag::Border { at, .. }) = &mut c.drag
+        {
+            *at = now;
+        }
+        self.relayout(tab);
+        self.dirty_tab(tab);
     }
 
     fn forward_mouse(&mut self, pane: PaneId, m: Mouse) {

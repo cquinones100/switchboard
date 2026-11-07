@@ -66,6 +66,38 @@ fn splitting_tabs_and_closing() {
 }
 
 #[test]
+fn dragging_the_line_between_panes_resizes_them() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("a second pane", |_| panes(&server.list()) == 2);
+    let list = server.list();
+    let width = |list: &serde_json::Value| {
+        list["sessions"][0]["tabs"][0]["panes"][0]["cols"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = width(&list);
+    let side = list["sessions"][0]["sidebar"]["columns"]
+        .as_u64()
+        .unwrap_or(0);
+    // The line is the column after the left pane; the mouse's are 1-based.
+    let line = side + before + 1;
+    let to = line - 10;
+    client.send(format!("\x1b[<0;{line};5M\x1b[<32;{to};5M\x1b[<0;{to};5m").as_bytes());
+    client.wait_for("the left pane narrower by ten", |_| {
+        width(&server.list()) == before - 10
+    });
+    // Back the other way, past where it was.
+    let back = to + 15;
+    client.send(format!("\x1b[<0;{to};5M\x1b[<32;{back};5M\x1b[<0;{back};5m").as_bytes());
+    client.wait_for("the left pane wider by five", |_| {
+        width(&server.list()) == before + 5
+    });
+}
+
+#[test]
 fn a_program_ending_closes_its_tab() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);

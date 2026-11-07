@@ -65,6 +65,42 @@ impl Placement {
             .find(|(id, _)| *id == pane)
             .map(|(_, rect)| *rect)
     }
+
+    /// The line between panes at (`col`, `row`), for a drag that moves it,
+    /// as tmux's MouseDrag1Border did: the panes before and after it there
+    /// (left and right of a line down, above and below one across), and
+    /// whether it runs down. Where two lines cross, the one running down.
+    pub fn border_at(&self, col: u16, row: u16) -> Option<(PaneId, PaneId, bool)> {
+        let on = |b: &Border| {
+            if b.vertical {
+                col == b.x && row >= b.y && row < b.y.saturating_add(b.len)
+            } else {
+                row == b.y && col >= b.x && col < b.x.saturating_add(b.len)
+            }
+        };
+        let side_by_side = |vertical: bool| {
+            let find = |before: bool| {
+                self.panes.iter().find_map(|(id, r)| {
+                    let (start, len, along, at) = if vertical {
+                        (r.x, r.width, r.y..r.bottom(), row)
+                    } else {
+                        (r.y, r.height, r.x..r.right(), col)
+                    };
+                    let line = if vertical { col } else { row };
+                    let touches = if before {
+                        start.saturating_add(len) == line
+                    } else {
+                        start == line.saturating_add(1)
+                    };
+                    (touches && along.contains(&at)).then_some(*id)
+                })
+            };
+            Some((find(true)?, find(false)?, vertical))
+        };
+        let mut lines: Vec<&Border> = self.borders.iter().filter(|b| on(b)).collect();
+        lines.sort_by_key(|b| !b.vertical);
+        lines.into_iter().find_map(|b| side_by_side(b.vertical))
+    }
 }
 
 impl Layout {
@@ -558,6 +594,29 @@ impl Layout {
 
 /// The area cut to what a `Rect` can reach, so nothing below adds past
 /// `u16::MAX`.
+#[cfg(test)]
+mod border_tests {
+    use super::*;
+
+    #[test]
+    fn a_line_between_panes_is_found_with_the_panes_either_side() {
+        let (a, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+        // a | b, with c under b.
+        let mut layout = Layout::new(a);
+        layout.split(a, b, Direction::Right, None);
+        layout.split(b, c, Direction::Down, None);
+        let placed = layout.place(Rect::new(0, 0, 41, 21));
+        let ra = placed.rect(a).unwrap();
+        let rb = placed.rect(b).unwrap();
+        let line = ra.right();
+        assert_eq!(placed.border_at(line, 2), Some((a, b, true)));
+        let under = rb.bottom();
+        assert_eq!(placed.border_at(line, under + 2), Some((a, c, true)));
+        assert_eq!(placed.border_at(line + 5, under), Some((b, c, false)));
+        assert_eq!(placed.border_at(1, 1), None, "inside a pane");
+    }
+}
+
 fn clip(area: Rect) -> Rect {
     Rect {
         x: area.x,
