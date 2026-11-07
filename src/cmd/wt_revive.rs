@@ -24,8 +24,9 @@
 //! transcript has changed, so a press reads only the few that have.
 //!
 //! The panes' directories come from the server (`switchboard list`) where
-//! tmux's `list-panes` gave them; the server, which has them already, calls
-//! `rows` itself, off its task.
+//! tmux's `list-panes` gave them. Mission control's Work map runs
+//! `wt-revive --json ~` off the server's task, as the daemon ran
+//! bin/wt-revive, keeping the rows it had when a look fails.
 
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -459,15 +460,6 @@ fn survey(dir: &Path, pane_dirs: &[PathBuf]) -> (Vec<Row>, bool) {
         .collect();
     write_cache(kept_transcripts, kept_repos);
     (rows, !found.is_empty())
-}
-
-/// The worktrees with no tab open, most recently used first: of the
-/// repository `dir` is in, of the panes' directories' and of every
-/// repository a Claude session ran in over the last two weeks, leaving out
-/// any a pane in `pane_dirs` is in. Reads and writes the cache, and runs
-/// git, so the server calls it off its task.
-pub fn rows(dir: &Path, pane_dirs: &[PathBuf]) -> Vec<Row> {
-    survey(dir, pane_dirs).0
 }
 
 /// Every pane's directory, from the running server; none outside one.

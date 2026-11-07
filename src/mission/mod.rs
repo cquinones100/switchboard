@@ -290,8 +290,9 @@ pub enum MissionEvent {
     /// The worktrees of the tabs' repositories, as git lists them, by
     /// repository.
     Worktrees(HashMap<PathBuf, Vec<Worktree>>),
-    /// The worktrees no tab is in, from wherever they are known.
-    Revived(Vec<Revived>),
+    /// The worktrees no tab is in, from wherever they are known; `None`
+    /// when the look failed or took too long, so the rows had stay.
+    Revived(Option<Vec<Revived>>),
 }
 
 /// What the server keeps for mission control across clients.

@@ -45,6 +45,8 @@ use crate::{paths, settings, util};
 /// How often the worktrees of the tabs' repositories are read again while
 /// the Work map is wanted.
 const WORKTREES_EVERY: Duration = Duration::from_secs(60);
+/// How long `wt-revive --json` may take before the look is given up.
+const REVIVED_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long your own files' Settings rows are kept before they are read
 /// again.
 const OWN_EVERY: Duration = Duration::from_secs(3);
@@ -586,23 +588,22 @@ impl Server {
         self.mission.revived_busy = true;
         self.mission.revived_at = Some(Instant::now());
         let tx = self.tx.clone();
-        tokio::task::spawn_blocking(move || {
-            let rows: Vec<views::Revived> = std::process::Command::new(exe)
-                .arg("wt-revive")
-                .arg("--json")
-                .arg(paths::home())
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .filter_map(|l| serde_json::from_str(l).ok())
-                        .collect()
-                })
-                .unwrap_or_default();
+        // A look that fails keeps the rows the last one gave, and one that
+        // hangs is given up (and ended) after REVIVED_TIMEOUT, as the daemon
+        // gave bin/wt-revive 30 seconds, so the next look can start.
+        tokio::spawn(async move {
+            let mut cmd = tokio::process::Command::new(exe);
+            cmd.arg("wt-revive").arg("--json").arg(paths::home());
+            let rows: Option<Vec<views::Revived>> =
+                crate::util::run_async(&mut cmd, Some(REVIVED_TIMEOUT))
+                    .await
+                    .ok()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .lines()
+                            .filter_map(|l| serde_json::from_str(l).ok())
+                            .collect()
+                    });
             let _ = tx.send(Event::Mission(MissionEvent::Revived(rows)));
         });
     }
@@ -678,7 +679,9 @@ impl Server {
             }
             MissionEvent::Revived(rows) => {
                 self.mission.revived_busy = false;
-                if rows != self.mission.revived {
+                if let Some(rows) = rows
+                    && rows != self.mission.revived
+                {
                     self.mission.revived = rows;
                     self.mission_redraw();
                 }
