@@ -682,7 +682,7 @@ Mermaid diagrams are drawn as text: flowcharts (`flowchart` or `graph`, in any d
 | `/` | Search, ignoring case unless what you type has a capital; `Enter` finds it, `Esc` cancels |
 | `n` `N` | The next match, or the one before |
 | `o` | The page being read, in the browser (the link view) |
-| `q`, `Esc`, `Ctrl-c` | Close |
+| `q`, `Esc` | Close (`Ctrl-c` does nothing, as in less, so one meant for the pane beside it is lost harmlessly) |
 
 The wheel scrolls three lines at a time.
 
@@ -1750,7 +1750,8 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Rules in reviews (`review_rules`) | on | codex-review gives the reviewer the repository's CLAUDE.md and AGENTS.md as the base has them and your own ~/.claude/CLAUDE.md with what it imports, and reports a change that breaks one; off, it reviews without them, and your rules aren't sent to the reviewer |
 | Review before pushing (`review_before_push`) | on | In this repository, a push to main needs a clean /review-loop first (.githooks/pre-push); off, it pushes without one |
 | Security review in the review loop (`review_security`) | on | /review-loop runs Claude Code's /security-review on the branch once before its first round, its findings fixed or asked about as the rounds' are |
-| Ask before closing a pane (`confirm_close`) | on | M-w asks first; off, it closes the pane at once |
+| Ask before closing a pane (`confirm_close`) | on | M-w asks first when a program runs in the pane (a shell at its prompt closes at once); off, it closes the pane at once whatever runs in it |
+
 
 ### Palette
 

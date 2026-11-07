@@ -596,7 +596,7 @@
     "key": "confirm_close",
     "category": "Safety",
     "label": "Ask before closing a pane",
-    "description": "M-w asks first; off, it closes the pane at once",
+    "description": "M-w asks first when a program runs in the pane (a shell at its prompt closes at once); off, it closes the pane at once whatever runs in it",
     "default": true
   },
   {

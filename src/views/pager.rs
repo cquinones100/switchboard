@@ -21,7 +21,8 @@
 //! PageUp a screen; d and u half of one; g and G the top and the end; Left
 //! and Right half a screen across; `/` searches (smart case), n and N go to
 //! the next match and the one before; o opens the page being read in the
-//! browser, where it has one; q or Esc closes. The wheel scrolls.
+//! browser, where it has one; q or Esc closes, and Ctrl-C does nothing, as
+//! in less. The wheel scrolls.
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -352,7 +353,10 @@ impl Pager {
         let half = (page / 2).max(1);
         let act = match key.code {
             KeyCode::Char('q' | 'Q') | KeyCode::Esc => Act::Quit,
-            KeyCode::Char('c') if ctrl => Act::Quit,
+            // Ctrl-C leaves the view up, as less did under pr-view.sh's
+            // `trap '' INT`, so a Ctrl-C meant for the pane beside it, a
+            // moment after the focus moved, loses nothing.
+            KeyCode::Char('c') if ctrl => Act::Same,
             KeyCode::Char('n' | 'e' | 'j') if ctrl => self.scroll_by(1),
             KeyCode::Char('p' | 'y' | 'k') if ctrl => self.scroll_by(-1),
             KeyCode::Char('f' | 'v') if ctrl => self.scroll_by(page),

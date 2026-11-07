@@ -1756,10 +1756,14 @@ impl Server {
             Action::PrImage => self.image_view(id, false),
             Action::TicketImage => self.image_view(id, true),
             Action::MissionControl => self.toggle_mission(id),
-            Action::FindTab => self.open_mission(
-                id,
-                crate::mission::Opening::Picker(crate::mission::Scope::Tabs),
-            ),
+            Action::FindTab => {
+                // Doing what the jump tip teaches marks it shown.
+                self.tip_seen("jump");
+                self.open_mission(
+                    id,
+                    crate::mission::Opening::Picker(crate::mission::Scope::Tabs),
+                )
+            }
             Action::ReviveWorktree => self.open_mission(
                 id,
                 crate::mission::Opening::Picker(crate::mission::Scope::Untabbed),

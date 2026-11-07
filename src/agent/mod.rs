@@ -14,11 +14,10 @@
 //!
 //! What it says goes in a message box (src/ui): nowhere for M-a to go, no
 //! Claude for M-c, a session moved to a tab of its own; a first wait or
-//! finish while you look elsewhere, and the first pin, bring their tips.
-//! M-a walks the sidebar's Needs you (src/sidebar), which alone can tell a
-//! tab that looks done is still working in the background. Left for the
-//! parts that come later: the worktree tip (its keys come with the PR
-//! views).
+//! finish while you look elsewhere, the first pin, and Claude's first start
+//! in a worktree (its PR keys, with GitHub on), bring their tips. M-a walks
+//! the sidebar's Needs you (src/sidebar), which alone can tell a tab that
+//! looks done is still working in the background.
 
 pub mod hook;
 mod serve;
