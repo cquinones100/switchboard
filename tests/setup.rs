@@ -760,7 +760,10 @@ fn the_guided_setup_asks_first_changes_nothing_on_a_closed_input_and_nothing_the
     let closed = ok(&h.run(&["setup"]));
     assert!(closed.contains("[Y/n]"), "{closed}");
     assert!(closed.contains("– Switchboard's skills"), "{closed}");
-    assert!(closed.contains("the Slack relay, for reaching your tabs from Slack"), "{closed}");
+    assert!(
+        closed.contains("the Slack relay, for reaching your tabs from Slack"),
+        "{closed}"
+    );
     assert!(!h.path(".claude").exists(), "nothing written: {closed}");
 
     // Yes to each, by Enter or y.
