@@ -280,9 +280,13 @@ opened again in the moment between the cleanup and the tick. `wtn` also keeps
 each item it starts in `~/.local/state/switchboard/wtn-claims.tsv`, and the
 mode never takes an item started in the last 30 minutes, worktree or not. The
 landed tab says `landed` and closes itself once you leave it after having it
-in front for a moment, or half an hour after landing if you never look; a
-prompt typed in it after landing keeps it open as yours (Settings' "Close a
-worked note's landed tabs", `autopilot_close`). Its tabs say `auto` in the
+in front for a moment, or, if you never look, as Settings' "Close a worked
+note's landed tabs" (`autopilot_close`) says: half an hour after landing
+(when seen, the default), as soon as it lands (at once), five minutes after
+(after 5 minutes), or never. A tab in front stays until you leave it, a
+prompt typed in it after landing keeps it open as yours, and a tab closed
+without your seeing it leaves a notification, "Closed <item>: landed <hash>",
+which Enter dismisses. The mode's menu changes the setting too. Its tabs say `auto` in the
 sidebar, and while it is on, mission
 control's Tabs view leads with its line: the note, how many work and are open,
 and the item it takes next. `k` from the top row of tabs (or a click) reaches

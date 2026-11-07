@@ -2460,7 +2460,7 @@ test("mission control's Settings view lists the options by category, / narrows t
     // / then "notif": the Notifications header and its two options, and no other category.
     for (const key of ["/", "n", "o", "t", "i", "f", "Enter"]) await sidebar.missionKey(client, { key });
     const items = sidebar.viewsFor(client)[client.view.view - 1].items;
-    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "M-a goes to notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes", "Mission control", "Highlight on hover", "Help", "Suggestions from how you work"], "the Notifications category, and the options elsewhere that mention notifications");
+    assert.deepEqual(items.map((i) => i.title), ["Notifications", "Push notifications", "Finished tabs clear", "Sidebar", "Notifications", "M-a goes to notifications", "Notifications view", "New notes", "Next meeting", "Calendar changes", "Sessions", "Close a worked note's landed tabs", "Mission control", "Highlight on hover", "Help", "Suggestions from how you work"], "the Notifications category, and the options elsewhere that mention notifications");
     assert.doesNotMatch(plain(sent.at(-1)), /Theme/);
 
     // Enter on an on/off option turns it off, and only what differs from the default is written.
@@ -4541,7 +4541,7 @@ test("a landed tab of the mode working a note closes once you leave it after see
     assert.deepEqual(check(asking), [], "Claude still asking in its removed worktree, a shell beside it in the main clone: not landed yet");
     assert.deepEqual(check(tab("@1", {})), [["set-option", "@autopilot_left"]], "back in the main clone, it is marked landed");
     assert.deepEqual(check(tab("@1", { landed: now - 60 })), [], "not seen and landed a minute ago: left open");
-    assert.deepEqual(check(tab("@1", { landed: now - sidebar.CLOSE_AFTER_S - 1 })), [["kill-window", "@1"]], "never seen: closed half an hour after landing");
+    assert.deepEqual(check(tab("@1", { landed: now - sidebar.CLOSE_AFTER_S.seen - 1 })), [["kill-window", "@1"]], "never seen: closed half an hour after landing");
     assert.deepEqual(check(tab("@2", { landed: now - 60 }, { front: true })), [], "in front a moment: not seen yet, as passing over it does");
     await wait(1100);
     assert.deepEqual(check(tab("@2", { landed: now - 60 }, { front: true })), [["set-option", "@autopilot_seen"]], "in front a second: seen");
@@ -4554,6 +4554,88 @@ test("a landed tab of the mode working a note closes once you leave it after see
     check(tab("@3", { landed: now - 60, seen: true }, { state: "working", since: now - 10 }));
     assert.ok(sent.length && sent.every((command) => command.includes("-u") && command.includes("@3")), "a prompt since landing takes it out of the mode, never closed");
   } finally {
+    sidebar.writeAutopilot({ on: false, repo: "" });
+  }
+});
+
+test("the Close landed tabs setting closes a landed tab of the mode at once, after 5 minutes or never, a tab in front staying until left, and one closed unseen leaves a notification", async () => {
+  const dir = path.join(tmp, "autopilot-close-when");
+  const repo = path.join(dir, "repo");
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env: { ...process.env, ...gitEnv } });
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "landed"], { env: { ...process.env, ...gitEnv } });
+  const hash = execFileSync("git", ["-C", repo, "rev-parse", "--short=7", "HEAD"], { encoding: "utf8" }).trim();
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  const choose = (value) => {
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({ autopilot_close: value }));
+    sidebar.reloadSettings();
+  };
+  sidebar.writeAutopilot({ on: false, note: "Work.md", repo, closed: [] });
+  const sent = [];
+  const pilot = sidebar.autopilot({ batch: (commands) => sent.push(...commands) });
+  const now = Math.floor(Date.now() / 1000);
+  const tab = (id, autopilot, { front = false } = {}) => ({
+    id,
+    current: front,
+    attached: true,
+    state: "idle",
+    claudePane: `%${id}`,
+    panes: [{ pane_id: `%${id}`, pane_current_path: repo, "@agent_since": "" }],
+    autopilot: { since: now - 3600, inWorktree: true, item: `Item ${id}`, ...autopilot },
+  });
+  const check = (...tabs) => {
+    sent.length = 0;
+    pilot.check(tabs, { away: false });
+    return sent.map((command) => (command[0].startsWith("kill-") ? [command[0], command.at(-1)] : [command[0], command.find((word) => word.startsWith("@autopilot"))]));
+  };
+  try {
+    choose("now");
+    assert.deepEqual(check(tab("@1", { landed: now })), [["kill-window", "@1"]], "at once: closed on the next check");
+    assert.deepEqual(check(tab("@2", { landed: now }, { front: true })), [], "at once, but in front: left open");
+    assert.deepEqual(check(tab("@2", { landed: now })), [["kill-window", "@2"]], "and closed once left");
+    assert.deepEqual(sidebar.readAutopilot().closed.map((c) => [c.id, c.item, c.hash]), [[`@1@${now - 3600}`, "Item @1", hash], [`@2@${now - 3600}`, "Item @2", hash]], "each closed unseen is kept for the notifications, with what landed");
+    check(tab("@1", { landed: now }));
+    assert.equal(sidebar.readAutopilot().closed.length, 2, "a tab closed again before tmux is read again is kept once");
+    check({ ...tab("@1", { landed: now }), autopilot: { since: now - 60, inWorktree: true, item: "Later", landed: now } });
+    assert.equal(sidebar.readAutopilot().closed.length, 3, "another tab given the same window ID after a restart is kept too");
+    // The notifications are read again at most every 2 seconds.
+    await wait(2100);
+    assert.deepEqual(sidebar.noticeItems().filter((n) => n.kind === "closed").map((n) => n.title), [`Closed Item @1: landed ${hash}`, `Closed Item @2: landed ${hash}`, `Closed Later: landed ${hash}`]);
+    sidebar.writeAutopilot({ closed: [] });
+    choose("5m");
+    assert.deepEqual(check(tab("@3", { landed: now - 60 })), [], "after 5 minutes: open a minute after landing");
+    assert.deepEqual(check(tab("@3", { landed: now - 5 * 60 - 1 })), [["kill-window", "@3"]], "and closed past 5 minutes");
+    assert.deepEqual(check(tab("@4", { landed: now - 60, seen: true })), [["kill-window", "@4"]], "sooner once seen and left");
+    assert.deepEqual(sidebar.readAutopilot().closed.map((c) => c.item), ["Item @3"], "a tab seen before it closed leaves no notification");
+    choose("seen");
+    assert.deepEqual(check(tab("@5", { landed: now - 5 * 60 - 1 })), [], "when seen: still open past 5 minutes");
+    choose("off");
+    check(tab("@6", { landed: now - 3600 }));
+    assert.ok(sent.length && sent.every((command) => command.includes("-u") && command.includes("@6")), "never: unmarked, left open");
+  } finally {
+    fs.rmSync(settingsFile, { force: true });
+    sidebar.reloadSettings();
+    sidebar.writeAutopilot({ on: false, repo: "", closed: [] });
+  }
+});
+
+test("the menu of the note worked continuously cycles the Close landed tabs setting", () => {
+  const settingsFile = path.join(home, ".config/switchboard/settings.json");
+  sidebar.writeAutopilot({ on: true, note: "Work.md", repo: tmp });
+  try {
+    fs.rmSync(settingsFile, { force: true });
+    sidebar.reloadSettings();
+    const pilot = sidebar.autopilot({ batch: () => {} });
+    const close = () => pilot.choices(() => {}).find((c) => c.label.startsWith("Close landed tabs"));
+    assert.equal(close().label, "Close landed tabs: when seen");
+    assert.equal(close().act(), "Landed tabs close: at once");
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, "utf8")), { autopilot_close: "now" });
+    assert.equal(close().label, "Close landed tabs: at once");
+  } finally {
+    fs.rmSync(settingsFile, { force: true });
+    sidebar.reloadSettings();
     sidebar.writeAutopilot({ on: false, repo: "" });
   }
 });
@@ -4582,7 +4664,7 @@ test("k from the top row of tabs reaches the line of the note worked continuousl
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(client.choose.title, "Working Work");
     // Skip shows only once the next item has been read, which the daemon may have done.
-    assert.deepEqual(client.choose.choices.map((c) => c.label).filter((label) => !label.startsWith("Skip the next item")), ["Pause: open no more tabs for now", "Take only items with a settled plan", "Change its note, slots, cap or spend limit…", "Stop working the note"]);
+    assert.deepEqual(client.choose.choices.map((c) => c.label).filter((label) => !label.startsWith("Skip the next item")), ["Pause: open no more tabs for now", "Take only items with a settled plan", "Close landed tabs: when seen", "Change its note, slots, cap or spend limit…", "Stop working the note"]);
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(sidebar.readAutopilot().paused, true);
     await sidebar.missionKey(client, { key: "j" });

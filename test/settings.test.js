@@ -123,3 +123,16 @@ test("a setting saved under its old name is read as its new one once, then dropp
   execFileSync(process.execPath, ["-e", "require(process.argv[1]).migrateSettings()", path.join(repo, "lib/settings.js")], { env });
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {}, "on, the default, it is only dropped");
 });
+
+test("an on/off value of a setting that became choices is read as the choice it meant, then written as it: Close landed tabs on is when seen, off is never", () => {
+  const read = (key) => execFileSync(process.execPath, ["-e", "console.log(require(process.argv[1]).setting(process.argv[2]))", path.join(repo, "lib/settings.js"), key], { env, encoding: "utf8" }).trim();
+  const migrate = () => execFileSync(process.execPath, ["-e", "require(process.argv[1]).migrateSettings()", path.join(repo, "lib/settings.js")], { env });
+  fs.writeFileSync(file, JSON.stringify({ autopilot_close: false, tips: false }));
+  assert.equal(read("autopilot_close"), "off", "read before it is migrated");
+  migrate();
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { autopilot_close: "off", tips: false });
+  fs.writeFileSync(file, JSON.stringify({ autopilot_close: true }));
+  assert.equal(read("autopilot_close"), "seen");
+  migrate();
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), {}, "on was the default, when seen now, so it is only dropped");
+});
