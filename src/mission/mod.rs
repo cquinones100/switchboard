@@ -23,6 +23,7 @@
 //!
 //! - `views`: the views after the tabs, the Work map and Settings among them.
 //! - `render`: the screen, as lines, and where a click lands.
+//! - `calendar`: the Calendar view drawn as a day, hours down the side.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
 //! - `ask`: a line to type in a box.
@@ -34,6 +35,7 @@
 pub mod answer;
 pub mod ask;
 pub mod busy;
+pub mod calendar;
 pub mod choices;
 pub mod remind;
 pub mod render;
@@ -110,6 +112,8 @@ pub struct Snapshot {
     /// Easy mode's × at the bar's right end.
     pub close: bool,
     pub now_secs: i64,
+    /// The time zone the Calendar's day is drawn in.
+    pub tz: jiff::tz::TimeZone,
     /// The spinner's frame.
     pub frame: usize,
     /// The line of the note worked continuously, leading the tabs while
@@ -132,6 +136,7 @@ impl Default for Snapshot {
             tab_focus: true,
             close: false,
             now_secs: 0,
+            tz: jiff::tz::TimeZone::UTC,
             frame: 0,
             pilot: None,
         }

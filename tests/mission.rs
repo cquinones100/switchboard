@@ -250,6 +250,41 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
     );
 }
 
+#[test]
+fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
+    let server = TestServer::start();
+    settings(&server, json!({"view_calendar": true}));
+    let now = jiff::Zoned::now();
+    let date = format!("{:04}-{:02}-{:02}", now.year(), now.month(), now.day());
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("calendar.json"),
+        json!({
+            "date": date,
+            "updated": now.timestamp().as_millisecond(),
+            "events": [
+                { "title": "Planning", "start": format!("{date}T09:00:00"), "end": format!("{date}T10:00:00"), "you": "going", "link": "https://calendar.example/1" },
+                { "title": "Offsite", "allDay": true, "you": "going" },
+            ],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vcalendar\r");
+    let screen = client.wait_text("Planning");
+    let has = |text: &str| screen.iter().any(|l| l.contains(text));
+    assert!(has("all day   Offsite"), "{}", screen.join("\n"));
+    assert!(has("   8 AM  ┈"), "the hours down the side");
+    assert!(has("   9 AM"));
+    assert!(has("Planning"));
+    // The chosen event is the first: the all-day one; j goes to the next.
+    client.type_text("j\r");
+    client.wait_text("Open it in Google Calendar");
+}
+
 /// What a line of the screen shows right of the sidebar's edge, if any.
 fn pane_text(line: &str) -> &str {
     line.rsplit('│').next().unwrap_or(line).trim()

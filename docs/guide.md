@@ -538,7 +538,7 @@ Switchboard keeps your day beside your tabs: today's calendar, what is new for y
 
 ### The Calendar view
 
-Mission control's Calendar view is today: the all-day events first, then the rest by start, each with its time, events already over faded and those you haven't said yes to marked. It reads your Google Calendar's iCal feed itself, every five minutes and when you go to the view, once its secret address is stored: in Google Calendar, open Settings, your calendar, Integrate calendar, and copy "Secret address in iCal format", then run
+Mission control's Calendar view is today, laid out as Google Calendar's Day view lays it out: the date and when it was read at the top, the all-day events as chips in a row of their own, then the hours down the left, each event a blue block from its start to its end with its title and times, events at the same time side by side, a red line where it is now, events already over faded, and one you haven't said yes to drawn in outline. Two meetings back to back in the same place take different shades, so they read as two. The day runs from 8 AM (or the first event, or now) to 6 PM (or the last event), as many rows to an hour as the screen has room for, up to eight; a day too long for the screen starts an hour before now. `j` and `k` go through the events (all-day ones first, then by start), the chosen one in a lighter blue, and a click chooses one. It reads your Google Calendar's iCal feed itself, every five minutes and when you go to the view, once its secret address is stored: in Google Calendar, open Settings, your calendar, Integrate calendar, and copy "Secret address in iCal format", then run
 
 ```sh
 switchboard platform secret-set google-calendar-ical

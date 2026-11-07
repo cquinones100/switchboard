@@ -1340,6 +1340,19 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     let room = rows.saturating_sub(1 + top);
                     board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
                 }
+            } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
+                let look = super::calendar::Look {
+                    cols,
+                    rows: rows.saturating_sub(1 + lines.len()),
+                    cursor: usize::try_from(m.cursor).ok(),
+                    tz: &snap.tz,
+                    now_ms: snap.now_secs * 1000,
+                    theme,
+                    top_row: lines.len(),
+                };
+                let (day, at) = super::calendar::day(v, &look);
+                lines.extend(day);
+                hits.extend(at);
             } else {
                 list(v, cols, rows, m, 0, &mut lines, &mut hits);
             }
@@ -1393,6 +1406,7 @@ mod tests {
             tab_focus: true,
             close: false,
             now_secs: rules().now_secs(),
+            tz: jiff::tz::TimeZone::UTC,
             frame: 0,
             pilot: None,
         };

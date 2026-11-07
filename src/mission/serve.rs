@@ -321,6 +321,7 @@ impl Server {
             tab_focus: settings::is_on("tab_focus"),
             close: settings::is_on("easy_keys") && settings::is_on("menu_mouse"),
             now_secs: now.div_euclid(1000),
+            tz: jiff::tz::TimeZone::system(),
             frame: (now as u64 / SPINNER_MS) as usize,
             // Not in M-j's and M-o's pickers.
             pilot: m
