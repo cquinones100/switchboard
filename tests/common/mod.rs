@@ -349,6 +349,24 @@ impl TestClient {
         }
     }
 
+    /// The first cell on the screen holding `c`, as (line, column).
+    pub fn find_cell(&mut self, c: char) -> Option<(usize, usize)> {
+        self.pump(Duration::from_millis(20));
+        let grid = self.term.grid();
+        (0..grid.screen_lines()).find_map(|y| {
+            (0..grid.columns())
+                .find(|x| grid[Line(y as i32)][Column(*x)].c == c)
+                .map(|x| (y, x))
+        })
+    }
+
+    /// The combining marks a cell's character carries.
+    pub fn marks(&mut self, line: usize, col: usize) -> Vec<char> {
+        self.pump(Duration::from_millis(20));
+        let cell = &self.term.grid()[Line(line as i32)][Column(col)];
+        cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default()
+    }
+
     /// Waits until the screen satisfies `pred`, failing with the screen after `timeout`.
     pub fn wait_for(&mut self, what: &str, pred: impl Fn(&[String]) -> bool) -> Vec<String> {
         let deadline = Instant::now() + Duration::from_secs(10);

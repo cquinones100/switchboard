@@ -192,13 +192,15 @@ Each step is a commit (or a few) on the branch, with its tests.
    the palette and the finder; the lock, `.notes.json`, renames, moves and
    folders; every save merging in what changed outside, and a watch on the
    directory; squashing through Claude after a yes; a socket the workspace
-   opens a tab's note through, `open <note>`, `sidebar on|off`, `shown`).
-   Left, for the server: M-N and M-e (Notes in a tab of its own or beside
-   one, the list put away there), note tabs and picking a tab's note
-   (`note-tab.sh`, `note-pick.sh`), the palette's Switchboard commands
-   (the app asks `switchboard press <name>`), passing the Cmd keys to a pane
-   marked `@notes_cmd_keys`, and passing kitty's graphics commands and the
-   placeholders' marks through to the terminal.
+   opens a tab's note through, `open <note>`, `sidebar on|off`, `shown`),
+   and what the server passes it (src/mux/passthrough.rs: the Cmd keys only
+   to a pane marked `@notes_cmd_keys`, and kitty's graphics commands from
+   the notes pane, or one marked `@allow_passthrough`, on to the terminal,
+   the placeholders' marks and colours kept through the emulator and the
+   frame). Left, for the server: M-N and M-e (Notes in a tab of its own or
+   beside one, the list put away there), note tabs and picking a tab's note
+   (`note-tab.sh`, `note-pick.sh`), and the palette's Switchboard commands
+   (the app asks `switchboard press <name>`).
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.
     `switchboard setup` done (src/setup: the `claude`, `claude-md` and

@@ -16,6 +16,8 @@
 //! - `server`: the server task, owning all of it.
 //! - `commands`: what shells, hooks and skills ask of the server.
 //! - `respawn`: a pane's program ended and another started in its place.
+//! - `passthrough`: what one pane may pass to the terminal or take from it
+//!   that others may not: kitty's graphics commands, easy mode's Cmd keys.
 //! - `persist`: the layout saved as it changes and restored on start.
 
 pub mod client;
@@ -25,6 +27,7 @@ pub mod input;
 pub mod keys;
 pub mod layout;
 pub mod pane;
+pub mod passthrough;
 pub mod persist;
 pub mod procinfo;
 pub mod proto;
@@ -137,6 +140,9 @@ pub enum TermNotice {
     Bell,
     /// The program put text on the clipboard (OSC 52).
     Clipboard(String),
+    /// A kitty graphics command (`ESC _ G ... ESC \`), whole, from a pane
+    /// allowed to send them on to the terminal (`passthrough`).
+    Graphics(Vec<u8>),
 }
 
 /// What a pane's reader thread sends the server. Each carries which of the

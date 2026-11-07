@@ -629,15 +629,20 @@ impl Server {
                 else {
                     return;
                 };
+                let allowed = super::passthrough::graphics_allowed(&slot.opts);
+                slot.pane.pass_graphics(allowed);
                 let notices = slot.pane.process(&bytes);
                 let tab = slot.tab;
                 self.sidebar.output(id);
+                let mut graphics = Vec::new();
                 for notice in notices {
                     match notice {
                         TermNotice::Clipboard(text) => self.to_clipboard(None, &text),
+                        TermNotice::Graphics(command) => graphics.push(command),
                         TermNotice::Title(_) | TermNotice::Bell => {}
                     }
                 }
+                self.pass_graphics(tab, graphics);
                 self.dirty_tab(tab);
             }
             PaneEvent::Exited(id, generation, code) => {
@@ -1454,6 +1459,11 @@ impl Server {
         if let Some(action) = self.bindings.root.get(&key).cloned() {
             self.count_key(&key.notation());
             self.act(id, action);
+            return;
+        }
+        // Easy mode's Cmd keys reach only a pane that takes them.
+        if super::passthrough::is_cmd_key(&key) {
+            self.cmd_key(id, raw);
             return;
         }
         if self.sidebar_key(id, key, raw) {

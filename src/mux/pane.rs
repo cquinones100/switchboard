@@ -126,6 +126,9 @@ pub struct Pane {
     /// Which side of its cell the selection's fixed end is on; see
     /// `select_extend`.
     anchor_side: Side,
+    /// Picking kitty's graphics commands out of the output, while the pane
+    /// is allowed to send them on (`pass_graphics`).
+    graphics: Option<super::passthrough::Scanner>,
 }
 
 /// Collects what the emulator reports while it reads, for `process` to
@@ -290,6 +293,7 @@ impl Pane {
             title: String::new(),
             exited: None,
             anchor_side: Side::Left,
+            graphics: None,
         })
     }
 
@@ -307,20 +311,42 @@ impl Pane {
         self.exited.is_none() && !self.reaped.load(Ordering::Acquire)
     }
 
+    /// Whether kitty's graphics commands in the output are picked out for
+    /// the terminal (`TermNotice::Graphics`); a command half read when it is
+    /// turned off is dropped.
+    pub fn pass_graphics(&mut self, on: bool) {
+        match (on, self.graphics.is_some()) {
+            (true, false) => self.graphics = Some(Default::default()),
+            (false, true) => self.graphics = None,
+            _ => {}
+        }
+    }
+
     /// Feeds what the program wrote to the emulator, writing its answers to
     /// the program's queries back to the PTY; gives what the server should
-    /// know of (a title, the bell, the clipboard).
+    /// know of (a title, the bell, the clipboard, graphics commands).
     ///
     /// A program drawing a frame inside a synchronized update (mode 2026,
     /// as Claude Code does) has it held back until the update ends, so a
     /// half-drawn frame is never shown; one that never ends is let through
     /// after 150ms, here when more output comes, else by `flush_sync`.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<TermNotice> {
+        // The emulator drops what it doesn't draw, kitty's commands with it,
+        // so they are picked out first.
+        let mut notices: Vec<TermNotice> = match &mut self.graphics {
+            Some(scanner) => scanner
+                .feed(bytes)
+                .into_iter()
+                .map(TermNotice::Graphics)
+                .collect(),
+            None => Vec::new(),
+        };
         if self.sync_deadline().is_some_and(|at| at <= Instant::now()) {
             self.parser.stop_sync(&mut self.term);
         }
         self.parser.advance(&mut self.term, bytes);
-        self.handle_events()
+        notices.extend(self.handle_events());
+        notices
     }
 
     /// When the synchronized update the program began, if any, has waited
@@ -1347,6 +1373,63 @@ mod tests {
         assert_eq!(buf[(0, 0)].symbol(), "e\u{301}");
         assert_eq!(buf[(1, 0)].symbol(), "x");
         assert_eq!(run.pane.text(1), "e\u{301}x");
+    }
+
+    #[test]
+    fn kittys_placeholder_cells_keep_their_marks_and_colour_through_a_frame() {
+        // Two cells of an image whose id is 42: U+10EEEE, its row's and
+        // column's marks, in the id's colour (src/notes/images.rs).
+        let mut run = idle(10, 2);
+        run.pane.process(
+            "\x1b[38;2;0;0;42m\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}\x1b[0mz".as_bytes(),
+        );
+        let (buf, _) = render(&run.pane, PaneView::default());
+        assert_eq!(buf[(0, 0)].symbol(), "\u{10EEEE}\u{305}\u{305}");
+        assert_eq!(buf[(1, 0)].symbol(), "\u{10EEEE}\u{305}\u{30D}");
+        assert_eq!(buf[(2, 0)].symbol(), "z", "each a cell wide");
+        assert_eq!(buf[(1, 0)].fg, Color::Rgb(0, 0, 42));
+
+        // Sent to the terminal as they are, colour first, and sent again
+        // whole when only one changes.
+        let mut screen = crate::mux::compose::Screen::default();
+        let mut frame = crate::mux::compose::Frame::new(10, 2);
+        run.pane
+            .render(&mut frame.buf, Rect::new(0, 0, 10, 2), &PaneView::default());
+        let sent = String::from_utf8(screen.render(&frame)).unwrap();
+        // In one SGR with the background, as crossterm writes them.
+        let colour = sent.find("\x1b[38;2;0;0;42;").expect("the id's colour");
+        let cells = sent
+            .find("\u{10EEEE}\u{305}\u{305}\u{10EEEE}\u{305}\u{30D}")
+            .expect("both cells with their marks");
+        assert!(colour < cells, "{sent:?}");
+        run.pane
+            .process("\x1b[1;2H\x1b[38;2;0;0;42m\u{10EEEE}\u{305}\u{30E}".as_bytes());
+        run.pane
+            .render(&mut frame.buf, Rect::new(0, 0, 10, 2), &PaneView::default());
+        let sent = String::from_utf8(screen.render(&frame)).unwrap();
+        assert!(sent.contains("\u{10EEEE}\u{305}\u{30E}"), "{sent:?}");
+        assert!(!sent.contains("\u{30D}"), "only the cell that changed");
+    }
+
+    #[test]
+    fn graphics_commands_are_picked_out_only_while_allowed() {
+        let mut run = idle(10, 2);
+        let command = b"\x1b_Ga=T,U=1,q=2,i=42;L3RtcC9hLnBuZw==\x1b\\";
+        let mut out = b"ab".to_vec();
+        out.extend_from_slice(command);
+        assert_eq!(run.pane.process(&out), vec![]);
+        run.pane.pass_graphics(true);
+        assert_eq!(
+            run.pane.process(&out),
+            vec![TermNotice::Graphics(command.to_vec())]
+        );
+        // The emulator draws nothing of it.
+        assert_eq!(run.pane.text(1), "abab");
+        // Half a command when it is turned off is dropped.
+        run.pane.process(&command[..10]);
+        run.pane.pass_graphics(false);
+        run.pane.pass_graphics(true);
+        assert_eq!(run.pane.process(&command[10..]), vec![]);
     }
 
     #[test]

@@ -246,3 +246,88 @@ fn respawn_starts_another_program_in_the_same_pane() {
     });
     assert_eq!(place(&server.list(), &pane), Some(before));
 }
+
+/// The id of the first pane of the first tab.
+fn first_pane(server: &TestServer) -> String {
+    server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// Whether `needle` is anywhere in what the client was sent.
+fn sent(raw: &[u8], needle: &[u8]) -> bool {
+    raw.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = first_pane(&server);
+    // Written with printf's octal escapes, so the line typed holds no ESC.
+    let print = |payload: &str, done: &str| {
+        server.ok(&[
+            "send-keys",
+            "-t",
+            &pane,
+            "-l",
+            &format!("printf '\\033_Ga=T,q=2;{payload}\\033\\\\'; echo {done}"),
+        ]);
+        server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    };
+    print("Tk9QRQ==", "printed-unmarked");
+    client.wait_text("printed-unmarked");
+    client.screen();
+    assert!(
+        !sent(&client.raw, b"\x1b_Ga=T,q=2;Tk9QRQ==\x1b\\"),
+        "no program's command is passed"
+    );
+
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    print("WUVT", "printed-marked");
+    client.wait_text("printed-marked");
+    client.wait_for("the command passed on", |_| true);
+    assert!(sent(&client.raw, b"\x1b_Ga=T,q=2;WUVT\x1b\\"));
+
+    // The placeholder cells the command's image is drawn over reach the
+    // terminal as the program wrote them, marks and colour.
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "printf '\\033[38;2;0;0;42m\\364\\216\\273\\256\\314\\205\\314\\215\\033[0m\\n'",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.wait_for("the placeholder cell drawn", |s| {
+        s.iter().any(|l| l.contains('\u{10EEEE}'))
+    });
+    assert!(sent(&client.raw, "\u{10EEEE}\u{305}\u{30D}".as_bytes()));
+    let (line, col) = client.find_cell('\u{10EEEE}').expect("the cell");
+    assert_eq!(client.marks(line, col), vec!['\u{305}', '\u{30D}']);
+    assert_eq!(client.fg_rgb(line, col), Some((0, 0, 42)));
+}
+
+#[test]
+fn the_cmd_keys_reach_only_a_pane_marked_for_them() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let pane = first_pane(&server);
+    server.ok(&["send-keys", "-t", &pane, "-l", "cat -v"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    // Cmd-S as Ghostty sends it, then a line to show what got through.
+    client.type_text("\x1b[115;8u");
+    client.type_text("unmarked\r");
+    client.wait_text("unmarked");
+    assert!(
+        !client.screen().iter().any(|l| l.contains("115;8u")),
+        "dropped, not read as a Ctrl key"
+    );
+    server.ok(&["set", "-t", &pane, "@notes_cmd_keys", "1"]);
+    client.type_text("\x1b[115;8u");
+    client.type_text("marked\r");
+    client.wait_text("^[[115;8umarked");
+}

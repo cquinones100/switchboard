@@ -2412,16 +2412,18 @@ extern "C" fn on_signal(_: libc::c_int) {
     ENDED.store(true, Ordering::Relaxed);
 }
 
-/// Marks the pane Notes runs in for the workspace to pass it easy mode's
-/// Cmd keys, or lets the mark go.
-fn mark_pane(on: bool) {
+/// Marks the pane Notes runs in, or lets the mark go: `@notes_cmd_keys`
+/// for the workspace to pass it easy mode's Cmd keys, `@allow_passthrough`
+/// to pass its pictures' graphics commands on to the terminal, as bin/notes
+/// set its pane's allow-passthrough (src/mux/passthrough.rs).
+fn mark_pane(option: &str, on: bool) {
     let Ok(pane) = std::env::var("SWITCHBOARD_PANE") else {
         return;
     };
     let args: Vec<&str> = if on {
-        vec!["set", "-t", &pane, "@notes_cmd_keys", "1"]
+        vec!["set", "-t", &pane, option, "1"]
     } else {
-        vec!["set", "-t", &pane, "-u", "@notes_cmd_keys"]
+        vec!["set", "-t", &pane, "-u", option]
     };
     let _ = crate::mux::socket::ask(&args);
 }
@@ -2462,8 +2464,11 @@ pub fn run(store: Store) -> ExitCode {
     } else {
         None
     };
-    if app.locked_by.is_none() && opts.easy && opts.server {
-        mark_pane(true);
+    if app.locked_by.is_none() && opts.server {
+        mark_pane("@allow_passthrough", true);
+        if opts.easy {
+            mark_pane("@notes_cmd_keys", true);
+        }
     }
     {
         let tx = tx.clone();
@@ -2533,8 +2538,11 @@ pub fn run(store: Store) -> ExitCode {
     if listener.is_some() {
         let _ = std::fs::remove_file(&socket_path);
     }
-    if app.locked_by.is_none() && opts.easy && opts.server {
-        mark_pane(false);
+    if app.locked_by.is_none() && opts.server {
+        mark_pane("@allow_passthrough", false);
+        if opts.easy {
+            mark_pane("@notes_cmd_keys", false);
+        }
     }
     drop(term);
     ExitCode::SUCCESS
