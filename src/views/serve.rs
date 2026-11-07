@@ -33,6 +33,7 @@ use super::{Command, ViewsEvent, page, ticket};
 use crate::integrations::{github, linear};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{Direction, PaneId, TabId};
+use crate::net::{self, ErrorKind};
 use crate::ui::{Outcome, Overlay, PickItem, Picker};
 use crate::{links, paths, settings, util};
 
@@ -128,6 +129,12 @@ impl Server {
             Command::OpenLink => self.pick_link(client, false),
             Command::CopyLink => self.pick_link(client, true),
             Command::OpenMedia => self.open_media(client),
+            Command::OpenMergeQueue => self.open_merge_queue(client),
+            Command::OpenProject => self.open_project(client),
+            Command::CopyTicketId => self.copy_ticket(client, false),
+            Command::CopyTicketUrl => self.copy_ticket(client, true),
+            Command::CopyPrNumber => self.copy_pr(client, false),
+            Command::CopyPrUrl => self.copy_pr(client, true),
         }
     }
 
@@ -135,6 +142,7 @@ impl Server {
     pub fn views_event(&mut self, event: ViewsEvent) {
         match event {
             ViewsEvent::Say { client, text } => self.say(Some(client), &text),
+            ViewsEvent::Copy { client, text } => self.copy_said(client, &text),
             ViewsEvent::Ready { client, answer } => {
                 if let Some(c) = self.clients.get_mut(&client)
                     && let Some(b) = c.overlays.find_mut::<ReadyBox>()
@@ -364,6 +372,139 @@ impl Server {
                 Ok(_) => Server::say_later(&tx, client, format!("Linear has no ticket {id}.")),
                 Err(e) => Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}")),
             }
+        });
+    }
+
+    /// Copies `text` to the client's clipboard and says so, as
+    /// branch-copy.sh did.
+    fn copy_said(&mut self, client: ClientId, text: &str) {
+        self.to_clipboard(Some(client), text);
+        self.say(Some(client), &format!("Copied {text}"));
+    }
+
+    /// M-p's "Copy the branch's ticket ID" and, with `url`, its link: at
+    /// the workspace written down, else where Linear says the ticket is.
+    fn copy_ticket(&mut self, client: ClientId, url: bool) {
+        let Some((_, tab, dir)) = self.here(client) else {
+            return;
+        };
+        let Some(id) = self.ticket_here(tab, &dir) else {
+            self.say(Some(client), "No Linear ticket in this branch or tab name");
+            return;
+        };
+        if !url {
+            self.copy_said(client, &id);
+            return;
+        }
+        if let Some(workspace) = linear_workspace() {
+            self.copy_said(
+                client,
+                &format!("https://linear.app/{workspace}/issue/{id}"),
+            );
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let said = match linear::ticket(&id, "copy the ticket's URL").await {
+                Ok(Some(t)) if !t.url.is_empty() => {
+                    let _ = tx.send(Event::Views(ViewsEvent::Copy {
+                        client,
+                        text: t.url,
+                    }));
+                    return;
+                }
+                Ok(_) => format!("Linear has no ticket {id}."),
+                Err(e) => format!("Can't copy {id}'s URL.\n\n{e}"),
+            };
+            Server::say_later(&tx, client, said);
+        });
+    }
+
+    /// M-p's "Copy the branch's PR number" and, with `url`, its link.
+    fn copy_pr(&mut self, client: ClientId, url: bool) {
+        let Some((_, _, dir)) = self.here(client) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let said = match github::pr_for_branch(&dir, "copy the PR").await {
+                Ok(Some(pr)) => {
+                    let text = if url { pr.url } else { pr.number.to_string() };
+                    let _ = tx.send(Event::Views(ViewsEvent::Copy { client, text }));
+                    return;
+                }
+                Ok(None) => "This branch has no pull request.".to_string(),
+                Err(e) => format!("Can't copy the PR.\n\n{e}"),
+            };
+            Server::say_later(&tx, client, said);
+        });
+    }
+
+    /// M-p's "Open the repository's merge queue in the browser": the queue
+    /// of the branch's PR's base, else of the repository's default branch.
+    fn open_merge_queue(&mut self, client: ClientId) {
+        let Some((_, _, dir)) = self.here(client) else {
+            return;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let source = "open the merge queue";
+            let queue = match github::pr_for_branch(&dir, source).await {
+                Ok(Some(pr)) => match pr.url.rsplit_once("/pull/") {
+                    Some((repo, _)) if !pr.base_ref_name.is_empty() => {
+                        Ok(format!("{repo}/queue/{}", pr.base_ref_name))
+                    }
+                    _ => Err("GitHub didn't say which branch's queue to open.".to_string()),
+                },
+                Ok(None) => match github::repo_of(&dir).await {
+                    Ok(repo) => github::default_branch(&repo, source)
+                        .await
+                        .map(|base| format!("https://github.com/{repo}/queue/{base}"))
+                        .map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            };
+            match queue {
+                Ok(url) => links::open_in_background(url),
+                Err(why) => {
+                    Server::say_later(&tx, client, format!("Can't open the merge queue.\n\n{why}"))
+                }
+            }
+        });
+    }
+
+    /// M-p's "Open the branch's Linear project in the browser": the project
+    /// Linear says the branch's ticket is in, and why not when it can't.
+    fn open_project(&mut self, client: ClientId) {
+        let Some((_, tab, dir)) = self.here(client) else {
+            return;
+        };
+        let Some(id) = self.ticket_here(tab, &dir) else {
+            self.say(
+                Some(client),
+                "No Linear ticket in this branch or tab name, so there's no project to open.",
+            );
+            return;
+        };
+        self.say(
+            Some(client),
+            &format!("Looking up the Linear project for {id}..."),
+        );
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let said = match linear::project_url(&id, "open the ticket's project").await {
+                Ok(Some(url)) => {
+                    links::open_in_background(url);
+                    return;
+                }
+                Ok(None) => format!("{id} isn't in a Linear project."),
+                Err(e) if net::kind_of(&e) == Some(&ErrorKind::NotFound) => {
+                    format!("Linear has no ticket {id}, so there's no project to open.")
+                }
+                Err(e) => format!("Can't look up the Linear project for {id}.\n\n{e}"),
+            };
+            Server::say_later(&tx, client, said);
         });
     }
 

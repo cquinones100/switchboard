@@ -1,7 +1,9 @@
 //! Reading things beside your work: the branch's PR description (M-v), its
 //! Linear ticket (M-i), any link (the link view), and search everything
 //! (M-S-f), with M-r and M-l opening the PR and the ticket in the browser
-//! and M-m saying whether the PR can merge.
+//! and M-m saying whether the PR can merge; and M-p's commands for the
+//! branch's merge queue and Linear project in the browser (merge-queue.sh,
+//! linear-project.sh) and its ticket and PR copied (branch-copy.sh).
 //!
 //! Under tmux each view was glow and less in a pane split off to the right
 //! (tmux/pr-view.sh, ticket-view.sh, link-view.sh); here each is a program
@@ -71,10 +73,22 @@ pub enum Command {
     /// An image or video the pane shows, opened in its app (or shown in
     /// its folder).
     OpenMedia,
+    /// The repository's merge queue for the branch's PR's base, else for
+    /// its default branch, in the browser (merge-queue.sh).
+    OpenMergeQueue,
+    /// The Linear project of the branch's ticket in the browser
+    /// (linear-project.sh).
+    OpenProject,
+    /// The branch's ticket ID, its link, its PR's number and its PR's
+    /// link, copied (branch-copy.sh).
+    CopyTicketId,
+    CopyTicketUrl,
+    CopyPrNumber,
+    CopyPrUrl,
 }
 
 impl Command {
-    pub const ALL: [Command; 12] = [
+    pub const ALL: [Command; 18] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -87,6 +101,12 @@ impl Command {
         Command::OpenLink,
         Command::CopyLink,
         Command::OpenMedia,
+        Command::OpenMergeQueue,
+        Command::OpenProject,
+        Command::CopyTicketId,
+        Command::CopyTicketUrl,
+        Command::CopyPrNumber,
+        Command::CopyPrUrl,
     ];
 
     /// Its name in keys.json.
@@ -104,6 +124,12 @@ impl Command {
             Command::OpenLink => "open-link",
             Command::CopyLink => "copy-link",
             Command::OpenMedia => "open-media",
+            Command::OpenMergeQueue => "open-merge-queue",
+            Command::OpenProject => "open-linear-project",
+            Command::CopyTicketId => "copy-ticket-id",
+            Command::CopyTicketUrl => "copy-ticket-url",
+            Command::CopyPrNumber => "copy-pr-number",
+            Command::CopyPrUrl => "copy-pr-url",
         }
     }
 
@@ -140,6 +166,12 @@ impl Command {
             Command::OpenMedia => {
                 "Open an image or video from this pane in its app, or show it in its folder"
             }
+            Command::OpenMergeQueue => "Open the repository's merge queue in the browser",
+            Command::OpenProject => "Open the branch's Linear project in the browser",
+            Command::CopyTicketId => "Copy the branch's ticket ID",
+            Command::CopyTicketUrl => "Copy the branch's ticket URL",
+            Command::CopyPrNumber => "Copy the branch's PR number",
+            Command::CopyPrUrl => "Copy the branch's PR URL",
         }
     }
 
@@ -159,6 +191,10 @@ impl Command {
             Command::OpenLink => &["links", "browser"],
             Command::CopyLink => &["links", "copy"],
             Command::OpenMedia => &["links", "image", "video", "media"],
+            Command::OpenMergeQueue => &["github", "merge", "browser"],
+            Command::OpenProject => &["linear", "project", "browser"],
+            Command::CopyTicketId | Command::CopyTicketUrl => &["linear", "ticket", "copy"],
+            Command::CopyPrNumber | Command::CopyPrUrl => &["github", "pr", "copy"],
         }
     }
 
@@ -176,7 +212,13 @@ impl Command {
             | Command::OpenLinkRead
             | Command::OpenLink
             | Command::CopyLink
-            | Command::OpenMedia => None,
+            | Command::OpenMedia
+            | Command::OpenMergeQueue
+            | Command::OpenProject
+            | Command::CopyTicketId
+            | Command::CopyTicketUrl
+            | Command::CopyPrNumber
+            | Command::CopyPrUrl => None,
         }
     }
 }
@@ -186,6 +228,8 @@ impl Command {
 pub enum ViewsEvent {
     /// Something to say on a client: why a link couldn't be opened.
     Say { client: ClientId, text: String },
+    /// Something to copy to a client's clipboard, and say it was.
+    Copy { client: ClientId, text: String },
     /// M-m's answer, or why there is none.
     Ready {
         client: ClientId,

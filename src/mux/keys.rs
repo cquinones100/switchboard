@@ -143,7 +143,9 @@ impl Action {
     /// `ticket-image`, `mission-control`, `find-tab`,
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
-    /// `search-everything`, `read-link`, `open-link-being-read`), updates'
+    /// `search-everything`, `read-link`, `open-link-being-read`,
+    /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
+    /// `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`), updates'
     /// (`update-switchboard`, `run-setup`), Notes' (`notes`,
     /// `notes-beside`, `note-tab`, `choose-tab-note`), and the extras'
     /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,

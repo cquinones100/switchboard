@@ -233,6 +233,23 @@ pub async fn ticket(identifier: &str, source: &str) -> Result<Option<Ticket>> {
     Ok(ticket_from(data.get("issue").unwrap_or(&Value::Null)))
 }
 
+const PROJECT: &str = "query($id: String!) { issue(id: $id) { project { name url } } }";
+
+/// The link to the Linear project the ticket `identifier` is in, or `None`
+/// when it is in none; a ticket Linear has no such one of is
+/// `ErrorKind::NotFound`.
+pub async fn project_url(identifier: &str, source: &str) -> Result<Option<String>> {
+    let data = graphql(PROJECT, json!({ "id": identifier }), source).await?;
+    Ok(project_url_in(&data))
+}
+
+fn project_url_in(data: &Value) -> Option<String> {
+    data.pointer("/issue/project/url")
+        .and_then(Value::as_str)
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
 // A ticket from the `issue` Linear gave, or `None` when it gave none, or one
 // without the fields every ticket has.
 fn ticket_from(issue: &Value) -> Option<Ticket> {
@@ -284,6 +301,16 @@ pub fn ticket_in(branch: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ticket_s_project_is_its_link_or_none() {
+        let data = json!({"issue": {"project": {"name": "Login", "url": "https://linear.app/a/project/login"}}});
+        assert_eq!(
+            project_url_in(&data).as_deref(),
+            Some("https://linear.app/a/project/login")
+        );
+        assert_eq!(project_url_in(&json!({"issue": {"project": null}})), None);
+    }
 
     #[test]
     fn tickets_in_branch_names() {

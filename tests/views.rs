@@ -202,6 +202,77 @@ mod with_github {
             !s.iter().any(|l| l.contains("Fix the login"))
         });
     }
+
+    #[test]
+    fn the_branch_s_ticket_and_pr_are_copied_and_its_merge_queue_opened() {
+        let url = fake_github();
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &url),
+            ("SWITCHBOARD_GITHUB_API", &url),
+            ("LINEAR_WORKSPACE", "acme"),
+        ]);
+        settings(&server, json!({"sidebar": false}));
+        let did = server.dir.path().join("did");
+        desktop_stand_ins(&server.home, &did);
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(&work, &["symbolic-ref", "HEAD", "refs/heads/eng-42-login"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(120, 30);
+        client.wait_text("$");
+        client.type_text(&format!("cd {}\r", work.display()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("widgets"))
+        {
+            assert!(Instant::now() < deadline, "the shell didn't cd");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        for (command, copied) in [
+            ("copy-ticket-id", "Copied ENG-42"),
+            (
+                "copy-ticket-url",
+                "Copied https://linear.app/acme/issue/ENG-42",
+            ),
+            ("copy-pr-number", "Copied 12"),
+            (
+                "copy-pr-url",
+                "Copied https://github.com/acme/widgets/pull/12",
+            ),
+        ] {
+            server.ok(&["press", command]);
+            client.wait_text(copied);
+            client.type_text("x");
+            client.wait_for("the box closed", |s| {
+                !s.iter().any(|l| l.contains("Copied"))
+            });
+        }
+
+        // The queue of the PR's base, in the browser.
+        server.ok(&["press", "open-merge-queue"]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let opened = std::fs::read_to_string(&did).unwrap_or_default();
+            if opened.contains("https://github.com/acme/widgets/queue/main") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "nothing opened it: {opened:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 #[test]
