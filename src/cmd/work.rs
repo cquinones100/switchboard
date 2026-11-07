@@ -39,7 +39,7 @@ use crate::mux::{PaneId, TabId};
 use crate::ui::picker::TYPED;
 use crate::ui::{PickItem, Picker};
 use crate::worktree;
-use crate::{paths, platform, util};
+use crate::{paths, platform, settings, util};
 
 /// The rest of a key's work, run back on the server's task.
 type Then = Box<dyn FnOnce(&mut Server, ClientId) + Send>;
@@ -487,7 +487,7 @@ impl Server {
 
     /// Opens a tab at the end of the client's session, in `dir`, running
     /// `command`, in the background unless `front`. Says why when it can't.
-    fn work_tab(
+    pub(crate) fn work_tab(
         &mut self,
         client: ClientId,
         dir: &Path,
@@ -514,7 +514,7 @@ impl Server {
     }
 
     /// Brings the first of the tabs just opened to the front.
-    fn front(&mut self, client: ClientId, tabs: &[TabId]) {
+    pub(crate) fn front(&mut self, client: ClientId, tabs: &[TabId]) {
         let (Some(first), Some(session)) = (
             tabs.first(),
             self.clients.get(&client).map(|c| c.session.clone()),
@@ -726,12 +726,20 @@ impl Server {
             move || {
                 let text = std::fs::read_to_string(&file).unwrap_or_default();
                 let all = worktree_from_note::items(&text);
-                (
-                    all.is_empty(),
-                    worktree_from_note::unclaimed(&at, &name, &text),
-                )
+                let items = worktree_from_note::unclaimed(&at, &name, &text);
+                // Each item whole, for the list's lower half, with the
+                // wtn_item_preview setting (wtn-open.zsh's `item`).
+                let wholes: Vec<String> = if settings::is_on("wtn_item_preview") {
+                    items
+                        .iter()
+                        .map(|i| worktree_from_note::item_text(&text, i.line))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                (all.is_empty(), items, wholes)
             },
-            move |server, client, (none, items)| {
+            move |server, client, (none, items, wholes)| {
                 let title = note.strip_suffix(".md").unwrap_or(&note).to_string();
                 if none {
                     server.say(Some(client), &format!("{title} has no unticked items."));
@@ -765,9 +773,22 @@ impl Server {
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
+                let previews = if wholes.is_empty() {
+                    Vec::new()
+                } else if items.len() > 1 {
+                    let every = items
+                        .iter()
+                        .map(|i| format!("- {}", i.text))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    std::iter::once(every).chain(wholes).collect()
+                } else {
+                    wholes
+                };
                 let picker = Picker::new(format!("Work on {short}'s items"), rows)
                     .named("items")
-                    .prompt(format!("{short}> "));
+                    .prompt(format!("{short}> "))
+                    .previews(previews);
                 server.pick(client, picker, move |server, client, picked| {
                     let Some(picked) = picked else {
                         return;

@@ -121,9 +121,14 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
             "Its keys do nothing until it is on".into(),
             format!("again: {palette}, then Settings."),
         ],
+        // tip.sh pointed at `setup.sh terminal`, which set the terminal's
+        // Option key; with no setup of the terminal now, it says where.
         "option-alt" => vec![
             "Option isn't acting as Alt here,".into(),
             "so the M- keys type letters instead.".into(),
+            String::new(),
+            "Set Option as Alt in the terminal's".into(),
+            "settings (the guide's \"Option as Alt\").".into(),
         ],
         _ if name.starts_with("key-") => vec![
             format!("Next time, press {}", key.unwrap_or("its key")),

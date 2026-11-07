@@ -1522,7 +1522,7 @@ impl Server {
     }
 
     /// A tab's name typed in; empty names it after its directory again.
-    fn rename_tab(&mut self, client: ClientId, tab: TabId) {
+    pub(crate) fn rename_tab(&mut self, client: ClientId, tab: TabId) {
         if !self.tabs.contains_key(&tab) {
             return;
         }

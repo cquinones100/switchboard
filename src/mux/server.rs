@@ -306,6 +306,8 @@ pub struct Server {
     pub status: crate::status::Status,
     /// The look for a new release, and its box (src/update).
     pub update: crate::update::Updates,
+    /// The clients waiting on C-w's next key (src/extras).
+    pub extras: crate::extras::Extras,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -550,6 +552,7 @@ impl Server {
             views: Default::default(),
             status: Default::default(),
             update: Default::default(),
+            extras: Default::default(),
         }
     }
 
@@ -848,13 +851,26 @@ impl Server {
         cols: u16,
         rows: u16,
     ) -> Result<Pane> {
-        let env = vec![
+        let mut env = vec![
             (
                 "SWITCHBOARD".to_string(),
                 socket::socket_path().to_string_lossy().into_owned(),
             ),
             ("SWITCHBOARD_PANE".to_string(), id.to_string()),
         ];
+        // gh's `--web`, from any pane, opens in the Chrome profile
+        // browser.json gives the site, as every link Switchboard opens does
+        // (tmux.conf's `setenv -g GH_BROWSER`). GH_BROWSER, not BROWSER,
+        // which other programs read too.
+        if let Ok(exe) = crate::util::exe() {
+            env.push((
+                "GH_BROWSER".to_string(),
+                format!(
+                    "{} open-url",
+                    crate::worktree::shell_quote(&exe.to_string_lossy())
+                ),
+            ));
+        }
         let spec = PaneSpawn {
             id: Some(id),
             command,
@@ -1502,7 +1518,15 @@ impl Server {
             }
             return;
         }
-        if let Some(action) = self.bindings.root.get(&key).cloned() {
+        // C-w's next key, Alt-arrows with pane_arrows off, and Option's
+        // characters where it isn't Alt (src/extras).
+        let fate = self.extras_key(id, key);
+        if fate == crate::extras::KeyFate::Taken {
+            return;
+        }
+        if fate == crate::extras::KeyFate::Bindings
+            && let Some(action) = self.bindings.root.get(&key).cloned()
+        {
             self.count_key(&key.notation());
             self.act(id, action);
             return;
@@ -1680,6 +1704,7 @@ impl Server {
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Notes(command) => self.notes_command(id, command, pane),
+            Action::Extra(command) => self.extras_command(id, command, pane),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

@@ -19,6 +19,10 @@
 //! `--print-query` let pick-dir.zsh take a path typed in) gives back the
 //! text typed when Enter finds no row matching it, or at once on Alt-Enter.
 //!
+//! A list may show the chosen row whole below the rows (`previews`, as
+//! fzf's `--preview` window at the bottom showed wtn-open.zsh's item), when
+//! a row is cut to one line of something longer.
+//!
 //! Up and Down (C-p and C-n, C-k and C-j, Tab and Shift-Tab, the wheel)
 //! move; Enter picks; Esc or C-c closes; Backspace, C-w and C-u edit what is
 //! typed. A click moves to a row and a second click on it picks it, as fzf
@@ -109,6 +113,9 @@ pub struct Picker {
     drawn: Option<Drawn>,
     /// How many rows the last draw had room for.
     room: usize,
+    /// Each item's text whole, by its place in `items`, shown under the
+    /// rows for the chosen one; none when empty.
+    previews: Vec<String>,
 }
 
 impl Picker {
@@ -130,6 +137,7 @@ impl Picker {
             last_click: None,
             drawn: None,
             room: 10,
+            previews: Vec::new(),
         };
         picker.refilter();
         picker
@@ -192,6 +200,13 @@ impl Picker {
     /// Its title given anew while it is up.
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
+    }
+
+    /// Each item's text whole, by its place in the items given, shown in
+    /// the lower part of the box for the row chosen.
+    pub fn previews(mut self, previews: Vec<String>) -> Picker {
+        self.previews = previews;
+        self
     }
 
     /// Typed, as if by hand.
@@ -441,7 +456,14 @@ impl Overlay for Picker {
             .max(10)
             .min(area.height as usize);
         let inner = outer_w.saturating_sub(2);
-        self.room = outer_h.saturating_sub(2 + 2 + 2).max(1);
+        let rows = outer_h.saturating_sub(2 + 2 + 2).max(1);
+        // With previews, the lower half shows the chosen one, under a rule.
+        let preview_rows = if self.previews.is_empty() {
+            0
+        } else {
+            rows / 2
+        };
+        self.room = rows.saturating_sub(preview_rows).max(1);
         if self.cursor >= self.top + self.room {
             self.top = self.cursor + 1 - self.room;
         }
@@ -459,6 +481,32 @@ impl Overlay for Picker {
         ];
         for row in self.top..(self.top + self.room).min(self.shown.len()) {
             lines.push(self.row_line(row, widths, look));
+        }
+        if preview_rows > 1 {
+            while lines.len() < 2 + self.room {
+                lines.push(BoxLine::blank());
+            }
+            lines.push(BoxLine::text("─".repeat(inner), look.faint()));
+            let whole = self
+                .shown
+                .get(self.cursor)
+                .and_then(|(i, _)| self.previews.get(*i))
+                .map(String::as_str)
+                .unwrap_or("");
+            let wrapped: Vec<String> = whole
+                .lines()
+                .flat_map(|l| {
+                    let indent = l.len() - l.trim_start().len();
+                    let pad = " ".repeat(indent + 1);
+                    draw::wrap(l.trim_start(), inner.saturating_sub(indent + 2))
+                        .into_iter()
+                        .map(move |w| format!("{pad}{w}"))
+                })
+                .take(preview_rows - 1)
+                .collect();
+            for line in wrapped {
+                lines.push(BoxLine::text(line, look.text()));
+            }
         }
         let mut spec = BoxSpec::new(&self.title, &lines);
         spec.keys = Some(if self.free {
@@ -513,7 +561,9 @@ impl Overlay for Picker {
         };
         let hit = drawn.hit(mouse.col, mouse.row);
         let row = match hit {
-            Hit::Line(i, _) if i >= 2 => Some(self.top + i - 2).filter(|r| *r < self.shown.len()),
+            Hit::Line(i, _) if i >= 2 && i < 2 + self.room => {
+                Some(self.top + i - 2).filter(|r| *r < self.shown.len())
+            }
             _ => None,
         };
         match draw::gesture(&mouse) {
@@ -690,6 +740,32 @@ mod tests {
             ..click
         };
         assert_eq!(p.mouse(outside, &look), Step::Close(Outcome::Dismissed));
+    }
+
+    #[test]
+    fn the_chosen_row_shows_whole_below_the_rows() {
+        let look = Look::default();
+        let wholes = items()
+            .iter()
+            .map(|i| format!("{} in full\n  and what is under it", i.text))
+            .collect();
+        let mut p = Picker::new("Items", items()).previews(wholes);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        assert!(
+            s.iter()
+                .any(|l| l.contains("Split pane to the left in full"))
+        );
+        assert!(s.iter().any(|l| l.contains("   and what is under it")));
+        p.key(Key::new(KeyCode::Down, Mods::NONE), &look);
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        assert!(s.iter().any(|l| l.contains("Close the pane in full")));
+        assert!(
+            !s.iter()
+                .any(|l| l.contains("Split pane to the left in full"))
+        );
     }
 
     #[test]

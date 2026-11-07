@@ -712,6 +712,27 @@ impl Server {
         let Some(session) = session else {
             return;
         };
+        log(
+            &dirs.state,
+            &format!("{name}: out of date with no tab keeping it; opening one"),
+        );
+        if let Err(e) = self.start_loop_tab(&session, name, every, skill, true) {
+            log(&dirs.state, &format!("{name}: couldn't open its tab: {e}"));
+        }
+    }
+
+    /// The tab itself, in `session`, from an interactive shell of yours for
+    /// your PATH, left at that shell when Claude exits; in front unless
+    /// `background` (M-p's "Open a Calendar tab" and "Open a Slack tab"
+    /// bring it there, as loop-tab.sh did without `--background`).
+    pub(crate) fn start_loop_tab(
+        &mut self,
+        session: &str,
+        name: &str,
+        every: &str,
+        skill: &str,
+        background: bool,
+    ) -> anyhow::Result<crate::mux::TabId> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let command = vec![
             shell.clone(),
@@ -719,24 +740,17 @@ impl Server {
             "-c".into(),
             format!("claude '/loop {every} {skill}'; exec {shell} -i"),
         ];
-        log(
-            &dirs.state,
-            &format!("{name}: out of date with no tab keeping it; opening one"),
-        );
-        match self.new_tab(
-            &session,
+        let (tab, _) = self.new_tab(
+            session,
             Some(crate::paths::home()),
             Some(command),
             Some(name.into()),
-            true,
-        ) {
-            Ok((tab, _)) => {
-                if let Some(t) = self.tabs.get_mut(&tab) {
-                    t.opts.insert("@loop_tab".into(), "1".into());
-                }
-            }
-            Err(e) => log(&dirs.state, &format!("{name}: couldn't open its tab: {e}")),
+            background,
+        )?;
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.insert("@loop_tab".into(), "1".into());
         }
+        Ok(tab)
     }
 
     // ── The views and notifications ─────────────────────────────────────────

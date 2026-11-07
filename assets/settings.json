@@ -97,7 +97,7 @@
     "key": "notice_list",
     "category": "Sidebar",
     "label": "Notifications view",
-    "description": "Moving the sidebar's cursor onto a notification, or clicking one, brings a Notifications view to the front as moving onto a tab does: every one with its whole message, Enter opening its actions; off, Enter or a click opens its view in mission control",
+    "description": "M-p's \"Go to the notifications\" opens mission control's Notifications view: every one with its whole message, Enter opening its actions; off, it moves the sidebar's cursor onto the first one, as M-a does",
     "default": true
   },
   {
@@ -413,7 +413,7 @@
     "key": "wtn_item_preview",
     "category": "Notes",
     "label": "Show a note's item whole in wtn's list",
-    "description": "M-p's wtn popup shows the item under the cursor whole in a pane below its list, its full text and what is indented under it, since the list cuts each item to one line",
+    "description": "M-p's \"Start work on a note's checklist items\" shows the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since the list cuts each item to one line; off, the list has the whole box",
     "default": true
   },
   {
@@ -624,6 +624,13 @@
     "category": "Help",
     "label": "Alt-arrows move between panes",
     "description": "M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do in Vim; off, they reach the pane",
+    "default": true
+  },
+  {
+    "key": "ctrl_w_panes",
+    "category": "Help",
+    "label": "C-w then h, j, k or l moves between panes",
+    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt",
     "default": true
   },
   {

@@ -728,7 +728,12 @@ impl Server {
             | Action::ListKeys
             | Action::Detach
             | Action::ResetTips
-            | Action::TogglePin => (false, true),
+            | Action::TogglePin
+            // C-w's next key moves from the sidebar, and M-0's tab keeps
+            // the cursor in a sidebar, as M-1 to M-9 do (src/extras).
+            | Action::Extra(crate::extras::Command::PaneNav | crate::extras::Command::GoToTab) => {
+                (false, true)
+            }
             _ => {
                 self.sidebar_leave(&session);
                 (false, true)
@@ -1268,7 +1273,7 @@ impl Server {
     /// The cursor onto the first notification, in the sidebar of the
     /// client's session (sidebar.sh notices with notice_list off); with no
     /// sidebar there, it says why.
-    fn sidebar_to_notices(&mut self, client: ClientId) {
+    pub(crate) fn sidebar_to_notices(&mut self, client: ClientId) {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };

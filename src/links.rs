@@ -132,14 +132,23 @@ pub fn choose(
 /// as long as it takes to hand the link over (a moment): the server calls
 /// it on a blocking thread (`open_in_background`).
 pub fn open_url(url: &str) -> Result<()> {
+    open_url_as(url, None)
+}
+
+/// `open_url`, the profile chosen as for a link on the site `as_site`
+/// rather than the link's own, when given: the AWS login's, whose pages are
+/// on AWS's sign-in hosts but whose profile is the one browser.json gives
+/// its access portal, `awsapps.com`, as aws-login.sh chose it.
+pub fn open_url_as(url: &str, as_site: Option<&str>) -> Result<()> {
     let url = url.trim();
     if host_of(url).is_none() {
         bail!("{url} isn't a web link");
     }
     let config = util::read_json(browser_file()).unwrap_or(Value::Null);
     let profiles = platform::chrome_local_state().and_then(|f| profiles_in(&f));
+    let chosen_by = as_site.map(|site| format!("https://{site}/"));
     match choose(
-        url,
+        chosen_by.as_deref().unwrap_or(url),
         &config,
         profiles.as_deref(),
         settings::is_on("chrome_profiles"),
@@ -213,13 +222,18 @@ fn open_in_chrome(url: &str, profile: &str) -> Result<()> {
 }
 
 /// `switchboard open-url <url>`: what open-url.sh was, for scripts, skills
-/// and gh's `--web` (as its `GH_BROWSER`).
+/// and gh's `--web` (as its `GH_BROWSER`, which every pane's environment
+/// sets). `--as <site>` chooses the profile as for a link on that site.
 pub fn main(args: Vec<String>) -> std::process::ExitCode {
-    let [url] = args.as_slice() else {
-        eprintln!("Usage: switchboard open-url <url>");
-        return std::process::ExitCode::from(2);
+    let (as_site, url) = match args.as_slice() {
+        [url] => (None, url),
+        [flag, site, url] if flag == "--as" => (Some(site.as_str()), url),
+        _ => {
+            eprintln!("Usage: switchboard open-url [--as <site>] <url>");
+            return std::process::ExitCode::from(2);
+        }
     };
-    match open_url(url) {
+    match open_url_as(url, as_site) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("open-url: {e}");

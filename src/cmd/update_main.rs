@@ -37,8 +37,9 @@ pub fn main(args: Vec<String>) -> ExitCode {
     }
 }
 
-/// Does the update; what it did, or why it didn't.
-fn update(dir: &Path) -> Result<String, String> {
+/// Does the update; what it did, or why it didn't. M-p's "Update local
+/// main" runs it too, off the server's task.
+pub fn update(dir: &Path) -> Result<String, String> {
     // The main clone, from the top of the checkout `dir` is in: older git
     // gives `--git-common-dir` relative to the top whatever directory asks,
     // and knows no `--path-format`.
@@ -53,6 +54,7 @@ fn update(dir: &Path) -> Result<String, String> {
     .unwrap_or_else(|_| format!("{remote}/main"))
     .replacen(&format!("{remote}/"), "", 1);
 
+    worktree::count_fetch(&root, &remote, "update main");
     let fetched = Command::new("git")
         .arg("-C")
         .arg(&root)

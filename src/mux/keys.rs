@@ -3,9 +3,9 @@
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-c to the
 //! tab's Claude, M-f to pin a tab), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
-//! M-N and M-e (src/notes/serve.rs), under the same keys, with
-//! the prefix `M-b` for the rest; `~/.config/switchboard/keys.json`
-//! adds to or changes them:
+//! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
+//! same keys, with the prefix `M-b` for the rest;
+//! `~/.config/switchboard/keys.json` adds to or changes them:
 //!
 //! ```json
 //! { "root": { "M-g": "new-tab", "M-w": null }, "prefix": { "y": "copy-mode" } }
@@ -124,6 +124,9 @@ pub enum Action {
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::Command),
+    /// The rest of tmux.conf's keys and M-p's commands: M-0, C-w, renaming
+    /// the tab, mission control on a view and the rest (src/extras).
+    Extra(crate::extras::Command),
 }
 
 impl Action {
@@ -139,8 +142,12 @@ impl Action {
     /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`), updates'
-    /// (`update-switchboard`, `run-setup`), and Notes' (`notes`,
-    /// `notes-beside`, `note-tab`, `choose-tab-note`).
+    /// (`update-switchboard`, `run-setup`), Notes' (`notes`,
+    /// `notes-beside`, `note-tab`, `choose-tab-note`), and the extras'
+    /// (`rename-tab`, `go-to-tab`, `pane-nav`, `mission-<view>`,
+    /// `notifications`, `habits-report`, `send-reply`, `update-main`,
+    /// `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`,
+    /// `open-pr-number`, `open-ticket-id`, `aws-login`).
     pub fn parse(name: &str) -> Option<Action> {
         let dir = |d: &str| match d {
             "left" => Some(Direction::Left),
@@ -160,6 +167,9 @@ impl Action {
         }
         if let Some(command) = crate::notes::serve::Command::parse(name) {
             return Some(Action::Notes(command));
+        }
+        if let Some(command) = crate::extras::Command::parse(name) {
+            return Some(Action::Extra(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -265,6 +275,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
             Action::Notes(command) => command.name().into(),
+            Action::Extra(command) => command.name(),
         }
     }
 
@@ -342,6 +353,7 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
             Action::Notes(command) => command.about().into(),
+            Action::Extra(command) => command.about().into(),
         }
     }
 
@@ -389,6 +401,7 @@ impl Action {
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
             Action::Notes(command) => command.tags(),
+            Action::Extra(command) => command.tags(),
         }
     }
 
@@ -410,6 +423,7 @@ impl Action {
         let words = match self {
             Action::SelectTab(1) => "Go to a tab by number (M-1 to M-9)".to_string(),
             Action::SelectTab(_) => return None,
+            Action::Extra(command) if !command.in_palette() => return None,
             _ => self.about(),
         };
         let tags = self
@@ -436,6 +450,10 @@ impl Action {
             .into_iter()
             .filter(|c| c.key().is_none())
             .map(Action::Notes);
+        let extras = crate::extras::Command::ALL
+            .into_iter()
+            .filter(|c| c.key().is_none())
+            .map(Action::Extra);
         [
             Action::ResetTips,
             Action::ToggleTheme,
@@ -455,6 +473,7 @@ impl Action {
         .chain(views)
         .chain(diff)
         .chain(notes)
+        .chain(extras)
         .chain(crate::update::Command::ALL.map(Action::Update))
         .collect()
     }
@@ -528,6 +547,11 @@ impl Default for Bindings {
         for command in crate::notes::serve::Command::ALL {
             if let Some(k) = command.key() {
                 bind(k, Notes(command));
+            }
+        }
+        for command in crate::extras::Command::ALL {
+            if let Some(k) = command.key() {
+                bind(k, Extra(command));
             }
         }
         let mut prefix = HashMap::new();
@@ -663,6 +687,10 @@ mod tests {
             Action::Diff(crate::diff::Command::Ask),
             Action::Notes(crate::notes::serve::Command::Beside),
             Action::Notes(crate::notes::serve::Command::NoteTab),
+            Action::Extra(crate::extras::Command::GoToTab),
+            Action::Extra(crate::extras::Command::Mission(
+                crate::extras::MissionView::Queues,
+            )),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

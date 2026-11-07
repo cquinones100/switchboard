@@ -16,9 +16,13 @@
 //! again, which the tab says. M-p's "Update Switchboard" looks at once
 //! whatever the setting says and says when there is nothing new or GitHub
 //! can't be reached; its "Run Switchboard's setup" opens the guided setup
-//! in a tab the same way.
+//! in a tab the same way. Each look also pulls the git repository your
+//! CLAUDE.md's rules come from, when claude.json names one (`pull_rules`).
 
-use std::time::Instant;
+use std::process::{Command as Process, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use ratatui::buffer::Buffer;
 
@@ -33,6 +37,10 @@ use crate::{paths, settings, util};
 pub struct Updates {
     /// A look is under way, so another isn't started beside it.
     checking: bool,
+    /// When your rules' repository was last pulled, and whether a pull is
+    /// under way (`pull_rules`).
+    rules_pulled: Option<Instant>,
+    rules_pulling: Arc<AtomicBool>,
     /// The box up now, if one is.
     prompt: Option<Prompt>,
     serial: u64,
@@ -135,6 +143,7 @@ impl Server {
     /// On the server's tick: the hourly look, once the hour since the last
     /// one is up.
     pub fn update_tick(&mut self) {
+        self.pull_rules(Why::Hourly);
         if self.update.checking || !super::looks_by_itself() {
             return;
         }
@@ -148,6 +157,7 @@ impl Server {
 
     /// A terminal attached: a look, offering anything newer on it.
     pub fn update_attached(&mut self, client: ClientId) {
+        self.pull_rules(Why::Attach);
         if super::looks_by_itself() && super::allowed(Why::Attach, &update_setting(true)) {
             self.update_look(Why::Attach, Some(client));
         }
@@ -156,7 +166,10 @@ impl Server {
     /// M-p's commands.
     pub fn update_command(&mut self, client: ClientId, command: Command) {
         match command {
-            Command::UpdateNow => self.update_look(Why::Asked, Some(client)),
+            Command::UpdateNow => {
+                self.pull_rules(Why::Asked);
+                self.update_look(Why::Asked, Some(client));
+            }
             Command::Setup => self.update_tab(client, &["update", "--setup", "--hold"]),
         }
     }
@@ -306,6 +319,72 @@ impl Server {
             self.say(Some(client), &format!("Couldn't open a tab for it: {e}"));
         }
     }
+}
+
+impl Server {
+    /// Your CLAUDE.md's rules, when claude.json names the git repository
+    /// they live in: pulled with each look the update_check setting allows,
+    /// hourly, as a terminal attaches, or asked for, fast-forward only, by
+    /// setup's `claude-md` part, which also writes `~/.claude/CLAUDE.md`
+    /// again if it must (repo-update.sh's pull beside its look). It runs
+    /// whether or not this binary looks for releases, since your rules
+    /// change apart from Switchboard, and one at a time, off the server's
+    /// task, so nothing it waits on holds anything up.
+    ///
+    /// It never asks for anything: git's own prompt is off, and so is its
+    /// askpass (`GIT_ASKPASS=false`, which fails at once; a credential
+    /// helper still answers first), ssh may not open an askpass dialog
+    /// (`SSH_ASKPASS_REQUIRE=never`), and its input is closed;
+    /// `SWITCHBOARD_PULL_ONLY` keeps it from cloning, which is the setup's.
+    fn pull_rules(&mut self, why: Why) {
+        if !super::allowed(why, &update_setting(why == Why::Attach)) {
+            return;
+        }
+        let hour = Duration::from_secs(super::CHECK_EVERY as u64);
+        if why == Why::Hourly
+            && self
+                .update
+                .rules_pulled
+                .is_some_and(|at| at.elapsed() < hour)
+        {
+            return;
+        }
+        if tokio::runtime::Handle::try_current().is_err()
+            || self.update.rules_pulling.swap(true, Ordering::SeqCst)
+        {
+            return;
+        }
+        self.update.rules_pulled = Some(Instant::now());
+        let pulling = self.update.rules_pulling.clone();
+        tokio::task::spawn_blocking(move || {
+            pull_rules_now();
+            pulling.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
+/// `switchboard setup claude-md` as the update check runs it, when
+/// claude.json names a repository.
+fn pull_rules_now() {
+    let names_repo = util::read_json(paths::config_dir().join("claude.json"))
+        .and_then(|v| v.get("repo").and_then(|r| r.as_str()).map(str::to_string))
+        .is_some_and(|r| !r.trim().is_empty());
+    let Ok(exe) = util::exe() else {
+        return;
+    };
+    if !names_repo {
+        return;
+    }
+    let _ = Process::new(exe)
+        .args(["setup", "claude-md"])
+        .env("SWITCHBOARD_PULL_ONLY", "true")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "false")
+        .env("SSH_ASKPASS_REQUIRE", "never")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The update_check setting's value: "hourly", "open" or "off"; read from

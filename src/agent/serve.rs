@@ -106,11 +106,22 @@ impl Server {
                 }
             }
         }
-        if hook.event == "SessionStart"
-            && hook.source != "compact"
-            && setting_on("one_claude_per_tab")
-        {
-            self.one_claude(pane);
+        if hook.event == "SessionStart" && hook.source != "compact" {
+            // The first Claude to start in a worktree brings the tip on its
+            // PR's keys, with GitHub on (agent-state.sh's SessionStart).
+            if setting_on("github") && !self.tip_was_seen("worktree") {
+                let dir = payload
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| self.panes.get(&pane).and_then(|s| s.pane.cwd()));
+                if dir.is_some_and(|d| in_worktree(&d)) {
+                    self.tip("worktree", None);
+                }
+            }
+            if setting_on("one_claude_per_tab") {
+                self.one_claude(pane);
+            }
         }
         Reply::ok("")
     }
@@ -385,4 +396,25 @@ fn process_group(pid: u32) -> Option<u32> {
 /// empty and not 0.
 fn pinned(value: &str) -> bool {
     !value.is_empty() && value != "0"
+}
+
+/// Whether a directory is in a worktree the worktree commands made, under a
+/// repository's `.claude/worktrees/` (agent-state.sh's
+/// `*/.claude/worktrees/*`).
+fn in_worktree(dir: &std::path::Path) -> bool {
+    dir.to_string_lossy().contains("/.claude/worktrees/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn a_worktree_is_under_a_repositorys_claude_worktrees() {
+        assert!(in_worktree(Path::new("/r/app/.claude/worktrees/eng-1-fix")));
+        assert!(in_worktree(Path::new("/r/app/.claude/worktrees/eng-1/src")));
+        assert!(!in_worktree(Path::new("/r/app/.claude")));
+        assert!(!in_worktree(Path::new("/r/app")));
+    }
 }

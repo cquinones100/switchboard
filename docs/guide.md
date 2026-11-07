@@ -110,6 +110,8 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-[` `M-]` | Previous tab, next tab |
 | `M-Tab` | Go back to the tab you were on before |
 | `M-1` … `M-9` | Go to the tab with that number |
+| `M-0` | Go to a tab by its number, typed in a box, for the tabs past 9 |
+| `C-w` then `h` `j` `k` `l` | Move to the pane on that side, as in Vim; in Vim itself `C-w` is Vim's, and `C-w C-w` sends one `C-w` to the pane |
 | `M-t`, `M-n` | New tab running Claude, in a directory you pick |
 | `M-j` | Find a tab by typing its name, and go to it |
 | `M-o` | Reopen a worktree no tab has open, resuming its Claude |
@@ -148,6 +150,8 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 
 `M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line.
 
+`C-w` waits for the next key: `h`, `j`, `k` or `l` moves to the pane on that side (from the sidebar too), `C-w` again sends `C-w` itself to the pane (deleting a word in a shell or in Claude's prompt), and any other key does what it would have done. Settings' "C-w then h, j, k or l moves between panes" (`ctrl_w_panes`) off leaves `C-w` to the pane, and Settings' "Alt-arrows move between panes" (`pane_arrows`) off hands Alt-arrows to the pane.
+
 ### Option as Alt on a Mac
 
 On a Mac, every `M-` key needs the terminal to send Option as Alt; otherwise Option types a character (`˙`, `∆`, `∫`) into the pane and nothing happens. Set it in the terminal:
@@ -157,7 +161,7 @@ On a Mac, every `M-` key needs the terminal to send Option as Alt; otherwise Opt
 - Terminal: Settings, Profiles, Keyboard, then "Use Option as Meta key".
 - kitty: `macos_option_as_alt yes`. WezTerm: `send_composed_key_when_left_alt_is_pressed = false`. Alacritty: `option_as_alt = "Both"` under `[window]`.
 
-On Linux, terminals send Alt this way already.
+On Linux, terminals send Alt this way already. Where Option doesn't act as Alt, the first of `˙` `∆` `˚` `¬` (what Option+h, j, k and l type) brings a tip saying so, once; each still reaches the pane.
 
 ### Changing the keys
 
@@ -177,15 +181,15 @@ The server reads the file when it starts, so a change takes effect after `switch
 
 The actions, by the names the file uses:
 
-- Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
-- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `new-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`.
-- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `continue-shaping`.
-- The workspace: `palette`, `mission-control`, `settings`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`.
-- Reading: `pr-view`, `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`, `search-everything`, `read-link`, `open-link-being-read`.
+- Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
+- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
+- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `continue-shaping`, `send-reply`, `update-main`.
+- The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
+- Reading: `pr-view`, `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `pr-ready`, `search-everything`, `read-link`, `open-link-being-read`.
 - The diff: `diff`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
 
-These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard` and `run-setup`. Give any of them a key in `keys.json` to have it on one.
+These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one.
 
 ## Tabs and the status line
 
@@ -233,6 +237,22 @@ While GitHub or Linear is off in Settings, the commands tagged `#github` or `#li
 
 `M-p`'s "Shape a note's checklist items as Linear tickets" picks a note (the one open in Notes first, then the newest), then its items (every one chosen to begin with; Enter on a row leaves it out or puts it back, and the first row shapes what is chosen), then the repository, and opens a background tab running `/shape` for each item, its details and numbered sub-items with it. "Shape a new Linear ticket from what you type, in a new tab" does the same for one idea typed in. Both need Linear (the `linear` setting). `M-p`'s "View the branch's PR description as an image" draws the description as GitHub does, in place of the pane.
 
+### More in the palette
+
+These are in `M-p` alone, with no key unless you give them one in `keys.json`:
+
+- **Rename the tab**: a name typed in a box, starting from the one it has; empty gives the tab its own name back, as "Rename it" in mission control's menu does.
+- **Mission control: \<view\>**, one for each view (Work map, Calendar, Slack, Closed, PRs, Tickets, Inbox, CI, Merge queues, Sessions, Usage, Resources): mission control opened on that view. A view turned off in Settings is said so at the bottom of mission control, which opens on the tabs.
+- **Go to the notifications**: mission control's Notifications view, every notification with its whole message and Enter opening its actions; with Settings' "Notifications view" (`notice_list`) off, the sidebar's cursor on the first notification instead, as `M-a` reaches them.
+- **How you use Switchboard**: what [Suggestions from how you work](#suggestions-from-how-you-work) has counted, in a box: the keys you press most this week and month, the commands you pick in `M-p`, the views you open, and the suggestions now. `j` and `k` scroll it, and any other key closes it.
+- **Send Claude's last reply to another tab**: the last thing this tab's Claude said in its last turn, from its transcript, pasted into the Claude of a tab you pick (its active pane when it runs none) without Enter, and that tab brought to the front, so you can add to it before sending. Its line breaks stay in the text.
+- **Update local main to origin's, without switching branches**: `switchboard update-main` (below) for the pane's repository, what it did in a box.
+- **Check Switchboard's setup**: `switchboard setup --check`, what it would change, in a box, changing nothing. **Run a part of Switchboard's setup, or only check it** lists the parts (`switchboard setup --parts`) and every part at once, then runs the one picked or only checks it.
+- **Open a Calendar tab** and **Open a Slack tab**: the tabs the Calendar and Slack views open in the background when they are out of date (`/loop 30m /today`, `/loop 5m /slack-updates`, Claude in your home directory), opened in front.
+- **Open a PR in the browser by number or URL**: a PR's number (a PR of the pane's repository) or its link, typed in a box that starts with the clipboard's when it holds one; empty is the tab's own PR, as `M-r` opens it. Then a menu: open it in the browser, or work on it in a new tab (`wtpr`). Needs GitHub.
+- **Open a Linear ticket in the browser by ID, number or URL**: the same for a ticket, a bare number taking the team key of the ticket the branch names, and working on it a new tab running `wt` in the pane's repository. Needs Linear.
+- **Log in to AWS (aws sso login) in your Chrome profile**: `switchboard aws-login` in a pane beside yours, which logs in to the one `[sso-session]` in `~/.aws/config` and opens AWS's login page in the Chrome profile `browser.json` gives `awsapps.com` (else its default profile), whatever host the page is on. The pane stays until the login is done and a key is pressed, so its code and any error can be read. It needs the AWS CLI (`aws`), which Switchboard doesn't install.
+
 ### Messages
 
 What a key has to tell you (nothing needs you, a link copied, no ticket in this branch) shows in a small box in the middle of the screen, as wide as its text, which any key or a click closes and which goes by itself after five seconds, rather than on the status line for a moment (Settings' "Messages in a box", `message_boxes`). The key that closes it goes no further. A new message takes the place of one still up. `switchboard say` shows one from a script.
@@ -251,6 +271,8 @@ A tip is a small box in the top-right corner that teaches a key at the moment it
 - You turn down the first update offered: where to look for updates.
 - You press a key of GitHub or Linear while that service is off: how to turn it back on.
 - You pick a command from `M-p` that has a key of its own: the key.
+- Claude first starts in a worktree (`.claude/worktrees/`), with GitHub on: `M-v`, `M-d` and `M-m` for its PR.
+- Option types `˙` `∆` `˚` or `¬` where it doesn't act as Alt: how to set it (see [Option as Alt on a Mac](#option-as-alt-on-a-mac)).
 
 Mission control's first opening says how to get around it in its own footer instead.
 
@@ -551,7 +573,7 @@ Switchboard sends nothing about how you use it anywhere. With Settings' "Suggest
 - turning off a view you haven't opened in 30 days (once 30 days are counted), which for the views that ask GitHub or Linear also stops what they look up;
 - turning on a feature that is off, when what you did this week would use it: the second status line after you looked up a tab's PR or ticket 10 times, today's todo note after you went to Notes 10 times.
 
-A suggestion's menu in mission control's Notifications view makes the change ("Turn it on", "Turn it off", or "Got it" for a key), puts it off for 14 days ("Not now"), or stops suggesting it ("Don't suggest it again"). Turning the setting off removes what was counted.
+A suggestion's menu in mission control's Notifications view makes the change ("Turn it on", "Turn it off", or "Got it" for a key), puts it off for 14 days ("Not now"), or stops suggesting it ("Don't suggest it again"). Turning the setting off removes what was counted. `M-p`'s "How you use Switchboard" shows the counts themselves, and the suggestions now, in a box.
 
 ### Resources
 
@@ -701,7 +723,7 @@ Every link Switchboard opens, from mission control, the views, `M-r` or `M-l`, g
 
 A site in `hosts` matches itself and its subdomains, the longest match winning. A profile is written as the folder Chrome keeps it in, as `chrome://version` shows it ("Profile 2"), or as the name Chrome shows for it ("Work"). Settings lists `hosts` and `default` under "Browser (browser.json)", as Chrome profiles and Default Chrome profile, the default picked from Chrome's own profiles. On macOS the link opens with `open -na "Google Chrome"`; on Linux the first of `google-chrome` and Chromium that is installed is run, with the profile. Where neither is installed, the link opens in the default browser (through `xdg-open` on Linux). Settings' "Chrome profiles" (`chrome_profiles`, Integrations) turned off opens every link in the default browser.
 
-`switchboard open-url <url>` opens a link the same way, for scripts and skills; with `GH_BROWSER='switchboard open-url'` in your environment, gh's `--web` does too.
+`switchboard open-url <url>` opens a link the same way, for scripts and skills, and `switchboard open-url --as <site> <url>` in the profile `<site>` would get (as the AWS login opens AWS's pages in `awsapps.com`'s). Every pane's environment has `GH_BROWSER` set to `switchboard open-url`, so gh's `--web` (`gh pr view --web` and the rest) opens the same way from any pane; outside the workspace, set it yourself.
 
 ### GitHub and Linear access
 
@@ -1222,7 +1244,7 @@ switchboard worktree-done --paths    print only the finished ones' paths
 
 ### Another tab's last reply
 
-`switchboard claude-reply <tab>` prints the last reply Claude gave in a tab, the final text of its last turn, read from its session's transcript; `<tab>` is the tab's number in your session or its id (`@12`). `--pane <tab>` prints the pane to type into instead: the tab's Claude pane, or its active pane when it runs no Claude. It exits 1, saying why, when the tab has no Claude or no reply yet.
+`switchboard claude-reply <tab>` prints the last reply Claude gave in a tab, the final text of its last turn, read from its session's transcript; `<tab>` is the tab's number in your session or its id (`@12`). `--pane <tab>` prints the pane to type into instead: the tab's Claude pane, or its active pane when it runs no Claude. It exits 1, saying why, when the tab has no Claude or no reply yet. `M-p`'s "Send Claude's last reply to another tab" does it in the workspace (see [More in the palette](#more-in-the-palette)).
 
 ## Landing and reviewing
 
@@ -1487,7 +1509,9 @@ The running server goes on with the old version until it starts again: `switchbo
 
 A release build of Switchboard looks for a new release by itself: each time a terminal attaches, and every hour. When there is one, a box lists the releases newer than yours, newest first, each with its age and notes, over two options. "Update now" opens a tab that runs the update and its setup and stays until you press Enter. "Not now", or Esc, puts it off: the hourly look doesn't ask about that release again, only about a newer one, while the look as a terminal attaches asks whenever something newer is out. A box left unanswered is asked about again the next hour, and a newer one takes its place. Settings' "Update check" (`update_check`) chooses when it looks: "open, hourly" (`hourly`, the default), "open only" (`open`), or "off" (`off`).
 
-`M-p`'s "Update Switchboard" looks now, whatever that setting says, and says so when there is nothing newer or it can't look. `M-p`'s "Run Switchboard's setup" opens a tab running the guided `switchboard setup`, to put in place what isn't, or to say yes to a part you said no to before.
+`M-p`'s "Update Switchboard" looks now, whatever that setting says, and says so when there is nothing newer or it can't look. `M-p`'s "Run Switchboard's setup" opens a tab running the guided `switchboard setup`, to put in place what isn't, or to say yes to a part you said no to before; "Check Switchboard's setup" and "Run a part of Switchboard's setup" are in [More in the palette](#more-in-the-palette).
+
+When `~/.config/switchboard/claude.json` names a git repository for your Claude rules, each look the setting allows (as a terminal attaches, every hour, or asked for) also pulls that repository's clone, fast-forward only, with `switchboard setup claude-md`, which writes `~/.claude/CLAUDE.md` again if it must. This happens whether or not your build looks for releases, since your rules change apart from Switchboard. It never asks for a password: git's prompt and askpass are off, and so is ssh's askpass, so a pull that needs one fails quietly and is tried again at the next look.
 
 A `switchboard` you built from source with cargo is kept current by git and cargo: its server never looks for releases, and `switchboard update` leaves it alone unless you add `--force`.
 
@@ -1549,7 +1573,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Show the landing queue (`landing_queue`) | on | Tabs landing on the default branch with queue-and-clean, or waiting their turn, get a Landing group in the sidebar and mission control, in the landing queue's order, which a waiting tab's menu changes; off, they show as Working, and the queue still orders the landings |
 | Notifications (`sidebar_notifications`) | on | The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox, which a click opens in mission control |
 | M-a goes to notifications (`needs_notices`) | on | M-a's walk of what needs you ends at the notifications while there are any, after the tabs, opening them as the sidebar's n does |
-| Notifications view (`notice_list`) | on | Moving the sidebar's cursor onto a notification, or clicking one, brings a Notifications view to the front as moving onto a tab does: every one with its whole message, Enter opening its actions; off, Enter or a click opens its view in mission control |
+| Notifications view (`notice_list`) | on | M-p's "Go to the notifications" opens mission control's Notifications view: every one with its whole message, Enter opening its actions; off, it moves the sidebar's cursor onto the first one, as M-a does |
 | New notes (`new_notes`) | on | In the sidebar's notifications, a note written for you (a meeting's from Fathom, the standup) until you read it, Enter offering to open it in Notes |
 | Next meeting (`next_meeting`) | on | In the sidebar's notifications, from five minutes before a meeting until ten after it starts: its name, the tickets and PRs it mentions, and Enter or a click to join its call |
 | Calendar changes (`calendar_changes`) | on | In the sidebar's notifications, what changed on today's calendar since you last looked at it: an event added, moved, renamed or gone; looking at the Calendar view clears them |
@@ -1623,7 +1647,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Toolbar (`notes_toolbar`) | on | A row of buttons over each note, one for each of the Format menu's styles (bold, italic, headings, lists, checklist, table, link, image) and ⋯ for the whole menu, each acting on the line or the selection; off, the Format menu is Ctrl-P alone |
 | Tell a note's new tab its note (`note_tab_prompt`) | on | A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read only when you ask; off, it starts as any other tab |
 | Notes beside a note's tab (`note_tab_beside`) | on | Opening a note's tab from Notes (t, or M-p's Open the tab for the note) moves Notes beside the tab's Claude showing the note, as M-e does; off, it only goes to the tab |
-| Show a note's item whole in wtn's list (`wtn_item_preview`) | on | M-p's wtn popup shows the item under the cursor whole in a pane below its list, its full text and what is indented under it, since the list cuts each item to one line |
+| Show a note's item whole in wtn's list (`wtn_item_preview`) | on | M-p's "Start work on a note's checklist items" shows the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since the list cuts each item to one line; off, the list has the whole box |
 | Ask for a tab's note (`ask_tab_note`) | on | When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on |
 
 ### Appearance
@@ -1657,6 +1681,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Easy mode (`easy_keys`) | off | Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (where the terminal sends them as the guide says), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update box's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (lists to pick from, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens |
 | Key help line (`key_help_line`) | on | With Easy mode on, a line at the bottom of Notes and M-d's diff naming the keys that work there |
 | Alt-arrows move between panes (`pane_arrows`) | on | M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do in Vim; off, they reach the pane |
+| C-w then h, j, k or l moves between panes (`ctrl_w_panes`) | on | C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt |
 
 ### Updates
 

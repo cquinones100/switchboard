@@ -22,7 +22,7 @@ switchboard <command>     ──┘            ├─ background tasks: GitHub, 
 ```
 
 - **Server** (`src/mux/server.rs`): one task owns all state (`Server`): sessions, tabs, panes, clients, overlays. Everything else (client sockets, PTY readers, timers, background lookups, file watches) sends it `Event`s over a channel; it handles them in order and draws the clients that changed. So nothing locks, and a slow lookup never holds up drawing. It runs on a tokio runtime; blocking work goes to `spawn_blocking` or a thread of its own. One server runs per state directory, held by a lock (`src/mux/socket.rs`); a client that finds none starts it detached (`setsid`), its output in `server.log`.
-- **Panes** (`src/mux/pane.rs`): a PTY (portable-pty) and a terminal emulator (alacritty_terminal) each, with a reader thread per pane. The emulator's replies to programs' queries go back to the PTY; OSC 52 goes to the clients' clipboard. Every pane's environment carries `SWITCHBOARD` (the socket) and `SWITCHBOARD_PANE` (its id), which the hooks and commands use as tmux's `TMUX` and `TMUX_PANE` were used. `src/mux/passthrough.rs` lets the notes pane alone send kitty's graphics commands on to the terminal and take easy mode's Cmd keys.
+- **Panes** (`src/mux/pane.rs`): a PTY (portable-pty) and a terminal emulator (alacritty_terminal) each, with a reader thread per pane. The emulator's replies to programs' queries go back to the PTY; OSC 52 goes to the clients' clipboard. Every pane's environment carries `SWITCHBOARD` (the socket) and `SWITCHBOARD_PANE` (its id), which the hooks and commands use as tmux's `TMUX` and `TMUX_PANE` were used, and `GH_BROWSER` (`switchboard open-url`), so gh's `--web` opens in the Chrome profile `browser.json` gives the site. `src/mux/passthrough.rs` lets the notes pane alone send kitty's graphics commands on to the terminal and take easy mode's Cmd keys.
 - **Layout** (`src/mux/layout.rs`): each tab is a tree of splits. Overlays sit above it: the boxes of `src/ui/` and mission control (what tmux's popups were).
 - **Drawing** (`src/mux/compose.rs`): per client, a ratatui `Buffer` is filled with the tab (sidebar, panes, borders, status line) and any overlay, and only the cells that changed are sent. The built-in screens draw into that buffer.
 - **Input** (`src/mux/input.rs`, `src/mux/keys.rs`): the client sends raw bytes; the server parses them into keys, mouse and paste, each with its raw bytes, matches bindings (the defaults are what tmux.conf bound, under the same keys; `~/.config/switchboard/keys.json` changes them), and passes anything unbound to the focused pane, mouse events encoded again for its position and mode.
@@ -72,7 +72,8 @@ The workspace:
 | `notes` | The notes app, and Notes in the workspace |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
 | `setup` | `switchboard setup`: Claude Code's hooks, statusline, permissions, CLAUDE.md and skills |
-| `update` | `switchboard update`, and the server's look for a new release |
+| `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
+| `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
 | `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `wait-deploy` and the rest) |
 
 `src/lib.rs` lists them with a line each, and every module opens with a comment saying what it is and why it works as it does.
@@ -133,13 +134,11 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
-- **Commands**: "Work the note continuously" (the mode itself; the sidebar reads only the `auto` mark on its tabs, and its `autopilot` setting is listed); "Rename the tab" in `M-p` (mission control's menu and `switchboard rename-tab` rename a tab); `M-p`'s "Mission control: <view>", "Go to the notifications", "How you use Switchboard" (`src/usage/report.rs` is there, with nothing opening it), "Send Claude's last reply to another tab", "Update local main", "Check Switchboard's setup" and "Run a part of Switchboard's setup", "Open a Calendar tab" and "Open a Slack tab", opening a PR or ticket by number, `M-0`, `C-w h/j/k/l` between panes, and the AWS login.
+- **Commands**: "Work the note continuously" (the mode itself; the sidebar reads only the `auto` mark on its tabs, and its `autopilot` setting is listed). Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name.
 - **Reading beside your work**: the notes pane's links in "Read a link", the pickers that open, copy or show a pane's links, images and videos, mission control's "Read it here", and OSC 8 links passed through to the terminal. Only the diff stands in a pane's place; lazygit there, and the diff and lazygit from a tab's menu, are gone.
 - **The diff**: a branch's commits one at a time (diffview's `c`), visual-mode ranges for `yp` and `yl`, and a working tree's changes, which `M-d` never showed.
 - **Mission control and the sidebar**: the Notifications window of its own (a view in mission control now), a new note's notification opening the note and a calendar change's opening the Calendar view, the Calendar drawn as a day, plugins' counts in the sidebar, the CI menu's failing log (the logs are kept), and the second status line's push count.
-- **Tips**: `worktree` and `option-alt` are written but never shown; nothing catches the characters Option types where it doesn't act as Alt.
-- **Settings nothing reads yet**: `pane_arrows` (Alt-arrows always move between panes; keys.json can unbind them), `notice_list` and `wtn_item_preview`.
-- **Elsewhere**: the update check's hourly pull of your rules' repository (setup's `claude-md` part pulls it), `GH_BROWSER` set for every pane, keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (mission control's menus type `wt`, `wtpr` and `shape` into a new shell, so they need them, and `shape` is a `switchboard` command, not a program on the PATH).
+- **Elsewhere**: keyboard selection in copy mode, and `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (mission control's menus type `wt`, `wtpr` and `shape` into a new shell, so they need them, and `shape` is a `switchboard` command, not a program on the PATH).
 
 ### Before this lands
 

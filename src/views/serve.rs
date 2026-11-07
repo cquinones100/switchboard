@@ -167,7 +167,7 @@ impl Server {
         }
     }
 
-    fn service_off(&mut self, client: ClientId, service: &str) {
+    pub(crate) fn service_off(&mut self, client: ClientId, service: &str) {
         if !self.tip(&format!("{service}_off"), Some(client)) {
             let name = if service == "github" {
                 "GitHub"
@@ -272,7 +272,7 @@ impl Server {
     }
 
     /// The ticket a tab's work is on: its branch's, else its name's.
-    pub(super) fn ticket_here(&self, tab: TabId, dir: &std::path::Path) -> Option<String> {
+    pub(crate) fn ticket_here(&self, tab: TabId, dir: &std::path::Path) -> Option<String> {
         ticket::id_for_dir(dir).or_else(|| {
             let t = self.tabs.get(&tab)?;
             t.opts
@@ -365,6 +365,13 @@ impl Server {
             self.say(Some(client), "No Linear ticket in this branch or tab name");
             return;
         };
+        self.open_ticket_id(client, id);
+    }
+
+    /// A Linear ticket by its ID in the browser: at the workspace's link
+    /// when one is written down, else where Linear says it is (M-l, and
+    /// M-p's "Open a Linear ticket in the browser by ID").
+    pub(crate) fn open_ticket_id(&mut self, client: ClientId, id: String) {
         if let Some(workspace) = linear_workspace() {
             links::open_in_background(format!("https://linear.app/{workspace}/issue/{id}"));
             return;

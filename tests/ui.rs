@@ -163,3 +163,96 @@ fn the_list_of_keys_opens_over_the_tab() {
         !s.iter().any(|l| l.contains("Split pane to the left"))
     });
 }
+
+/// The current tab's number.
+fn current_tab(list: &serde_json::Value) -> i64 {
+    let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
+    let tab = tabs.iter().find(|t| t["current"] == true).unwrap();
+    tab["index"].as_i64().unwrap()
+}
+
+/// The id of the session's focused pane.
+fn active_pane(list: &serde_json::Value) -> String {
+    let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
+    let tab = tabs.iter().find(|t| t["current"] == true).unwrap();
+    tab["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["active"] == true)
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn m_0_asks_for_a_tab_number_and_goes_there() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.type_text(&format!("{ALT}1"));
+    client.wait_for("the first tab current", |_| {
+        current_tab(&server.list()) == 1
+    });
+    client.type_text(&format!("{ALT}0"));
+    client.wait_text("Go to tab");
+    client.type_text("3\r");
+    client.wait_for("the third tab current", |_| {
+        current_tab(&server.list()) == 3
+    });
+    // A number past the last tab is said.
+    client.type_text(&format!("{ALT}0"));
+    client.wait_text("Go to tab");
+    client.type_text("12\r");
+    client.wait_text("There is no tab 12.");
+}
+
+#[test]
+fn ctrl_w_then_a_direction_moves_between_panes() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let left = active_pane(&server.list());
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("a second pane, focused", |_| {
+        active_pane(&server.list()) != left
+    });
+    let right = active_pane(&server.list());
+    client.type_text("\x17h");
+    client.wait_for("the left pane focused", |_| {
+        active_pane(&server.list()) == left
+    });
+    client.type_text("\x17l");
+    client.wait_for("the right pane focused", |_| {
+        active_pane(&server.list()) == right
+    });
+}
+
+#[test]
+fn the_palette_renames_the_tab_and_reports_how_it_is_used() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["press", "rename-tab"]);
+    client.wait_text("Rename the tab");
+    client.type_text("billing\r");
+    client.wait_for("the tab renamed", |_| {
+        server.list()["sessions"][0]["tabs"][0]["name"] == "billing"
+    });
+    server.ok(&["press", "habits-report"]);
+    let screen = client.wait_text("How you use Switchboard");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Nothing counted yet") || l.contains("Counting is off")),
+        "the report says what it has:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("x");
+    client.wait_for("the report gone", |s| {
+        !s.iter().any(|l| l.contains("How you use Switchboard"))
+    });
+}

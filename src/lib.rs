@@ -47,12 +47,17 @@
 //!   hourly look for a new release, offered in a box.
 //! - `notes`: the notes app, `switchboard notes`, in place of the Neovim
 //!   plugin.
+//! - `extras`: the rest of tmux.conf's keys and M-p's commands: renaming the
+//!   tab, mission control on a view, the habits report, a reply sent to
+//!   another tab, setup checked, the loop tabs, a PR or ticket by number,
+//!   the AWS login, M-0 and `C-w` between panes.
 
 pub mod agent;
 pub mod cmd;
 pub mod connector;
 pub mod day;
 pub mod diff;
+pub mod extras;
 pub mod facts;
 pub mod integrations;
 pub mod items;

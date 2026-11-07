@@ -8,6 +8,7 @@
 
 use std::process::ExitCode;
 
+pub mod aws_login;
 pub mod claude_here;
 pub mod claude_reply;
 pub mod codex_review;
@@ -240,7 +241,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "open-url",
         run: crate::links::main,
-        about: "Open a link in its site's Chrome profile (browser.json)",
+        about: "Open a link in its site's Chrome profile (browser.json; --as <site> for another site's)",
+    },
+    Command {
+        name: "aws-login",
+        run: aws_login::main,
+        about: "Log in to AWS (aws sso login) in your Chrome profile (M-p runs it beside a pane)",
     },
 ];
 
