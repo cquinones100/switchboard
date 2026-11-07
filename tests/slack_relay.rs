@@ -234,6 +234,9 @@ fn start_opens_the_relays_tab_once_and_the_rest_say_it_isnt_running() {
     );
     let (code, out, _) = relay(&server, &["status"]);
     assert_eq!((code, out.as_str()), (0, "The relay is not running.\n"));
+    // How long since a key was pressed in the workspace, which the relay
+    // goes by where the desktop can't say how long you've been idle.
+    assert!(server.list()["idle_ms"].is_u64());
     let (code, _, err) = relay(&server, &["notify", "--from", "oncall", "hello"]);
     assert_eq!(code, 1);
     assert!(err.contains("the relay isn't running"), "{err}");

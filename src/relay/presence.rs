@@ -49,11 +49,24 @@ pub struct Presence {
 }
 
 impl Presence {
-    /// The computer's own readings.
+    /// The computer's own readings; where the desktop can't say how long
+    /// you've been idle (Linux with no idle monitor, over SSH, under WSL),
+    /// the time since a key was last pressed in the workspace, which the
+    /// server keeps for its own `away`. Without it, idle would read as none
+    /// at all and every notice would be held until you wrote from Slack.
     pub fn new() -> Presence {
-        Presence::reading_with(Box::new(
-            || Box::pin(crate::presence::read_presence_async()),
-        ))
+        Presence::reading_with(Box::new(|| {
+            Box::pin(async {
+                let mut reading = crate::presence::read_presence_async().await;
+                if reading.idle_ms.is_none() {
+                    reading.idle_ms = tokio::task::spawn_blocking(super::mux::server_idle_ms)
+                        .await
+                        .ok()
+                        .flatten();
+                }
+                reading
+            })
+        }))
     }
 
     pub fn reading_with(read: Box<dyn Fn() -> LocalBoxFuture<'static, Reading>>) -> Presence {

@@ -154,6 +154,14 @@ impl Server {
     }
 }
 
+/// How long since a key was last pressed in the workspace, in ms, as the
+/// running server says (`list`'s `idle_ms`), or `None` when it can't be
+/// asked.
+pub fn server_idle_ms() -> Option<f64> {
+    let list: Value = serde_json::from_str(&Server::current().ask(&["list"]).ok()?).ok()?;
+    list.get("idle_ms").and_then(Value::as_f64)
+}
+
 impl Mux for Server {
     fn windows(&self) -> Option<Vec<Window>> {
         let list: Value = serde_json::from_str(&self.ask(&["list"]).ok()?).ok()?;

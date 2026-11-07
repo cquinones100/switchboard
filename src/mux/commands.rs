@@ -420,7 +420,11 @@ impl Server {
             .values()
             .map(|c| json!({ "session": c.session, "cols": c.cols, "rows": c.rows }))
             .collect();
-        json!({ "sessions": sessions, "clients": clients })
+        // How long since a key was last pressed in a client: what idle is
+        // where the desktop can't say (the Slack relay's presence, as the
+        // server's own `away`).
+        let idle_ms = u64::try_from(self.last_input.elapsed().as_millis()).unwrap_or(u64::MAX);
+        json!({ "sessions": sessions, "clients": clients, "idle_ms": idle_ms })
     }
 
     fn cmd_new_tab(

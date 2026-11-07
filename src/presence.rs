@@ -3,8 +3,8 @@
 //! server, to pause its lookups while you're away. Each decides how
 //! long idle counts as away for it; what idle is, is decided here, from
 //! `platform::presence`: macOS's input idle time and lock screen, the Linux
-//! desktop's; where there is no desktop to ask, the server goes by the last
-//! key pressed in its clients.
+//! desktop's; where there is no desktop to ask, the server (and the relay,
+//! asking the server) goes by the last key pressed in its clients.
 //! A locked screen is away at once, however recently a key was pressed.
 
 pub use crate::platform::Presence;
