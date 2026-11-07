@@ -57,6 +57,8 @@ Arguments: `all` means also ask about low-severity findings from the first round
 
    Fix `critical` and `high` findings you agree with without asking. Ask before acting on a `medium` one, or a `low` one (from a confirmation round, or with `all`): one `AskUserQuestion` for the round, a question per finding (up to four; more go in a second), each saying in a sentence or two what the finding is and the real impact of leaving it: who it would hit, how likely that is, and what happens then, so the user can weigh it against another round. The options: **Fix it**, or **Leave it**, which goes in the notes file as a `Known gap` with the user's reason (or "the user chose to leave it" and the impact you gave), so later rounds don't raise it again. Outside a confirmation round, and without `all`, `low` findings aren't asked about; they go in the final report.
 
+   In a tab that lands without asking, where `tmux show -wqv -t "$TMUX_PANE" @autopilot_land` prints `1` (the work-a-note mode's "Land without asking", which queue-and-clean's landing on the default branch reads), ask about none of them: fix a `medium` one you agree with as a `high` one is, and leave a `low` one as a `Known gap` line ("left by a landing without asking", with the impact), in a confirmation round too, so the landing never waits on a finding. Both go in the final report as usual.
+
    A `rules` finding is a change that breaks one of the rules the reviewer was given (your CLAUDE.md and what it imports, and the repository's CLAUDE.md and AGENTS.md as the base has them). Triage it like any other: fix it, or dispute it when the rule doesn't apply to this change.
 
 4. Check for siblings before you commit a fix. When a finding points at one of several parallel paths, such as one call site of a shared helper, one handler among several that follow the same shape, or one of a pair like `query` and `cross_query`, grep for the others. Fix each sibling in the same round, or dispute each sibling by name in the notes file. A fix that lands on one path and leaves the others untouched is a new known gap, and the next round will report it as a broken commit claim.
@@ -82,7 +84,7 @@ Say which of these ended the loop: two consecutive clean rounds, the round cap, 
 - **Outside this repository**: each finding in a file of another repository, with the file and that repository, left for the user.
 - **PR description**: whether it changed and how.
 
-Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. If the cap ended the loop with findings still open, list them and let the user decide whether to keep going.
+Then ask whether to push. Never run `git push` without the user's explicit approval, even in auto mode. The one approval given ahead is queue-and-clean's landing without asking (its step 7), which runs this loop with its push question left out. If the cap ended the loop with findings still open, list them and let the user decide whether to keep going.
 
 ## Squashing the loop's commits
 

@@ -4702,7 +4702,7 @@ test("k from the top row of tabs reaches the line of the note worked continuousl
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(client.choose.title, "Working Work");
     // Skip shows only once the next item has been read, which the daemon may have done.
-    assert.deepEqual(client.choose.choices.map((c) => c.label).filter((label) => !label.startsWith("Skip the next item")), ["Pause: open no more tabs for now", "Take only items with a settled plan", "Close landed tabs: when seen", "Change its note, slots, cap or spend limit…", "Stop working the note"]);
+    assert.deepEqual(client.choose.choices.map((c) => c.label).filter((label) => !label.startsWith("Skip the next item")), ["Pause: open no more tabs for now", "Take only items with a settled plan", "Close landed tabs: when seen", "Land without asking", "Change its note, slots, cap or spend limit…", "Stop working the note"]);
     await sidebar.missionKey(client, { key: "Enter" });
     assert.equal(sidebar.readAutopilot().paused, true);
     await sidebar.missionKey(client, { key: "j" });
@@ -4710,6 +4710,100 @@ test("k from the top row of tabs reaches the line of the note worked continuousl
   } finally {
     sidebar.writeAutopilot({ on: false, paused: false });
   }
+});
+
+test("Land without asking, after a yes, marks the mode's tabs not landed yet, and only those, and its line says so; Ask before landing unmarks them", async () => {
+  const dir = path.join(tmp, "autopilot-land");
+  const repo = path.join(dir, "repo");
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init", "-q", "-b", "main", repo], { env: { ...process.env, ...gitEnv } });
+  execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env: { ...process.env, ...gitEnv } });
+  const worktree = path.join(repo, ".claude/worktrees/x");
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", worktree, "-b", "x"], { env: { ...process.env, ...gitEnv } });
+  const sent = [];
+  const pilot = sidebar.autopilot({ batch: (commands) => sent.push(...commands) });
+  const now = Math.floor(Date.now() / 1000);
+  const tab = (id, dir, autopilot) => ({ id, state: "working", path: dir, panes: [{ pane_id: `%${id}`, pane_current_path: dir }], autopilot: autopilot && { since: now - 600, inWorktree: true, ...autopilot } });
+  const marks = (...tabs) => {
+    sent.length = 0;
+    pilot.check(tabs, { away: false });
+    return sent.filter((c) => c.includes("@autopilot_land")).map((c) => [c.includes("-u") ? "unset" : "set", c[c.indexOf("-t") + 1]]);
+  };
+  try {
+    sidebar.writeAutopilot({ on: false, note: "Work.md", repo, landWithoutAsking: false });
+    const working = tab("@1", worktree, {});
+    const mine = [working, tab("@2", worktree, undefined), tab("@3", repo, { landed: now - 60 })];
+    assert.deepEqual(marks(...mine), [], "off: nothing marked");
+
+    sidebar.writeAutopilot({ on: true, paused: true });
+    const client = { kind: "mission", socket: { write() {}, end() {} }, view: { view: 0, cursor: -1 }, cols: 120, rows: 30, tmuxClient: "none" };
+    await sidebar.missionKey(client, { key: "Enter" });
+    client.choose.cursor = client.choose.choices.findIndex((c) => c.label === "Land without asking");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.match(client.confirm.text, /without asking to push\? \[Y\/n\]/, "asked first, naming what it skips");
+    assert.ok(client.confirm.list.some((line) => /^Kept: the tests, two clean review rounds, the landing lock, leak-check/.test(line)));
+    assert.equal(sidebar.readAutopilot().landWithoutAsking, false, "not before the yes");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(sidebar.readAutopilot().landWithoutAsking, true);
+
+    assert.deepEqual(marks(...mine), [["set", "@1"]], "only the mode's tab still in its worktree");
+    assert.deepEqual(marks({ ...working, autopilot: { ...working.autopilot, land: true } }), [], "already marked: nothing to do");
+    const standIn = { ...working, autopilot: { ...working.autopilot, land: true }, panes: [{ pane_id: "%tool", pane_current_path: worktree, "@parked_pane": "%claude" }] };
+    sent.length = 0;
+    pilot.check([standIn], { away: false, parked: [{ id: "@9", panes: [{ pane_id: "%claude", pane_current_path: worktree }] }] });
+    assert.deepEqual(sent.filter((c) => c.includes("@autopilot_land")).map((c) => c[c.indexOf("-t") + 1]), ["@9"], "the window a tool parked Claude's pane in is marked too");
+    const summary = pilot.summary([working], { away: false });
+    assert.equal(summary.landsAlone, true);
+    const line = sidebar.missionLines({ tabs: [], sections: [], cols: 160, rows: 30, view: { view: 0, cursor: 0, frame: 0, autopilot: summary }, config })[1].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+    assert.match(line, / · lands on its own/);
+
+    await sidebar.missionKey(client, { key: "Enter" });
+    client.choose.cursor = client.choose.choices.findIndex((c) => c.label === "Ask before landing");
+    await sidebar.missionKey(client, { key: "Enter" });
+    assert.equal(sidebar.readAutopilot().landWithoutAsking, false, "no question to turn it off");
+    assert.deepEqual(marks({ ...working, autopilot: { ...working.autopilot, land: true } }), [["unset", "@1"]], "unmarked on the open tabs");
+  } finally {
+    sidebar.writeAutopilot({ on: false, paused: false, landWithoutAsking: false, repo: "" });
+  }
+});
+
+test("a landing without asking marks its tab, shows in the notifications until dismissed, and its menu goes to its tab", async (t) => {
+  const stateDir = process.env.TMUX_SIDEBAR_STATE_DIR;
+  const landLock = path.join(__dirname, "../claude/skills/queue-and-clean/scripts/land-lock.js");
+  const window = tmux("new-window", "-d", "-P", "-F", "#{window_id}", "cat");
+  const pane = tmux("display", "-p", "-t", window, "#{pane_id}");
+  t.after(() => {
+    try { tmux("kill-window", "-t", window); } catch {}
+    fs.rmSync(path.join(stateDir, "autolanded.json"), { force: true });
+  });
+  execFileSync("node", [landLock, "autolanded", "abc1234", "Make", "the", "thing"], { env: { ...process.env, TMUX_PANE: pane } });
+  assert.equal(tmux("show", "-wqv", "-t", window, "@autopilot_autoland"), "abc1234", "its tab marked");
+  // With a tool standing in for Claude's pane, the tool's window is the tab.
+  const parkedIn = tmux("new-window", "-d", "-P", "-F", "#{window_id}", "cat");
+  const claudePane = tmux("display", "-p", "-t", parkedIn, "#{pane_id}");
+  tmux("set", "-p", "-t", pane, "@parked_pane", claudePane);
+  t.after(() => {
+    try { tmux("kill-window", "-t", parkedIn); } catch {}
+  });
+  execFileSync("node", [landLock, "autolanded", "def5678", "Other"], { env: { ...process.env, TMUX_PANE: claudePane } });
+  assert.equal(tmux("show", "-wqv", "-t", window, "@autopilot_autoland"), "def5678", "the tool's window marked, not the parked one");
+  assert.equal(tmux("show", "-wqv", "-t", parkedIn, "@autopilot_autoland"), "");
+  tmux("set", "-pu", "-t", pane, "@parked_pane");
+  sidebar.dismissLanded("def5678");
+  await wait(2_100);
+  await sidebar.refresh();
+  const items = sidebar.noticeItems().filter((i) => i.kind === "autolanded");
+  assert.deepEqual(items.map((i) => i.title), ["Landed abc1234: Make the thing"]);
+  const session = tmux("display", "-p", "-t", "test", "#{session_id}");
+  sidebar.state.noticeCursor.set(session, sidebar.noticeItems().findIndex((i) => i.kind === "autolanded"));
+  const client = { kind: "notices", session, pane, socket: { write() {}, end() {} } };
+  await sidebar.noticesKey(client, { key: "Enter" });
+  assert.deepEqual(client.choose.choices.map((c) => c.label), ["Go to its tab", "Dismiss it"]);
+  await sidebar.missionKey(client, { key: "Enter" });
+  assert.equal(tmux("display", "-p", "-t", window, "#{window_active}"), "1", "in front");
+  await wait(2_100);
+  assert.deepEqual(sidebar.noticeItems().filter((i) => i.kind === "autolanded"), [], "dismissed once acted on");
 });
 
 test("a tab of the mode whose worktree queue-and-clean has removed is landing, not left, until its pane is back in the main clone", () => {

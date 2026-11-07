@@ -297,19 +297,38 @@ sidebar, and while it is on, mission
 control's Tabs view leads with its line: the note, how many work and are open,
 and the item it takes next. `k` from the top row of tabs (or a click) reaches
 it, and Enter there pauses or resumes it, skips the next item, takes only
-items with a settled plan or those with none too, changes its settings, or
-stops it; M-p's command opens the same menu while it is on. It pauses itself
+items with a settled plan or those with none too, lands without asking or
+asks before landing again (below), changes its settings, or stops it; M-p's
+command opens the same menu while it is on. It pauses itself
 while you're away from the Mac, stops opening tabs once the day's Claude spend
 in the Usage view passes its limit, and says so in the notifications when the
 note has nothing left to take or the limit is reached. Settings' "Work a note
 continuously" (`autopilot`) allows it; the mode itself starts off.
 
+Its menu's "Land without asking", after a yes, has its tabs land straight on
+the default branch without asking before the push: each of its tabs not
+landed yet is marked `@autopilot_land` (and unmarked by "Ask before
+landing"), which queue-and-clean reads at the push question and takes as
+yes, and the review loop reads to fix medium findings without asking, as it
+does high ones, leaving low ones as known gaps. The tests, two clean review
+rounds (the pre-push hook's check), the landing lock and `leak-check` (below)
+all still run, and anything `leak-check` finds, an unclear conflict, a test
+failure the branch didn't cause or the review loop's round cap still asks, and
+so does a repository whose landing runs no tests or no review loop.
+After each landing without asking, the sidebar's notifications say "Landed
+<hash>: <item>" (Enter goes to its tab while it is open), the Slack relay
+sends the same while it runs, the tab says `landed without asking`, and the
+note's `Done:` line says so. Mission control's line for the mode says `lands
+on its own` while it is on. It covers landings straight on the default branch
+alone: a landing through a PR still waits for you to approve its test.
+
 `/queue-and-clean` lands it: on a branch with no PR, in a repository that
 `landing` says lands straight on its default branch, "Land on main" rebases
 it onto `origin/main` and goes through the repository's steps: squashes it
 into one commit, runs its tests (which must pass) and then the review loop,
-each only as its `repos.json` entry says, and asks before pushing, all in
-every worktree at once. Only then does it take the landing lock
+each only as its `repos.json` entry says, runs `leak-check` (below) on what
+it would push, and asks before pushing, showing what `leak-check` found, all
+in every worktree at once. Only then does it take the landing lock
 (`claude/skills/queue-and-clean/scripts/land-lock.js`, a lock in the main
 clone's git directory), so one worktree pushes at a time: it rebases onto
 what landed meanwhile and runs the tests again, and when the commit is still
@@ -338,6 +357,22 @@ diff or the Notes app) it names in the question. The list comes from
 `apply-actions`, below; the note's item's `Done:` line says what was applied
 or when it takes effect. Settings' "Offer to apply a landed change"
 (`apply_after_landing`) turns it off.
+
+## leak-check
+
+`leak-check <range>` looks for anything identifying you or your employer in
+what a range of commits adds, before it goes to a public repository: each
+added line and each commit message. It finds the words in
+`~/.config/switchboard/leak-check.txt` (your organization's and company's
+names, usernames, internal hosts, one a line, `#` lines left out; Settings'
+"Identifying words" opens it), as whole words in any case; Linear-style
+ticket IDs and PR numbers written with a `#`, outside tests, whose IDs are
+made up; home directory paths; email addresses but noreply and example ones;
+and the shapes of GitHub, OpenAI-style and Slack tokens. It prints each hit
+as `<file>:<line>: <kind>: <text>` or `commit <hash>: <kind>: <text>` and
+exits 1 on any, 0 on none and 2 when it can't look. queue-and-clean runs it
+before a direct landing's push question, and a landing without asking asks
+after all when it finds anything.
 
 ## apply-actions
 

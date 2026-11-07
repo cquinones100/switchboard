@@ -25,6 +25,12 @@
 //                          @agent_phase, its loop marked queue-and-clean's
 //                          (@agent_loop), since a session following the skill
 //                          by reading it never invokes it; no words clear it
+//   land-lock.js autolanded <short hash> [item]
+//                          tells the sidebar this tab landed without asking
+//                          (the work-a-note mode's "Land without asking"):
+//                          marks its window @autopilot_autoland with the hash
+//                          and adds the landing to the notifications
+//                          (autolanded.json in the sidebar's state directory)
 //
 // A landing holds it only to rebase, test and push, but one whose change no
 // longer matches its review reviews again and asks again while holding it,
@@ -55,6 +61,41 @@ if (process.argv[2] === "phase") {
   phase();
   process.exit(0);
 }
+
+// Needs no repository either: it runs once the landing has pushed, whatever
+// the cleanup has removed since.
+const autolanded = () => {
+  const [hash, ...item] = process.argv.slice(3);
+  if (!hash) {
+    console.error("usage: land-lock.js autolanded <short hash> [item]");
+    return 2;
+  }
+  const pane = process.env.TMUX_PANE;
+  let window = "";
+  if (pane && process.env.TMUX) {
+    // With a tool in its place (pane-in-place.sh, M-d or lazygit), Claude's
+    // pane is parked in a window that is no tab: the tab is the window of the
+    // tool's pane, which names Claude's in @parked_pane.
+    const panes = spawnSync("tmux", ["list-panes", "-a", "-F", "#{pane_id}\t#{window_id}\t#{@parked_pane}"], { encoding: "utf8" }).stdout ?? "";
+    const rows = panes.split("\n").map((row) => row.split("\t"));
+    window = (rows.find((row) => row[2] === pane) ?? rows.find((row) => row[0] === pane))?.[1] ?? "";
+    if (window) spawnSync("tmux", ["set", "-w", "-t", window, "@autopilot_autoland", hash], { stdio: "ignore" });
+  }
+  const dir = process.env.TMUX_SIDEBAR_STATE_DIR || path.join(os.homedir(), ".local/state/tmux-sidebar");
+  const file = path.join(dir, "autolanded.json");
+  let list = [];
+  try {
+    list = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {}
+  if (!Array.isArray(list)) list = [];
+  list = [...list.filter((l) => l?.hash !== hash), { hash, item: item.join(" ").replace(/\s+/g, " ").trim(), window, at: Date.now() }].slice(-20);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(list));
+  fs.renameSync(`${file}.tmp`, file);
+  fs.appendFileSync(path.join(dir, "nudge"), "\n");
+  return 0;
+};
+if (process.argv[2] === "autolanded") process.exit(autolanded());
 
 let common;
 let here;

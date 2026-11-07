@@ -85,6 +85,21 @@ test("queue-and-clean ticks the note's item before its cleanup removes the workt
   assert.match(text, /## Closing out\n\nInside the cleanup, once clean-worktree's step 2 has found nothing would be lost and before its step 3 removes the worktree/);
 });
 
+test("a tab of the work-a-note mode lands without asking only once leak-check finds nothing, and its review loop fixes mediums without asking", () => {
+  const queue = fs.readFileSync(path.join(skillsDir, "queue-and-clean", "SKILL.md"), "utf8");
+  const step7 = queue.split("\n").find((l) => l.startsWith("7. **Ask before pushing**"));
+  const check = 'tmux show -wqv -t "$TMUX_PANE" @autopilot_land';
+  assert.ok(step7.includes(check), "step 7 reads the tab's switch");
+  assert.ok(step7.indexOf("leak-check <base>..HEAD") >= 0 && step7.indexOf("leak-check <base>..HEAD") < step7.indexOf(check), "leak-check runs first");
+  assert.match(step7, /`leak-check` exited 0, the landing ran both the tests and the review loop .*two clean rounds of this very change .*take the answer as \*\*Push to <name>\*\* without asking/);
+  assert.match(queue, /<lock> autolanded <short hash>/, "it says so after landing");
+  const step11 = queue.split("\n").find((l) => l.startsWith("11. **Push**"));
+  assert.ok(step11.indexOf("read `@autopilot_land` again") >= 0 && step11.indexOf("read `@autopilot_land` again") < step11.indexOf("git push origin HEAD:<name>"), "and reads the switch again just before the push");
+  const review = fs.readFileSync(path.join(skillsDir, "review-loop", "SKILL.md"), "utf8");
+  assert.ok(review.includes(check), "the review loop reads the same switch");
+  assert.match(review, /fix a `medium` one you agree with as a `high` one is/);
+});
+
 // Switchboard's project skills, in .claude/skills: for working on Switchboard
 // itself, so setup.sh never links them (test/setup.test.js checks that).
 const projectDir = path.join(__dirname, "../.claude/skills");
