@@ -130,6 +130,8 @@ pub struct Picker {
     previews: Vec<String>,
     /// Lines said under the count, dimmed, as fzf's `--header`.
     header: Vec<String>,
+    /// Only each row's text matched, not its tags or key (fzf's `--nth`).
+    text_only: bool,
     /// Whether rows can be marked and taken together, and the items marked,
     /// by their place in `items`.
     multi: bool,
@@ -158,6 +160,7 @@ impl Picker {
             room: 10,
             previews: Vec::new(),
             header: Vec::new(),
+            text_only: false,
             multi: false,
             marked: Vec::new(),
         };
@@ -277,6 +280,14 @@ impl Picker {
         Step::Redraw
     }
 
+    /// Only each row's text matched, its tags and key shown but not
+    /// matched, as fzf's `--nth=1` matched a branch's name and not its date.
+    pub fn text_only(mut self) -> Picker {
+        self.text_only = true;
+        self.refilter();
+        self
+    }
+
     /// A line said under the count, dimmed, as fzf's `--header`.
     pub fn header(mut self, line: impl Into<String>) -> Picker {
         self.header.push(line.into());
@@ -324,7 +335,13 @@ impl Picker {
         let mut buf = Vec::new();
         let mut found: Vec<(usize, u32, Vec<u32>)> = Vec::new();
         for (i, item) in self.items.iter().enumerate() {
-            let hay = item.haystack();
+            // The text comes first in the haystack, so the letters matched
+            // in the text alone are where they would be in the whole.
+            let hay = if self.text_only {
+                item.text.clone()
+            } else {
+                item.haystack()
+            };
             let mut indices = Vec::new();
             if let Some(score) = pattern.indices(
                 Utf32Str::new(&hay, &mut buf),
@@ -945,6 +962,30 @@ mod tests {
         let mut plain = Picker::new("Pick", items());
         tab(&mut plain, Mods::NONE);
         assert_eq!(plain.chosen().unwrap().text, "Close the pane");
+    }
+
+    #[test]
+    fn a_list_matching_text_alone_leaves_the_tags_out() {
+        let rows = vec![
+            PickItem {
+                text: "fix-login".into(),
+                tags: "2 days ago".into(),
+                value: "fix-login".into(),
+                ..PickItem::default()
+            },
+            PickItem {
+                text: "days-off".into(),
+                tags: "3 weeks ago".into(),
+                value: "days-off".into(),
+                ..PickItem::default()
+            },
+        ];
+        let mut p = Picker::new("Branches", rows.clone()).exact().text_only();
+        typed(&mut p, "days");
+        assert_eq!(p.shown(), vec!["days-off"]);
+        let mut all = Picker::new("Branches", rows).exact();
+        typed(&mut all, "days");
+        assert_eq!(all.shown().len(), 2, "tags matched too by default");
     }
 
     #[test]

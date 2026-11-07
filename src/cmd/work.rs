@@ -441,11 +441,14 @@ impl Server {
             .iter()
             .map(|d| PickItem::new(paths::tilde(d), d.to_string_lossy()))
             .collect();
+        // Matches keep the list's order, as pick-dir.zsh's fzf --no-sort:
+        // here, the tabs' directories, the sessions', then home.
         let picker = Picker::new(title, items)
             .named("pick-dir")
             .prompt("Open in > ")
             .exact()
-            .free();
+            .free()
+            .order(Box::new(|_, matched| matched.to_vec()));
         let clipboard = found.clipboard;
         let here = found.here;
         self.pick(client, picker, move |server, client, picked| {
@@ -603,6 +606,7 @@ impl Server {
                         .named("branches")
                         .prompt("branch> ")
                         .exact()
+                        .text_only()
                         .free();
                 server.pick(client, picker, move |server, client, picked| {
                     let Some(picked) = picked else {

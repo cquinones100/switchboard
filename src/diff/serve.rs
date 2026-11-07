@@ -69,9 +69,17 @@ impl Server {
         self.tool_here(client, TOOL)
     }
 
-    /// lazygit in place of the pane, or quit with its own C-c.
+    /// lazygit in place of the pane, or quit with its own C-c, whether the
+    /// server put it there or it was started in the pane by hand, as
+    /// tmux.conf's binding checked the pane's command too.
     fn toggle_lazygit(&mut self, client: ClientId) {
-        if let Some(lazygit) = self.tool_here(client, LAZYGIT) {
+        let by_hand = self.current_pane(client).filter(|p| {
+            self.panes
+                .get(p)
+                .and_then(|s| s.pane.foreground_command())
+                .is_some_and(|c| c == LAZYGIT)
+        });
+        if let Some(lazygit) = self.tool_here(client, LAZYGIT).or(by_hand) {
             if let Some(slot) = self.panes.get_mut(&lazygit) {
                 let _ = slot.pane.write(b"\x03");
             }

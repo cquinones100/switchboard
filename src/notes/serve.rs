@@ -363,6 +363,9 @@ impl Server {
             false,
         ) {
             Ok((tab, pane)) => {
+                // At the end, as notes-open.sh's new-window took the next
+                // free index, so no tab is renumbered.
+                self.tab_to_end(tab);
                 self.set_pane_opt(pane, "@notes_pane", Some("1"));
                 self.make_notes_tab(tab);
             }
@@ -586,7 +589,10 @@ impl Server {
             }
             None if alone => self.make_notes_tab(tab),
             None => match self.break_pane_to(pane, false) {
-                Ok(home) => self.make_notes_tab(home),
+                Ok(home) => {
+                    self.tab_to_end(home);
+                    self.make_notes_tab(home);
+                }
                 Err(_) => return false,
             },
         }
