@@ -101,6 +101,15 @@ fn m_t_lists_the_directory_youre_in_first_and_opens_claude_in_the_one_picked() {
     let all = tabs(&server);
     assert_eq!(all.len(), before + 1);
     assert_eq!(all.last().unwrap()["current"], true, "at the end, in front");
+    // Then what to call it: s, shaping a ticket, asks which, since the
+    // repository's branch names none.
+    client.wait_text("Name the tab");
+    client.type_text("s");
+    client.wait_text("Its ID, like ABC-123");
+    client.type_text("abc-7\r");
+    wait("the tab named", || {
+        tabs(&server).last().unwrap()["options"]["@tab_name"] == "Shaping: ABC-7"
+    });
 }
 
 #[test]

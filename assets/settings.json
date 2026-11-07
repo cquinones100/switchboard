@@ -340,7 +340,15 @@
     "default": true
   },
   {
+    "key": "name_new_tabs",
+    "category": "Tabs and status bar",
+    "label": "Name new tabs",
+    "description": "M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory",
+    "default": true
+  },
+  {
     "key": "message_boxes",
+
     "category": "Tabs and status bar",
     "label": "Messages in a box",
     "description": "What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment",

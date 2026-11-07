@@ -1178,7 +1178,7 @@ Run again on the same work, a command reopens it: the worktree is reused if it i
 
 Each of the first six asks which directory first, in a list: the one you are in, then every open tab's, then those Claude sessions ran in, most recent first, then your home, with worktrees left out but the one you are in. For the keys that make a worktree, each entry is its repository's main clone, listed once, and a directory in no repository is left out. Typing narrows the list; a path typed in is taken when nothing matches it, or at once with Alt-Enter (`~` is your home). Then:
 
-- `M-t` opens the tab there running Claude, from an interactive shell of yours, which is left in the tab when Claude exits.
+- `M-t` opens the tab there running Claude, from an interactive shell of yours, which is left in the tab when Claude exits. Then a menu asks what to call it, which you may skip with Esc: `n` a name typed in, `t` its ticket and the ticket's title, or `s` "Shaping: " and a ticket, the form `/shape` gives a tab. Each ticket is the one the branch names, else asked for; `t` on a ticket's own branch leaves the tab to show its ticket and title by itself (Settings' "Name new tabs", `name_new_tabs`).
 - `M-W` asks for the tickets, IDs or Linear URLs separated by commas or spaces, filled in from the clipboard when it holds only tickets. Every one is checked before any tab opens, so a typo leaves none half-started. The tabs go at the end of the tab bar in the order given, so no open tab is renumbered, and the first comes to the front.
 - `M-B` lists the repository's branches, local and remote, the most recently committed first. Enter works on the one picked; a name no branch matches is a new branch, and Alt-Enter takes the name typed even when some branch matches it.
 - "Start work on a PR" asks for its number or URL, filled in from the clipboard when it holds one. A URL names its repository, which `wtpr` finds a clone of, so it asks for no directory; a bare number asks which repository it is a PR of.
@@ -1716,6 +1716,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Setting | Default | What it does |
 |---|---|---|
 | One Claude to a tab (`one_claude_per_tab`) | on | A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane |
+| Name new tabs (`name_new_tabs`) | on | M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory |
 | Messages in a box (`message_boxes`) | on | What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment |
 | Second status line (`second_status`) | off | The line under the tabs with the tab's name, branch, PR and Claude session |
 | PRs and tickets in tab names (`tab_lookups`) | on | Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background |

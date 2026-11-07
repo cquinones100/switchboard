@@ -532,6 +532,10 @@ impl Server {
         let command = worktree::tab_command("claude", "claude", &[]);
         if let Some(tab) = self.work_tab(client, dir, command, true) {
             self.front(client, &[tab]);
+            // Then what to call it, as new-tab.zsh ended in tab-name.zsh.
+            if settings::is_on("name_new_tabs") {
+                self.ask_tab_name(client, tab, dir.to_path_buf());
+            }
         }
     }
 

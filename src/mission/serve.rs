@@ -722,7 +722,7 @@ impl Server {
         }
     }
 
-    fn mission_redraw(&mut self) {
+    pub(crate) fn mission_redraw(&mut self) {
         for c in self.clients.values_mut() {
             if c.overlays.find::<Mission>().is_some() {
                 c.dirty = true;

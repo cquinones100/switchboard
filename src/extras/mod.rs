@@ -17,8 +17,12 @@
 //!
 //! - `text`: a box of lines to read, scrolled with j and k, for what a
 //!   command has to show at length (the habits report, setup's output).
+//! - `naming`: what a new tab is called, asked after M-t and M-n
+//!   (tab-name.zsh).
+
 //! - `serve`: the server's side.
 
+mod naming;
 mod serve;
 pub mod text;
 
