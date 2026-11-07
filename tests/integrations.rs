@@ -412,7 +412,19 @@ fn without_a_token_it_says_how_to_store_one() {
     assert_eq!(kind(&err), ErrorKind::NoCredentials);
     assert!(err.to_string().contains("linear-api-key"), "{err}");
 
-    // With no keyring, the stored secret is the file only you can read.
+    // The stored secret: on a Mac the Keychain's, through security (a
+    // stand-in here, never your Keychain); elsewhere, with no keyring, the
+    // file only you can read.
+    if switchboard::platform::NAME == "macOS" {
+        let security = env.home.join("bin/security");
+        std::fs::write(
+            &security,
+            "#!/bin/sh\ncase \"$*\" in *github-token*) echo from-file ;; *) exit 44 ;; esac\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&security, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     std::fs::create_dir_all(env.home.join(".config/switchboard")).unwrap();
     std::fs::write(
         env.home.join(".config/switchboard/secrets.json"),
