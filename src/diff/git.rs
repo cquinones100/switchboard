@@ -134,6 +134,16 @@ fn pr_base(dir: &Path) -> Option<String> {
     .filter(|b| !b.is_empty())
 }
 
+/// The base where neither the PR nor origin says: main, or master in a
+/// repository that has it and no main, as one made by a git older than
+/// `init.defaultBranch`.
+fn default_base(dir: &Path) -> &'static str {
+    ["main", "master"]
+        .into_iter()
+        .find(|b| verifies(dir, &format!("origin/{b}")) || verifies(dir, b))
+        .unwrap_or("main")
+}
+
 /// Asks GitHub for the PR's base and fetches it, keeping the answer for
 /// the branch's commit (diff-base.sh's `fetch`). `None` outside a
 /// repository.
@@ -151,7 +161,7 @@ pub fn fetch_base(dir: &Path) -> Option<Base> {
         base = rest.to_string();
     }
     if base.is_empty() || !safe_ref(&base) {
-        base = "main".into();
+        base = default_base(dir).into();
     }
     crate::worktree::count_fetch(&facts.top, "origin", "M-d diff: fetch base");
     let fetched = git(dir, &["fetch", "--quiet", "origin", &base]).is_ok();
@@ -479,7 +489,7 @@ pub fn read_working(top: &Path) -> Result<Change> {
         texts.push(with(&["--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M"])?);
     }
     let untracked = git(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    for path in untracked.split(' ').filter(|p| !p.is_empty()) {
+    for path in untracked.split('\0').filter(|p| !p.is_empty()) {
         let Some(text) = text_at(top, WORK_TREE, path) else {
             entries.push(Entry {
                 path: path.to_string(),
@@ -586,6 +596,38 @@ mod tests {
         assert_eq!((entries[1].additions, entries[1].deletions), (2, 2));
         assert!(entries[2].binary && entries[2].one_sided());
         assert!(entries[3].one_sided() && entries[3].deletions == 4);
+    }
+
+    #[test]
+    fn a_repository_with_master_and_no_main_compares_with_master() {
+        let dir = std::env::temp_dir().join(format!("sb-diff-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+                .args([
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["checkout", "-q", "-b", "master"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        run(&["checkout", "-q", "-b", "feature"]);
+        assert_eq!(default_base(&dir), "master");
+        run(&["branch", "-q", "main"]);
+        assert_eq!(default_base(&dir), "main");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
