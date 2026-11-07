@@ -89,6 +89,82 @@ pub const NAMES: &[&str] = &[
     "press",
 ];
 
+/// How each command is used, which `--help` (or `-h`) after its name prints.
+pub const USAGE: &[(&str, &str)] = &[
+    ("list", "list: sessions, tabs and panes, as JSON"),
+    (
+        "sources",
+        "sources [refresh [view]]: mission control's GitHub and Linear views as JSON, or asked for now",
+    ),
+    (
+        "new-tab",
+        "new-tab [-s session] [-c dir] [-n name] [-d] [-E] [-- command...]: prints the new tab's and pane's ids; -d leaves it in the background, -E puts it at the end of the tabs",
+    ),
+    (
+        "split",
+        "split [-t pane] [-L|-R|-U|-D] [-c dir] [-p percent] [-d] [-- command...]: prints the new pane's id",
+    ),
+    (
+        "respawn-pane",
+        "respawn-pane [-t pane] [-c dir] [-k] [-- command...]: the pane's program replaced, in the same pane; -k ends one still running",
+    ),
+    (
+        "send-keys",
+        "send-keys [-t pane] [-l|-p] key...: keys by name (Enter, C-c, M-x), or with -l, text typed as it is, or with -p, text pasted",
+    ),
+    (
+        "capture-pane",
+        "capture-pane [-t pane] [-S lines]: the screen, and that much history",
+    ),
+    (
+        "select-pane",
+        "select-pane [-t pane] [-L|-R|-U|-D]: that pane; with a side, the pane beside it there",
+    ),
+    ("select-tab", "select-tab -t tab"),
+    (
+        "switch-client",
+        "switch-client -t tab: the terminal used last shown the tab, in its session",
+    ),
+    ("kill-pane", "kill-pane [-t pane]"),
+    ("kill-tab", "kill-tab [-t tab]"),
+    (
+        "rename-tab",
+        "rename-tab [-t tab] name: \"\" to name it after its directory",
+    ),
+    (
+        "set",
+        "set [-t target] [-u] @option [value]: a tab's or pane's option",
+    ),
+    ("show", "show [-t target] @option"),
+    (
+        "display",
+        "display [-t pane] pane|tab|session|cwd|command|title",
+    ),
+    ("list-keys", "list-keys: every key and its action"),
+    (
+        "detach",
+        "detach [-s session]: the terminals attached (to that session)",
+    ),
+    (
+        "kill-server",
+        "kill-server: ends the server and everything in it",
+    ),
+    ("save", "save: the layout now; prints its file"),
+    ("say", "say [-t seconds] text...: a message in a box"),
+    (
+        "tip",
+        "tip <name> | tip seen <name> | tip reset: a tip, once; marked shown; all again",
+    ),
+    (
+        "hook",
+        "hook <event> [--parked pids]: from switchboard hook, its JSON on stdin",
+    ),
+    (
+        "press",
+        "press <action> [arg]: an action run as its key would be, by its name in keys.json",
+    ),
+];
+
 /// The commands that read their stdin (a Claude Code hook's JSON); no other
 /// command's stdin is read, since one run with a pipe nobody closes would
 /// wait for it forever.
@@ -111,6 +187,12 @@ impl Args {
             if a == "--" {
                 i += 1;
                 break;
+            }
+            // A long option first is none of these commands', so it is a
+            // mistake rather than a program to run or a key to send; after
+            // a flag (send-keys -l --text) it is what is typed.
+            if i == 0 && a.starts_with("--") {
+                return Err(format!("unknown option {a}"));
             }
             let Some(letters) = a
                 .strip_prefix('-')
@@ -174,6 +256,11 @@ impl Server {
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("no command given");
         };
+        if matches!(rest.first().map(String::as_str), Some("--help" | "-h"))
+            && let Some((_, usage)) = USAGE.iter().find(|(n, _)| n == name)
+        {
+            return Reply::ok(format!("usage: switchboard {usage}\n"));
+        }
         let caller = pane
             .and_then(|p| p.parse::<PaneId>().ok())
             .filter(|p| self.panes.contains_key(p));
@@ -269,7 +356,7 @@ impl Server {
             "press" => Ok(self.cmd_press(rest, caller)),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
-                .map_err(|e| e.to_string()),
+                .map_err(|e| format!("{e:#}")),
             other => Err(format!("no command named {other}")),
         };
         result.unwrap_or_else(Reply::fail)
@@ -461,7 +548,7 @@ impl Server {
                 a.value('n').map(str::to_string),
                 a.has('d'),
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:#}"))?;
         if a.has('E') {
             self.tab_to_end(tab);
         }
@@ -524,7 +611,7 @@ impl Server {
         let command = (!a.rest.is_empty()).then(|| a.rest.clone());
         let pane = self
             .split(target, side, dir, command, percent, a.has('d'))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:#}"))?;
         Ok(Reply::ok(format!("{pane}\n")))
     }
 
@@ -539,7 +626,7 @@ impl Server {
         let dir = a.value('c').map(|d| resolve(cwd, d));
         let command = (!a.rest.is_empty()).then(|| a.rest.clone());
         self.respawn_pane(pane, dir, command, a.has('k'))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("{e:#}"))?;
         Ok(Reply::ok(""))
     }
 
@@ -563,7 +650,7 @@ impl Server {
         }
         slot.pane.copy_end();
         slot.copy = None;
-        slot.pane.write(&bytes).map_err(|e| e.to_string())?;
+        slot.pane.write(&bytes).map_err(|e| format!("{e:#}"))?;
         Ok(Reply::ok(""))
     }
 
@@ -764,6 +851,22 @@ mod tests {
         assert_eq!(b.value('t'), Some("%3"));
         assert_eq!(b.rest, args(&["hi"]));
         assert!(Args::parse(&args(&["-t"]), "t").is_err());
+        assert!(
+            Args::parse(&args(&["--wat"]), "t").is_err(),
+            "a long option first isn't a program to run"
+        );
+        let typed = Args::parse(&args(&["-l", "--text"]), "t").unwrap();
+        assert_eq!(typed.rest, args(&["--text"]), "after a flag it is typed");
+    }
+
+    #[test]
+    fn every_command_says_how_it_is_used() {
+        for name in NAMES {
+            assert!(
+                USAGE.iter().any(|(n, u)| n == name && u.starts_with(name)),
+                "{name} has no usage"
+            );
+        }
     }
 
     #[test]

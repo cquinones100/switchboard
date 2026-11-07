@@ -1864,7 +1864,7 @@ switchboard send-keys -t "$pane" 'make test' Enter
 switchboard capture-pane -t "$pane" -S 200
 ```
 
-A pane closes when its program ends, so a command given to `new-tab` or `split` takes its pane with it when it finishes; type it into the shell, as above, to keep what it printed.
+A pane closes when its program ends, so a command given to `new-tab` or `split` takes its pane with it when it finishes; type it into the shell, as above, to keep what it printed. Each of these says how it is used with `--help` after its name.
 
 Four more commands are programs of their own:
 

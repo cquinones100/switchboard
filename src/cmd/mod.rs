@@ -294,7 +294,7 @@ fn help() {
         println!("  {:width$}  {}", c.name, c.about);
     }
     println!(
-        "\nAnd, asked of the running server (switchboard <command> --help-less; see src/mux/commands.rs):"
+        "\nAnd, asked of the running server (switchboard <command> --help says how each is used):"
     );
     println!("  {}", crate::mux::commands::NAMES.join(" "));
 }
