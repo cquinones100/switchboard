@@ -1487,9 +1487,13 @@ impl Server {
                     }
                 });
             }
+            // The connector takes several seconds, which the busy box shows,
+            // as the daemon's menu waited on its answer.
             Do::Rsvp(event, answer) => {
-                self.calendar_rsvp(Some(client), *event, answer);
-                self.mission_note(client, "Answering it…");
+                self.mission_busy_with(client, label, async move {
+                    let said = crate::day::calendar::rsvp(&event, answer).await;
+                    (Some(said), Some(After::Calendar))
+                });
             }
             Do::SlackThread { url, who, said } => {
                 let quoted: String = said
@@ -1641,6 +1645,7 @@ impl Server {
                 self.refresh_sources(Some(crate::sources::INBOX));
             }
             After::Worktrees => self.mission_worktrees(true),
+            After::Calendar => self.calendar_reread(),
             After::Tickets => {
                 self.refresh_sources(Some(crate::sources::TICKETS));
                 self.refresh_sources(Some(crate::sources::INBOX));

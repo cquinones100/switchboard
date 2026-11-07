@@ -10,7 +10,9 @@
 //! every couple of seconds, and a lookup is due once its interval has passed
 //! since it was last asked, give or take `SLACK`, so a tick landing a moment
 //! early doesn't put it off a whole tick. The first asks come a few seconds
-//! after starting, spread out, as the daemon's first `setTimeout`s were.
+//! after starting, spread out, as the daemon's first `setTimeout`s were,
+//! and, as those weren't held while you were away, even with no one there,
+//! so the views have something to show when a client first attaches.
 //!
 //! Something that has just asked GitHub about a PR (M-m's pr-ready.sh, a
 //! skill) appends to `github` in the state directory, and the lookups that
@@ -120,18 +122,15 @@ impl Schedule {
 
     /// The lookups due now, each marked asked and waiting: every one whose
     /// interval has passed (`fast` with the `poll_fast` setting on, else its
-    /// slow one), none while `away`, and every one not already waiting on
-    /// the tick you come back.
+    /// slow one), none while `away` but its first ask after starting, and
+    /// every one not already waiting on the tick you come back.
     pub fn due(&mut self, now: Instant, fast: bool, away: bool) -> Vec<&'static str> {
         let back = self.was_away && !away;
         self.was_away = away;
-        if away {
-            return Vec::new();
-        }
         let started = self.started;
         let mut due = Vec::new();
         for entry in &mut self.entries {
-            if entry.busy {
+            if entry.busy || (away && entry.last.is_some()) {
                 continue;
             }
             let interval = if fast {
@@ -247,7 +246,13 @@ mod tests {
     fn paused_while_away_and_all_asked_on_return() {
         let t0 = Instant::now();
         let mut s = Schedule::new(&LOOKUPS, t0);
-        assert!(s.due(t0 + S(10), true, true).is_empty());
+        // The first asks after starting go out with no one there, as the
+        // daemon's first timeouts did; then nothing until you're back.
+        let first = s.due(t0 + S(10), true, true);
+        assert_eq!(first.len(), LOOKUPS.len(), "each one's first ask");
+        for name in first {
+            s.done(name);
+        }
         assert!(s.due(t0 + S(600), true, true).is_empty());
         let back = s.due(t0 + S(601), true, false);
         assert_eq!(back.len(), LOOKUPS.len(), "every one on return");

@@ -6,9 +6,10 @@
 //! worked out on the tick from what was last answered and from small files,
 //! and kept here for mission control and the sidebar to read.
 //!
-//! The calendar feed and the Slack look pause while you're away
-//! (`Server::away`) and both run on your return; the notes (standup,
-//! meetings) carry on, and today's to-do list waits for you, as before.
+//! The calendar feed and the Slack look pause while you're away, but for
+//! their first look after starting (`Server::away`), and both run on your
+//! return; the notes (standup, meetings) carry on, and today's to-do list
+//! waits for you, as before.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 use jiff::Zoned;
 use serde_json::Value;
 
-use super::calendar::{self, CalEvent, Feed, Fetched, Rsvp, SavedDay};
+use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
     Claude, ClaudeAsk, Dirs, changes, log, meetings, new_notes, slack, slack_look, standup, todo,
 };
@@ -43,13 +44,6 @@ pub enum DayEvent {
     Noted {
         job: Job,
         log: Vec<String>,
-    },
-    /// Something to say to a client (an RSVP's answer), and whether the
-    /// feed should be read again after it.
-    Said {
-        client: Option<ClientId>,
-        text: String,
-        reread: bool,
     },
 }
 
@@ -162,7 +156,9 @@ impl Server {
         }
         self.day.away = away;
         let started = self.day.started.unwrap_or(started);
-        if !away
+        // The first look after starting goes out with no one there too, as
+        // the daemon's first timeouts weren't held while you were away.
+        if (!away || self.day.feed_asked.is_none())
             && !self.day.feed_busy
             && due(
                 self.day.feed_asked,
@@ -174,7 +170,7 @@ impl Server {
         {
             self.read_feed();
         }
-        if !away
+        if (!away || self.day.slack_asked.is_none())
             && settings::is_on("slack_background")
             && due(
                 self.day.slack_asked,
@@ -220,16 +216,6 @@ impl Server {
                     log(&dirs.state, &line);
                 }
             }
-            DayEvent::Said {
-                client,
-                text,
-                reread,
-            } => {
-                self.say(client, &text);
-                if reread {
-                    self.read_feed();
-                }
-            }
         }
         self.day_views(&dirs, &util::local_now());
     }
@@ -257,21 +243,10 @@ impl Server {
         self.day_views(&dirs, &now);
     }
 
-    /// Answers an invitation (an event's menu: `calendar::rsvp_choices`),
-    /// saying how it went to `client` when done, and reading the feed again.
-    pub fn calendar_rsvp(&mut self, client: Option<ClientId>, event: CalEvent, answer: Rsvp) {
-        if tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let text = calendar::rsvp(&event, answer).await;
-            let _ = tx.send(Event::Day(DayEvent::Said {
-                client,
-                text,
-                reread: true,
-            }));
-        });
+    /// The calendar feed read again, after something changed it (an
+    /// invitation answered from mission control's menu).
+    pub fn calendar_reread(&mut self) {
+        self.read_feed();
     }
 
     /// Going to the Slack view asks for a look now, when the last is over a

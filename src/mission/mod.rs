@@ -252,6 +252,8 @@ pub enum After {
     Worktrees,
     /// A ticket closed: the ticket board and the Inbox ask again.
     Tickets,
+    /// An invitation answered: the calendar feed read again.
+    Calendar,
     /// Linear has said which state closing a ticket moves it to: asked
     /// about first, since it changes Linear for everyone.
     CloseTicket {
