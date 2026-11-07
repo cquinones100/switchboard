@@ -120,6 +120,9 @@ pub enum Action {
     Settings,
     /// A reminder on the current tab (remind.sh).
     RemindTab,
+    /// The tab's whole title in a box, which the sidebar and the status
+    /// line cut (M-T; tab-title.sh; src/tabs/title.rs).
+    TabTitle,
     /// What the views do: M-v, M-i, M-r, M-l, M-m, M-S-f and the link
     /// commands (src/views).
     View(crate::views::Command),
@@ -153,7 +156,7 @@ impl Action {
     /// `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`,
     /// `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`,
     /// `ticket-image`, `mission-control`, `find-tab`,
-    /// `revive-worktree`, `settings`, `remind-tab`, and the views' (`pr-view`,
+    /// `revive-worktree`, `settings`, `remind-tab`, `tab-title`, and the views' (`pr-view`,
     /// `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `pr-ready`,
     /// `search-everything`, `read-link`, `open-link-being-read`,
     /// `open-merge-queue`, `open-linear-project`, `copy-ticket-id`,
@@ -233,6 +236,7 @@ impl Action {
             "revive-worktree" => Action::ReviveWorktree,
             "settings" => Action::Settings,
             "remind-tab" => Action::RemindTab,
+            "tab-title" => Action::TabTitle,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -300,6 +304,7 @@ impl Action {
             Action::ReviveWorktree => "revive-worktree".into(),
             Action::Settings => "settings".into(),
             Action::RemindTab => "remind-tab".into(),
+            Action::TabTitle => "tab-title".into(),
             Action::View(command) => command.name().into(),
             Action::Diff(command) => command.name().into(),
             Action::SlackRelay => "slack-relay".into(),
@@ -387,6 +392,7 @@ impl Action {
             Action::RemindTab => {
                 "Remind me about this tab later, as Slack does: it waits under Reminders with the time left, then needs you".into()
             }
+            Action::TabTitle => "Show this tab's full title".into(),
             Action::View(command) => command.about().into(),
             Action::Diff(command) => command.about().into(),
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
@@ -442,6 +448,7 @@ impl Action {
             Action::ReviveWorktree => &["worktree", "claude", "tabs", "reopen"],
             Action::Settings => &["settings", "config", "preferences"],
             Action::RemindTab => &["tabs", "remind", "todo"],
+            Action::TabTitle => &["tabs"],
             Action::View(command) => command.tags(),
             Action::Diff(command) => command.tags(),
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
@@ -584,6 +591,7 @@ impl Default for Bindings {
         bind("M-S", SlackRelay);
         bind("M-j", FindTab);
         bind("M-o", ReviveWorktree);
+        bind("M-T", TabTitle);
         for command in crate::views::Command::ALL {
             if let Some(k) = command.key() {
                 bind(k, View(command));
@@ -757,6 +765,7 @@ mod tests {
             Action::ReviveWorktree,
             Action::Settings,
             Action::RemindTab,
+            Action::TabTitle,
             Action::ShapeNote,
             Action::ShapeNewTicket,
             Action::PrImage,

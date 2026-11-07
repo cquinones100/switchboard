@@ -33,6 +33,8 @@ pub enum Do {
     Answer(TabId),
     /// A look at it without going there.
     Peek(TabId),
+    /// Its whole title in a box, as M-T shows it.
+    TabTitle(TabId),
     /// The tab, and its diff in its pane's place (M-d).
     Diff(TabId),
     /// The tab, and lazygit in its pane's place.
@@ -191,12 +193,14 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
 }
 
 /// A tab's menu. `waiter` is its place in the landing queue when it waits
-/// there; `all` every tab, for closing the merged ones together.
+/// there; `all` every tab, for closing the merged ones together; `title`
+/// the tab_title setting, for showing its whole title.
 pub fn tab_choices(
     tab: &TabModel,
     all: &[TabModel],
     waiter: Option<&Waiter>,
     reminders: bool,
+    title: bool,
 ) -> Vec<Choice> {
     let mut out = vec![choice(
         'g',
@@ -219,6 +223,10 @@ pub fn tab_choices(
         },
         Do::Peek(tab.id),
     ));
+    // Its whole title, as M-T shows it, which the cards cut to a line.
+    if title {
+        out.push(choice('i', "Show its full title", Do::TabTitle(tab.id)));
+    }
     out.push(choice('d', "Its diff (M-d)", Do::Diff(tab.id)));
     out.push(choice('L', "lazygit", Do::Lazygit(tab.id)));
     out.push(choice('p', "Actions (M-p) in the tab", Do::Palette(tab.id)));
@@ -928,18 +936,20 @@ mod tests {
     #[test]
     fn a_tabs_menu_goes_there_first_then_answers_peeks_renames_pins_and_reminds() {
         let mut t = tab(3, "fix");
-        let choices = tab_choices(&t, std::slice::from_ref(&t), None, true);
-        assert_eq!(keys(&choices), "gavdLprfex");
+        let choices = tab_choices(&t, std::slice::from_ref(&t), None, true, true);
+        assert_eq!(keys(&choices), "gavidLprfex");
+        assert_eq!(choices[3].label, "Show its full title");
+        assert_eq!(choices[3].act, Do::TabTitle(TabId(3)));
         assert_eq!(choices[0].label, "Go to tab 3");
         assert_eq!(choices[0].act, Do::GoTo(TabId(3)));
         t.claude_pane = None;
         t.claude = None;
         t.pinned = true;
-        let choices = tab_choices(&t, std::slice::from_ref(&t), None, false);
+        let choices = tab_choices(&t, std::slice::from_ref(&t), None, false, false);
         assert_eq!(
             keys(&choices),
             "gvdLprfx",
-            "no answer without a Claude, no reminder when off"
+            "no answer without a Claude, no reminder or full title when off"
         );
         assert_eq!(choices[1].label, "Peek at its screen");
         assert_eq!(choices[2].act, Do::Diff(TabId(3)));
@@ -960,14 +970,20 @@ mod tests {
             first: false,
             last: true,
         };
-        let choices = tab_choices(&waiting, std::slice::from_ref(&waiting), Some(&w), true);
+        let choices = tab_choices(
+            &waiting,
+            std::slice::from_ref(&waiting),
+            Some(&w),
+            true,
+            true,
+        );
         assert!(keys(&choices).contains("nu") && !keys(&choices).contains('b'));
         let mut merged = tab(5, "done with");
         merged.merge = Some(MergeState::Merged);
         let mut also = tab(6, "also merged");
         also.merge = Some(MergeState::Merged);
         let all = vec![merged.clone(), also];
-        let choices = tab_choices(&merged, &all, None, true);
+        let choices = tab_choices(&merged, &all, None, true, true);
         let last = choices.last().unwrap();
         assert_eq!(last.label, "Close every Merged tab and its worktree (2)");
         assert_eq!(last.act, Do::CloseMerged(vec![TabId(5), TabId(6)]));

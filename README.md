@@ -62,6 +62,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-c` | Into the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin the tab to the top of Needs you |
+| `M-T` | This tab's whole title, which the sidebar and status line cut, in a box (`y` copies it) |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
 | `M-[` `M-]`, `M-1` … `M-9` | The previous or next tab, or a tab by number |

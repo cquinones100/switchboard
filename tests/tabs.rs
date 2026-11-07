@@ -146,6 +146,31 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     wait_tab(&server, "the gray", |t| t["color"] == "8a8a8a");
 }
 
+#[test]
+fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let work = server.dir.path().join("shop");
+    repo(&work, "feature-x");
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    client.wait_for("the repository's name in the tab", |s| {
+        s[29].ends_with("1:shop:feature-x")
+    });
+    let id = first_tab(&server)["id"].as_str().unwrap().to_string();
+    let long = "A tab's name long enough that the status line and the sidebar would cut it short somewhere";
+    server.ok(&["set", "-t", &id, "@tab_name", long]);
+    client.type_text("\x1bT");
+    let screen = client.wait_text("Copy the title");
+    let text = screen.join("\n");
+    assert!(text.contains("Tab 1"), "{text}");
+    assert!(text.contains("Branch     feature-x"), "{text}");
+    assert!(text.contains("somewhere"), "the title whole: {text}");
+    client.type_text("y");
+    client.wait_text("Copied the tab's title");
+}
+
 #[cfg(feature = "net")]
 mod from_the_services {
     use super::*;

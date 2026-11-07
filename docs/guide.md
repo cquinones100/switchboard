@@ -137,6 +137,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-c` | Go to the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
 | `M-f` | Pin or unpin the tab, keeping it at the top of Needs you |
+| `M-T` | This tab's whole title in a box, which the sidebar cuts at three lines and the status line at its width: the title as the tab bar has it, its PR number in front, wrapped, then its branch, directory, PR and Linear ticket as far as they are known, read from what the workspace holds alone, never the network; Copy the title (or `y`) copies it, and Close, Esc or a click off the options closes it (Settings' "Show a tab's full title", `tab_title`; off, the key reaches the pane) |
 | `M-p` | The palette: find any command by what it does, and run it |
 | `M-/` | Every key, in mission control's Keys view (see "The Keys view") |
 | `M-Space` | Open or close mission control |
@@ -216,7 +217,7 @@ The server reads the file as it starts and again within two seconds of a change,
 The actions, by the names the file uses:
 
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
-- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
+- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `tab-title` (`M-T`), `rename-tab`, `calendar-tab`, `slack-tab`.
 - Claude and work: `next-needs-you`, `next-idle`, `focus-claude`, `copy-reply`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-landing` (`mission-merge-queues`, its name before, still works), `mission-sessions`, `mission-usage`, `mission-resources`), `keys-view` (`M-/`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `clear-image-cache`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
@@ -419,6 +420,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | `a` | answer the chosen tab's Claude, or send it a message, in mission control's box (see [Answering a tab](#answering-a-tab)) |
 | `n` | to the notifications, or a box saying there are none |
 | `t` | a new tab running Claude, as `M-t` opens one, from the chosen tab, so its directory is first in the list |
+| `i` | the chosen tab's whole title in a box, as `M-T` shows it |
 | `d` `L` | the chosen tab gone to, its diff (as `M-d`) or lazygit in its pane's place |
 | any other Alt or Ctrl key | goes to the chosen tab and runs there |
 | `?` | these keys |
@@ -503,6 +505,7 @@ On a tab, the menu offers:
 - go to the tab;
 - answer it here, or send it a message (below);
 - peek at its last turn, or at its screen for a tab with no Claude;
+- show its full title, as `M-T` does, with Copy the title;
 - its diff, as `M-d` opens it, or lazygit (below), in its pane's place, going to the tab;
 - the `M-p` palette in that tab;
 - rename it (empty names it after its directory again);
@@ -1795,6 +1798,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | M-A cycles idle tabs (`idle_walk`) | on | M-A goes to the next idle tab, in the sidebar's Idle order, wrapping at the end, as M-a walks the tabs that need you; off, M-A reaches the pane |
 | One Claude to a tab (`one_claude_per_tab`) | on | A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane |
 | Name new tabs (`name_new_tabs`) | on | M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory |
+| Show a tab's full title (`tab_title`) | on | M-T, the sidebar's i and a tab's menu in mission control show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, the key reaches the pane |
 | Messages in a box (`message_boxes`) | on | What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment |
 | Second status line (`second_status`) | off | The line under the tabs with the tab's name, branch, PR and Claude session |
 | PRs and tickets in tab names (`tab_lookups`) | on | Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background |

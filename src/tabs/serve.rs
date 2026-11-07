@@ -15,8 +15,10 @@ use crate::{paths, util};
 use super::color::{self, Rgb};
 use super::label::{self, PaneKind};
 use super::names::{Answer, Ask};
+use super::{git, title};
 use crate::mux::TabId;
-use crate::mux::server::{Event, Server};
+use crate::mux::server::{ClientId, Event, Server};
+use crate::ui::{Menu, MenuOption};
 
 /// Where the PRs and titles found are kept for the next server, as
 /// window-pr.sh and ticket-title.sh kept theirs under `~/.cache`.
@@ -179,5 +181,54 @@ impl Server {
     /// The tab's PR number, when its branch has one.
     pub fn tab_pr(&self, tab: TabId) -> Option<u64> {
         self.tab_names.shown.get(&tab)?.pr
+    }
+
+    /// M-T's box for a tab (src/tabs/title.rs): its whole title, and its
+    /// branch, directory, PR and ticket, with Copy the title and Close; with
+    /// the tab_title setting off, it says so.
+    pub fn show_tab_title(&mut self, client: ClientId, tab: TabId) {
+        if !crate::settings::is_on("tab_title") {
+            self.say(
+                Some(client),
+                "Showing a tab's full title is off in Settings (Show a tab's full title)",
+            );
+            return;
+        }
+        let Some(index) = self
+            .session_of_tab(tab)
+            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
+        else {
+            return;
+        };
+        let full = self.tab_label(tab);
+        let path = self.tab_path(tab).map(Path::to_path_buf);
+        let branch = path
+            .as_deref()
+            .and_then(git::locate)
+            .map(|place| place.branch);
+        let shown = self.tab_names.shown.get(&tab);
+        let ticket = shown
+            .and_then(|s| title::ticket_of(&s.label))
+            .map(str::to_string);
+        let facts = title::facts(
+            branch.as_deref(),
+            path.as_deref().map(paths::tilde).as_deref(),
+            self.tab_pr(tab),
+            ticket.as_deref(),
+        );
+        let menu = Menu::new(
+            format!("Tab {}", index + 1),
+            vec![
+                MenuOption::new("Copy the title").key('y'),
+                MenuOption::new("Close"),
+            ],
+        )
+        .body(title::body(&full, &facts));
+        self.choose(client, menu, move |server, client, chose| {
+            if chose == Some(0) {
+                server.to_clipboard(Some(client), &full);
+                server.say(Some(client), "Copied the tab's title");
+            }
+        });
     }
 }

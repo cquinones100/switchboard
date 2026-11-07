@@ -1244,8 +1244,13 @@ impl Server {
             };
             let all = self.sidebar_all_tabs();
             let waiter = self.sources.landing_waiter(tab.id).cloned();
-            let list =
-                choices::tab_choices(&tab, &all, waiter.as_ref(), settings::is_on("reminders"));
+            let list = choices::tab_choices(
+                &tab,
+                &all,
+                waiter.as_ref(),
+                settings::is_on("reminders"),
+                settings::is_on("tab_title"),
+            );
             self.mission_menu(
                 client,
                 format!("{} {}", tab.index, tab.name),
@@ -1435,6 +1440,7 @@ impl Server {
             Do::GoTo(tab) => self.mission_go(client, tab),
             Do::Answer(tab) => self.open_answer(client, tab, None),
             Do::Peek(tab) => self.mission_peek(client, tab),
+            Do::TabTitle(tab) => self.show_tab_title(client, tab),
             Do::Diff(tab) => self.tool_in_tab(client, tab, false),
             Do::Lazygit(tab) => self.tool_in_tab(client, tab, true),
             Do::ToolIn { dir, lazygit } => {

@@ -13,6 +13,7 @@
 //!   name; what the Claude statusline will call to keep the same color.
 //! - `git`: where a directory sits in git, from git's files.
 //! - `label`: the label's rules, with nothing in them that reads or asks.
+//! - `title`: M-T's box, a tab's whole title and what is known of it.
 //! - `names`: what is kept per directory and per lookup, and the lookups.
 //! - `serve`: the server's side: naming the tabs, and what later parts read
 //!   (`Server::tab_label`, `tab_color`, `tab_path`, `tab_pr`).
@@ -22,6 +23,7 @@ pub mod git;
 pub mod label;
 pub mod names;
 mod serve;
+pub mod title;
 
 use std::collections::HashMap;
 

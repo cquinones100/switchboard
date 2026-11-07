@@ -60,6 +60,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ("a", "answer it, or send it a message"),
     ("n", "to the notifications, when there are any"),
     ("t", "new tab running Claude there (M-t)"),
+    ("i", "its full title (M-T)"),
     ("d L", "its diff, or lazygit, in its pane's place"),
     ("M-x C-x", "run that key there"),
     ("M-s", "back to your pane"),
@@ -1178,6 +1179,12 @@ impl Server {
                 if let Some(t) = chosen {
                     self.sidebar_go(session, t);
                     self.act(client, Action::NewClaudeTab);
+                }
+            }
+            // i: its whole title in a box, as M-T shows it.
+            KeyCode::Char('i') if none && settings::is_on("tab_title") => {
+                if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
+                    self.show_tab_title(client, t);
                 }
             }
             KeyCode::Char('?') if none => {

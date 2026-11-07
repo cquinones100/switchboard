@@ -112,6 +112,10 @@ impl Server {
         {
             return KeyFate::ToPane;
         }
+        // M-T with the tab_title setting off reaches the pane as it is.
+        if matches!(self.bindings.root.get(&key), Some(Action::TabTitle)) && is_off("tab_title") {
+            return KeyFate::ToPane;
+        }
         if let KeyCode::Char(c) = key.code
             && key.mods.is_empty()
             && OPTION_CHARS.contains(&c)

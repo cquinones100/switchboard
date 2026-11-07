@@ -1932,6 +1932,7 @@ impl Server {
             ),
             Action::Settings => self.open_mission(id, crate::mission::Opening::Settings),
             Action::RemindTab => self.remind_tab(id, current_tab),
+            Action::TabTitle => self.show_tab_title(id, current_tab),
             Action::View(command) => self.view_command(id, command),
             Action::Diff(command) => self.diff_command(id, command),
             Action::SlackRelay => self.slack_relay(true),
