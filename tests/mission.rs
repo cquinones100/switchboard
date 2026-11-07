@@ -391,8 +391,7 @@ fn a_time_typed_into_the_reminder_list_wins_over_the_row_it_resembles() {
     let (server, mut client) = two_tabs(json!({}));
     open(&mut client);
     client.type_text("\r");
-    client.wait_text("Remind me about it later");
-    client.type_text("e");
+    pick(&mut client, "Remind me about it later");
     client.wait_text("Or type a time");
     // "2h" matches "In 20 minutes" and "In 3 hours" by their numbers and
     // letters, but names a time of its own.
