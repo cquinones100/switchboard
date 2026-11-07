@@ -70,7 +70,7 @@ fn no_skill_names_another_skill_s_skill_md_by_a_fixed_path() {
 }
 
 #[test]
-fn skill_path_finds_the_repository_s_copy_then_the_personal_one_then_the_plugin_s() {
+fn skill_path_finds_the_repository_s_copy_then_switchboard_s_personal_one_then_the_plugin_s() {
     let tmp = TempDir::new("skill-path");
     let home = tmp.path();
     let git = |args: &[&str]| {
@@ -143,16 +143,39 @@ fn skill_path_finds_the_repository_s_copy_then_the_personal_one_then_the_plugin_
     );
     assert_eq!(out(&outside), plugin, "outside a repository too");
 
+    // A skill of yours that only shares the name: Switchboard's own is
+    // still the plugin's, so /switchboard:demo and a hand-off to it follow
+    // Switchboard's text, not yours.
     let personal = skill(home);
+    assert_eq!(out(&worktree), plugin, "not a skill of yours by the name");
+    assert_eq!(out(&outside), plugin, "nor outside a repository");
+
+    // Switchboard's, written there the old way.
+    let marker = home.join(".claude/skills/demo/.switchboard-skill");
+    fs::write(&marker, "SKILL.md\n").unwrap();
     assert_eq!(
         out(&worktree),
         personal,
-        "the personal one when the repository has none"
+        "the personal one when it is Switchboard's and the repository has none"
     );
     assert_eq!(
         out(&outside),
         personal,
         "the personal one outside a repository"
+    );
+
+    // A copy of Switchboard's made yours, as the guide says to change one:
+    // its list deleted, its opening still deferring by skill-path.
+    fs::remove_file(&marker).unwrap();
+    fs::write(
+        &personal,
+        "# demo\n\nThis is Switchboard's own copy, for repositories that have none. Before anything else, run `switchboard skill-path demo`: if it prints a path other than this file's, read that file and follow it instead.\n\nMy way.\n",
+    )
+    .unwrap();
+    assert_eq!(
+        out(&worktree),
+        personal,
+        "a copy of Switchboard's made yours"
     );
 
     let main = skill(&repo);

@@ -154,6 +154,21 @@ pub fn installed() -> bool {
         .any(|name| matches!(found(name), Found::Ours(_) | Found::Linked))
 }
 
+/// Whether `~/.claude/skills/<name>` is Switchboard's skill by that name,
+/// for `skill-path` to follow: one the old way wrote there (its folder holds
+/// `MANIFEST`) or a link into a clone's, or a copy of it made yours as the
+/// guide says to change one (its `MANIFEST` deleted), known by its opening
+/// still running `skill-path <name>`. A skill of yours that only shares the
+/// name isn't, so Switchboard's own (the plugin's) is followed in its place.
+pub fn switchboard_s(name: &str) -> bool {
+    match found(name) {
+        Found::Ours(_) | Found::Linked => true,
+        Found::Own => fs::read_to_string(skills_dir().join(name).join("SKILL.md"))
+            .is_ok_and(|text| text.contains(&format!("skill-path {name}`"))),
+        Found::Nothing => false,
+    }
+}
+
 /// The skills of your own kept in place of Switchboard's of the same name.
 pub fn own_skills() -> Vec<String> {
     shipped()

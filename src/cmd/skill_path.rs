@@ -6,18 +6,24 @@
 //!
 //! The worktree's own `.claude/skills/<name>/SKILL.md` comes first, then its
 //! main clone's (a branch cut before the repository added the skill has none
-//! of its own), then the personal one, `~/.claude/skills/<name>/SKILL.md`
-//! (Switchboard's own the old way, src/setup/way.rs, or one of yours), then
-//! Switchboard's plugin's, `~/.local/share/switchboard/plugin/skills/<name>/
-//! SKILL.md` (src/setup/plugin.rs). Outside a git repository, the personal
-//! one, then the plugin's. It prints nothing and exits 1 when there is none.
+//! of its own), then Switchboard's own: the personal one,
+//! `~/.claude/skills/<name>/SKILL.md`, when it is Switchboard's (written
+//! there the old way, src/setup/way.rs, or a copy of it made yours,
+//! `skills::switchboard_s`), else the plugin's,
+//! `~/.local/share/switchboard/plugin/skills/<name>/SKILL.md`
+//! (src/setup/plugin.rs). Outside a git repository, Switchboard's own alone.
+//! It prints nothing and exits 1 when there is none.
 //!
 //! Every Switchboard skill runs it first and follows the repository's copy
 //! when it prints one, and a skill handing off to another reads the file it
 //! prints, since Claude Code itself may run Switchboard's copy where a
 //! project has its own: a personal skill over a project's of the same name,
 //! and the plugin's whenever it is asked for by its plugin's name
-//! (`/switchboard:<name>`) or a hand-off names it.
+//! (`/switchboard:<name>`) or a hand-off names it. A skill of yours that only
+//! shares a name with one of Switchboard's is never printed: Claude Code
+//! runs it for the bare name, and Switchboard's, run as
+//! `/switchboard:<name>` or handed off to, follows its own text rather than
+//! yours.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -85,7 +91,9 @@ pub fn find(name: &str, dir: &Path) -> Option<PathBuf> {
             roots.push(top);
         }
     }
-    roots.push(paths::home());
+    if crate::setup::skills::switchboard_s(name) {
+        roots.push(paths::home());
+    }
     roots
         .into_iter()
         .map(|root| root.join(".claude/skills").join(name).join("SKILL.md"))
