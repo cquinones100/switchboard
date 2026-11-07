@@ -105,7 +105,7 @@ switchboard <command>     ──┘            ├─ background tasks: GitHub, 
 | fzf (palette, pickers) | `src/ui/picker.rs` with nucleo-matcher |
 | glow, mermaid-ascii | `src/views/markdown.rs` (pulldown-cmark), a Mermaid flowchart/sequence drawer |
 | diffview.nvim, `nvim/lua/diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `src/diff/` (`switchboard diff`; syntect for highlighting, similar for the line and word diffs) |
-| the notes app (`notes/`, Neovim) | `src/views/notes/` (ropey) |
+| the notes app (`notes/`, Neovim), `bin/notes` | `src/notes/` (`switchboard notes`; ropey for the text, notify for the watch, image for pictures other than PNGs) |
 | `gh` | GitHub's API over reqwest; the token from `GH_TOKEN`/`GITHUB_TOKEN`, `gh auth token` when gh is there, else a stored secret |
 | `security`, `pbcopy`, `osascript`, `ioreg`, `open` | `src/platform/` |
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
@@ -185,7 +185,20 @@ Each step is a commit (or a few) on the branch, with its tests.
    Left: the branch's commits one at a time (diffview's `c`), visual-mode
    ranges for yp and yl, and a working tree's changes, which M-d never
    showed.
-9. **The notes app**.
+9. **The notes app** — done (src/notes: `switchboard notes`, the list of
+   folders, tags and notes beside a note drawn as Notes shows it, with its
+   tables, folds and pictures under their lines through kitty's Unicode
+   placeholders; Vim's keys and easy mode's, the toolbar, the Format menu,
+   the palette and the finder; the lock, `.notes.json`, renames, moves and
+   folders; every save merging in what changed outside, and a watch on the
+   directory; squashing through Claude after a yes; a socket the workspace
+   opens a tab's note through, `open <note>`, `sidebar on|off`, `shown`).
+   Left, for the server: M-N and M-e (Notes in a tab of its own or beside
+   one, the list put away there), note tabs and picking a tab's note
+   (`note-tab.sh`, `note-pick.sh`), the palette's Switchboard commands
+   (the app asks `switchboard press <name>`), passing the Cmd keys to a pane
+   marked `@notes_cmd_keys`, and passing kitty's graphics commands and the
+   placeholders' marks through to the terminal.
 10. **`switchboard setup`, updates, releases**: Claude settings merge, skills,
     statusline, CI and release builds for the three targets, self-update.
     `switchboard setup` done (src/setup: the `claude`, `claude-md` and

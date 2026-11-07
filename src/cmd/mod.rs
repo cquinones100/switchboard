@@ -4,7 +4,7 @@
 //! What used to be a program run inside tmux is part of the workspace now
 //! (the sidebar, search), or a program of its own the workspace runs in a
 //! pane (`view`, `pr-view`, `ticket-view`, `link-view`, src/views; `diff`,
-//! src/diff).
+//! src/diff; `notes`, src/notes).
 
 use std::process::ExitCode;
 
@@ -225,6 +225,11 @@ pub const COMMANDS: &[Command] = &[
         name: "diff",
         run: crate::diff::main,
         about: "The branch's changes against its PR's base, told as a story (M-d runs it in a pane's place)",
+    },
+    Command {
+        name: "notes",
+        run: crate::notes::main,
+        about: "The notes app: your notes in $NOTES_DIR or ~/Notes, drawn as Notes shows them and edited with Vim's keys",
     },
     Command {
         name: "open-url",
