@@ -78,7 +78,13 @@ pub struct Presence {
 /// `tokio::task::spawn_blocking` on a runtime. Where the desktop can't say
 /// (a Linux with no desktop session, WSL), the idle time is `None`, and the
 /// server goes by the last key pressed in any of its clients instead.
+/// `SWITCHBOARD_PRESENCE=unknown` has the desktop say nothing, as the tests'
+/// servers run, so a test goes by what it typed whatever the computer's own
+/// idle time (a CI Mac nobody touches is always away).
 pub fn presence() -> Presence {
+    if std::env::var_os("SWITCHBOARD_PRESENCE").is_some_and(|v| v == "unknown") {
+        return Presence::default();
+    }
     os::presence()
 }
 

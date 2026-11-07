@@ -164,6 +164,9 @@ impl TestServer {
         cmd.env("HOME", home)
             .env("PATH", format!("{}:{path}", home.join("bin").display()))
             .env("SWITCHBOARD_STATE_DIR", state)
+            // The computer's own idle time isn't the test's: it goes by
+            // what it typed.
+            .env("SWITCHBOARD_PRESENCE", "unknown")
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
             .env("PS1", "$ ")
