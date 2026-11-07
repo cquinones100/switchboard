@@ -25,7 +25,7 @@ use std::time::UNIX_EPOCH;
 use super::line::{self, Act, Summary};
 use super::mode::{self, Mode, note_title};
 use super::pilot::{Job, Mark};
-use super::place::{Mine, in_worktree_of};
+use super::place::{Mine, in_main_clone, in_worktree_of};
 use super::{AutopilotEvent, Command};
 use crate::agent::State;
 use crate::cmd::work::main_clone;
@@ -45,6 +45,12 @@ pub const OPENED: &str = "@autopilot";
 pub const IN: &str = "@autopilot_in";
 /// The first line of the item it was opened for.
 pub const ITEM: &str = "@autopilot_item";
+/// When it was found back in the main clone once landed, in seconds.
+pub const LEFT: &str = "@autopilot_left";
+/// Seen since it landed.
+pub const SEEN: &str = "@autopilot_seen";
+/// Every mark of the mode's, taken off as a tab leaves it.
+const MARKS: [&str; 5] = [OPENED, IN, ITEM, LEFT, SEEN];
 
 /// When a file last changed, in ms; `None` when it isn't there.
 fn modified_ms(path: &Path) -> Option<i64> {
@@ -365,10 +371,11 @@ impl Server {
             .flatten();
         let away = self.away_now();
         let counts = self.autopilot.pilot.counts;
-        let check = self
-            .autopilot
-            .pilot
-            .check(&mode, on, &mine, away, util::now_ms(), mtime);
+        let close = settings::is_on("autopilot_close");
+        let check =
+            self.autopilot
+                .pilot
+                .check(&mode, on, close, &mine, away, util::now_ms(), mtime);
         let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
         self.autopilot.mode = mode;
         self.autopilot_marks(&check.marks);
@@ -437,13 +444,56 @@ impl Server {
                     }
                     dirs.extend(slot.pane.cwd());
                 }
+                let marked = |name: &str| {
+                    tab.opts
+                        .get(name)
+                        .is_some_and(|v| !v.is_empty() && v != "0")
+                };
+                let landed = tab
+                    .opts
+                    .get(LEFT)
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|n| *n != 0.0);
+                // Its Claude's own pane, idle, in a main clone: whichever,
+                // since the mode may have moved to another repository since
+                // it opened the tab. Only Claude's pane counts when it has
+                // one, since a shell beside it may be in the main clone
+                // already while queue-and-clean still asks something.
+                let claude_dirs: Vec<PathBuf> = match self.agents.leader(&panes) {
+                    Some((p, _, _)) => self
+                        .panes
+                        .get(&p)
+                        .and_then(|s| s.pane.cwd())
+                        .into_iter()
+                        .collect(),
+                    None => dirs.clone(),
+                };
+                let home = state == TabState::Idle && in_main_clone(&claude_dirs);
+                let everywhere = self.panes_with_parked(*id);
+                let prompted_since = landed.is_some_and(|at| {
+                    state != TabState::Idle
+                        && everywhere
+                            .iter()
+                            .any(|p| self.agents.get(*p).is_some_and(|a| a.since as f64 > at))
+                });
+                let stand_in = panes.iter().any(|p| {
+                    self.panes
+                        .get(p)
+                        .is_some_and(|s| s.opts.contains_key(PARKED_PANE))
+                });
                 out.push(Mine {
                     tab: *id,
                     since,
-                    was_in: tab.opts.get(IN).is_some_and(|v| !v.is_empty() && v != "0"),
+                    was_in: marked(IN),
                     item: tab.opts.get(ITEM).filter(|v| !v.is_empty()).cloned(),
                     state,
                     in_worktree: in_worktree_of(&dirs, repo),
+                    landed,
+                    seen: marked(SEEN),
+                    front: self.tab_in_front(*id),
+                    stand_in,
+                    home,
+                    prompted_since,
                 });
             }
         }
@@ -475,12 +525,16 @@ impl Server {
         )
     }
 
-    /// Its tabs marked as they reach their worktree, and unmarked as they
-    /// land.
+    /// Its tabs marked as they reach their worktree, land and are seen,
+    /// unmarked as they leave the mode, and closed once landed and left.
     fn autopilot_marks(&mut self, marks: &[Mark]) {
         for mark in marks {
             let tab = match *mark {
-                Mark::In(t) | Mark::Left(t) => t,
+                Mark::In(t) | Mark::Left(t) | Mark::Landed(t, _) | Mark::Seen(t) => t,
+                Mark::Close(t) => {
+                    self.autopilot_close_tab(t);
+                    continue;
+                }
             };
             let Some(t) = self.tabs.get_mut(&tab) else {
                 continue;
@@ -489,14 +543,45 @@ impl Server {
                 Mark::In(_) => {
                     t.opts.insert(IN.into(), "1".into());
                 }
-                Mark::Left(_) => {
-                    for option in [OPENED, IN, ITEM] {
+                Mark::Landed(_, at) => {
+                    t.opts.insert(LEFT.into(), at.to_string());
+                }
+                Mark::Seen(_) => {
+                    t.opts.insert(SEEN.into(), "1".into());
+                }
+                Mark::Left(_) | Mark::Close(_) => {
+                    for option in MARKS {
                         t.opts.remove(option);
                     }
                 }
             }
             self.dirty_tab(tab);
         }
+    }
+
+    /// A landed tab closed: with Notes moved beside it (M-e), only its own
+    /// panes, so Notes, left alone, goes back to its tab and the tab closes
+    /// (`notes_orphan`); else the tab.
+    fn autopilot_close_tab(&mut self, tab: TabId) {
+        let Some(t) = self.tabs.get(&tab) else {
+            return;
+        };
+        let panes = t.layout.panes();
+        let notes = |p: &PaneId| {
+            self.panes
+                .get(p)
+                .and_then(|s| s.opts.get("@notes_pane"))
+                .is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        if panes.iter().any(notes) {
+            let own: Vec<PaneId> = panes.iter().copied().filter(|p| !notes(p)).collect();
+            for p in own {
+                self.kill_pane(p);
+            }
+        } else {
+            self.kill_tab(tab);
+        }
+        eprintln!("autopilot: closed {tab}, landed");
     }
 
     /// The next item read again, off the task, for mission control's line.

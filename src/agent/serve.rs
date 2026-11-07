@@ -147,7 +147,7 @@ impl Server {
 
     /// Whether a tab is the one in front in a session someone is looking at
     /// (tmux's `window_active` and `session_attached`).
-    fn tab_in_front(&self, tab: TabId) -> bool {
+    pub(crate) fn tab_in_front(&self, tab: TabId) -> bool {
         self.session_of_tab(tab)
             .is_some_and(|s| s.current == tab && self.clients.values().any(|c| c.session == s.name))
     }
@@ -232,6 +232,15 @@ impl Server {
                     t.opts.remove(option);
                 }
                 self.redraw_tab(tab);
+            }
+            // A tab of the mode working a note, landed and back in the main
+            // clone, has been seen, so it closes once you leave it
+            // (src/autopilot).
+            if let Some(t) = self.tabs.get_mut(&tab)
+                && t.opts.contains_key("@autopilot_left")
+                && !t.opts.contains_key("@autopilot_seen")
+            {
+                t.opts.insert("@autopilot_seen".into(), "1".into());
             }
         }
         if self

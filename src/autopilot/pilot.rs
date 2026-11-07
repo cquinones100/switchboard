@@ -16,6 +16,16 @@
 //! is typed and its first words would be opened as an item. A note found
 //! empty is looked at again once it changes, or `RECENT_MS` later, since an
 //! item a worktree had comes back once that worktree is removed.
+//!
+//! A tab back in the main clone once queue-and-clean has landed it leaves
+//! the mode, and, with the autopilot_close setting on, is closed for you
+//! (autopilot.js's `afterLanding`): marked landed (`@autopilot_left`, the
+//! time) once its Claude's pane is idle in a main clone, marked seen
+//! (`@autopilot_seen`) once it has been in front for `SEEN_MS`, and closed
+//! as soon as you leave it, or `CLOSE_AFTER_S` after it landed if you never
+//! look. Never while it is in front or while a tool stands in for one of
+//! its panes; a prompt typed in it after it landed makes it yours, out of
+//! the mode, so it stays open. Off, it leaves the mode as it lands.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -36,6 +46,11 @@ pub const SETTLE_MS: i64 = 60_000;
 /// The next item is read again at most this often, and when the note, the
 /// items skipped or the kind of items taken change.
 pub const QUEUE_MS: i64 = 30_000;
+/// A landed tab you never look at is closed this long after it landed.
+pub const CLOSE_AFTER_S: f64 = 30.0 * 60.0;
+/// A landed tab in front this long counts as seen, so passing over it, as
+/// moving the sidebar's cursor does, doesn't.
+pub const SEEN_MS: i64 = 1_000;
 
 /// The item it will take next, as last read, for mission control.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -48,13 +63,21 @@ pub struct Next {
     pub key: String,
 }
 
-/// A mark a check sets on one of its tabs.
+/// A mark a check sets on one of its tabs, or what it does to one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mark {
     /// Seen in its worktree: `@autopilot_in`.
     In(TabId),
-    /// Landed: its marks taken off, so it leaves the mode.
+    /// Its marks taken off, so it leaves the mode: landed, with the
+    /// autopilot_close setting off, or made yours by a prompt.
     Left(TabId),
+    /// Found back in a main clone once landed, at this time (seconds):
+    /// `@autopilot_left`.
+    Landed(TabId, i64),
+    /// Seen since it landed: `@autopilot_seen`.
+    Seen(TabId),
+    /// Closed, once landed and seen and left, or long after it landed.
+    Close(TabId),
 }
 
 /// A look at the note's queue, run off the server's task.
@@ -151,6 +174,8 @@ pub struct Pilot {
     held: Vec<String>,
     /// How many of its tabs work and how many are open, at the last check.
     pub counts: (usize, usize),
+    /// When each landed tab was first found in front (ms), for `SEEN_MS`.
+    fronts: HashMap<TabId, i64>,
     /// Openings this far apart (ms); the tests give a shorter one.
     pub gap_ms: i64,
 }
@@ -168,6 +193,7 @@ impl Default for Pilot {
             missing_said: String::new(),
             held: Vec::new(),
             counts: (0, 0),
+            fronts: HashMap::new(),
             gap_ms: GAP_MS,
         }
     }
@@ -195,15 +221,39 @@ impl Pilot {
             .collect()
     }
 
+    /// What becomes of a tab back in the main clone once landed, as the
+    /// module's comment says, at `now_ms`.
+    fn after_landing(&mut self, m: &Mine, now_ms: i64) -> Option<Mark> {
+        let now = now_ms as f64 / 1000.0;
+        let Some(landed) = m.landed else {
+            return m.home.then_some(Mark::Landed(m.tab, now as i64));
+        };
+        if m.prompted_since {
+            return Some(Mark::Left(m.tab));
+        }
+        if m.front {
+            let first = *self.fronts.entry(m.tab).or_insert(now_ms);
+            return (!m.seen && now_ms - first >= SEEN_MS).then_some(Mark::Seen(m.tab));
+        }
+        self.fronts.remove(&m.tab);
+        if m.stand_in || !(m.seen || now - landed >= CLOSE_AFTER_S) {
+            return None;
+        }
+        Some(Mark::Close(m.tab))
+    }
+
     /// One check, at `now_ms`: marks the mode's tabs as they reach their
-    /// worktree or leave the mode, then, while fewer than `slots` work and
-    /// fewer than `cap` are open, looks for the next item to open. `on` is
-    /// the autopilot setting, `away` whether you're away, `mtime` when the
-    /// note last changed (ms), `None` when it isn't there.
+    /// worktree or leave the mode (closing a landed one with `close`, the
+    /// autopilot_close setting, on), then, while fewer than `slots` work
+    /// and fewer than `cap` are open, looks for the next item to open. `on`
+    /// is the autopilot setting, `away` whether you're away, `mtime` when
+    /// the note last changed (ms), `None` when it isn't there.
+    #[allow(clippy::too_many_arguments)]
     pub fn check(
         &mut self,
         mode: &Mode,
         on: bool,
+        close: bool,
         mine: &[Mine],
         away: bool,
         now_ms: i64,
@@ -216,14 +266,17 @@ impl Pilot {
         }
         let now = now_ms as f64 / 1000.0;
         let placed: Vec<(&Mine, Kind)> = mine.iter().map(|m| (m, kind_of(m, now))).collect();
-        out.marks = placed
-            .iter()
-            .filter_map(|(m, kind)| match kind {
-                Kind::Left => Some(Mark::Left(m.tab)),
-                _ if m.in_worktree && !m.was_in => Some(Mark::In(m.tab)),
-                _ => None,
-            })
-            .collect();
+        let mut marks = Vec::new();
+        for (m, kind) in &placed {
+            match kind {
+                Kind::Left if close => marks.extend(self.after_landing(m, now_ms)),
+                Kind::Left => marks.push(Mark::Left(m.tab)),
+                _ if m.in_worktree && !m.was_in => marks.push(Mark::In(m.tab)),
+                _ => {}
+            }
+        }
+        out.marks = marks;
+        self.fronts.retain(|t, _| mine.iter().any(|m| m.tab == *t));
         self.held = placed
             .iter()
             .filter(|(_, kind)| *kind != Kind::Left)
@@ -443,6 +496,7 @@ mod tests {
             let check = self.pilot.check(
                 &self.mode,
                 true,
+                false,
                 &self.tabs,
                 false,
                 self.now,
@@ -451,7 +505,9 @@ mod tests {
             for mark in check.marks {
                 match mark {
                     Mark::In(t) => self.tab(t).was_in = true,
-                    Mark::Left(t) => self.tabs.retain(|m| m.tab != t),
+                    Mark::Left(t) | Mark::Close(t) => self.tabs.retain(|m| m.tab != t),
+                    Mark::Landed(t, at) => self.tab(t).landed = Some(at as f64),
+                    Mark::Seen(t) => self.tab(t).seen = true,
                 }
             }
             if let Some(said) = check.said {
@@ -582,17 +638,17 @@ mod tests {
         let mut w = World::new();
         let check = w
             .pilot
-            .check(&w.mode, true, &[], true, w.now, Some(w.mtime));
+            .check(&w.mode, true, false, &[], true, w.now, Some(w.mtime));
         assert_eq!(check.open, None, "away");
         let check = w
             .pilot
-            .check(&w.mode, false, &[], false, w.now, Some(w.mtime));
+            .check(&w.mode, false, false, &[], false, w.now, Some(w.mtime));
         assert_eq!(check.open, None, "the setting off");
 
         w.mode.spend_limit = 5.0;
         let check = w
             .pilot
-            .check(&w.mode, true, &[], false, w.now, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, w.now, Some(w.mtime));
         let job = check.open.expect("a look, which sums the spend");
         assert_eq!(job.spend_limit, 5.0);
         let opened = w.pilot.opened(&w.mode, Found::Spent, w.mtime, w.now);
@@ -603,21 +659,107 @@ mod tests {
         let later = w.now + 60_000;
         let check = w
             .pilot
-            .check(&w.mode, true, &[], false, later, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, later, Some(w.mtime));
         assert_eq!(check.open, None, "not summed again today");
         w.mode.spend_limit = 50.0;
         let check = w
             .pilot
-            .check(&w.mode, true, &[], false, later, Some(w.mtime));
+            .check(&w.mode, true, false, &[], false, later, Some(w.mtime));
         assert!(check.open.is_some(), "a new limit is looked at again");
         w.pilot.cancel();
 
-        let missing =
-            |w: &mut World, at: i64| w.pilot.check(&w.mode, true, &[], false, at, None).said;
+        let missing = |w: &mut World, at: i64| {
+            w.pilot
+                .check(&w.mode, true, false, &[], false, at, None)
+                .said
+        };
         assert_eq!(
             missing(&mut w, later + 10_000).as_deref(),
             Some("Can't find the note Work: set the mode up again from M-p")
         );
         assert_eq!(missing(&mut w, later + 20_000), None, "said once");
+    }
+
+    // test/tmux-sidebar.test.js's "a landed tab of the mode working a note
+    // closes once seen and left, or half an hour after landing".
+    #[test]
+    fn a_landed_tab_is_marked_then_closed_once_seen_and_left_or_long_after_it_landed() {
+        let mut pilot = Pilot::default();
+        let mode = Mode {
+            on: true,
+            note: "Work.md".into(),
+            repo: "/repo".into(),
+            ..Mode::default()
+        };
+        let now = 1_700_000_000_000_i64;
+        let secs = (now / 1000) as f64;
+        let mut tab = mine(1, secs - 3_600.0, TabState::Idle, false);
+        tab.was_in = true;
+        let marks = |pilot: &mut Pilot, tab: &Mine, at: i64, close: bool| {
+            pilot
+                .check(
+                    &mode,
+                    true,
+                    close,
+                    std::slice::from_ref(tab),
+                    false,
+                    at,
+                    None,
+                )
+                .marks
+        };
+        assert_eq!(
+            marks(&mut pilot, &tab, now, false),
+            [Mark::Left(TabId(1))],
+            "with the setting off, it leaves the mode as it lands"
+        );
+        assert!(
+            marks(&mut pilot, &tab, now, true).is_empty(),
+            "not marked landed while its Claude isn't idle in a main clone"
+        );
+        tab.home = true;
+        assert_eq!(
+            marks(&mut pilot, &tab, now, true),
+            [Mark::Landed(TabId(1), secs as i64)]
+        );
+        tab.landed = Some(secs);
+        assert!(
+            marks(&mut pilot, &tab, now + 1_000, true).is_empty(),
+            "not yet"
+        );
+
+        // In front: seen after a second, never closed while there.
+        tab.front = true;
+        assert!(marks(&mut pilot, &tab, now + 2_000, true).is_empty());
+        assert_eq!(
+            marks(&mut pilot, &tab, now + 3_500, true),
+            [Mark::Seen(TabId(1))]
+        );
+        tab.seen = true;
+        assert!(marks(&mut pilot, &tab, now + 4_000, true).is_empty());
+        // Left: closed, unless a tool stands in for its pane.
+        tab.front = false;
+        tab.stand_in = true;
+        assert!(marks(&mut pilot, &tab, now + 5_000, true).is_empty());
+        tab.stand_in = false;
+        assert_eq!(
+            marks(&mut pilot, &tab, now + 5_000, true),
+            [Mark::Close(TabId(1))]
+        );
+
+        // Never looked at: closed half an hour after it landed.
+        let mut unseen = tab.clone();
+        unseen.seen = false;
+        assert!(marks(&mut pilot, &unseen, now + 60_000, true).is_empty());
+        assert_eq!(
+            marks(&mut pilot, &unseen, now + 1_800_000, true),
+            [Mark::Close(TabId(1))]
+        );
+        // A prompt typed in it since makes it yours.
+        unseen.prompted_since = true;
+        assert_eq!(
+            marks(&mut pilot, &unseen, now + 1_800_000, true),
+            [Mark::Left(TabId(1))]
+        );
     }
 }

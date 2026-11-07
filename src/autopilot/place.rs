@@ -2,8 +2,9 @@
 //! `stateOf`): busy, working in its worktree or still opening; waiting on
 //! you, which frees its slot but still counts toward the cap; or landed,
 //! back in the main clone once queue-and-clean has landed it, which leaves
-//! the mode. Worked out from plain data, which `serve` gathers from the
-//! server's tabs, so the rules are tested without one.
+//! the mode, and what then becomes of it (`pilot`'s after landing). Worked
+//! out from plain data, which `serve` gathers from the server's tabs, so the
+//! rules are tested without one.
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,32 @@ pub struct Mine {
     pub state: TabState,
     /// Whether it is in a worktree of the note's repository now.
     pub in_worktree: bool,
+    /// When it was found back in a main clone once landed
+    /// (`@autopilot_left`), in seconds.
+    pub landed: Option<f64>,
+    /// Whether you have had it in front since it landed (`@autopilot_seen`).
+    pub seen: bool,
+    /// Whether it is in front on a terminal now.
+    pub front: bool,
+    /// Whether a tool stands in for one of its panes (M-d's diff, lazygit).
+    pub stand_in: bool,
+    /// Whether its Claude's pane is in a main clone (a directory still
+    /// there), idle: landed and moved back by queue-and-clean.
+    pub home: bool,
+    /// Whether its Claude has been prompted since it landed: a state begun
+    /// after then, which makes it yours.
+    pub prompted_since: bool,
+}
+
+/// Whether the first of a tab's directories that is in a git repository is
+/// a main clone, read from git's files.
+pub fn in_main_clone(dirs: &[PathBuf]) -> bool {
+    dirs.iter()
+        .filter(|d| d.exists())
+        .find_map(|d| git_of(d))
+        .is_some_and(|(root, common)| {
+            common.file_name().is_some_and(|n| n == ".git") && common.parent() == Some(&root)
+        })
 }
 
 /// Whether the first of a tab's directories that is in a git repository is
@@ -95,6 +122,12 @@ pub(crate) mod tests {
             item: Some(format!("item {tab}")),
             state,
             in_worktree,
+            landed: None,
+            seen: false,
+            front: false,
+            stand_in: false,
+            home: false,
+            prompted_since: false,
         }
     }
 
@@ -165,6 +198,11 @@ pub(crate) mod tests {
         assert!(
             !in_worktree_of(std::slice::from_ref(&dir), &repo),
             "nor a directory in no repository"
+        );
+        assert!(in_main_clone(std::slice::from_ref(&repo)));
+        assert!(
+            !in_main_clone(&[tree.join("src")]),
+            "a worktree is no main clone"
         );
         let _ = fs::remove_dir_all(&dir);
     }

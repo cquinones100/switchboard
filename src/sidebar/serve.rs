@@ -409,6 +409,7 @@ impl Server {
         t.autopilot = opt("@autopilot")
             .and_then(|v| v.trim().parse::<f64>().ok())
             .is_some_and(|n| n != 0.0);
+        t.autopilot_landed = t.autopilot && opt("@autopilot_left").is_some();
         // Notes beside this tab's work, or, on Notes' own tab while it is
         // away, where it went (model.js's notesHere, notesAway, notesOwner).
         let marked = |p: &PaneId, name: &str| {

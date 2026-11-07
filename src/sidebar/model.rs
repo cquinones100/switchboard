@@ -115,6 +115,8 @@ pub struct TabModel {
     pub remind_note: Option<String>,
     /// Opened by the mode that works a note continuously (`@autopilot`).
     pub autopilot: bool,
+    /// Landed and back in the main clone, closing soon (`@autopilot_left`).
+    pub autopilot_landed: bool,
     /// The one Notes, brought beside this tab's pane with M-e rather than
     /// in a tab of its own (src/notes/serve.rs).
     pub notes_here: bool,
@@ -180,6 +182,7 @@ impl TabModel {
             remind_at: None,
             remind_note: None,
             autopilot: false,
+            autopilot_landed: false,
             notes_here: false,
             notes_away: false,
             notes_owner: None,

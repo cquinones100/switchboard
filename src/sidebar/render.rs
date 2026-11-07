@@ -467,8 +467,17 @@ pub fn sidebar_lines(
             if tab.notes_here {
                 parts.push("✎ Notes here".into());
             }
+            // A tab the mode working a note opened says so, and that it
+            // landed once back in the main clone, closing soon.
             if tab.autopilot {
-                parts.push("auto".into());
+                parts.push(
+                    if tab.autopilot_landed {
+                        "landed"
+                    } else {
+                        "auto"
+                    }
+                    .into(),
+                );
             }
             let mut details: Vec<String> = Vec::new();
             for part in parts {

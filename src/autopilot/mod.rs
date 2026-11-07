@@ -14,8 +14,12 @@
 //! again. Only the tabs it opened count: each is marked `@autopilot` with
 //! the time it opened, `@autopilot_item` with the item's first line, and
 //! `@autopilot_in` once seen in its worktree; a tab whose pane
-//! queue-and-clean has moved back to the main clone leaves the mode. Those
-//! are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
+//! queue-and-clean has moved back to the main clone leaves the mode, and,
+//! with the autopilot_close setting on, is marked landed
+//! (`@autopilot_left`), shown "landed" in the sidebar instead of "auto",
+//! marked seen once you have had it in front (`@autopilot_seen`), and
+//! closed as soon as you leave it, or half an hour after it landed if you
+//! never look. Those are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
 //! so they come back after a restart, as tmux/window-options.sh carried
 //! them under tmux.
 //!
