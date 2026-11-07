@@ -25,6 +25,15 @@ fn is_shell(command: &str) -> bool {
     matches!(command, "sh" | "bash" | "dash")
 }
 
+/// Whether the pane on the right of two beside the sidebar (the one a split
+/// just opened) shows its shell's prompt on a row of its own, which a login
+/// shell draws once its profile has run.
+fn right_pane_at_prompt(screen: &[String]) -> bool {
+    screen.iter().any(|row| {
+        row.matches('│').count() >= 2 && row.rsplit('│').next().map(str::trim) == Some("$")
+    })
+}
+
 fn front_command(list: &serde_json::Value) -> String {
     let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
     let tab = tabs.iter().find(|t| t["current"] == true).unwrap();
@@ -125,20 +134,21 @@ fn closing_a_busy_pane_asks_first() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);
     client.wait_text("$");
-    // A shell at its prompt closes at once: waited for in front, since a
-    // login shell's profile can run a command of its own first.
+    // A shell at its prompt closes at once: waited for at its prompt, since
+    // a login shell's profile can run a command of its own (Ubuntu's runs
+    // `locale`) after the shell is in front, and before the prompt.
     client.type_text(&format!("{ALT}L"));
-    client.wait_for("a second pane at its shell", |_| {
+    client.wait_for("a second pane at its prompt", |s| {
         let list = server.list();
-        panes(&list) == 2 && is_shell(&front_command(&list))
+        panes(&list) == 2 && right_pane_at_prompt(s) && is_shell(&front_command(&list))
     });
     client.type_text(&format!("{ALT}w"));
     client.wait_for("the shell's pane closed", |_| panes(&server.list()) == 1);
     // One running a program asks.
     client.type_text(&format!("{ALT}L"));
-    client.wait_for("a second pane at its shell", |_| {
+    client.wait_for("a second pane at its prompt", |s| {
         let list = server.list();
-        panes(&list) == 2 && is_shell(&front_command(&list))
+        panes(&list) == 2 && right_pane_at_prompt(s) && is_shell(&front_command(&list))
     });
     client.type_text("sleep 100\r");
     client.wait_for("sleep in front", |_| {
