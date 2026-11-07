@@ -621,7 +621,9 @@ impl Server {
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
             Event::Cell(w, h) => self.terminal_cell((w, h)),
             Event::Gone(id) => {
-                self.clients.remove(&id);
+                if let Some(c) = self.clients.remove(&id) {
+                    self.client_left(&c.session);
+                }
             }
             Event::Command {
                 args,
@@ -1463,11 +1465,27 @@ impl Server {
         if c.session == session {
             return;
         }
-        c.session = session.to_string();
+        let left = std::mem::replace(&mut c.session, session.to_string());
         c.screen.invalidate();
         c.dirty = true;
         self.size_session_to(id);
+        self.client_left(&left);
         self.agent_focus(tab);
+    }
+
+    /// A terminal left a session: the session takes the size of the one
+    /// used last of those still showing it, as tmux's `window-size latest`
+    /// did, rather than keeping the size of the one gone.
+    pub fn client_left(&mut self, session: &str) {
+        let latest = self
+            .clients
+            .values()
+            .filter(|c| c.session == session)
+            .max_by_key(|c| c.activity)
+            .map(|c| c.id);
+        if let Some(id) = latest {
+            self.size_session_to(id);
+        }
     }
 
     /// The client acting now: the most recently active one.
@@ -1816,6 +1834,7 @@ impl Server {
                     let _ = c.tx.send(ServerMsg::Exit {
                         message: Some(format!("[detached (from session {session})]")),
                     });
+                    self.client_left(&c.session);
                 }
             }
             Action::CopyMode => {

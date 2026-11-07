@@ -227,6 +227,33 @@ fn the_first_tab_starts_where_switchboard_was_run() {
 }
 
 #[test]
+fn a_session_takes_the_size_of_the_terminal_left_when_another_goes() {
+    let server = TestServer::start();
+    let mut big = server.attach(120, 40);
+    big.wait_text("$");
+    let mut small = server.attach(80, 24);
+    small.wait_text("$");
+    let size = |server: &TestServer| {
+        let list = server.list();
+        (
+            list["sessions"][0]["cols"].as_u64().unwrap(),
+            list["sessions"][0]["rows"].as_u64().unwrap(),
+        )
+    };
+    assert_eq!(size(&server), (80, 24), "the one attached last");
+    small.detach();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while size(&server) != (120, 40) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "still {:?}",
+            size(&server)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
 fn switch_client_takes_the_terminal_to_another_session_s_tab() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);

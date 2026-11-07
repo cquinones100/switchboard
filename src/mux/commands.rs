@@ -342,6 +342,7 @@ impl Server {
                             let _ = c.tx.send(super::proto::ServerMsg::Exit {
                                 message: Some("[detached]".into()),
                             });
+                            self.client_left(&c.session);
                         }
                     }
                     Reply::ok("")
