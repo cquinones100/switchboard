@@ -17,7 +17,8 @@
 //!   skills run linked into `~/.local/bin`.
 //! - `terminal` (`terminal`): Option acting as Alt in a Mac's terminal.
 //! - `leftovers` (`leftovers`): what the tmux version's setup.sh left in
-//!   your home that leads nowhere now, tidied.
+//!   your home that leads nowhere now, and a `switchboard` function or alias
+//!   that starts tmux in the binary's place, tidied.
 //!
 //! Which way the middle three put Switchboard, as a plugin or in
 //! `~/.claude` as earlier versions did, is Settings' "Load Switchboard as a
@@ -141,7 +142,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "leftovers",
-        about: "remove the tmux version's links that lead nowhere, and run its ~/.zshrc lines through switchboard",
+        about: "remove the tmux version's links that lead nowhere, run its ~/.zshrc lines through switchboard, and take out a switchboard function or alias that starts tmux",
         run: leftovers::run,
     },
 ];
@@ -380,11 +381,11 @@ fn leftovers_offered(check: bool, list: &mut List) {
             heading("From the tmux version");
             if check {
                 list.todo(format!(
-                    "{n} of the tmux version's links or ~/.zshrc lines lead nowhere: switchboard setup leftovers"
+                    "{n} of the tmux version's links or ~/.zshrc lines are left: switchboard setup leftovers"
                 ));
             } else if ask(
                 check,
-                "Remove the tmux version's links that lead nowhere now, and run its worktree lines in ~/.zshrc or ~/.bashrc through switchboard? A copy of each file changed is left beside it.",
+                "Remove the tmux version's links that lead nowhere now, run its worktree lines in ~/.zshrc or ~/.bashrc through switchboard, and take out a switchboard function or alias there that starts tmux? A copy of each file changed is left beside it.",
             ) {
                 if apply(part) {
                     list.ok("tidied what the tmux version left");

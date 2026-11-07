@@ -13,9 +13,17 @@
 //!   init zsh)"` and the rest, which fail on every new shell once the script
 //!   is gone: each is turned into the same line run through the binary
 //!   (`switchboard worktree-from-ticket init zsh`), so the functions it
-//!   defined are still there; the same in `~/.bashrc`. The file is written
-//!   through a link to it (a dotfiles repository's), and a copy of it as it
-//!   was is left beside it.
+//!   defined are still there; the same in `~/.bashrc`.
+//! - A `switchboard` shell function or alias that starts tmux: the tmux
+//!   version's `tmux_server` setting ran it on a server of its own, opened
+//!   with `tmux -L switchboard new-session -A -s main`, which people wrapped
+//!   in a function or alias of that name. Left in, it runs in the binary's
+//!   place in every new shell, so `switchboard` still starts tmux. It is
+//!   taken out, with the comment right above it when that names Switchboard
+//!   and tmux.
+//!
+//! A startup file is written through a link to it (a dotfiles repository's),
+//! and a copy of it as it was is left beside it.
 //!
 //! As every part, a second run finds nothing to do.
 
@@ -174,6 +182,45 @@ pub fn rc_fixed(text: &str) -> Option<String> {
     changed.then(|| fixed.concat())
 }
 
+/// A startup file's text without a `switchboard` function or alias that
+/// starts tmux, or `None` when it has none. Only a definition on one line
+/// whose body runs tmux goes, as the tmux version's command was wrapped; one
+/// of your own that runs anything else is left alone. A comment line right
+/// above it goes too when it names Switchboard and tmux, as it would say
+/// what the definition was for.
+pub fn rc_unshadowed(text: &str) -> Option<String> {
+    let definition = Regex::new(
+        r#"^\s*(?:(?:function\s+switchboard(?:\s*\(\))?|switchboard\s*\(\))\s*\{.*\btmux\b.*\}|alias\s+switchboard=(?:'[^']*\btmux\b[^']*'|"[^"]*\btmux\b[^"]*"))\s*;?\s*(?:#.*)?$"#,
+    )
+    .expect("a valid pattern");
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut keep = vec![true; lines.len()];
+    for (i, l) in lines.iter().enumerate() {
+        if !definition.is_match(l.trim_end_matches('\n')) {
+            continue;
+        }
+        keep[i] = false;
+        if let Some(above) = i.checked_sub(1).map(|j| lines[j].trim().to_lowercase())
+            && above.starts_with('#')
+            && above.contains("switchboard")
+            && above.contains("tmux")
+        {
+            keep[i - 1] = false;
+        }
+    }
+    if keep.iter().all(|k| *k) {
+        return None;
+    }
+    Some(
+        lines
+            .iter()
+            .zip(&keep)
+            .filter(|(_, k)| **k)
+            .map(|(l, _)| *l)
+            .collect(),
+    )
+}
+
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
     for link in dead_links() {
@@ -190,9 +237,19 @@ pub fn run(r: &mut Report) -> Result<()> {
         let Some(text) = util::read_text(&rc) else {
             continue;
         };
-        let Some(fixed) = rc_fixed(&text) else {
+        let mut fixed = text;
+        let mut done = Vec::new();
+        if let Some(t) = rc_fixed(&fixed) {
+            fixed = t;
+            done.push("run the worktree functions' init through switchboard");
+        }
+        if let Some(t) = rc_unshadowed(&fixed) {
+            fixed = t;
+            done.push("take out the switchboard function or alias that starts tmux");
+        }
+        if done.is_empty() {
             continue;
-        };
+        }
         if !r.check {
             // Through a link to the file, so a dotfiles repository's copy
             // is what changes, and the link stays a link.
@@ -209,10 +266,7 @@ pub fn run(r: &mut Report) -> Result<()> {
                 let _ = fs::set_permissions(&real, mode);
             }
         }
-        r.change(format!(
-            "run the worktree functions' init through switchboard in {}",
-            home_tilde(&rc)
-        ));
+        r.change(format!("{} in {}", done.join(", and "), home_tilde(&rc)));
     }
     Ok(())
 }
@@ -236,5 +290,43 @@ mod tests {
         );
         assert_eq!(rc_fixed("eval \"$(switchboard wt init zsh)\"\n"), None);
         assert_eq!(rc_fixed("# nothing here\n"), None);
+    }
+
+    #[test]
+    fn a_switchboard_function_or_alias_that_starts_tmux_is_taken_out() {
+        let text = "export X=1\n\
+                    # Switchboard runs on a tmux server of its own: `switchboard` opens it.\n\
+                    switchboard() { command tmux -L switchboard new-session -A -s main \"$@\"; }\n\
+                    # A plain `tmux` starts the default server.\n\
+                    alias tmux='tmux -f ~/.tmux.conf'\n";
+        assert_eq!(
+            rc_unshadowed(text).unwrap(),
+            "export X=1\n\
+             # A plain `tmux` starts the default server.\n\
+             alias tmux='tmux -f ~/.tmux.conf'\n"
+        );
+        // The other ways to write one, a comment of your own above kept.
+        for line in [
+            "function switchboard { tmux -L switchboard attach; }",
+            "function switchboard() { tmux new -A -s main }",
+            "alias switchboard='tmux -L switchboard new-session -A -s main'",
+            "  alias switchboard=\"tmux -L switchboard attach\" # mine",
+        ] {
+            assert_eq!(
+                rc_unshadowed(&format!("# my shortcuts\n{line}\nexport Y=2")).as_deref(),
+                Some("# my shortcuts\nexport Y=2"),
+                "{line}"
+            );
+        }
+        // One of your own that doesn't start tmux, and the binary's lines,
+        // are left alone.
+        for kept in [
+            "switchboard() { command switchboard -s work \"$@\"; }",
+            "alias switchboard='switchboard -s main'",
+            "alias sb='tmux -L switchboard attach'",
+            "eval \"$(switchboard worktree-from-ticket init zsh)\"",
+        ] {
+            assert_eq!(rc_unshadowed(&format!("{kept}\n")), None, "{kept}");
+        }
     }
 }

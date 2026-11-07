@@ -1486,9 +1486,12 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
     symlink(h.path("elsewhere/bin/tool"), h.path(".local/bin/tool")).unwrap();
     fs::write(clone.join("Cargo.lock"), "").unwrap();
     symlink(clone.join("Cargo.lock"), h.path(".local/bin/kept")).unwrap();
-    // ~/.zshrc as setup.sh left it, through a link into your dotfiles.
+    // ~/.zshrc as setup.sh left it, through a link into your dotfiles, with
+    // the tmux server's command wrapped in a function of the binary's name.
     fs::create_dir_all(h.path("dotfiles")).unwrap();
-    let zshrc = "export A=1\neval \"$(worktree-from-ticket init zsh)\"\neval \"$(worktree-from-note init zsh)\"\n";
+    let zshrc = "export A=1\neval \"$(worktree-from-ticket init zsh)\"\neval \"$(worktree-from-note init zsh)\"\n\
+                 # Switchboard runs on a tmux server of its own: `switchboard` opens it.\n\
+                 switchboard() { command tmux -L switchboard new-session -A -s main \"$@\"; }\n";
     fs::write(h.path("dotfiles/zshrc"), zshrc).unwrap();
     symlink(h.path("dotfiles/zshrc"), h.path(".zshrc")).unwrap();
 
@@ -1497,7 +1500,10 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
         check.contains("would: remove ~/.local/bin/worktree-from-ticket"),
         "{check}"
     );
-    assert!(check.contains("~/.zshrc"), "{check}");
+    assert!(
+        check.contains("would: run the worktree functions' init through switchboard, and take out the switchboard function or alias that starts tmux in ~/.zshrc"),
+        "{check}"
+    );
     assert!(h.path(".local/bin/skill-path").symlink_metadata().is_ok());
 
     // The guided setup asks, and a closed input says no.
