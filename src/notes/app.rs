@@ -2516,7 +2516,6 @@ pub fn run(store: Store) -> ExitCode {
     let opts = Options::read();
     let mut store = store;
     store.server = opts.server;
-    let mut app = App::new(store, opts, cols, rows, tx.clone());
     for signal in [libc::SIGHUP, libc::SIGTERM] {
         // SAFETY: a handler that only stores to an atomic.
         unsafe {
@@ -2530,6 +2529,20 @@ pub fn run(store: Store) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The terminal's background, for the `system` theme, which Neovim
+    // followed through Ghostty's; a key typed meanwhile is read as typed.
+    let (colors, typed) = crate::mux::terminal::ask(Duration::from_millis(200));
+    if let Some(light) = colors.light() {
+        crate::status::theme::set_system(light);
+    }
+    let opts = Options {
+        light: Options::read().light,
+        ..opts
+    };
+    let mut app = App::new(store, opts, cols, rows, tx.clone());
+    if !typed.is_empty() {
+        let _ = tx.send(Msg::Input(typed));
+    }
     app.start();
     let _watch = if app.locked_by.is_none() {
         let tx = tx.clone();

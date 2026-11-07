@@ -940,6 +940,7 @@ impl Server {
         if let Some(cell) = self.terminal.cell {
             pane.set_cell(cell);
         }
+        pane.set_colors(self.terminal.colors);
         Ok(pane)
     }
 
@@ -1389,7 +1390,8 @@ impl Server {
             activity: Instant::now(),
             options_taken: 0,
         };
-        // For the `system` theme: the terminal's background (src/status).
+        // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
+        // the background's for the `system` theme too (src/status).
         Server::ask_background(&client.tx);
         self.clients.insert(id, client);
         self.size_session_to(id);
@@ -1555,10 +1557,14 @@ impl Server {
     }
 
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
-        // The terminal's answer about its background, asked as it attached,
-        // is the server's (src/status), whatever is up.
-        if parsed.input == Input::Unknown && self.status_reply(&parsed.raw) {
-            return;
+        // The terminal's answers about its colours, asked as it attached,
+        // are the server's (src/mux/terminal.rs, and the background's for
+        // the theme in src/status), whatever is up.
+        if parsed.input == Input::Unknown {
+            let colour = self.terminal_reply(&parsed.raw);
+            if self.status_reply(&parsed.raw) || colour {
+                return;
+            }
         }
         // Mission control takes them while it is the box on top
         // (src/mission); any other overlay up takes them (src/ui).

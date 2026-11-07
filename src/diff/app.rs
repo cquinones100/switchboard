@@ -76,6 +76,8 @@ const LIST_WIDTH: u16 = 30;
 const SHORT_WHY: u16 = 48;
 /// Lines J and K scroll the diff from the list.
 const SCROLL: usize = 5;
+/// How long the terminal is given to say its colours as the diff starts.
+const ASK_WAIT: Duration = Duration::from_millis(200);
 /// How long the cover stays blank, and how long a message stays.
 const COVER_BLANK: Duration = Duration::from_millis(300);
 const MESSAGE_FOR: Duration = Duration::from_secs(5);
@@ -143,7 +145,9 @@ impl Options {
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
             hover: on("hover_highlight"),
-            light: all.iter().any(|s| s.key == "theme" && s.value == "light"),
+            light: all
+                .iter()
+                .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
             pane_arrows: on("pane_arrows"),
             haiku: true,
             server: crate::mux::socket::in_pane(),
@@ -424,6 +428,9 @@ pub struct App {
     in_history: bool,
     wants: Option<Wants>,
     title: Option<(String, String)>,
+    /// The colours the terminal said it draws in, as the diff started
+    /// (src/mux/terminal.rs): its background, for the tints, and its text.
+    term: crate::mux::terminal::Colors,
 }
 
 /// `fg` mixed over `bg`, `amount` of it.
@@ -487,6 +494,7 @@ impl App {
             in_history: false,
             wants: None,
             title: None,
+            term: Default::default(),
         }
     }
 
@@ -874,7 +882,6 @@ impl App {
             Some(false) => sides::alone(&old, false),
             None => sides::align(&old, &new),
         };
-        let light = self.opts.light;
         for (new_side, lines) in [(false, old.clone()), (true, new.clone())] {
             if lines.is_empty() {
                 continue;
@@ -887,7 +894,7 @@ impl App {
                 entry.old().to_string()
             };
             std::thread::spawn(move || {
-                if let Some(lines) = highlight::highlight(&named, &lines, light) {
+                if let Some(lines) = highlight::highlight(&named, &lines) {
                     let _ = tx.send(Msg::Coloured {
                         path,
                         new_side,
@@ -1742,6 +1749,7 @@ impl App {
             ..self.opts
         };
         let mut app = App::new(opts, self.cols, self.rows, tx.clone());
+        app.term = self.term;
         app.in_history = true;
         app.list_width = self.list_width;
         let short: String = hash.chars().take(7).collect();
@@ -2543,6 +2551,15 @@ pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // The terminal's colours: its background for the tints and for the
+    // `system` theme, which Neovim followed through Ghostty's, its text's
+    // for the faint words and the buttons.
+    let (colors, _) = crate::mux::terminal::ask(ASK_WAIT);
+    if let Some(light) = colors.light() {
+        crate::status::theme::set_system(light);
+    }
+    app.opts.light = Options::read().light;
+    app.term = colors;
     let mut screen = Screen::default();
     let mut dirty = true;
     let mut last_tick = Instant::now();
@@ -3137,6 +3154,22 @@ mod tests {
         press(&mut app, "gg");
         screen(&mut app);
         assert_eq!(app.answer.as_ref().unwrap().top, 0);
+    }
+
+    #[test]
+    fn the_tints_are_mixed_over_the_terminals_own_background() {
+        let mut app = app();
+        assert_eq!(app.palette().0, blend(REMOVED, 0x1d1f21, 0.14), "unsaid");
+        let mut said = crate::mux::terminal::Colors::default();
+        said.take(b"\x1b]11;rgb:28/2a/36\x07");
+        said.take(b"\x1b]10;rgb:f8/f8/f2\x07");
+        app.term = said;
+        assert_eq!(app.palette().0, blend(REMOVED, 0x282a36, 0.14));
+        assert_eq!(app.palette().3, blend(ADDED, 0x282a36, 0.55));
+        // A dark background under the light theme (set by hand) isn't mixed
+        // over: the theme's own is.
+        app.opts.light = true;
+        assert_eq!(app.palette().0, blend(REMOVED, 0xffffff, 0.14));
     }
 
     #[test]

@@ -264,16 +264,18 @@ pub enum Hl {
 
 impl Hl {
     /// Its style: the foreground of a group every colorscheme has, and the
-    /// plugin's own touches, as `render.highlights` set them.
+    /// plugin's own touches, as `render.highlights` set them. The title,
+    /// subheadings and tags take the terminal's own blue, red and yellow,
+    /// the ANSI colours ghostty.lua gave Title, Identifier and Type.
     pub fn style(self, light: bool) -> Style {
         let c = |dark: u8, lite: u8| Color::Indexed(if light { lite } else { dark });
         let s = Style::new();
         match self {
             Hl::Title => s
-                .fg(c(255, 232))
+                .fg(Color::Indexed(4))
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             Hl::Heading => s.fg(c(117, 25)).add_modifier(Modifier::BOLD),
-            Hl::Subheading => s.fg(c(180, 94)).add_modifier(Modifier::BOLD),
+            Hl::Subheading => s.fg(Color::Indexed(1)).add_modifier(Modifier::BOLD),
             Hl::Bold => s.add_modifier(Modifier::BOLD),
             Hl::Italic => s.add_modifier(Modifier::ITALIC),
             Hl::Underline => s.add_modifier(Modifier::UNDERLINED),
@@ -303,7 +305,7 @@ impl Hl {
             Hl::NoteLinkMissing => s
                 .fg(c(243, 246))
                 .add_modifier(Modifier::UNDERLINED | Modifier::ITALIC),
-            Hl::Tag => s.fg(c(180, 94)).add_modifier(Modifier::BOLD),
+            Hl::Tag => s.fg(Color::Indexed(3)).add_modifier(Modifier::BOLD),
             Hl::TableBorder => s.fg(c(243, 246)),
             Hl::TableHeader => s.add_modifier(Modifier::BOLD),
             Hl::Search => s.bg(c(58, 186)),

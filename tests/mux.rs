@@ -575,6 +575,26 @@ fn copy_mode_selects_with_the_keyboard_and_copies_through_the_clipboard() {
 }
 
 #[test]
+fn a_panes_program_asking_the_terminals_colours_is_told_its_own() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let script = r#"read -r go; printf '\033]11;?\007\033]4;4;?\007'; IFS= read -rs -d $'\a' bg; IFS= read -rs -d $'\a' blue; echo "bg:${bg#*;} blue:${blue#*;*;}"; sleep 30"#;
+    server.ok(&["new-tab", "-n", "ask", "--", "bash", "-c", script]);
+    client.wait_for("the tab open", |_| {
+        server.list()["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .len()
+            == 2
+    });
+    // The terminal's answers to the server's questions as it attached.
+    client.send(b"\x1b]11;rgb:fafa/f8f8/f0f0\x1b\\\x1b]4;4;rgb:81/a2/be\x1b\\");
+    client.type_text("go\r");
+    client.wait_text("bg:rgb:fafa/f8f8/f0f0 blue:rgb:8181/a2a2/bebe");
+}
+
+#[test]
 fn a_panes_program_is_told_the_terminals_own_cell() {
     let server = TestServer::start();
     let mut client = server.attach(100, 30);

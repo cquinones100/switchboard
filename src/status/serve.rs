@@ -200,10 +200,11 @@ impl Server {
         true
     }
 
-    /// Asks a terminal that has just attached for its background colour, for
-    /// the `system` theme.
+    /// Asks a terminal that has just attached for its colours: its
+    /// background's for the `system` theme (`theme::QUERY`), and the rest
+    /// for the panes' programs (src/mux/terminal.rs).
     pub fn ask_background(tx: &mpsc::UnboundedSender<ServerMsg>) {
-        let _ = tx.send(ServerMsg::Output(theme::QUERY.to_vec()));
+        let _ = tx.send(ServerMsg::Output(crate::mux::terminal::queries()));
     }
 
     /// A terminal's answer about its background, among its keys: kept, and

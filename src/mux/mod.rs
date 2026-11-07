@@ -20,7 +20,7 @@
 //! - `passthrough`: what one pane may pass to the terminal or take from it
 //!   that others may not: kitty's graphics commands, easy mode's Cmd keys.
 //! - `terminal`: what the attached terminal says of itself (its cell's
-//!   size), which the panes' programs are told when they ask.
+//!   size, its colours), which the panes' programs are told when they ask.
 //! - `persist`: the layout saved as it changes and restored on start.
 
 pub mod client;

@@ -83,14 +83,31 @@ impl App {
         cursor
     }
 
+    /// The terminal's background and text, when it said both and its
+    /// background agrees with the theme drawn in.
+    fn ends(&self) -> Option<(u32, u32)> {
+        let rgb = |c: alacritty_terminal::vte::ansi::Rgb| {
+            (u32::from(c.r) << 16) | (u32::from(c.g) << 8) | u32::from(c.b)
+        };
+        let (bg, fg) = (self.term.bg?, self.term.fg?);
+        (self.term.light() == Some(self.opts.light)).then(|| (rgb(bg), rgb(fg)))
+    }
+
+    /// Faint text: halfway from the background to the text, as base16's
+    /// comments are, else a grey of the palette's.
     fn faint(&self) -> Style {
-        Style::new().fg(Color::Indexed(if self.opts.light { 246 } else { 243 }))
+        Style::new().fg(match self.ends() {
+            Some((bg, fg)) => blend(fg, bg, 0.5),
+            None => Color::Indexed(if self.opts.light { 246 } else { 243 }),
+        })
     }
 
     fn comment(&self) -> Style {
-        Style::new()
-            .fg(Color::Indexed(if self.opts.light { 244 } else { 245 }))
-            .add_modifier(Modifier::ITALIC)
+        let fg = match self.ends() {
+            Some((bg, fg)) => blend(fg, bg, 0.6),
+            None => Color::Indexed(if self.opts.light { 244 } else { 245 }),
+        };
+        Style::new().fg(fg).add_modifier(Modifier::ITALIC)
     }
 
     fn put(buf: &mut Buffer, x: u16, y: u16, cols: u16, text: &str, style: Style) -> u16 {
@@ -251,7 +268,10 @@ impl App {
                 }
                 ListRow::Heading(text, look) => {
                     let style = match look {
-                        StoryLook::Title => Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
+                        // The colorscheme's Title, the terminal's blue.
+                        StoryLook::Title => Style::new()
+                            .fg(Color::Indexed(4))
+                            .add_modifier(Modifier::BOLD),
                         StoryLook::Comment => self.comment(),
                         StoryLook::Normal => Style::new(),
                     };
@@ -578,9 +598,15 @@ impl App {
         out
     }
 
-    /// The old side's line and word shades, then the new side's.
-    fn palette(&self) -> (Color, Color, Color, Color) {
-        let normal = if self.opts.light { 0xffffff } else { 0x1d1f21 };
+    /// The old side's line and word shades, then the new side's, mixed over
+    /// the terminal's own background as diffview.lua mixed them over
+    /// Ghostty's, else over a white or Tomorrow Night's.
+    pub(super) fn palette(&self) -> (Color, Color, Color, Color) {
+        let normal = match self.ends() {
+            Some((bg, _)) => bg,
+            None if self.opts.light => 0xffffff,
+            None => 0x1d1f21,
+        };
         (
             blend(REMOVED, normal, 0.14),
             blend(REMOVED, normal, 0.55),
@@ -589,12 +615,18 @@ impl App {
         )
     }
 
+    /// A button, as ghostty.lua's SwitchboardButton drew it: a shade of the
+    /// background toward the text, lit in the terminal's blue under the
+    /// mouse.
     fn button_style(&self, lit: bool) -> Style {
+        let ends = self.ends();
         if lit {
             Style::new()
-                .bg(ACCENT)
-                .fg(Color::Indexed(232))
+                .bg(Color::Indexed(4))
+                .fg(ends.map_or(Color::Indexed(0), |(bg, _)| solid(bg)))
                 .add_modifier(Modifier::BOLD)
+        } else if let Some((bg, fg)) = ends {
+            Style::new().bg(blend(fg, bg, 0.18)).fg(solid(fg))
         } else {
             Style::new()
                 .bg(Color::Indexed(if self.opts.light { 252 } else { 238 }))
@@ -832,4 +864,9 @@ impl App {
             }
         }
     }
+}
+
+/// A colour given as `0xrrggbb`.
+fn solid(c: u32) -> Color {
+    Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }

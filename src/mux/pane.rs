@@ -202,6 +202,9 @@ pub struct Pane {
     /// A cell's width and height in pixels, as the terminal attached last
     /// said (src/mux/terminal.rs), else `CELL`.
     cell: (u16, u16),
+    /// The colours the terminal attached last said it draws in, which the
+    /// program is told when it asks.
+    colors: super::terminal::Colors,
 }
 
 /// Collects what the emulator reports while it reads, for `process` to
@@ -388,6 +391,7 @@ impl Pane {
             graphics: None,
             other_keys: spec.extended_keys.then(ModifyOtherKeys::default),
             cell: CELL,
+            colors: Default::default(),
         })
     }
 
@@ -475,7 +479,10 @@ impl Pane {
                 Event::ClipboardStore(_, text) => notices.push(TermNotice::Clipboard(text)),
                 Event::ClipboardLoad(_, format) => self.reply(format("")),
                 Event::ColorRequest(index, format) => {
+                    // One the program set, else the terminal's own, as tmux
+                    // answered from its client's.
                     let color = self.term.colors()[index.min(COLOR_COUNT - 1)]
+                        .or_else(|| self.colors.get(index))
                         .unwrap_or_else(|| default_color(index));
                     self.reply(format(color));
                 }
@@ -540,6 +547,12 @@ impl Pane {
         // The program learns of it by SIGWINCH; a terminal that is gone
         // has no program left to tell.
         let _ = self.master.resize(pty_size(cols, rows, self.cell));
+    }
+
+    /// The colours the terminal said it draws in, for the program's
+    /// questions from now on.
+    pub fn set_colors(&mut self, colors: super::terminal::Colors) {
+        self.colors = colors;
     }
 
     /// The cell's size in pixels, as the terminal said it: the PTY's
@@ -1572,6 +1585,12 @@ mod tests {
         // A color the program set is the one it is told.
         run.pane.process(b"\x1b]4;1;rgb:12/34/56\x07\x1b]4;1;?\x07");
         run.until_text("]4;1;rgb:1212/3434/5656");
+        // One the terminal said is told in place of the stand-in.
+        let mut said = crate::mux::terminal::Colors::default();
+        said.take(b"\x1b]11;rgb:fa/f8/f0\x07");
+        run.pane.set_colors(said);
+        run.pane.process(b"\x1b]11;?\x07");
+        run.until_text("]11;rgb:fafa/f8f8/f0f0");
     }
 
     #[test]
