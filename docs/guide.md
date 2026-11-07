@@ -200,13 +200,13 @@ The actions, by the names the file uses:
 
 - Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
 - Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
-- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `send-reply`, `update-main`.
+- Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
-- Reading: `pr-view`, `ticket-view`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
+- Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
 - The diff: `diff`, `diff-working-tree`, `lazygit`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`.
 - Notes: `notes`, `notes-beside`, `note-tab`, `choose-tab-note`.
 
-These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one, `lazygit`, `diff-working-tree`.
+These have no key by default and are in `M-p` alone: `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `pr-image`, `ticket-image`, `lazygit`, `diff-working-tree`, `settings`, `remind-tab`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `stop-slack-relay`, `open-repo`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`, `tool-beside`, `tool-alone`, `copy-diff-story`, `ask-about-diff`, `note-tab`, `choose-tab-note`, `update-switchboard`, `run-setup`, and those of [More in the palette](#more-in-the-palette): `rename-tab`, the `mission-<view>` commands, `notifications`, `habits-report`, `send-reply`, `update-main`, `check-setup`, `setup-part`, `calendar-tab`, `slack-tab`, `open-pr-number`, `open-ticket-id` and `aws-login`. Give any of them a key in `keys.json` to have it on one.
 
 ## Tabs and the status line
 
@@ -734,10 +734,12 @@ switchboard view --log ci.log           # page a CI job's log from its end
 switchboard pr-view [dir]               # the branch's PR description
 switchboard pr-view --checks [dir]      # the PR's failing checks, as M-m shows them
 switchboard ticket-view [dir | ABC-123] # a ticket, by ID or from a directory's branch
+switchboard pr-image [dir]              # the branch's PR description as GitHub draws it, as images
+switchboard pr-image --ticket ABC-123   # a Linear ticket the same way
 switchboard link-view <url>             # what a link holds
 ```
 
-Each runs in the terminal it is started in, the directory defaulting to the one you are in, and takes the pager's keys.
+Each runs in the terminal it is started in, the directory defaulting to the one you are in, and takes the pager's keys. `pr-image` has Chrome draw the page and shows it a page at a time as pictures (`j`, `k`, Space and `b` page, `g` and `G` go to the ends, `r` draws it again, `q` quits), through kitty's graphics protocol, so it needs Chrome and a terminal that draws pictures (Ghostty, kitty); inside the workspace only a pane allowed to send pictures shows them, which is why `M-p`'s "View the branch's PR description as an image" and "View the branch's Linear ticket as an image" open it in the pane's place.
 
 ### Where links open
 
@@ -1327,7 +1329,7 @@ Codex runs in its read-only sandbox, the commands it runs with no network and no
 
 The reviewer is given the rules you work under, and reports a change that breaks one (category `rules`): your `~/.claude/CLAUDE.md` with what it imports, and the repository's `CLAUDE.md` and `AGENTS.md` as the base has them, which win where the two disagree. Settings' "Rules in reviews" (`review_rules`) turned off leaves them out, so your rules aren't sent to the reviewer.
 
-`patchId` is the reviewed change as one hash, context lines included, so the same change rebased onto a newer base has the same one. Once a loop is clean, `/review-loop` records the reviewed commit, its base and that hash in the clone's `review-loop-clean` (`git rev-parse --git-path review-loop-clean`), for a pre-push hook that asks for a review. Switchboard's own repository has one for `main`, which Settings' "Review before pushing" (`review_before_push`) turns off.
+`patchId` is the reviewed change as one hash, context lines included, so the same change rebased onto a newer base has the same one. It is `git patch-id --verbatim`'s hash (whitespace kept), worked out by `codex-review` itself with git's diff options fixed, so a git older than 2.39, which hasn't `--verbatim`, or a git config of yours gives the same one; `switchboard codex-review --patch-id <from> <to>` prints it for any two commits, as the pre-push hook asks for it. Once a loop is clean, `/review-loop` records the reviewed commit, its base and that hash in the clone's `review-loop-clean` (`git rev-parse --git-path review-loop-clean`), for a pre-push hook that asks for a review. Switchboard's own repository has one for `main`, which Settings' "Review before pushing" (`review_before_push`) turns off.
 
 ### Landing: `/queue-and-clean`
 
@@ -1613,7 +1615,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `trusted-dirs` | The directories whose own code may run, one a line: `switchboard try` builds a worktree holding someone else's commits only once it is listed | "Trying a change" |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you | "GitHub and Linear access" |
 
-What Switchboard keeps for itself is in `~/.local/state/switchboard/` (the socket, the saved layout, the tips shown, what it counted, the day's files) and its caches in `~/.cache/switchboard/`; the Slack relay's state is in `~/.local/state/slack-relay/`. None of it is yours to edit, and any of it can be deleted while the server is stopped, at the cost of what it held.
+What Switchboard keeps for itself is in `~/.local/state/switchboard/` (the socket, the saved layout, the tips shown, what it counted, the day's files) and its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/` (what each Claude transcript says of its worktree, for `wt-revive`); the Slack relay's state is in `~/.local/state/slack-relay/`, and `/oncall`'s in `~/.local/state/oncall/`. `~/.local/share/switchboard/` holds what setup writes for Claude Code: Switchboard's part of your CLAUDE.md (`switchboard.md`), the clone of your rules' repository (`claude-md/`) and the build whose parts were last put in place (`setup-build`). None of it is yours to edit, and any of it can be deleted while the server is stopped, at the cost of what it held.
 
 ## Every setting
 

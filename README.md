@@ -76,7 +76,7 @@ A release keeps itself current: each time you attach, and hourly after that, the
 
 ## Making it yours
 
-Everything of your own is in `~/.config/switchboard/`, which nothing here writes over, so an update leaves it be:
+Everything of your own is in `~/.config/switchboard/`, which nothing writes over but Settings, so an update leaves it be:
 
 | File | What it holds |
 |---|---|
@@ -91,8 +91,9 @@ Everything of your own is in `~/.config/switchboard/`, which nothing here writes
 | `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules |
 | `sidebar.json`, `sidebar-plugins/` | The sidebar's and mission control's sizes, and the plugins that add views |
 | `trusted-dirs` | The directories whose own scripts may run |
+| `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |
 
-Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, and its caches in `~/.cache/switchboard/`.
+Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/`, and what setup writes for Claude Code (Switchboard's part of your CLAUDE.md, the clone of your rules' repository) in `~/.local/share/switchboard/`.
 
 ## More
 
