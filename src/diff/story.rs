@@ -458,6 +458,22 @@ pub fn key(top: &str, paths: &[String], diff: &str, commits: &str) -> String {
     hex(&crate::tabs::color::sha256(joined.as_bytes()))
 }
 
+/// A change's story key (`key`) and the paths it names, sorted, each once,
+/// as M-d's diff, the story told ahead and "Clear this tab's diff cache"
+/// all work it out, so each finds what the others keep.
+pub fn key_of(change: &super::git::Change) -> (String, Vec<String>) {
+    let mut paths: Vec<String> = change.entries.iter().map(|e| e.path.clone()).collect();
+    paths.sort();
+    paths.dedup();
+    let key = key(
+        &change.top.to_string_lossy(),
+        &paths,
+        &change.runs().join("\n"),
+        &commits(&change.raw_commits),
+    );
+    (key, paths)
+}
+
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }

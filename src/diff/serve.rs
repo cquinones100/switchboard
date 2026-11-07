@@ -53,7 +53,49 @@ impl Server {
             Command::CopyStory => self.press_in_diff(client, b"\x1c\x0eyS"),
             Command::Ask => self.press_in_diff(client, b"\x1c\x0ega"),
             Command::Lazygit => self.toggle_lazygit(client),
+            Command::ClearCache => self.clear_diff_cache(client),
         }
+    }
+
+    /// M-p's "Clear this tab's diff cache": after a yes, what M-d's diff
+    /// keeps of the tab's branch removed (`clear`), off the server's task,
+    /// in the directory the tab is named from, so Notes beside it clears
+    /// the tab's work, and said in a box.
+    fn clear_diff_cache(&mut self, client: ClientId) {
+        let tab = self
+            .clients
+            .get(&client)
+            .and_then(|c| self.session(&c.session))
+            .map(|s| s.current);
+        let dir = tab
+            .and_then(|t| self.tab_path(t))
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                self.current_pane(client)
+                    .and_then(|p| self.panes.get(&p))
+                    .and_then(|s| s.pane.cwd())
+            })
+            .unwrap_or_else(paths::home);
+        self.ask(
+            client,
+            crate::ui::Confirm::new("Clear this tab's diff cache?"),
+            move |server, client, yes| {
+                if !yes {
+                    return;
+                }
+                server.off_task(
+                    client,
+                    move || super::clear::clear(&dir),
+                    |server, client, done| {
+                        let said = match done {
+                            Ok(done) => super::clear::words(&done),
+                            Err(why) => why,
+                        };
+                        server.say(Some(client), &said);
+                    },
+                );
+            },
+        );
     }
 
     /// The pane of tool `name` for the pane a client is in: itself, or the

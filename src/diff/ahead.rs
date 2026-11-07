@@ -109,11 +109,7 @@ pub fn main(dir: &Path) -> ExitCode {
 /// warning it was told with, or why it couldn't be told.
 pub fn tell_ahead(top: &Path, base: &str) -> Result<Option<String>, String> {
     let change = git::read_change(top, base).map_err(|e| e.to_string())?;
-    let paths: Vec<String> = {
-        let mut p: Vec<String> = change.entries.iter().map(|e| e.path.clone()).collect();
-        p.sort();
-        p
-    };
+    let (key, paths) = story::key_of(&change);
     // Nothing to tell: told, as far as the next commit is concerned.
     if paths.len() < 2 || paths.iter().all(|p| order::generated(p)) {
         return Ok(None);
@@ -130,7 +126,7 @@ pub fn tell_ahead(top: &Path, base: &str) -> Result<Option<String>, String> {
         .collect();
     let commits = story::commits(&change.raw_commits);
     let asked = Asked {
-        key: story::key(&top.to_string_lossy(), &paths, &change.diff, &commits),
+        key,
         input: story::input(&entries, &diffs, &hunks, &commits),
         paths,
         hunks,

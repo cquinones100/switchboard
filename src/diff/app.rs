@@ -758,15 +758,7 @@ impl App {
             estimate: Some(story::estimate(story::count(&hunks))),
         };
         self.hunks = hunks;
-        let mut paths: Vec<String> = change.entries.iter().map(|e| e.path.clone()).collect();
-        paths.sort();
-        paths.dedup();
-        let key = story::key(
-            &change.top.to_string_lossy(),
-            &paths,
-            &change.runs().join("\n"),
-            &commits,
-        );
+        let (key, paths) = story::key_of(&change);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
         self.sort();
@@ -905,16 +897,7 @@ impl App {
         let Some(change) = &self.change else {
             return;
         };
-        let files: Vec<order::Ordered> = change
-            .entries
-            .iter()
-            .map(|e| order::Ordered {
-                path: e.path.clone(),
-                additions: e.additions,
-                deletions: e.deletions,
-            })
-            .collect();
-        let files = order::to_order(&files);
+        let files = order::ordered(change);
         if files.is_empty() {
             return;
         }

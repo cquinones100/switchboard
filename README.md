@@ -67,7 +67,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-[` `M-]`, `M-1` … `M-9` | The previous or next tab, or a tab by number |
 | `M-w` | Close the pane, asking first when something runs in it |
 | `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |
-| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story |
+| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story; `M-p`'s "Clear this tab's diff cache" makes the next one ask again |
 | `M-N` / `M-e` | Notes in its own tab / beside the pane you are in |
 | `M-b d` | Detach, leaving everything running; `switchboard` attaches again |
 

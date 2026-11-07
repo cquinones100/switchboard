@@ -484,6 +484,13 @@ impl Teller {
 }
 
 /// How long ago a file was last written, or `None` when it isn't there.
+/// Whether the story kept by `key` is being told now, here or by another
+/// program: its partial file written within the time a follower waits on
+/// it, so the story would be kept again once told.
+pub fn being_told(key: &str) -> bool {
+    age(&story_dir().join(format!("{key}.partial"))).is_some_and(|a| a < FOLLOW_STALE)
+}
+
 fn age(file: &Path) -> Option<Duration> {
     let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
     Some(

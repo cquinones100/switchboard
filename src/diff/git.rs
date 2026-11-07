@@ -100,6 +100,12 @@ fn base_cache(git_dir: &Path) -> PathBuf {
         .join(git_dir.to_string_lossy().replace('/', "%"))
 }
 
+/// Forgets the base kept for a worktree (by its git directory), so the next
+/// M-d asks for it again; whether one was kept.
+pub fn forget_base(git_dir: &Path) -> bool {
+    std::fs::remove_file(base_cache(git_dir)).is_ok()
+}
+
 /// The base kept for the branch's commit, while it is still there; nothing
 /// asked of the network (diff-base.sh's `cached`).
 pub fn cached_base(dir: &Path) -> Option<String> {

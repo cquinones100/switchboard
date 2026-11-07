@@ -10,7 +10,9 @@
 //! control's menu on a tab, as the diff does from that menu. M-p's
 //! working tree command shows the changes not yet committed, those not
 //! staged (a file git doesn't know yet among them) and those staged. `c`
-//! in the diff goes through the branch's commits one at a time.
+//! in the diff goes through the branch's commits one at a time. M-p's
+//! "Clear this tab's diff cache" removes the story, order and PR base kept
+//! for the tab's branch after a yes, keeping a story being told.
 
 mod common;
 
@@ -470,4 +472,104 @@ fn c_in_the_diff_goes_through_the_branchs_commits_one_at_a_time() {
     wait_until("the pane back", || {
         panes(&server)[0]["options"].get("@in_place").is_none()
     });
+}
+
+#[test]
+fn clearing_the_tabs_diff_cache_removes_its_story_order_and_base_after_a_yes() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    // The story told ahead, as M-d finds it, and the base kept with it.
+    let path = std::env::var("PATH").unwrap_or_default();
+    let out = Command::new(BIN)
+        .args(["diff", "--ahead"])
+        .arg(&work)
+        .env("HOME", &server.home)
+        .env(
+            "PATH",
+            format!("{}:{path}", server.home.join("bin").display()),
+        )
+        .env("SWITCHBOARD_STATE_DIR", server.dir.path().join("ahead"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env_remove("SWITCHBOARD")
+        .env_remove("SWITCHBOARD_PANE")
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cache = server.home.join(".cache/switchboard");
+    let story_dir = cache.join("diff-story");
+    let story = std::fs::read_dir(&story_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| x == "txt"))
+        .expect("a story kept");
+    std::fs::write(story_dir.join("unrelated.txt"), "another diff's story\n").unwrap();
+    let based = || std::fs::read_dir(cache.join("diff-base")).map_or(0, |d| d.count());
+    assert_eq!(based(), 1, "the PR base kept for the worktree");
+    // Haiku's order of its files, where M-d keeps it.
+    let change = switchboard::diff::git::read_change(&work, "origin/main").unwrap();
+    let order = switchboard::diff::order::order_file(
+        &change.top,
+        &change.left,
+        &change.right,
+        &switchboard::diff::order::ordered(&change),
+    );
+    let order = cache.join("diff-order").join(order.file_name().unwrap());
+    std::fs::create_dir_all(order.parent().unwrap()).unwrap();
+    std::fs::write(&order, r#"["src/a.js", "src/b.js"]"#).unwrap();
+
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    wait_until("the tab named from the work", || {
+        server
+            .ok(&["show", "-t", &tab, "@tab_path"])
+            .trim()
+            .ends_with("work")
+    });
+    let clear = |client: &mut common::TestClient, said: &str| {
+        server.ok(&["press", "clear-diff-cache"]);
+        client.wait_text("Clear this tab's diff cache?");
+        client.type_text("\r");
+        client.wait_text(said);
+        client.type_text("\x1b");
+        client.wait_for("the box closed", |s| {
+            !s.iter().any(|l| l.contains("diff cache is cleared"))
+        });
+    };
+    // While another program tells it, the story is kept.
+    let partial = story.with_extension("partial");
+    std::fs::write(&partial, "{}").unwrap();
+    clear(
+        &mut client,
+        "This tab's diff cache is cleared: 2 files. Its story is being told",
+    );
+    assert!(story.exists(), "the story being told kept");
+    assert!(!order.exists(), "the order gone");
+    assert_eq!(based(), 0, "the PR base gone");
+    // Then the base is asked for again, and cleared with the story.
+    std::fs::remove_file(&partial).unwrap();
+    clear(&mut client, "This tab's diff cache is cleared: 2 files.");
+    assert!(!story.exists(), "the story gone");
+    assert!(story_dir.join("unrelated.txt").exists(), "another's kept");
+    assert_eq!(based(), 0);
+    // Nothing told again.
+    let kept: Vec<String> = std::fs::read_dir(&story_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(kept, ["unrelated.txt"]);
 }

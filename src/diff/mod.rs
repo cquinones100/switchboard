@@ -19,6 +19,7 @@
 //! - `app`: the program on the screen.
 //! - `ahead`: the story told ahead of time for each tab's new commit.
 //! - `in_place`: a tool in a pane's place, in the server.
+//! - `clear`: M-p's "Clear this tab's diff cache".
 //! - `serve`: the server's keys: M-d, lazygit in a pane's place, and the
 //!   palette's commands.
 
@@ -28,6 +29,7 @@ use std::process::ExitCode;
 pub mod ahead;
 pub mod app;
 pub mod ask;
+pub mod clear;
 pub mod git;
 pub mod highlight;
 pub mod in_place;
@@ -55,10 +57,12 @@ pub enum Command {
     Lazygit,
     /// The working tree's changes in place of this pane, or closed.
     WorkingTree,
+    /// What M-d keeps of the tab's branch removed, after a yes.
+    ClearCache,
 }
 
 impl Command {
-    pub const ALL: [Command; 7] = [
+    pub const ALL: [Command; 8] = [
         Command::Diff,
         Command::Side,
         Command::Full,
@@ -66,6 +70,7 @@ impl Command {
         Command::Ask,
         Command::Lazygit,
         Command::WorkingTree,
+        Command::ClearCache,
     ];
 
     /// Its name in keys.json.
@@ -78,6 +83,7 @@ impl Command {
             Command::Ask => "ask-about-diff",
             Command::Lazygit => "lazygit",
             Command::WorkingTree => "diff-working-tree",
+            Command::ClearCache => "clear-diff-cache",
         }
     }
 
@@ -105,6 +111,9 @@ impl Command {
             Command::WorkingTree => {
                 "Open the changes not yet committed, staged and not, in place of this pane, or close them"
             }
+            Command::ClearCache => {
+                "Clear this tab's diff cache (M-d): the story, file order and PR base kept for its branch"
+            }
         }
     }
 
@@ -118,6 +127,7 @@ impl Command {
             Command::Ask => &["git", "diff", "review", "story", "ai", "diffview"],
             Command::Lazygit => &["git", "commit", "stage"],
             Command::WorkingTree => &["git", "diff", "review", "stage"],
+            Command::ClearCache => &["git", "diff", "story", "cache"],
         }
     }
 

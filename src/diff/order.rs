@@ -223,6 +223,21 @@ pub fn to_order(files: &[Ordered]) -> Vec<Ordered> {
     if picked.len() < 2 { Vec::new() } else { picked }
 }
 
+/// The files of a change Haiku is asked to order (`to_order`), as M-d's
+/// diff asks for them and "Clear this tab's diff cache" finds their order.
+pub fn ordered(change: &super::git::Change) -> Vec<Ordered> {
+    let files: Vec<Ordered> = change
+        .entries
+        .iter()
+        .map(|e| Ordered {
+            path: e.path.clone(),
+            additions: e.additions,
+            deletions: e.deletions,
+        })
+        .collect();
+    to_order(&files)
+}
+
 /// Where Haiku's order for these files in this comparison is kept.
 pub fn order_file(top: &Path, left: &str, right: &str, files: &[Ordered]) -> std::path::PathBuf {
     let mut names: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
