@@ -87,3 +87,22 @@ test("a tab's reminder comes back after a restart, on the same tab, and only fro
   run("save");
   assert.match(fs.readFileSync(path.join(custom, "window-options.tsv"), "utf8"), /^tmux_resurrect_20261104T190000\.txt\nwork\t2\t1800000200/, "kept in the folder resurrect saves to");
 });
+
+test("a note item's tab keeps its full title and its name across a restart", () => {
+  try {
+    tmux("kill-server");
+  } catch {}
+  fs.rmSync(path.join(resurrect, "window-options.tsv"), { force: true });
+  start();
+  tmux("set", "-gu", "@resurrect-dir");
+  const title = "a tab opened for a note's item keeps only the first fifty characters as its name";
+  tmux("set", "-w", "-t", "work:2", "@tab_title", title);
+  tmux("set", "-w", "-t", "work:2", "@tab_name", "a tab opened for a note's item keeps only the…");
+  saveAs("tmux_resurrect_20261104T200000.txt");
+  run("save");
+  tmux("kill-server");
+  start();
+  run("restore");
+  assert.equal(tmux("show", "-wqv", "-t", "work:2", "@tab_title"), title);
+  assert.equal(tmux("show", "-wqv", "-t", "work:2", "@tab_name"), "a tab opened for a note's item keeps only the…", "and the name it is shown against");
+});

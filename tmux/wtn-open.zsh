@@ -153,12 +153,24 @@ queue() {
 
 # A tab for one item: in the background, in this repository, named after the
 # item and linked to its note, the note in WTN_NOTE and wtn typed with the
-# item's line alone. Prints the window's id.
+# item's line alone. Prints the window's id. The tab bar's name is the item's
+# first 50 characters, cut back to a word and ending in …, and the item's
+# whole first line is the tab's full title (@tab_title), which M-T's box, the
+# sidebar and mission control show.
 open_tab() {
-  local note=$1 line=$2 name=$3 window
+  # Characters, not bytes, under any locale the caller has.
+  setopt localoptions extendedglob
+  local LC_ALL=en_US.UTF-8
+  local note=$1 line=$2 name=$3 window short=$3
+  if (( ${#name} > 50 )); then
+    short=${name[1,49]}
+    [[ $short == *' '* ]] && short=${short% *}
+    short="${short%%[[:space:][:punct:]]#}…"
+  fi
   # Two words, -t and the session: zsh doesn't split one expansion into two.
   window=$(tmux new-window -d ${WTN_SESSION:+-t} ${WTN_SESSION:+"$WTN_SESSION:"} -c "${PWD//\#/##}" -e "WTN_NOTE=$note" -n "wtn" -P -F '#{window_id}') || return 1
-  tmux set-option -w -t "$window" @tab_name "${name[1,50]}"
+  tmux set-option -w -t "$window" @tab_name "$short"
+  tmux set-option -w -t "$window" @tab_title "$name"
   tmux set-option -w -t "$window" @tab_note "$note"
   tmux send-keys -t "$window" "wtn --item $line" Enter
   print -r -- "$window"

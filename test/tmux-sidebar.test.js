@@ -321,6 +321,37 @@ test("an idle tab says how long since its pane last printed anything", async () 
   assert.deepEqual(text.slice(4, 6), ["▌     idle for 5m · cat", "▌     #12345"]);
 });
 
+test("a note item's tab shows its whole title, wrapped to three lines, while its name is still the item cut short", async (t) => {
+  const title = "a tab opened for a note's item keeps only the first fifty characters as its name, so the rest can't be read";
+  const short = "a tab opened for a note's item keeps only the…";
+  const window = tmux("display", "-p", "-t", "test:", "#{window_id}");
+  const set = (option, value) => tmux("set", "-w", "-t", window, option, value);
+  t.after(() => ["@tab_name", "@tab_title", "@tab_label", "@autopilot_item"].forEach((option) => tmux("set", "-wu", "-t", window, option)));
+  set("@tab_name", short);
+  set("@tab_label", `#12 ${short}`);
+  set("@tab_title", title);
+  const tab = async () => sidebar.tabsFrom(await sidebar.snapshot()).find((x) => x.id === window);
+  const named = await tab();
+  assert.equal(named.name, title, "the whole title, not the tab bar's name");
+  assert.equal(named.pr, "12");
+  const { lines } = sidebar.sidebarLines({ tabs: [named], sections: [], cols: 30, rows: 12, view: { focused: false, cursor: window, frame: 0, here: window } });
+  const text = lines.map((line) => line.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd());
+  const first = text.findIndex((line) => line.includes("a tab opened"));
+  assert.ok(first >= 0, text.join("\n"));
+  assert.match(text[first + 2], /…$/, "three lines, the last cut");
+  assert.ok(!text[first + 3].includes("read"), "no fourth line of it");
+
+  tmux("set", "-wu", "-t", window, "@tab_title");
+  set("@autopilot_item", title);
+  assert.equal((await tab()).name, title, "a tab opened before @tab_title: the mode's item");
+  set("@tab_name", "Renamed");
+  set("@tab_label", "Renamed");
+  assert.equal((await tab()).name, "Renamed", "renamed since, its new name");
+  set("@tab_name", "a tab opened");
+  set("@tab_label", "a tab opened");
+  assert.equal((await tab()).name, "a tab opened", "renamed to the start of the item, still its new name");
+});
+
 test("a tab is named after its own pane's directory, not its sidebar's, while the sidebar has focus", (t) => {
   const work = path.join(tmp, "named-work");
   const elsewhere = path.join(tmp, "named-elsewhere");

@@ -23,7 +23,7 @@
 set -u
 export LC_ALL=en_US.UTF-8
 
-OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived @autopilot @autopilot_in @autopilot_item @autopilot_left @autopilot_seen)
+OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived @autopilot @autopilot_in @autopilot_item @autopilot_left @autopilot_seen @tab_title @tab_name)
 
 # Resurrect's own folder, found as it finds it.
 dir=$("${0%/*}/resurrect-dir.sh")

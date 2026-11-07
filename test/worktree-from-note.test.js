@@ -380,7 +380,7 @@ test("working a note continuously takes items with a settled plan first, then th
       "  Plan: [[Plan - Undecided]] (needs a choice)",
       "- [ ] Taken",
       "  Plan: [[Plan - Taken]]",
-      "- [ ] Also planned",
+      "- [ ] Also planned, an item whose first line runs well past the fifty characters a tab bar name keeps",
       "  Plan: [[Plan - Also]]",
       "- [ ] Also plain",
       "- [ ] Open in its plan",
@@ -396,9 +396,10 @@ test("working a note continuously takes items with a settled plan first, then th
     execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
     execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "9"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
     const queue = (...args) => execFileSync("zsh", [popup, "queue", "Work.md", ...args], { cwd: repo, env, encoding: "utf8" }).trim().split("\n");
-    assert.deepEqual(queue(), ["5\tPlanned", "11\tAlso planned", "3\tPlain", "13\tAlso plain", "16\tLost plan"], "a plan whose note isn't there taken as no plan, one whose note needs a decision never, and an empty item never");
-    assert.deepEqual(queue("--ready-only"), ["5\tPlanned", "11\tAlso planned"], "only items with a settled plan");
-    assert.deepEqual(execFileSync("zsh", [popup, "queue", "Work.md"], { cwd: repo, env: { ...env, WTN_SKIP: "Planned\nPlain" }, encoding: "utf8" }).trim().split("\n"), ["11\tAlso planned", "13\tAlso plain", "16\tLost plan"], "the skipped ones left out");
+    const also = "Also planned, an item whose first line runs well past the fifty characters a tab bar name keeps";
+    assert.deepEqual(queue(), ["5\tPlanned", `11\t${also}`, "3\tPlain", "13\tAlso plain", "16\tLost plan"], "a plan whose note isn't there taken as no plan, one whose note needs a decision never, and an empty item never");
+    assert.deepEqual(queue("--ready-only"), ["5\tPlanned", `11\t${also}`], "only items with a settled plan");
+    assert.deepEqual(execFileSync("zsh", [popup, "queue", "Work.md"], { cwd: repo, env: { ...env, WTN_SKIP: "Planned\nPlain" }, encoding: "utf8" }).trim().split("\n"), [`11\t${also}`, "13\tAlso plain", "16\tLost plan"], "the skipped ones left out");
 
     execFileSync("tmux", ["-S", socket, "-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "120", "-y", "30", "cat"], { env });
     // Its tabs run cat, not a shell that would write into HOME as it goes.
@@ -406,9 +407,10 @@ test("working a note continuously takes items with a settled plan first, then th
     // In the session the daemon names by its id, as the mode does.
     const session = execFileSync("tmux", ["-S", socket, "display", "-p", "-t", "t", "#{session_id}"], { env, encoding: "utf8" }).trim();
     const out = execFileSync("zsh", [popup, "next", "Work.md", "2"], { cwd: repo, env: { ...env, TMUX: `${socket},1,0`, WTN_SESSION: session }, encoding: "utf8" }).trim().split("\n").map((row) => row.split("\t"));
-    assert.deepEqual(out.map(([line, , text]) => [line, text]), [["5", "Planned"], ["11", "Also planned"]], "the first two taken, by line");
-    const tabs = execFileSync("tmux", ["-S", socket, "list-windows", "-F", "#{window_id}\t#{@tab_name}\t#{@tab_note}\t#{@autopilot}\t#{window_active}"], { env, encoding: "utf8" }).trim().split("\n").slice(1).map((row) => row.split("\t"));
-    assert.deepEqual(tabs.map(([id, name, note]) => [id, name, note]), out.map(([, window, text]) => [window, text, "Work.md"]), "a tab for each, named after it and linked to the note");
+    assert.deepEqual(out.map(([line, , text]) => [line, text]), [["5", "Planned"], ["11", also]], "the first two taken, by line");
+    const tabs = execFileSync("tmux", ["-S", socket, "list-windows", "-F", "#{window_id}\t#{@tab_name}\t#{@tab_note}\t#{@autopilot}\t#{window_active}\t#{@tab_title}"], { env, encoding: "utf8" }).trim().split("\n").slice(1).map((row) => row.split("\t"));
+    assert.deepEqual(tabs.map(([id, , note, , , title]) => [id, title, note]), out.map(([, window, text]) => [window, text, "Work.md"]), "a tab for each, its whole first line its full title, linked to the note");
+    assert.deepEqual(tabs.map(([, name]) => name), ["Planned", "Also planned, an item whose first line runs well…"], "the tab bar's name at most 50 characters, cut at a word and ending in …");
     assert.ok(tabs.every(([, , , at, active]) => Number(at) > 0 && active === "0"), "each marked as the mode's, in the background");
   } finally {
     spawnSync("tmux", ["-S", socket, "kill-server"], { env });

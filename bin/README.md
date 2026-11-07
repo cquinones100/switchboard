@@ -260,6 +260,8 @@ marked), the one under the cursor shown whole in a pane below the list, its
 full text and what is indented under it (`wtn_item_preview` setting), Tab
 picking several, and opens a tab for each at the end of the
 tab list, named after its item and linked to the note, with `wtn` running in it.
+The tab bar shows the item's first 50 characters, cut at a word, and `M-T`, the
+sidebar and mission control its whole first line.
 
 M-p's "Work the note continuously" keeps that going without you picking: from
 a pane in the note's repository, mission control asks which note (the one it

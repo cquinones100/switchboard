@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # M-T: shows a tab's whole title in a box, since the sidebar cuts it at three
 # lines and the status line at its width: the title as the tab bar has it
-# (@tab_label, its PR number in front), wrapped, and under it, faint, the
+# (@tab_label, its PR number in front), or a note item's whole first line
+# where the tab bar has it cut short (cut_of below), wrapped, and under it, faint, the
 # branch, the directory, the PR and the Linear ticket, as far as they are
 # known. Copy the title (or y) copies it; Close, Esc, q or a click off the
 # options closes it.
@@ -85,7 +86,7 @@ done
 window=${1:-}
 [ -n "$window" ] || exit 0
 
-IFS=$'\t' read -r index label name < <(tmux display -p -t "$window" $'#{window_index}\t#{?@tab_label,#{@tab_label},none}\t#{window_name}' 2>/dev/null)
+IFS=$'\t' read -r index label name tab_name tab_title item < <(tmux display -p -t "$window" $'#{window_index}\t#{?@tab_label,#{@tab_label},none}\t#{window_name}\t#{?@tab_name,#{@tab_name},none}\t#{?@tab_title,#{@tab_title},none}\t#{?@autopilot_item,#{@autopilot_item},none}' 2>/dev/null)
 [ -n "${index:-}" ] || exit 0
 [ "$label" = none ] && label=$name
 
@@ -123,6 +124,41 @@ tilde="~"
 [ -n "$path" ] && add "Directory  ${path/#"$HOME"/$tilde}"
 [ -n "${pr:-}" ] && add "PR         #$pr"
 [ -n "$ticket" ] && add "Ticket     $ticket"
+
+# A tab opened for a note's item has the item's first 50 characters as its
+# name (@tab_name, wtn-open.zsh) and its whole first line as its full title:
+# @tab_title, else, for a tab opened before there was one, the work-a-note
+# mode's @autopilot_item, else the item its branch is for (wtnItem in git's
+# config, "<note>: <item's first line>"). Each counts only while the name is
+# still that item cut short, so a tab renamed since shows its new name.
+cut_of() {
+  local short=$1 whole=$2
+  [ "$short" != none ] && [ -n "$short" ] && [ "$whole" != none ] && [ -n "$whole" ] || return 1
+  [[ $short =~ ^#[0-9]+\  ]] && short=${short#* }
+  # The name wtn-open.zsh gives: the item whole up to 50 characters, else its
+  # first 49 cut back to a word, ending in …; or its first 50, as tabs opened
+  # before were named.
+  [ "$short" = "$whole" ] && return 0
+  [ ${#whole} -gt 50 ] || return 1
+  [ "$short" = "${whole:0:50}" ] && return 0
+  local cut=${whole:0:49}
+  [[ $cut == *" "* ]] && cut=${cut% *}
+  shopt -s extglob
+  cut=${cut%%+([[:space:][:punct:]])}
+  [ "$short" = "${cut}…" ]
+}
+title=""
+if cut_of "$tab_name" "$tab_title"; then title=$tab_title
+elif cut_of "$tab_name" "$item"; then title=$item
+elif [ -n "$path" ] && [ -n "$branch" ] && [ "$branch" != HEAD ]; then
+  wtn_item=$(git -C "$path" --no-optional-locks config --get "branch.$branch.wtnItem" 2>/dev/null)
+  wtn_item=${wtn_item#*.md: }
+  cut_of "$tab_name" "$wtn_item" && title=$wtn_item
+fi
+if [ -n "$title" ]; then
+  [[ $label =~ ^#[0-9]+\  ]] && title="${label%% *} $title"
+  label=$title
+fi
 
 wrapped=$(printf '%s\n' "$label" | fold -s -w 68 | sed 's/ *$//')
 if [ -n "$print" ]; then

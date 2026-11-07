@@ -44,6 +44,9 @@ bindkey '\e' send-break
 trim() { print -r -- ${${1##[[:space:]]#}%%[[:space:]]#}; }
 
 save() {
+  # The name typed is the tab's whole title now, so a full title kept for a
+  # note's item (wtn-open.zsh) goes.
+  tmux set -wu -t "$window" @tab_title
   if [[ -z $1 ]]; then
     tmux set -wu -t "$window" @tab_name
   else

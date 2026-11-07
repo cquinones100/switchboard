@@ -66,3 +66,38 @@ esac
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("tab-title.sh shows a note item's whole first line where the tab bar has it cut short: @tab_title, else @autopilot_item, else the branch's wtnItem", async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "tab-title-")));
+  try {
+    const home = path.join(tmp, "home");
+    const repo = path.join(home, "code/app");
+    fs.mkdirSync(repo, { recursive: true });
+    const env0 = { ...process.env, HOME: home, GIT_CONFIG_GLOBAL: "/dev/null" };
+    execFileSync("git", ["init", "-q", "-b", "note/long-item", repo], { env: env0 });
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "start"], { env: env0 });
+    const whole = "a tab opened for a note's item keeps only the first fifty characters as its name";
+    const short = "a tab opened for a note's item keeps only the…";
+    // The stand-in answers display with the fields in FIELDS, and list-panes
+    // with the repository's pane.
+    fs.writeFileSync(path.join(tmp, "tmux"), `#!/bin/sh
+case "$1" in
+  display) printf '%s\\n' "$FIELDS" ;;
+  list-panes) printf '0\\t0\\t1\\t%s\\n' '${repo}' ;;
+esac
+`, { mode: 0o755 });
+    const env = { ...env0, PATH: `${tmp}:${process.env.PATH}`, XDG_CACHE_HOME: path.join(tmp, "cache"), XDG_STATE_HOME: tmp };
+    const title = (name, tabTitle, item) => execFileSync("bash", [script, "--print", "@3"], { env: { ...env, FIELDS: ["3", `#12 ${name}`, "app", name, tabTitle, item].join("\t") }, encoding: "utf8" }).split("\n\n")[0].split("\n").join(" ");
+
+    assert.equal(title(short, whole, "none"), `#12 ${whole}`, "@tab_title, the PR number in front");
+    assert.equal(title(short, "none", whole), `#12 ${whole}`, "a tab opened before @tab_title: the mode's item");
+    assert.equal(title(whole.slice(0, 50), "none", whole), `#12 ${whole}`, "a name cut mid-word, as tabs were named before");
+    assert.equal(title("Renamed", whole, whole), "#12 Renamed", "renamed since: its new name");
+    assert.equal(title("a tab opened", "none", whole), "#12 a tab opened", "renamed to the start of the item: still its new name");
+    assert.equal(title(short, "none", "none"), `#12 ${short}`, "nothing kept: the name");
+    execFileSync("git", ["-C", repo, "config", "branch.note/long-item.wtnItem", `Work/Notes.md: ${whole}`], { env: env0 });
+    assert.equal(title(short, "none", "none"), `#12 ${whole}`, "the item its branch is for");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
