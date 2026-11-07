@@ -19,7 +19,6 @@
 //!   command has to show at length (the habits report, setup's output).
 //! - `naming`: what a new tab is called, asked after M-t and M-n
 //!   (tab-name.zsh).
-
 //! - `serve`: the server's side.
 
 mod naming;

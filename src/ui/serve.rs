@@ -18,10 +18,10 @@ use super::{
     Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked, Picker, Step, Then,
     Tip, Ui, UiEvent, keylist, message, tip,
 };
-use crate::mux::PaneId;
 use crate::mux::input::{Input, Parsed};
 use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Event, Reply, Server};
+use crate::mux::{PaneId, TabId};
 use crate::{paths, settings, util};
 
 /// How long the status line shows a message with message_boxes off: tmux's
@@ -490,6 +490,34 @@ impl Server {
     /// its prompt (confirm.sh's question), unless the confirm_close setting
     /// is off. The pane is the one M-w was pressed in, whatever has the
     /// focus by the time it is answered.
+    /// The prefix's `&`: the tab closed once you say so, as tmux's
+    /// `confirm-before kill-window`, the programs running in its panes
+    /// listed under the question.
+    pub fn close_tab(&mut self, client: ClientId, tab: TabId) {
+        let Some(panes) = self.tabs.get(&tab).map(|t| t.layout.panes()) else {
+            return;
+        };
+        let index = self
+            .session_of_tab(tab)
+            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
+            .map_or(0, |i| i + 1);
+        let list: Vec<String> = panes
+            .into_iter()
+            .filter_map(|p| self.running(p))
+            .filter(|r| !r.is_empty())
+            .collect();
+        let question = format!("Close tab {index} {}?", self.tab_label(tab));
+        self.ask(
+            client,
+            Confirm::new(question).list(list),
+            move |server, _, yes| {
+                if yes && server.tabs.contains_key(&tab) {
+                    server.kill_tab(tab);
+                }
+            },
+        );
+    }
+
     pub fn close_pane(&mut self, client: ClientId, pane: PaneId) {
         // Notes beside a pane goes back to its own tab instead (notes-open.sh
         // away, src/notes/serve.rs).

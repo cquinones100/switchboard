@@ -158,6 +158,14 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 | `M-b "` | Split the pane below |
 | `M-b ?` | The list of keys |
 | `M-b M-b` | Send `M-b` to the program in the pane |
+| `M-b 1` … `M-b 9`, `M-b 0` | Go to that tab (`0` the tenth) |
+| `M-b n`, `M-b p`, `M-b l` | The next tab, the previous one, the one you were on before |
+| `M-b w` | Pick a tab from a list (as `M-j`) |
+| `M-b ,` | Rename the tab |
+| `M-b &` | Close the tab, after asking |
+| `M-b o`, `M-b ;` | The next pane of the tab, going round; the pane you were in before |
+| `M-b` and an arrow | The pane on that side |
+| `M-b` and Ctrl with an arrow | Grow the pane a cell that way |
 
 `M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line.
 
@@ -198,8 +206,8 @@ The server reads the file as it starts and again within two seconds of a change,
 
 The actions, by the names the file uses:
 
-- Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
-- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
+- Panes: `select-pane-left`, `select-pane-right`, `select-pane-up`, `select-pane-down`, `next-pane`, `last-pane`, `pane-nav` (`C-w`, waiting for `h` `j` `k` `l`), `split-left`, `split-right`, `split-up`, `split-down`, `close-pane`, `zoom`, `resize-left`, `resize-right`, `resize-up`, `resize-down` (five cells; `resize-left-2` for two), `copy-mode`.
+- Tabs: `prev-tab`, `next-tab`, `last-tab`, `select-tab-1` (any number from 1), `go-to-tab` (`M-0`), `new-tab`, `close-tab`, `new-claude-tab`, `find-tab`, `revive-worktree`, `toggle-pin`, `remind-tab`, `rename-tab`, `calendar-tab`, `slack-tab`.
 - Claude and work: `next-needs-you`, `focus-claude`, `work-on-tickets`, `work-on-branch`, `work-on-pr`, `work-on-note`, `work-note-continuously`, `continue-shaping`, `shape-note`, `shape-new-ticket`, `send-reply`, `update-main`.
 - The workspace: `palette`, `mission-control`, `mission-<view>` (the view's name in lower case with dashes for spaces: `mission-work-map`, `mission-calendar`, `mission-slack`, `mission-closed`, `mission-prs`, `mission-tickets`, `mission-inbox`, `mission-ci`, `mission-merge-queues`, `mission-sessions`, `mission-usage`, `mission-resources`), `notifications`, `settings`, `habits-report`, `focus-sidebar`, `toggle-sidebar`, `toggle-theme`, `reset-tips`, `list-keys`, `detach`, `send-prefix`, `slack-relay`, `stop-slack-relay`, `update-switchboard`, `run-setup`, `check-setup`, `setup-part`, `aws-login`.
 - Reading: `pr-view`, `ticket-view`, `pr-image`, `ticket-image`, `open-pr`, `open-repo`, `open-ticket`, `open-pr-number`, `open-ticket-id`, `open-merge-queue`, `open-linear-project`, `copy-ticket-id`, `copy-ticket-url`, `copy-pr-number`, `copy-pr-url`, `pr-ready`, `search-everything`, `read-link`, `open-link`, `copy-link`, `open-media`, `open-link-being-read`.
@@ -1751,7 +1759,6 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Review before pushing (`review_before_push`) | on | In this repository, a push to main needs a clean /review-loop first (.githooks/pre-push); off, it pushes without one |
 | Security review in the review loop (`review_security`) | on | /review-loop runs Claude Code's /security-review on the branch once before its first round, its findings fixed or asked about as the rounds' are |
 | Ask before closing a pane (`confirm_close`) | on | M-w asks first when a program runs in the pane (a shell at its prompt closes at once); off, it closes the pane at once whatever runs in it |
-
 
 ### Palette
 

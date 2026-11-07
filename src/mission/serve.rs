@@ -39,7 +39,6 @@ use crate::sidebar::model::{self, Rules};
 use crate::sidebar::render::Filter;
 use crate::sidebar::text::SPINNER_MS;
 use crate::ui::{Confirm, Menu, MenuOption, Outcome, PickItem, Picker, Theme};
-
 use crate::usage::ViewKind;
 use crate::{paths, settings, util};
 

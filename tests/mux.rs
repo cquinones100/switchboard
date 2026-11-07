@@ -117,6 +117,58 @@ fn an_old_tmux_conf_and_keys_json_s_mistakes_are_said_on_attaching() {
 }
 
 #[test]
+fn tmux_s_own_prefix_keys_move_between_tabs_and_panes_and_close_a_tab_after_asking() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let prefix = format!("{ALT}b");
+    let current = |list: &serde_json::Value| {
+        list["sessions"][0]["tabs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .position(|t| t["current"] == true)
+    };
+    let active = |list: &serde_json::Value| {
+        let tab = &list["sessions"][0]["tabs"][0]["panes"];
+        tab.as_array()
+            .unwrap()
+            .iter()
+            .position(|p| p["active"] == true)
+    };
+    // o and ; between the panes of a tab.
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("a second pane", |_| panes(&server.list()) == 2);
+    client.wait_for("the new pane focused", |_| {
+        active(&server.list()) == Some(1)
+    });
+    client.type_text(&format!("{prefix}o"));
+    client.wait_for("round to the first pane", |_| {
+        active(&server.list()) == Some(0)
+    });
+    client.type_text(&format!("{prefix};"));
+    client.wait_for("back to the last pane", |_| {
+        active(&server.list()) == Some(1)
+    });
+    // n, p and the numbers between tabs.
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    client.type_text(&format!("{prefix}1"));
+    client.wait_for("the first tab", |_| current(&server.list()) == Some(0));
+    client.type_text(&format!("{prefix}n"));
+    client.wait_for("the next tab", |_| current(&server.list()) == Some(1));
+    client.type_text(&format!("{prefix}p"));
+    client.wait_for("the previous tab", |_| current(&server.list()) == Some(0));
+    // &: the tab closed once you say so.
+    client.type_text(&format!("{prefix}2"));
+    client.wait_for("the second tab", |_| current(&server.list()) == Some(1));
+    client.type_text(&format!("{prefix}&"));
+    client.wait_text("Close tab 2 second?");
+    client.type_text("\r");
+    client.wait_for("one tab left", |_| tabs(&server.list()) == 1);
+}
+
+#[test]
 fn a_program_ending_closes_its_tab() {
     let server = TestServer::start();
     let mut client = server.attach(80, 24);

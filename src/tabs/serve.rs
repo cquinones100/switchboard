@@ -129,7 +129,6 @@ impl Server {
     }
 
     // Runs a lookup off the server task, answering with `Event::TabLookup`.
-
     fn start_lookup(&self, ask: Ask) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;

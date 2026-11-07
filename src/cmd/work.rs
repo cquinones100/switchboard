@@ -808,7 +808,6 @@ impl Server {
                             .filter(|i| values.contains(&i.line.to_string().as_str()))
                             .collect()
                     };
-
                     let tabs: Vec<TabId> = chosen
                         .into_iter()
                         .filter_map(|item| server.open_item_tab(client, &repo, &note, item))

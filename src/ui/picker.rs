@@ -700,7 +700,6 @@ impl Overlay for Picker {
             Hit::Line(i, _) if i >= first && i < first + self.room => {
                 Some(self.top + i - first).filter(|r| *r < self.shown.len())
             }
-
             _ => None,
         };
         match draw::gesture(&mouse) {

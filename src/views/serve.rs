@@ -636,7 +636,6 @@ impl Server {
                 links::open_in_background(picked.value);
                 return;
             }
-
             let pane = running
                 .and_then(|r| r.pane)
                 .filter(|p| server.panes.contains_key(p))

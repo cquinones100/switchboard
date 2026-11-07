@@ -207,7 +207,6 @@ mod tests {
             Some(late.timestamp().as_second())
         );
         assert_eq!(when("tomorrow soon", &now), None);
-
         assert_eq!(when("13pm", &now), None);
         assert_eq!(when("soonish", &now), None);
     }

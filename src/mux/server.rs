@@ -638,7 +638,6 @@ impl Server {
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.reload_keys_if_changed();
-
                 self.status_tick();
                 self.ask_presence();
                 self.refresh_names();
@@ -1700,6 +1699,28 @@ impl Server {
             Action::ClosePane => {
                 if let Some(p) = pane {
                     self.close_pane(id, p);
+                }
+            }
+            Action::CloseTab => self.close_tab(id, current_tab),
+            Action::NextPane => {
+                let panes = self
+                    .tabs
+                    .get(&current_tab)
+                    .map(|t| t.layout.panes())
+                    .unwrap_or_default();
+                let at = panes.iter().position(|p| Some(*p) == pane);
+                if let Some(next) = at.map(|at| panes[(at + 1) % panes.len()])
+                    && Some(next) != pane
+                {
+                    self.focus_pane(next);
+                }
+            }
+            Action::LastPane => {
+                let last = self.tabs.get(&current_tab).and_then(|t| t.last_pane);
+                if let Some(last) =
+                    last.filter(|p| self.panes.get(p).is_some_and(|s| s.tab == current_tab))
+                {
+                    self.focus_pane(last);
                 }
             }
             Action::Zoom => {

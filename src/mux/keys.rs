@@ -46,6 +46,12 @@ pub enum Action {
     Split(Direction),
     /// Close the current pane (its tab, when it is the last).
     ClosePane,
+    /// Close the current tab, after asking (tmux's prefix `&`).
+    CloseTab,
+    /// The next pane of the tab, going round (tmux's prefix `o`).
+    NextPane,
+    /// The pane you were in before, in this tab (tmux's prefix `;`).
+    LastPane,
     /// Zoom the current pane to the whole tab, or back.
     Zoom,
     /// Grow the current pane toward a direction by cells.
@@ -185,6 +191,9 @@ impl Action {
             "last-tab" => Action::LastTab,
             "new-tab" => Action::NewTab,
             "close-pane" => Action::ClosePane,
+            "close-tab" => Action::CloseTab,
+            "next-pane" => Action::NextPane,
+            "last-pane" => Action::LastPane,
             "zoom" => Action::Zoom,
             "detach" => Action::Detach,
             "copy-mode" => Action::CopyMode,
@@ -248,6 +257,9 @@ impl Action {
             Action::NewTab => "new-tab".into(),
             Action::Split(d) => format!("split-{}", dir(d)),
             Action::ClosePane => "close-pane".into(),
+            Action::CloseTab => "close-tab".into(),
+            Action::NextPane => "next-pane".into(),
+            Action::LastPane => "last-pane".into(),
             Action::Zoom => "zoom".into(),
             Action::Resize(d, n) => format!("resize-{}-{n}", dir(d)),
             Action::Detach => "detach".into(),
@@ -314,6 +326,9 @@ impl Action {
             Action::NewTab => "New tab".into(),
             Action::Split(d) => format!("Split pane {}", side(d)),
             Action::ClosePane => "Close the pane".into(),
+            Action::CloseTab => "Close the tab, after asking".into(),
+            Action::NextPane => "Move to the next pane in the tab".into(),
+            Action::LastPane => "Go back to the pane you were in before".into(),
             Action::Zoom => "Zoom the pane in or out".into(),
             Action::Resize(d, 5) => format!("Grow pane {}", toward(d)),
             Action::Resize(d, n) => format!("Grow pane {} by {n}", toward(d)),
@@ -378,6 +393,8 @@ impl Action {
             Action::NewTab => &["tabs", "new"],
             Action::Split(_) => &["panes", "split"],
             Action::ClosePane => &["panes", "close"],
+            Action::CloseTab => &["tabs", "close"],
+            Action::NextPane | Action::LastPane => &["panes", "navigate"],
             Action::Zoom => &["panes", "layout"],
             Action::Resize(..) => &["panes", "resize"],
             Action::Detach => &["session", "detach"],
@@ -579,6 +596,31 @@ impl Default for Bindings {
         pbind("M-b", SendPrefix);
         pbind("%", Split(Right));
         pbind("\"", Split(Down));
+        // The rest of tmux's own prefix keys that have a place here: tabs
+        // by number (0 the tenth), next and previous, the last one, one
+        // picked from the open tabs (choose-tree's place), renamed, or
+        // closed after asking; panes in turn, the last one, by arrow, and
+        // grown a cell at a time with Ctrl.
+        for n in 1..=9 {
+            pbind(&n.to_string(), SelectTab(n));
+        }
+        pbind("0", SelectTab(10));
+        pbind("n", NextTab);
+        pbind("p", PrevTab);
+        pbind("l", LastTab);
+        pbind("w", FindTab);
+        pbind(",", Extra(crate::extras::Command::RenameTab));
+        pbind("&", CloseTab);
+        pbind("o", NextPane);
+        pbind(";", LastPane);
+        pbind("Left", SelectPane(Left));
+        pbind("Right", SelectPane(Right));
+        pbind("Up", SelectPane(Up));
+        pbind("Down", SelectPane(Down));
+        pbind("C-Left", Resize(Left, 1));
+        pbind("C-Right", Resize(Right, 1));
+        pbind("C-Up", Resize(Up, 1));
+        pbind("C-Down", Resize(Down, 1));
         Bindings {
             prefix_key: key("M-b"),
             root,
@@ -676,6 +718,9 @@ mod tests {
             Action::Resize(Direction::Left, 3),
             Action::Split(Direction::Down),
             Action::Detach,
+            Action::CloseTab,
+            Action::NextPane,
+            Action::LastPane,
             Action::NextNeedsYou,
             Action::FocusClaude,
             Action::TogglePin,
