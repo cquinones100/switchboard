@@ -1,6 +1,8 @@
 //! How Switchboard's skills defer to a repository's own skill of the same
 //! name, ported from test/skills.test.js: every skill's opening step,
-//! hand-offs between skills, and `switchboard skill-path`, which both use.
+//! hand-offs between skills, and `switchboard skill-path`, which both use;
+//! and the repository's own project skills (`.claude/skills/`), which
+//! never ship.
 
 mod common;
 
@@ -213,6 +215,7 @@ fn every_switchboard_command_a_skill_names_is_one_the_binary_has_and_none_names_
             .unwrap();
     let mut texts = skills();
     texts.push(("switchboard.md".into(), part));
+    texts.extend(project_skills());
     for (name, text) in texts {
         for line in text.lines() {
             for found in named.captures_iter(line) {
@@ -222,6 +225,86 @@ fn every_switchboard_command_a_skill_names_is_one_the_binary_has_and_none_names_
         }
         assert!(!text.contains("tmux "), "{name} still names tmux");
         assert!(!text.contains("TMUX"), "{name} still reads TMUX");
+    }
+}
+
+/// Switchboard's project skills, in `.claude/skills/`, by name with their
+/// SKILL.md: for working on Switchboard itself, so they never ship
+/// (tests/setup.rs checks `switchboard setup` leaves them out too).
+fn project_skills() -> Vec<(String, String)> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills");
+    let mut all: Vec<(String, String)> = fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|e| {
+            let text = fs::read_to_string(e.path().join("SKILL.md")).ok()?;
+            Some((e.file_name().to_string_lossy().into_owned(), text))
+        })
+        .collect();
+    all.sort();
+    all
+}
+
+#[test]
+fn every_project_skill_is_named_after_its_folder_has_a_description_and_never_ships() {
+    let all = project_skills();
+    assert!(all.iter().any(|(name, _)| name == "plan-item"));
+    let shipped = switchboard::setup::skills::shipped();
+    let named = regex::Regex::new(r"`((?:src|assets|tests|docs|\.claude)/[^`\s]+)`").unwrap();
+    for (name, text) in all {
+        let frontmatter = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .map(|(front, _)| front)
+            .unwrap_or_else(|| panic!("{name} starts with its frontmatter"));
+        assert!(
+            frontmatter.lines().any(|l| l == format!("name: {name}")),
+            "{name}'s name is its folder's"
+        );
+        assert!(
+            frontmatter.lines().any(|l| l
+                .strip_prefix("description: ")
+                .is_some_and(|d| !d.trim().is_empty())),
+            "{name} has a description"
+        );
+        assert!(
+            !shipped.contains_key(name.as_str()),
+            "{name} isn't one of the skills the binary carries"
+        );
+        // What it names of the repository is there, so a move in the code
+        // that leaves it behind fails here.
+        for path in named.captures_iter(&text).map(|c| c[1].to_string()) {
+            assert!(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join(&path).exists(),
+                "{name} names {path}, which isn't there"
+            );
+        }
+    }
+}
+
+#[test]
+fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bottom() {
+    let all = project_skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "plan-item").unwrap();
+    assert!(
+        text.lines().any(|l| l == "disable-model-invocation: true"),
+        "it reads your note, so only you start it"
+    );
+    for option in [
+        "**Top of the list**",
+        "**In order of difficulty**",
+        "**Bottom of the list**",
+    ] {
+        assert!(text.contains(option), "{option}");
+    }
+    // The shape the work-a-note mode reads: an open choice is a "Decision
+    // needed" heading in the plan and "(needs a choice" on the item.
+    for shape in [
+        "## Decision needed",
+        "(needs a choice: ",
+        "Plan: [[Plan - <name>]]",
+    ] {
+        assert!(text.contains(shape), "{shape}");
     }
 }
 

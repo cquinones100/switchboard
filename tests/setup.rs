@@ -753,6 +753,16 @@ fn skills_are_written_keeping_one_of_your_own_and_brought_up_to_date() {
         fs::read_link(skills.join("today")).unwrap(),
         Path::new("../../dotfiles/claude/skills/today")
     );
+    for project in fs::read_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills"))
+        .unwrap()
+        .flatten()
+    {
+        let name = project.file_name();
+        assert!(
+            !skills.join(&name).exists(),
+            "the repository's own {name:?} is never written"
+        );
+    }
     assert!(
         skills.join("walkthrough/scripts/record.js").is_file(),
         "the scripts that stay with their skills"
