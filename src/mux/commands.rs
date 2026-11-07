@@ -534,9 +534,9 @@ impl Server {
     }
 
     /// `set -t %3 @agent_state working`: an option on a pane, or with a tab
-    /// target (`-t @2`), on the tab. Without `-t`, an option whose name
-    /// starts `@tab_` or `@agent` (but `@agent_` pane options) goes on the
-    /// caller's tab; any other on its pane.
+    /// target (`-t @2`), on the tab. An option whose name starts `@tab_` or
+    /// `@agent` (but `@agent_` pane options) goes on a tab: the one named,
+    /// else the named pane's, else the caller's; any other on the pane.
     fn cmd_set(&mut self, rest: &[String], caller: Option<PaneId>) -> Result<Reply, String> {
         let a = Args::parse(rest, "t")?;
         let Some(name) = a.rest.first() else {
@@ -605,12 +605,20 @@ impl Server {
         caller: Option<PaneId>,
         name: &str,
     ) -> Result<Target, String> {
-        if let Some(t) = a.value('t') {
-            return self.parse_target(t);
-        }
-        let pane = self.default_pane(caller).ok_or("no pane to act on")?;
         let tab_option = name.starts_with("@tab_")
             || (name.starts_with("@agent") && !name.starts_with("@agent_"));
+        // A pane named for a tab's option means its tab, as without `-t`.
+        if let Some(t) = a.value('t') {
+            return match self.parse_target(t)? {
+                Target::Pane(p) if tab_option => self
+                    .panes
+                    .get(&p)
+                    .map(|slot| Target::Tab(slot.tab))
+                    .ok_or_else(|| "the pane is gone".to_string()),
+                target => Ok(target),
+            };
+        }
+        let pane = self.default_pane(caller).ok_or("no pane to act on")?;
         Ok(if tab_option {
             Target::Tab(self.panes[&pane].tab)
         } else {

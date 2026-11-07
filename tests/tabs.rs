@@ -104,6 +104,13 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
         server.ok(&["show", "-t", &id, "@tab_label"]).trim(),
         "shop:feature-x"
     );
+    // A pane named for a tab's option means its tab, as /walkthrough's
+    // record.js asks for the label of the pane it runs in.
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        server.ok(&["show", "-t", &pane, "@tab_label"]).trim(),
+        "shop:feature-x"
+    );
 
     // A name given to the tab wins, still in the project's color.
     server.ok(&["rename-tab", "-t", &id, "My work"]);

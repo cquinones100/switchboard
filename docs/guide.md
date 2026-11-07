@@ -1769,7 +1769,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 
 ## Commands for scripts
 
-Scripts, hooks and skills act on the running workspace through `switchboard <command>`, much as they once called tmux. These commands never start a server; with none running, they fail. Each acts on a target given as `-t %<pane>` or `-t @<tab>` (as `switchboard list` and `switchboard tabs` show them); without one, on the pane the command runs in (its `SWITCHBOARD_PANE`), else the pane in front on the terminal used last. A tab given where a pane is wanted means its active pane, and a pane given where a tab is wanted means its tab. A directory given with `-c` is read from where the command runs, `~` included.
+Scripts, hooks and skills act on the running workspace through `switchboard <command>`, much as they once called tmux. These commands never start a server; with none running, they fail. Each acts on a target given as `-t %<pane>` or `-t @<tab>` (as `switchboard list` and `switchboard tabs` show them); without one, on the pane the command runs in (its `SWITCHBOARD_PANE`), else the pane in front on the terminal used last. A tab given where a pane is wanted means its active pane, and a pane given where a tab is wanted, or for a tab's option with `show` and `set` (`@tab_label`, `@tab_name` and the other `@tab_` ones, and `@agent`), means its tab. A directory given with `-c` is read from where the command runs, `~` included.
 
 ```text
 switchboard list                         sessions, tabs and panes, as JSON
