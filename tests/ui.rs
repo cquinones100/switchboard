@@ -240,7 +240,7 @@ fn the_palette_renames_the_tab_and_reports_how_it_is_used() {
     client.wait_text("Rename the tab");
     client.type_text("billing\r");
     client.wait_for("the tab renamed", |_| {
-        server.list()["sessions"][0]["tabs"][0]["name"] == "billing"
+        server.list()["sessions"][0]["tabs"][0]["label"] == "billing"
     });
     server.ok(&["press", "habits-report"]);
     let screen = client.wait_text("How you use Switchboard");

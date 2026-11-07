@@ -120,17 +120,16 @@ impl Server {
         });
     }
 
-    /// The tab's own name: the one given with `rename-tab`, else its
-    /// `@tab_name` option (what M-p's "Rename the tab" and `/shape` set).
+    /// The tab's own name: its `@tab_name` option (what M-p's "Rename the
+    /// tab", `/shape` and `/wtn` set, and `/wt` clears), first, as
+    /// tab-label.sh read it, else the one given with `rename-tab`.
     pub fn tab_own_name(&self, tab: TabId) -> Option<&str> {
         let tab = self.tabs.get(&tab)?;
-        if !tab.name.is_empty() {
-            return Some(&tab.name);
-        }
         tab.opts
             .get("@tab_name")
             .map(String::as_str)
             .filter(|n| !n.is_empty())
+            .or_else(|| (!tab.name.is_empty()).then_some(tab.name.as_str()))
     }
 
     /// The tab's label (what tmux kept in `@tab_label`): its own name, else

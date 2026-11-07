@@ -1628,9 +1628,16 @@ impl Server {
                 let Outcome::Picked(p) = outcome else {
                     return;
                 };
+                // The tab's `@tab_name`, as tmux's rename set it, so `/wt`,
+                // `/wtn` and `/shape`, which set and clear that option, still
+                // name the tab after a rename here.
                 if let Some(t) = server.tabs.get_mut(&tab) {
-                    t.name = p.value.clone();
-                    t.opts.remove("@tab_name");
+                    t.name.clear();
+                    if p.value.is_empty() {
+                        t.opts.remove("@tab_name");
+                    } else {
+                        t.opts.insert("@tab_name".into(), p.value.clone());
+                    }
                 }
                 server.name_tab(tab);
                 server.mission_redraw();
