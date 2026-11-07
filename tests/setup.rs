@@ -1723,5 +1723,7 @@ fn respawn_puts_a_program_in_the_pane_s_place_and_tabs_lists_it() {
     assert_eq!(fields[0], "1");
     assert!(fields[1].ends_with(&format!(":{tab}.{new}")), "{tabs:?}");
     assert_eq!(fields[2], "Shaping: a thing");
-    assert_eq!(fields[5], "/tmp");
+    // As the system reads the pane's directory: /private/tmp on a Mac.
+    let tmp = std::fs::canonicalize("/tmp").unwrap();
+    assert_eq!(fields[5], tmp.to_str().unwrap());
 }

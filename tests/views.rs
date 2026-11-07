@@ -502,9 +502,10 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     let id = first["id"].as_str().unwrap();
     server.ok(&["set", "-t", id, "@notes_pane", "1"]);
     server.ok(&["press", "read-link"]);
+    // One of one in the picker, whatever the pane shows beside its box.
     let screen = client.wait_text("the RFC  https://rfc.example/1");
     assert!(
-        !screen.iter().any(|l| l.contains("127.0.0.1:9/docs")),
+        screen.iter().any(|l| l.contains("│   1/1 ")),
         "the note's links alone:\n{}",
         screen.join("\n")
     );

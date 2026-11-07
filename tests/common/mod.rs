@@ -69,6 +69,9 @@ impl TestServer {
         let home = dir.path().join("home");
         let state = dir.path().join("s");
         std::fs::create_dir_all(&home).unwrap();
+        // The login shell's own prompt: a Mac's /etc/profile sets one naming
+        // the computer over PS1, long enough to wrap what a test types.
+        std::fs::write(home.join(".profile"), "PS1='$ '\n").unwrap();
         let mut server = TestServer {
             dir,
             home,
