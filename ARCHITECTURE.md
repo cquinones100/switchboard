@@ -94,7 +94,7 @@ The workspace:
 
 Unit tests sit beside the code. Integration tests are in `tests/`, each a binary of its own: `tests/common` starts a server of the test's own in a temporary home under `/tmp` (short, since a Unix socket's path can't be over 104 bytes on macOS), runs commands against it, and attaches a client that reads what the server draws through a terminal emulator, so a test looks at the screen as a person would. Services are stand-ins on 127.0.0.1, reached by moving their address (`SWITCHBOARD_GITHUB_API`, `SWITCHBOARD_GITHUB_GRAPHQL`, `SWITCHBOARD_LINEAR_API`); Slack, Claude and the desktop's tools are stand-ins on the test's PATH. No test reaches the real server, the real home or a real service.
 
-Debug builds keep only line tables, and the crates no debug info, since every integration test links all of them. CI (`.github/workflows/ci.yml`) checks the formatting, runs clippy with warnings as errors and the tests on Linux and an Apple silicon Mac, and builds for Intel Macs.
+Debug builds keep only line tables, and the crates no debug info, since every integration test links all of them. CI (`.github/workflows/ci.yml`) checks the formatting, runs clippy with warnings as errors (with the `net` feature and without it) and the tests on Linux and an Apple silicon Mac, and builds for Intel Macs.
 
 ## Releases
 
@@ -149,5 +149,4 @@ Decisions left to the maintainer before the rewrite is merged:
 - **The release repository.** `src/update/release.rs`'s `REPO`, `install.sh`'s `REPO` and the line in its opening comment, and README's install line and clone URL all name the repository the rewrite was made in. They change together, to the repository it lands in.
 - **The modifier on Linux.** Every key is Alt, as on a Mac with Option as Alt. Whether Linux, where desktops and terminals take some Alt keys for themselves, gets a choice (a `modifier` setting, Alt by default, was proposed) is undecided.
 - **Clones of the tmux version.** Their hourly update fast-forwards `main` and runs `./setup.sh`, which is gone, leaving their tmux, Neovim and `bin/` links pointing at removed files. Whether they get a last tmux-version commit saying to install the binary, or something else, is undecided. `switchboard setup` already turns a `~/.claude/settings.json` or `~/.claude/CLAUDE.md` linked into such a clone into files of your own, from the clone's history once the files are gone.
-- **CI's clippy without the `net` feature**, once `tests/views.rs` builds without dead-code warnings there.
 - **The review loop over the branch** (`/review-loop`, Claude reviewing where Codex isn't installed), offered before the PR.

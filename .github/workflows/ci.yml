@@ -1,7 +1,8 @@
 # Every push and pull request: the formatting checked, clippy with its
-# warnings as errors, and the tests, on x86_64 Linux and on an Apple silicon
-# Mac, with a build for Intel Macs cross-compiled on the same Mac by its own
-# toolchain. The Rust is the one rust-toolchain.toml pins, installed by
+# warnings as errors (with the net feature and without it, the build that
+# type-checks macOS's paths from Linux), and the tests, on x86_64 Linux and
+# on an Apple silicon Mac, with a build for Intel Macs cross-compiled on the
+# same Mac by its own toolchain. The Rust is the one rust-toolchain.toml pins, installed by
 # rustup as that file says; cargo's registry and each job's target folder
 # are cached, keyed on Cargo.lock and the toolchain.
 
@@ -59,6 +60,8 @@ jobs:
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-test-
       - name: Clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy without the net feature
+        run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
       - name: Tests
         run: cargo test --locked
 
