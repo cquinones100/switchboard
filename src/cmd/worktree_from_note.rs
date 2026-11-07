@@ -584,7 +584,10 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         start: Some(&start),
     };
     worktree::ensure_worktree(&path, &branch, &purpose).map_err(|e| e.to_string())?;
-    worktree::git_ok(&root, &["config", &key, &identity]);
+    // Without it the item looks unclaimed, and would be offered again.
+    if !worktree::git_ok(&root, &["config", &key, &identity]) {
+        return Err(format!("could not record the item in git config ({key})"));
+    }
     worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
 
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
@@ -604,7 +607,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     let mut prompt = format!(
         "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
-         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open.",
+         When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, straight on the default branch, reviewed, where the repository's CLAUDE.md says its work is committed there with no PR, else through a PR it offers to open.",
         file.display()
     );
     if !extra.is_empty() {

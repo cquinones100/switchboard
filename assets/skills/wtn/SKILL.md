@@ -25,7 +25,7 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
 
    Note the item's line number: everything after this goes by it. Whatever else the arguments hold is the text to add.
 
-3. **In a Switchboard pane.** `$SWITCHBOARD_PANE` must be set. If it is not, tell the user to run `wtn --note '<note path>' --item <line>` themselves (`--prompt '<text>'` with text to add) and stop.
+3. **In a Switchboard pane.** `$SWITCHBOARD_PANE` must be set. If it is not, tell the user to run `switchboard worktree-from-note --note '<note path>' --item <line>` themselves (`--prompt '<text>'` with text to add) and stop.
 
 4. **Work still running.** As `/wt`'s step 3: handing the tab over ends this session and everything it started (background commands, subagents, workflows, Monitor watches, scheduled loops). If any is still running, list each in a line and ask whether to stop them and hand over, or wait; on wait, stop here.
 

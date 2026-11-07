@@ -31,7 +31,7 @@ Usually run with no argument: the ticket comes from this session. A Linear ticke
 
    Whichever way it was found, check the ID has the shape `ABC-123`. Anything else is not a ticket ID: say so and stop. The ID is placed into a shell command below, so nothing else may go in.
 
-2. Check that this session is running in a Switchboard pane: `$SWITCHBOARD_PANE` must be set. If it is not, there is no pane to hand over. Tell the user to run `wt <ID>` themselves (`wt <ID> --prompt "<text>"` with text to add) and stop.
+2. Check that this session is running in a Switchboard pane: `$SWITCHBOARD_PANE` must be set. If it is not, there is no pane to hand over. Tell the user to run `switchboard worktree-from-ticket <ID>` themselves (with `--prompt "<text>"` after it for text to add) and stop.
 
 3. Check for work of this session's still running. Handing the tab over ends this session, and everything it started ends with it: background shell commands, subagents, workflows, Monitor watches and scheduled loops (`CronList`). If any is still running, list each in a line and ask with `AskUserQuestion` whether to stop them and hand the tab over, or wait (recommended first when one is close to done). On wait, stop here and say `/wt` can be run again once they finish. On stop, stop each with `TaskStop` (a scheduled loop with `CronDelete`) and go on.
 

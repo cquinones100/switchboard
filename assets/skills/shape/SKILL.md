@@ -42,7 +42,7 @@ Put the one the ticket's state suggests first, marked as recommended: a review l
 
 ## A checklist item from a note
 
-The notes action (through `switchboard shape-batch`) passes one item from a checklist in the user's notes, on one line: the item, `(from my note "<title>")`, then `Details:` with everything indented under it that isn't a checklist item (lines joined by ` / `), then `Sub-items, each its own ticket:` with the unticked checklist items indented under it, numbered, each with its own details in brackets. The details are part of the item's ticket. Each sub-item is a ticket of its own.
+The notes action (M-p's, which splits a note's items as `switchboard shape-batch` does and opens a tab running `switchboard shape` for each) passes one item from a checklist in the user's notes, on one line: the item, `(from my note "<title>")`, then `Details:` with everything indented under it that isn't a checklist item (lines joined by ` / `), then `Sub-items, each its own ticket:` with the unticked checklist items indented under it, numbered, each with its own details in brackets. The details are part of the item's ticket. Each sub-item is a ticket of its own.
 
 When there are sub-items, ask first, before anything else but naming the tab, with `AskUserQuestion`, how to organise them:
 
