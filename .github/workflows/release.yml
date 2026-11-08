@@ -86,6 +86,11 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # The container runs as root over a checkout the runner's user
+          # owns, which git refuses to read, checkout's own exception
+          # having been for its steps alone; build.rs asks git for the
+          # commit `switchboard --version` names.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install the pinned toolchain and the target
         run: |
           rustup toolchain install
