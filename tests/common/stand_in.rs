@@ -55,7 +55,9 @@ pub fn install_all(programs: &[(PathBuf, String)]) {
     ));
     fs::create_dir_all(&staging).unwrap();
     let mut copy = std::process::Command::new("/bin/sh");
-    copy.arg("-c").arg(
+    // The system's own tools, whatever PATH a test gave this process (some
+    // have only their stand-ins on it).
+    copy.env("PATH", "/bin:/usr/bin").arg("-c").arg(
         r#"while [ $# -gt 0 ]; do rm -f "$2" && cp "$1" "$2" && chmod 755 "$2" || exit 1; shift 2; done"#,
     );
     copy.arg("sh");
