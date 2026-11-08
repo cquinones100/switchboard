@@ -167,10 +167,53 @@ fn archive_of(path: &str, bytes: &[u8]) -> Vec<u8> {
 /// What the release's binary is in these tests: a script that says a
 /// version and notes in `$SB_MARK` that its setup ran.
 fn stub(version: &str) -> Vec<u8> {
+    // Named anything but switchboard, it fails as switchboard 0.2.0 did,
+    // reading its own name as a command it doesn't have, so an installer
+    // that runs it under another name is caught here.
     format!(
-        "#!/bin/sh\ncase \"$1\" in\n  --version) echo 'switchboard {version} (stub)' ;;\n  setup) echo \"setup $*\" >> \"$SB_MARK\" ;;\nesac\n"
+        "#!/bin/sh\nname=$(basename \"$0\")\n[ \"$name\" = switchboard ] || {{ echo \"switchboard: no command named $name\" >&2; exit 2; }}\ncase \"$1\" in\n  --version) echo 'switchboard {version} (stub)' ;;\n  setup) echo \"setup $*\" >> \"$SB_MARK\" ;;\nesac\n"
     )
     .into_bytes()
+}
+
+#[test]
+fn the_binary_is_switchboard_under_any_name_but_a_commands() {
+    let dir = TempDir::new("sbn");
+    let version = format!("switchboard {} (", env!("CARGO_PKG_VERSION"));
+    // As an installer runs it once before renaming it into place.
+    for name in [".switchboard.new.123", "switchboard-0.2.0"] {
+        let copy = dir.path().join(name);
+        std::fs::copy(BIN, &copy).unwrap();
+        // A file just written is "busy" on Linux for a moment while a
+        // program another test starts still holds it open until its exec,
+        // as install.rs's spawn_version knows; tried again meanwhile.
+        let out = (0..250)
+            .find_map(|_| match Command::new(&copy).arg("--version").output() {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    thread::sleep(Duration::from_millis(20));
+                    None
+                }
+                other => Some(other.unwrap()),
+            })
+            .expect("the copy never stopped being busy");
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && said.starts_with(&version),
+            "{name}: {said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // A link named after a command still runs that command.
+    let link = dir.path().join("skill-path");
+    std::os::unix::fs::symlink(BIN, &link).unwrap();
+    let out = Command::new(&link).arg("--help").output().unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(said.contains("skill-path"), "{said}");
+    assert!(!said.starts_with("switchboard 0"), "{said}");
 }
 
 /// A copy of the switchboard under test to update, so the one cargo built

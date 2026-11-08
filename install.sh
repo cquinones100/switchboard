@@ -142,15 +142,20 @@ main() {
   [ -n "$binary" ] || fail "$archive has no switchboard in it."
 
   # Copied beside the old one and renamed over it, so a switchboard running
-  # now goes on running, and nothing half-copied is ever in its place.
+  # now goes on running, and nothing half-copied is ever in its place. It
+  # is run once first, named switchboard in a folder of its own there: a
+  # release up to 0.2.0 reads any other name as a command it doesn't have.
   mkdir -p "$bin_dir" || fail "couldn't make $bin_dir."
-  cp "$binary" "$bin_dir/.switchboard.new.$$" || fail "couldn't write in $bin_dir."
-  chmod 755 "$bin_dir/.switchboard.new.$$"
-  if ! "$bin_dir/.switchboard.new.$$" --version >/dev/null 2>&1; then
-    rm -f "$bin_dir/.switchboard.new.$$"
-    fail "the switchboard in $archive won't start on this computer. Nothing was installed."
+  new="$bin_dir/.switchboard.new.$$"
+  mkdir "$new" || fail "couldn't write in $bin_dir."
+  cp "$binary" "$new/switchboard" || { rm -rf "$new"; fail "couldn't write in $bin_dir."; }
+  chmod 755 "$new/switchboard"
+  if ! started=$("$new/switchboard" --version 2>&1); then
+    rm -rf "$new"
+    fail "the switchboard in $archive won't start on this computer ($started). Nothing was installed."
   fi
-  mv -f "$bin_dir/.switchboard.new.$$" "$bin_dir/switchboard"
+  mv -f "$new/switchboard" "$bin_dir/switchboard"
+  rmdir "$new"
   say "Installed $("$bin_dir/switchboard" --version) in $bin_dir."
 
   case ":$PATH:" in

@@ -338,6 +338,14 @@ const OWN_HELP: &[&str] = &[
     "setup",
 ];
 
+/// Whether `name` is a command a link to the binary may be named after: one
+/// of its programs, or a command asked of the running server. A file of any
+/// other name (`.switchboard.new.123`, which an installer runs once before
+/// renaming it into place, or `switchboard-0.2.0`) runs as `switchboard`.
+pub fn is_command(name: &str) -> bool {
+    crate::mux::commands::NAMES.contains(&name) || COMMANDS.iter().any(|c| c.name == name)
+}
+
 pub fn run(name: Option<&str>, args: Vec<String>) -> ExitCode {
     match name {
         None => workspace::main(args),
