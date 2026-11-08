@@ -163,6 +163,80 @@ fn one_worktree_at_a_time_the_second_taking_it_once_the_first_lets_go_and_a_dead
 }
 
 #[test]
+fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
+    let tmp = TempDir::new("land-targets");
+    let home = tmp.path();
+    let repo = repo(home);
+    git(&repo, &["branch", "team/next"]);
+    let one = worktree(home, &repo, home, "one");
+    let two = worktree(home, &repo, home, "two");
+    let three = worktree(home, &repo, home, "three");
+    let four = worktree(home, &repo, home, "four");
+    // As wtn --target records it; naming the default branch is landing on it.
+    git(&repo, &["config", "branch.two.wtnTarget", "team/next"]);
+    git(&repo, &["config", "branch.four.wtnTarget", "main"]);
+
+    assert_eq!(
+        code(&lock(home, &one, &["take"])),
+        0,
+        "the default branch's"
+    );
+    assert_eq!(
+        code(&lock(home, &two, &["take"])),
+        0,
+        "team/next's, taken while the default branch's is held"
+    );
+    assert!(repo.join(".git/land.lock/holder").exists());
+    assert!(repo.join(".git/land.lock.team%2Fnext/holder").exists());
+
+    let behind = lock(home, &three, &["--target", "team/next", "take"]);
+    assert_eq!(
+        code(&behind),
+        3,
+        "an explicit target waits on that branch's"
+    );
+    assert!(
+        stdout(&behind).contains(&format!("held by {}", two.display())),
+        "{}",
+        stdout(&behind)
+    );
+    let places = |out: Output| -> Vec<String> {
+        stdout(&out)
+            .lines()
+            .map(|l| l.split('\t').take(2).collect::<Vec<_>>().join("\t"))
+            .collect()
+    };
+    assert_eq!(
+        places(lock(home, &two, &["queue"])),
+        vec![
+            format!("landing\t{}", two.display()),
+            format!("2nd\t{}", three.display())
+        ]
+    );
+    assert_eq!(
+        places(lock(home, &one, &["queue"])),
+        vec![format!("landing\t{}", one.display())],
+        "the default branch's queue has no one waiting"
+    );
+    assert_eq!(
+        code(&lock(home, &four, &["take"])),
+        3,
+        "a target naming the default branch waits on its lock"
+    );
+
+    assert_eq!(code(&lock(home, &two, &["release"])), 0);
+    assert_eq!(
+        stdout(&lock(home, &one, &["holder"])).trim(),
+        one.to_str().unwrap(),
+        "letting team/next's go leaves the default branch's held"
+    );
+    assert_eq!(
+        code(&lock(home, &three, &["--target", "team/next", "take"])),
+        0
+    );
+}
+
+#[test]
 fn waiters_take_it_in_the_queue_s_order_which_a_take_cant_jump_and_move_reorders() {
     let tmp = TempDir::new("land-queue");
     let home = tmp.path();

@@ -6,6 +6,15 @@
 //! shared by every worktree of it, and so does the queue of the worktrees
 //! waiting for it, which lands them in its order.
 //!
+//! There is one lock and queue per branch landed on, so worktrees landing
+//! onto different branches never wait on each other. The branch is
+//! `--target <branch>` when given, else the worktree's
+//! `branch.<branch>.wtnTarget` (the target autopilot cut it from), else the
+//! default branch. The default branch keeps the names `land.lock` and
+//! `land.queue`, so a landing in flight from before goes on; another has
+//! `land.lock.<branch>` and `land.queue.<branch>`, its `%` written `%25` and
+//! its `/` `%2F` (`file_suffix`), which src/sources/landing.rs reads back.
+//!
 //! ```text
 //! land-lock take      takes it for this worktree: exit 0 taken (or held by
 //!                     this worktree already, so a landing checks it still
@@ -28,10 +37,13 @@
 //!                     shows the landing's step in this tab, the pane's
 //!                     @agent_phase, its loop marked queue-and-clean's
 //!                     (@agent_loop), since a session following the skill by
-//!                     reading it never invokes it; no words clear it
+//!                     reading it never invokes it; no words clear it.
+//!                     `tests failed [words]` and `review blocked [words]`
+//!                     mark a failed stage, which the Landing view draws red
+//!                     with the words after them
 //! land-lock autolanded <short hash> [item]
-//!                     says this tab landed without asking (the work-a-note
-//!                     mode's "Land without asking"): marks the tab
+//!                     says this tab landed without asking (autopilot's
+//!                     "Land without asking"): marks the tab
 //!                     @autopilot_autoland with the hash, which the sidebar
 //!                     shows, and adds the landing to the notifications
 //!                     (autolanded.json in the state directory)
@@ -69,9 +81,18 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [item]";
 
-pub fn main(args: Vec<String>) -> ExitCode {
+pub fn main(mut args: Vec<String>) -> ExitCode {
+    let mut given_target = None;
+    if let Some(at) = args.iter().position(|a| a == "--target") {
+        if at + 1 >= args.len() {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+        given_target = Some(args.remove(at + 1));
+        args.remove(at);
+    }
     let command = args.first().map(String::as_str).unwrap_or("");
     // The phase needs no repository, so it is set before the lookup below:
     // the landing clears it last, after its cleanup has removed the worktree.
@@ -93,7 +114,12 @@ pub fn main(args: Vec<String>) -> ExitCode {
         eprintln!("not in a git repository");
         return ExitCode::from(2);
     };
-    let lock = Lock::new(&common, PathBuf::from(here));
+    let here = PathBuf::from(here);
+    let target = given_target.or_else(|| recorded_target(&here));
+    let suffix = target
+        .filter(|t| crate::tabs::git::default_branch(&common).as_deref() != Some(t.as_str()))
+        .map(|t| file_suffix(&t));
+    let lock = Lock::new(&common, here, suffix.as_deref());
     let result = match command {
         "take" => lock.take(false).map(ExitCode::from),
         "wait" => {
@@ -226,13 +252,19 @@ struct Lock {
 }
 
 impl Lock {
-    fn new(common: &Path, here: PathBuf) -> Lock {
-        let dir = common.join("land.lock");
+    /// `suffix` names a branch other than the default one (`file_suffix`).
+    fn new(common: &Path, here: PathBuf, suffix: Option<&str>) -> Lock {
+        let named = |base: &str| match suffix {
+            Some(s) => format!("{base}.{s}"),
+            None => base.to_string(),
+        };
+        let dir = common.join(named("land.lock"));
+        let queue = named("land.queue");
         Lock {
             holder_file: dir.join("holder"),
             dir,
-            queue_file: common.join("land.queue"),
-            queue_mutex: common.join("land.queue.lock"),
+            queue_mutex: common.join(format!("{queue}.lock")),
+            queue_file: common.join(queue),
             here,
         }
     }
@@ -293,9 +325,16 @@ impl Lock {
             let (next, answer) = change(queue.clone());
             let next = Value::Array(next.unwrap_or(queue));
             if next != read {
-                let temporary = self
-                    .queue_file
-                    .with_extension(format!("queue.{}", std::process::id()));
+                // Named apart from every queue's file, which the server
+                // finds by `land.queue.`.
+                let temporary = self.queue_file.with_file_name(format!(
+                    "land.tmp.{}.{}",
+                    std::process::id(),
+                    self.queue_file
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                ));
                 fs::write(&temporary, util::json_compact(&next))?;
                 fs::rename(&temporary, &self.queue_file)?;
             }
@@ -431,6 +470,29 @@ impl Lock {
     }
 }
 
+/// The branch the worktree at `here` lands on, as `wtn --target` recorded
+/// it, `None` when it named none.
+fn recorded_target(here: &Path) -> Option<String> {
+    let branch = worktree::git_at(here, &["rev-parse", "--abbrev-ref", "HEAD"]).ok()?;
+    worktree::git_at(
+        here,
+        &["config", "--get", &format!("branch.{branch}.wtnTarget")],
+    )
+    .ok()
+    .filter(|t| !t.is_empty())
+}
+
+/// A branch as the end of its lock's and queue's file names: `%` as `%25`
+/// and `/` as `%2F`, so it is one file name and reads back as the branch.
+pub fn file_suffix(branch: &str) -> String {
+    branch.replace('%', "%25").replace('/', "%2F")
+}
+
+/// A file name's end back as its branch, `file_suffix` undone.
+pub fn branch_of_suffix(suffix: &str) -> String {
+    suffix.replace("%2F", "/").replace("%25", "%")
+}
+
 /// An entry's or holder's worktree.
 fn entry_path(entry: &Value) -> Option<&str> {
     entry
@@ -525,6 +587,16 @@ mod tests {
                 "111th"
             ]
         );
+    }
+
+    #[test]
+    fn a_branch_is_one_file_name_and_reads_back() {
+        for branch in ["team/next", "a%2Fb/c", "plain"] {
+            let suffix = file_suffix(branch);
+            assert!(!suffix.contains('/'));
+            assert_eq!(branch_of_suffix(&suffix), branch);
+        }
+        assert_eq!(file_suffix("team/next"), "team%2Fnext");
     }
 
     #[test]

@@ -254,7 +254,7 @@ pub fn grid(tabs: &[TabModel], r: &Rules, cols: usize, card: usize) -> Grid {
     let card = card.max(1);
     let fit = (cols.saturating_sub(BORDER) / card).max(1);
     let mut used = 0;
-    for staged in model::staged(tabs, r) {
+    for staged in model::grouped(tabs, None, r) {
         let n = staged.tabs.len();
         let room = if shelves.is_empty() {
             0
@@ -516,6 +516,96 @@ fn card(
     out
 }
 
+/// A tab's card as UX 2.0 draws it, `w` wide and `h` tall: a rounded box,
+/// its state's mark, number and name on the top edge and its state at the
+/// edge's right end, the last lines of its screen inside in the pane's own
+/// colors, down to a footer line with its branch dimmed and its PR's checks
+/// as marks.
+#[allow(clippy::too_many_arguments)]
+fn card_ux2(
+    tab: &TabModel,
+    screen: Option<&super::Screen>,
+    w: usize,
+    h: usize,
+    chosen: bool,
+    hovered: bool,
+    frame: usize,
+    r: &Rules,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let inner = w.saturating_sub(4);
+    let state = model::badge_state(tab, r);
+    let color = state.color().unwrap_or(theme.dim);
+    let edge = if chosen {
+        fg(ACCENT)
+    } else if hovered {
+        fg(tab.color.map(Color::from).unwrap_or(theme.bright))
+    } else {
+        fg(theme.faint)
+    };
+    let words = text::cut(&model::state_words(tab, r), inner / 3);
+    let right = vec![
+        Span::styled(format!(" {words} "), fg(color)),
+        Span::styled("─╮", edge),
+    ];
+    let index = tab.index.to_string();
+    let room = w.saturating_sub(spans_width(&right) + 2 + 4 + width(&index) + 2);
+    let mut top = vec![
+        Span::styled("╭─", edge),
+        Span::raw(" "),
+        badge(state, frame, theme),
+        Span::raw(" "),
+        Span::styled(index, bold(theme.bright)),
+        Span::raw(" "),
+        Span::styled(text::cut(&tab.name, room), bold(theme.bright)),
+        Span::raw(" "),
+    ];
+    let used = spans_width(&top) + spans_width(&right);
+    top.push(Span::styled("─".repeat(w.saturating_sub(used)), edge));
+    top.extend(right);
+    let mut out = vec![fit(top, w, Style::new())];
+    let side = |line: Vec<Span<'static>>| {
+        let mut row = vec![Span::styled("│", edge), Span::raw(" ")];
+        row.extend(fit(line, inner, Style::new()));
+        row.push(Span::raw(" "));
+        row.push(Span::styled("│", edge));
+        row
+    };
+    // The screen's last lines, down to the footer.
+    let room = h.saturating_sub(3);
+    let lines: &[Vec<Span<'static>>] = screen.map_or(&[], |s| &s.lines);
+    let shown = &lines[lines.len().saturating_sub(room)..];
+    for _ in shown.len()..room {
+        out.push(side(Vec::new()));
+    }
+    for line in shown {
+        out.push(side(line.clone()));
+    }
+    let branch = screen.and_then(|s| s.branch.clone()).unwrap_or_default();
+    let mut footer = vec![Span::styled(branch, fg(theme.dim))];
+    // The PR's checks as marks after the branch, failing first.
+    if let Some(c) = tab.checks {
+        for (mark, n, color) in [
+            ("✗", c.fail, Some(RED)),
+            ("✓", c.pass, Badge::Done.color()),
+            ("◌", c.pending, Badge::Working.color()),
+        ] {
+            if n > 0 {
+                footer.push(Span::styled(
+                    format!("  {mark}{n}"),
+                    fg(color.unwrap_or(theme.dim)),
+                ));
+            }
+        }
+    }
+    out.push(side(footer));
+    out.push(vec![Span::styled(
+        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
+        edge,
+    )]);
+    out
+}
+
 /// The tabs' cards in their stages' boxes, scrolled to keep the chosen card
 /// in view, and where each card's cells are.
 fn cards(
@@ -557,7 +647,15 @@ fn cards(
             .blocks
             .iter()
             .flat_map(|b| b.cards.iter())
-            .map(|&i| card_needs(&snap.tabs[g.order[i]], cw, r, theme))
+            .map(|&i| {
+                let tab = &snap.tabs[g.order[i]];
+                if r.ux2 {
+                    // A screen fills whatever room the card has.
+                    usize::MAX
+                } else {
+                    card_needs(tab, cw, r, theme)
+                }
+            })
             .max()
             .unwrap_or(6);
         let height = shelf.rows * most.min(tallest.max(6));
@@ -591,16 +689,24 @@ fn cards(
                             x + (c + 1) * cw,
                             i,
                         ));
-                        card(
-                            &snap.tabs[g.order[i]],
-                            cw,
-                            h,
-                            i as isize == m.cursor,
-                            m.hover == Some(Spot::Index(i as isize)),
-                            snap.frame,
-                            r,
-                            theme,
-                        )
+                        let tab = &snap.tabs[g.order[i]];
+                        let chosen = i as isize == m.cursor;
+                        let hovered = m.hover == Some(Spot::Index(i as isize));
+                        if r.ux2 {
+                            card_ux2(
+                                tab,
+                                snap.screens.get(&tab.id),
+                                cw,
+                                h,
+                                chosen,
+                                hovered,
+                                snap.frame,
+                                r,
+                                theme,
+                            )
+                        } else {
+                            card(tab, cw, h, chosen, hovered, snap.frame, r, theme)
+                        }
                     })
                     .collect();
                 for line in 0..h {
@@ -811,6 +917,278 @@ fn board(
     }
 }
 
+/// UX 2.0's PR board: a column per place a PR stands, its name bold with a
+/// dim count, each PR a rounded card of its number in the accent color and
+/// its checks' mark on the top edge, its title, then its repository, review
+/// and place in the queue dimmed; the chosen card's edge in the accent color.
+/// Its last line names the tab working on the PR, else its reviewers. On a
+/// screen `PR_SIDE_AT` wide, the chosen PR's description sits beside them.
+#[allow(clippy::too_many_arguments)]
+fn pr_cards(
+    view: &View,
+    columns: &[&str],
+    cols: usize,
+    body: usize,
+    m: &Mission,
+    theme: &Theme,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    const TALL: usize = 5;
+    let side_w = if cols >= PR_SIDE_AT { PR_SIDE_W } else { 0 };
+    let about = usize::try_from(m.cursor)
+        .ok()
+        .and_then(|c| view.data.items.get(c))
+        .filter(|_| side_w > 0)
+        .map(|item| pr_about(item, side_w, body, theme))
+        .unwrap_or_default();
+    let cols = cols - side_w;
+    // As many columns as fit 12 wide; with more, the ones around the chosen
+    // PR's, so h and l bring the rest into sight, an arrow on the first and
+    // last heading saying more are off to that side.
+    let fit_n = (cols / 12).clamp(1, columns.len().max(1));
+    let chosen_col = usize::try_from(m.cursor)
+        .ok()
+        .and_then(|c| view.data.items.get(c))
+        .and_then(|item| {
+            columns
+                .iter()
+                .position(|c| item.group.as_deref() == Some(*c))
+        });
+    let start = chosen_col
+        .map_or(0, |c| c.saturating_sub(fit_n - 1))
+        .min(columns.len().saturating_sub(fit_n));
+    let more_left = start > 0;
+    let more_right = start + fit_n < columns.len();
+    let columns = &columns[start..(start + fit_n).min(columns.len())];
+    let col_w = (cols / columns.len().max(1)).max(12);
+    let w = col_w - 1;
+    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+    for (ci, column) in columns.iter().enumerate() {
+        let arrow_left = if ci == 0 && more_left { " ‹" } else { "" };
+        let arrow_right = if ci + 1 == columns.len() && more_right {
+            " ›"
+        } else {
+            ""
+        };
+        let items: Vec<(usize, &Item)> = view
+            .data
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.group.as_deref() == Some(column))
+            .collect();
+        let mut out = vec![
+            fit(
+                vec![
+                    Span::styled(arrow_left, fg(theme.dim)),
+                    Span::styled(format!(" {column}"), bold(theme.text)),
+                    Span::styled(format!(" {}", items.len()), fg(theme.dim)),
+                    Span::styled(arrow_right, fg(theme.dim)),
+                ],
+                col_w,
+                Style::new(),
+            ),
+            vec![Span::raw(" ".repeat(col_w))],
+        ];
+        let room = body.saturating_sub(2) / TALL;
+        let chosen_at = items.iter().position(|(i, _)| *i as isize == m.cursor);
+        let first = match chosen_at {
+            Some(c) if c >= room => c + 1 - room,
+            _ => 0,
+        };
+        for (shown, (index, item)) in items.iter().enumerate().skip(first).take(room) {
+            let chosen = *index as isize == m.cursor;
+            let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
+            let edge = fg(if chosen {
+                ACCENT
+            } else if lit {
+                theme.text
+            } else {
+                theme.faint
+            });
+            let number = format!(" #{} ", item.data["pr"]["number"]);
+            let (mark, mark_color) = match item.data["checks"].as_str() {
+                Some("success") => ("✓", Badge::Done.color()),
+                Some("failure") => ("✕", Some(RED)),
+                Some("pending") => ("◌", Badge::Working.color()),
+                _ => ("", None),
+            };
+            let mark = if mark.is_empty() {
+                String::new()
+            } else {
+                format!(" {mark} ")
+            };
+            let rule = w.saturating_sub(3 + width(&number) + width(&mark));
+            let title = item
+                .title
+                .split_once(' ')
+                .filter(|(n, _)| n.starts_with('#'))
+                .map_or(item.title.as_str(), |(_, t)| t);
+            let inner = w.saturating_sub(4);
+            let side = |text: String, style: Style| {
+                fit(
+                    vec![
+                        Span::styled("│ ", edge),
+                        Span::styled(text::cut(&text, inner), style),
+                    ],
+                    w - 1,
+                    Style::new(),
+                )
+                .into_iter()
+                .chain([Span::styled("│", edge), Span::raw(" ")])
+                .collect::<Vec<_>>()
+            };
+            out.push(vec![
+                Span::styled("╭", edge),
+                Span::styled(number, bold(ACCENT)),
+                Span::styled("─".repeat(rule), edge),
+                Span::styled(mark, fg(mark_color.unwrap_or(theme.dim))),
+                Span::styled("─╮ ", edge),
+            ]);
+            out.push(side(
+                title.to_string(),
+                if chosen {
+                    bold(theme.bright)
+                } else {
+                    fg(theme.text)
+                },
+            ));
+            let number = item.data["pr"]["number"].as_u64();
+            let tab = m
+                .snap
+                .tabs
+                .iter()
+                .find(|t| number.is_some() && t.pr == number);
+            let queued = item.group.as_deref() == Some("In merge queue");
+            let third = match (tab, item.data["reviewers"].as_str()) {
+                (Some(t), _) => format!("tab {}", t.index),
+                (None, Some(r)) if !queued && !r.is_empty() => r.to_string(),
+                _ => item.data["meta"].as_str().unwrap_or("").to_string(),
+            };
+            out.push(side(third, fg(theme.dim)));
+            out.push(vec![
+                Span::styled(format!("╰{}╯", "─".repeat(w.saturating_sub(2))), edge),
+                Span::raw(" "),
+            ]);
+            out.push(vec![Span::raw(" ".repeat(col_w))]);
+            let y = top_row + 2 + (shown - first) * TALL;
+            for dy in 0..TALL - 1 {
+                hits.push(HitBox {
+                    y: (y + dy) as u16,
+                    x0: (ci * col_w) as u16,
+                    x1: (ci * col_w + w).saturating_sub(1) as u16,
+                    spot: Spot::Index(*index as isize),
+                });
+            }
+        }
+        if items.is_empty() {
+            out.push(fit(
+                vec![Span::styled(" none", fg(theme.faint))],
+                col_w,
+                Style::new(),
+            ));
+        }
+        drawn.push(out);
+    }
+    for i in 0..body {
+        let mut spans = Vec::new();
+        for c in &drawn {
+            spans.extend(
+                c.get(i)
+                    .cloned()
+                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
+            );
+        }
+        let mut spans = fit(spans, cols, Style::new());
+        if side_w > 0 {
+            spans.push(Span::styled("│ ", fg(theme.faint)));
+            spans.extend(fit(
+                about.get(i).cloned().unwrap_or_default(),
+                side_w - 2,
+                Style::new(),
+            ));
+        }
+        lines.push(Line { spans, fill: None });
+    }
+}
+
+/// How wide a screen shows the chosen PR's description beside the board,
+/// and how many columns it takes there.
+const PR_SIDE_AT: usize = 140;
+const PR_SIDE_W: usize = 50;
+
+/// The chosen PR's description, as the board draws it beside the columns:
+/// its number and title bold, a dim line of its author, commits, lines
+/// changed and checks, a rule, then its body as plain text wrapped to fit.
+fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let inner = side_w.saturating_sub(3);
+    let d = &item.data;
+    let mut facts: Vec<String> = Vec::new();
+    if let Some(a) = d["author"].as_str().filter(|a| !a.is_empty()) {
+        facts.push(a.to_string());
+    }
+    if let Some(n) = d["commits"].as_u64() {
+        facts.push(format!("{n} commit{}", if n == 1 { "" } else { "s" }));
+    }
+    if let (Some(a), Some(r)) = (d["additions"].as_u64(), d["deletions"].as_u64()) {
+        facts.push(format!("+{a} −{r}"));
+    }
+    let (mark, color) = match d["checks"].as_str() {
+        Some("success") => ("✓", Badge::Done.color()),
+        Some("failure") => ("✕", Some(RED)),
+        Some("pending") => ("◌", Badge::Working.color()),
+        _ => ("", None),
+    };
+    let mut fact_line = vec![Span::styled(facts.join(" · "), fg(theme.dim))];
+    if !mark.is_empty() {
+        if !facts.is_empty() {
+            fact_line.push(Span::styled(" · ", fg(theme.dim)));
+        }
+        fact_line.push(Span::styled(mark, fg(color.unwrap_or(theme.dim))));
+        fact_line.push(Span::styled(" checks", fg(theme.dim)));
+    }
+    let mut out = vec![
+        vec![Span::styled(
+            text::cut(&item.title, inner),
+            bold(theme.text),
+        )],
+        fact_line,
+        vec![Span::styled("─".repeat(inner), fg(theme.faint))],
+    ];
+    let mut blank = true;
+    for raw in d["body"].as_str().unwrap_or("").lines() {
+        let line = raw.trim_end();
+        let heading = line.trim_start_matches('#');
+        let is_heading = heading.len() < line.len() && heading.starts_with(' ');
+        if line.trim().is_empty() {
+            if !blank {
+                out.push(Vec::new());
+            }
+            blank = true;
+            continue;
+        }
+        if is_heading && !blank {
+            out.push(Vec::new());
+        }
+        blank = false;
+        let style = if is_heading {
+            bold(theme.text)
+        } else {
+            fg(theme.text)
+        };
+        for w in text::wrap(if is_heading { heading.trim() } else { line }, inner) {
+            out.push(vec![Span::styled(w, style)]);
+        }
+        if out.len() >= body {
+            break;
+        }
+    }
+    out.truncate(body);
+    out
+}
+
 /// When an item happened, shortly, for the column at a row's end; nothing
 /// for one still to come (a meeting), whose time its detail says.
 fn when(item: &Item, now_secs: i64) -> String {
@@ -882,6 +1260,14 @@ fn list(
                 );
             }
         }
+        return;
+    }
+    if snap.rules.ux2 && view.id == ViewId::Landing && cols >= STAGES_AT + 6 * STAGE_STEP {
+        stage_rows(view, cols, rows, m, top_row, lines, hits);
+        return;
+    }
+    if snap.rules.ux2 && view.id == ViewId::Autopilot && cols >= PILOT_AT + 8 * PILOT_STEP {
+        pilot_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
     let table = view.table();
@@ -1106,6 +1492,420 @@ fn list(
         row.spans
             .extend(table_row(&data.footer, &|_| bold(theme.text)));
         lines.push(row.line(cols, None));
+    }
+}
+
+/// UX 2.0's Landing view: where the stage cells start, how wide each is and
+/// how far apart they start.
+const STAGES_AT: usize = 40;
+const STAGE_WIDTH: usize = 13;
+const STAGE_STEP: usize = 14;
+const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
+/// A merge queue's stages, as its rows are drawn.
+const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
+
+/// How far a stage of a landing has got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    Done,
+    Running,
+    Waiting,
+    Queued,
+    Failed,
+    /// Waiting on you (Autopilot's view).
+    Asks,
+}
+
+impl Stage {
+    /// Its text's color, its run's background and whether the text is bold.
+    fn look(self, theme: &Theme) -> (Color, Color, bool) {
+        match self {
+            Stage::Done => (Color::Indexed(114), Color::Indexed(22), false),
+            Stage::Running => (Color::Indexed(75), Color::Indexed(17), true),
+            Stage::Waiting => (theme.dim, theme.panel, false),
+            Stage::Queued => (Color::Indexed(176), Color::Indexed(53), false),
+            Stage::Failed => (Color::Indexed(210), Color::Indexed(52), true),
+            Stage::Asks => (Color::Indexed(221), Color::Indexed(58), true),
+        }
+    }
+
+    /// A stage by the name src/autopilot/view.rs gives its look.
+    fn named(look: &str) -> Stage {
+        match look {
+            "done" => Stage::Done,
+            "running" => Stage::Running,
+            "queued" => Stage::Queued,
+            "failed" => Stage::Failed,
+            "asks" => Stage::Asks,
+            _ => Stage::Waiting,
+        }
+    }
+}
+
+/// A landing's six stages from what the view holds of it (`data.landing`):
+/// a worktree is in the landing queue only once its tests, review and leak
+/// check are done (queue-and-clean takes the lock after them), so those are
+/// done; a waiter is queued for the lock at its place; the one holding it
+/// is at the step its phase names, a failure included (`tests failed …`,
+/// `review blocked …`, the words after it shown in the cell). Neither the
+/// phase nor the landing's files hold a test count or the review's rounds,
+/// so a done cell says only "passed" or "clean".
+fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
+    let done = |s: &str| (Stage::Done, format!("✓ {s}"));
+    let running = |s: &str| (Stage::Running, s.to_string());
+    let waiting = || (Stage::Waiting, "waiting".to_string());
+    let mut out = [
+        done("passed"),
+        done("clean"),
+        done("none"),
+        waiting(),
+        waiting(),
+        waiting(),
+    ];
+    if landing.get("holding").and_then(serde_json::Value::as_bool) != Some(true) {
+        let place = landing
+            .get("place")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        out[3] = (Stage::Queued, ordinal(place));
+        return out;
+    }
+    out[3] = done("held");
+    let phase = landing
+        .get("phase")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let failed = |rest: &str, or: &str| {
+        let rest = rest.trim_start_matches([':', ' ']).trim();
+        (
+            Stage::Failed,
+            format!("✕ {}", if rest.is_empty() { or } else { rest }),
+        )
+    };
+    if let Some(rest) = phase.strip_prefix("tests failed") {
+        out[0] = failed(rest, "failed");
+    } else if let Some(rest) = phase.strip_prefix("review blocked") {
+        out[1] = failed(rest, "blocked");
+    } else if phase.contains("testing") {
+        out[0] = running("testing…");
+    } else if phase.starts_with("reviewing") {
+        out[1] = running("reviewing…");
+    } else if phase.starts_with("pushing") {
+        out[4] = running("pushing…");
+    } else if phase.starts_with("applying") {
+        out[4] = done("pushed");
+        out[5] = running("applying…");
+    } else if phase.starts_with("cleaning") {
+        out[4] = done("pushed");
+        out[5] = done("applied");
+    }
+    out
+}
+
+/// A merge queue row's stages from what the view holds of it
+/// (`data.queue.state` and `position`): GitHub lets a PR into the queue only
+/// once its checks pass and it is approved, so those are done; the queue
+/// cell is its place, its checks running, or a failure when it can't merge;
+/// merging is the merge stage running. The deploy test waits, since the row
+/// leaves the queue once it merges.
+fn queue_stages(queue: &serde_json::Value) -> [(Stage, String); 5] {
+    let state = queue
+        .get("state")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let position = queue
+        .get("position")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let waiting = || (Stage::Waiting, "waiting".to_string());
+    let mut out = [
+        (Stage::Done, "✓ CI".to_string()),
+        (Stage::Done, "✓ approved".to_string()),
+        (
+            Stage::Queued,
+            format!("{} in queue", ordinal(position.max(1))),
+        ),
+        waiting(),
+        waiting(),
+    ];
+    match state {
+        "AWAITING_CHECKS" => out[2] = (Stage::Running, "checks…".into()),
+        "UNMERGEABLE" => out[2] = (Stage::Failed, "✕ can't merge".into()),
+        "MERGEABLE" => out[2] = (Stage::Done, "✓ ready".into()),
+        "LOCKED" => {
+            out[2] = (Stage::Done, "✓ ready".into());
+            out[3] = (Stage::Running, "merging…".into());
+        }
+        _ => {}
+    }
+    out
+}
+
+/// `n` with its English ordinal suffix: 1st, 2nd, 11th.
+fn ordinal(n: u64) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, m) if m != 11 => "st",
+        (2, m) if m != 12 => "nd",
+        (3, m) if m != 13 => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
+}
+
+/// `text` centered in `w` columns.
+fn centered(text: &str, w: usize) -> String {
+    let text = text::cut(text, w);
+    let left = w.saturating_sub(width(&text)) / 2;
+    let right = w.saturating_sub(width(&text) + left);
+    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+}
+
+/// UX 2.0's Landing view: each repository's landing queue under its
+/// heading and the stages' names, each worktree two lines, its name bold
+/// with a cell per stage, then a dim note of where it is under it; the
+/// merge queue's rows one line each, as before.
+fn stage_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let items = &view.data.items;
+    let room = (rows.saturating_sub(1 + lines.len()) / 2).max(1);
+    let cursor = m.cursor.max(0) as usize;
+    let first = (cursor + 1).saturating_sub(room);
+    let name_w = STAGES_AT.saturating_sub(4);
+    for (index, item) in items.iter().enumerate().skip(first).take(room) {
+        let chosen = index == cursor && m.cursor >= 0;
+        let fill = if chosen {
+            Some(theme.highlight)
+        } else if m.hover == Some(Spot::Index(index as isize)) {
+            Some(theme.panel)
+        } else {
+            None
+        };
+        let mut hit = |lines: &Vec<Line>| {
+            hits.push(HitBox {
+                y: (top_row + lines.len()) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Index(index as isize),
+            });
+        };
+        if views::is_header(item) {
+            hit(lines);
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let mut row = Row::default();
+            row.put(format!(" {}", item.title), bold(theme.bright))
+                .put(format!("   {count}"), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            let names: &[&str] = if item.id.ends_with(":direct") {
+                &STAGES
+            } else if item.id.ends_with(":queue") {
+                &QUEUE_STAGES
+            } else {
+                &[]
+            };
+            if !names.is_empty() {
+                let first = if names.len() == STAGES.len() {
+                    " worktree"
+                } else {
+                    " pull request"
+                };
+                let mut heads = Row::default();
+                heads.put(text::pad(first, STAGES_AT), fg(theme.dim));
+                for name in names {
+                    heads
+                        .put(centered(name, STAGE_WIDTH), fg(theme.dim))
+                        .put(" ", Style::new());
+                }
+                lines.push(heads.line(cols, None));
+            }
+            continue;
+        }
+        let pointer = if chosen { "▌" } else { " " };
+        let stages: Vec<(Stage, String)> =
+            if let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) {
+                landing_stages(landing).to_vec()
+            } else if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
+                queue_stages(queue).to_vec()
+            } else {
+                Vec::new()
+            };
+        if stages.is_empty() {
+            hit(lines);
+            let mut row = Row::default();
+            row.put(pointer, fg(ACCENT))
+                .put(" ", Style::new())
+                .put(item.title.clone(), fg(theme.text))
+                .put("  ", Style::new())
+                .put(item.detail.clone(), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            continue;
+        }
+        let name = item
+            .title
+            .split_once(". ")
+            .map_or(item.title.as_str(), |(_, n)| n);
+        hit(lines);
+        let mut top = Row::default();
+        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
+            text::pad(&text::cut(name, name_w), STAGES_AT - 2),
+            bold(theme.bright),
+        );
+        for (stage, label) in stages {
+            let (color, bg, strong) = stage.look(theme);
+            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
+            top.put(centered(&label, STAGE_WIDTH), style)
+                .put(" ", Style::new());
+        }
+        lines.push(top.line(cols, fill));
+        hit(lines);
+        let mut under = Row::default();
+        under
+            .put(pointer, fg(ACCENT))
+            .put(" ", Style::new())
+            .put(text::cut(&item.detail, name_w), fg(theme.dim));
+        lines.push(under.line(cols, fill));
+    }
+}
+
+/// UX 2.0's Autopilot view: where its eight stage cells start, how wide
+/// each is and how far apart they start, narrower than Landing's so the
+/// eight fit the main area beside the sidebar.
+const PILOT_AT: usize = 34;
+const PILOT_WIDTH: usize = 10;
+const PILOT_STEP: usize = 11;
+
+/// UX 2.0's Autopilot view (src/autopilot/view.rs): the note bold with its
+/// slots, cap, landing and pause dim beside it, the stages' names, each tab
+/// it opened two lines (its item bold with a cell per stage, then a dim
+/// note of where it is), then the next items and the skipped ones under
+/// headings of their own, a line each.
+fn pilot_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    let items = &view.data.items;
+    let room = (rows.saturating_sub(3 + lines.len()) / 2).max(1);
+    let cursor = m.cursor.max(0) as usize;
+    let first = (cursor + 1).saturating_sub(room);
+    let name_w = PILOT_AT.saturating_sub(4);
+    for (index, item) in items.iter().enumerate() {
+        let summary = item
+            .data
+            .get("summary")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        if index < first && !summary {
+            continue;
+        }
+        let chosen = index == cursor && m.cursor >= 0;
+        let fill = if chosen {
+            Some(theme.highlight)
+        } else if m.hover == Some(Spot::Index(index as isize)) {
+            Some(theme.panel)
+        } else {
+            None
+        };
+        let mut hit = |lines: &Vec<Line>| {
+            hits.push(HitBox {
+                y: (top_row + lines.len()) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Index(index as isize),
+            });
+        };
+        if summary {
+            let mut row = Row::default();
+            row.put(" AUTO ", bold(ACCENT))
+                .put(item.title.clone(), bold(theme.bright))
+                .put(format!("   {}", item.detail), fg(theme.dim));
+            hit(lines);
+            lines.push(row.line(cols, fill));
+            let mut heads = Row::default();
+            heads.put(text::pad(" item", PILOT_AT), fg(theme.dim));
+            for name in crate::autopilot::view::STAGES {
+                heads
+                    .put(centered(name, PILOT_WIDTH), fg(theme.dim))
+                    .put(" ", Style::new());
+            }
+            lines.push(heads.line(cols, None));
+            continue;
+        }
+        if views::is_header(item) {
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let mut row = Row::default();
+            row.put(format!(" {}", item.title), bold(theme.bright))
+                .put(format!("   {count}"), fg(theme.dim));
+            lines.push(row.line(cols, None));
+            continue;
+        }
+        let pointer = if chosen { "▌" } else { " " };
+        let stages = item
+            .data
+            .pointer("/pilot/stages")
+            .and_then(serde_json::Value::as_array);
+        let Some(stages) = stages else {
+            hit(lines);
+            let mut row = Row::default();
+            row.put(pointer, fg(ACCENT))
+                .put(" ", Style::new())
+                .put(item.title.clone(), fg(theme.text))
+                .put("  ", Style::new())
+                .put(item.detail.clone(), fg(theme.dim));
+            lines.push(row.line(cols, fill));
+            continue;
+        };
+        hit(lines);
+        let mut top = Row::default();
+        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
+            text::pad(&text::cut(&item.title, name_w), PILOT_AT - 2),
+            bold(theme.bright),
+        );
+        for cell in stages {
+            let look = cell
+                .get(0)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let words = cell
+                .get(1)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let (color, bg, strong) = Stage::named(look).look(theme);
+            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
+            top.put(centered(words, PILOT_WIDTH), style)
+                .put(" ", Style::new());
+        }
+        lines.push(top.line(cols, fill));
+        hit(lines);
+        let mut under = Row::default();
+        under
+            .put(pointer, fg(ACCENT))
+            .put(" ", Style::new())
+            .put(text::cut(&item.detail, name_w), fg(theme.dim));
+        lines.push(under.line(cols, fill));
+        if lines.len() + 2 > rows {
+            break;
+        }
     }
 }
 
@@ -1368,7 +2168,11 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     }
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
-                    board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    if snap.rules.ux2 && v.id == ViewId::Prs {
+                        pr_cards(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    } else {
+                        board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    }
                 }
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
@@ -1379,6 +2183,7 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     now_ms: snap.now_secs * 1000,
                     theme,
                     top_row: lines.len(),
+                    ux2: crate::settings::is_on("ux2"),
                 };
                 let (day, at) = super::calendar::day(v, &look);
                 lines.extend(day);
@@ -1438,6 +2243,7 @@ mod tests {
             now_secs: rules().now_secs(),
             tz: jiff::tz::TimeZone::UTC,
             frame: 0,
+            screens: Default::default(),
             pilot: None,
         };
         m
@@ -1624,6 +2430,81 @@ mod tests {
         );
     }
 
+    #[test]
+    fn with_ux2_a_card_shows_its_screen_its_state_on_the_edge_and_its_branch() {
+        let mut working = tab(3, "M-d uncommitted");
+        working.state = TabState::Working;
+        let mut m = mission(vec![working], Vec::new());
+        m.snap.rules.ux2 = true;
+        m.snap.screens.insert(
+            TabId(3),
+            crate::mission::Screen {
+                lines: (1..=40)
+                    .map(|n| vec![Span::raw(format!("line {n}"))])
+                    .collect(),
+                branch: Some("md-uncommitted".into()),
+            },
+        );
+        let (lines, _) = screen(&m, 3 * 56, 30);
+        let text = texts(&lines);
+        let top = text
+            .iter()
+            .position(|l| l.contains("3 M-d uncommitted"))
+            .unwrap();
+        assert!(text[top].contains(" working"), "{text:#?}");
+        assert!(text[top].trim_end().ends_with("─╮│"), "{text:#?}");
+        let bottom = top + text[top..].iter().position(|l| l.contains("╰")).unwrap();
+        // The screen's last line just above the footer with the branch.
+        assert!(text[bottom - 1].contains("md-uncommitted"), "{text:#?}");
+        assert!(text[bottom - 2].contains("line 40"), "{text:#?}");
+        assert!(!text.iter().any(|l| l.contains("line 1 ")));
+    }
+
+    #[test]
+    fn with_ux2_a_card_keeps_its_screens_colors_and_shows_its_checks_after_the_branch() {
+        let mut working = tab(3, "colors");
+        working.state = TabState::Working;
+        working.checks = Some(crate::facts::Checks {
+            pass: 12,
+            fail: 1,
+            pending: 0,
+        });
+        let mut m = mission(vec![working], Vec::new());
+        m.snap.rules.ux2 = true;
+        let lit = Style::new()
+            .fg(Color::Indexed(2))
+            .add_modifier(Modifier::BOLD);
+        m.snap.screens.insert(
+            TabId(3),
+            crate::mission::Screen {
+                lines: vec![vec![Span::raw("$ "), Span::styled("passed", lit)]],
+                branch: Some("colors-branch".into()),
+            },
+        );
+        let (lines, _) = screen(&m, 3 * 56, 30);
+        let text = texts(&lines);
+        let footer = text
+            .iter()
+            .position(|l| l.contains("colors-branch"))
+            .unwrap();
+        assert!(text[footer].contains("colors-branch  ✗1  ✓12"), "{text:#?}");
+        assert!(!text[footer].contains('◌'), "{text:#?}");
+        let screen_line = &lines[footer - 1];
+        let passed = screen_line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("passed"))
+            .unwrap();
+        assert_eq!(passed.style.fg, Some(Color::Indexed(2)));
+        assert!(passed.style.add_modifier.contains(Modifier::BOLD));
+        let fail = screen_line_span(&lines[footer], "✗1");
+        assert_eq!(fail.style.fg, Some(RED));
+    }
+
+    fn screen_line_span<'a>(line: &'a Line, has: &str) -> &'a Span<'static> {
+        line.spans.iter().find(|s| s.content.contains(has)).unwrap()
+    }
+
     // test/tmux-sidebar.test.js's "while a note is worked continuously,
     // mission control's Tabs view leads with its line, which the cursor and
     // a click reach above the cards".
@@ -1643,6 +2524,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: false,
+            target: String::new(),
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);
@@ -1786,6 +2668,164 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_the_pr_board_draws_each_pr_as_a_card() {
+        let item = |n: u32, column: &str, checks: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .detail("w")
+                .group(column)
+                .data(serde_json::json!({
+                    "pr": { "number": n }, "checks": checks, "meta": "w · queue 1",
+                }))
+        };
+        let items = vec![
+            item(1, "In review", "success"),
+            item(2, "In review", "failure"),
+            item(3, "Approved", "pending"),
+        ];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let (lines, hits) = screen(&m, 150, 24);
+        let text = texts(&lines);
+        assert!(
+            text[1].contains("In review 2") && text[1].contains("Approved 1"),
+            "{}",
+            text[1]
+        );
+        assert!(
+            text[3].contains("╭ #1 ─") && text[3].contains(" ✓ ─╮") && text[3].contains(" ◌ ─╮"),
+            "{}",
+            text[3]
+        );
+        assert!(
+            text[4].contains("│ PR 1") && !text[4].contains("#1"),
+            "{}",
+            text[4]
+        );
+        assert!(text[5].contains("│ w · queue 1"), "{}", text[5]);
+        assert!(text[6].contains("╰─"), "{}", text[6]);
+        assert!(
+            text[8].contains("#2") && text[8].contains(" ✕ "),
+            "{}",
+            text[8]
+        );
+        let edge = lines[8].spans.iter().find(|s| s.content == "╭").unwrap();
+        assert_eq!(edge.style.fg, Some(ACCENT), "the chosen card's edge");
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 9));
+    }
+
+    #[test]
+    fn with_ux2_the_pr_board_names_reviewers_or_the_tab_and_shows_the_chosen_pr_beside_it() {
+        let item = |n: u32, column: &str, reviewers: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(column)
+                .data(serde_json::json!({
+                    "pr": { "number": n }, "checks": "success", "meta": "w",
+                    "reviewers": reviewers, "author": "ana", "commits": 3,
+                    "additions": 214, "deletions": 88,
+                    "body": "## Summary\nLay the Settings view out in two columns.",
+                }))
+        };
+        let items = vec![
+            item(1, "In review", "sam, ben"),
+            item(2, "Changes asked", "ben"),
+        ];
+        let mut working = tab(3, "settings");
+        working.pr = Some(1);
+        let mut m = mission(vec![working], vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let columns = crate::sources::prboard::columns(true);
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        let view = &m.snap.views[0];
+        pr_cards(
+            view,
+            columns,
+            160,
+            20,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut lines,
+            &mut hits,
+        );
+        let text = texts(&lines);
+        assert!(text[0].contains("Changes asked 1"), "{}", text[0]);
+        assert!(text[4].contains("│ tab 3"), "{}", text[4]);
+        assert!(text[4].contains("│ ben"), "the reviewers: {}", text[4]);
+        assert!(text[0].contains("│ #2 PR 2"), "{}", text[0]);
+        assert!(
+            text[1].contains("ana · 3 commits · +214 −88 · ✓ checks"),
+            "{}",
+            text[1]
+        );
+        assert!(text[3].contains("│ Summary") && text[4].contains("Lay the Settings"));
+        let (narrow, _) = {
+            let mut l = Vec::new();
+            let mut h = Vec::new();
+            pr_cards(view, columns, 120, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
+            (texts(&l), h)
+        };
+        assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+    }
+
+    #[test]
+    fn with_ux2_a_narrow_pr_board_shows_the_chosen_pr_s_column() {
+        let item = |n: u32, column: &str| {
+            Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(column)
+                .data(serde_json::json!({ "pr": { "number": n } }))
+        };
+        let columns = crate::sources::prboard::columns(true);
+        let last = *columns.last().unwrap();
+        let items = vec![item(1, columns[0]), item(2, last)];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        let draw = |m: &Mission| {
+            let (mut l, mut h) = (Vec::new(), Vec::new());
+            pr_cards(
+                &m.snap.views[0],
+                columns,
+                55,
+                20,
+                m,
+                &Theme::DARK,
+                0,
+                &mut l,
+                &mut h,
+            );
+            (texts(&l), h)
+        };
+        // The first PR chosen: the columns from the first, more to the right.
+        m.cursor = 0;
+        let (text, _) = draw(&m);
+        assert!(
+            text[0].contains(columns[0]) && text[0].ends_with("›"),
+            "{}",
+            text[0]
+        );
+        assert!(!text[0].contains(last), "{}", text[0]);
+        // The last column's PR chosen: its column in sight, its card drawn
+        // and clickable inside the board, more to the left.
+        m.cursor = 1;
+        let (text, hits) = draw(&m);
+        assert!(
+            text[0].contains(last) && text[0].contains("‹"),
+            "{}",
+            text[0]
+        );
+        assert!(text.iter().any(|l| l.contains("#2")), "{text:?}");
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Index(1) && usize::from(h.x1) < 55),
+            "{hits:?}"
+        );
+    }
+
+    #[test]
     fn a_table_heads_its_columns_and_totals_them_at_the_bottom() {
         let mut row = Item::new("@1", "1 build").target(crate::items::Target::Tab(TabId(1)));
         row.cells = vec!["1 build".into(), "93.0".into(), "1.2G".into(), "14".into()];
@@ -1803,5 +2843,219 @@ mod tests {
         );
         assert!(text[2].contains("1 build") && text[2].contains("93.0"));
         assert!(text[10].contains("All tabs"), "{text:#?}");
+    }
+
+    #[test]
+    fn with_ux2_autopilot_has_a_view_of_its_tabs_stages_then_what_it_opens_next() {
+        use crate::autopilot::view::{Row, items};
+        let summary = crate::autopilot::Summary {
+            target: String::new(),
+            note: "Switchboard".into(),
+            busy: 1,
+            open: 2,
+            slots: 2,
+            cap: 5,
+            next: "Third".into(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 1,
+            spend_limit: 0.0,
+            lands_alone: true,
+        };
+        let row = |tab: u32, item: &str, state: TabState| Row {
+            tab: TabId(tab),
+            index: tab as usize,
+            item: item.into(),
+            state,
+            was_in: true,
+            loop_skill: None,
+            phase: None,
+            landing: None,
+            left: false,
+            autoland: false,
+        };
+        let mut landing = row(3, "Give notes stable IDs", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        landing.phase = Some("pushing".into());
+        landing.landing = Some(serde_json::json!({ "holding": true, "phase": "pushing" }));
+        let rows = vec![landing, row(4, "Port the PR board", TabState::Waiting)];
+        let list = items(
+            &summary,
+            "",
+            &rows,
+            &["Third".into(), "Fourth".into()],
+            &["Old idea".into()],
+        );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let (lines, _) = screen(&m, 125, 30);
+        let text = texts(&lines);
+        let at = text
+            .iter()
+            .position(|l| l.contains("AUTO Switchboard"))
+            .unwrap();
+        assert!(
+            text[at].contains("1 of 2 working · 2 of 5 open · lands without asking"),
+            "{}",
+            text[at]
+        );
+        let heads = &text[at + 1];
+        assert!(
+            heads.contains("opened") && heads.contains("leak check") && heads.contains("closed"),
+            "{heads}"
+        );
+        let first = &text[at + 2];
+        assert!(
+            first.contains("Give notes stable IDs")
+                && first.contains("✓ tab 3")
+                && first.contains("✓ held")
+                && first.contains("pushing…"),
+            "{first}"
+        );
+        assert!(text[at + 3].contains("tab 3 · pushing"), "{}", text[at + 3]);
+        // Waiting on you is a yellow cell.
+        let asks = lines[at + 4]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("asks you"))
+            .unwrap();
+        assert_eq!(asks.style.bg, Some(Color::Indexed(58)));
+        let next = text
+            .iter()
+            .position(|l| l.contains("Next, in the order"))
+            .unwrap();
+        assert!(text[next + 1].contains("1. Third"), "{}", text[next + 1]);
+        assert!(text[next + 2].contains("2. Fourth"), "{}", text[next + 2]);
+        assert!(text[next + 3].contains("Skipped"), "{}", text[next + 3]);
+        assert!(
+            text[next + 4].contains("Old idea") && text[next + 4].contains("skipped by you"),
+            "{}",
+            text[next + 4]
+        );
+    }
+
+    #[test]
+    fn with_ux2_a_landing_is_a_row_of_stage_cells_with_its_note_under_its_name() {
+        let landing = |n: &str, holding: bool, place: Option<u64>, phase: Option<&str>| {
+            Item::new(format!("land:/w/{n}"), format!("1. {n}"))
+                .detail(if holding {
+                    "landing · pushing · tab 3"
+                } else {
+                    "waiting · tab 4"
+                })
+                .data(serde_json::json!({ "landing": {
+                    "holding": holding, "place": place, "phase": phase,
+                } }))
+        };
+        let items = vec![
+            views::header("/r:direct", "switchboard · straight to main", 2),
+            landing("note-stable-ids", true, None, Some("pushing")),
+            landing("note-benchmark", false, Some(2), None),
+        ];
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        let (lines, _) = screen(&m, 140, 20);
+        let text = texts(&lines);
+        let at = text
+            .iter()
+            .position(|l| l.contains("switchboard · straight to main"))
+            .unwrap();
+        let heads = &text[at + 1];
+        assert!(
+            heads.contains("worktree") && heads.contains("leak check") && heads.contains("applied"),
+            "{heads}"
+        );
+        let holder = &text[at + 2];
+        assert!(
+            holder.contains("note-stable-ids") && !holder.contains("1. "),
+            "{holder}"
+        );
+        assert!(
+            holder.contains("✓ held") && holder.contains("pushing…") && holder.contains("waiting"),
+            "{holder}"
+        );
+        assert!(
+            text[at + 3].contains("landing · pushing · tab 3"),
+            "{}",
+            text[at + 3]
+        );
+        assert!(text[at + 4].contains("2nd"), "{}", text[at + 4]);
+        // Each cell is a run of its stage's background: pushing is blue.
+        let pushing = lines[at + 2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("pushing…"))
+            .unwrap();
+        assert_eq!(pushing.style.bg, Some(Color::Indexed(17)));
+        // A failed stage is a red cell with ✕ and the phase's words.
+        let failing = Item::new("land:/w/x", "1. note-full-titles").data(serde_json::json!({
+            "landing": { "holding": true, "phase": "tests failed 2 of 401" },
+        }));
+        let queued = |state: &str| {
+            Item::new("https://pr/2031", "1. #2031 settings page").data(serde_json::json!({
+                "queue": { "state": state, "position": 3 },
+            }))
+        };
+        let more = vec![
+            views::header("/r:direct", "switchboard · straight to main", 1),
+            failing,
+            views::header("/r:queue", "web-app · merge queue", 2),
+            queued("QUEUED"),
+            queued("UNMERGEABLE"),
+        ];
+        let mut f = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", more)],
+        );
+        f.snap.rules.ux2 = true;
+        f.view = 1;
+        let (flines, _) = screen(&f, 140, 30);
+        let ftext = texts(&flines);
+        let row = ftext
+            .iter()
+            .position(|l| l.contains("note-full-titles"))
+            .unwrap();
+        let cell = flines[row]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("✕ 2 of 401"))
+            .unwrap();
+        assert_eq!(cell.style.bg, Some(Color::Indexed(52)));
+        // A merge queue's PR is a row of its own stages.
+        let heads = ftext.iter().find(|l| l.contains("pull request")).unwrap();
+        assert!(
+            heads.contains("CI") && heads.contains("deploy test"),
+            "{heads}"
+        );
+        let pr = ftext
+            .iter()
+            .position(|l| l.contains("#2031 settings page"))
+            .unwrap();
+        assert!(
+            ftext[pr].contains("✓ CI")
+                && ftext[pr].contains("✓ approved")
+                && ftext[pr].contains("3rd in queue"),
+            "{}",
+            ftext[pr]
+        );
+        assert!(ftext[pr + 2].contains("✕ can't merge"), "{}", ftext[pr + 2]);
+        // Off, the rows are as before.
+        m.snap.rules.ux2 = false;
+        let (lines, _) = screen(&m, 140, 20);
+        assert!(
+            texts(&lines)
+                .iter()
+                .any(|l| l.contains("1. note-stable-ids"))
+        );
     }
 }

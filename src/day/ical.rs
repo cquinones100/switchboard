@@ -32,7 +32,7 @@ use jiff::tz::{Offset, TimeZone};
 use jiff::{SignedDuration, Timestamp, Zoned};
 use regex::Regex;
 
-use super::calendar::{CalEvent, Ref, SavedDay};
+use super::calendar::{Attendee, CalEvent, Ref, SavedDay};
 use super::rrule::{Rule, Until};
 use crate::util;
 
@@ -626,6 +626,67 @@ fn you_of(event: &Component, owner: Option<&str>) -> &'static str {
     }
 }
 
+/// Everyone an event invites but rooms and other resources, by name (the
+/// CN parameter, else the address), with their answer.
+fn attendees_of(event: &Component) -> Vec<Attendee> {
+    event
+        .all("ATTENDEE")
+        .filter(|a| {
+            !matches!(
+                a.param("CUTYPE").map(str::to_ascii_uppercase).as_deref(),
+                Some("RESOURCE" | "ROOM")
+            )
+        })
+        .map(|a| {
+            let address = a.value.trim();
+            let address = address
+                .strip_prefix("mailto:")
+                .or_else(|| address.strip_prefix("MAILTO:"))
+                .unwrap_or(address);
+            let name = a
+                .param("CN")
+                .map(|n| n.trim_matches('"').trim())
+                .filter(|n| !n.is_empty())
+                .unwrap_or(address);
+            let reply = match a
+                .param("PARTSTAT")
+                .unwrap_or("")
+                .to_ascii_uppercase()
+                .as_str()
+            {
+                "ACCEPTED" => "going",
+                "TENTATIVE" => "maybe",
+                "DECLINED" => "not going",
+                _ => "not answered",
+            };
+            Attendee {
+                name: name.to_string(),
+                reply: reply.into(),
+            }
+        })
+        .collect()
+}
+
+/// A description as plain text: Google's HTML line breaks as new lines,
+/// other tags dropped, and the call details it appends (after its
+/// `-::~:~::~` rule) left out.
+fn description_of(text: &str) -> String {
+    static BREAK: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"(?i)<br\s*/?>|</p>|</li>").unwrap());
+    static TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]*>").unwrap());
+    let text = text.split("-::~").next().unwrap_or("");
+    let text = BREAK.replace_all(text, "\n");
+    let text = TAG.replace_all(&text, "");
+    text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 // An event's start, end and length, read once.
 struct Timing {
     start: When,
@@ -790,6 +851,8 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
                 uid.clone()
             }),
             refs: refs_from(&format!("{description} {location}")),
+            attendees: attendees_of(event),
+            description: description_of(&description),
         });
     };
 
@@ -1193,6 +1256,9 @@ mod tests {
             "DTSTART;TZID=Eastern Standard Time:20261028T110000",
             "DTEND;TZID=Eastern Standard Time:20261028T120000",
             "DESCRIPTION:Join: https://teams.microsoft.com/l/meetup-join/19%3a\\, about AB-12",
+            "ATTENDEE;CN=Ana Ruiz;PARTSTAT=ACCEPTED:mailto:ana@example.com",
+            "ATTENDEE;PARTSTAT=TENTATIVE:mailto:ben@example.com",
+            "ATTENDEE;CUTYPE=RESOURCE;CN=Room 4;PARTSTAT=ACCEPTED:mailto:room@example.com",
             "END:VEVENT",
             "END:VCALENDAR",
         ];
@@ -1212,6 +1278,31 @@ mod tests {
                 id: "AB-12".into(),
                 url: None
             }]
+        );
+        // Who is invited, rooms left out, by name else address.
+        assert_eq!(
+            e.attendees,
+            [
+                Attendee {
+                    name: "Ana Ruiz".into(),
+                    reply: "going".into()
+                },
+                Attendee {
+                    name: "ben@example.com".into(),
+                    reply: "maybe".into()
+                },
+            ]
+        );
+        assert!(e.description.starts_with("Join: https://teams"));
+    }
+
+    #[test]
+    fn a_description_is_read_as_text_without_googles_call_details() {
+        assert_eq!(
+            description_of(
+                "Walk through <b>A</b> and B.<br>Pick one.\n\n-::~:~::~\nJoin with Meet"
+            ),
+            "Walk through A and B.\nPick one."
         );
     }
 

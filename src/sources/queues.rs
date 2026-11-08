@@ -108,6 +108,7 @@ pub fn queue_items(by_repo: &BTreeMap<String, Queue>, tabs: &[TabInfo]) -> Vec<I
             .data(json!({
                 "queue": {
                     "repo": repo, "number": number, "url": url, "queueUrl": queue.url,
+                    "state": state, "position": position,
                     "tab": tab.map(|t| t.id.to_string()),
                 },
                 "search": format!("{repo} {author}"),

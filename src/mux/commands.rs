@@ -52,8 +52,9 @@
 //!                                        stdin (src/agent)
 //! press <action> [arg]                   an action run as its key would be,
 //!                                        by its name in keys.json; the notes
-//!                                        app's palette asks this
-//!                                        (src/notes/serve.rs)
+//!                                        app's palette asks this, and its
+//!                                        `gw` presses `work-on-item <note>
+//!                                        <line>` (src/notes/serve.rs)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -767,7 +768,7 @@ impl Server {
         caller: Option<PaneId>,
         name: &str,
     ) -> Result<Target, String> {
-        // The work-a-note mode's marks (src/autopilot) are its tab's too, so
+        // Autopilot's marks (src/autopilot) are its tab's too, so
         // a skill in one of its tabs reads `@autopilot_land` as the tab has
         // it, a tool standing in for Claude's pane or not.
         let tab_option = name.starts_with("@tab_")

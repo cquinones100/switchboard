@@ -9,13 +9,15 @@
 //! editor's or the Finder's) are left out: only what git keeps ships.
 //!
 //! It also names the commit the binary is built from, for `switchboard
-//! --version` and so a release can be traced to its source (`commit`).
+//! --version` and so a release can be traced to its source (`commit`), and,
+//! in a build that isn't a release, the checkout and target directory it is
+//! built in, which M-p's restart builds again (`checkout`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+    let root = manifest_dir().join("assets/skills");
     println!("cargo:rerun-if-changed=assets/skills");
     let mut files = Vec::new();
     walk(&root, &mut files);
@@ -39,6 +41,53 @@ fn main() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     fs::write(out.join("skills.rs"), table).expect("the table written");
     commit();
+    checkout();
+}
+
+/// The checkout and the target directory this build is in, as
+/// `SWITCHBOARD_CHECKOUT` and `SWITCHBOARD_TARGET_DIR`, for M-p's "Restart
+/// Switchboard on the latest build on disk" (src/mux/latest.rs) to build
+/// again; both empty in a release build (`SWITCHBOARD_RELEASE` set), which
+/// has no checkout on the computer it runs on. The target directory is the
+/// one holding `OUT_DIR` that cargo marks with its `CACHEDIR.TAG`, so a
+/// build for another target (`--target`) names it too. With them goes the
+/// `cargo` the build's PATH had (rustup's, which reads the checkout's
+/// `rust-toolchain.toml`), as `SWITCHBOARD_CARGO`, for a server whose PATH
+/// has none.
+fn checkout() {
+    println!("cargo:rerun-if-env-changed=SWITCHBOARD_RELEASE");
+    let release = std::env::var("SWITCHBOARD_RELEASE").is_ok_and(|v| !v.is_empty() && v != "0");
+    let (checkout, target, cargo) = if release {
+        (String::new(), String::new(), String::new())
+    } else {
+        let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+        let target = out
+            .ancestors()
+            .find(|dir| dir.join("CACHEDIR.TAG").is_file())
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_default();
+        let cargo = std::env::var_os("PATH")
+            .and_then(|path| {
+                std::env::split_paths(&path)
+                    .map(|dir| dir.join("cargo"))
+                    .find(|cargo| cargo.is_file())
+            })
+            .map(|cargo| cargo.display().to_string())
+            .unwrap_or_default();
+        (manifest_dir().display().to_string(), target, cargo)
+    };
+    println!("cargo:rustc-env=SWITCHBOARD_CHECKOUT={checkout}");
+    println!("cargo:rustc-env=SWITCHBOARD_TARGET_DIR={target}");
+    println!("cargo:rustc-env=SWITCHBOARD_CARGO={cargo}");
+}
+
+/// The checkout being built, read as the build script runs rather than
+/// compiled into it (`env!`): a target directory shared by several
+/// worktrees reuses one compiled build script for all of them, which would
+/// otherwise read the skills and git of whichever worktree compiled it first,
+/// gone once that worktree is removed.
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"))
 }
 
 /// The commit the binary is built from, for `switchboard --version`, as
@@ -59,7 +108,7 @@ fn commit() {
     let git = |args: &[&str]| {
         std::process::Command::new("git")
             .args(args)
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .current_dir(manifest_dir())
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -75,7 +124,7 @@ fn commit() {
     .into_iter()
     .flatten()
     {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(watched);
+        let path = manifest_dir().join(watched);
         if path.exists() {
             println!("cargo:rerun-if-changed={}", path.display());
         }

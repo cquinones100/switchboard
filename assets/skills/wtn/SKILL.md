@@ -1,7 +1,7 @@
 ---
 name: wtn
 description: Replace this Claude session with `wtn` in the same Switchboard pane, so a worktree opens in this tab for one checklist item of a note, with a fresh Claude session working on it and its plan. For work kept in a note in any repository; /queue-and-clean lands it as `switchboard landing` says for the repository: straight on the default branch, or through a PR.
-argument-hint: "[note] [item text or line number] [what to add to its prompt]"
+argument-hint: "[note] [item text or line number] [→ branch to land on] [what to add to its prompt]"
 disable-model-invocation: true
 ---
 
@@ -13,7 +13,7 @@ Hand this tab over to `wtn` for one checklist item of a note: `/wt`'s counterpar
 
 The conversation does not carry over. The item and its plan are the hand-off.
 
-Arguments, all optional: the note (its title or path), the item (a few of its words, or its line number in the note), and text to add to the new session's prompt.
+Arguments, all optional: the note (its title or path), the item (a few of its words, or its line number in the note), the branch to land on, and text to add to the new session's prompt. The branch is written `→ <branch>` after the item, or `--target <branch>` anywhere: the item's worktree is cut from it and `/queue-and-clean` lands it there, as autopilot's target does. With none, it lands on the default branch.
 
 ## Steps
 
@@ -23,9 +23,9 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
    - **Named in the arguments**, by line number or by words only one item's first line holds: use it. Words that match several: ask which, as below, with those alone.
    - **Not named**: ask with `AskUserQuestion`, the items in the note's order, four to a question with **More…** as an option moving to the next four, each option the item's first line, shortened, and its description `needs a choice` when its `Plan:` line or plan note still marks a choice as needed.
 
-   Note the item's line number: everything after this goes by it. Whatever else the arguments hold is the text to add.
+   Note the item's line number: everything after this goes by it. Whatever else the arguments hold, the branch to land on aside, is the text to add.
 
-3. **In a Switchboard pane.** `$SWITCHBOARD_PANE` must be set. If it is not, tell the user to run `switchboard worktree-from-note --note '<note path>' --item <line>` themselves (`--prompt '<text>'` with text to add) and stop.
+3. **In a Switchboard pane.** `$SWITCHBOARD_PANE` must be set. If it is not, tell the user to run `switchboard worktree-from-note --note '<note path>' --item <line>` themselves (`--prompt '<text>'` with text to add, `--target '<branch>'` with a branch to land on) and stop.
 
 4. **Work still running.** As `/wt`'s step 3: handing the tab over ends this session and everything it started (background commands, subagents, workflows, Monitor watches, scheduled loops). If any is still running, list each in a line and ask whether to stop them and hand over, or wait; on wait, stop here.
 
@@ -45,7 +45,7 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
    switchboard respawn -c "$PWD" wtn --item 12 --note 'Switchboard Notes.md'
    ```
 
-   With text to add, `--prompt '<text>'` after them, quoted the same way.
+   With a branch to land on, `--target '<branch>'` after them, and with text to add, `--prompt '<text>'`, each quoted the same way.
 
    `respawn` stops this session and starts `wtn` in its place in the same pane, in a shell of the user's that defines `wtn` and reads their rc for the PATH. `-c "$PWD"` starts it in this directory, so `wtn` finds the same repository. If `wtn` refuses (a ticked item, or a worktree another session is already working in), a shell is left in the pane.
 

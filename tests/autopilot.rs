@@ -1,5 +1,5 @@
-//! Working a note continuously (src/autopilot) as someone turns it on,
-//! against a server of the test's own: M-p's "Work the note continuously"
+//! Autopilot (src/autopilot) as someone turns it on,
+//! against a server of the test's own: M-p's "Autopilot: work a note"
 //! asked from a pane in a throwaway repository, the note picked and the
 //! counts kept as they were, and the server opens a background tab for the
 //! note's first item running `wtn`, marked as the mode's, then one for the
@@ -16,7 +16,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 use common::stand_in::Claude;
-use common::{TempDir, TestServer};
+use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -59,8 +59,19 @@ fn opened(server: &TestServer) -> Vec<Value> {
         .collect()
 }
 
-#[test]
-fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when_none_is_left() {
+/// A server with a note "Work" in a notes directory of its own, a stand-in
+/// claude and a repository landing straight on its branch, the mode set up
+/// from M-p in a tab there with the counts kept as they were; `more`
+/// settings added to the test's own.
+fn set_up(
+    more: Value,
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    TestServer,
+    TestClient,
+    std::path::PathBuf,
+) {
     let notes = TempDir::new("sbn");
     let note = notes.path().join("Work.md");
     std::fs::write(&note, "# Work\n\n- [ ] First thing\n- [ ] Second thing\n").unwrap();
@@ -78,7 +89,11 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     std::fs::create_dir_all(&config).unwrap();
     // Whether you're at the computer is the desktop's to say, which a test
     // can't be sure of, so it doesn't pause while you're away.
-    let settings = json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false});
+    let mut settings = json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false});
+    settings
+        .as_object_mut()
+        .unwrap()
+        .extend(more.as_object().unwrap().clone());
     std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
     Claude::new()
         .answer("echo \"$PWD\" >> \"$HOME/claude-ran\"")
@@ -88,15 +103,35 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     git(&repo, &["init", "-q"]);
     git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(&repo, &["branch", "team/next"]);
     let repo = repo.canonicalize().unwrap();
 
-    let mut client = server.attach(120, 40);
+    // Wide enough for the Autopilot view's stage cells beside the sidebar.
+    let cols = if more.get("ux2").is_some() { 170 } else { 120 };
+    let mut client = server.attach(cols, 40);
     client.wait_text("$");
+    if more.get("ux2").is_some() {
+        client.wait_text("M-c  Claude");
+    }
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
     client.type_text("\x1bp");
     client.wait_text("action>");
-    client.type_text("continuously");
-    client.wait_text("Work the note continuously");
+    client.type_text("autopilot");
+    client.wait_text("Autopilot: work a note");
+    client.type_text("\r");
+    // A repository landing through a PR, as one with no GitHub and no
+    // repos.json does, is refused.
+    client.wait_text("Autopilot lands only straight onto a branch for now");
+    std::fs::write(
+        config.join("repos.json"),
+        json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+    )
+    .unwrap();
+    client.type_text("\x1b\x1b");
+    client.type_text("\x1bp");
+    client.wait_text("action>");
+    client.type_text("autopilot");
+    client.wait_text("Autopilot: work a note");
     client.type_text("\r");
     let screen = client.wait_text("More notes…");
     assert!(
@@ -109,13 +144,56 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
         "a note with nothing unticked is behind More notes…"
     );
     client.type_text("\r");
+    // Where it lands: the default branch first, so Enter keeps it.
+    let screen = client.wait_text("Another branch…");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("main (the default branch)"))
+    );
+    assert!(screen.iter().any(|l| l.contains("team/next")));
+    client.type_text("\r");
     client.wait_text("Tabs working at once");
     client.type_text("\r");
     client.wait_text("Tabs open at most");
     client.type_text("\r");
     client.wait_text("Spend limit");
     client.type_text("\r");
-    client.wait_text("Working Work: 3 at a time, up to 5 tabs, in ~/repo");
+    client.wait_text(
+        "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
+    );
+    (notes, note, server, client, repo)
+}
+
+#[test]
+fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    // M-p's command opened mission control on the Autopilot view, its
+    // heading saying what the line said.
+    let screen = client.wait_text("leak check");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("AUTO Work") && l.contains("of 5 open · asks before landing")),
+        "{screen:#?}"
+    );
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("leak check"))
+    });
+    // The Tabs view leads with the cards alone, the Autopilot view among
+    // the views while the mode is on.
+    client.type_text("\x1b ");
+    client.wait_text("Autopilot");
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = client.screen();
+    assert!(!screen.iter().any(|l| l.contains("AUTO ")), "{screen:#?}");
+    drop(server);
+}
+
+#[test]
+fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when_none_is_left() {
+    let (notes, note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("AUTO Work");
 
     let mode: Value = serde_json::from_str(
@@ -133,6 +211,7 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     // up, so a rename anywhere is followed.
     let note_id = switchboard::notes::id::of_file(&note).expect("the note given an ID");
     assert_eq!(mode["noteId"], note_id.as_str());
+    assert_eq!(mode["target"], "", "the default branch");
 
     wait("a tab for the first item", &server, || {
         opened(&server)
@@ -199,6 +278,21 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
                 .all(|t| t["options"]["@autopilot_land"] == "1")
     });
     client.wait_text("lands on its own");
+
+    // Its menu's "Change the target branch…": the tabs it opens from now
+    // land on the branch picked, which its line names.
+    client.type_text("\r");
+    client.wait_text("Change the target branch…");
+    client.type_text("jjjj\r");
+    client.wait_text("Another branch…");
+    client.type_text("team/next\r");
+    wait("the target kept", &server, || {
+        std::fs::read_to_string(server.state.join("autopilot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|m| m["target"] == "team/next")
+    });
+    client.wait_text("→ team/next");
 
     // Renamed outside Notes: followed by its ID, its new path kept.
     std::fs::create_dir_all(notes.path().join("Projects")).unwrap();

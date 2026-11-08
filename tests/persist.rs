@@ -52,7 +52,7 @@ fn tabs_panes_names_options_and_screens_come_back() {
     let split = server.ok(&["split", "-t", pane, "-D", "-d"]);
     let split = split.trim();
     server.ok(&["set", "-t", tab, "@tab_note", "Today's plan"]);
-    // The work-a-note mode's marks, as tmux/window-options.sh carried them.
+    // Autopilot's marks, as tmux/window-options.sh carried them.
     server.ok(&["set", "-t", tab, "@autopilot_land", "1"]);
     server.ok(&["set", "-t", tab, "@autopilot_autoland", "abc1234"]);
     server.ok(&["set", "-t", split, "@role", "logs"]);

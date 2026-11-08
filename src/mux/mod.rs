@@ -29,13 +29,17 @@
 //! - `replay`: what a pane shows, as the bytes that draw it again.
 //! - `upgrade`: the server restarted on a new build in place, its panes'
 //!   programs, its socket and its terminals handed over across an exec.
+//! - `latest`: M-p's restart building the checkout first, and telling
+//!   whether there is anything new to restart on.
 
 pub mod client;
 pub mod commands;
 pub mod compose;
 pub mod extkeys;
+pub mod header;
 pub mod input;
 pub mod keys;
+pub mod latest;
 pub mod layout;
 pub mod pane;
 pub mod passthrough;

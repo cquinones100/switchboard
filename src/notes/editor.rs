@@ -50,6 +50,9 @@ pub enum Effect {
     Prompt(char),
     /// Ctrl-W and a direction: to the list (`h`) or the note (`l`).
     Window(char),
+    /// `gw`: start work on the checklist item on the cursor's line in a
+    /// new tab.
+    WorkOnItem,
 }
 
 /// A register's text, and whether it holds whole lines.
@@ -1689,6 +1692,7 @@ impl Editor {
                 }
             }
             ('g', 'i') => self.mode = Mode::Insert,
+            ('g', 'w') => self.out.push(Effect::WorkOnItem),
             _ => {}
         }
         if a == 'z' {

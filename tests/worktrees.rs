@@ -1141,6 +1141,11 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
         ),
         "its plan, found in a folder"
     );
+    assert!(
+        prompt.contains("compare the item and its plan with the code as it is now")
+            && prompt.contains("without building, landing or ticking it"),
+        "told to check the item is still worth doing first: {prompt}"
+    );
     assert!(prompt.contains("/queue-and-clean"), "told how to land it");
     assert!(
         prompt.contains("as `switchboard landing` says for the repository"),
@@ -1487,7 +1492,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         "back once its worktree is removed, its branch kept"
     );
 
-    // The queue working a note continuously takes.
+    // The queue autopilot takes.
     std::fs::write(
         notes.join("Work.md"),
         [
@@ -1878,4 +1883,113 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
         "outside the workspace, left as it is"
     );
     common::stand_in::assert_none_refused(&bin);
+}
+
+// Autopilot's target: `wtn --target` cuts the item's branch from that
+// branch rather than the default one, a branch only origin has made a local
+// one tracking it, and records it, which `switchboard landing` names with
+// the remote branch it tracks, or none for a local-only one.
+#[test]
+fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_tracks() {
+    let w = World::new("wtn-target");
+    let notes = w.path("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Work.md"),
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n",
+    )
+    .unwrap();
+    let (origin, repo) = w.origin_and_clone();
+    let _ = origin;
+    // A local-only branch a commit past main.
+    w.git(&repo, &["branch", "local-dev"]);
+    let dev = w.path("dev-wt");
+    w.git(
+        &repo,
+        &["worktree", "add", "-q", dev.to_str().unwrap(), "local-dev"],
+    );
+    w.git(&dev, &["commit", "-q", "--allow-empty", "-m", "dev only"]);
+    let dev_tip = w.git(&dev, &["rev-parse", "HEAD"]);
+    // A branch on origin alone.
+    w.git(&dev, &["push", "-q", "origin", "local-dev:shared"]);
+
+    let wtn = |item: &str, target: &str| {
+        let cd = w.path("cd");
+        w.ok(
+            &repo,
+            &[
+                "worktree-from-note",
+                "--no-claude",
+                "--cd-file",
+                cd.to_str().unwrap(),
+                "--note",
+                "Work",
+                "--item",
+                item,
+                "--target",
+                target,
+            ],
+        );
+        PathBuf::from(read(&cd).lines().next().unwrap())
+    };
+    let landing_target = |dir: &Path| -> serde_json::Value {
+        let out = w.run(dir, &["landing", "--json"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["target"].clone()
+    };
+
+    let first = wtn("3", "local-dev");
+    assert_eq!(w.git(&first, &["rev-parse", "HEAD"]), dev_tip);
+    assert_eq!(
+        w.git(&repo, &["config", "branch.note/first-thing.wtnTarget"]),
+        "local-dev"
+    );
+    assert_eq!(
+        landing_target(&first),
+        serde_json::json!({ "branch": "local-dev", "remote": null, "remoteBranch": null })
+    );
+
+    let second = wtn("4", "shared");
+    assert_eq!(w.git(&second, &["rev-parse", "HEAD"]), dev_tip);
+    assert_eq!(
+        landing_target(&second),
+        serde_json::json!({ "branch": "shared", "remote": "origin", "remoteBranch": "shared" })
+    );
+
+    // None given: the default branch, and no target for landing.
+    let cd = w.path("cd");
+    w.ok(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
+            "--note",
+            "Work",
+            "--item",
+            "5",
+        ],
+    );
+    let third = PathBuf::from(read(&cd).lines().next().unwrap());
+    assert_eq!(landing_target(&third), serde_json::Value::Null);
+
+    let missing = w.run(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--note",
+            "Work",
+            "--item",
+            "5",
+            "--target",
+            "nowhere",
+        ],
+    );
+    assert!(
+        stderr(&missing).contains("no branch nowhere"),
+        "{}",
+        stderr(&missing)
+    );
 }

@@ -37,7 +37,7 @@ use std::time::SystemTime;
 use crate::mux::server::ClientId;
 use crate::mux::{PaneId, TabId};
 
-pub use model::{Group, Rules, Stage, TabModel, TabState};
+pub use model::{Rules, Stage, TabModel, TabState};
 pub use render::{Filter, Owner};
 pub use serve::KEYS;
 

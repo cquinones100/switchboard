@@ -88,6 +88,7 @@ static STARTED_FROM: OnceLock<PathBuf> = OnceLock::new();
 /// Notes which binary the server was started from, for an upgrade later.
 pub fn remember_binary() {
     if let Ok(path) = crate::util::exe() {
+        super::latest::remember(&path);
         let _ = STARTED_FROM.set(path);
     }
 }
@@ -286,6 +287,8 @@ pub struct Upgrade {
     pending: Option<Pending>,
     /// The handover has begun: another upgrade asked meanwhile is refused.
     handing: bool,
+    /// M-p's restart is building first (src/mux/latest.rs).
+    building: bool,
 }
 
 struct Pending {
@@ -301,6 +304,9 @@ struct Pending {
 #[derive(Debug)]
 pub enum UpgradeEvent {
     Checked(Result<(), String>),
+    /// M-p's build for the terminal that asked: whether there is a new
+    /// binary to restart on, or why the build failed.
+    Built(ClientId, Result<bool, String>),
 }
 
 /// Whether a command's arguments ask for an upgrade (and not its usage).
@@ -323,7 +329,7 @@ impl Server {
             client,
             checked: false,
         };
-        if self.upgrade.pending.is_some() || self.upgrade.handing {
+        if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
             self.upgrade_refused(pending, "it is restarting on the new build already");
             return;
         }
@@ -342,8 +348,59 @@ impl Server {
         });
     }
 
+    /// M-p's "Restart Switchboard on the latest build on disk": builds the
+    /// checkout first, off the server's task (src/mux/latest.rs), then
+    /// restarts as `switchboard upgrade` does, only when the binary on disk
+    /// is a new one.
+    pub fn latest_asked(&mut self, client: ClientId) {
+        if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
+            self.say(
+                Some(client),
+                "Switchboard is building or restarting already.",
+            );
+            return;
+        }
+        let Some(binary) = binary() else {
+            self.say(
+                Some(client),
+                "Switchboard can't restart on the new build: the binary it was started from isn't known.",
+            );
+            return;
+        };
+        let build_first = settings::is_on(super::latest::SETTING);
+        if build_first && let Some((dir, _)) = super::latest::checkout() {
+            self.say(
+                Some(client),
+                &format!("Building Switchboard in {}…", paths::tilde(&dir)),
+            );
+        }
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.upgrade.building = true;
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let result = super::latest::bring_up_to_date(&binary, build_first);
+            let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
+        });
+    }
+
     pub fn upgrade_event(&mut self, event: UpgradeEvent) {
-        let UpgradeEvent::Checked(checked) = event;
+        let checked = match event {
+            UpgradeEvent::Checked(checked) => checked,
+            UpgradeEvent::Built(client, result) => {
+                self.upgrade.building = false;
+                match result {
+                    Ok(true) => self.upgrade_asked(None, Some(client)),
+                    Ok(false) => self.say(Some(client), "Already on the latest build."),
+                    Err(why) => self.say(
+                        Some(client),
+                        &format!("The build failed: {why}. Switchboard goes on as it was."),
+                    ),
+                }
+                return;
+            }
+        };
         let Some(pending) = self.upgrade.pending.as_mut() else {
             return;
         };

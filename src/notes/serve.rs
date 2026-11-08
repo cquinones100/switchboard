@@ -133,6 +133,10 @@ impl Command {
     }
 }
 
+/// What Notes presses to start work on a checklist item (`gw`), with the
+/// note and the item's line.
+pub const WORK_ON_ITEM: &str = "work-on-item";
+
 /// The rest of what a key does, back on the server's task once what it read
 /// off the task (the notes, for ranking them) is in.
 pub struct NotesEvent(Box<dyn FnOnce(&mut Server) + Send>);
@@ -143,7 +147,7 @@ fn is_on(value: Option<&String>) -> bool {
 }
 
 /// A path that stays in the notes directory.
-fn in_notes(rel: &str) -> bool {
+pub fn in_notes(rel: &str) -> bool {
     !rel.is_empty() && !rel.starts_with('/') && !rel.split('/').any(|p| p == "..")
 }
 
@@ -745,24 +749,34 @@ impl Server {
 
     /// `press <name> [arg]`: runs the action named as its key would, in the
     /// client used last on the caller's session (the app's palette asks
-    /// this); `note-tab` takes the note as `arg`.
+    /// this); `note-tab` takes the note as `arg`. `work-on-item <note>
+    /// <line>`, Notes' `gw`, is no key's: it starts work on the item on
+    /// that line of the note (src/cmd/work.rs).
     pub fn cmd_press(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("press: which action?");
         };
         let arg = rest.first().filter(|a| !a.is_empty()).cloned();
+        if name == WORK_ON_ITEM {
+            let (Some(note), Some(line)) = (
+                arg.filter(|n| in_notes(n)),
+                rest.get(1).and_then(|l| l.parse::<usize>().ok()),
+            ) else {
+                return Reply::fail("press: work-on-item takes a note and a line number");
+            };
+            let Some(client) = self.press_client(caller) else {
+                return Reply::fail("press: no client is attached to press it in");
+            };
+            self.work_on_item(client, note, line);
+            return Reply::ok("");
+        }
         let Some(action) = Action::parse(name) else {
             return Reply::fail(format!("press: no action named {name}"));
         };
         if arg.is_some() && action != Action::Notes(Command::NoteTab) {
             return Reply::fail(format!("press: {name} takes nothing more"));
         }
-        let client = caller
-            .and_then(|p| self.pane_tab(p))
-            .and_then(|t| self.session_of_tab(t))
-            .and_then(|s| self.latest_client_of(&s.name))
-            .or_else(|| self.latest_client());
-        let Some(client) = client else {
+        let Some(client) = self.press_client(caller) else {
             return Reply::fail("press: no client is attached to press it in");
         };
         match action {
@@ -770,6 +784,16 @@ impl Server {
             action => self.act(client, action),
         }
         Reply::ok("")
+    }
+
+    /// The client a press runs in: the one used last on the caller's
+    /// session, else the one used last.
+    fn press_client(&self, caller: Option<PaneId>) -> Option<ClientId> {
+        caller
+            .and_then(|p| self.pane_tab(p))
+            .and_then(|t| self.session_of_tab(t))
+            .and_then(|s| self.latest_client_of(&s.name))
+            .or_else(|| self.latest_client())
     }
 
     /// The directory a pane is in, for a picker that offers it first.

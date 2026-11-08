@@ -185,7 +185,7 @@ impl Server {
 
     /// A tab's full title where its name is a note item cut short: its
     /// `@tab_title`, else, for a tab opened before there was one, the
-    /// work-a-note mode's `@autopilot_item`, either only while the tab's
+    /// autopilot's `@autopilot_item`, either only while the tab's
     /// name is still that item cut short (src/tabs/title.rs).
     pub fn tab_full_title(&self, tab: TabId) -> Option<String> {
         let opts = &self.tabs.get(&tab)?.opts;

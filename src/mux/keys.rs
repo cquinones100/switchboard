@@ -95,7 +95,7 @@ pub enum Action {
     WorkOnBranch,
     /// Work on a pull request in a new tab running `wtpr`.
     WorkOnPr,
-    /// Work on a note's checklist items, each in a new tab running `wtn`.
+    /// Work on a note's checklist items, each in a new tab running `wtn` (M-I).
     WorkOnNote,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
     ContinueShaping,
@@ -135,8 +135,9 @@ pub enum Action {
     StopSlackRelay,
     /// M-p's "Update Switchboard" and "Run Switchboard's setup" (src/update).
     Update(crate::update::Command),
-    /// Restart the server on the build installed now, keeping every pane,
-    /// tab and terminal attached (src/mux/upgrade.rs).
+    /// Build the checkout a build from a clone came from, then restart the
+    /// server on it when it is new, keeping every pane, tab and terminal
+    /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
     Upgrade,
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
@@ -144,7 +145,7 @@ pub enum Action {
     /// The rest of tmux.conf's keys and M-p's commands: M-0, C-w, renaming
     /// the tab, mission control on a view and the rest (src/extras).
     Extra(crate::extras::Command),
-    /// Working a note continuously (src/autopilot).
+    /// Autopilot (src/autopilot).
     Autopilot(crate::autopilot::Command),
 }
 
@@ -404,7 +405,7 @@ impl Action {
             Action::SlackRelay => "Open the Slack relay in its own tab".into(),
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
-            Action::Upgrade => "Restart Switchboard on the new build, keeping every pane".into(),
+            Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about().into(),
             Action::Autopilot(command) => command.about().into(),
@@ -521,7 +522,6 @@ impl Action {
             Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::WorkOnPr,
-            Action::WorkOnNote,
             Action::ContinueShaping,
             Action::ShapeNote,
             Action::ShapeNewTicket,
@@ -589,6 +589,7 @@ impl Default for Bindings {
         bind("M-n", NewClaudeTab);
         bind("M-W", WorkOnTickets);
         bind("M-B", WorkOnBranch);
+        bind("M-I", WorkOnNote);
         bind("M-a", NextNeedsYou);
         bind("M-A", NextIdle);
         bind("M-c", FocusClaude);

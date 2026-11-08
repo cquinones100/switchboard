@@ -6,10 +6,10 @@
 //! to it then and gone to, or a new one in a directory you pick, as M-t's,
 //! linked to the note and named after it, whose Claude starts knowing which
 //! note it is for (added to its system prompt, so no turn is spent on it:
-//! its title and file, the note itself read only when asked; the
-//! note_tab_prompt setting). new-tab.zsh passed that in the tab's
-//! environment as NEW_TAB_CONTEXT, out of reach of the shell; here it is a
-//! word of the command, which no shell reads either.
+//! its title and file, the note itself read when asked or when the session's
+//! start says to read it first; the note_tab_prompt setting). new-tab.zsh
+//! passed that in the tab's environment as NEW_TAB_CONTEXT, out of reach of
+//! the shell; here it is a word of the command, which no shell reads either.
 //!
 //! Whichever tab it goes to, Notes moves beside the tab's Claude showing the
 //! note, as M-e puts it there, the cursor left in Claude's pane (the
@@ -26,7 +26,10 @@ use crate::{paths, settings, worktree};
 
 /// What a note's new tab tells its Claude, added to its system prompt
 /// (new-tab.zsh's NEW_TAB_CONTEXT): the note's title (`name`, else its
-/// file's name) and its file, to read only when asked.
+/// file's name) and its file, to read when asked or when the session's
+/// start says to read it first (src/cmd/claude_context.rs, by the
+/// tab_note_context setting as it is when each session starts, which a
+/// prompt fixed as the tab opens can't follow).
 pub fn new_tab_context(note: &str, name: Option<&str>) -> String {
     let stem = Path::new(note)
         .file_stem()
@@ -37,9 +40,10 @@ pub fn new_tab_context(note: &str, name: Option<&str>) -> String {
     let dir = dir.trim_end_matches('/');
     format!(
         "This tab is for the note \"{name}\" in the user's notes app, the file {dir}/{note}, \
-         which Notes shows beside you. It is the user's own and private: read it only when \
-         they ask you to. Renamed or moved since, its file is the one the tab's @tab_note \
-         option names now, relative to the notes directory (switchboard show @tab_note)."
+         which Notes shows beside you. It is the user's own and private: read it when they ask \
+         you to, or when this session's start tells you to read it first. Renamed or \
+         moved since, its file is the one the tab's @tab_note option names now, relative to \
+         the notes directory (switchboard show @tab_note)."
     )
 }
 
@@ -228,7 +232,9 @@ mod tests {
             context.contains("/Work/Plan $(x).md, which Notes shows beside you"),
             "its file, as written: {context}"
         );
-        assert!(context.contains("read it only when they ask you to"));
+        // Read when asked, or first when the session's start says so, which
+        // follows the setting as each session starts.
+        assert!(context.contains("read it when they ask you to, or when this session's start"));
         assert!(
             context.contains("@tab_note"),
             "and where to find it once renamed"

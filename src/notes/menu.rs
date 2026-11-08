@@ -29,6 +29,8 @@ pub enum Act {
     SortChecked,
     UncheckAll,
     DeleteChecked,
+    /// Start work on the item in a new tab (`gw`), from Switchboard.
+    WorkOnItem,
     PasteImage,
     Table,
     AddRow,
@@ -122,6 +124,7 @@ pub const SECTIONS: &[(&str, &[Item])] = &[
             item("s", "Move checked to bottom", Act::SortChecked),
             item("u", "Uncheck all", Act::UncheckAll),
             item("D", "Delete checked items", Act::DeleteChecked),
+            item("w", "Start work on the item in a new tab", Act::WorkOnItem),
         ],
     ),
     ("Image", &[item("v", "Paste image", Act::PasteImage)]),

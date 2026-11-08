@@ -274,6 +274,12 @@ pub const VIEWS: &[View] = &[
         needs: None,
         lookups: true,
     },
+    View {
+        title: "Autopilot",
+        key: "view_autopilot",
+        needs: Some("autopilot"),
+        lookups: false,
+    },
     service_view("Tickets", "ticket_board", "linear"),
     service_view("Inbox", "view_inbox", "linear"),
     view("Sessions", "view_sessions"),

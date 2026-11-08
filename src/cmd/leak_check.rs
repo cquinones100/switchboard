@@ -23,7 +23,7 @@
 //! and 2 when it can't look: a word list that is there but can't be read
 //! stops it, so a landing asks rather than pushing unchecked.
 //! queue-and-clean runs it before a direct landing asks to push, and a
-//! landing without asking (the work-a-note mode's "Land without asking")
+//! landing without asking (autopilot's "Land without asking")
 //! asks after all when it finds anything.
 //!
 //! JavaScript's look-arounds, which Rust's regex hasn't, are the boundary

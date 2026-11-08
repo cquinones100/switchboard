@@ -113,6 +113,11 @@ impl TestServer {
     /// may replace, as `switchboard update` replaces yours; gives the copy's
     /// path too.
     pub fn start_from_copy() -> (TestServer, PathBuf) {
+        TestServer::start_from_copy_with_env(&[])
+    }
+
+    /// As `start_from_copy`, its environment with these variables too.
+    pub fn start_from_copy_with_env(env: &[(&str, &str)]) -> (TestServer, PathBuf) {
         let dir = TempDir::new("sbt");
         let home = dir.path().join("home");
         let state = dir.path().join("s");
@@ -129,7 +134,10 @@ impl TestServer {
             home,
             state,
             child: None,
-            extra_env: Vec::new(),
+            extra_env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             bin: bin.clone(),
         };
         server.launch();
@@ -258,6 +266,8 @@ impl TestServer {
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
             .env("PS1", "$ ")
+            // M-p's restart builds no checkout, this repository least of all.
+            .env("SWITCHBOARD_CHECKOUT", "")
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")

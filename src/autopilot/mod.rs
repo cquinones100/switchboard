@@ -58,6 +58,7 @@
 //! - `line`: its line in mission control and the menu Enter opens on it.
 //! - `landed`: the landings its tabs made without asking, for the
 //!   notifications.
+//! - `view`: its own view in mission control, with UX 2.0 on.
 //! - `serve`: the server's side: setting it up, the check on every tick,
 //!   opening the tabs, the notifications.
 
@@ -67,15 +68,34 @@ pub mod mode;
 pub mod pilot;
 pub mod place;
 mod serve;
+pub mod view;
 
 pub use line::{Act, Summary};
 pub use mode::Mode;
 pub use pilot::Pilot;
 
+/// Whether the mode has its own view in mission control (UX 2.0 and the
+/// view_autopilot setting on), which then takes the place of its line
+/// leading the Tabs view.
+pub fn has_view() -> bool {
+    let on = crate::settings::is_on;
+    on("ux2") && on("view_autopilot") && on("autopilot")
+}
+
+/// Where mission control opens to show the mode: its own view while it has
+/// one, else the Tabs view its line leads.
+pub fn opening() -> crate::mission::Opening {
+    if has_view() {
+        crate::mission::Opening::View("autopilot".into())
+    } else {
+        crate::mission::Opening::Tabs
+    }
+}
+
 /// M-p's command, the one way to set the mode up or change it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
-    /// "Work the note continuously": with the mode off, which note, how
+    /// "Autopilot: work a note": with the mode off, which note, how
     /// many tabs at once, the most open and a spend limit, then on; with it
     /// on, its menu.
     WorkNote,
@@ -99,7 +119,7 @@ impl Command {
     pub fn about(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Work the note continuously: keep tabs working through a note's checklist with wtn, the next opened as each lands"
+                "Autopilot: work a note: keep tabs working through a note's checklist with wtn, the next opened as each lands"
             }
         }
     }
@@ -124,7 +144,12 @@ impl Command {
 pub enum AutopilotEvent {
     /// The item it would take next, read again for mission control's line,
     /// under the key it was read for.
-    Next { key: String, text: String },
+    Next {
+        key: String,
+        text: String,
+        /// The items it will open, in order, for its view.
+        queue: Vec<String>,
+    },
     /// What looking for the next item to open found, for a note last
     /// changed at `mtime` (ms).
     Found { found: pilot::Found, mtime: i64 },

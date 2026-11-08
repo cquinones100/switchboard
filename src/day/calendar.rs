@@ -87,6 +87,21 @@ pub struct CalEvent {
     pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refs: Vec<Ref>,
+    /// Who is invited and how each answered; the feed's alone, so a day
+    /// saved before it, or by /today, has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attendees: Vec<Attendee>,
+    /// Its description as text, without the call details Google adds.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+/// One person invited to an event: their name (else their address) and
+/// their answer, "going", "maybe", "not going" or "not answered".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Attendee {
+    pub name: String,
+    pub reply: String,
 }
 
 fn not_answered() -> String {

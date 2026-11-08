@@ -37,7 +37,7 @@ pub const MARK: &str = "@notices_window";
 /// they are shown (daemon.js's `notices`): the meeting about to start,
 /// Slack's new messages, what changed on today's calendar, notes written
 /// for you, the Linear inbox, the landings its tabs made without asking,
-/// what the mode working a note has to say, the landed tabs it closed
+/// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, and suggestions. A source not named here goes
 /// after them.
 pub const ORDER: [&str; 9] = [

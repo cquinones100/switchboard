@@ -12,6 +12,12 @@
 //! a permission prompt says "waiting" twice (PermissionRequest, then the
 //! Notification hook about six seconds later), and every tool call says
 //! "working", and neither should look like a new wait or a new turn.
+//!
+//! A wait belongs to whoever asked: the conversation itself, or a subagent
+//! (the hook's `agent_id`). A subagent runs its tools while the
+//! conversation waits on a question, so only the one waiting ends its wait
+//! by going on with its tools; a new prompt, a finished turn or a session
+//! starting or ending ends any.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -68,6 +74,14 @@ const LOOPS: &[(&str, &str)] = &[
     ("preview-test", "deploy"),
 ];
 
+/// Who a wait belongs to: the conversation itself, or a subagent by its
+/// `agent_id`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Waiter {
+    Conversation,
+    Agent(String),
+}
+
 /// One pane's Claude: its state and what goes with it. Serialized only to
 /// hand it to a new build with its pane (src/mux/upgrade.rs).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +96,13 @@ pub struct PaneAgent {
     /// What it waits on ("permission: Bash git push", "asks: Which
     /// layout?"), while it waits.
     pub wait: Option<String>,
+    /// Whose wait it is, while the pane waits; `None` while nothing
+    /// waits, or for a wait only a Notification said, whose hook may not
+    /// say who asked, which any tool call ends, as before waits had owners.
+    pub wait_by: Option<Waiter>,
+    /// When the conversation itself last ran a hook (ms), which tells a
+    /// question its transcript shows unanswered from one asked before.
+    pub heard: i64,
     /// The loop the session runs (review, ci, queue or deploy), from the
     /// moment its skill is asked for until a new prompt or session: the turns
     /// between a loop's rounds are the loop's too.
@@ -114,6 +135,7 @@ impl PaneAgent {
         self.state.is_none()
             && self.activity.is_none()
             && self.wait.is_none()
+            && self.wait_by.is_none()
             && self.loop_name.is_none()
             && self.phase.is_none()
             && self.compact_from.is_none()
@@ -151,6 +173,9 @@ pub struct Hook {
     pub kind: String,
     pub message: String,
     pub session_id: String,
+    /// The subagent the hook fires in (`agent_id`); empty for the
+    /// conversation itself.
+    pub agent: String,
 }
 
 impl Hook {
@@ -239,6 +264,16 @@ impl Hook {
             kind: text(payload, "notification_type").unwrap_or_default(),
             message: text(payload, "message").unwrap_or_default(),
             session_id: text(payload, "session_id").unwrap_or_default(),
+            agent: text(payload, "agent_id").unwrap_or_default(),
+        }
+    }
+
+    /// Who the hook fires for: the conversation itself or a subagent.
+    pub fn waiter(&self) -> Waiter {
+        if self.agent.is_empty() {
+            Waiter::Conversation
+        } else {
+            Waiter::Agent(self.agent.clone())
         }
     }
 
@@ -377,6 +412,25 @@ impl Agents {
         if hook.event == "SessionStart" && hook.source == "compact" {
             return false;
         }
+        // A tool call by someone other than whoever waits (a background
+        // agent's while the conversation asks you something) is no answer.
+        // A new question is a wait of its own, which takes the wait over.
+        let asks = hook.event == "PreToolUse" && hook.tool == "AskUserQuestion";
+        let tool_event = matches!(
+            hook.event.as_str(),
+            "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
+        );
+        if tool_event
+            && !asks
+            && let Some(agent) = self.panes.get(&pane)
+            && agent.state == Some(State::Waiting)
+            && agent
+                .wait_by
+                .as_ref()
+                .is_some_and(|by| *by != hook.waiter())
+        {
+            return false;
+        }
         let agent = self.panes.entry(pane).or_default();
         let mut handed_back = false;
         match hook.event.as_str() {
@@ -409,10 +463,15 @@ impl Agents {
             _ => {}
         }
         // A question to you is a wait from the moment it is asked.
-        if hook.event == "PreToolUse" && hook.tool == "AskUserQuestion" {
+        if asks {
             state = Some(State::Waiting);
         }
         let changed = set_state(agent, state, now, front) || handed_back;
+        // Whoever asked last owns the wait, as its words are the ones shown;
+        // a wait handed back after a compaction has none, so any call ends it.
+        if (asks || hook.event == "PermissionRequest") && agent.state == Some(State::Waiting) {
+            agent.wait_by = Some(hook.waiter());
+        }
         details(agent, state, hook);
         if agent.is_empty() {
             self.panes.remove(&pane);
@@ -428,6 +487,33 @@ impl Agents {
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
+        changed
+    }
+
+    /// The conversation itself ran a hook at `at` (ms), kept while the pane
+    /// has a record.
+    pub fn heard(&mut self, pane: PaneId, at: i64) {
+        if let Some(agent) = self.panes.get_mut(&pane) {
+            agent.heard = agent.heard.max(at);
+        }
+    }
+
+    /// A question the pane's transcript shows unanswered, asked at `at`
+    /// (ms): a wait, unless the pane waits already or the conversation has
+    /// run a hook since, which says the transcript is behind (the answer not
+    /// written yet) or the hook marked it itself. For a question whose hook
+    /// never came. Gives whether its state changed.
+    pub fn asked(&mut self, pane: PaneId, at: i64, question: &str, now: i64, front: bool) -> bool {
+        let agent = self.panes.entry(pane).or_default();
+        if agent.state == Some(State::Waiting) || agent.heard >= at {
+            if agent.is_empty() {
+                self.panes.remove(&pane);
+            }
+            return false;
+        }
+        let changed = set_state(agent, Some(State::Waiting), now, front);
+        agent.wait_by = Some(Waiter::Conversation);
+        agent.wait = Some(one_line(&short(&format!("asks: {question}"), 80)));
         changed
     }
 
@@ -472,6 +558,7 @@ impl Agents {
         agent.state = None;
         agent.since = 0;
         agent.wait = None;
+        agent.wait_by = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -487,6 +574,7 @@ impl Agents {
         };
         let changed = agent.state.take().is_some();
         agent.since = 0;
+        agent.wait_by = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -568,6 +656,9 @@ impl Agents {
                 Ok(())
             }
         };
+        if agent.state != Some(State::Waiting) {
+            agent.wait_by = None;
+        }
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -615,9 +706,11 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
         None | Some(State::Done) => {
             agent.activity = None;
             agent.wait = None;
+            agent.wait_by = None;
         }
         Some(State::Working) => {
             agent.wait = None;
+            agent.wait_by = None;
             match hook.event.as_str() {
                 "UserPromptSubmit" | "PostCompact" => agent.activity = None,
                 "PreCompact" => agent.activity = Some("compacting context".into()),
@@ -681,6 +774,91 @@ mod tests {
         assert!(on(&mut a, "PostToolUse", json!({}), 110));
         assert!(!on(&mut a, "PreToolUse", json!({}), 120));
         assert_eq!(a.get(P).unwrap().since, 110);
+    }
+
+    #[test]
+    fn only_whoever_waits_ends_the_wait_by_going_on() {
+        let mut a = Agents::default();
+        let ask = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which?"}]}});
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        assert!(on(&mut a, "PreToolUse", ask, 110));
+        // A background agent's tools while the conversation asks you.
+        let sub = json!({"agent_id": "a1", "tool_name": "Bash", "tool_input": {"command": "ls"}});
+        assert!(!on(&mut a, "PreToolUse", sub.clone(), 111));
+        assert!(!on(&mut a, "PostToolUse", sub.clone(), 112));
+        assert_eq!(a.state(P), Some(State::Waiting));
+        assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("asks: Which?"));
+        // The answer: the question's own call ends.
+        assert!(on(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "AskUserQuestion"}),
+            130
+        ));
+        assert_eq!(a.state(P), Some(State::Working));
+        // A subagent's permission request is its wait; the conversation's
+        // own calls don't end it, the subagent going on does.
+        let request =
+            json!({"agent_id": "a1", "tool_name": "Bash", "tool_input": {"command": "git push"}});
+        assert!(on(&mut a, "PermissionRequest", request, 140));
+        assert!(!on(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "Read"}),
+            141
+        ));
+        assert!(on(&mut a, "PostToolUse", sub.clone(), 150));
+        // A question asked while a subagent waits takes the wait over.
+        on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 154);
+        let ask = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "And?"}]}});
+        on(&mut a, "PreToolUse", ask, 155);
+        assert!(!on(&mut a, "PostToolUse", sub, 156));
+        assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("asks: And?"));
+        on(&mut a, "PostToolUse", json!({}), 157);
+        // Two subagents asking: the later one's request is the one shown,
+        // and its going on ends the wait.
+        on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 158);
+        on(&mut a, "PermissionRequest", json!({"agent_id": "a2"}), 159);
+        assert!(!on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 160));
+        assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a2"}), 161));
+        // A wait an automatic compaction hands back is anyone's.
+        on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 162);
+        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 163);
+        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 164);
+        assert_eq!(a.state(P), Some(State::Waiting));
+        assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 165));
+        assert_eq!(a.get(P).unwrap().wait_by, None);
+        // A wait only a Notification said may be anyone's: any call ends it.
+        on(&mut a, "PostToolUse", json!({}), 151);
+        assert!(a.wait(P, 152, false));
+        assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 153));
+        // A finished turn ends any wait.
+        on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 160);
+        on(&mut a, "Stop", json!({}), 170);
+        assert_eq!(a.state(P), Some(State::Done));
+    }
+
+    #[test]
+    fn a_question_the_transcript_shows_waits_unless_a_hook_came_since() {
+        let mut a = Agents::default();
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        a.heard(P, 100_000);
+        // Asked after the conversation's last hook: its hook never came.
+        assert!(a.asked(P, 105_000, "Which layout?", 106, false));
+        assert_eq!(a.state(P), Some(State::Waiting));
+        assert_eq!(
+            a.get(P).unwrap().wait.as_deref(),
+            Some("asks: Which layout?")
+        );
+        assert!(!a.asked(P, 105_000, "Which layout?", 107, false));
+        // Answered: the hook comes before the transcript has the answer.
+        on(&mut a, "PostToolUse", json!({}), 120);
+        a.heard(P, 120_000);
+        assert!(!a.asked(P, 105_000, "Which layout?", 121, false));
+        assert_eq!(a.state(P), Some(State::Working));
+        // An idle pane with no record waits on a question too.
+        let mut b = Agents::default();
+        assert!(b.asked(P, 5, "Go?", 1, false));
     }
 
     #[test]

@@ -323,7 +323,7 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
     ] {
         assert!(text.contains(option), "{option}");
     }
-    // The shape the work-a-note mode reads: an open choice is a "Decision
+    // The shape autopilot reads: an open choice is a "Decision
     // needed" heading in the plan and "(needs a choice" on the item.
     for shape in [
         "## Decision needed",
@@ -334,7 +334,7 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
     }
 }
 
-// test/skills.test.js's "a tab of the work-a-note mode lands without asking
+// test/skills.test.js's "a tab of autopilot lands without asking
 // only once leak-check finds nothing, and its review loop fixes mediums
 // without asking".
 #[test]

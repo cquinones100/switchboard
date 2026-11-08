@@ -1,4 +1,4 @@
-//! The landings the work-a-note mode's tabs made without asking (its menu's
+//! The landings autopilot's tabs made without asking (its menu's
 //! "Land without asking"), for the notifications: what queue-and-clean's
 //! `switchboard land-lock autolanded <short hash> <item>` adds once such a
 //! landing has pushed, `autolanded.json` in the state directory, `[{ hash,

@@ -10,13 +10,15 @@
 //!
 //! The hash is SHA-256, as `shasum -a 256` gave it, written out here since
 //! the color needs only this one use of it: the first eight hex digits of
-//! the key's hash, as a number, modulo 360 is the hue, turned into a color
+//! the key's hash, as a number, picks the hue from those whose color doesn't
+//! read as red (the scripts took any of the 360), turned into a color
 //! at about 80% saturation and 45% lightness in the same integer steps the
 //! shell's arithmetic took. The tab's color is then lifted to a perceived
 //! luminance of at least 100, for reading on a dark status line; the
 //! statusline's isn't, as it never was.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use super::git::GitPlace;
 
@@ -91,11 +93,35 @@ pub fn color_key_of(dir: &Path) -> String {
     color_key(&dir_name(dir), super::git::locate(dir).as_ref())
 }
 
+/// The hues a key can hash to: those of the 360 whose color doesn't read as
+/// red, since red is what a failing build and an error wear. The shell's
+/// steps run each 60° segment out and back, so red is at both ends of the
+/// two segments either side of 0° (0°, 60°, 300°, 360°), not only around 0°;
+/// what is left is 302 hues, orange (15° to 45°) and magenta (315° to 345°)
+/// among them.
+static HUES: LazyLock<Vec<i64>> =
+    LazyLock::new(|| (0..360).filter(|h| !reads_as_red(hue_color(*h))).collect());
+
+/// Red, its other two channels left too low to make it orange or pink.
+fn reads_as_red(c: Rgb) -> bool {
+    c.r > c.g.max(c.b) && c.g.max(c.b) < 135
+}
+
+/// The hue a key hashes to, in degrees.
+fn hue(key: &str) -> i64 {
+    let digest = sha256(key.as_bytes());
+    let hash = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize;
+    HUES[hash % HUES.len()]
+}
+
 /// The color a key hashes to, as the Claude statusline draws it.
 pub fn statusline_color(key: &str) -> Rgb {
-    let digest = sha256(key.as_bytes());
-    let hash = u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as i64;
-    let hue = hash % 360;
+    hue_color(hue(key))
+}
+
+/// A hue made a color at about 80% saturation and 45% lightness, in the
+/// shell's integer steps.
+fn hue_color(hue: i64) -> Rgb {
     let segment = hue / 60;
     let frac = (hue % 60) * 255 / 60;
     let c: i64 = 204;
@@ -267,9 +293,36 @@ mod tests {
     }
 
     #[test]
+    fn no_key_hashes_to_a_red() {
+        // Every hue a key can take is a color that isn't red, the tab's
+        // lifted one too, and the reds at 0°, 60° and 300° are left out.
+        for h in HUES.iter() {
+            assert!(!reads_as_red(hue_color(*h)), "{h}°");
+        }
+        assert_eq!(hue_color(300), Rgb::new(239, 35, 35));
+        for red in [0, 14, 46, 59, 300, 314, 346, 359] {
+            assert!(!HUES.contains(&red), "{red}°");
+        }
+        assert_eq!(HUES.len(), 302);
+        // The reddest left are orange and pink.
+        assert_eq!(hue_color(15), Rgb::new(239, 135, 35));
+        assert_eq!(hue_color(345), Rgb::new(239, 35, 137));
+        // Thousands of made-up directories, spread over all of them.
+        let hues: std::collections::HashSet<i64> = (0..5000)
+            .map(|i| {
+                let key = format!("project-{i} | branch:eng-{i}-fix");
+                assert!(!reads_as_red(statusline_color(&key)), "{key}");
+                assert!(!reads_as_red(accent_color(&key)), "{key}");
+                hue(&key)
+            })
+            .collect();
+        assert_eq!(hues.len(), HUES.len());
+    }
+
+    #[test]
     fn colors_are_pinned() {
-        // Worked out by tmux/accent-color.sh, so a change to the hash or the
-        // steps shows up here.
+        // The steps of tmux/accent-color.sh, over the hues that aren't red,
+        // so a change to the hash or the steps shows up here.
         for (key, hex) in PINNED {
             assert_eq!(accent_color(key).hex(), *hex, "{key}");
         }
@@ -280,18 +333,18 @@ mod tests {
         }
     }
 
-    // Some lifted for a dark status line (app, deep-blue, a, f), some not.
+    // Some lifted for a dark status line (a), some not.
     const PINNED: &[(&str, &str)] = &[
-        ("switchboard | branch:main", "23d4ef"),
-        ("app", "f0243f"),
-        ("web | branch:eng-42-fix-login", "23a3ef"),
-        ("eng-7 | worktree:eng-7", "ef7423"),
-        ("notes", "efe123"),
-        ("api | branch:HEAD", "23efb7"),
-        ("deep-blue", "8f31fd"),
-        ("a", "7d39ff"),
-        ("c", "beef23"),
-        ("f", "f42828"),
+        ("switchboard | branch:main", "d923ef"),
+        ("app", "efdb23"),
+        ("web | branch:eng-42-fix-login", "67ef23"),
+        ("eng-7 | worktree:eng-7", "a3ef23"),
+        ("notes", "5fef23"),
+        ("api | branch:HEAD", "ef238f"),
+        ("deep-blue", "29ef23"),
+        ("a", "6f3fff"),
+        ("c", "4bef23"),
+        ("f", "6eef23"),
     ];
 
     /// Real directories, read through git's own files, take the keys and

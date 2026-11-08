@@ -19,7 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::model::{self, Group, Rules, TabModel, TabState};
+use super::model::{self, Rules, Stage, TabModel, TabState};
 use super::text::{self, Badge, SPINNER, width};
 use crate::items::{Item, State};
 use crate::mux::TabId;
@@ -66,6 +66,9 @@ pub struct Notice {
     pub owner: Owner,
     pub title: String,
     pub detail: String,
+    /// When the newest of its kind came, in seconds since the epoch, shown
+    /// as how long ago with UX 2.0 on; none for a kind that keeps no time.
+    pub time: Option<i64>,
 }
 
 /// A plugin's short list under the tabs (its `sidebar` count of items, from
@@ -252,6 +255,16 @@ fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
 
+/// A group's heading color with UX 2.0: the color of the badge its stage
+/// wears in mission control, so what needs you reads yellow and what works
+/// blue; the quiet groups dim.
+fn ux2_group_color(stage: Stage, theme: &Theme) -> Color {
+    match stage {
+        Stage::Idle | Stage::Other => theme.dim,
+        _ => stage.color().color().unwrap_or(theme.dim),
+    }
+}
+
 /// An item's mark by its state, as mission control's lists draw it.
 fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
     match item.state {
@@ -346,6 +359,8 @@ pub fn sidebar_lines(
     let here = tabs.iter().find(|t| t.id == view.here);
 
     // The session's name in a pill of its tab's color, and the counts.
+    // With UX 2.0, which has no sessions to tell apart, how many tabs
+    // there are in its place.
     let mut pill_row = Row::default();
     let pill = match here.and_then(|t| t.color) {
         Some(c) => Style::new()
@@ -357,11 +372,27 @@ pub fn sidebar_lines(
             .fg(theme.bright)
             .add_modifier(Modifier::BOLD),
     };
-    pill_row
-        .put(" ", Style::new())
-        .put(format!(" {session} "), pill)
-        .put("  ", Style::new());
-    counts(&mut pill_row, tabs, r, theme);
+    if r.ux2 {
+        // The count, and on the right how to filter; the groups' own
+        // headings say how many need you or work.
+        let n = tabs.len();
+        let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
+        pill_row
+            .put(" ", Style::new())
+            .put(said.clone(), fg(theme.dim));
+        let gap = cols.saturating_sub(width(&said) + 1 + width("/ filter") + 1);
+        if gap > 0 {
+            pill_row
+                .put(" ".repeat(gap), Style::new())
+                .put("/ filter", fg(theme.faint));
+        }
+    } else {
+        pill_row
+            .put(" ", Style::new())
+            .put(format!(" {session} "), pill)
+            .put("  ", Style::new());
+        counts(&mut pill_row, tabs, r, theme);
+    }
     head.push(pill_row.fit(cols, None));
     // A / filter being typed, or kept, in the line under it.
     match view.filter {
@@ -383,15 +414,28 @@ pub fn sidebar_lines(
         // at a glance.
         let mut heading = Row::default();
         heading.put(" ", Style::new());
-        if group.group == Group::Failing {
+        if r.ux2 {
+            // UX 2.0: the heading in its group's color, bold, its count at
+            // the right edge.
+            let title = group.stage.title().to_uppercase();
+            let n = group.tabs.len().to_string();
+            let color = ux2_group_color(group.stage, theme);
+            heading.put(title.clone(), bold(color));
+            let gap = cols.saturating_sub(width(&title) + width(&n) + 2);
+            heading
+                .put(" ".repeat(gap.max(1)), Style::new())
+                .put(n, fg(color));
+        } else if group.stage == Stage::Failing {
             heading.put(
-                format!("✗ {}", group.group.title().to_uppercase()),
+                format!("✗ {}", group.stage.title().to_uppercase()),
                 bold(Color::Indexed(160)),
             );
         } else {
-            heading.put(group.group.title().to_uppercase(), fg(theme.dim));
+            heading.put(group.stage.title().to_uppercase(), fg(theme.dim));
         }
-        heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
+        if !r.ux2 {
+            heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
+        }
         lines.push(heading.fit(cols, None));
         owners.push(None);
         let last = group.tabs.len().saturating_sub(1);
@@ -399,6 +443,73 @@ pub fn sidebar_lines(
             let chosen = selected == Some(tab.id);
             if chosen {
                 cursor_at = lines.len();
+            }
+            if r.ux2 {
+                // UX 2.0: two lines a tab. Its state's mark in its color
+                // (no pill), its number in its project's color, its name on
+                // one line; under it, what it is doing. The cursor's row
+                // shaded, with an accent bar at its left.
+                let state = model::badge_state(tab, r);
+                spins |= state.spins();
+                let fill = if chosen {
+                    Some(theme.highlight)
+                } else if view.hover == Some(&Owner::Tab(tab.id)) {
+                    Some(theme.panel)
+                } else {
+                    None
+                };
+                let mark = if state.spins() {
+                    SPINNER[view.frame % SPINNER.len()]
+                } else {
+                    state.look().mark
+                };
+                let mark_style = state.color().map(bold).unwrap_or(fg(theme.faint));
+                let edge = if chosen { "▌" } else { " " };
+                let accent = fg(Color::Indexed(81));
+                let number = tab.index.to_string();
+                let name_style = if chosen || tab.id == view.here {
+                    bold(theme.bright)
+                } else {
+                    fg(theme.text)
+                };
+                let room = cols.saturating_sub(4 + width(&number));
+                let mut first = Row::default();
+                first
+                    .put(edge, accent)
+                    .put(mark, mark_style)
+                    .put(" ", Style::new())
+                    .put(
+                        number,
+                        fg(tab.color.map(Color::from).unwrap_or(theme.faint)),
+                    )
+                    .put(" ", Style::new())
+                    .put(text::cut(&tab.name, room), name_style);
+                lines.push(first.fit(cols, fill));
+                owners.push(Some(tab.id));
+                let mut doing: Vec<String> = model::state_words(tab, r)
+                    .split(" · ")
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if let Some(c) = tab.checks.filter(|c| c.fail > 0) {
+                    doing.insert(0, format!("✗{} failing", c.fail));
+                }
+                if let Some(n) = tab.pr.filter(|n| !tab.name.contains(&format!("#{n}"))) {
+                    doing.push(format!("#{n}"));
+                }
+                if !doing.is_empty() {
+                    let mut second = Row::default();
+                    second.put(edge, accent).put("    ", Style::new()).put(
+                        text::cut(&doing.join(" · "), cols.saturating_sub(6)),
+                        fg(theme.dim),
+                    );
+                    lines.push(second.fit(cols, fill));
+                    owners.push(Some(tab.id));
+                }
+                if chosen {
+                    cursor_end = lines.len() - 1;
+                }
+                continue;
             }
             let fill = if chosen {
                 Some(theme.highlight)
@@ -467,7 +578,7 @@ pub fn sidebar_lines(
             if tab.notes_here {
                 parts.push("✎ Notes here".into());
             }
-            // A tab the mode working a note opened says so, and that it
+            // A tab autopilot opened says so, and that it
             // landed once back in the main clone, closing soon, and whether
             // it landed without asking.
             if tab.autopilot {
@@ -573,7 +684,47 @@ pub fn sidebar_lines(
     // heading, so they read as no tab and never scroll away.
     let mut notice_lines: Vec<Line> = Vec::new();
     let mut notice_owners: Vec<Option<Owner>> = Vec::new();
-    if !notices.is_empty() {
+    // With UX 2.0 they open the sidebar instead, under the header, a line
+    // each, and are gone when there are none; they never scroll away
+    // either.
+    let mut top_owners: Vec<Option<Owner>> = Vec::new();
+    if r.ux2 && !notices.is_empty() {
+        let mut heading = Row::default();
+        heading
+            .put(" ", Style::new())
+            .put("NOTIFICATIONS", bold(YELLOW))
+            .put(format!(" {}", notices.len()), fg(theme.faint));
+        head.push(heading.fit(cols, None));
+        top_owners.push(None);
+        for n in notices {
+            let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
+                Some(theme.highlight)
+            } else if view.hover == Some(&n.owner) {
+                Some(theme.panel)
+            } else {
+                None
+            };
+            // How long ago it came at the right edge, dim, the title cut
+            // so it always fits.
+            let when = text::ago(n.time, r.now_secs());
+            let room = cols.saturating_sub(4 + if when.is_empty() { 0 } else { width(&when) + 1 });
+            let title = text::cut(&n.title, room);
+            let gap = cols.saturating_sub(4 + width(&title) + width(&when));
+            let mut row = Row::default();
+            row.put(if fill.is_some() { "▌" } else { " " }, fg(YELLOW))
+                .put("●", fg(YELLOW))
+                .put(" ", Style::new())
+                .put(title, fg(theme.text));
+            if !when.is_empty() {
+                row.put(" ".repeat(gap), Style::new())
+                    .put(when, fg(theme.dim));
+            }
+            head.push(row.fit(cols, fill));
+            top_owners.push(Some(n.owner.clone()));
+        }
+        head.push(Line::blank(cols));
+        top_owners.push(None);
+    } else if !notices.is_empty() {
         notice_lines.push(Line::blank(cols));
         let mut rule = Row::default();
         rule.put(" ", Style::new())
@@ -610,6 +761,15 @@ pub fn sidebar_lines(
                 notice_owners.push(Some(n.owner.clone()));
             }
         }
+    }
+
+    // UX 2.0's last row: the keys that start, find and walk tabs.
+    if r.ux2 {
+        let mut hint = Row::default();
+        hint.put(" ", Style::new())
+            .put("M-t new · M-j jump · M-a next", fg(theme.faint));
+        notice_lines.push(hint.fit(cols, None));
+        notice_owners.push(None);
     }
 
     // The list scrolls to keep the chosen tab in sight between the header
@@ -670,7 +830,8 @@ pub fn sidebar_lines(
         row.put(" ", Style::new()).put(said, fg(theme.faint));
         row.fit(cols, fill)
     };
-    let mut head_owners: Vec<Option<Owner>> = vec![None; head.len()];
+    let mut head_owners: Vec<Option<Owner>> = vec![None; head.len() - top_owners.len()];
+    head_owners.extend(top_owners);
     if top > 0 && view.filter.is_none() {
         // A tab cut at the top counts as above.
         head[1] = more("▲", &Owner::ScrollUp, tabs_in(0, top).len());
@@ -853,6 +1014,20 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_under_queue_and_clean_is_under_its_heading() {
+        let mut landing = tab(1, "landing", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        let tabs = vec![landing, tab(2, "busy", TabState::Working)];
+        let out = lines(&tabs, 30, 14, &view(1));
+        let text: Vec<String> = out.lines.iter().map(Line::text).collect();
+        let at = |heading: &str| text.iter().position(|l| l.starts_with(heading));
+        let queue = at(" QUEUE-AND-CLEAN 1").expect("a Queue-and-clean heading");
+        let working = at(" WORKING 1").expect("a Working heading");
+        assert!(working < queue, "{text:?}");
+        assert_eq!(out.owners[queue + 1], Some(Owner::Tab(TabId(1))));
+    }
+
+    #[test]
     fn the_header_counts_and_a_pr_said_once() {
         let r = rules();
         let mut failing = tab(2, "red idle", TabState::Idle);
@@ -965,6 +1140,100 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_the_tab_count_and_the_notifications_open_the_sidebar() {
+        let t = tab(1, "work", TabState::Idle);
+        let notice = Notice {
+            owner: Owner::Notice {
+                source: "slack".into(),
+                id: "n1".into(),
+            },
+            title: "3 new on Slack".into(),
+            detail: "Ada · #general".into(),
+            time: Some(rules().now_secs() - 720),
+        };
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let out = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            std::slice::from_ref(&notice),
+            &[],
+            "s",
+            40,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        assert_eq!(out.lines.len(), 20);
+        let text = texts(&out);
+        assert!(text[0].starts_with(" 1 tab"), "{:?}", text[0]);
+        assert!(!text[0].contains(" s "), "no session's name: {:?}", text[0]);
+        assert_eq!(text[2], " NOTIFICATIONS 1");
+        // How long ago it came, dim at the right edge.
+        assert_eq!(text[3], format!(" ● 3 new on Slack{}12m", " ".repeat(19)));
+        assert_eq!(out.lines[3].spans.last().unwrap().content, " ");
+        let when = &out.lines[3].spans[out.lines[3].spans.len() - 2];
+        assert_eq!(when.content, "12m");
+        assert_eq!(when.style.fg, Some(Theme::DARK.dim));
+        assert_eq!(out.owners[3], Some(notice.owner.clone()));
+        // A long title is cut so the time still fits; none kept, none shown.
+        let long = |time| Notice {
+            title: "Landed the stable note IDs and the claims by them".into(),
+            time,
+            ..notice.clone()
+        };
+        let at = |n: &Notice| {
+            texts(&sidebar_lines(
+                std::slice::from_ref(&t),
+                None,
+                std::slice::from_ref(n),
+                &[],
+                "s",
+                40,
+                20,
+                &view(1),
+                &r,
+                &Theme::DARK,
+            ))[3]
+                .clone()
+        };
+        assert_eq!(
+            at(&long(Some(rules().now_secs() - 3600))),
+            " ● Landed the stable note IDs and t… 1h"
+        );
+        assert_eq!(at(&long(None)), " ● Landed the stable note IDs and the …");
+        assert_eq!(text[4], "");
+        assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
+        // The group's heading with its count at the right edge, then the
+        // tab: the cursor's bar, its mark with no pill, its number, its name.
+        assert!(text[5].ends_with(" 1"), "{:?}", text[5]);
+        assert_eq!(text[6], "▌○ 1 work");
+        assert_eq!(out.owners[6], Some(Owner::Tab(TabId(1))));
+        assert_eq!(text[19], " M-t new · M-j jump · M-a next");
+        assert!(
+            !text.iter().any(|l| l.contains("═")),
+            "none pinned at the bottom"
+        );
+        // None, none shown.
+        let none = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            20,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        assert!(!texts(&none).iter().any(|l| l.contains("NOTIFICATIONS")));
+    }
+
+    #[test]
     fn notifications_sit_at_the_bottom_under_their_own_heading() {
         let t = tab(1, "work", TabState::Idle);
         let notice = Notice {
@@ -974,6 +1243,7 @@ mod tests {
             },
             title: "3 new on Slack".into(),
             detail: "Ada · #general".into(),
+            time: None,
         };
         let out = sidebar_lines(
             std::slice::from_ref(&t),

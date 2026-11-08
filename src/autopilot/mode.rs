@@ -56,6 +56,9 @@ pub struct Mode {
     pub spend_limit: f64,
     /// Its tabs land on the default branch without asking to push.
     pub land_without_asking: bool,
+    /// The branch its tabs are cut from and land on; empty for the
+    /// repository's default branch.
+    pub target: String,
     /// What it has to say, in the notifications; empty for nothing.
     pub said: String,
     /// The landed tabs it closed without your seeing them, the last
@@ -112,6 +115,7 @@ impl Default for Mode {
             skipped: Vec::new(),
             spend_limit: 0.0,
             land_without_asking: false,
+            target: String::new(),
             said: String::new(),
             closed: Vec::new(),
         }
@@ -169,6 +173,7 @@ impl Mode {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
             land_without_asking: flag("landWithoutAsking", d.land_without_asking),
+            target: text("target").unwrap_or_default(),
             said: text("said").unwrap_or_default(),
             closed: match map.get("closed") {
                 Some(Value::Array(list)) => list
@@ -219,6 +224,7 @@ impl Mode {
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
+        map.insert("target".into(), self.target.into());
         map.insert("said".into(), self.said.into());
         map.insert(
             "closed".into(),
@@ -282,6 +288,76 @@ pub struct NoteChoices {
     pub rest: Vec<String>,
 }
 
+/// The value of "Another branch…" in the target's list, which no branch
+/// can be named (git refuses a `:` in one).
+pub const ANOTHER_BRANCH: &str = ":another";
+
+/// "Land on:"'s list, each option's label and value: the branches picked
+/// before (`recent`, from src/cmd/work_recent.rs, `""` for the default
+/// one, or its name when typed), the most recent first, then the default
+/// branch if it isn't among them, its value empty so the mode keeps
+/// following it, then the other local branches by name, then "Another branch…" to type one. With nothing
+/// picked yet the default branch leads, so Enter lands there.
+pub fn target_choices(
+    default: Option<&str>,
+    branches: &[String],
+    recent: &[String],
+) -> Vec<(String, String)> {
+    let default_row = || {
+        (
+            match default {
+                Some(d) => format!("{d} (the default branch)"),
+                None => "The default branch".to_string(),
+            },
+            String::new(),
+        )
+    };
+    let others: Vec<&String> = branches
+        .iter()
+        .filter(|b| Some(b.as_str()) != default)
+        .collect();
+    let mut out: Vec<(String, String)> = Vec::new();
+    for r in recent {
+        // The default branch typed by its name through "Another branch…"
+        // counts as a pick of the default one.
+        let is_default = r.is_empty() || Some(r.as_str()) == default;
+        if is_default {
+            if !out.iter().any(|(_, v)| v.is_empty()) {
+                out.push(default_row());
+            }
+        } else if others.contains(&r) && !out.iter().any(|(_, v)| v == r) {
+            out.push((r.clone(), r.clone()));
+        }
+    }
+    if !out.iter().any(|(_, v)| v.is_empty()) {
+        out.push(default_row());
+    }
+    let mut rest: Vec<&String> = others
+        .into_iter()
+        .filter(|b| !out.iter().any(|(_, v)| v == *b))
+        .collect();
+    rest.sort();
+    out.extend(rest.into_iter().map(|b| (b.clone(), b.clone())));
+    out.push(("Another branch…".into(), ANOTHER_BRANCH.into()));
+    out
+}
+
+/// The branch typed for "Another branch…", or `None` for one git couldn't
+/// name (empty, a space, `..`, a `:` and the like).
+pub fn typed_branch(text: &str) -> Option<String> {
+    let t = text.trim();
+    let bad = t.is_empty()
+        || t.starts_with(['-', '/', '.'])
+        || t.ends_with(['/', '.'])
+        || t.ends_with(".lock")
+        || t.contains("..")
+        || t.contains("//")
+        || t.contains("@{")
+        || t.chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    (!bad).then(|| t.to_string())
+}
+
 /// The notes to pick from, each list the one the mode last worked first,
 /// then the most recently changed, leaving out deleted ones and every other
 /// dot-folder. Reads the whole directory and every note in it, so it is
@@ -333,6 +409,10 @@ mod tests {
         assert_eq!(mode.slots, 3, "a count that isn't one is the default");
         assert_eq!(mode.skipped, Vec::<Skipped>::new(), "Lua's empty object");
         assert_eq!(mode.spend_limit, 2.5);
+        assert_eq!(
+            mode.target, "",
+            "a state saved before targets lands on the default branch"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -344,6 +424,7 @@ mod tests {
             m.on = true;
             m.spend_limit = 20.0;
             m.note_id = "n-0123456789ab".into();
+            m.target = "team/next".into();
             m.skipped.push(Skipped {
                 note: m.note_id.clone(),
                 text: "One".into(),
@@ -362,6 +443,8 @@ mod tests {
         assert_eq!(written["note"], "Work.md");
         assert_eq!(written["noteId"], "n-0123456789ab");
         assert_eq!(written["landWithoutAsking"], false);
+        assert_eq!(written["target"], "team/next");
+        assert_eq!(Mode::read(&dir).target, "team/next");
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -442,5 +525,60 @@ mod tests {
         );
         assert_eq!(note_title("Work/Plan's Notes.md"), "Plan's Notes");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn land_on_lists_the_default_branch_first_then_the_others_then_another() {
+        let branches = ["x".to_string(), "main".into(), "team/next".into()];
+        assert_eq!(
+            target_choices(Some("main"), &branches, &[]),
+            [
+                ("main (the default branch)".to_string(), String::new()),
+                ("team/next".into(), "team/next".into()),
+                ("x".into(), "x".into()),
+                ("Another branch…".into(), ANOTHER_BRANCH.into()),
+            ]
+        );
+        assert_eq!(target_choices(None, &[], &[])[0].0, "The default branch");
+        assert_eq!(
+            typed_branch(" release/1.2 ").as_deref(),
+            Some("release/1.2")
+        );
+        for bad in ["", "a b", "a..b", "-x", "x:y", "x.lock", "x/"] {
+            assert_eq!(typed_branch(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn land_on_lists_the_branches_picked_before_first_the_most_recent_first() {
+        let branches = [
+            "z".to_string(),
+            "main".into(),
+            "team/next".into(),
+            "a".into(),
+        ];
+        let values = |recent: &[&str]| -> Vec<String> {
+            let recent: Vec<String> = recent.iter().map(|r| r.to_string()).collect();
+            target_choices(Some("main"), &branches, &recent)
+                .into_iter()
+                .map(|(_, v)| v)
+                .collect()
+        };
+        // The default branch by its own time among them, a branch gone left
+        // out, the rest by name.
+        assert_eq!(
+            values(&["z", "", "gone", "team/next"]),
+            ["z", "", "team/next", "a", ANOTHER_BRANCH]
+        );
+        // The default branch typed by its name counts as picked, once.
+        assert_eq!(
+            values(&["main", "z", ""]),
+            ["", "z", "a", "team/next", ANOTHER_BRANCH]
+        );
+        // Never picked, the default branch leads the rest.
+        assert_eq!(
+            values(&["team/next"]),
+            ["team/next", "", "a", "z", ANOTHER_BRANCH]
+        );
     }
 }

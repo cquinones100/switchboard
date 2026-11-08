@@ -36,7 +36,7 @@ This is a project skill of Switchboard's repository (`.claude/skills/`), for wor
 
    An item always goes in the note's top list (the items before its first `## ` section), never in a section, which is where ticked items are moved.
 
-6. **The plan note.** `<plans folder>/Plan - <name>.md`, `<name>` a few words in title case naming what the change does, and one no other `Plan - <name>.md` anywhere in the notes directory has, since `/wtn` and the work-a-note mode find a plan by its file name alone:
+6. **The plan note.** `<plans folder>/Plan - <name>.md`, `<name>` a few words in title case naming what the change does, and one no other `Plan - <name>.md` anywhere in the notes directory has, since `/wtn` and autopilot find a plan by its file name alone:
 
    ```
    # Plan - <name>
@@ -62,8 +62,8 @@ This is a project skill of Switchboard's repository (`.claude/skills/`), for wor
    - The plan follows the repository's `CLAUDE.md`: a new feature gets a setting, a new key an `Action` in `src/mux/keys.rs` or a part's `Command` with `about()` and its tags (so `M-p` lists it), anything that takes a choice a click and a Tab stop, what it says goes through `Server::say`, and nothing on the drawing path starts a process or waits on the network.
    - Write it as the user's rules say: changes as instructions, current behavior only under `## Today`, no rejected alternatives, no future notes, and no self-corrections or thinking aloud. Write each step as decided.
 
-7. **The item**, only once its plan note is written, since the work-a-note mode can take an item as soon as it is in the note. One `- [ ]` line in the user's terms. Under it, indented two spaces, in this order: `- Cause: …` for a bug once found, `- Seen in …` for evidence, then `Plan: [[Plan - <name>]]`, followed by ` (needs a choice: <the options' letters>)` while the plan has an open decision. Edit the note file directly, as `assets/switchboard.md` says for notes; when moving items, move each whole, with its indented lines.
+7. **The item**, only once its plan note is written, since autopilot can take an item as soon as it is in the note. One `- [ ]` line in the user's terms. Under it, indented two spaces, in this order: `- Cause: …` for a bug once found, `- Seen in …` for evidence, then `Plan: [[Plan - <name>]]`, followed by ` (needs a choice: <the options' letters>)` while the plan has an open decision. Edit the note file directly, as `assets/switchboard.md` says for notes; when moving items, move each whole, with its indented lines.
 
-8. **A choice made later.** When the user answers a plan's decision ("A", "b"), tick that option, rename the heading `## Decision needed` to `## Decision` (the work-a-note mode, `plan_of` in `src/cmd/worktree_from_note.rs`, skips a plan while it has a "Decision needed" heading), rewrite the steps that depended on it and their heading, and change the item's `(needs a choice: …)` to `(chose <X>)`.
+8. **A choice made later.** When the user answers a plan's decision ("A", "b"), tick that option, rename the heading `## Decision needed` to `## Decision` (autopilot, `plan_of` in `src/cmd/worktree_from_note.rs`, skips a plan while it has a "Decision needed" heading), rewrite the steps that depended on it and their heading, and change the item's `(needs a choice: …)` to `(chose <X>)`.
 
 9. **The reply.** In a few lines: what was added and where it sits in the note, the cause in a line for a bug, and any choice needed as one-line options. Don't recap the plan's steps.

@@ -10,10 +10,9 @@
 //!   into anything but a Switchboard clone, is yours and left alone. (The
 //!   skills part replaces the old links in `~/.claude/skills` itself.)
 //! - The lines setup.sh added to `~/.zshrc`, `eval "$(worktree-from-ticket
-//!   init zsh)"` and the rest, which fail on every new shell once the script
-//!   is gone: each is turned into the same line run through the binary
-//!   (`switchboard worktree-from-ticket init zsh`), so the functions it
-//!   defined are still there; the same in `~/.bashrc`.
+//!   init zsh)"` and the rest, with the comments it wrote above them: each
+//!   is taken out, since every tab, menu and skill that runs a worktree
+//!   function defines it itself; the same in `~/.bashrc`.
 //! - A `switchboard` shell function or alias that starts tmux: the tmux
 //!   version's `tmux_server` setting ran it on a server of its own, opened
 //!   with `tmux -L switchboard new-session -A -s main`, which people wrapped
@@ -139,47 +138,65 @@ pub fn dead_links() -> Vec<PathBuf> {
     found
 }
 
-/// A startup file's text with each leftover line run through the binary,
-/// or `None` when it has none. A line is a leftover when it evals a worktree
-/// script's `init` by a name or path that no longer runs anything.
-pub fn rc_fixed(text: &str) -> Option<String> {
+/// A startup file's text without the tmux version's worktree lines, or
+/// `None` when it has none. A line is one when it evals a worktree script's
+/// `init` by the script's name or a path to it, as setup.sh wrote them;
+/// nothing needs them now, since every tab, menu and skill that runs `wt`,
+/// `wtn` and the rest defines the function itself, so they go whether or
+/// not the script still runs. The comment lines right above one go too when
+/// they name the function it defined (`wt`, `wtpr`, `wtr`, `wtb`, `wtn`),
+/// as setup.sh's words said what each was for. A line running the binary's
+/// own `init` (`switchboard worktree-from-note init zsh`) is yours, added to
+/// type the functions, and left alone.
+pub fn rc_cleared(text: &str) -> Option<String> {
     let line = Regex::new(&format!(
-        r#"^(\s*eval\s+"\$\()((?:[^"\s()]*/)?({}))(\s+init\s+(?:zsh|bash)\s*\)".*)$"#,
+        r#"^\s*eval\s+"\$\((?:[^"\s()]*/)?(?:{})\s+init\s+(?:zsh|bash)\s*\)"\s*(?:#.*)?$"#,
         WORKTREE_SCRIPTS.join("|")
     ))
     .expect("a valid pattern");
-    let mut changed = false;
-    let fixed: Vec<String> = text
-        .split_inclusive('\n')
-        .map(|l| {
-            let (body, end) = match l.strip_suffix('\n') {
-                Some(body) => (body, "\n"),
-                None => (l, ""),
-            };
-            let Some(c) = line.captures(body) else {
-                return l.to_string();
-            };
-            let named = &c[2];
-            let runs = if named.contains('/') {
-                let expanded = match named.strip_prefix("~/") {
-                    Some(rest) => paths::home_join(rest),
-                    None => match named.strip_prefix("$HOME/") {
-                        Some(rest) => paths::home_join(rest),
-                        None => PathBuf::from(named),
-                    },
-                };
-                util::which(&expanded.to_string_lossy()).is_some()
-            } else {
-                util::which(named).is_some()
-            };
-            if runs {
-                return l.to_string();
+    let names = Regex::new(r"`(?:wt|wtpr|wtr|wtb|wtn)`").expect("a valid pattern");
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut keep = vec![true; lines.len()];
+    for (i, l) in lines.iter().enumerate() {
+        if !line.is_match(l.trim_end_matches('\n')) {
+            continue;
+        }
+        keep[i] = false;
+        // The comment block right above, when it names a function.
+        let mut top = i;
+        while top > 0 && lines[top - 1].trim_start().starts_with('#') {
+            top -= 1;
+        }
+        if top < i && lines[top..i].iter().any(|c| names.is_match(c)) {
+            for k in keep.iter_mut().take(i).skip(top) {
+                *k = false;
             }
-            changed = true;
-            format!("{}switchboard {}{}{end}", &c[1], &c[3], &c[4])
-        })
+        }
+    }
+    if keep.iter().all(|k| *k) {
+        return None;
+    }
+    let kept: Vec<&str> = lines
+        .iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(l, _)| *l)
         .collect();
-    changed.then(|| fixed.concat())
+    // No run of blank lines left longer than the file had.
+    let mut out = String::new();
+    let mut blanks = 0;
+    for l in kept {
+        if l.trim().is_empty() {
+            blanks += 1;
+            if blanks > 1 {
+                continue;
+            }
+        } else {
+            blanks = 0;
+        }
+        out.push_str(l);
+    }
+    Some(out)
 }
 
 /// A startup file's text without a `switchboard` function or alias that
@@ -239,9 +256,9 @@ pub fn run(r: &mut Report) -> Result<()> {
         };
         let mut fixed = text;
         let mut done = Vec::new();
-        if let Some(t) = rc_fixed(&fixed) {
+        if let Some(t) = rc_cleared(&fixed) {
             fixed = t;
-            done.push("run the worktree functions' init through switchboard");
+            done.push("take out the tmux version's worktree lines");
         }
         if let Some(t) = rc_unshadowed(&fixed) {
             fixed = t;
@@ -276,20 +293,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_line_whose_script_is_gone_runs_through_the_binary() {
+    fn the_tmux_versions_worktree_lines_are_taken_out() {
         let text = "export X=1\n\
+                    \n\
+                    # Defines `wt`: creates a worktree from a Linear ticket, opens claude\n\
+                    # in it. Linear key: ~/.config/worktree-from-ticket/config.json\n\
                     eval \"$(worktree-from-ticket init zsh)\"\n\
+                    \n\
+                    # my own note\n\
                     eval \"$(~/.local/bin/worktree-from-pr init bash)\" # mine\n\
-                    eval \"$(switchboard worktree-resume init zsh)\"\n";
+                    eval \"$(switchboard worktree-resume init zsh)\"\n\
+                    \n\
+                    export Y=2\n";
         assert_eq!(
-            rc_fixed(text).unwrap(),
+            rc_cleared(text).unwrap(),
             "export X=1\n\
-             eval \"$(switchboard worktree-from-ticket init zsh)\"\n\
-             eval \"$(switchboard worktree-from-pr init bash)\" # mine\n\
-             eval \"$(switchboard worktree-resume init zsh)\"\n"
+             \n\
+             # my own note\n\
+             eval \"$(switchboard worktree-resume init zsh)\"\n\
+             \n\
+             export Y=2\n"
         );
-        assert_eq!(rc_fixed("eval \"$(switchboard wt init zsh)\"\n"), None);
-        assert_eq!(rc_fixed("# nothing here\n"), None);
+        assert_eq!(
+            rc_cleared("eval \"$(switchboard worktree-from-note init zsh)\"\n"),
+            None
+        );
+        assert_eq!(rc_cleared("# nothing here\n"), None);
     }
 
     #[test]

@@ -97,7 +97,7 @@ pub struct TabLinks {
     pub last: String,
     pub arrived: String,
     pub name: String,
-    /// The ID of the note the work-a-note mode opened it for
+    /// The ID of the note autopilot opened it for
     /// (`@autopilot_note`).
     pub pilot_note: String,
 }
@@ -509,7 +509,7 @@ impl Store {
         let _ = util::write_atomic(&file, util::json_pretty(&mode));
     }
 
-    /// The IDs the work-a-note mode keeps for notes squashed into one
+    /// The IDs autopilot keeps for notes squashed into one
     /// (`renumber`, each squashed note's ID to the merged note's) follow
     /// too: its note's, its skipped items' and its tabs' (`@autopilot_note`),
     /// whichever of the squashed notes they were.

@@ -37,6 +37,7 @@ pub mod update_main;
 pub mod wait_deploy;
 pub mod watch_note;
 pub mod work;
+pub mod work_recent;
 pub mod workspace;
 pub mod worktree_done;
 pub mod worktree_from_branch;

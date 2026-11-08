@@ -1223,6 +1223,53 @@ impl Pane {
         (text, links)
     }
 
+    /// The screen's rows in the pane's own colors, as `render` draws them,
+    /// each row's trailing blanks and the blank rows at the end left out,
+    /// for UX 2.0's mission control cards. Read from the emulator in memory
+    /// alone.
+    pub fn styled_lines(&self) -> Vec<Vec<ratatui::text::Span<'static>>> {
+        use ratatui::style::Style;
+        use ratatui::text::Span;
+        use unicode_width::UnicodeWidthStr;
+        let (cols, rows) = (self.term.columns(), self.term.screen_lines());
+        let (Ok(w), Ok(h)) = (u16::try_from(cols), u16::try_from(rows)) else {
+            return Vec::new();
+        };
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        self.render(&mut buf, area, &PaneView::default());
+        let mut out: Vec<Vec<Span<'static>>> = (0..h)
+            .map(|y| {
+                let cells: Vec<_> = (0..w).filter_map(|x| buf.cell((x, y))).collect();
+                let end = cells
+                    .iter()
+                    .rposition(|c| c.symbol() != " " || c.bg != Color::Reset)
+                    .map_or(0, |i| i + 1);
+                let mut row: Vec<Span<'static>> = Vec::new();
+                // The blank ratatui leaves after a wide character's first half.
+                let mut skip = false;
+                for c in &cells[..end] {
+                    if std::mem::take(&mut skip) {
+                        continue;
+                    }
+                    skip = c.symbol().width() > 1;
+                    let style = Style::new().fg(c.fg).bg(c.bg).add_modifier(c.modifier);
+                    match row.last_mut() {
+                        Some(last) if last.style == style => {
+                            last.content.to_mut().push_str(c.symbol());
+                        }
+                        _ => row.push(Span::styled(c.symbol().to_string(), style)),
+                    }
+                }
+                row
+            })
+            .collect();
+        while out.last().is_some_and(Vec::is_empty) {
+            out.pop();
+        }
+        out
+    }
+
     /// The title the program set, or "".
     pub fn title(&self) -> &str {
         &self.title
@@ -1775,6 +1822,22 @@ mod tests {
             .render(&mut buf, Rect::new(0, 0, 2, 1), &PaneView::default());
         assert_eq!(buf[(0, 0)].symbol(), "a");
         assert_eq!(buf[(1, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn styled_lines_keep_the_cells_colors_and_drop_trailing_blanks() {
+        let mut run = idle(10, 4);
+        run.pane.process("a漢b\r\n\x1b[1;32mok\x1b[0m x".as_bytes());
+        let lines = run.pane.styled_lines();
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        let text = |l: &Vec<ratatui::text::Span>| {
+            l.iter().map(|s| s.content.to_string()).collect::<String>()
+        };
+        assert_eq!(text(&lines[0]), "a漢b");
+        assert_eq!(text(&lines[1]), "ok x");
+        assert_eq!(lines[1][0].content, "ok");
+        assert_eq!(lines[1][0].style.fg, Some(Color::Indexed(2)));
+        assert!(lines[1][0].style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
