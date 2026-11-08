@@ -17,6 +17,14 @@
 //! terminal too, as tmux passed them on. Anything drawn over such a cell
 //! (a box, mission control) takes its link away (`Frame::cover_links`), so
 //! no box is clickable as the link under it.
+//!
+//! Pictures drawn as sixel (src/mux/sixel) ride beside the cells the same
+//! way (`Frame::pictures`), each written after the frame's text at its
+//! top left: again whenever any of its cells is sent, since text written
+//! over a sixel takes it away, and when it is new or moved. The cells of
+//! one shown before and not now are erased (`ECH`, which a terminal's
+//! picture goes with) and sent again, so nothing of it stays behind. No
+//! picture reaches the last row, where a sixel would scroll the screen.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -25,7 +33,7 @@ use std::sync::Arc;
 use crossterm::{cursor, queue};
 use ratatui::backend::{Backend, CrosstermBackend};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use unicode_width::UnicodeWidthStr;
 
@@ -87,6 +95,24 @@ impl Links {
 /// over the frame, so a cell still holding it afterwards was left alone.
 const UNDER: &str = "\u{10fffe}";
 
+/// A symbol no cell holds, put in the last frame's cells that must be sent
+/// again whatever this one holds.
+const UNSENT: &str = "\u{10fffd}";
+
+/// The most a frame's pictures add to it, well inside the largest frame a
+/// client reads (`proto::MAX_FRAME`).
+const PICTURES_MOST: usize = 40 << 20;
+
+/// A picture drawn over cells as sixel: where, which piece of which
+/// picture (`key`, to tell one from another), and the string that draws
+/// it from its top left.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub area: Rect,
+    pub key: u64,
+    pub sixel: Arc<[u8]>,
+}
+
 /// One client's frame: what to show, and where the cursor goes (hidden when
 /// `None`).
 pub struct Frame {
@@ -97,6 +123,8 @@ pub struct Frame {
     pub cursor_style: Option<cursor::SetCursorStyle>,
     /// The cells that are part of a hyperlink.
     pub links: Links,
+    /// The pictures drawn over its cells as sixel.
+    pub pictures: Vec<Placed>,
 }
 
 impl Frame {
@@ -106,6 +134,7 @@ impl Frame {
             cursor: None,
             cursor_style: None,
             links: Links::default(),
+            pictures: Vec::new(),
         }
     }
 
@@ -147,6 +176,8 @@ impl Frame {
 pub struct Screen {
     prev: Option<Buffer>,
     prev_links: Links,
+    /// The pictures last sent: where, and which.
+    prev_pictures: Vec<(Rect, u64)>,
     style: Option<cursor::SetCursorStyle>,
 }
 
@@ -156,6 +187,7 @@ impl Screen {
     pub fn invalidate(&mut self) {
         self.prev = None;
         self.prev_links = Links::default();
+        self.prev_pictures.clear();
         self.style = None;
     }
 
@@ -165,23 +197,45 @@ impl Screen {
         // Synchronized output: the terminal shows the frame once it is whole.
         out.extend_from_slice(b"\x1b[?2026h\x1b[?25l");
         let full = self.prev.as_ref().is_none_or(|p| p.area != frame.buf.area);
-        let prev = match self.prev.take() {
+        let mut prev = match self.prev.take() {
             Some(p) if !full => p,
             _ => {
                 out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
                 self.prev_links = Links::default();
+                self.prev_pictures.clear();
                 Buffer::empty(frame.buf.area)
             }
         };
+        // A picture shown before and not now, the same in the same place:
+        // its cells erased, with whatever of it the terminal shows, and
+        // sent again.
+        let stale: Vec<Rect> = self
+            .prev_pictures
+            .iter()
+            .filter(|(area, key)| {
+                !frame
+                    .pictures
+                    .iter()
+                    .any(|p| p.area == *area && p.key == *key)
+            })
+            .map(|(area, _)| area.intersection(prev.area))
+            .collect();
+        if !stale.is_empty() {
+            out.extend_from_slice(b"\x1b[0m");
+            for area in &stale {
+                for y in area.top()..area.bottom() {
+                    let _ = write!(out, "\x1b[{};{}H\x1b[{}X", y + 1, area.x + 1, area.width);
+                    for x in area.left()..area.right() {
+                        prev[(x, y)].set_symbol(UNSENT);
+                    }
+                }
+            }
+        }
         let mut diff = prev.diff(&frame.buf);
-        if frame.links.is_empty() && self.prev_links.is_empty() {
-            let mut backend = CrosstermBackend::new(&mut out);
-            // Writing into a Vec can't fail.
-            let _ = backend.draw(diff.into_iter());
-        } else {
+        let linked = !(frame.links.is_empty() && self.prev_links.is_empty());
+        if linked {
             // A cell whose link came or went is sent again though its text
-            // is the same, and each run of cells with one link is sent
-            // inside its OSC 8.
+            // is the same.
             let sent: std::collections::HashSet<(u16, u16)> =
                 diff.iter().map(|(x, y, _)| (*x, *y)).collect();
             let mut changed: Vec<(u16, u16)> = frame
@@ -207,6 +261,22 @@ impl Screen {
                 }
             }
             diff.sort_by_key(|(x, y, _)| (*y, *x));
+        }
+        // A picture any of whose cells is sent is drawn again over them.
+        let touched: Vec<bool> = frame
+            .pictures
+            .iter()
+            .map(|p| {
+                diff.iter()
+                    .any(|(x, y, _)| p.area.contains(Position::new(*x, *y)))
+            })
+            .collect();
+        if !linked {
+            let mut backend = CrosstermBackend::new(&mut out);
+            // Writing into a Vec can't fail.
+            let _ = backend.draw(diff.into_iter());
+        } else {
+            // Each run of cells with one link is sent inside its OSC 8.
             let mut rest = diff.as_slice();
             while let Some(&(x, y, _)) = rest.first() {
                 let link = frame.links.get(x, y);
@@ -228,6 +298,30 @@ impl Screen {
             }
         }
         self.prev_links = frame.links.clone();
+        // The pictures, after the text: one new, moved or under cells just
+        // sent; never one reaching the last row, where it would scroll.
+        let rows = frame.buf.area.bottom();
+        let mut shown = Vec::with_capacity(frame.pictures.len());
+        for (p, touched) in frame.pictures.iter().zip(touched) {
+            if p.area.bottom() >= rows || p.area.is_empty() {
+                continue;
+            }
+            let same = self
+                .prev_pictures
+                .iter()
+                .any(|(area, key)| *area == p.area && *key == p.key);
+            if touched || !same {
+                // One more would make the frame larger than a client
+                // takes: left for the next frame.
+                if out.len() + p.sixel.len() > PICTURES_MOST {
+                    continue;
+                }
+                let _ = write!(out, "\x1b[{};{}H", p.area.y + 1, p.area.x + 1);
+                out.extend_from_slice(&p.sixel);
+            }
+            shown.push((p.area, p.key));
+        }
+        self.prev_pictures = shown;
         if let Some((x, y)) = frame.cursor {
             let style = frame
                 .cursor_style
@@ -827,6 +921,134 @@ mod tests {
             second.contains('x') && !second.contains("hello"),
             "{second:?}"
         );
+    }
+
+    /// A picture over cells, its sixel standing in as `SIXEL<n>`.
+    fn picture(area: Rect, key: u64) -> Placed {
+        Placed {
+            area,
+            key,
+            sixel: Arc::from(format!("\x1bPSIXEL{key}\x1b\\").into_bytes()),
+        }
+    }
+
+    fn count(haystack: &str, needle: &str) -> usize {
+        haystack.matches(needle).count()
+    }
+
+    #[test]
+    fn a_picture_is_drawn_after_its_text_and_again_only_when_its_cells_are() {
+        let mut screen = Screen::default();
+        let mut frame = Frame::new(20, 6);
+        frame.buf.set_string(0, 0, "above", Style::new());
+        frame.pictures.push(picture(Rect::new(2, 1, 4, 2), 1));
+        let first = String::from_utf8(screen.render(&frame)).unwrap();
+        let text = first.find("above").unwrap();
+        let drawn = first
+            .find("\x1b[2;3H\x1bPSIXEL1\x1b\\")
+            .expect("at its top left");
+        assert!(drawn > text, "after the text: {first:?}");
+        assert!(
+            first.find("\x1b[?2026l").unwrap() > drawn,
+            "inside the frame's update"
+        );
+        // Nothing changed: not sent again.
+        let same = String::from_utf8(screen.render(&frame)).unwrap();
+        assert_eq!(count(&same, "SIXEL"), 0, "{same:?}");
+        // A cell beside it sent: still not.
+        frame.buf.set_string(10, 1, "x", Style::new());
+        let beside = String::from_utf8(screen.render(&frame)).unwrap();
+        assert_eq!(count(&beside, "SIXEL"), 0, "{beside:?}");
+        // One of its cells sent (text over it takes it away): drawn again.
+        frame.buf[(3, 2)].set_bg(Color::Indexed(236));
+        let under = String::from_utf8(screen.render(&frame)).unwrap();
+        assert_eq!(count(&under, "SIXEL1"), 1, "{under:?}");
+        assert!(under.find("SIXEL1").unwrap() > under.find("\x1b[3;4H").unwrap());
+        // Everything drawn again: so is it.
+        screen.invalidate();
+        let all = String::from_utf8(screen.render(&frame)).unwrap();
+        assert_eq!(count(&all, "SIXEL1"), 1);
+    }
+
+    #[test]
+    fn a_picture_gone_or_moved_has_its_cells_erased_and_sent_again() {
+        let mut screen = Screen::default();
+        let mut frame = Frame::new(20, 6);
+        frame.pictures.push(picture(Rect::new(2, 1, 4, 2), 1));
+        screen.render(&frame);
+        // Scrolled up a row: the old place erased row by row, its blank
+        // cells sent again, and the picture drawn at its new place.
+        frame.pictures = vec![picture(Rect::new(2, 0, 4, 2), 2)];
+        let moved = String::from_utf8(screen.render(&frame)).unwrap();
+        let erase = moved
+            .find("\x1b[2;3H\x1b[4X")
+            .expect("its first row erased");
+        assert!(moved.contains("\x1b[3;3H\x1b[4X"), "and its second");
+        let drawn = moved.find("\x1b[1;3H\x1bPSIXEL2").expect("drawn anew");
+        assert!(erase < drawn, "{moved:?}");
+        assert!(
+            moved.contains("\x1b[3;3H    "),
+            "the cells sent again: {moved:?}"
+        );
+        // Gone: erased, and nothing drawn.
+        frame.pictures.clear();
+        let gone = String::from_utf8(screen.render(&frame)).unwrap();
+        assert!(gone.contains("\x1b[1;3H\x1b[4X") && gone.contains("\x1b[2;3H\x1b[4X"));
+        assert_eq!(count(&gone, "SIXEL"), 0);
+        // Erased once only.
+        let after = String::from_utf8(screen.render(&frame)).unwrap();
+        assert!(!after.contains('X'), "{after:?}");
+    }
+
+    #[test]
+    fn no_picture_reaches_the_last_row() {
+        let mut screen = Screen::default();
+        let mut frame = Frame::new(20, 6);
+        frame.pictures.push(picture(Rect::new(0, 4, 4, 2), 1));
+        frame.pictures.push(picture(Rect::new(0, 3, 4, 2), 2));
+        let sent = String::from_utf8(screen.render(&frame)).unwrap();
+        assert_eq!(count(&sent, "SIXEL1"), 0, "it would scroll the screen");
+        assert_eq!(count(&sent, "SIXEL2"), 1, "ending just above it is drawn");
+    }
+
+    #[test]
+    fn with_no_pictures_a_frame_is_sent_as_it_always_was() {
+        // What a screen sent before pictures could ride beside the cells:
+        // the frame's update, the screen cleared the first time, the cells
+        // that changed as ratatui's backend writes them, the cursor.
+        fn as_before(prev: Option<&Buffer>, frame: &Frame) -> Vec<u8> {
+            let mut out = b"\x1b[?2026h\x1b[?25l".to_vec();
+            let empty = Buffer::empty(frame.buf.area);
+            let prev = match prev {
+                Some(p) => p,
+                None => {
+                    out.extend_from_slice(b"\x1b[0m\x1b[H\x1b[2J");
+                    &empty
+                }
+            };
+            let _ = CrosstermBackend::new(&mut out).draw(prev.diff(&frame.buf).into_iter());
+            if let Some((x, y)) = frame.cursor {
+                let _ = queue!(
+                    out,
+                    cursor::SetCursorStyle::DefaultUserShape,
+                    cursor::MoveTo(x, y),
+                    cursor::Show
+                );
+            }
+            out.extend_from_slice(b"\x1b[?2026l");
+            out
+        }
+        let mut screen = Screen::default();
+        let mut frame = Frame::new(30, 4);
+        frame
+            .buf
+            .set_string(0, 0, "a pane", Style::new().fg(Color::Red));
+        frame.cursor = Some((3, 1));
+        assert_eq!(screen.render(&frame), as_before(None, &frame));
+        let first = frame.buf.clone();
+        frame.buf.set_string(0, 2, "more", Style::new());
+        frame.cursor = None;
+        assert_eq!(screen.render(&frame), as_before(Some(&first), &frame));
     }
 
     #[test]

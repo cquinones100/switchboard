@@ -71,6 +71,16 @@ impl TestServer {
 
     /// A server whose environment has these variables too.
     pub fn start_with_env(env: &[(&str, &str)]) -> TestServer {
+        TestServer::start_with(env, None)
+    }
+
+    /// A server whose home's `settings.json` (what Settings keeps of
+    /// yours) is `settings` from the start.
+    pub fn start_with_settings(settings: &str) -> TestServer {
+        TestServer::start_with(&[], Some(settings))
+    }
+
+    fn start_with(env: &[(&str, &str)], settings: Option<&str>) -> TestServer {
         let dir = TempDir::new("sbt");
         let home = dir.path().join("home");
         let state = dir.path().join("s");
@@ -78,6 +88,11 @@ impl TestServer {
         // The login shell's own prompt: a Mac's /etc/profile sets one naming
         // the computer over PS1, long enough to wrap what a test types.
         std::fs::write(home.join(".profile"), "PS1='$ '\n").unwrap();
+        if let Some(settings) = settings {
+            let config = home.join(".config/switchboard");
+            std::fs::create_dir_all(&config).unwrap();
+            std::fs::write(config.join("settings.json"), settings).unwrap();
+        }
         let mut server = TestServer {
             dir,
             home,
@@ -543,4 +558,84 @@ impl TestClient {
         }
         self.exit.clone().flatten()
     }
+
+    /// Waits until what the client was sent holds `needle`, failing with
+    /// `what` after ten seconds.
+    pub fn wait_sent(&mut self, what: &str, needle: &[u8]) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !self.raw.windows(needle.len()).any(|w| w == needle) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            self.pump(Duration::from_millis(50));
+        }
+    }
+}
+
+impl TestServer {
+    /// Has `pane` show the four-colour picture (`four_colours`), four cells
+    /// by two, given as Notes gives one, each row of it after "Q7"; gives
+    /// the line and column of its top left on the client's screen once the
+    /// shell has printed it.
+    pub fn show_picture(&self, client: &mut TestClient, pane: &str) -> (usize, usize) {
+        let png = self.dir.path().join("four.png");
+        four_colours(&png, 40);
+        let file = self.dir.path().join("picture.out");
+        std::fs::write(&file, picture_bytes(&png, 42, 4, 2, "Q7")).unwrap();
+        self.ok(&[
+            "send-keys",
+            "-t",
+            pane,
+            "-l",
+            &format!("cat {}; echo pic''-done", file.display()),
+        ]);
+        self.ok(&["send-keys", "-t", pane, "Enter"]);
+        let screen = client.wait_text("pic-done");
+        let line = screen
+            .iter()
+            .position(|l| l.contains("Q7"))
+            .unwrap_or_else(|| panic!("the picture's line: {}", screen.join("\n")));
+        // Columns, not bytes: the sidebar's line before it is three bytes.
+        let before = &screen[line][..screen[line].find("Q7").unwrap()];
+        (line, before.chars().count() + 2)
+    }
+}
+
+/// What Notes writes to show a picture, into a file a pane can `cat`: the
+/// PNG given by its path as kitty's virtual placement `id`, `cols` by
+/// `rows` cells, then its placeholder cells, coloured with its id, each
+/// row on a line of its own after `lead`.
+pub fn picture_bytes(png: &Path, id: u32, cols: u16, rows: u16, lead: &str) -> Vec<u8> {
+    use switchboard::notes::images::Picture;
+    let mut out = format!(
+        "\x1b_Ga=T,U=1,f=100,t=f,q=2,i={id},c={cols},r={rows};{}\x1b\\",
+        switchboard::util::base64(png.to_string_lossy().as_bytes())
+    );
+    for row in 0..rows {
+        out.push_str(&format!(
+            "{lead}\x1b[38;2;{};{};{}m",
+            (id >> 16) & 0xff,
+            (id >> 8) & 0xff,
+            id & 0xff
+        ));
+        for col in 0..cols {
+            out.push_str(&Picture::cell(row, col));
+        }
+        out.push_str("\x1b[0m\r\n");
+    }
+    out.into_bytes()
+}
+
+/// A PNG of four colours, a quarter each (red, green, blue, yellow from
+/// the top left), `size` pixels a side.
+pub fn four_colours(file: &Path, size: u32) {
+    image::RgbaImage::from_fn(size, size, |x, y| {
+        let half = size / 2;
+        image::Rgba(match (x < half, y < half) {
+            (true, true) => [255, 0, 0, 255],
+            (false, true) => [0, 255, 0, 255],
+            (true, false) => [0, 0, 255, 255],
+            (false, false) => [255, 255, 0, 255],
+        })
+    })
+    .save(file)
+    .expect("a picture written");
 }

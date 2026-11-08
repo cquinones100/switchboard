@@ -504,6 +504,68 @@ fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
     let (line, col) = client.find_cell('\u{10EEEE}').expect("the cell");
     assert_eq!(client.marks(line, col), vec!['\u{305}', '\u{30D}']);
     assert_eq!(client.fg_rgb(line, col), Some((0, 0, 42)));
+    // With kitty's protocol, the default, the terminal is asked nothing
+    // more and sent no sixel.
+    assert!(!sent(&client.raw, b"\x1b[16t"));
+    assert!(!sent(&client.raw, b"\x1bP"));
+}
+
+/// The sixel string the client was sent at a cell (0-based), up to its end.
+fn sixel_at(raw: &[u8], line: usize, col: usize) -> Option<String> {
+    let at = format!("\x1b[{};{}H\x1bP", line + 1, col + 1);
+    let raw = String::from_utf8_lossy(raw);
+    let start = raw.find(&at)? + at.len() - 2;
+    let end = raw[start..].find("\x1b\\")? + start + 2;
+    Some(raw[start..end].to_string())
+}
+
+#[test]
+fn with_sixel_chosen_the_server_draws_a_pane_s_picture_where_its_placeholders_are() {
+    let server = TestServer::start_with_settings(r#"{"image_protocol": "sixel"}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.wait_sent("the terminal asked for its cell", b"\x1b[16t");
+    // Its answer, a cell of 13 by 25 pixels (Windows Terminal's is its
+    // sixel's virtual cell, 10 by 20, which a terminal that doesn't
+    // answer is taken to have too).
+    client.send(b"\x1b[6;25;13t");
+    let pane = first_pane(&server);
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    let (line, col) = server.show_picture(&mut client, &pane);
+    // Drawn at the placeholders' top left: four cells of 13 pixels wide,
+    // two of 25 tall made a whole number of six-row bands.
+    let at = format!("\x1b[{};{}H\x1bP0;1;0q\"1;1;52;48", line + 1, col + 1);
+    client.wait_sent("the picture drawn as sixel", at.as_bytes());
+    let sixel = sixel_at(&client.raw, line, col).unwrap();
+    for colour in ["100;0;0", "0;100;0", "0;0;100", "100;100;0"] {
+        assert!(
+            sixel.contains(&format!(";2;{colour}")),
+            "{colour}: {sixel:?}"
+        );
+    }
+    // The command went no further, and the placeholders reached the
+    // terminal as blanks.
+    assert!(!sent(&client.raw, b"\x1b_G"), "no kitty command passed on");
+    assert!(!sent(&client.raw, "\u{10EEEE}".as_bytes()));
+    assert!(
+        client.screen()[line].ends_with("Q7"),
+        "the placeholders blank after the line's text"
+    );
+
+    // The pane's screen cleared: the picture's cells are erased, taking it
+    // away, and it isn't drawn again.
+    let before = client.raw.len();
+    server.ok(&["send-keys", "-t", &pane, "-l", "printf '\\033[H\\033[2J'"]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.wait_for("the picture's line cleared", |s| {
+        !s.iter().any(|l| l.contains("Q7"))
+    });
+    let erased = format!("\x1b[{};{}H\x1b[4X", line + 1, col + 1);
+    client.wait_sent("its cells erased", erased.as_bytes());
+    assert!(
+        !sent(&client.raw[before..], b"\x1bP"),
+        "and not drawn again"
+    );
 }
 
 #[test]

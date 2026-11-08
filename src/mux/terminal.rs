@@ -9,7 +9,13 @@
 //! makes (`Pane::set_cell`), so a program that reads TIOCGWINSZ or asks
 //! `CSI 14 t` finds the real cell, and Notes and the image view draw a
 //! picture at its own size. A terminal that doesn't say its pixels leaves
-//! the stand-in cell (`pane::CELL`).
+//! the stand-in cell (`pane::CELL`). While pictures are drawn as sixel
+//! (src/mux/sixel), each terminal is also asked its cell with `CSI 16 t`
+//! as it attaches, and its answer kept apart (`asked_cell`) as the size
+//! the server draws them at: Windows Terminal, whose window's pixels may
+//! not reach a program at all under WSL, answers with its sixel's virtual
+//! cell. The panes keep the cell the window's pixels make, so the apps lay
+//! pictures out as before.
 //!
 //! Its colours: the text's, the background's and the sixteen of its
 //! palette, asked with OSC 10, 11 and 4 as it attaches (`queries`) and
@@ -37,6 +43,10 @@ use super::server::Server;
 pub struct Terminal {
     /// A cell's width and height in pixels, once a terminal has said.
     pub cell: Option<(u16, u16)>,
+    /// The same as a terminal answered `CSI 16 t`, asked while pictures
+    /// are drawn as sixel (src/mux/sixel): in Windows Terminal its sixel's
+    /// virtual cell, whatever its font.
+    pub asked_cell: Option<(u16, u16)>,
     pub colors: Colors,
 }
 
@@ -150,6 +160,15 @@ pub fn queries() -> Vec<u8> {
     out
 }
 
+/// A terminal's answer to `CSI 16 t`, `CSI 6 ; <height> ; <width> t`, as
+/// a cell's width and height in pixels.
+pub fn cell_answer(raw: &[u8]) -> Option<(u16, u16)> {
+    let body = raw.strip_prefix(b"\x1b[6;")?.strip_suffix(b"t")?;
+    let (h, w) = std::str::from_utf8(body).ok()?.split_once(';')?;
+    let (h, w) = (h.parse::<u16>().ok()?, w.parse::<u16>().ok()?);
+    (h > 0 && w > 0).then_some((w, h))
+}
+
 /// A cell's width and height in pixels from a window's size in cells and
 /// in pixels; `None` when the terminal didn't say its pixels.
 pub fn cell_of(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Option<(u16, u16)> {
@@ -233,10 +252,21 @@ impl Server {
         }
     }
 
-    /// A terminal's answer about one of its colours, among its keys: kept,
-    /// and every pane told. Gives whether the bytes were such an answer,
-    /// which no pane is given as typed.
+    /// A terminal's answer about one of its colours, or its cell's size in
+    /// pixels, among its keys: kept, and every pane told of a colour, every
+    /// client drawn again for a cell (the size pictures are drawn at,
+    /// src/mux/sixel). Gives whether the bytes were such an answer, which
+    /// no pane is given as typed.
     pub fn terminal_reply(&mut self, raw: &[u8]) -> bool {
+        if let Some(cell) = cell_answer(raw) {
+            if self.terminal.asked_cell != Some(cell) {
+                self.terminal.asked_cell = Some(cell);
+                for c in self.clients.values_mut() {
+                    c.dirty = true;
+                }
+            }
+            return true;
+        }
         let mut colors = self.terminal.colors;
         if !colors.take(raw) {
             return false;
@@ -261,6 +291,22 @@ mod tests {
         // A terminal that doesn't say its pixels gives none.
         assert_eq!(cell_of(80, 24, 0, 0), None);
         assert_eq!(cell_of(0, 0, 100, 100), None);
+    }
+
+    #[test]
+    fn a_cell_asked_for_is_read_from_the_answer() {
+        assert_eq!(cell_answer(b"\x1b[6;20;10t"), Some((10, 20)));
+        assert_eq!(cell_answer(b"\x1b[6;36;16t"), Some((16, 36)));
+        assert_eq!(cell_answer(b"\x1b[4;480;800t"), None, "the window's");
+        assert_eq!(cell_answer(b"\x1b[6;0;10t"), None);
+        assert_eq!(cell_answer(b"\x1b[6;20t"), None);
+        // As the parser reads it from what the terminal sent: whole, and
+        // not a key.
+        let mut parser = Parser::new();
+        let read = parser.feed(b"\x1b[6;20;10t");
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].input, super::super::input::Input::Unknown);
+        assert_eq!(cell_answer(&read[0].raw), Some((10, 20)));
     }
 
     #[test]

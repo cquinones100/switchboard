@@ -67,6 +67,10 @@ tar = { version = "0.4", default-features = false }
 ropey = { version = "1.6", default-features = false, features = ["simd"] }
 notify = "8.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+# Pictures drawn as sixel for a terminal without kitty's (src/mux/sixel):
+# NeuQuant, the image crate's own GIF quantiser, brings a picture of many
+# colours down to sixel's 256 registers.
+color_quant = "1.1"
 # `switchboard try --sealed`: someone else's Cargo.toml read as cargo reads
 # it (cargo's own TOML parser), so a git, path or other registry's
 # dependency is refused before cargo fetches anything for it.

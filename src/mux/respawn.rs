@@ -14,8 +14,9 @@
 //! runs in.
 //!
 //! What the server knew of the old program goes with it: Claude's state in
-//! the pane (a new session says its own), what the sidebar read of it, and
-//! the options that belong to the program rather than the pane
+//! the pane (a new session says its own), what the sidebar read of it, the
+//! pictures it gave the terminal (src/mux/sixel), and the options that
+//! belong to the program rather than the pane
 //! (`PROGRAM_MARKS`), so a shell started where Notes ran isn't taken for
 //! Notes, nor allowed what Notes was.
 
@@ -70,6 +71,7 @@ impl Server {
         slot.copy = None;
         slot.opts
             .retain(|name, _| !PROGRAM_MARKS.contains(&name.as_str()));
+        self.forget_images(pane);
         self.agents.retain(|p| p != pane);
         self.sidebar.panes.remove(&pane);
         self.sidebar.stale = true;

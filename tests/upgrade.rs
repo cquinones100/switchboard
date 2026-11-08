@@ -278,3 +278,28 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
     });
     assert!(client.exit.is_none(), "the terminal stays attached");
 }
+
+#[test]
+fn a_picture_given_before_an_upgrade_is_drawn_as_sixel_after_it() {
+    let server = TestServer::start_with_settings(r#"{"image_protocol": "sixel"}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // A cell of 13 by 25 pixels, as the terminal answered.
+    client.send(b"\x1b[6;25;13t");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    let (line, col) = server.show_picture(&mut client, &pane);
+    let at = format!("\x1b[{};{}H\x1bP0;1;0q\"1;1;52;48", line + 1, col + 1);
+    client.wait_sent("the picture drawn", at.as_bytes());
+
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
+    // The program gave the picture once, before: the new build knows it,
+    // and the cell its terminal said, and draws it for a terminal
+    // attaching now, which says nothing of its cell.
+    let mut fresh = server.attach(100, 30);
+    fresh.wait_sent("the picture drawn after the upgrade", at.as_bytes());
+}

@@ -2678,6 +2678,7 @@ version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "color_quant",
  "crossterm",
  "flate2",
  "futures-util",
