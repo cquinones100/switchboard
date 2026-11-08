@@ -2,7 +2,8 @@
 # built in release mode, each packed as switchboard-<version>-<target>.tar.gz
 # (a folder of that name holding the binary) with its SHA-256 beside it in
 # <archive>.sha256, and all six published as a GitHub release whose notes are
-# the commits since the tag before. `switchboard update` and install.sh take
+# the commits since the tag before (the newest of them and a link to the
+# rest, past what GitHub takes). `switchboard update` and install.sh take
 # the newest release's archive for their computer and refuse it unless its
 # checksum matches.
 #
@@ -138,16 +139,30 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           previous=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="$previous..$tag"
+          else
+            range="$tag"
+          fi
+          git log --no-merges --format='- %s (%h)' "$range" > commits.md
+          # GitHub refuses notes over 125,000 characters, and the first
+          # release's list is the whole history: a list past the limit keeps
+          # its newest commits (whole lines) and links to the rest.
+          limit=60000
           {
             if [ -n "$previous" ]; then
               echo "Changes since $previous:"
-              range="$previous..$tag"
             else
               echo "The first release."
-              range="$tag"
             fi
             echo
-            git log --no-merges --format='- %s (%h)' "$range"
+            if [ "$(wc -c < commits.md)" -le "$limit" ]; then
+              cat commits.md
+            else
+              head -c "$limit" commits.md | sed '$d' > kept.md
+              cat kept.md
+              echo "- …and $(( $(wc -l < commits.md) - $(wc -l < kept.md) )) earlier commits: https://github.com/$GITHUB_REPOSITORY/commits/$tag"
+            fi
           } > notes.md
           cat notes.md
       - name: Publish
