@@ -1,9 +1,9 @@
 //! Each tab as the sidebar and mission control see it, and where it goes
 //! (lib/sidebar/model.js): its label and color, what its Claude is doing,
 //! the work it runs in the background, its pin and reminder, and what
-//! GitHub and the landing queue say of it, placed in one group (the
-//! sidebar's) and one stage (mission control's finer list), each in order
-//! of what needs you most.
+//! GitHub and the landing queue say of it, placed in one stage, which the
+//! sidebar groups it under and mission control lists it under alike, in
+//! order of what needs you most.
 //!
 //! The rules take the settings and the time they depend on as `Rules`, and
 //! nothing here reads a file or the server, so each can be tested on tabs
@@ -222,6 +222,9 @@ pub struct Rules {
     pub now_ms: i64,
     pub reminders: bool,
     pub build_failing: bool,
+    /// UX 2.0: the sidebar opens with its tab count and the notifications,
+    /// in place of the session's name with them pinned at the bottom.
+    pub ux2: bool,
 }
 
 impl Rules {
@@ -231,6 +234,7 @@ impl Rules {
             now_ms: crate::util::now_ms(),
             reminders: crate::settings::is_on("reminders"),
             build_failing: crate::settings::is_on("build_failing"),
+            ux2: crate::settings::is_on("ux2"),
         }
     }
 
@@ -311,89 +315,6 @@ pub fn build_failing(tab: &TabModel, r: &Rules) -> bool {
         && tab.merge.is_none()
 }
 
-/// The sidebar's groups, in the order it lists them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Group {
-    Needs,
-    Failing,
-    Working,
-    Monitoring,
-    Queued,
-    Landing,
-    Deploy,
-    Merged,
-    Idle,
-    Loops,
-    /// Put off by you until later, so near the bottom, above Other.
-    Later,
-    /// No Claude in it (the Slack relay, Notes, a shell).
-    Other,
-}
-
-impl Group {
-    pub const ALL: [Group; 12] = [
-        Group::Needs,
-        Group::Failing,
-        Group::Working,
-        Group::Monitoring,
-        Group::Queued,
-        Group::Landing,
-        Group::Deploy,
-        Group::Merged,
-        Group::Idle,
-        Group::Loops,
-        Group::Later,
-        Group::Other,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Group::Needs => "needs",
-            Group::Failing => "failing",
-            Group::Working => "working",
-            Group::Monitoring => "monitoring",
-            Group::Queued => "queued",
-            Group::Landing => "landing",
-            Group::Deploy => "deploy",
-            Group::Merged => "merged",
-            Group::Idle => "idle",
-            Group::Loops => "loops",
-            Group::Later => "later",
-            Group::Other => "other",
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Group::Needs => "Needs you",
-            Group::Failing => "Build failing",
-            Group::Working => "Working",
-            Group::Monitoring => "Monitoring",
-            Group::Queued => "In merge queue",
-            Group::Landing => "Landing",
-            Group::Deploy => "Testing Deploy",
-            Group::Merged => "Merged",
-            Group::Idle => "Idle",
-            Group::Loops => "Loops",
-            Group::Later => "Reminders",
-            Group::Other => "Other",
-        }
-    }
-
-    /// How its tabs are ordered: Needs you pinned first, the merge queue in
-    /// its order, Landing in the landing queue's (the landing one first),
-    /// Reminders by when; the rest by need.
-    pub fn order(self, a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
-        match self {
-            Group::Needs => pinned_first(a, b, r),
-            Group::Queued => queue_order(a, b),
-            Group::Landing => landing_order(a, b),
-            Group::Later => a.remind_at.cmp(&b.remind_at),
-            _ => by_need(a, b),
-        }
-    }
-}
-
 fn queue_order(a: &TabModel, b: &TabModel) -> Ordering {
     let place = |t: &TabModel| t.position.map_or(u64::MAX, u64::from);
     place(a).cmp(&place(b)).then_with(|| by_need(a, b))
@@ -404,133 +325,9 @@ fn landing_order(a: &TabModel, b: &TabModel) -> Ordering {
     line(a).cmp(&line(b)).then_with(|| by_need(a, b))
 }
 
-/// A tab with no Claude in it is Other, at the bottom, so Idle holds only
-/// Claude sessions with nothing to do.
-fn rest_of(tab: &TabModel) -> Group {
-    if tab.claude.is_some() {
-        Group::Idle
-    } else {
-        Group::Other
-    }
-}
-
-/// The one group a tab is in: Needs you whenever Claude waits on you or has
-/// finished there (or it is pinned, or a reminder came due); otherwise
-/// Landing while it holds or waits for the landing lock; otherwise Testing
-/// Deploy, In merge queue or Merged by its PR, even while Claude works in
-/// it; otherwise Build failing when a check on its open PR failed;
-/// otherwise Monitoring, Loops or Working by its background work; otherwise
-/// Reminders when one is still to come; otherwise Idle or Other.
-pub fn group_of(tab: &TabModel, r: &Rules) -> Group {
-    if needs_tab(tab, r) {
-        Group::Needs
-    } else if tab.landing.is_some() {
-        Group::Landing
-    } else if testing_deploy(tab) {
-        Group::Deploy
-    } else if let Some(merge) = tab.merge {
-        match merge {
-            MergeState::Queued => Group::Queued,
-            MergeState::Merged => Group::Merged,
-        }
-    } else if build_failing(tab, r) {
-        Group::Failing
-    } else if monitoring_only(tab) {
-        Group::Monitoring
-    } else if looping_only(tab) {
-        Group::Loops
-    } else if tab.state.busy() {
-        Group::Working
-    } else if reminder_later(tab, r) {
-        Group::Later
-    } else {
-        rest_of(tab)
-    }
-}
-
-/// Each tab's group and place as `grouped` lays them out now, for holding
-/// them still while you browse (`frozen_from`).
-pub type Frozen = HashMap<TabId, (Group, usize)>;
-
-/// A group and its tabs, in order.
-#[derive(Clone, Debug)]
-pub struct Grouped<'a> {
-    pub group: Group,
-    pub tabs: Vec<&'a TabModel>,
-}
-
-/// The tabs in their groups, in the groups' order, empty groups left out.
-/// `frozen` keeps each tab it knows in the group and place it had then,
-/// whatever its state since, so tabs hold still while you browse them
-/// (going to a tab marks it seen, and states change on their own); a tab
-/// opened since goes where its state puts it, after them.
-pub fn grouped<'a>(tabs: &'a [TabModel], frozen: Option<&Frozen>, r: &Rules) -> Vec<Grouped<'a>> {
-    let held = |t: &TabModel| frozen.and_then(|f| f.get(&t.id)).copied();
-    Group::ALL
-        .iter()
-        .filter_map(|&group| {
-            let mut in_it: Vec<&TabModel> = tabs
-                .iter()
-                .filter(|t| held(t).map_or_else(|| group_of(t, r), |(g, _)| g) == group)
-                .collect();
-            in_it.sort_by(|a, b| match (held(a), held(b)) {
-                (Some((_, x)), Some((_, y))) => x.cmp(&y),
-                (Some(_), None) => Ordering::Less,
-                (None, Some(_)) => Ordering::Greater,
-                (None, None) => group.order(a, b, r),
-            });
-            (!in_it.is_empty()).then_some(Grouped { group, tabs: in_it })
-        })
-        .collect()
-}
-
-/// The tabs in the order the sidebar lists them, one list.
-pub fn sidebar_order<'a>(
-    tabs: &'a [TabModel],
-    frozen: Option<&Frozen>,
-    r: &Rules,
-) -> Vec<&'a TabModel> {
-    grouped(tabs, frozen, r)
-        .into_iter()
-        .flat_map(|g| g.tabs)
-        .collect()
-}
-
-/// The tabs under Needs you, in the order the sidebar lists them: what M-a
-/// walks.
-pub fn needs_you<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
-    let mut needs: Vec<&TabModel> = tabs
-        .iter()
-        .filter(|t| group_of(t, r) == Group::Needs)
-        .collect();
-    needs.sort_by(|a, b| pinned_first(a, b, r));
-    needs
-}
-
-/// The tabs under Idle, in the order the sidebar lists them: what M-A
-/// walks (model.js's `idleTabs`). Only the model can tell an idle tab from
-/// one working in the background or looping.
-pub fn idle_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
-    let mut idle: Vec<&TabModel> = tabs
-        .iter()
-        .filter(|t| group_of(t, r) == Group::Idle)
-        .collect();
-    idle.sort_by(|a, b| Group::Idle.order(a, b, r));
-    idle
-}
-
-/// Each tab's group and place as `grouped` lays them out now.
-pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
-    grouped(tabs, None, r)
-        .into_iter()
-        .flat_map(|g| g.tabs.into_iter().map(move |t| (t.id, g.group)))
-        .enumerate()
-        .map(|(at, (id, group))| (id, (group, at)))
-        .collect()
-}
-
-/// Mission control's finer stages, in this order: each loop running in the
-/// background is a stage of its own rather than part of Working.
+/// Where a tab is, in this order: the sidebar's groups and mission control's
+/// stages. Each loop skill at work (a review loop, a CI loop,
+/// queue-and-clean) is a stage of its own rather than part of Working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Stage {
     Needs,
@@ -702,6 +499,10 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
     }
 }
 
+/// Each tab's stage and place as `grouped` lays them out now, for holding
+/// them still while you browse (`frozen_from`).
+pub type Frozen = HashMap<TabId, (Stage, usize)>;
+
 /// A stage and its tabs, in order.
 #[derive(Clone, Debug)]
 pub struct Staged<'a> {
@@ -709,16 +510,75 @@ pub struct Staged<'a> {
     pub tabs: Vec<&'a TabModel>,
 }
 
-/// The tabs in their stages, in the stages' order, empty ones left out.
-pub fn staged<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<Staged<'a>> {
+/// The tabs in their stages, in the stages' order, empty ones left out:
+/// the sidebar's groups and mission control's stages alike, so the two
+/// never place a tab apart. `frozen` keeps each tab it knows in the stage
+/// and place it had then, whatever its state since, so tabs hold still
+/// while you browse them (going to a tab marks it seen, and states change
+/// on their own); a tab opened since goes where its state puts it, after
+/// them.
+pub fn grouped<'a>(tabs: &'a [TabModel], frozen: Option<&Frozen>, r: &Rules) -> Vec<Staged<'a>> {
+    let held = |t: &TabModel| frozen.and_then(|f| f.get(&t.id)).copied();
     Stage::ALL
         .iter()
         .filter_map(|&stage| {
-            let mut in_it: Vec<&TabModel> =
-                tabs.iter().filter(|t| stage_of(t, r) == stage).collect();
-            in_it.sort_by(|a, b| stage.order(a, b, r));
+            let mut in_it: Vec<&TabModel> = tabs
+                .iter()
+                .filter(|t| held(t).map_or_else(|| stage_of(t, r), |(s, _)| s) == stage)
+                .collect();
+            in_it.sort_by(|a, b| match (held(a), held(b)) {
+                (Some((_, x)), Some((_, y))) => x.cmp(&y),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => stage.order(a, b, r),
+            });
             (!in_it.is_empty()).then_some(Staged { stage, tabs: in_it })
         })
+        .collect()
+}
+
+/// The tabs in the order the sidebar lists them, one list.
+pub fn sidebar_order<'a>(
+    tabs: &'a [TabModel],
+    frozen: Option<&Frozen>,
+    r: &Rules,
+) -> Vec<&'a TabModel> {
+    grouped(tabs, frozen, r)
+        .into_iter()
+        .flat_map(|g| g.tabs)
+        .collect()
+}
+
+/// The tabs under Needs you, in the order the sidebar lists them: what M-a
+/// walks.
+pub fn needs_you<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
+    let mut needs: Vec<&TabModel> = tabs
+        .iter()
+        .filter(|t| stage_of(t, r) == Stage::Needs)
+        .collect();
+    needs.sort_by(|a, b| pinned_first(a, b, r));
+    needs
+}
+
+/// The tabs under Idle, in the order the sidebar lists them: what M-A
+/// walks (model.js's `idleTabs`). Only the model can tell an idle tab from
+/// one working in the background or looping.
+pub fn idle_tabs<'a>(tabs: &'a [TabModel], r: &Rules) -> Vec<&'a TabModel> {
+    let mut idle: Vec<&TabModel> = tabs
+        .iter()
+        .filter(|t| stage_of(t, r) == Stage::Idle)
+        .collect();
+    idle.sort_by(|a, b| Stage::Idle.order(a, b, r));
+    idle
+}
+
+/// Each tab's stage and place as `grouped` lays them out now.
+pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
+    grouped(tabs, None, r)
+        .into_iter()
+        .flat_map(|g| g.tabs.into_iter().map(move |t| (t.id, g.stage)))
+        .enumerate()
+        .map(|(at, (id, stage))| (id, (stage, at)))
         .collect()
 }
 
@@ -964,7 +824,8 @@ fn state_only(tab: &TabModel, r: &Rules) -> String {
 pub fn pr_facts(tab: &TabModel) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(c) = tab.checks {
-        let marks: Vec<String> = [("✓", c.pass), ("✗", c.fail), ("⏳", c.pending)]
+        let pending = crate::sidebar::text::pending_mark();
+        let marks: Vec<String> = [("✓", c.pass), ("✗", c.fail), (pending, c.pending)]
             .iter()
             .filter(|(_, n)| *n > 0)
             .map(|(m, n)| format!("{m}{n}"))
@@ -998,6 +859,7 @@ pub(crate) mod tests {
             now_ms: NOW_MS,
             reminders: true,
             build_failing: true,
+            ux2: false,
         }
     }
 
@@ -1011,12 +873,12 @@ pub(crate) mod tests {
         t
     }
 
-    fn names<'a>(groups: &[Grouped<'a>]) -> Vec<(&'static str, Vec<String>)> {
+    fn names<'a>(groups: &[Staged<'a>]) -> Vec<(&'static str, Vec<String>)> {
         groups
             .iter()
             .map(|g| {
                 (
-                    g.group.title(),
+                    g.stage.title(),
                     g.tabs.iter().map(|t| t.name.clone()).collect(),
                 )
             })
@@ -1079,7 +941,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn tabs_with_no_claude_are_other_under_idle_and_loops_between() {
+    fn tabs_with_no_claude_are_other_under_idle_and_each_loop_its_own_group() {
         let r = rules();
         let mut notes = tab(1, "Notes", TabState::Idle);
         notes.claude = None;
@@ -1102,16 +964,12 @@ pub(crate) mod tests {
         assert_eq!(
             names(&grouped(&tabs, None, &r)),
             vec![
-                ("Working", v(&["busy", "reviewing"])),
-                ("Idle", v(&["resting"])),
+                ("Working", v(&["busy"])),
+                ("Review loop", v(&["reviewing"])),
                 ("Loops", v(&["Calendar"])),
+                ("Idle", v(&["resting"])),
                 ("Other", v(&["Notes", "Slack relay"])),
             ]
-        );
-        let stages: Vec<&str> = staged(&tabs, &r).iter().map(|s| s.stage.title()).collect();
-        assert_eq!(
-            stages,
-            vec!["Working", "Review loop", "Loops", "Idle", "Other"]
         );
     }
 
@@ -1248,7 +1106,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_failing_build_is_a_group_of_its_own_and_a_ci_loop_a_stage() {
+    fn a_failing_build_is_a_group_of_its_own_and_a_ci_loop_at_work_on_it_another() {
         let r = rules();
         let pr = |n, name: &str, state, pr_state, fail| {
             let mut t = tab(n, name, state);
@@ -1283,27 +1141,6 @@ pub(crate) mod tests {
             names(&grouped(&tabs, None, &r)),
             vec![
                 ("Needs you", v(&["red asking"])),
-                (
-                    "Build failing",
-                    v(&["red working", "red ci loop", "red idle"])
-                ),
-                ("In merge queue", v(&["red queued"])),
-                ("Idle", v(&["green", "red closed"])),
-            ]
-        );
-        let stages: Vec<(&str, Vec<String>)> = staged(&tabs, &r)
-            .iter()
-            .map(|s| {
-                (
-                    s.stage.title(),
-                    s.tabs.iter().map(|t| t.name.clone()).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            stages,
-            vec![
-                ("Needs you", v(&["red asking"])),
                 ("Build failing", v(&["red working", "red idle"])),
                 ("CI loop", v(&["red ci loop"])),
                 ("In merge queue", v(&["red queued"])),
@@ -1319,7 +1156,7 @@ pub(crate) mod tests {
             build_failing: false,
             ..r
         };
-        assert_eq!(group_of(&tabs[2], &off), Group::Idle);
+        assert_eq!(stage_of(&tabs[2], &off), Stage::Idle);
     }
 
     #[test]
@@ -1336,10 +1173,10 @@ pub(crate) mod tests {
         let mut watcher = tab(7, "watcher", TabState::Background);
         watcher.background = 1;
         watcher.monitors = vec!["CI on #12".into()];
-        assert_eq!(group_of(&watcher, &r), Group::Monitoring);
+        assert_eq!(stage_of(&watcher, &r), Stage::Monitoring);
         assert_eq!(state_words(&watcher, &r), "monitoring · CI on #12");
         watcher.background = 2;
-        assert_eq!(group_of(&watcher, &r), Group::Working, "other work as well");
+        assert_eq!(stage_of(&watcher, &r), Stage::Working, "other work as well");
         let mut looped = bg.clone();
         looped.tab_loop = Some(TabLoop::Run(LoopRun {
             kind: "ci",
@@ -1422,14 +1259,6 @@ pub(crate) mod tests {
             names(&grouped(&tabs, None, &r))[0],
             ("Needs you", v(&["pinned", "waiting long", "done"]))
         );
-        assert_eq!(
-            staged(&tabs, &r)[0]
-                .tabs
-                .iter()
-                .map(|t| t.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["pinned", "waiting long", "done"]
-        );
         for state in [TabState::Waiting, TabState::Done, TabState::Working] {
             let t = TabModel {
                 state,
@@ -1444,7 +1273,7 @@ pub(crate) mod tests {
         assert_eq!(state_words(&asking, &r), "pinned · waiting on you");
         pinned.claude = None;
         pinned.pinned = false;
-        assert_eq!(group_of(&pinned, &r), Group::Other);
+        assert_eq!(stage_of(&pinned, &r), Stage::Other);
     }
 
     #[test]
@@ -1455,7 +1284,7 @@ pub(crate) mod tests {
         t.claude = None;
         t.remind_at = Some(now + 90 * 60 + 30);
         t.remind_note = Some("check the deploy".into());
-        assert_eq!(group_of(&t, &r), Group::Later);
+        assert_eq!(stage_of(&t, &r), Stage::Later);
         assert_eq!(stage_of(&t, &r), Stage::Later);
         assert_eq!(badge_state(&t, &r), Badge::Later);
         assert!(
@@ -1467,7 +1296,7 @@ pub(crate) mod tests {
             state: TabState::Waiting,
             ..t.clone()
         };
-        assert_eq!(group_of(&asking, &r), Group::Needs);
+        assert_eq!(stage_of(&asking, &r), Stage::Needs);
         assert_eq!(badge_state(&asking, &r), Badge::Waiting);
         assert!(state_words(&asking, &r).ends_with("check the deploy · waiting on you"));
         assert_eq!(needs_you(std::slice::from_ref(&asking), &r).len(), 1);
@@ -1475,13 +1304,13 @@ pub(crate) mod tests {
             state: TabState::Working,
             ..t.clone()
         };
-        assert_eq!(group_of(&busy, &r), Group::Working);
+        assert_eq!(stage_of(&busy, &r), Stage::Working);
         assert_eq!(badge_state(&busy, &r), Badge::Working);
         let merged = TabModel {
             merge: Some(MergeState::Merged),
             ..t.clone()
         };
-        assert_eq!(group_of(&merged, &r), Group::Merged);
+        assert_eq!(stage_of(&merged, &r), Stage::Merged);
         // Come due, it needs you, with the pinned ones first.
         let mut due = t.clone();
         due.remind_at = Some(now - 5);
@@ -1498,7 +1327,7 @@ pub(crate) mod tests {
             reminders: false,
             ..r
         };
-        assert_eq!(group_of(&due, &off), Group::Other);
+        assert_eq!(stage_of(&due, &off), Stage::Other);
     }
 
     #[test]
@@ -1532,18 +1361,134 @@ pub(crate) mod tests {
                 ("Merged", v(&["done with it"])),
             ]
         );
-        assert_eq!(
-            staged(&tabs, &r)
-                .iter()
-                .map(|s| s.stage.title())
-                .collect::<Vec<_>>(),
-            vec!["Needs you", "Testing Deploy", "Merged"]
-        );
         // Merged while marked working says merged; waiting still wins.
         let busy = merged(5, "b", TabState::Working);
         assert_eq!(badge_state(&busy, &r), Badge::Merged);
         let asking = merged(6, "a", TabState::Waiting);
         assert_eq!(badge_state(&asking, &r), Badge::Waiting);
+    }
+
+    #[test]
+    fn every_state_a_tab_can_be_in_has_its_group() {
+        let r = rules();
+        let now = r.now_secs();
+        let run = |kind| Some(TabLoop::Run(LoopRun { kind, round: 1 }));
+        let at_work = |n, name: &str, state, skill: &str| {
+            let mut t = tab(n, name, state);
+            if state == TabState::Background {
+                t.background = 1;
+                t.tab_loop = run(match skill {
+                    "review" => "review",
+                    "ci" => "ci",
+                    _ => "queue",
+                });
+            } else {
+                t.loop_skill = Some(skill.into());
+            }
+            t
+        };
+        let mut pinned = tab(3, "pinned", TabState::Idle);
+        pinned.pinned = true;
+        let mut due = tab(4, "reminder due", TabState::Idle);
+        due.remind_at = Some(now - 5);
+        let mut later = tab(5, "reminder to come", TabState::Idle);
+        later.remind_at = Some(now + 600);
+        let landing = |n, name: &str, holding| {
+            let mut t = tab(n, name, TabState::Working);
+            t.landing = Some(Landing {
+                holding,
+                line: 1,
+                method: Method::Direct,
+            });
+            t
+        };
+        let mut deploy = tab(8, "testing a deploy", TabState::Background);
+        deploy.merge = Some(MergeState::Merged);
+        deploy.tab_loop = run("deploy");
+        let mut queued = tab(9, "in a merge queue", TabState::Idle);
+        queued.merge = Some(MergeState::Queued);
+        let mut merged = tab(10, "merged", TabState::Idle);
+        merged.merge = Some(MergeState::Merged);
+        let failing = |n, name: &str, state| {
+            let mut t = tab(n, name, state);
+            t.pr_state = Some(PrState::Open);
+            t.checks = Some(Checks {
+                pass: 0,
+                fail: 1,
+                pending: 0,
+            });
+            t
+        };
+        let mut fixing = failing(12, "a CI loop fixing it", TabState::Working);
+        fixing.loop_skill = Some("ci".into());
+        let mut watching = tab(13, "monitoring only", TabState::Background);
+        watching.background = 1;
+        watching.monitors = vec!["CI".into()];
+        let mut timed = tab(20, "a /loop", TabState::Background);
+        timed.tab_loop = Some(TabLoop::Scheduled(Scheduled {
+            prompt: "/today".into(),
+            at: NOW_MS + 60_000,
+        }));
+        let mut bare = tab(23, "no Claude", TabState::Idle);
+        bare.claude = None;
+        let tabs = vec![
+            (tab(1, "waiting", TabState::Waiting), Stage::Needs),
+            (tab(2, "done", TabState::Done), Stage::Needs),
+            (pinned, Stage::Needs),
+            (due, Stage::Needs),
+            (later, Stage::Later),
+            (landing(6, "landing", true), Stage::Landing),
+            (landing(7, "waiting to land", false), Stage::Landing),
+            (deploy, Stage::Deploy),
+            (queued, Stage::Queued),
+            (merged, Stage::Merged),
+            (failing(11, "build failing", TabState::Idle), Stage::Failing),
+            (fixing, Stage::Ci),
+            (watching, Stage::Monitoring),
+            (
+                at_work(14, "review working", TabState::Working, "review"),
+                Stage::Review,
+            ),
+            (
+                at_work(
+                    15,
+                    "review in the background",
+                    TabState::Background,
+                    "review",
+                ),
+                Stage::Review,
+            ),
+            (
+                at_work(16, "CI working", TabState::Working, "ci"),
+                Stage::Ci,
+            ),
+            (
+                at_work(17, "CI in the background", TabState::Background, "ci"),
+                Stage::Ci,
+            ),
+            (
+                at_work(18, "queue working", TabState::Working, "queue"),
+                Stage::Queue,
+            ),
+            (
+                at_work(19, "queue in the background", TabState::Background, "queue"),
+                Stage::Queue,
+            ),
+            (timed, Stage::Scheduled),
+            (tab(21, "working", TabState::Working), Stage::Working),
+            (tab(22, "idle", TabState::Idle), Stage::Idle),
+            (bare, Stage::Other),
+        ];
+        let models: Vec<TabModel> = tabs.iter().map(|(t, _)| t.clone()).collect();
+        let shown: HashMap<String, Stage> = grouped(&models, None, &r)
+            .into_iter()
+            .flat_map(|g| g.tabs.into_iter().map(move |t| (t.name.clone(), g.stage)))
+            .collect();
+        for (t, stage) in &tabs {
+            assert_eq!(shown.get(&t.name), Some(stage), "{}", t.name);
+        }
+        assert_eq!(Stage::Queue.title(), "Queue-and-clean");
+        assert_eq!(Stage::Scheduled.title(), "Loops");
     }
 
     #[test]

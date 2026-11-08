@@ -745,3 +745,73 @@ fn m_shift_a_walks_the_idle_tabs_wrapping_round() {
     client.type_text(&format!("{ALT}Aafter\r"));
     client.wait_text("^[Aafter");
 }
+
+/// `switchboard claude-context` as a SessionStart hook runs it in `pane`:
+/// the context it adds.
+fn context_in(server: &TestServer, pane: &str) -> String {
+    let mut child = Command::new(common::BIN)
+        .arg("claude-context")
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", pane)
+        .env("CLAUDE_CODE_ENTRYPOINT", "cli")
+        .env_remove("NOTES_DIR")
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"session_id":"s1","hook_event_name":"SessionStart"}"#)
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success() && out.stderr.is_empty());
+    let answer: Value = serde_json::from_slice(&out.stdout).expect("JSON");
+    answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[test]
+fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"tab_note_context": true}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, _) = first_pane(&server);
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(notes.join("Plans")).unwrap();
+    std::fs::write(notes.join("Plans/Design.md"), "# Design\n").unwrap();
+    std::fs::write(notes.join("Last.md"), "# Last\n").unwrap();
+    let pointed = |note: &Path| format!("This tab's note is `{}`", notes.join(note).display());
+
+    // No note: the part alone.
+    assert!(!context_in(&server, &pane).contains("This tab's note"));
+
+    // The note last shown beside the tab, while it has none of its own.
+    server.ok(&["set", "-t", &tab, "@tab_note_last", "Last.md"]);
+    assert!(context_in(&server, &pane).contains(&pointed(Path::new("Last.md"))));
+
+    // Its own note first; one whose file is gone, or outside the notes
+    // directory, isn't pointed at.
+    server.ok(&["set", "-t", &tab, "@tab_note", "Plans/Design.md"]);
+    let context = context_in(&server, &pane);
+    assert!(
+        context.contains(&pointed(Path::new("Plans/Design.md"))),
+        "{context}"
+    );
+    assert!(context.contains("before your first reply"));
+    server.ok(&["set", "-t", &tab, "@tab_note", "../Gone.md"]);
+    assert!(context_in(&server, &pane).contains(&pointed(Path::new("Last.md"))));
+
+    // The setting off, as it is by default: the part alone.
+    settings(&server, json!({}));
+    assert!(!context_in(&server, &pane).contains("This tab's note"));
+}

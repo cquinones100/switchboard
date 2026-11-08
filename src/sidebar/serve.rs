@@ -215,10 +215,24 @@ impl Server {
             .iter()
             .filter_map(|(p, r)| Some((*p, r.work.interrupted_at?)))
             .collect();
+        // A question asked since the session started, still unanswered.
+        let asks: Vec<(PaneId, String, i64)> = reads
+            .iter()
+            .filter_map(|(p, r)| {
+                let (question, at) = r.turn.as_ref()?.asks.clone()?;
+                let started = r.session.as_ref()?.started_at.unwrap_or(0);
+                (at >= started).then_some((*p, question, at))
+            })
+            .collect();
         let changed = reads != self.sidebar.panes;
         self.sidebar.panes = reads;
         self.sidebar.stale = false;
         self.sidebar_hand_back(&interrupted);
+        for (pane, question, at) in asks {
+            if self.agent_asked(pane, at, &question) {
+                self.dirty_sidebars();
+            }
+        }
         if changed {
             self.dirty_sidebars();
         }
@@ -512,6 +526,12 @@ impl Server {
                     },
                     title,
                     detail,
+                    // The newest one's time; a meeting's is when it starts,
+                    // not when it came.
+                    time: (source != "meeting")
+                        .then(|| items.iter().filter_map(|i| i.time).max())
+                        .flatten()
+                        .map(|ms| ms.div_euclid(1000)),
                 }
             })
             .collect()
@@ -1482,7 +1502,7 @@ impl Server {
     /// (daemon.js's `openNotice`): the next meeting joins its call (with
     /// none, the Calendar view opens), the newest note written for you
     /// opens in Notes, a calendar change opens the Calendar view, a
-    /// suggestion Settings, the mode working a note mission control's tabs,
+    /// suggestion Settings, autopilot mission control's tabs,
     /// where its line is, and the others mission control on their view.
     fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
         let Owner::Notice { source, id } = owner else {
@@ -1513,7 +1533,7 @@ impl Server {
             },
             "calendar" => self.open_mission(client, view("calendar")),
             "habits" => self.open_mission(client, crate::mission::Opening::Settings),
-            "autopilot" => self.open_mission(client, crate::mission::Opening::Tabs),
+            "autopilot" => self.open_mission(client, crate::autopilot::opening()),
             // The landed tabs closed unseen are only to be read: Enter
             // dismisses them.
             "landed" => self.autopilot_dismiss_closed(None),
@@ -1552,7 +1572,7 @@ impl Server {
             "inbox" if on("linear") && on("view_inbox") => view("inbox"),
             "meeting" | "calendar" if on("view_calendar") => view("calendar"),
             "habits" => Some(crate::mission::Opening::Settings),
-            "autopilot" | "autolanded" => Some(crate::mission::Opening::Tabs),
+            "autopilot" | "autolanded" => Some(crate::autopilot::opening()),
             _ => None,
         }
     }
@@ -1607,20 +1627,11 @@ impl Server {
 
     // ── M-a ─────────────────────────────────────────────────────────────────
 
-    /// M-a: the next of what needs you, in the sidebar's order, across every
-    /// session: the tabs under Needs you, then the notifications while there
-    /// are any (needs_notices setting). Pressed from the sidebar, the cursor
-    /// stays in a sidebar, on the tab it went to.
-    pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
-        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
-            return;
-        };
-        let Some(here) = self.session(&session).map(|s| s.current) else {
-            return;
-        };
+    /// What M-a walks, in its order: the tabs under Needs you, then the
+    /// notifications while there are any (needs_notices setting).
+    fn sidebar_needs_stops(&self, all: &[TabModel]) -> Vec<Stop> {
         let r = Rules::now();
-        let all = self.sidebar_all_tabs();
-        let mut stops: Vec<Stop> = model::needs_you(&all, &r)
+        let mut stops: Vec<Stop> = model::needs_you(all, &r)
             .iter()
             .map(|t| Stop {
                 place: Place::Tab(t.id),
@@ -1635,13 +1646,45 @@ impl Server {
                 },
             })
             .collect();
-        let notices = self.sidebar_notices();
-        if settings::is_on("needs_notices") && !notices.is_empty() {
+        if settings::is_on("needs_notices") && !self.sidebar_notices().is_empty() {
             stops.push(Stop {
                 place: Place::Notices,
                 why: Why::Notices,
             });
         }
+        stops
+    }
+
+    /// The tab M-a would go to next from `here`, its number and name, from
+    /// the same walk without taking it (UX 2.0's header says it): none when
+    /// it would go to the notifications, or nowhere else.
+    pub fn sidebar_needs_next(&self, here: TabId) -> Option<(usize, String)> {
+        let all = self.sidebar_all_tabs();
+        let stops = self.sidebar_needs_stops(&all);
+        let Next::Go(i) = self.sidebar.walk.clone().next(&stops, here) else {
+            return None;
+        };
+        let Place::Tab(t) = stops[i].place else {
+            return None;
+        };
+        all.iter()
+            .find(|m| m.id == t && t != here)
+            .map(|m| (m.index, m.name.clone()))
+    }
+
+    /// M-a: the next of what needs you, in the sidebar's order, across every
+    /// session: the tabs under Needs you, then the notifications while there
+    /// are any (needs_notices setting). Pressed from the sidebar, the cursor
+    /// stays in a sidebar, on the tab it went to.
+    pub fn sidebar_next_needs_you(&mut self, client: ClientId) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        let Some(here) = self.session(&session).map(|s| s.current) else {
+            return;
+        };
+        let all = self.sidebar_all_tabs();
+        let stops = self.sidebar_needs_stops(&all);
         let side = self.sidebar.sides.get(&session).filter(|s| s.focused);
         let from_sidebar = side.is_some();
         let on_notices = side

@@ -329,7 +329,7 @@ fn offer_upgrade(version: &Version) {
     }
     let how = format!(
         "The workspace runs {version} once its server restarts on it: `switchboard upgrade` \
-         (M-p's \"Restart Switchboard on the new build\") does that, keeping every tab and \
+         (M-p's \"Restart Switchboard on the latest build on disk\") does that, keeping every tab and \
          what runs in it."
     );
     if !crate::settings::is_on(OFFER_UPGRADE) || !std::io::stdin().is_terminal() {

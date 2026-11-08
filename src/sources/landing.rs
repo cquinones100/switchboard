@@ -8,10 +8,17 @@
 //! directory, whose `commondir` leads to the shared one, whose config names
 //! origin and whose `refs/remotes/origin/HEAD` the default branch.
 //!
+//! Each branch landed on has a lock and queue of its own (src/cmd/
+//! land_lock.rs): the default branch's `land.lock` and `land.queue`, and a
+//! target branch's `land.lock.<branch>` and `land.queue.<branch>`, found by
+//! their names, so a repository is read as one `RepoLanding` per branch.
+//!
 //! Mission control's Landing view (`view_items`), in place of the Merge
 //! queues view, is there only while something lands, a section per
-//! repository and way: "<repo> · straight to <branch>" with the tab landing
-//! and those waiting, and "<repo> · merge queue" with every PR in it.
+//! repository and way: "<repo> · straight to <branch>" for the default
+//! branch and "<repo> → <branch>" for a target branch, each with the tab
+//! landing and those waiting, and "<repo> · merge queue" with every PR in
+//! it.
 //!
 //! A holder or waiter counts while its worktree is there and a Claude
 //! session runs in it, as land-lock.js's `gone()` has it, so a landing that
@@ -42,8 +49,8 @@ pub struct Entry {
     pub since: i64,
 }
 
-/// A repository a tab is in, and what lands there straight on its default
-/// branch.
+/// A repository a tab is in, and what lands there straight on one branch:
+/// its default branch, or a target branch with a lock and queue of its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RepoLanding {
     /// Its shared git directory, which the landing lock is in.
@@ -54,6 +61,9 @@ pub struct RepoLanding {
     pub name: String,
     /// The default branch, as `origin/HEAD` names it.
     pub branch: Option<String>,
+    /// The branch this queue lands on when it isn't the default one
+    /// (`land.queue.<branch>`), `None` for the default branch's.
+    pub target: Option<String>,
     pub holder: Option<Entry>,
     pub waiting: Vec<Entry>,
 }
@@ -147,14 +157,46 @@ fn entry_of(value: &Value) -> Option<Entry> {
     })
 }
 
-// A repository's landing, read from its shared git directory.
-fn repo_landing(root: &Path, common: &Path, running: &[PathBuf]) -> RepoLanding {
+// The branches other than the default one that have a landing lock or
+// queue in a shared git directory, from their files' names, sorted.
+fn targets_in(common: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(common) else {
+        return Vec::new();
+    };
+    let mut targets: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let rest = name
+                .strip_prefix("land.queue.")
+                .or_else(|| name.strip_prefix("land.lock."))?;
+            // A queue's mutex; no branch's name ends in `.lock`.
+            (!rest.ends_with(".lock")).then(|| crate::cmd::land_lock::branch_of_suffix(rest))
+        })
+        .collect();
+    targets.sort();
+    targets.dedup();
+    targets
+}
+
+// A repository's landing onto one branch (`target`, `None` for the default
+// branch), read from its shared git directory.
+fn repo_landing(
+    root: &Path,
+    common: &Path,
+    target: Option<&str>,
+    running: &[PathBuf],
+) -> RepoLanding {
+    let named = |base: &str| match target {
+        Some(t) => format!("{base}.{}", crate::cmd::land_lock::file_suffix(t)),
+        None => base.to_string(),
+    };
     let live = |e: &Entry| live_in(&e.path, running);
-    let holder = util::read_json(common.join("land.lock/holder"))
+    let holder = util::read_json(common.join(named("land.lock")).join("holder"))
         .as_ref()
         .and_then(entry_of)
         .filter(live);
-    let waiting = util::read_json(common.join("land.queue"))
+    let waiting = util::read_json(common.join(named("land.queue")))
         .and_then(|q| q.as_array().cloned())
         .unwrap_or_default()
         .iter()
@@ -184,6 +226,7 @@ fn repo_landing(root: &Path, common: &Path, running: &[PathBuf]) -> RepoLanding 
         }),
         repo,
         branch,
+        target: target.map(str::to_string),
         holder,
         waiting,
     }
@@ -202,15 +245,25 @@ pub fn landing_of(tabs: &[(TabId, Vec<PathBuf>)], running: &[PathBuf]) -> Read {
             continue;
         };
         roots.insert(*tab, root.clone());
-        let at = match repos.iter().position(|r| r.common == common) {
-            Some(at) => at,
-            None => {
-                repos.push(repo_landing(&root, &common, running));
-                repos.len() - 1
+        if !repos.iter().any(|r| r.common == common) {
+            repos.push(repo_landing(&root, &common, None, running));
+            for target in targets_in(&common) {
+                repos.push(repo_landing(&root, &common, Some(&target), running));
             }
-        };
-        let holder = repos[at].holder.as_ref().map(|e| e.path.clone());
-        let queue: Vec<PathBuf> = repos[at].waiting.iter().map(|e| e.path.clone()).collect();
+        }
+        // The queue the tab's worktree is in, whichever branch it lands on,
+        // else the default branch's.
+        let mine = repos.iter().filter(|r| r.common == common);
+        let at = mine
+            .clone()
+            .find(|r| {
+                r.holder.as_ref().is_some_and(|e| e.path == root)
+                    || r.waiting.iter().any(|e| e.path == root)
+            })
+            .or_else(|| mine.clone().next())
+            .expect("the repository's queues were read above");
+        let holder = at.holder.as_ref().map(|e| e.path.clone());
+        let queue: Vec<PathBuf> = at.waiting.iter().map(|e| e.path.clone()).collect();
         if holder.as_deref() == Some(root.as_path()) {
             places.insert(
                 *tab,
@@ -310,16 +363,21 @@ pub fn view_items(
             .chain(r.waiting.iter().map(|e| (e, false)))
             .collect();
         if !direct.is_empty() {
-            let way = format!(
-                "{} · straight to {}",
-                r.name,
-                r.branch.as_deref().unwrap_or("the default branch")
-            );
-            items.push(header(
-                &format!("{}:direct", r.common.display()),
-                &way,
-                direct.len(),
-            ));
+            let (way, id) = match &r.target {
+                Some(target) => (
+                    format!("{} → {target}", r.name),
+                    format!("{}:direct:{target}", r.common.display()),
+                ),
+                None => (
+                    format!(
+                        "{} · straight to {}",
+                        r.name,
+                        r.branch.as_deref().unwrap_or("the default branch")
+                    ),
+                    format!("{}:direct", r.common.display()),
+                ),
+            };
+            items.push(header(&id, &way, direct.len()));
             let ahead = usize::from(r.holder.is_some());
             for (i, (entry, holding)) in direct.iter().enumerate() {
                 let tab = tabs.iter().find(|t| roots.get(&t.id) == Some(&entry.path));
@@ -360,6 +418,9 @@ pub fn view_items(
                         "holding": holding,
                         "first": !holding && at == 0,
                         "last": !holding && at + 1 == r.waiting.len(),
+                        "place": (!holding).then(|| at + 1),
+                        "phase": tab.and_then(|t| t.phase.clone()),
+                        "target": r.target,
                     },
                     "search": format!("{} {}", r.name, entry.path.display()),
                 }));
@@ -517,6 +578,101 @@ mod tests {
             places.iter().map(|(t, p)| (t.0, p.landing.line)).collect();
         lines.sort();
         assert_eq!(lines, vec![(2, 2), (3, 1)]);
+    }
+
+    #[test]
+    fn a_target_branch_s_queue_is_a_section_of_its_own_and_places_its_tabs() {
+        let scratch = Scratch::new("landing-target");
+        let main = scratch.0.join("repo");
+        if !repo(&main) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        let sessions = scratch.0.join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let pid = std::process::id();
+        let [one, two, three] = ["one", "two", "three"].map(|name| {
+            let worktree = scratch.0.join(name);
+            assert!(git(
+                &main,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    name,
+                    worktree.to_str().unwrap()
+                ]
+            ));
+            fs::write(
+                sessions.join(format!("target-{name}.json")),
+                serde_json::json!({ "sessionId": name, "cwd": worktree, "pid": pid }).to_string(),
+            )
+            .unwrap();
+            worktree
+        });
+        let common = main.join(".git");
+        // The default branch's lock held by one; team/next's by two,
+        // three waiting for it. A queue's mutex is no branch.
+        fs::create_dir_all(common.join("land.lock")).unwrap();
+        fs::write(
+            common.join("land.lock/holder"),
+            serde_json::json!({ "path": one, "since": 1 }).to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(common.join("land.lock.team%2Fnext")).unwrap();
+        fs::write(
+            common.join("land.lock.team%2Fnext/holder"),
+            serde_json::json!({ "path": two, "since": 2 }).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            common.join("land.queue.team%2Fnext"),
+            serde_json::json!([{ "path": three, "since": 3 }]).to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(common.join("land.queue.team%2Fnext.lock")).unwrap();
+        let tabs = vec![
+            (TabId(1), vec![one.clone()]),
+            (TabId(2), vec![two.clone()]),
+            (TabId(3), vec![three.clone()]),
+        ];
+        let read = landing_of(&tabs, &running_sessions(&sessions));
+        let targets: Vec<Option<&str>> = read.repos.iter().map(|r| r.target.as_deref()).collect();
+        assert_eq!(targets, vec![None, Some("team/next")]);
+        let line = |id: u32| {
+            let p = &read.places[&TabId(id)].landing;
+            (p.holding, p.line)
+        };
+        assert_eq!(
+            (line(1), line(2), line(3)),
+            ((true, 1), (true, 1), (false, 2)),
+            "each branch's lock held at once, the waiter second in its own queue"
+        );
+
+        let view_tabs: Vec<ViewTab> = [(1, "first"), (2, "second"), (3, "third")]
+            .map(|(id, name)| ViewTab {
+                id: TabId(id),
+                index: id as usize,
+                name: name.into(),
+                phase: None,
+                waiting: false,
+            })
+            .into();
+        let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs, &read.roots);
+        let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec![
+                "repo · straight to the default branch",
+                "1. first",
+                "repo → team/next",
+                "1. second",
+                "2. third",
+            ]
+        );
+        assert_eq!(items[4].data["landing"]["target"], "team/next");
+        assert_eq!(items[4].data["landing"]["place"], 1);
     }
 
     #[test]

@@ -16,7 +16,7 @@
 //! One module per part, as the plugin had one Lua file per part:
 //! - `store`: the files on disk (store.lua).
 //! - `id`: a note's stable ID, its last line, which wtn's claims and the
-//!   work-a-note mode follow a note by (id.lua, lib/note-id.js).
+//!   autopilot follow a note by (id.lua, lib/note-id.js).
 //! - `text`: a note's lines, in a rope.
 //! - `render`: a note drawn as Notes shows it (render.lua).
 //! - `format`: the Format menu's commands and the typing it does

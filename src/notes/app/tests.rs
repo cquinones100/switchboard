@@ -795,6 +795,49 @@ fn the_palette_runs_the_command_picked_where_it_was_opened() {
 }
 
 #[test]
+fn gw_on_an_item_saves_the_note_and_presses_work_on_item_and_elsewhere_says_why() {
+    let (dir, mut store) = temp("gw");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] Fix the login\n- [x] Done\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    // An unsaved line above the item moves it, and the press names the line
+    // on screen, saved.
+    app.editor.doc.row = 1;
+    keys(&mut app, "oA new first line<Esc>");
+    app.editor.doc.row = 3;
+    assert_eq!(
+        app.item_press(),
+        Some(vec![
+            "work-on-item".to_string(),
+            "Plan.md".to_string(),
+            "4".to_string()
+        ])
+    );
+    assert!(
+        fs::read_to_string(dir.path.join("Plan.md"))
+            .unwrap()
+            .contains("A new first line\n- [ ] Fix the login"),
+        "saved before the press"
+    );
+    app.editor.doc.row = 4;
+    assert_eq!(app.item_press(), None);
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("that line is ticked"))
+    );
+    // gw itself, on a line that is no item, says so.
+    app.editor.doc.row = 0;
+    keys(&mut app, "gw");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("isn't a checklist item"))
+    );
+}
+
+#[test]
 fn an_image_pasted_while_typing_goes_under_the_line_and_ctrl_v_else_types_the_next_key() {
     let (dir, mut store) = temp("ctrl-v");
     let path = store.create("", Some("Bug report"));
@@ -1082,4 +1125,39 @@ fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styl
     crate::notes::format::paragraph(&mut doc, 1, 2, crate::notes::format::Paragraph::Check);
     assert_eq!(doc.line(1), "- [ ] one");
     assert_eq!(doc.line(2), line, "the ID line isn't made a checklist item");
+}
+
+// UX 2.0: the background look's tabs matched to the items they are for.
+#[test]
+fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
+    let list = serde_json::json!({ "sessions": [{ "tabs": [
+        { "index": 3, "agent": "working", "options": { "@tab_title": "show uncommitted changes" },
+          "panes": [{ "agent": { "state": "working", "phase": "review round 1" } }] },
+        { "index": 2, "agent": "waiting", "options": { "@autopilot_item": "stable IDs" },
+          "panes": [{ "agent": { "state": "waiting", "wait": "git push" } }] },
+        { "index": 4, "agent": "working", "options": {}, "path": "/repo/wt", "panes": [] },
+        { "index": 5, "agent": "done", "options": { "@tab_title": "finished" }, "panes": [] },
+        { "index": 6, "agent": null, "options": { "@tab_title": "idle" }, "panes": [] },
+    ]}]});
+    let got = item_tabs_of(&list, |dir| {
+        (dir == "/repo/wt").then(|| "from git".to_string())
+    });
+    assert_eq!(
+        got["show uncommitted changes"],
+        render::ItemTab {
+            index: 3,
+            waits: false,
+            detail: "review round 1".into()
+        }
+    );
+    assert_eq!(
+        got["stable IDs"],
+        render::ItemTab {
+            index: 2,
+            waits: true,
+            detail: "git push".into()
+        }
+    );
+    assert_eq!(got["from git"].index, 4);
+    assert_eq!(got.len(), 3, "a finished or idle tab is no chip");
 }

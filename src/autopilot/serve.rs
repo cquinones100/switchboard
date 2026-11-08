@@ -3,7 +3,7 @@
 //! every refresh, its notice) and what tmux/wtn-open.zsh's `next` did, done
 //! in the server task.
 //!
-//! M-p's "Work the note continuously" opens mission control on its tabs,
+//! M-p's "Autopilot: work a note" opens mission control on its tabs,
 //! then, with the mode off, asks which note (those holding an unticked
 //! item, the one last worked first, then the newest, the rest behind "More
 //! notes…"), how many of its tabs work at once, the most open and a
@@ -36,10 +36,11 @@ use super::place::{Mine, in_main_clone, in_worktree_of};
 use super::{AutopilotEvent, Command};
 use crate::agent::State;
 use crate::cmd::work::main_clone;
+use crate::cmd::work_recent;
 use crate::cmd::worktree_from_note::{self, Item};
 use crate::diff::in_place::PARKED_PANE;
+use crate::mission::Mission;
 use crate::mission::ask::Ask;
-use crate::mission::{Mission, Opening};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::TabState;
@@ -141,12 +142,9 @@ impl Server {
                     .and_then(|p| self.panes.get(&p))
                     .and_then(|s| s.pane.cwd())
                     .unwrap_or_else(paths::home);
-                self.open_mission(client, Opening::Tabs);
+                self.open_mission(client, super::opening());
                 if !settings::is_on("autopilot") {
-                    self.mission_note(
-                        client,
-                        "Working a note continuously is off in Settings (Work a note continuously)",
-                    );
+                    self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
                 }
                 if Mode::read(&paths::state_dir()).on {
@@ -158,9 +156,10 @@ impl Server {
         }
     }
 
-    /// Which note, how many tabs at once, the most open and a spend limit,
-    /// then the mode on, working the note in the main clone of `dir`'s
-    /// repository.
+    /// Which note, which branch to land on, how many tabs at once, the most
+    /// open and a spend limit, then the mode on, working the note in the
+    /// main clone of `dir`'s repository. A repository that lands through a
+    /// PR is refused: autopilot lands only straight onto a branch for now.
     fn autopilot_setup(&mut self, client: ClientId, dir: &Path) {
         let Some(repo) = main_clone(dir) else {
             self.mission_note(
@@ -172,10 +171,28 @@ impl Server {
         let notes = worktree_from_note::notes_dir();
         let was = Mode::read(&paths::state_dir());
         let last = was.note.clone();
+        let at = repo.clone();
         self.off_task(
             client,
-            move || mode::note_choices(&notes, &last),
-            move |server, client, notes| {
+            move || {
+                let landing = crate::repos::landing_for(&at, false).map(|l| l.landing);
+                (mode::note_choices(&notes, &last), landing)
+            },
+            move |server, client, (notes, landing)| {
+                match landing.as_deref() {
+                    Ok("direct") => {}
+                    Ok(_) => {
+                        server.mission_note(
+                            client,
+                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                        return;
+                    }
+                }
                 if notes.open.is_empty() && notes.rest.is_empty() {
                     server.mission_note(client, "No notes to work");
                     return;
@@ -220,13 +237,115 @@ impl Server {
                 };
                 server.autopilot_pick_note(client, repo, was, rest);
             }
-            Some(p) => server.autopilot_ask_counts(client, repo, p.value, was),
+            Some(p) => {
+                let note = p.value;
+                let at = repo.clone();
+                server.autopilot_pick_target(client, at, move |server, client, target| {
+                    server.autopilot_ask_counts(client, repo, note, target, was)
+                });
+            }
             None => {}
         });
     }
 
+    /// "Land on:": the branches picked here before, the most recent first
+    /// (src/cmd/work_recent.rs), then the repository's default branch, so
+    /// with nothing picked yet Enter lands there, then its other local
+    /// branches by name, read from git's files off the task, then "Another
+    /// branch…" to type one; `then` given the branch, empty for the default
+    /// one, and the pick kept for next time. The palette's "Start work on a
+    /// note's checklist items" asks it too, after the items.
+    pub(crate) fn autopilot_pick_target(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        then: impl FnOnce(&mut Server, ClientId, String) + Send + 'static,
+    ) {
+        self.off_task(
+            client,
+            move || {
+                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+                let (default, branches, recent) = common
+                    .as_deref()
+                    .map(|c| {
+                        let mut branches = crate::tabs::git::local_branches(c);
+                        let recent = work_recent::branches(c);
+                        // A branch only origin has, picked through "Another
+                        // branch…", is made a local one only as an item
+                        // starts, so it stays listed while origin has it.
+                        let remote_only: Vec<String> = recent
+                            .iter()
+                            .filter(|b| !b.is_empty() && !branches.contains(b))
+                            .filter(|b| crate::tabs::git::on_origin(c, b))
+                            .cloned()
+                            .collect();
+                        branches.extend(remote_only);
+                        (crate::tabs::git::default_branch(c), branches, recent)
+                    })
+                    .unwrap_or_default();
+                (common, default, branches, recent)
+            },
+            move |server, client, (common, default, branches, recent)| {
+                let keep = move |branch: &str| {
+                    if let Some(common) = common {
+                        let branch = branch.to_string();
+                        work_recent::in_background(move || {
+                            work_recent::pick_branch(&common, &branch)
+                        });
+                    }
+                };
+                let items = mode::target_choices(default.as_deref(), &branches, &recent)
+                    .into_iter()
+                    .map(|(label, value)| PickItem::new(label, value))
+                    .collect();
+                let picker = Picker::new("Land on:", items)
+                    .named("branches")
+                    .prompt("branch> ");
+                server.pick(client, picker, move |server, client, picked| match picked {
+                    Some(p) if p.value == mode::ANOTHER_BRANCH => {
+                        let ask = Ask::new(
+                            "Land on which branch?",
+                            "A local branch, or one on origin, which is made a local branch tracking it.",
+                        );
+                        server.open(
+                            client,
+                            Box::new(ask),
+                            Some(Box::new(move |server: &mut Server, client, outcome| {
+                                let Outcome::Picked(p) = outcome else {
+                                    return;
+                                };
+                                match mode::typed_branch(&p.value) {
+                                    Some(b) => {
+                                        keep(&b);
+                                        then(server, client, b)
+                                    }
+                                    None => server.mission_note(
+                                        client,
+                                        format!("Not a branch name: {}", p.value),
+                                    ),
+                                }
+                            })),
+                        );
+                    }
+                    Some(p) => {
+                        keep(&p.value);
+                        then(server, client, p.value)
+                    }
+                    None => {}
+                });
+            },
+        );
+    }
+
     /// The setup's slots and cap, each typed in starting from what it was.
-    fn autopilot_ask_counts(&mut self, client: ClientId, repo: PathBuf, note: String, was: Mode) {
+    fn autopilot_ask_counts(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        note: String,
+        target: String,
+        was: Mode,
+    ) {
         let (slots_were, cap_was, limit_was) = (was.slots, was.cap, was.spend_limit);
         self.autopilot_number(
             client,
@@ -247,7 +366,13 @@ impl Server {
                             );
                             return;
                         }
-                        server.autopilot_ask_limit(client, repo, note, (slots, cap), limit_was);
+                        server.autopilot_ask_limit(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap),
+                            limit_was,
+                        );
                     },
                 );
             },
@@ -286,7 +411,7 @@ impl Server {
         &mut self,
         client: ClientId,
         repo: PathBuf,
-        note: String,
+        (note, target): (String, String),
         (slots, cap): (u32, u32),
         was: f64,
     ) {
@@ -316,7 +441,13 @@ impl Server {
                     client,
                     move || crate::notes::id::ensure_id(&file, &notes).ok(),
                     move |server, client, note_id| {
-                        server.autopilot_start(client, repo, note, (slots, cap, limit), note_id)
+                        server.autopilot_start(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap, limit),
+                            note_id,
+                        )
                     },
                 );
             })),
@@ -328,7 +459,7 @@ impl Server {
         &mut self,
         client: ClientId,
         repo: PathBuf,
-        note: String,
+        (note, target): (String, String),
         (slots, cap, limit): (u32, u32, f64),
         note_id: Option<String>,
     ) {
@@ -348,6 +479,7 @@ impl Server {
             m.slots = slots;
             m.cap = cap;
             m.spend_limit = limit;
+            m.target = target.clone();
         });
         match written {
             Ok(_) => {
@@ -356,14 +488,40 @@ impl Server {
                 self.mission_note(
                     client,
                     format!(
-                        "Working {}: {slots} at a time, up to {cap} tabs, in {}",
+                        "Working {}: {slots} at a time, up to {cap} tabs, in {}, landing on {}",
                         note_title(&note),
-                        paths::tilde(&repo)
+                        paths::tilde(&repo),
+                        if target.is_empty() {
+                            "the default branch"
+                        } else {
+                            &target
+                        }
                     ),
                 );
             }
             Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
         }
+    }
+
+    /// Its menu's "Change the target branch…": "Land on:" asked again, for
+    /// the tabs it opens from now; those open land where they were cut from.
+    fn autopilot_change_target(&mut self, client: ClientId) {
+        let repo = Mode::read(&paths::state_dir()).repo;
+        self.autopilot_pick_target(client, repo, |server, client, target| {
+            let said = if target.is_empty() {
+                "Its new tabs land on the default branch".to_string()
+            } else {
+                format!("Its new tabs land on {target}")
+            };
+            match Mode::update(&paths::state_dir(), |m| m.target = target) {
+                Ok(_) => {
+                    server.autopilot.pilot.reset();
+                    server.autopilot_tick();
+                    server.mission_note(client, said);
+                }
+                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
+            }
+        });
     }
 
     // ── Its menu ────────────────────────────────────────────────────────────
@@ -403,7 +561,8 @@ impl Server {
                 };
                 self.autopilot_setup(client, &dir);
             }
-            Act::ToTabs => self.open_mission(client, Opening::Tabs),
+            Act::ChangeTarget => self.autopilot_change_target(client),
+            Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
                 self.autopilot_say("");
                 self.mission_note(client, "Dismissed.");
@@ -460,11 +619,74 @@ impl Server {
         }
     }
 
-    /// What mission control's line shows, while the mode is on.
+    /// What mission control's line shows, while the mode is on and has no
+    /// view of its own (src/autopilot/view.rs) to say it in instead.
     pub fn autopilot_summary(&self) -> Option<Summary> {
         let mode = &self.autopilot.mode;
-        (settings::is_on("autopilot") && mode.on)
+        (settings::is_on("autopilot") && mode.on && !super::has_view())
             .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
+    }
+
+    /// Its own view in mission control (`view`), with UX 2.0 and the
+    /// view_autopilot setting on: while the mode is on, or `keep` (a client
+    /// has it in front). `landing` is the Landing view's items, whose
+    /// entries say where each tab's worktree is in its landing queue. Built
+    /// from what the server holds, reading no file.
+    pub fn autopilot_view(
+        &self,
+        keep: bool,
+        landing: &[crate::items::Item],
+    ) -> Option<Vec<crate::items::Item>> {
+        if !super::has_view() {
+            return None;
+        }
+        let mode = &self.autopilot.mode;
+        if !(mode.on || keep) {
+            return None;
+        }
+        let marked = |opts: &std::collections::BTreeMap<String, String>, name: &str| {
+            opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        let mut rows = Vec::new();
+        for model in self.sidebar_all_tabs() {
+            let Some(tab) = self.tabs.get(&model.id) else {
+                continue;
+            };
+            if !marked(&tab.opts, OPENED) {
+                continue;
+            }
+            let id = model.id.to_string();
+            let landing = landing.iter().find_map(|i| {
+                let l = i.data.get("landing")?;
+                (l.get("tab").and_then(serde_json::Value::as_str) == Some(id.as_str()))
+                    .then(|| l.clone())
+            });
+            rows.push(super::view::Row {
+                tab: model.id,
+                index: model.index,
+                item: tab
+                    .opts
+                    .get(ITEM)
+                    .cloned()
+                    .unwrap_or_else(|| model.name.clone()),
+                state: model.state,
+                was_in: marked(&tab.opts, IN),
+                loop_skill: model.loop_skill.clone(),
+                phase: model.phase.clone(),
+                landing,
+                left: marked(&tab.opts, LEFT) || model.autopilot_landed,
+                autoland: model.autopilot_autoland,
+            });
+        }
+        let summary = self.autopilot.pilot.summary(mode, self.away_now());
+        let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
+        Some(super::view::items(
+            &summary,
+            &mode.said,
+            &rows,
+            &self.autopilot.pilot.next.queue,
+            &skipped,
+        ))
     }
 
     // ── The check ───────────────────────────────────────────────────────────
@@ -900,15 +1122,18 @@ impl Server {
         let tx = self.tx.clone();
         let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
-            let text = job
-                .first(&notes, &state)
-                .ok()
-                .flatten()
+            let queue: Vec<String> = job
+                .items(&notes, &state)
+                .unwrap_or_default()
+                .into_iter()
+                .take(super::pilot::QUEUE_SHOWN)
                 .map(|i| i.text)
-                .unwrap_or_default();
+                .collect();
+            let text = queue.first().cloned().unwrap_or_default();
             let _ = tx.send(Event::Autopilot(AutopilotEvent::Next {
                 key: job.key,
                 text,
+                queue,
             }));
         });
     }
@@ -933,9 +1158,11 @@ impl Server {
     /// What the looks off the task found.
     pub fn autopilot_event(&mut self, event: AutopilotEvent) {
         match event {
-            AutopilotEvent::Next { key, text } => {
-                let changed = self.autopilot.pilot.next.text != text;
+            AutopilotEvent::Next { key, text, queue } => {
+                let changed = self.autopilot.pilot.next.text != text
+                    || self.autopilot.pilot.next.queue != queue;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
+                self.autopilot.pilot.next.queue = queue;
                 if changed {
                     self.autopilot_redraw();
                 }
@@ -971,7 +1198,8 @@ impl Server {
         let Some(client) = self.latest_client() else {
             return;
         };
-        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item) else {
+        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item, &mode.target)
+        else {
             return;
         };
         if let Some(t) = self.tabs.get_mut(&tab) {
@@ -1020,7 +1248,7 @@ impl Server {
     fn autopilot_notices(&mut self, mode: &Mode) {
         let on = settings::is_on("autopilot");
         let items = if on && !mode.said.is_empty() {
-            vec![crate::items::Item::new("said", &mode.said).detail("working a note continuously")]
+            vec![crate::items::Item::new("said", &mode.said).detail("autopilot")]
         } else {
             Vec::new()
         };
@@ -1030,9 +1258,10 @@ impl Server {
                 .iter()
                 .map(|c| {
                     let mut item = crate::items::Item::new(&c.id, c.title())
-                        .detail("working a note continuously");
+                        .detail("autopilot")
+                        .time(c.at);
                     item.lines = vec![
-                        "Closed by working a note continuously once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
+                        "Closed by autopilot once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
                     ];
                     item
                 })
@@ -1044,10 +1273,12 @@ impl Server {
         let autolanded = super::landed::read(&paths::state_dir())
             .iter()
             .map(|l| {
-                let mut item = crate::items::Item::new(&l.hash, l.title()).detail("without asking");
+                let mut item = crate::items::Item::new(&l.hash, l.title())
+                    .detail("without asking")
+                    .time(l.at);
                 let at = util::local_at_ms(l.at).strftime("%-I:%M %p").to_string();
                 item.lines = vec![format!(
-                    "Landed on the default branch without asking, as working a note continuously's \"Land without asking\" allows, at {at}"
+                    "Landed on the default branch without asking, as autopilot's \"Land without asking\" allows, at {at}"
                 )];
                 item.data = serde_json::json!({ "tab": l.tab });
                 item

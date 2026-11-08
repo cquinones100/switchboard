@@ -16,6 +16,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -177,7 +178,11 @@ pub fn says_version(binary: &Path) -> Result<String> {
 fn spawn_version(binary: &Path) -> Result<std::process::Child> {
     let started = Instant::now();
     loop {
+        // Named `switchboard`, whatever the file is called (the new one is
+        // `.switchboard.new-<pid>` until it is renamed), so it runs
+        // `--version` rather than look for a command by its file's name.
         let spawned = Command::new(binary)
+            .arg0("switchboard")
             .arg("--version")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

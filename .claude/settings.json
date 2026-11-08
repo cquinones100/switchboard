@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(cargo build --release --locked)",
+      "Bash(install -m 755 target/release/switchboard ~/.local/bin/)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {

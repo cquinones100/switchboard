@@ -1503,7 +1503,7 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
         "{check}"
     );
     assert!(
-        check.contains("would: run the worktree functions' init through switchboard, and take out the switchboard function or alias that starts tmux in ~/.zshrc"),
+        check.contains("would: take out the tmux version's worktree lines, and take out the switchboard function or alias that starts tmux in ~/.zshrc"),
         "{check}"
     );
     assert!(h.path(".local/bin/skill-path").symlink_metadata().is_ok());
@@ -1537,10 +1537,7 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
             .file_type()
             .is_symlink()
     );
-    assert_eq!(
-        read(&h.path("dotfiles/zshrc")),
-        "export A=1\neval \"$(switchboard worktree-from-ticket init zsh)\"\neval \"$(switchboard worktree-from-note init zsh)\"\n"
-    );
+    assert_eq!(read(&h.path("dotfiles/zshrc")), "export A=1\n");
     assert_eq!(backups(&h.path("dotfiles"), "zshrc.bak."), 1);
 
     // Nothing left: the part is up to date and the guided setup says nothing of it.

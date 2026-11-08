@@ -43,6 +43,16 @@ pub fn lines() -> u16 {
     LINES.load(Ordering::Relaxed)
 }
 
+/// The rows a tab's header takes at the top of its area, as the server
+/// last laid the tabs out: none, or `header::ROWS` with UX 2.0 on.
+static TOP: AtomicU16 = AtomicU16::new(0);
+
+/// The rows above a tab's panes (UX 2.0's tab header, src/mux/header.rs),
+/// 0 without it.
+pub fn top() -> u16 {
+    TOP.load(Ordering::Relaxed)
+}
+
 /// What the server keeps for the status line.
 #[derive(Debug, Default)]
 pub struct Status {

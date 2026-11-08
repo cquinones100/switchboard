@@ -237,6 +237,12 @@ impl Names {
         self.pinned = true;
     }
 
+    /// The branch `dir` was last worked out on, from what is kept, reading
+    /// nothing (`HEAD` when detached).
+    pub fn branch(&self, dir: &Path) -> Option<&str> {
+        self.kept.get(dir)?.branch.as_deref()
+    }
+
     /// What the tab bar shows for `dir`, and the lookups to start for it.
     pub fn facts(&mut self, dir: &Path, now: Instant) -> (Facts, Vec<Ask>) {
         let switches = self.switches(now);

@@ -88,6 +88,8 @@ pub enum Msg {
     Squashed(Result<String, String>),
     /// A request on the socket, and where its reply goes.
     Socket(Request, Sender<String>),
+    /// UX 2.0: the tabs on notes' items, from the background look.
+    ItemTabs(HashMap<String, render::ItemTab>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +136,9 @@ pub struct Options {
     pub clipboard: bool,
     /// The workspace's server is told of notes moving (a pane of it).
     pub server: bool,
+    /// UX 2.0 (ux2): chips under a checklist item saying what is happening
+    /// with it.
+    pub ux2: bool,
 }
 
 impl Default for Options {
@@ -156,6 +161,7 @@ impl Default for Options {
             pane_arrows: true,
             clipboard: false,
             server: false,
+            ux2: false,
         }
     }
 }
@@ -185,6 +191,9 @@ impl Options {
             pane_arrows: on("pane_arrows"),
             clipboard: true,
             server: crate::mux::socket::in_pane(),
+            ux2: all
+                .iter()
+                .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             ..Options::default()
         }
     }
@@ -256,6 +265,13 @@ pub(crate) enum Shown {
         indent: u16,
         bg: Option<render::Hl>,
     },
+    /// UX 2.0's chips on a line of their own under a checklist item, at
+    /// the column its text starts.
+    Chips {
+        row: usize,
+        chips: Vec<render::Chip>,
+        indent: u16,
+    },
     Fold {
         row: usize,
         text: String,
@@ -270,7 +286,10 @@ pub(crate) enum Shown {
 impl Shown {
     fn row(&self) -> usize {
         match self {
-            Shown::Text { row, .. } | Shown::Fold { row, .. } | Shown::Picture { row, .. } => *row,
+            Shown::Text { row, .. }
+            | Shown::Chips { row, .. }
+            | Shown::Fold { row, .. }
+            | Shown::Picture { row, .. } => *row,
         }
     }
 }
@@ -330,6 +349,10 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
     ("Enter", "tick, fold or follow what the cursor is on"),
     ("Ctrl-P", "the Format menu, on the word, line or selection"),
     ("Ctrl-Shift-P", "every Notes command, in a palette"),
+    (
+        "gw",
+        "start work on the checklist item in a new tab: pick the repository and the branch to land on",
+    ),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the list of notes"),
     ("Ctrl-V", "paste the clipboard's image, while typing"),
@@ -378,6 +401,10 @@ const MESSAGE_FOR: Duration = Duration::from_secs(5);
 pub struct App {
     pub store: Store,
     pub opts: Options,
+    /// UX 2.0: the tabs on the note's items, by each item's first line, as
+    /// the background look (`look_at_tabs`) last found them; drawing reads
+    /// only this.
+    pub item_tabs: HashMap<String, render::ItemTab>,
     look: Look,
     cols: u16,
     rows: u16,
@@ -493,6 +520,7 @@ impl App {
             replaying: false,
             save_due: None,
             watch_due: None,
+            item_tabs: HashMap::new(),
             squash_pid: None,
             squash_paths: Vec::new(),
             squash_cancelled: false,
@@ -1244,15 +1272,13 @@ impl App {
     }
 
     /// A Switchboard command for Notes, asked of the workspace's server.
-    fn press(&mut self, name: &str, arg: Option<&str>) {
+    fn press(&mut self, words: &[&str]) {
         if !self.opts.server {
             self.say("notes: that needs Switchboard's workspace");
             return;
         }
-        let mut args = vec!["press", name];
-        if let Some(a) = arg {
-            args.push(a);
-        }
+        let mut args = vec!["press"];
+        args.extend(words);
         match crate::mux::socket::ask_ok(&args) {
             Ok(_) => {}
             Err(e) => self.say(format!("notes: {e}")),
@@ -1268,7 +1294,49 @@ impl App {
             return;
         };
         let rel = self.store.relative(&path);
-        self.press("note-tab", Some(&rel));
+        self.press(&["note-tab", &rel]);
+    }
+
+    /// `gw`: work on the checklist item on the cursor's line in a new tab,
+    /// asked of the workspace (`press work-on-item <note> <line>`), which
+    /// asks the repository and the branch to land on; on any other line,
+    /// why not. The note is saved first, so the line the server reads is
+    /// the one on screen.
+    fn work_on_item(&mut self) {
+        if let Some(words) = self.item_press() {
+            let words: Vec<&str> = words.iter().map(String::as_str).collect();
+            self.press(&words);
+        }
+    }
+
+    /// What `gw` presses for the cursor's line, the note saved; `None`,
+    /// having said why, when it is no unticked top-level item.
+    fn item_press(&mut self) -> Option<Vec<String>> {
+        let path = self.current_path()?.to_path_buf();
+        if self.store.in_trash(&path) {
+            self.say("notes: restore the note to start work on its items");
+            return None;
+        }
+        self.leave_modes();
+        let line = self.editor.doc.row + 1;
+        let text = self.editor.doc.text.lines().join("\n");
+        if let Err(why) = crate::cmd::worktree_from_note::item_at(&text, line) {
+            self.say(format!("notes: that line {why}"));
+            return None;
+        }
+        // Saving can rename the note after its title, so its path is read
+        // after.
+        self.save();
+        let path = self.current_path()?.to_path_buf();
+        if self.modified() {
+            return None;
+        }
+        let rel = self.store.relative(&path);
+        Some(vec![
+            crate::notes::serve::WORK_ON_ITEM.to_string(),
+            rel,
+            line.to_string(),
+        ])
     }
 
     // ── Boxes ─────────────────────────────────────────────────────────────
@@ -1473,6 +1541,10 @@ impl App {
                 self.paste_image();
                 return;
             }
+            FormatAct::WorkOnItem => {
+                self.work_on_item();
+                return;
+            }
             _ => {}
         }
         self.editor.change(|doc| match act {
@@ -1490,7 +1562,7 @@ impl App {
             FormatAct::AddColumn => table::add_column(doc),
             FormatAct::DeleteRow => table::delete_row(doc),
             FormatAct::DeleteColumn => table::delete_column(doc),
-            FormatAct::Link | FormatAct::PasteImage => {}
+            FormatAct::Link | FormatAct::PasteImage | FormatAct::WorkOnItem => {}
         });
         self.take_insert();
         if act.typing() && sel.is_none() && self.editor.mode != Mode::Insert {
@@ -1650,6 +1722,7 @@ impl App {
                 let reply = self.request(request);
                 let _ = back.send(reply);
             }
+            Msg::ItemTabs(tabs) => self.item_tabs = tabs,
         }
     }
 
@@ -1991,8 +2064,9 @@ impl App {
             PaletteAct::NewFolder => self.new_folder(),
             PaletteAct::Squash => self.squash(),
             PaletteAct::Quit => self.quit = true,
-            PaletteAct::Press(name) => self.press(name, None),
+            PaletteAct::Press(name) => self.press(&[name]),
             PaletteAct::NoteTab => self.note_tab(),
+            PaletteAct::WorkOnItem => self.work_on_item(),
             PaletteAct::Rename
             | PaletteAct::Move
             | PaletteAct::Pin
@@ -2413,6 +2487,7 @@ impl App {
                 }
                 Effect::Prompt(c) => self.prompt = Some((c, String::new())),
                 Effect::Window(dir) => self.window_move(dir),
+                Effect::WorkOnItem => self.work_on_item(),
             }
         }
     }
@@ -2645,6 +2720,85 @@ extern "C" fn on_signal(_: libc::c_int) {
     ENDED.store(true, Ordering::Relaxed);
 }
 
+/// How often UX 2.0's background look asks the server for its tabs.
+const TABS_EVERY: Duration = Duration::from_secs(3);
+
+/// UX 2.0's background look, off the drawing path: every few seconds while
+/// the app runs, the server's tabs (`switchboard list` over its socket),
+/// matched to the items they work on, handed to the app only when they
+/// change. Ends with the app.
+fn look_at_tabs(tx: Sender<Msg>) {
+    std::thread::spawn(move || {
+        let mut last = None;
+        loop {
+            let found = crate::mux::socket::ask_ok(&["list"])
+                .ok()
+                .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
+                .map(|list| {
+                    item_tabs_of(&list, |dir| crate::tabs::title::wtn_item_at(Path::new(dir)))
+                })
+                .unwrap_or_default();
+            if last.as_ref() != Some(&found) {
+                last = Some(found.clone());
+                if tx.send(Msg::ItemTabs(found)).is_err() {
+                    return;
+                }
+            }
+            std::thread::sleep(TABS_EVERY);
+        }
+    });
+}
+
+/// The tabs working on an item or waiting on you, by the item's first
+/// line, from `switchboard list`'s JSON: the item from the tab's
+/// `@tab_title` or `@autopilot_item`, else from `wtn_item` on its
+/// directory; working with its Claude's phase, or waiting with what it
+/// waits on.
+fn item_tabs_of(
+    list: &serde_json::Value,
+    wtn_item: impl Fn(&str) -> Option<String>,
+) -> HashMap<String, render::ItemTab> {
+    let mut out = HashMap::new();
+    let sessions = list["sessions"].as_array().into_iter().flatten();
+    for tab in sessions.flat_map(|s| s["tabs"].as_array().into_iter().flatten()) {
+        let waits = match tab["agent"].as_str() {
+            Some("waiting") => true,
+            Some("working") => false,
+            _ => continue,
+        };
+        let opt = |key: &str| {
+            tab["options"][key]
+                .as_str()
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let Some(item) = opt("@tab_title")
+            .or_else(|| opt("@autopilot_item"))
+            .or_else(|| tab["path"].as_str().and_then(&wtn_item))
+        else {
+            continue;
+        };
+        let state = if waits { "waiting" } else { "working" };
+        let detail = tab["panes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|p| &p["agent"])
+            .find(|a| a["state"].as_str() == Some(state))
+            .and_then(|a| a[if waits { "wait" } else { "phase" }].as_str())
+            .unwrap_or("")
+            .to_string();
+        let index = tab["index"].as_u64().unwrap_or(0) as usize;
+        out.entry(item.trim().to_string())
+            .or_insert(render::ItemTab {
+                index,
+                waits,
+                detail,
+            });
+    }
+    out
+}
+
 /// Marks the pane Notes runs in, or lets the mark go: `@notes_cmd_keys`
 /// for the workspace to pass it easy mode's Cmd keys, `@allow_passthrough`
 /// to pass its pictures' graphics commands on to the terminal, as bin/notes
@@ -2732,6 +2886,9 @@ pub fn run(store: Store) -> ExitCode {
                 }
             }
         });
+    }
+    if app.opts.ux2 {
+        look_at_tabs(tx.clone());
     }
     let mut screen = Screen::default();
     let mut size = (cols, rows);

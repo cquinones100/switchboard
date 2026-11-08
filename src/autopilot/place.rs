@@ -155,7 +155,7 @@ pub(crate) mod tests {
         }
     }
 
-    // test/tmux-sidebar.test.js's "a tab of the mode working a note still
+    // test/tmux-sidebar.test.js's "a tab of autopilot still
     // counts as working while M-d or lazygit stands in for its Claude",
     // the parked pane's state given as the tab's by `serve`.
     #[test]

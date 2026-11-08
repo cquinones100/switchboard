@@ -86,6 +86,9 @@ impl Server {
         } else {
             self.agents.apply(pane, &hook, now, front)
         };
+        if hook.agent.is_empty() {
+            self.agents.heard(pane, util::now_ms());
+        }
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
             // session that died without SessionEnd leaves no mark behind.
@@ -155,7 +158,7 @@ impl Server {
     /// A tab's panes, a Claude parked behind the diff or lazygit included:
     /// the tab still shows what it is doing, and looking at the tab sees it
     /// finished, as looking at a tmux window did whatever was in front.
-    fn tab_panes(&self, tab: TabId) -> Vec<PaneId> {
+    pub(crate) fn tab_panes(&self, tab: TabId) -> Vec<PaneId> {
         self.panes_with_parked(tab)
     }
 
@@ -233,7 +236,7 @@ impl Server {
                 }
                 self.redraw_tab(tab);
             }
-            // A tab of the mode working a note, landed and back in the main
+            // A tab of autopilot, landed and back in the main
             // clone, has been seen, so it closes once you leave it
             // (src/autopilot).
             if let Some(t) = self.tabs.get_mut(&tab)
@@ -357,7 +360,23 @@ impl Server {
             .find(|p| self.runs_claude(*p))
         {
             Some(pane) => self.focus_pane(pane),
-            None => self.say(None, "No Claude in this tab"),
+            None => {
+                // UX 2.0: M-c is the header's Claude key, so with the diff,
+                // the PR or the ticket in Claude's place it closes that,
+                // which gives Claude its place back (src/diff/in_place.rs).
+                let in_place = settings::is_on("ux2")
+                    .then(|| self.tabs.get(&tab).map(|t| t.active))
+                    .flatten()
+                    .filter(|p| {
+                        self.panes
+                            .get(p)
+                            .is_some_and(|s| s.opts.contains_key("@in_place"))
+                    });
+                match in_place {
+                    Some(tool) => self.kill_pane(tool),
+                    None => self.say(None, "No Claude in this tab"),
+                }
+            }
         }
     }
 
@@ -457,6 +476,27 @@ impl Server {
         if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
             self.redraw_tab(tab);
         }
+        true
+    }
+
+    /// A question the pane's transcript shows unanswered, asked at `at`
+    /// (ms), read by the sidebar (`claude::Turn::asks`): the pane waits on
+    /// it, unless the conversation's own hooks have said more since
+    /// (`Agents::asked`). For a question whose hook never reached the
+    /// server, which would leave the tab looking busy while Claude waits on
+    /// you. Gives whether it changed.
+    pub fn agent_asked(&mut self, pane: PaneId, at: i64, question: &str) -> bool {
+        let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
+            return false;
+        };
+        let front = self.tab_in_front(tab);
+        if !self
+            .agents
+            .asked(pane, at, question, util::now_secs(), front)
+        {
+            return false;
+        }
+        self.redraw_tab(tab);
         true
     }
 

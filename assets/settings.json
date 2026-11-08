@@ -45,6 +45,13 @@
     "default": "look"
   },
   {
+    "key": "ux2",
+    "category": "Appearance",
+    "label": "UX 2.0",
+    "description": "No status line: each tab has a header naming it, with the keys of what it can show in Claude's place (M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note); the sidebar starts with its notifications; and M-v and M-i show the PR and the ticket in Claude's place rather than beside it. Off, the status line, the sidebar and those keys are as before",
+    "default": false
+  },
+  {
     "key": "sidebar",
     "category": "Sidebar",
     "label": "Sidebar",
@@ -82,15 +89,15 @@
   {
     "key": "autopilot",
     "category": "Sessions",
-    "label": "Work a note continuously",
-    "description": "With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
+    "label": "Autopilot",
+    "description": "With it on, M-p's 'Autopilot: work a note' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
     "default": true
   },
   {
     "key": "autopilot_close",
     "category": "Sessions",
     "label": "Close a worked note's landed tabs",
-    "description": "When a tab the mode working a note opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification",
+    "description": "When a tab autopilot opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification",
     "choices": [
       {
         "value": "seen",
@@ -452,7 +459,7 @@
     "key": "note_tab_prompt",
     "category": "Notes",
     "label": "Tell a note's new tab its note",
-    "description": "A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read only when you ask; off, it starts as any other tab",
+    "description": "A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read when you ask, or first while Point Claude at the tab's note is on; off, it starts as any other tab",
     "default": true
   },
   {
@@ -482,6 +489,13 @@
     "label": "Ask for a tab's note",
     "description": "When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on",
     "default": true
+  },
+  {
+    "key": "tab_note_context",
+    "category": "Notes",
+    "label": "Point Claude at the tab's note",
+    "description": "As a Claude session starts in a tab with a note of its own, tell it the note's path and to read it before its first reply, so the note's standing rules reach every session in the tab, in any repository, while Switchboard loads as a plugin (claude_plugin), whose session-start hook does it; off, a session reads the note only when asked to. Off by default, since it has Claude read a note on its own",
+    "default": false
   },
   {
     "key": "calendar_rsvp",
@@ -544,6 +558,13 @@
     "category": "Mission control",
     "label": "Landing view",
     "description": "While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out",
+    "default": true
+  },
+  {
+    "key": "view_autopilot",
+    "category": "Mission control",
+    "label": "Autopilot view",
+    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, a row of stage cells for each tab it opened from opened to closed, and the items it opens next and those skipped. Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
     "default": true
   },
   {
@@ -754,6 +775,13 @@
     "category": "Updates",
     "label": "Offer to restart after an update",
     "description": "Once switchboard update has put a new release in place, ask whether to restart the workspace on it now, keeping every tab and what runs in it; off, it only says how (switchboard upgrade)",
+    "default": true
+  },
+  {
+    "key": "build_before_restart",
+    "category": "Updates",
+    "label": "Build before restarting",
+    "description": "M-p's \"Restart Switchboard on the latest build on disk\" first builds the checkout a build from a clone came from (cargo build --release --locked) and puts it in place of the binary the server runs, restarting only when that is new; off, it restarts on the binary on disk as it is, when that is new",
     "default": true
   },
   {

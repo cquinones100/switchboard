@@ -336,7 +336,12 @@ impl Stack {
     /// Draws the overlays over the frame, bottom first, and the status
     /// line's message over the status line.
     pub fn draw(&mut self, frame: &mut Frame) {
-        if let Some((text, _)) = &self.note {
+        // A message kept from before the status line went (UX 2.0 turned on
+        // while one was up) has no row to go in, and is left undrawn.
+        if let Some((text, _)) = &self.note
+            && crate::status::lines() > 0
+            && frame.area().height > 0
+        {
             let area = frame.area();
             let row = Rect::new(
                 0,

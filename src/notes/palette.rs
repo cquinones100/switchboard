@@ -36,6 +36,8 @@ pub enum Act {
     Mark,
     Squash,
     NoteTab,
+    /// Start work on the checklist item under the cursor in a new tab.
+    WorkOnItem,
     /// A Switchboard command for Notes, by its name in keys.json, which the
     /// workspace runs (`switchboard press <name>`).
     Press(&'static str),
@@ -172,6 +174,12 @@ pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
             "fold",
             Act::FoldHere,
         ));
+        list.push(command(
+            "Start work on this item in a new tab (wtn)",
+            "gw",
+            "tabs",
+            Act::WorkOnItem,
+        ));
         list.push(command("Fold every heading", "zM", "fold", Act::FoldAll));
         list.push(command(
             "Unfold every heading",
@@ -179,7 +187,11 @@ pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
             "fold",
             Act::UnfoldAll,
         ));
-        for (heading, item) in menu::items() {
+        // The Format menu's own way to start work is the command above.
+        for (heading, item) in menu::items()
+            .into_iter()
+            .filter(|(_, i)| i.act != menu::Act::WorkOnItem)
+        {
             list.push(command(
                 format!("{heading}: {}", item.label),
                 format!("Ctrl-P {}", item.key),

@@ -851,6 +851,9 @@ pub struct Turn {
     pub reply: Option<String>,
     pub tools: usize,
     pub pending: Option<String>,
+    /// The question it is stopped on, when the call it is stopped on is
+    /// one (AskUserQuestion), and when it was asked (ms).
+    pub asks: Option<(String, i64)>,
 }
 
 /// The prompt as you typed it: a slash command as `/name args`, pasted text
@@ -940,7 +943,7 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         .iter()
         .rposition(|e| str_of(e.get("type")) == "user" && prompt_text(e).is_some())?;
     let mut said: Vec<String> = Vec::new();
-    let mut calls: IndexMap<String, (Value, bool)> = IndexMap::new();
+    let mut calls: IndexMap<String, (Value, bool, i64)> = IndexMap::new();
     for entry in &entries[start + 1..] {
         let parts = entry
             .pointer("/message/content")
@@ -958,7 +961,8 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
                             }
                         }
                         "tool_use" => {
-                            calls.insert(str_of(part.get("id")).to_string(), (part, false));
+                            let at = timestamp_ms(entry);
+                            calls.insert(str_of(part.get("id")).to_string(), (part, false, at));
                         }
                         _ => {}
                     }
@@ -977,11 +981,11 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
             _ => {}
         }
     }
-    let pending = calls
-        .values()
-        .rev()
-        .find(|(_, answered)| !answered)
-        .map(|(part, _)| tool_text(part));
+    let stopped_on = calls.values().rev().find(|(_, answered, _)| !answered);
+    let pending = stopped_on.map(|(part, _, _)| tool_text(part));
+    let asks = stopped_on
+        .filter(|(part, _, at)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
+        .map(|(part, _, at)| (tool_text(part), *at));
     let at = timestamp_ms(&entries[start]);
     Some(Turn {
         prompt: prompt_text(&entries[start]).unwrap_or_default(),
@@ -989,6 +993,7 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         reply: said.pop(),
         tools: calls.len(),
         pending,
+        asks,
     })
 }
 
@@ -1741,6 +1746,33 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_stopped_on_a_question_says_what_it_asks_and_when() {
+        let asked = |answered: bool| {
+            let mut lines = vec![
+                json!({"type": "user", "message": {"content": "pick one"}, "timestamp": "2026-01-01T00:00:00Z"}),
+                json!({"type": "assistant", "timestamp": "2026-01-01T00:00:05Z", "message": {"content": [{"type": "tool_use", "id": "q", "name": "AskUserQuestion", "input": {"questions": [{"question": "Which layout?"}]}}]}}),
+                // A background agent's call, which the question doesn't wait on.
+                json!({"type": "assistant", "isSidechain": true, "message": {"content": [{"type": "tool_use", "id": "s", "name": "Bash", "input": {"command": "ls"}}]}}),
+            ];
+            if answered {
+                lines.push(json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "q", "content": "A"}]}}));
+            }
+            let text = lines
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            parse_turn(&text).unwrap().asks
+        };
+        let at = "2026-01-01T00:00:05Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .as_millisecond();
+        assert_eq!(asked(false), Some(("Which layout?".to_string(), at)));
+        assert_eq!(asked(true), None);
+    }
+
+    #[test]
     fn the_last_turn_is_the_last_prompt_what_claude_said_and_the_call_it_waits_on() {
         let lines = [
             json!({"type": "user", "message": {"content": "first prompt"}, "timestamp": "2026-01-01T00:00:00Z"}),
@@ -1761,6 +1793,7 @@ mod tests {
         assert_eq!(turn.reply.as_deref(), Some("Ready to run the tests."));
         assert_eq!(turn.tools, 2);
         assert_eq!(turn.pending.as_deref(), Some("Bash: npm test"));
+        assert_eq!(turn.asks, None, "a command waiting is no question");
         assert_eq!(
             turn.at,
             Some(

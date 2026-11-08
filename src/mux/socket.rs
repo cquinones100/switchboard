@@ -150,6 +150,17 @@ const QUIET_WAIT: Duration = Duration::from_secs(1);
 /// hook`, which Claude Code runs on every tool call. `None` when no server
 /// answered. Like `run_command`, it never starts a server.
 pub fn send_quiet(args: Vec<String>, pane: Option<String>, stdin: Option<Vec<u8>>) -> Option<i32> {
+    ask_quiet(args, pane, stdin).map(|(code, _, _)| code)
+}
+
+/// As `send_quiet`, giving the whole answer (its code, what it printed and
+/// what it said went wrong): for `switchboard claude-context`, which Claude
+/// Code waits on as a session starts.
+pub fn ask_quiet(
+    args: Vec<String>,
+    pane: Option<String>,
+    stdin: Option<Vec<u8>>,
+) -> Option<(i32, Vec<u8>, Vec<u8>)> {
     let cwd = std::env::current_dir()
         .ok()
         .or_else(|| std::env::var_os("PWD").map(PathBuf::from))
@@ -163,7 +174,7 @@ pub fn send_quiet(args: Vec<String>, pane: Option<String>, stdin: Option<Vec<u8>
         pane,
         stdin,
     };
-    exchange(&mut stream, &msg).ok().map(|(code, _, _)| code)
+    exchange(&mut stream, &msg).ok()
 }
 
 /// Runs a command in the server and gives its answer, its code, what it

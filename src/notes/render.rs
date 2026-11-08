@@ -24,6 +24,8 @@
 //! `cells` lays a line out as the cells it shows, each knowing the byte of
 //! the line it came from, so the cursor and a click find their place.
 
+use std::collections::HashMap;
+
 use ratatui::style::{Color, Modifier, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -825,6 +827,185 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
     out
 }
 
+// ── UX 2.0's chips ──────────────────────────────────────────────────────────
+
+/// What a chip under an unticked checklist item says, with UX 2.0 on: the
+/// item has a plan (an indented `Plan: [[...]]` line under it), or it waits
+/// on a choice ("needs a choice" in the item or that line). Read from the
+/// note's text alone, so drawing starts nothing.
+///
+/// Two need the workspace's state, which the app's background look hands
+/// it (`ItemTab`, kept in memory by app.rs): a tab working on the item,
+/// with its phase, or a tab waiting on you, with what it waits on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Chip {
+    /// A tab working on the item: its number and its phase, if any.
+    Working(usize, String),
+    /// A tab waiting on you: its number and what it waits on, if known.
+    Waits(usize, String),
+    Choice,
+    Plan,
+}
+
+/// A tab on a note's item, as the app's background look last found it in
+/// the server's `list`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemTab {
+    /// The tab's number in its session.
+    pub index: usize,
+    /// Its Claude waits on you, else it works.
+    pub waits: bool,
+    /// The loop's phase while working, what it waits on while waiting.
+    pub detail: String,
+}
+
+impl Chip {
+    pub fn text(&self) -> String {
+        let with = |head: String, detail: &str| {
+            if detail.is_empty() {
+                head
+            } else {
+                format!("{head} · {detail}")
+            }
+        };
+        match self {
+            Chip::Working(n, phase) => with(format!("⠹ tab {n}"), phase),
+            Chip::Waits(n, wait) => with(format!("● tab {n} waits on you"), wait),
+            Chip::Choice => "needs a choice".into(),
+            Chip::Plan => "plan".into(),
+        }
+    }
+
+    /// A run of background color: the choice and a waiting tab yellow, a
+    /// working tab blue, the plan dim.
+    pub fn style(&self, light: bool) -> Style {
+        match self {
+            Chip::Working(..) => Style::new().fg(Color::Indexed(4)).bg(if light {
+                Color::Rgb(0xd8, 0xe6, 0xf8)
+            } else {
+                Color::Rgb(0x1e, 0x2a, 0x3c)
+            }),
+            Chip::Choice | Chip::Waits(..) => Style::new().fg(Color::Indexed(3)).bg(if light {
+                Color::Rgb(0xf5, 0xe9, 0xb8)
+            } else {
+                Color::Rgb(0x3a, 0x32, 0x20)
+            }),
+            Chip::Plan => Style::new()
+                .fg(Color::Indexed(if light { 242 } else { 245 }))
+                .bg(Color::Indexed(if light { 253 } else { 237 })),
+        }
+    }
+}
+
+/// A checklist item's first line, its marker taken off: what wtn records
+/// as the item a branch is for, and a tab's `@tab_title`.
+pub fn item_text(line: &str, kind: Kind) -> &str {
+    match kind {
+        Kind::Check { indent, marker, .. } => line.get(indent + marker..).unwrap_or("").trim(),
+        _ => "",
+    }
+}
+
+/// The "landed <hash>" chip's run of background color: green.
+pub fn landed_style(light: bool) -> Style {
+    Style::new().fg(Color::Indexed(2)).bg(if light {
+        Color::Rgb(0xd6, 0xf0, 0xd6)
+    } else {
+        Color::Rgb(0x1e, 0x33, 0x22)
+    })
+}
+
+/// Each line's "landed <hash>" chip: a ticked item's, the first commit
+/// hash its indented lines name (a word of 7 to 40 hex digits holding a
+/// digit and a letter, as git's short hashes are); none for any other line.
+pub fn landed<S: AsRef<str>>(lines: &[S], kinds: &[Kind]) -> Vec<Option<String>> {
+    let is_hash = |w: &str| {
+        (7..=40).contains(&w.len())
+            && w.bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            && w.bytes().any(|c| c.is_ascii_digit())
+            && w.bytes().any(|c| c.is_ascii_alphabetic())
+    };
+    let mut out = vec![None; lines.len()];
+    for (i, k) in kinds.iter().enumerate() {
+        let Kind::Check {
+            indent, done: true, ..
+        } = *k
+        else {
+            continue;
+        };
+        for (line, k) in lines.iter().zip(kinds).skip(i + 1) {
+            let line = line.as_ref();
+            if line.bytes().all(is_space)
+                || indent_of(line) <= indent
+                || matches!(k, Kind::Check { .. })
+            {
+                break;
+            }
+            let hash = line
+                .split(|c: char| !c.is_ascii_alphanumeric())
+                .find(|w| is_hash(w));
+            if let Some(h) = hash {
+                out[i] = Some(h.chars().take(7).collect());
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Each line's chips: an unticked item's, from it and the lines indented
+/// under it up to the next item, a tab working on it or waiting on you
+/// first (`tabs`, keyed by the item's first line); none for any other line.
+pub fn chips<S: AsRef<str>>(
+    lines: &[S],
+    kinds: &[Kind],
+    tabs: &HashMap<String, ItemTab>,
+) -> Vec<Vec<Chip>> {
+    let mut out = vec![Vec::new(); lines.len()];
+    for (i, k) in kinds.iter().enumerate() {
+        let Kind::Check {
+            indent,
+            done: false,
+            ..
+        } = *k
+        else {
+            continue;
+        };
+        if let Some(tab) = tabs.get(item_text(lines[i].as_ref(), *k)) {
+            out[i].push(if tab.waits {
+                Chip::Waits(tab.index, tab.detail.clone())
+            } else {
+                Chip::Working(tab.index, tab.detail.clone())
+            });
+        }
+        let mut plan = false;
+        let mut choice = lines[i].as_ref().to_lowercase().contains("needs a choice");
+        for (line, k) in lines.iter().zip(kinds).skip(i + 1) {
+            let line = line.as_ref();
+            if line.bytes().all(is_space)
+                || indent_of(line) <= indent
+                || matches!(k, Kind::Check { .. })
+            {
+                break;
+            }
+            let text = line.trim_start();
+            let text = text.strip_prefix("- ").unwrap_or(text);
+            if text.starts_with("Plan:") && text.contains("[[") {
+                plan = true;
+                choice |= text.to_lowercase().contains("needs a choice");
+            }
+        }
+        if choice {
+            out[i].push(Chip::Choice);
+        }
+        if plan {
+            out[i].push(Chip::Plan);
+        }
+    }
+    out
+}
+
 /// Pushes a conceal for table.rs.
 pub fn conceal_with(
     look: &mut Look,
@@ -1127,6 +1308,83 @@ mod tests {
         let h = cells.iter().find(|c| c.text == "h").unwrap();
         assert_eq!(h.col, Some(6));
         assert!(h.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn an_unticked_items_plan_and_choice_are_its_chips() {
+        let lines = [
+            "# Work",
+            "- [ ] stable IDs",
+            "  Plan: [[Stable IDs]]",
+            "- [ ] a condensed sidebar",
+            "  Plan: [[Condensed sidebar]], needs a choice: A or B",
+            "- [ ] needs a choice between two looks",
+            "- [ ] no plan yet",
+            "  some words",
+            "- [x] landed",
+            "  Plan: [[Landed]]",
+            "Plan: [[Not under an item]]",
+        ];
+        let ks = kinds(&lines);
+        let got = chips(&lines, &ks, &HashMap::new());
+        assert_eq!(got[1], [Chip::Plan]);
+        assert_eq!(got[3], [Chip::Choice, Chip::Plan]);
+        assert_eq!(got[5], [Chip::Choice]);
+        assert!(got[6].is_empty(), "no Plan: line, no chip");
+        assert!(got[8].is_empty(), "a ticked item gets nothing new");
+        assert!(got[10].is_empty(), "a plan under no item");
+        assert_eq!(Chip::Plan.text(), "plan");
+        assert_eq!(Chip::Choice.style(false).fg, Some(Color::Indexed(3)));
+    }
+
+    #[test]
+    fn a_tab_on_an_item_is_its_first_chip_and_a_ticked_items_commit_is_landed() {
+        let lines = [
+            "# Work",
+            "- [ ] show uncommitted changes in M-d",
+            "  Plan: [[M-d uncommitted]]",
+            "  - [ ] give each note a stable ID",
+            "- [ ] nobody on it",
+            "- [x] sealed review of community PRs",
+            "  landed in 2505ca4f, see the PR",
+            "- [x] ticked with words only",
+            "  defaced facade 1234567",
+        ];
+        let ks = kinds(&lines);
+        let tabs = HashMap::from([
+            (
+                "show uncommitted changes in M-d".to_string(),
+                ItemTab {
+                    index: 3,
+                    waits: false,
+                    detail: "review round 1".into(),
+                },
+            ),
+            (
+                "give each note a stable ID".to_string(),
+                ItemTab {
+                    index: 2,
+                    waits: true,
+                    detail: "git push".into(),
+                },
+            ),
+        ]);
+        let got = chips(&lines, &ks, &tabs);
+        assert_eq!(
+            got[1],
+            [Chip::Working(3, "review round 1".into()), Chip::Plan]
+        );
+        assert_eq!(got[3], [Chip::Waits(2, "git push".into())]);
+        assert!(got[4].is_empty());
+        assert_eq!(got[1][0].text(), "⠹ tab 3 · review round 1");
+        assert_eq!(got[3][0].text(), "● tab 2 waits on you · git push");
+        assert_eq!(Chip::Working(1, String::new()).text(), "⠹ tab 1");
+        assert_eq!(got[1][0].style(false).fg, Some(Color::Indexed(4)));
+        assert_eq!(got[3][0].style(false).fg, Some(Color::Indexed(3)));
+        let landed = landed(&lines, &ks);
+        assert_eq!(landed[5].as_deref(), Some("2505ca4"));
+        assert_eq!(landed[7], None, "words of hex letters or digits alone");
+        assert_eq!(landed[1], None, "an unticked item lands nothing");
     }
 
     fn looks_of(lines: &[&str]) -> Vec<Look> {

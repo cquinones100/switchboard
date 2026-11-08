@@ -494,6 +494,18 @@ pub struct BadgeLook {
     pub words: &'static str,
 }
 
+/// Whether UX 2.0 is on, which draws every mark as a one-column symbol of
+/// the terminal's font in place of an emoji (📌 ⏰ ⏳), so marks look alike
+/// whatever emoji font the computer has, and take one column.
+pub fn ux2() -> bool {
+    crate::settings::is_on("ux2")
+}
+
+/// The mark for checks still running: ⏳, or ◌ with UX 2.0.
+pub fn pending_mark() -> &'static str {
+    if ux2() { "◌" } else { "⏳" }
+}
+
 impl Badge {
     pub fn look(self) -> BadgeLook {
         let l = |color: u8, ink: u8, mark, words| BadgeLook {
@@ -523,9 +535,9 @@ impl Badge {
             Badge::Merged => l(135, 232, "◆", "merged"),
             Badge::Landing => l(179, 232, "⇣", "landing"),
             Badge::Failing => l(160, 255, "✗", "build failing"),
-            Badge::Pinned => l(220, 232, "📌", "pinned"),
-            Badge::Later => l(75, 232, "⏰", "reminder"),
-            Badge::Reminder => l(209, 232, "⏰", "reminder"),
+            Badge::Pinned => l(220, 232, if ux2() { "▲" } else { "📌" }, "pinned"),
+            Badge::Later => l(75, 232, if ux2() { "◷" } else { "⏰" }, "reminder"),
+            Badge::Reminder => l(209, 232, if ux2() { "◷" } else { "⏰" }, "reminder"),
         }
     }
 

@@ -118,6 +118,9 @@ pub struct Snapshot {
     pub tz: jiff::tz::TimeZone,
     /// The spinner's frame.
     pub frame: usize,
+    /// With UX 2.0, each tab's screen as its cards show it: the last lines
+    /// of its Claude's pane (else its active one) and its branch.
+    pub screens: HashMap<TabId, Screen>,
     /// The line of the note worked continuously, leading the tabs while
     /// the mode is on (src/autopilot); the cursor's -1 is on it.
     pub pilot: Option<crate::autopilot::Summary>,
@@ -132,6 +135,7 @@ impl Default for Snapshot {
                 now_ms: 0,
                 reminders: true,
                 build_failing: true,
+                ux2: false,
             },
             theme: Theme::DARK,
             card: (56, 13),
@@ -140,9 +144,18 @@ impl Default for Snapshot {
             now_secs: 0,
             tz: jiff::tz::TimeZone::UTC,
             frame: 0,
+            screens: HashMap::new(),
             pilot: None,
         }
     }
+}
+
+/// What a UX 2.0 card shows of a tab's pane: its screen's lines in the
+/// pane's own colors, and the branch its directory is on.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Screen {
+    pub lines: Vec<Vec<ratatui::text::Span<'static>>>,
+    pub branch: Option<String>,
 }
 
 /// One client's mission control.
@@ -166,8 +179,12 @@ pub struct Mission {
     pub snap: Snapshot,
     /// Where each part was last drawn, for clicks and the mouse.
     pub hits: Vec<HitBox>,
-    /// The screen it was last drawn on.
+    /// The screen it was last drawn on: with UX 2.0, the area right of
+    /// the sidebar.
     pub size: (u16, u16),
+    /// With UX 2.0, the sidebar's columns, which it leaves showing on its
+    /// left; 0 to cover the whole screen.
+    pub left: u16,
     /// The view last brought to the front, by its title ("Tabs" for the
     /// cards), for what going to one does.
     pub(crate) came: Option<String>,
@@ -177,6 +194,8 @@ pub struct Mission {
     /// The Landing view kept while this client has it in front, or opens
     /// on it, with nothing landing.
     pub keep_landing: bool,
+    /// Autopilot's view kept the same way, with the mode off.
+    pub keep_autopilot: bool,
 }
 
 impl Mission {
@@ -195,9 +214,11 @@ impl Mission {
             snap: Snapshot::default(),
             hits: Vec::new(),
             size: (0, 0),
+            left: 0,
             came: None,
             spun_at: 0,
             keep_landing: false,
+            keep_autopilot: false,
         }
     }
 
@@ -234,7 +255,10 @@ impl Overlay for Mission {
     }
 
     fn draw(&mut self, buf: &mut Buffer, _look: &Look) {
-        let area = buf.area;
+        let whole = buf.area;
+        let left = self.left.min(whole.width.saturating_sub(1));
+        let area =
+            ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
         let (lines, hits) = render::screen(self, area.width as usize, area.height as usize);
         self.hits = hits;

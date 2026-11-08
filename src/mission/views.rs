@@ -4,7 +4,8 @@
 //! already keeps, so building them reads no network and starts no process.
 //! In the daemon's order, each only while its setting is on: the
 //! Notifications (the sidebar's, whole), the Work map, the Calendar, Slack,
-//! Closed, the PR board, CI, Landing (while something lands), the ticket
+//! Closed, the PR board, CI, Landing (while something lands), Autopilot
+//! (with UX 2.0, while it is on, src/autopilot/view.rs), the ticket
 //! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
 //! then each plugin's.
 //!
@@ -47,6 +48,8 @@ pub enum ViewId {
     Prs,
     Ci,
     Landing,
+    /// Autopilot's own view, with UX 2.0 on (src/autopilot/view.rs).
+    Autopilot,
     Tickets,
     Inbox,
     Sessions,
@@ -71,7 +74,9 @@ impl View {
     /// A board's columns, in their order (the PR and ticket boards).
     pub fn columns(&self) -> Option<&'static [&'static str]> {
         match self.id {
-            ViewId::Prs => Some(&crate::sources::prboard::COLUMNS),
+            ViewId::Prs => Some(crate::sources::prboard::columns(crate::settings::is_on(
+                "ux2",
+            ))),
             ViewId::Tickets => Some(&crate::sources::tickets::COLUMNS),
             _ => None,
         }
@@ -113,7 +118,10 @@ pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
 /// never rests on one, and a filter leaves out those with nothing under
 /// them.
 pub fn grouped(id: &ViewId) -> bool {
-    matches!(id, ViewId::Settings | ViewId::Keys | ViewId::Landing)
+    matches!(
+        id,
+        ViewId::Settings | ViewId::Keys | ViewId::Landing | ViewId::Autopilot
+    )
 }
 
 /// What a `/` filter matches an item by.

@@ -224,13 +224,149 @@ fn an_upgrade_keeps_every_pane_running_and_the_server_its_pid() {
     let again = server.list();
     assert_eq!(pids(&again).len(), 4);
 
-    // As M-p's action does it, in the terminal used last, which is told
-    // how it went in a box.
+    // M-p's action, with nothing to build and the same binary on disk,
+    // says so in the terminal used last and restarts nothing.
     server.ok(&["press", "upgrade"]);
-    fresh.wait_text("Switchboard restarted on");
-    assert_eq!(server.log().matches("Switchboard restarted on").count(), 4);
+    fresh.wait_text("Already on the latest build");
+    assert_eq!(server.log().matches("Switchboard restarted on").count(), 3);
     assert_eq!(server.pid(), Some(server_pid));
     assert_eq!(pids(&server.list()), pids(&again));
+    assert!(client.exit.is_none());
+}
+
+/// A stand-in for cargo that "builds" `$1` into the target directory it is
+/// given, saying where as cargo's JSON does, or fails as cargo does when
+/// the checkout holds `broken`.
+const CARGO: &str = r#"#!/bin/sh
+echo "$*" > "$CARGO_TARGET_DIR/args"
+if [ -e broken ]; then
+  echo "   Compiling switchboard v0.0.0" >&2
+  echo "error: could not compile \`switchboard\` (bin \"switchboard\") due to 1 previous error" >&2
+  exit 101
+fi
+if [ -e new ]; then
+  rm -f "$CARGO_TARGET_DIR/switchboard"
+  cp "$(cat new)" "$CARGO_TARGET_DIR/switchboard"
+fi
+echo "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"switchboard\",\"kind\":[\"bin\"]},\"executable\":\"$CARGO_TARGET_DIR/switchboard\"}"
+echo "{\"reason\":\"build-finished\",\"success\":true}"
+"#;
+
+#[test]
+fn m_p_restarts_only_on_a_new_binary() {
+    let (server, bin) = TestServer::start_from_copy();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let server_pid = server.pid().unwrap();
+
+    // With nothing to build: the same binary says so, another one in its
+    // place is restarted on.
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Already on the latest build");
+    std::fs::remove_file(&bin).unwrap();
+    std::fs::copy(common::BIN, &bin).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Switchboard restarted on");
+    assert_eq!(server.pid(), Some(server_pid));
+    assert!(client.exit.is_none());
+}
+
+#[test]
+fn m_p_builds_the_checkout_and_installs_it_before_restarting() {
+    let dir = common::TempDir::new("sbc");
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("Cargo.toml"), "").unwrap();
+    let (server, bin) = TestServer::start_from_copy_with_env(&[(
+        "SWITCHBOARD_CHECKOUT",
+        checkout.to_str().unwrap(),
+    )]);
+    // Not a clone of yours: built only once trusted-dirs lists it.
+    let trusted = server.home.join(".config/switchboard/trusted-dirs");
+    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
+    std::fs::write(&trusted, format!("{}\n", checkout.display())).unwrap();
+    let target = checkout.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    common::stand_in::install(
+        &server.home.join("bin/cargo"),
+        &CARGO.replace("$CARGO_TARGET_DIR", target.to_str().unwrap()),
+    );
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let server_pid = server.pid().unwrap();
+
+    // A binary put in place by hand since the server started is the latest:
+    // restarted on with nothing built over it.
+    std::fs::remove_file(&bin).unwrap();
+    std::fs::copy(common::BIN, &bin).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Switchboard restarted on");
+    assert!(!target.join("args").exists(), "cargo wasn't run");
+
+    // A binary gone from the server's path is built again, not taken for
+    // one put there by hand.
+    std::fs::remove_file(&bin).unwrap();
+    std::fs::write(checkout.join("new"), common::BIN).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_for("the restart after the build", |s| {
+        s.iter()
+            .filter(|l| l.contains("Switchboard restarted on"))
+            .count()
+            > 0
+            && target.join("args").exists()
+    });
+    assert!(bin.exists(), "the build is in its place again");
+    std::fs::remove_file(target.join("args")).unwrap();
+    std::fs::remove_file(checkout.join("new")).unwrap();
+
+    // A build that fails says so, and nothing changes.
+    std::fs::write(checkout.join("broken"), "").unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("The build failed");
+    assert_eq!(
+        std::fs::read_to_string(target.join("args")).unwrap().trim(),
+        "build --release --locked --message-format=json-render-diagnostics"
+    );
+    std::fs::remove_file(checkout.join("broken")).unwrap();
+
+    // A build the same as the binary the server runs: nothing to restart on.
+    std::fs::write(checkout.join("new"), common::BIN).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Already on the latest build");
+
+    // A build that can't take over is put in place, then refused; pressed
+    // again, the checkout is built again rather than the refused build
+    // taken for one put there by hand.
+    let refused = dir.path().join("refused");
+    common::stand_in::install(
+        &refused,
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = server ]; then echo 99; else exec {} \"$@\"; fi\n",
+            common::BIN
+        ),
+    );
+    std::fs::write(checkout.join("new"), refused.to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("format 99");
+    std::fs::remove_file(target.join("args")).unwrap();
+
+    // A build that differs is put in place of the server's binary, then
+    // restarted on.
+    let wrapper = dir.path().join("wrapper");
+    common::stand_in::install(
+        &wrapper,
+        &format!("#!/bin/sh\nexec {} \"$@\"\n", common::BIN),
+    );
+    std::fs::write(checkout.join("new"), wrapper.to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Switchboard restarted on");
+    assert!(target.join("args").exists(), "the checkout was built again");
+    assert_eq!(
+        std::fs::read(&bin).unwrap(),
+        std::fs::read(&wrapper).unwrap(),
+        "the build is in place of the server's binary"
+    );
+    assert_eq!(server.pid(), Some(server_pid));
     assert!(client.exit.is_none());
 }
 
@@ -277,4 +413,13 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
         s.iter().any(|l| last_tick(l).is_some_and(|n| n > ticked))
     });
     assert!(client.exit.is_none(), "the terminal stays attached");
+}
+
+#[test]
+fn the_new_binary_says_its_version_whatever_its_file_is_called() {
+    let dir = common::TempDir::new("sbv");
+    let new = dir.path().join(".switchboard.new-1");
+    std::fs::copy(common::BIN, &new).unwrap();
+    let said = switchboard::update::install::says_version(&new).unwrap();
+    assert!(said.starts_with(env!("CARGO_PKG_VERSION")), "{said}");
 }

@@ -3,7 +3,7 @@
 //! last line `<!-- note-id: n-<12 hex> -->`. Ported from
 //! notes/lua/notes/id.lua, the app's side, and lib/note-id.js, the side of
 //! everything else that names a note: wtn's branch claims
-//! (src/cmd/worktree_from_note.rs), and the work-a-note mode's note and the
+//! (src/cmd/worktree_from_note.rs), and autopilot's note and the
 //! items it skips or holds (src/autopilot), which name a note by its ID
 //! rather than by its path, so a rename doesn't lose them.
 //!
@@ -279,7 +279,7 @@ pub fn copy_of(path: &Path, id: &str, dir: &Path) -> Option<PathBuf> {
 
 /// Writes `text` to the note with `id` as its last line, its modified time
 /// kept, so a note given an ID doesn't move up the notes list or read as
-/// just changed (the work-a-note mode waits a minute after a change).
+/// just changed (autopilot waits a minute after a change).
 pub fn write_id(file: &Path, text: &str, id: &str) -> io::Result<()> {
     let meta = fs::metadata(file)?;
     util::write_atomic(file, with(text, id))?;

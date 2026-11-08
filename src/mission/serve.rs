@@ -206,6 +206,7 @@ impl Server {
         m.cursor = 0;
         // The Landing view opens even with nothing landing, saying so.
         m.keep_landing = how == Opening::View("landing".into());
+        m.keep_autopilot = how == Opening::View("autopilot".into());
         if let Opening::Picker(scope) = how {
             m.scope = Some(scope);
             m.picker = true;
@@ -306,11 +307,55 @@ impl Server {
         }
     }
 
+    /// Each tab's screen for UX 2.0's cards: the lines of its Claude's pane
+    /// (else its active one) in the pane's own colors, from its emulator in
+    /// memory, and the branch its directory was last named on.
+    fn mission_screens(&self) -> std::collections::HashMap<TabId, super::Screen> {
+        self.tabs
+            .iter()
+            .map(|(&id, tab)| {
+                let pane = self
+                    .sidebar
+                    .panes
+                    .iter()
+                    .find(|(p, r)| r.claude && tab.layout.panes().contains(p))
+                    .map_or(tab.active, |(p, _)| *p);
+                let lines = self
+                    .panes
+                    .get(&pane)
+                    .map(|slot| slot.pane.styled_lines())
+                    .unwrap_or_default();
+                let branch = self
+                    .tab_path(id)
+                    .and_then(|p| self.tab_names.names.branch(p))
+                    .map(str::to_string);
+                (id, super::Screen { lines, branch })
+            })
+            .collect()
+    }
+
     /// Puts together what a client's mission control shows, and does what
     /// bringing a view to the front does.
     fn mission_prepare(&mut self, client: ClientId) {
         let Some((cols, rows)) = self.clients.get(&client).map(|c| (c.cols, c.rows)) else {
             return;
+        };
+        // With UX 2.0 it fills the session's main area, header included,
+        // leaving the sidebar showing on its left.
+        let ux2 = settings::is_on("ux2");
+        let left = if ux2 {
+            self.clients
+                .get(&client)
+                .and_then(|c| self.session(&c.session))
+                .map_or(0, |s| s.main_area().x)
+                .min(cols.saturating_sub(1))
+        } else {
+            0
+        };
+        let screens = if ux2 {
+            self.mission_screens()
+        } else {
+            Default::default()
         };
         // A box over mission control, other than the busy box.
         let boxed = self
@@ -345,7 +390,9 @@ impl Server {
         // opening on it, so it doesn't vanish under you once the last
         // landing ends.
         let keep_landing = m.keep_landing || m.current().is_some_and(|v| v.id == ViewId::Landing);
-        let all = self.mission_views(m.scope.is_some(), keep_landing);
+        let keep_autopilot =
+            m.keep_autopilot || m.current().is_some_and(|v| v.id == ViewId::Autopilot);
+        let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot);
         let views: Vec<View> = all
             .iter()
             .map(|v| views::shown(v, &text, m.scope, m.show_merged))
@@ -391,6 +438,7 @@ impl Server {
             now_secs: now.div_euclid(1000),
             tz: jiff::tz::TimeZone::system(),
             frame,
+            screens,
             // Not in M-j's and M-o's pickers.
             pilot: m
                 .scope
@@ -398,11 +446,13 @@ impl Server {
                 .then(|| self.autopilot_summary())
                 .flatten(),
         };
-        m.size = (cols, rows);
+        m.size = (cols - left, rows);
+        m.left = left;
         if m.view > m.snap.views.len() {
             m.view = 0;
         }
         m.keep_landing = m.current().is_some_and(|v| v.id == ViewId::Landing);
+        m.keep_autopilot = m.current().is_some_and(|v| v.id == ViewId::Autopilot);
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
@@ -473,8 +523,13 @@ impl Server {
     /// Every view after the tabs, each only while its setting is on (the
     /// Work map for M-j's and M-o's pickers whatever its setting), Landing
     /// only while something lands or `keep_landing` (the client has it in
-    /// front).
-    fn mission_views(&mut self, picker: bool, keep_landing: bool) -> Vec<View> {
+    /// front), Autopilot only while it is on or `keep_autopilot`.
+    fn mission_views(
+        &mut self,
+        picker: bool,
+        keep_landing: bool,
+        keep_autopilot: bool,
+    ) -> Vec<View> {
         let on = settings::is_on;
         let mut out: Vec<View> = Vec::new();
         let view = |id: ViewId, title: &str, data: ViewData, loaded: bool| View {
@@ -540,8 +595,21 @@ impl Server {
             (ViewId::Inbox, crate::sources::INBOX, "Inbox"),
         ] {
             if id == ViewId::Landing {
-                if let Some(d) = self.landing_view(keep_landing) {
+                let landing = self.landing_view(keep_landing);
+                let landing_items = landing.as_ref().map(|d| d.items.clone());
+                if let Some(d) = landing {
                     out.push(view(id, title, d, true));
+                }
+                // Autopilot's own view, with UX 2.0 on, after Landing.
+                if let Some(items) =
+                    self.autopilot_view(keep_autopilot, landing_items.as_deref().unwrap_or(&[]))
+                {
+                    let data = ViewData {
+                        items,
+                        at: Some(1),
+                        ..ViewData::default()
+                    };
+                    out.push(view(ViewId::Autopilot, "Autopilot", data, true));
                 }
                 continue;
             }
@@ -1195,6 +1263,12 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
+        // Its parts were drawn from the sidebar's edge (UX 2.0); over the
+        // sidebar, a click lands on nothing.
+        let Some(col) = mouse.col.checked_sub(m.left) else {
+            return;
+        };
+        let mouse = Mouse { col, ..mouse };
         match mouse_in(m, mouse, look.hover) {
             Then::Nothing => {}
             Then::Redraw => self.mission_dirty(client),
@@ -1272,6 +1346,12 @@ impl Server {
         };
         if item.id == views::MERGED_HEADER {
             m.show_merged = !m.show_merged;
+            return;
+        }
+        // Autopilot's view's heading opens the menu its line on the Tabs
+        // view opens without UX 2.0.
+        if view.id == ViewId::Autopilot && item.id == crate::autopilot::view::HEADING {
+            self.autopilot_menu(client);
             return;
         }
         if views::is_header(&item) {
@@ -1426,7 +1506,7 @@ impl Server {
     /// Puts a notification away, by the source that gave it: the next
     /// meeting until another, a Slack message until its thread gets more,
     /// the calendar's changes by taking the day as seen, a new note, an
-    /// Inbox item (here alone), what the mode working a note said.
+    /// Inbox item (here alone), what autopilot said.
     pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
         match source {
             "inbox" => self.inbox_dismiss(item),
@@ -3135,6 +3215,7 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             lands_alone: false,
+            target: String::new(),
         });
         m.cursor = 1;
         let to = row_step(&m, -1);

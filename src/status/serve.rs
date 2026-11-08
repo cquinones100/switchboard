@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::second::{self, Second};
-use super::{Hits, LINES, Left, StatusEvent, health, lines, theme};
+use super::{Hits, LINES, Left, StatusEvent, TOP, health, lines, theme};
 use crate::mux::compose::{self, Frame, TabStatus};
 use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Server, Session};
@@ -25,12 +25,18 @@ impl Server {
     /// every client drawn again for the times it shows ("waiting on you for
     /// 4m").
     pub fn status_tick(&mut self) {
-        let want = if settings::is_on("second_status") {
+        // UX 2.0 has no status line, and a header at the top of each tab.
+        let ux2 = settings::is_on("ux2");
+        let want = if ux2 {
+            0
+        } else if settings::is_on("second_status") {
             2
         } else {
             1
         };
-        if LINES.swap(want, Ordering::Relaxed) != want {
+        let top = if ux2 { crate::mux::header::ROWS } else { 0 };
+        let moved = LINES.swap(want, Ordering::Relaxed) != want;
+        if TOP.swap(top, Ordering::Relaxed) != top || moved {
             let tabs: Vec<_> = self.tabs.keys().copied().collect();
             for tab in tabs {
                 self.relayout(tab);
@@ -157,6 +163,10 @@ impl Server {
         let area = frame.area();
         let p = theme::palette();
         let n = lines().min(area.height);
+        if n == 0 {
+            // UX 2.0: no status line.
+            return Hits::default();
+        }
         let row = Rect::new(0, area.height.saturating_sub(n), area.width, 1);
         // The Notifications window is shown only while it is in front, in
         // the notifications' yellow, as daemon.js's window formats had it.

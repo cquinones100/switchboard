@@ -198,7 +198,25 @@ impl Server {
         percent: u16,
     ) -> Option<PaneId> {
         let mut command = vec![exe()];
+        let tool = args.first().cloned().unwrap_or_default();
         command.extend(args);
+        // UX 2.0 shows the PR and the ticket in Claude's place, as M-d
+        // shows the diff (src/diff/in_place.rs), the key closing it giving
+        // the place back; the header names what is shown.
+        if crate::settings::is_on("ux2") && (mark == PR_VIEW || mark == TICKET_VIEW) {
+            return match self.open_in_place(pane, &tool, command, None) {
+                Ok(view) => {
+                    if let Some(slot) = self.panes.get_mut(&view) {
+                        slot.opts.insert(mark.to_string(), "1".into());
+                    }
+                    Some(view)
+                }
+                Err(e) => {
+                    self.say(None, &format!("Couldn't open it in this pane's place: {e}"));
+                    None
+                }
+            };
+        }
         match self.split(
             pane,
             Direction::Right,

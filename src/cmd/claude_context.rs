@@ -1,8 +1,8 @@
 //! `switchboard claude-context`: Switchboard's part of Claude's instructions
-//! (`assets/switchboard.md`: the notes app, `switchboard tabs`, talking to
-//! another tab and naming one, a repository's own skills), printed as a
-//! SessionStart hook's `additionalContext`, which Claude Code adds to the
-//! conversation as a session starts, resumes, clears or compacts. New with
+//! (`assets/switchboard.md`: the notes app and the tab's own note,
+//! `switchboard tabs`, talking to another tab and naming one, a
+//! repository's own skills), printed as a SessionStart hook's
+//! `additionalContext`, which Claude Code adds to the conversation as a session starts, resumes, clears or compacts. New with
 //! the plugin (src/setup/plugin.rs), whose hooks run it, so the text
 //! reaches the Claude sessions in Switchboard's panes without an import in
 //! your own `~/.claude/CLAUDE.md`, as the old way (and the tmux version)
@@ -22,14 +22,27 @@
 //! JSON with a bound, prints only the hook's JSON or nothing (a panic's
 //! message, or a failed write to a pipe Claude has closed, says nothing),
 //! and always exits 0.
+//!
+//! A session in a tab with a note of its own (`@tab_note`, else
+//! `@tab_note_last`, as Notes picks the tab's note) is also pointed at that
+//! note by its path and told to read it before its first reply: a note is
+//! in no conversation until Claude reads it, so a standing rule kept there
+//! would be missed by each new session in the tab, whatever repository it
+//! works in. Only the path goes through the hook, never the note's words,
+//! and the `tab_note_context` setting turns it off. The server is asked
+//! with `send_quiet`'s bound, so one that has stopped answering costs the
+//! session start a second at most, and the session gets the part alone.
 
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use serde_json::{Value, json};
 
 use crate::agent::sessions;
 use crate::mux::socket;
+use crate::notes::{serve::in_notes, store};
+use crate::settings;
 
 /// Switchboard's part, as compiled in.
 pub const PART: &str = include_str!("../../assets/switchboard.md");
@@ -37,15 +50,44 @@ pub const PART: &str = include_str!("../../assets/switchboard.md");
 /// The most of the hook's JSON read.
 const INPUT_MAX: u64 = 1 << 20;
 
-/// The hook's answer: the part as SessionStart's added context.
-pub fn answer() -> String {
+/// The hook's answer: the part as SessionStart's added context, with the
+/// tab's note pointed at when it has one.
+pub fn answer(note: Option<&Path>) -> String {
+    let context = match note {
+        Some(note) => format!(
+            "{PART}\n# This tab's note\n\nThis tab's note is `{}`. Read it before your first reply: \
+             the standing rules it keeps apply to this session too, whatever repository it works in.\n",
+            note.display()
+        ),
+        None => PART.to_string(),
+    };
     json!({
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": PART,
+            "additionalContext": context,
         }
     })
     .to_string()
+}
+
+/// The note of the tab this pane is in, by its file: `@tab_note`, else
+/// `@tab_note_last`, while its file is in the notes directory. Nothing
+/// outside a pane, with the setting off, or when the server doesn't answer.
+fn tab_note() -> Option<PathBuf> {
+    if !socket::in_pane() || !settings::is_on("tab_note_context") {
+        return None;
+    }
+    let pane = std::env::var("SWITCHBOARD_PANE").ok();
+    let dir = store::notes_dir();
+    for option in ["@tab_note", "@tab_note_last"] {
+        let (code, out, _) =
+            socket::ask_quiet(vec!["show".into(), option.into()], pane.clone(), None)?;
+        let rel = String::from_utf8_lossy(&out).trim().to_string();
+        if code == 0 && in_notes(&rel) && dir.join(&rel).is_file() {
+            return Some(dir.join(rel));
+        }
+    }
+    None
 }
 
 /// Whether a session started as `entrypoint` (Claude Code's
@@ -81,7 +123,7 @@ pub fn main(_args: Vec<String>) -> ExitCode {
             return;
         }
         let mut out = std::io::stdout().lock();
-        let _ = out.write_all(answer().as_bytes());
+        let _ = out.write_all(answer(tab_note().as_deref()).as_bytes());
         let _ = out.write_all(b"\n");
         let _ = out.flush();
     });
@@ -94,7 +136,7 @@ mod tests {
 
     #[test]
     fn the_answer_is_session_start_s_context_holding_the_whole_part() {
-        let answer: Value = serde_json::from_str(&answer()).expect("JSON");
+        let answer: Value = serde_json::from_str(&answer(None)).expect("JSON");
         assert_eq!(
             answer["hookSpecificOutput"]["hookEventName"],
             "SessionStart"
@@ -106,6 +148,22 @@ mod tests {
         assert!(PART.chars().count() < 10_000);
         assert!(PART.contains("switchboard tabs"));
         assert!(!PART.contains("tmux"));
+    }
+
+    #[test]
+    fn a_tab_with_a_note_has_it_pointed_at_after_the_part() {
+        let answer: Value =
+            serde_json::from_str(&answer(Some(Path::new("/n/Plans/A b.md")))).expect("JSON");
+        let context = answer["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        let added = context.strip_prefix(PART).expect("the part first");
+        assert!(
+            added.contains("This tab's note is `/n/Plans/A b.md`"),
+            "{added}"
+        );
+        assert!(added.contains("before your first reply"), "{added}");
+        assert!(context.chars().count() < 10_000);
     }
 
     #[test]

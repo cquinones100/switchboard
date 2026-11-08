@@ -7,7 +7,7 @@
 //! the one changed last wins. The new note goes in the first one's folder,
 //! the originals go to Recently Deleted, so nothing is lost, and every tab
 //! linked to one of them links to the new one. No note's ID (id.rs) is sent:
-//! the merged note gets one of its own, which the work-a-note mode's note,
+//! the merged note gets one of its own, which autopilot's note,
 //! its skipped items and its tabs take in place of any squashed note's.
 //!
 //! `ask` runs Claude, off the screen's thread, and gives its answer;
@@ -240,7 +240,7 @@ mod tests {
     }
 
     // test/notes.test.js's "tabs linked to squashed notes link to the new
-    // note, and the IDs the work-a-note mode keeps for any of them become
+    // note, and the IDs autopilot keeps for any of them become
     // the new note's", the mode's file here; its tabs' @autopilot_note are
     // set through the server, as their @tab_note are.
     #[test]

@@ -243,7 +243,8 @@ impl Server {
         let Some(c) = self.clients.get_mut(&id) else {
             return;
         };
-        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar;
+        let header = !c.header_keys.is_empty() && crate::settings::is_on("hover_highlight");
+        let motion = (!c.overlays.layers.is_empty() && c.overlays.look.hover) || sidebar || header;
         if motion != c.overlays.motion {
             c.overlays.motion = motion;
             let mode: &[u8] = if motion {
@@ -333,7 +334,9 @@ impl Server {
         else {
             return;
         };
-        if !setting_on("message_boxes") {
+        // With no status line (UX 2.0), there is nowhere to put the line, so
+        // it is said in a box whatever the setting.
+        if !setting_on("message_boxes") && crate::status::lines() > 0 {
             if let Some(c) = self.clients.get_mut(&id) {
                 let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
                 c.overlays.note = Some((line, Instant::now() + DISPLAY_TIME));
