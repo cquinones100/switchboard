@@ -16,7 +16,10 @@
 //! like any other text, so the picture sits exactly where its rows are,
 //! scrolls with them, and is covered by a box over them as text would be.
 //! It needs a terminal that speaks kitty's protocol with placeholders
-//! (Ghostty, kitty); elsewhere, or with the notes_images setting off, an
+//! (Ghostty, kitty), or, inside the workspace with Settings' "Image
+//! protocol" on sixel, one that draws sixel (Windows Terminal), for which
+//! the server draws the picture where its placeholders are
+//! (src/mux/sixel); elsewhere, or with the notes_images setting off, an
 //! image is its name alone. A picture other than a PNG is made one first,
 //! once for each version of the file, in the cache, as macOS's sips did.
 
@@ -265,10 +268,13 @@ fn as_png(file: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Whether the terminal speaks kitty's graphics protocol with
-/// placeholders: Ghostty or kitty, by `$TERM` or `$TERM_PROGRAM` (the
-/// multiplexer's panes keep the terminal the workspace started in as
-/// `TERM_PROGRAM`).
+/// Whether pictures can be drawn with kitty's placeholders: the terminal
+/// speaks kitty's graphics protocol with them (Ghostty or kitty, by
+/// `$TERM` or `$TERM_PROGRAM`; the multiplexer's panes keep the terminal
+/// the workspace started in as `TERM_PROGRAM`), or, inside the workspace
+/// with Settings' "Image protocol" on sixel, the server draws them as
+/// sixel where the placeholders are (src/mux/sixel), whatever the
+/// terminal is called.
 pub fn terminal_can() -> bool {
     let name = format!(
         "{} {}",
@@ -276,7 +282,9 @@ pub fn terminal_can() -> bool {
         std::env::var("TERM_PROGRAM").unwrap_or_default()
     )
     .to_lowercase();
-    name.contains("ghostty") || name.contains("kitty")
+    name.contains("ghostty")
+        || name.contains("kitty")
+        || (crate::mux::socket::in_pane() && crate::mux::sixel::chosen_now())
 }
 
 /// The terminal's cell in pixels, from its window size, else a common one.

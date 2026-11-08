@@ -13,7 +13,9 @@
 //! terminal drops a string it doesn't know. So the server picks them out of
 //! the output of the pane allowed to send them (`Scanner`), whole however
 //! the reads split them, and sends each on to the clients showing that
-//! pane's session. Only the notes app's pane (`@notes_pane`) or one marked
+//! pane's session; with Settings' "Image protocol" on sixel it keeps them
+//! instead and draws the pictures itself (src/mux/sixel), for a terminal
+//! without kitty's. Only the notes app's pane (`@notes_pane`) or one marked
 //! `@allow_passthrough` (as Notes marks its own, however it was started) is
 //! allowed: a command can have the terminal read any file of yours, so
 //! never any program's.

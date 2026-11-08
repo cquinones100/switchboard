@@ -17,8 +17,10 @@
 //! descriptor, program, size, screen and the input still to be written to
 //! it; the listening socket and the server's lock, by descriptor, so no
 //! connection is refused and no other server starts in between; what each
-//! pane's Claude was doing; and the connection of the `switchboard upgrade`
-//! that asked, which the new build answers.
+//! pane's Claude was doing; the pictures each pane's program gave the
+//! terminal, which a program gives once and the new build may have to
+//! draw as sixel (src/mux/sixel); and the connection of the `switchboard
+//! upgrade` that asked, which the new build answers.
 //!
 //! Attached terminals stay attached without noticing: each connection is
 //! handed over by descriptor too, with its session and size. A connection
@@ -136,6 +138,13 @@ pub struct Handover {
     pub next_pane: u32,
     #[serde(default)]
     pub next_tab: u32,
+    /// The pictures each pane's program gave the terminal (src/mux/sixel),
+    /// given once, which the new build draws as sixel.
+    #[serde(default)]
+    pub images: Vec<(PaneId, Vec<crate::mux::sixel::kitty::Handed>)>,
+    /// A cell's size in pixels as the terminal answered when asked.
+    #[serde(default)]
+    pub asked_cell: Option<(u16, u16)>,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -563,6 +572,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         agents: server.agents.records(),
         next_pane: server.next_pane,
         next_tab: server.next_tab,
+        images: server.sixel.hand_over(),
+        asked_cell: server.terminal.asked_cell,
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -716,6 +727,9 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     }
     server.next_pane = server.next_pane.max(handover.next_pane);
     server.next_tab = server.next_tab.max(handover.next_tab);
+    server.terminal.asked_cell = handover.asked_cell;
+    let taken: std::collections::HashSet<PaneId> = server.panes.keys().copied().collect();
+    server.sixel.take_up(handover.images, &taken);
     super::persist::adopt_layout(server, handover.layout);
     for (id, agent) in handover.agents {
         if server.panes.contains_key(&id) {
@@ -889,6 +903,17 @@ mod tests {
             }],
             next_pane: 9,
             next_tab: 4,
+            images: vec![(
+                PaneId(4),
+                vec![crate::mux::sixel::kitty::Handed {
+                    id: 77,
+                    path: "/tmp/notes/.attachments/a.png".into(),
+                    placed: true,
+                    cols: Some(30),
+                    rows: Some(6),
+                }],
+            )],
+            asked_cell: Some((10, 20)),
         }
     }
 
@@ -917,7 +942,20 @@ mod tests {
             (7, Some(3), Some(11))
         );
         assert_eq!(read.cell, Some((9, 18)));
+        assert_eq!(read.images, sample().images);
+        assert_eq!(read.asked_cell, Some((10, 20)));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_handover_from_before_pictures_were_carried_reads_with_none() {
+        let mut json = serde_json::to_value(sample()).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        fields.remove("images");
+        fields.remove("asked_cell");
+        let read: Handover = serde_json::from_value(json).unwrap();
+        assert!(read.images.is_empty());
+        assert_eq!(read.asked_cell, None);
     }
 
     #[test]

@@ -121,6 +121,9 @@ pub enum Event {
     Autopilot(crate::autopilot::AutopilotEvent),
     /// The check of a new build to restart on answered (src/mux/upgrade.rs).
     Upgrade(super::upgrade::UpgradeEvent),
+    /// A picture's file looked at, or a piece of it drawn as sixel, off
+    /// the task (src/mux/sixel).
+    Sixel(super::sixel::SixelEvent),
     Tick,
     Quit,
 }
@@ -285,7 +288,7 @@ pub struct Client {
     pub rows: u16,
     parser: Parser,
     prefix: bool,
-    screen: Screen,
+    pub(super) screen: Screen,
     pub dirty: bool,
     drag: Option<Drag>,
     last_click: Option<(Instant, u16, u16, u8)>,
@@ -370,6 +373,9 @@ pub struct Server {
     pub terminal: super::terminal::Terminal,
     /// A restart on a new build under way (src/mux/upgrade.rs).
     pub(super) upgrade: super::upgrade::Upgrade,
+    /// The pictures panes' programs gave the terminal, and those drawn as
+    /// sixel (src/mux/sixel).
+    pub sixel: super::sixel::Sixel,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -978,6 +984,7 @@ impl Server {
             terminal: Default::default(),
             autopilot: Default::default(),
             upgrade: Default::default(),
+            sixel: super::sixel::Sixel::new(),
         }
     }
 
@@ -1045,8 +1052,10 @@ impl Server {
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Upgrade(event) => self.upgrade_event(event),
+            Event::Sixel(event) => self.sixel_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
+                self.sixel_tick();
                 self.reload_keys_if_changed();
                 self.status_tick();
                 self.ask_presence();
@@ -1081,6 +1090,9 @@ impl Server {
                 let notices = slot.pane.process(&bytes);
                 let tab = slot.tab;
                 self.sidebar.output(id);
+                if !allowed {
+                    self.forget_images(id);
+                }
                 let mut graphics = Vec::new();
                 for notice in notices {
                     match notice {
@@ -1089,7 +1101,7 @@ impl Server {
                         TermNotice::Title(_) | TermNotice::Bell => {}
                     }
                 }
-                self.pass_graphics(tab, graphics);
+                self.take_graphics(id, tab, graphics);
                 self.dirty_tab(tab);
             }
             PaneEvent::Exited(id, generation, code) => {
@@ -2912,21 +2924,31 @@ impl Server {
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
         let session = c.session.clone();
-        let (hits, side, header_keys) = match self.session(&c.session) {
+        let (hits, side, header_keys, panes) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
+        // With sixel chosen, the pictures' cells as the panes drew them,
+        // before anything is drawn over them (src/mux/sixel).
+        let pictures = self.pictures_drawn(&frame, &panes);
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
+        // Pictures as sixel where the panes' own placeholders still show,
+        // once everything over the panes is drawn.
+        self.place_pictures(&mut frame, pictures);
+        let c = self.clients.get_mut(&id).expect("checked above");
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));
         self.sidebar_drawn(id, &session, side);
         self.sync_motion(id);
     }
 
+    /// Draws a client's session into `frame`; gives where the status line's
+    /// parts went, what the sidebar drew, where UX 2.0's header put its
+    /// keys, and each pane drawn and where.
     fn compose(
         &self,
         frame: &mut Frame,
@@ -2936,6 +2958,7 @@ impl Server {
         crate::status::Hits,
         Option<crate::sidebar::Drawn>,
         super::header::Keys,
+        Vec<(PaneId, Rect)>,
     ) {
         let rows = frame.area().height;
         let cols = frame.area().width;
@@ -2943,6 +2966,7 @@ impl Server {
         // With the sidebar focused, no pane has the focus.
         let side_focused = self.sidebar.focused(&s.name);
         let mut cursor = None;
+        let mut drawn = Vec::new();
         if let Some(tab) = self.tabs.get(&s.current) {
             let area = s.area_for(tab.zoomed);
             let main = area.intersection(frame.area());
@@ -2977,6 +3001,7 @@ impl Server {
                         },
                     );
                     slot.pane.put_links(rect, frame.area(), &mut frame.links);
+                    drawn.push((*pid, rect));
                     at
                 };
                 if active {
@@ -3066,7 +3091,7 @@ impl Server {
             );
         }
         frame.cursor = cursor;
-        (hits, side, header_keys)
+        (hits, side, header_keys, drawn)
     }
 }
 

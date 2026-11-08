@@ -153,7 +153,8 @@ pub fn secrets_file() -> PathBuf {
 
 /// Saves the clipboard's image to `file` as a PNG, for a picture pasted
 /// into a note (src/notes/images.rs): macOS's pasteboard, through
-/// JavaScript for Automation; Wayland's or X's clipboard tool on Linux.
+/// JavaScript for Automation; Wayland's or X's clipboard tool on Linux, or
+/// Windows' clipboard through PowerShell under WSL.
 /// Whether there was an image to save.
 pub fn paste_image(file: &std::path::Path) -> bool {
     os::paste_image(file)

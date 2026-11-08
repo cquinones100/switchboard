@@ -1064,7 +1064,7 @@ act() {
   ran=
   while [ $# -gt 0 ]; do
     case $1 in
-      -NoProfile | -NoLogo | -NonInteractive) ;;
+      -NoProfile | -NoLogo | -NonInteractive | -Sta) ;;
       -Command)
         if [ $# -lt 2 ]; then
           printf "Missing argument for parameter 'Command'.\n" >&2
@@ -1080,13 +1080,21 @@ act() {
   done
   case $ran in
     Get-Clipboard) ;;
+    # src/platform/linux.rs's WINDOWS_CLIPBOARD_PNG: the clipboard's
+    # picture, here the PNG beside the clipboard's text, if there is one.
+    *'[System.Windows.Forms.Clipboard]::GetImage()'*'[Console]::OpenStandardOutput()'*) ;;
     *)
       printf 'powershell.exe (a stand-in): it has no answer for %s\n' "$ran" >&2
       exit 1 ;;
   esac
 }
 act() {
-  cat "$clipboard" 2>/dev/null
+  case $ran in
+    Get-Clipboard) cat "$clipboard" 2>/dev/null ;;
+    *)
+      [ -f "$clipboard.png" ] || exit 1
+      cat "$clipboard.png" ;;
+  esac
 }"#
         }
         "open" => {

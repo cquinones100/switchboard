@@ -445,7 +445,7 @@
     "key": "notes_images",
     "category": "Notes",
     "label": "Images drawn in a note",
-    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do); off, it is its name, which Enter opens in Quick Look or the desktop's image viewer",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do), or one that draws sixel with Image protocol on sixel (Windows Terminal); off, it is its name, which Enter opens in Quick Look or the desktop's image viewer",
     "default": true
   },
   {
@@ -615,6 +615,23 @@
       }
     ],
     "default": "dark"
+  },
+  {
+    "key": "image_protocol",
+    "category": "Appearance",
+    "label": "Image protocol",
+    "description": "How pictures (a note's images, the PR and ticket image views) reach your terminal: kitty passes kitty's graphics commands on, for Ghostty and kitty; sixel has the workspace draw each picture itself as sixel where it shows, for a terminal that draws sixel but not kitty's pictures, as Windows Terminal (1.22 and later) does; Notes and the image view opened after a change draw by it",
+    "choices": [
+      {
+        "value": "kitty",
+        "label": "kitty"
+      },
+      {
+        "value": "sixel",
+        "label": "sixel"
+      }
+    ],
+    "default": "kitty"
   },
   {
     "key": "copy_reply",

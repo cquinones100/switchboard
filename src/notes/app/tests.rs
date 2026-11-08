@@ -1161,3 +1161,96 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
     assert_eq!(got["from git"].index, 4);
     assert_eq!(got.len(), 3, "a finished or idle tab is no chip");
 }
+
+// UX 2.0's chips and a note's pictures, as the workspace reads the screen
+// to draw the pictures as sixel (src/mux/sixel/place.rs): a picture's rows
+// follow the chip row under its item, in order, from its first, as the
+// note scrolls, and one cut by the bottom of the screen shows its first.
+#[test]
+fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
+    use crate::mux::PaneId;
+    use crate::mux::sixel::place;
+    let (dir, mut store) = temp("chips-pictures");
+    // Pictures of 80 by 48 pixels: ten cells of 8 by 16 wide, three tall.
+    for name in ["a.png", "b.png"] {
+        image::RgbaImage::from_pixel(80, 48, image::Rgba([0, 0, 255, 255]))
+            .save(dir.path.join(name))
+            .unwrap();
+    }
+    let path = store.create("", Some("Plan"));
+    let mut text = String::from("# Plan\n\n");
+    for n in 0..16 {
+        text.push_str(&format!("line {n}\n"));
+    }
+    text.push_str("- [ ] Pick a name, needs a choice ![name](a.png)\n");
+    text.push_str("- [ ] Draw the logo, needs a choice\n  ![logo](b.png)\n");
+    for n in 16..50 {
+        text.push_str(&format!("line {n}\n"));
+    }
+    write(&path, &text);
+    let opts = Options {
+        images: true,
+        ux2: true,
+        list: false,
+        ..options()
+    };
+    let (mut app, _) = app_in(store, opts);
+    app.images.cell = (8, 16);
+    app.start();
+    // The screen's rows, and the pieces the workspace finds in it.
+    let draw = |app: &mut App| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        app.draw(&mut buf);
+        let rows: Vec<String> = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect();
+        let drawn = place::Drawn::of(&buf, vec![(PaneId(1), buf.area)]);
+        let bottom = buf.area.height;
+        let pieces = place::find(&mut buf, &drawn, bottom);
+        (rows, pieces)
+    };
+    // Each piece a picture from its first row, ten cells wide, under its
+    // item's chip row ("needs a choice"), or under the line naming it
+    // that is under the chips, as far up as the note shows (the toolbar
+    // on the top row).
+    let check = |rows: &[String], pieces: &[place::Piece]| {
+        let screen = rows.join("\n");
+        for p in pieces {
+            assert_eq!((p.row, p.col, p.area.width), (0, 0, 10), "{p:?}\n{screen}");
+            let y = p.area.y as usize;
+            let above: &[&str] = if rows[y - 1].contains("needs a choice") {
+                &["needs a choice", "Pick a name"]
+            } else {
+                &["logo", "needs a choice", "Draw the logo"]
+            };
+            for (n, want) in above.iter().enumerate() {
+                let Some(at) = y.checked_sub(n + 1).filter(|at| *at >= 1) else {
+                    break;
+                };
+                assert!(rows[at].contains(want), "{want} at {at}: {p:?}\n{screen}");
+            }
+        }
+    };
+    // From the top: the first picture whole, the second cut by the
+    // bottom of the screen after its first two rows.
+    let (rows, pieces) = draw(&mut app);
+    check(&rows, &pieces);
+    let heights: Vec<u16> = pieces.iter().map(|p| p.area.height).collect();
+    assert_eq!(heights, vec![3, 2], "{pieces:?}\n{}", rows.join("\n"));
+    assert_eq!(pieces[1].area.bottom(), app.geo.text.bottom());
+    // The cursor down a line at a time, the note scrolling up under it: the
+    // pictures and their chips go up together, whole, and each leaves
+    // the screen with its line.
+    let mut whole = 0;
+    for row in 20..50 {
+        app.editor.doc.row = row;
+        let (rows, pieces) = draw(&mut app);
+        check(&rows, &pieces);
+        whole += pieces.iter().filter(|p| p.area.height == 3).count();
+    }
+    assert!(whole > 0, "the pictures seen whole as the note scrolled");
+}

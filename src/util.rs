@@ -392,6 +392,35 @@ pub fn base64(bytes: &[u8]) -> String {
     out
 }
 
+/// Standard base64 read back, its padding optional; `None` for anything
+/// else (a character outside the alphabet, a length no encoding gives).
+pub fn unbase64(text: &[u8]) -> Option<Vec<u8>> {
+    let digit = |c: u8| -> Option<u32> {
+        Some(match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        } as u32)
+    };
+    let body = text.strip_suffix(b"==").or_else(|| text.strip_suffix(b"="));
+    let body = body.unwrap_or(text);
+    if body.len() % 4 == 1 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(body.len() / 4 * 3 + 2);
+    for chunk in body.chunks(4) {
+        let mut n = 0u32;
+        for (i, c) in chunk.iter().enumerate() {
+            n |= digit(*c)? << (18 - 6 * i);
+        }
+        out.extend_from_slice(&n.to_be_bytes()[1..chunk.len()]);
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +432,20 @@ mod tests {
         assert_eq!(base64(b"fo"), "Zm8=");
         assert_eq!(base64(b"foo"), "Zm9v");
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_reads_back_with_or_without_its_padding() {
+        for text in [&b""[..], b"f", b"fo", b"foo", b"foobar", b"/tmp/a b.png"] {
+            assert_eq!(
+                unbase64(base64(text).as_bytes()).as_deref(),
+                Some(text),
+                "{text:?}"
+            );
+        }
+        assert_eq!(unbase64(b"Zm8").as_deref(), Some(&b"fo"[..]));
+        assert_eq!(unbase64(b"Zm9v!"), None, "not the alphabet");
+        assert_eq!(unbase64(b"Zm9vY"), None, "no encoding is that long");
     }
 
     #[test]

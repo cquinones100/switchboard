@@ -416,6 +416,50 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
 }
 
 #[test]
+fn a_picture_given_before_an_upgrade_is_drawn_as_sixel_after_it() {
+    let (server, bin) = TestServer::start_from_copy();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("settings.json"),
+        r#"{"image_protocol": "sixel"}"#,
+    )
+    .unwrap();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // A cell of 13 by 25 pixels, as the terminal answered once asked.
+    client.wait_sent("the terminal asked for its cell", b"\x1b[16t");
+    client.send(b"\x1b[6;25;13t");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &pane, "@allow_passthrough", "1"]);
+    let (line, col) = server.show_picture(&mut client, &pane);
+    let at = format!("\x1b[{};{}H\x1bP0;1;0q\"1;1;52;48", line + 1, col + 1);
+    client.wait_sent("the picture drawn", at.as_bytes());
+
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
+    // The program gave the picture once, before: the new build knows it,
+    // and the cell its terminal said, and draws it for a terminal
+    // attaching now, which says nothing of its cell.
+    let mut fresh = server.attach(100, 30);
+    fresh.wait_sent("the picture drawn after the upgrade", at.as_bytes());
+    fresh.detach();
+
+    // M-p's restart, which builds first (the test's server has no
+    // checkout to build) and restarts on the binary put in place since,
+    // hands the picture on the same way.
+    std::fs::remove_file(&bin).unwrap();
+    std::fs::copy(common::BIN, &bin).unwrap();
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Switchboard restarted on");
+    let mut third = server.attach(100, 30);
+    third.wait_sent("the picture drawn after M-p's restart", at.as_bytes());
+}
+
+#[test]
 fn the_new_binary_says_its_version_whatever_its_file_is_called() {
     let dir = common::TempDir::new("sbv");
     let new = dir.path().join(".switchboard.new-1");

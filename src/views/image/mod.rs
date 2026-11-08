@@ -21,9 +21,11 @@
 //! protocol's Unicode placeholders, as the notes app draws a note's
 //! pictures (src/notes/images.rs): the terminal is given the page's PNG by
 //! its path, and the pane is filled with placeholder cells coloured with
-//! the picture's id, which the multiplexer places as text. Two ids take
-//! turns, a page taking the one the page before it didn't, so every cell
-//! changes from one page to the next and is drawn again. j, k, the arrows,
+//! the picture's id, which the multiplexer places as text (and, with
+//! Settings' "Image protocol" on sixel, draws the page over as sixel
+//! itself, src/mux/sixel, for Windows Terminal). Two ids take turns, a
+//! page taking the one the page before it didn't, so every cell changes
+//! from one page to the next and is drawn again. j, k, the arrows,
 //! Space and b page; g and G go to the ends; r draws the page again; q
 //! gives the pane back. A resize lays the pages out again for the new size,
 //! once the resizes stop, and shows the page holding what was at the top.
@@ -471,7 +473,7 @@ pub fn cannot_draw(chrome: bool, terminal: bool) -> Option<&'static str> {
         Some(NEEDS_CHROME)
     } else if !terminal {
         Some(
-            "The image view needs a terminal that draws kitty's pictures, as Ghostty and kitty do. M-v shows the description as text.",
+            "The image view needs a terminal that draws kitty's pictures, as Ghostty and kitty do, or, in the workspace, one that draws sixel, as Windows Terminal does, with Settings' Image protocol on sixel. M-v shows the description as text.",
         )
     } else {
         None
