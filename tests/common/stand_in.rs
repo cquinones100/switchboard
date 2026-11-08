@@ -32,13 +32,45 @@ use std::path::{Path, PathBuf};
 
 /// Writes `text` to `path` as a program, making its folder; gives the path.
 pub fn install(path: &Path, text: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).unwrap();
-    }
-    fs::write(path, text).unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    install_all(&[(path.to_path_buf(), text.to_string())]);
     path.to_path_buf()
+}
+
+/// Writes each of `programs` (a path and its text) as a program, making
+/// their folders, all through one child process, so none is ever open for
+/// writing in this one. A program written here and run at once fails now
+/// and then with "Text file busy": Linux won't run a file that any process
+/// has open for writing, and another test's thread starting a program just
+/// then hands its child a copy of the open file, which it keeps until it
+/// execs. The texts are staged in a folder of their own, never run, and the
+/// child copies each into a new file (the old one taken away first, so a
+/// copy still running is left alone) and makes it executable.
+pub fn install_all(programs: &[(PathBuf, String)]) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let staging = std::env::temp_dir().join(format!(
+        "sb-stand-in-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&staging).unwrap();
+    let mut copy = std::process::Command::new("/bin/sh");
+    copy.arg("-c").arg(
+        r#"while [ $# -gt 0 ]; do rm -f "$2" && cp "$1" "$2" && chmod 755 "$2" || exit 1; shift 2; done"#,
+    );
+    copy.arg("sh");
+    for (n, (path, text)) in programs.iter().enumerate() {
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).unwrap();
+        }
+        let staged = staging.join(n.to_string());
+        fs::write(&staged, text).unwrap();
+        copy.arg(staged).arg(path);
+    }
+    let status = copy.status().unwrap();
+    let _ = fs::remove_dir_all(&staging);
+    let paths: Vec<&PathBuf> = programs.iter().map(|(path, _)| path).collect();
+    assert!(status.success(), "couldn't install {paths:?}");
 }
 
 /// `text` quoted for sh, as one word whatever it holds.
@@ -1299,15 +1331,21 @@ act
 /// it takes to `log`, a line of its name and arguments, and keeps what is
 /// copied in `clipboard`, which pasting reads.
 pub fn desktop(bin: &Path, tools: &[&str], log: &Path, clipboard: &Path) {
-    for tool in tools {
-        let script = DESKTOP
-            .replace("@TOOL@", &sh_quote(tool))
-            .replace("@LOG@", &quoted(log))
-            .replace("@CLIPBOARD@", &quoted(clipboard))
-            .replace("@CHECK@", desktop_check(tool))
-            .replace("@CHECKED@", CHECKED);
-        install_in(bin, tool, &script);
-    }
+    let programs: Vec<(PathBuf, String)> = tools
+        .iter()
+        .map(|tool| {
+            let script = DESKTOP
+                .replace("@TOOL@", &sh_quote(tool))
+                .replace("@LOG@", &quoted(log))
+                .replace("@CLIPBOARD@", &quoted(clipboard))
+                .replace("@CHECK@", desktop_check(tool))
+                .replace("@CHECKED@", CHECKED);
+            let path = bin.join(tool);
+            let text = finish(&script, Some(&path));
+            (path, text)
+        })
+        .collect();
+    install_all(&programs);
 }
 
 // ── macOS's Keychain ────────────────────────────────────────────────────────

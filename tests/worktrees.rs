@@ -642,16 +642,11 @@ fn a_forks_pr_opens_untrusted_by_default_outside_the_clone_running_no_hook_with_
     .unwrap();
     w.clone_into("git@github.com:acme/widgets.git", &clone);
     let write_hooks = |whose: &str| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(clone.join(".githooks")).unwrap();
         for name in ["post-checkout", "post-merge", "post-commit", "pre-commit"] {
-            let file = clone.join(".githooks").join(name);
-            std::fs::write(
-                &file,
-                format!("#!/bin/sh\necho \"{whose} $0\" >> '{}'\n", ran.display()),
-            )
-            .unwrap();
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+            common::stand_in::install(
+                &clone.join(".githooks").join(name),
+                &format!("#!/bin/sh\necho \"{whose} $0\" >> '{}'\n", ran.display()),
+            );
         }
     };
     // Your clone's hooks, committed.
@@ -874,15 +869,10 @@ fn with_the_hooks_path_in_full_a_worktree_runs_the_clones_hooks_never_its_branch
     let ran = w.path("ran");
     w.init(&clone, false);
     let write_hook = |whose: &str| {
-        use std::os::unix::fs::PermissionsExt;
-        let file = clone.join(".githooks/post-checkout");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::write(
-            &file,
-            format!("#!/bin/sh\necho {whose} >> '{}'\n", ran.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        common::stand_in::install(
+            &clone.join(".githooks/post-checkout"),
+            &format!("#!/bin/sh\necho {whose} >> '{}'\n", ran.display()),
+        );
     };
     write_hook("ours");
     w.git(&clone, &["add", "."]);

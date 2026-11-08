@@ -84,22 +84,19 @@ fn a_closed_tab_is_logged_with_its_name_and_directory() {
 
 #[test]
 fn a_named_plugin_runs_with_its_options() {
-    use std::os::unix::fs::PermissionsExt;
     let server = TestServer::start();
     let config = server.home.join(".config/switchboard");
     let plugins = config.join("sidebar-plugins");
     std::fs::create_dir_all(&plugins).unwrap();
     let seen = server.home.join("seen");
     let script = plugins.join("demo");
-    std::fs::write(
+    common::stand_in::install(
         &script,
-        format!(
+        &format!(
             "#!/bin/sh\ncat > '{}'\necho '[{{\"id\":1,\"title\":\"one\"}}]'\n",
             seen.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     std::fs::write(
         config.join("sidebar.json"),
         r#"{ "plugins": { "demo": { "word": "hello" }, "other": false } }"#,
@@ -118,15 +115,13 @@ fn a_named_plugin_runs_with_its_options() {
 
 #[test]
 fn a_plugin_that_asks_for_it_lists_its_first_items_in_the_sidebar() {
-    use std::os::unix::fs::PermissionsExt;
     let server = TestServer::start();
     let config = server.home.join(".config/switchboard");
     let plugins = config.join("sidebar-plugins");
     std::fs::create_dir_all(&plugins).unwrap();
     let script = plugins.join("deploys");
     let items = r#"{"title":"Deploys","sidebar":2,"items":[{"id":1,"title":"api rolling out","state":"attention"},{"id":2,"title":"web done","state":"idle"},{"id":3,"title":"jobs queued"}]}"#;
-    std::fs::write(&script, format!("#!/bin/sh\necho '{items}'\n")).unwrap();
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::stand_in::install(&script, &format!("#!/bin/sh\necho '{items}'\n"));
     std::fs::write(
         config.join("sidebar.json"),
         r#"{ "plugins": { "deploys": true } }"#,

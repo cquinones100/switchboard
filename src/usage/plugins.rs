@@ -361,11 +361,10 @@ mod tests {
         dir
     }
 
+    /// A plugin of the test's own, written as the stand-ins are, so running
+    /// it at once never finds it busy.
     fn script(dir: &Path, name: &str, body: &str) {
-        use std::os::unix::fs::PermissionsExt;
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::stand_in::install(&dir.join(name), &format!("#!/bin/sh\n{body}\n"));
     }
 
     #[test]
