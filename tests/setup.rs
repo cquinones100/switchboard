@@ -1454,6 +1454,23 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
     let clone = h.path("switchboard");
     fs::create_dir_all(clone.join("assets/skills")).unwrap();
     fs::write(clone.join("Cargo.toml"), "").unwrap();
+    // Its history has the files Claude Code still uses.
+    let c = clone.to_str().unwrap();
+    h.init(&clone, "main");
+    fs::create_dir_all(clone.join("claude/hooks")).unwrap();
+    fs::create_dir_all(clone.join("claude/commands")).unwrap();
+    fs::write(clone.join("claude/hooks/enforce.sh"), "echo guard\n").unwrap();
+    fs::write(clone.join("claude/otel-headers.sh"), "echo headers\n").unwrap();
+    fs::write(clone.join("claude/commands/pr-view.md"), "Open the PR\n").unwrap();
+    std::process::Command::new("chmod")
+        .args(["755"])
+        .arg(clone.join("claude/hooks/enforce.sh"))
+        .status()
+        .unwrap();
+    h.git(&["-C", c, "add", "-A"]);
+    h.git(&["-C", c, "commit", "-q", "-m", "tmux"]);
+    h.git(&["-C", c, "rm", "-q", "-r", "claude"]);
+    h.git(&["-C", c, "commit", "-q", "-m", "rewrite"]);
     for dir in [".local/bin", ".config/tmux", ".claude/hooks"] {
         fs::create_dir_all(h.path(dir)).unwrap();
     }
@@ -1483,6 +1500,32 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
         h.path(".claude/statusline-command.sh"),
     )
     .unwrap();
+    symlink(
+        clone.join("claude/otel-headers.sh"),
+        h.path(".claude/otel-headers.sh"),
+    )
+    .unwrap();
+    // A hook the settings run but the history never had is left, and said.
+    symlink(
+        clone.join("claude/hooks/missing.sh"),
+        h.path(".claude/hooks/missing.sh"),
+    )
+    .unwrap();
+    fs::write(
+        h.path(".claude/settings.json"),
+        json!({
+            "hooks": { "PreToolUse": [{ "hooks": [
+                { "type": "command", "command": "bash ~/.claude/hooks/enforce.sh" },
+                { "type": "command", "command": "bash $HOME/.claude/hooks/missing.sh" },
+            ]}]},
+            "otelHeadersHelper": "bash ~/.claude/otel-headers.sh",
+            // The claude part moves this one onto switchboard statusline.
+            "statusLine": { "type": "command", "command": "bash ~/.claude/statusline-command.sh" },
+            "permissions": { "allow": ["Bash(~/.claude/statusline-command.sh)"] },
+        })
+        .to_string(),
+    )
+    .unwrap();
     // A link of your own leading nowhere, and one into the clone that still
     // leads somewhere, are left alone.
     symlink(h.path("elsewhere/bin/tool"), h.path(".local/bin/tool")).unwrap();
@@ -1497,6 +1540,21 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
     fs::write(h.path("dotfiles/zshrc"), zshrc).unwrap();
     symlink(h.path("dotfiles/zshrc"), h.path(".zshrc")).unwrap();
 
+    let left = h.run(&["setup", "--check", "leftovers"]);
+    assert!(
+        stderr(&left).contains("~/.claude/hooks/missing.sh leads to"),
+        "{}",
+        stderr(&left)
+    );
+    // Taken out of the settings, the missing one goes as any other.
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&read(&h.path(".claude/settings.json"))).unwrap();
+    settings["hooks"]["PreToolUse"][0]["hooks"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    fs::write(h.path(".claude/settings.json"), settings.to_string()).unwrap();
+
     let check = ok(&h.run(&["setup", "--check", "leftovers"]));
     assert!(
         check.contains("would: remove ~/.local/bin/worktree-from-ticket"),
@@ -1506,8 +1564,15 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
         check.contains("would: take out the tmux version's worktree lines, and take out the switchboard function or alias that starts tmux in ~/.zshrc"),
         "{check}"
     );
+    assert!(
+        check.contains("would: replace ~/.claude/hooks/enforce.sh, which led to what the tmux version had, with a copy of it from ~/switchboard's history, since ~/.claude/settings.json runs it"),
+        "{check}"
+    );
+    assert!(
+        check.contains("would: replace ~/.claude/commands, which led to what the tmux version had, with a copy of it from ~/switchboard's history, since Claude Code reads it"),
+        "{check}"
+    );
     assert!(h.path(".local/bin/skill-path").symlink_metadata().is_ok());
-
     // The guided setup asks, and a closed input says no.
     let closed = String::from_utf8_lossy(&h.run(&["setup"]).stdout).into_owned();
     assert!(closed.contains("From the tmux version"), "{closed}");
@@ -1522,11 +1587,34 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
         ".local/bin/worktree-from-ticket",
         ".local/bin/skill-path",
         ".config/tmux/agent-state.sh",
-        ".claude/hooks/enforce.sh",
-        ".claude/commands",
+        ".claude/hooks/missing.sh",
         ".claude/statusline-command.sh",
     ] {
         assert!(h.path(gone).symlink_metadata().is_err(), "{gone}");
+    }
+    // What Claude Code still uses is a file of its own, as it was.
+    for (path, held) in [
+        (".claude/hooks/enforce.sh", "echo guard\n"),
+        (".claude/otel-headers.sh", "echo headers\n"),
+        (".claude/commands/pr-view.md", "Open the PR\n"),
+    ] {
+        assert!(
+            !h.path(path).symlink_metadata().unwrap().is_symlink(),
+            "{path}"
+        );
+        assert_eq!(read(&h.path(path)), held, "{path}");
+    }
+    assert!(
+        !h.path(".claude/commands")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &str| fs::metadata(h.path(p)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(".claude/hooks/enforce.sh"), 0o755);
+        assert_eq!(mode(".claude/otel-headers.sh"), 0o644);
     }
     assert!(h.path(".local/bin/tool").symlink_metadata().is_ok());
     assert!(h.path(".local/bin/kept").symlink_metadata().is_ok());
@@ -1547,6 +1635,73 @@ fn what_the_tmux_version_left_is_tidied_after_asking_and_once() {
     );
     let again = String::from_utf8_lossy(&h.run(&["setup"]).stdout).into_owned();
     assert!(!again.contains("From the tmux version"), "{again}");
+}
+
+#[test]
+fn a_hooks_folder_the_old_settings_run_comes_back_whole() {
+    use std::os::unix::fs::symlink;
+    let h = Home::new("setup-leftovers-hooks");
+    // The clone's guards went in two commits, the last of them a move, and
+    // ~/.claude/settings.json and ~/.claude/hooks are still its links.
+    let clone = h.path("switchboard");
+    let c = clone.to_str().unwrap();
+    h.init(&clone, "main");
+    fs::create_dir_all(clone.join("assets/skills")).unwrap();
+    fs::write(clone.join("Cargo.toml"), "").unwrap();
+    fs::create_dir_all(clone.join("claude/hooks")).unwrap();
+    fs::write(clone.join("claude/hooks/first.sh"), "echo first\n").unwrap();
+    fs::write(clone.join("claude/hooks/second.sh"), "echo second\n").unwrap();
+    fs::write(
+        clone.join("claude/settings.json"),
+        json!({ "hooks": { "PreToolUse": [{ "hooks": [
+            { "type": "command", "command": "bash ~/.claude/hooks/first.sh" },
+        ]}]}})
+        .to_string(),
+    )
+    .unwrap();
+    h.git(&["-C", c, "add", "-A"]);
+    h.git(&["-C", c, "commit", "-q", "-m", "tmux"]);
+    h.git(&[
+        "-C",
+        c,
+        "rm",
+        "-q",
+        "claude/hooks/first.sh",
+        "claude/settings.json",
+    ]);
+    h.git(&["-C", c, "commit", "-q", "-m", "rewrite"]);
+    fs::create_dir_all(clone.join(".claude/hooks")).unwrap();
+    h.git(&[
+        "-C",
+        c,
+        "mv",
+        "claude/hooks/second.sh",
+        ".claude/hooks/second.sh",
+    ]);
+    h.git(&["-C", c, "commit", "-q", "-m", "move"]);
+    // As a pull would leave it, with no empty folder where the guards were.
+    fs::remove_dir_all(clone.join("claude")).unwrap();
+    fs::create_dir_all(h.path(".claude")).unwrap();
+    symlink(clone.join("claude/hooks"), h.path(".claude/hooks")).unwrap();
+    symlink(
+        clone.join("claude/settings.json"),
+        h.path(".claude/settings.json"),
+    )
+    .unwrap();
+
+    let done = ok(&h.run(&["setup", "leftovers"]));
+    assert!(
+        done.contains("replace ~/.claude/hooks, which led to what the tmux version had"),
+        "{done}"
+    );
+    assert!(
+        !h.path(".claude/hooks")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(read(&h.path(".claude/hooks/first.sh")), "echo first\n");
+    assert_eq!(read(&h.path(".claude/hooks/second.sh")), "echo second\n");
 }
 
 #[test]

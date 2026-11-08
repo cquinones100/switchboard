@@ -265,6 +265,25 @@ pub fn merge(current: &Map<String, Value>, ours: &Value, way: Way) -> Map<String
     out
 }
 
+/// `~/.claude/settings.json` as it stands for the leftovers part: the file,
+/// or, while it is still the tmux version's link leading nowhere (this part
+/// not yet run), what that link held, from the clone's history; `Null` when
+/// there is none, and `None` when it is there but can't be read.
+pub fn as_claude_reads() -> Option<Value> {
+    let file = settings_file();
+    if !super::exists(&file) {
+        return Some(Value::Null);
+    }
+    if is_link(&file) && !file.exists() {
+        let target = fs::read_link(&file).ok()?;
+        let target = file
+            .parent()
+            .map_or(target.clone(), |dir| dir.join(&target));
+        return serde_json::from_slice(&held_by_link(&target)?).ok();
+    }
+    util::read_json(&file)
+}
+
 /// What a link into a clone's `claude/settings.json` held: the file it leads
 /// to, else, in a clone pulled since the repository dropped that file, the
 /// file from git, the commit before the one that removed it, as `claude_md`
