@@ -1,6 +1,5 @@
 .claude/worktrees/
 
 # Packages a skill's scripts install with npm ci
-claude/skills/*/scripts/node_modules/
-# lib's Node packages (setup.sh's lib_packages)
-lib/node_modules/
+assets/skills/*/scripts/node_modules/
+/target/

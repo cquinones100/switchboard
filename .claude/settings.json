@@ -1,4 +1,10 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(cargo build --release --locked)",
+      "Bash(install -m 755 target/release/switchboard ~/.local/bin/)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
@@ -6,11 +12,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/claude/hooks/enforce-push-review.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-push-review.sh\""
           },
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/claude/hooks/enforce-git-hooks-run.sh\""
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-git-hooks-run.sh\""
           }
         ]
       }

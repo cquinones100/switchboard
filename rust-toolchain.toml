@@ -1,0 +1,7 @@
+# The Rust that builds Switchboard: `rustup toolchain install` in the clone
+# installs it, as CI does, and cargo here builds with it. Bumped with each
+# stable release.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

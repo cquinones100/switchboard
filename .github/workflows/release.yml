@@ -1,0 +1,198 @@
+# A release, from a tag `v<version>` pushed to GitHub: the three targets
+# built in release mode, each packed as switchboard-<version>-<target>.tar.gz
+# (a folder of that name holding the binary) with its SHA-256 beside it in
+# <archive>.sha256, and all six published as a GitHub release whose notes are
+# the commits since the tag before (the newest of them and a link to the
+# rest, past what GitHub takes). `switchboard update` and install.sh take
+# the newest release's archive for their computer and refuse it unless its
+# checksum matches.
+#
+# The version is the tag's, and Cargo.toml's `version` has to say the same,
+# since the binary compares its own (CARGO_PKG_VERSION) with the releases'
+# to know when one is newer: bump Cargo.toml in a commit of its own
+# (`cargo check` updates Cargo.lock to match), then tag that commit and push
+# the tag (`git tag v0.2.0 && git push origin v0.2.0`). A tag that disagrees
+# with Cargo.toml fails the first job, and nothing is built or published.
+#
+# The binaries are built with SWITCHBOARD_RELEASE set, which lets the
+# server look for newer releases by itself (src/update); a binary built from
+# a clone doesn't. Linux's is built in PyPA's manylinux_2_28 image, whose
+# glibc is 2.28, so it starts on any distribution with that or newer (Ubuntu
+# 20.04, Debian 10, RHEL 8 and on); built on a GitHub runner, it would need
+# the runner's own glibc, newer than many distributions still in use have,
+# and its first step running it there is the check that it starts on 2.28.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  version:
+    name: Tag and Cargo.toml agree
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::The tag says $version and Cargo.toml says $cargo_version; bump Cargo.toml and tag that commit."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            container: quay.io/pypa/manylinux_2_28_x86_64
+            native: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            native: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            native: false
+    runs-on: ${{ matrix.os }}
+    # Empty for the Macs, which build on the runner itself.
+    container: ${{ matrix.container }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      SWITCHBOARD_RELEASE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rustup in the container
+        if: matrix.container
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # The container runs as root over a checkout the runner's user
+          # owns, which git refuses to read, checkout's own exception
+          # having been for its steps alone; build.rs asks git for the
+          # commit `switchboard --version` names.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install the pinned toolchain and the target
+        run: |
+          rustup toolchain install
+          rustup target add "$TARGET"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Build
+        run: cargo build --locked --release --target "$TARGET"
+      - name: Check it starts and names its version
+        if: matrix.native
+        run: |
+          said=$("target/$TARGET/release/switchboard" --version)
+          echo "$said"
+          case "$said" in
+            "switchboard $VERSION ("*) ;;
+            *) echo "::error::It says '$said', not version $VERSION"; exit 1 ;;
+          esac
+      - name: Pack it with its checksum
+        run: |
+          name="switchboard-$VERSION-$TARGET"
+          mkdir -p "dist/$name"
+          cp "target/$TARGET/release/switchboard" "dist/$name/"
+          cd dist
+          tar -czf "$name.tar.gz" "$name"
+          # The same `<hash>  <name>` line from either: the container has
+          # sha256sum, a Mac shasum.
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          else
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+          fi
+          cat "$name.tar.gz.sha256"
+          rm -r "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Every tag and commit, for the notes since the tag before.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Check every archive against its checksum
+        run: |
+          cd dist
+          ls -l
+          [ "$(ls *.tar.gz | wc -l)" -eq 3 ] || { echo "::error::Expected three archives"; exit 1; }
+          sha256sum --check *.sha256
+      - name: Write the notes from the commits since the tag before
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          if [ -n "$previous" ]; then
+            range="$previous..$tag"
+          else
+            range="$tag"
+          fi
+          git log --no-merges --format='- %s (%h)' "$range" > commits.md
+          # GitHub refuses notes over 125,000 characters, and the first
+          # release's list is the whole history: a list past the limit keeps
+          # its newest commits (whole lines) and links to the rest.
+          limit=60000
+          {
+            if [ -n "$previous" ]; then
+              echo "Changes since $previous:"
+            else
+              echo "The first release."
+            fi
+            echo
+            if [ "$(wc -c < commits.md)" -le "$limit" ]; then
+              cat commits.md
+            else
+              head -c "$limit" commits.md | sed '$d' > kept.md
+              cat kept.md
+              echo "- …and $(( $(wc -l < commits.md) - $(wc -l < kept.md) )) earlier commits: https://github.com/$GITHUB_REPOSITORY/commits/$tag"
+            fi
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "Switchboard $VERSION" \
+            --notes-file notes.md \
+            --verify-tag

@@ -1,0 +1,1334 @@
+//! The mode on the server: what lib/sidebar/daemon.js did for it (M-p's
+//! `autopilotStart` and `autopilotSetup`, `pilotMenu`, `pilot.check` on
+//! every refresh, its notice) and what tmux/wtn-open.zsh's `next` did, done
+//! in the server task.
+//!
+//! M-p's "Autopilot: work a note" opens mission control on its tabs,
+//! then, with the mode off, asks which note (those holding an unticked
+//! item, the one last worked first, then the newest, the rest behind "More
+//! notes…"), how many of its tabs work at once, the most open and a
+//! spend limit, each typed in a box with what it was before, Enter keeping
+//! it; the repository is the main clone of the pane it was asked from. With
+//! the mode on, it opens the line's menu instead.
+//!
+//! Every tick reads `autopilot.json`, gathers the tabs it opened (their
+//! directories from what the server holds and git's files, their state from
+//! the sidebar's model, or from the pane parked behind M-d's diff), and
+//! checks (`Pilot::check`). Reading the queue starts git, so it runs off the
+//! task and answers with `Event::Autopilot`; the tab for the item found is
+//! opened back on it, in the session used last, as the palette's "Start
+//! work on a note's checklist items" opens one (`Server::open_item_tab`).
+//!
+//! The note is followed by its stable ID (src/notes/id.rs): each tick reads
+//! the ID at the note's path (its last bytes, again only once the file
+//! changes), and what following it needs, giving it an ID, looking for it
+//! by its ID, giving older tabs their note's ID, bringing wtn's claims to
+//! IDs, runs off the task too (`Keep`), its answer written back to the
+//! mode.
+
+use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
+
+use super::line::{self, Act, Summary};
+use super::mode::{self, Mode, note_title};
+use super::pilot::{Job, Keep, Kept, Mark};
+use super::place::{Mine, in_main_clone, in_worktree_of};
+use super::{AutopilotEvent, Command};
+use crate::agent::State;
+use crate::cmd::work::main_clone;
+use crate::cmd::work_recent;
+use crate::cmd::worktree_from_note::{self, Item};
+use crate::diff::in_place::PARKED_PANE;
+use crate::mission::Mission;
+use crate::mission::ask::Ask;
+use crate::mux::server::{ClientId, Event, Server};
+use crate::mux::{PaneId, TabId};
+use crate::sidebar::model::TabState;
+use crate::ui::{Menu, MenuOption, Outcome, PickItem, Picker};
+use crate::{paths, settings, util};
+
+/// When it opened one of its tabs, in seconds.
+pub const OPENED: &str = "@autopilot";
+/// Seen in its worktree.
+pub const IN: &str = "@autopilot_in";
+/// The first line of the item it was opened for.
+pub const ITEM: &str = "@autopilot_item";
+/// The ID of that item's note, so the item is held in its own note alone.
+pub const NOTE: &str = "@autopilot_note";
+/// When it was found back in the main clone once landed, in seconds.
+pub const LEFT: &str = "@autopilot_left";
+/// Seen since it landed.
+pub const SEEN: &str = "@autopilot_seen";
+/// To land on the default branch without asking to push, which
+/// queue-and-clean reads (`switchboard show @autopilot_land`).
+pub const LAND: &str = "@autopilot_land";
+/// Landed without asking, the commit it pushed, which queue-and-clean sets
+/// (`switchboard land-lock autolanded`).
+pub const AUTOLAND: &str = "@autopilot_autoland";
+/// Every mark of the mode's, taken off as a tab leaves it.
+const MARKS: [&str; 8] = [OPENED, IN, ITEM, NOTE, LEFT, SEEN, LAND, AUTOLAND];
+
+/// The commit `HEAD` is at in the checkout `dir` is in, read from git's
+/// files: a loose ref, `packed-refs`, or a detached `HEAD`'s own.
+fn head_of(dir: &Path) -> Option<String> {
+    let place = crate::tabs::git::locate(dir)?;
+    let head = std::fs::read_to_string(place.git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    let Some(name) = head.strip_prefix("ref:").map(str::trim) else {
+        return Some(head.to_string());
+    };
+    for at in [&place.git_dir, &place.common_dir] {
+        if let Ok(sha) = std::fs::read_to_string(at.join(name)) {
+            return Some(sha.trim().to_string());
+        }
+    }
+    let packed = std::fs::read_to_string(place.common_dir.join("packed-refs")).ok()?;
+    packed
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+        .find_map(|l| {
+            let (sha, r) = l.split_once(' ')?;
+            (r.trim() == name).then(|| sha.to_string())
+        })
+}
+
+/// When a file last changed, in ms; `None` when it isn't there.
+fn modified_ms(path: &Path) -> Option<i64> {
+    let at = std::fs::metadata(path).ok()?.modified().ok()?;
+    Some(at.duration_since(UNIX_EPOCH).ok()?.as_millis() as i64)
+}
+
+/// What says a file changed: its modified time, size and change time
+/// (giving a note its ID keeps its modified time, but not its change time).
+fn stamp_of(path: &Path) -> Option<super::Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::metadata(path).ok()?;
+    Some((
+        m.mtime(),
+        m.mtime_nsec(),
+        m.size(),
+        m.ctime(),
+        m.ctime_nsec(),
+    ))
+}
+
+/// A whole number, 1 or more, as typed; empty keeps `was`.
+fn whole(text: &str, was: u32) -> Option<u32> {
+    if text.is_empty() {
+        return Some(was);
+    }
+    let n: f64 = text.parse().ok()?;
+    (n.fract() == 0.0 && (1.0..=f64::from(u32::MAX)).contains(&n)).then_some(n as u32)
+}
+
+/// Dollars, as typed, a `$` in front or not; empty for no limit.
+fn dollars(text: &str) -> Option<f64> {
+    if text.is_empty() {
+        return Some(0.0);
+    }
+    let n: f64 = text.strip_prefix('$').unwrap_or(text).trim().parse().ok()?;
+    (n.is_finite() && n >= 0.0).then_some(n)
+}
+
+impl Server {
+    // ── M-p ─────────────────────────────────────────────────────────────────
+
+    /// M-p's command, pressed with `pane` current: mission control's tabs,
+    /// then the mode set up, or its menu while it is on.
+    pub fn autopilot_command(&mut self, client: ClientId, command: Command, pane: Option<PaneId>) {
+        match command {
+            Command::WorkNote => {
+                let dir = pane
+                    .and_then(|p| self.panes.get(&p))
+                    .and_then(|s| s.pane.cwd())
+                    .unwrap_or_else(paths::home);
+                self.open_mission(client, super::opening());
+                if !settings::is_on("autopilot") {
+                    self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
+                    return;
+                }
+                if Mode::read(&paths::state_dir()).on {
+                    self.autopilot_menu(client);
+                } else {
+                    self.autopilot_setup(client, &dir);
+                }
+            }
+        }
+    }
+
+    /// Which note, which branch to land on, how many tabs at once, the most
+    /// open and a spend limit, then the mode on, working the note in the
+    /// main clone of `dir`'s repository. A repository that lands through a
+    /// PR is refused: autopilot lands only straight onto a branch for now.
+    fn autopilot_setup(&mut self, client: ClientId, dir: &Path) {
+        let Some(repo) = main_clone(dir) else {
+            self.mission_note(
+                client,
+                "Ask from a pane in the note's repository: its items are worked there",
+            );
+            return;
+        };
+        let notes = worktree_from_note::notes_dir();
+        let was = Mode::read(&paths::state_dir());
+        let last = was.note.clone();
+        let at = repo.clone();
+        self.off_task(
+            client,
+            move || {
+                let landing = crate::repos::landing_for(&at, false).map(|l| l.landing);
+                (mode::note_choices(&notes, &last), landing)
+            },
+            move |server, client, (notes, landing)| {
+                match landing.as_deref() {
+                    Ok("direct") => {}
+                    Ok(_) => {
+                        server.mission_note(
+                            client,
+                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                        return;
+                    }
+                }
+                if notes.open.is_empty() && notes.rest.is_empty() {
+                    server.mission_note(client, "No notes to work");
+                    return;
+                }
+                server.autopilot_pick_note(client, repo, was, notes);
+            },
+        );
+    }
+
+    /// Which note: those holding an unticked item, the rest behind "More
+    /// notes…", so the list stays short; with none of them, the rest at
+    /// once.
+    fn autopilot_pick_note(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        was: Mode,
+        notes: mode::NoteChoices,
+    ) {
+        let (shown, rest) = if notes.open.is_empty() {
+            (notes.rest, Vec::new())
+        } else {
+            (notes.open, notes.rest)
+        };
+        // A note's value is its path, never empty.
+        const MORE: &str = "";
+        let mut items: Vec<PickItem> = shown
+            .iter()
+            .map(|n| PickItem::new(n.strip_suffix(".md").unwrap_or(n), n.clone()))
+            .collect();
+        if !rest.is_empty() {
+            items.push(PickItem::new("More notes…", MORE));
+        }
+        let picker = Picker::new("Work which note continuously?", items)
+            .named("notes")
+            .prompt("note> ");
+        self.pick(client, picker, move |server, client, picked| match picked {
+            Some(p) if p.value == MORE => {
+                let rest = mode::NoteChoices {
+                    open: Vec::new(),
+                    rest,
+                };
+                server.autopilot_pick_note(client, repo, was, rest);
+            }
+            Some(p) => {
+                let note = p.value;
+                let at = repo.clone();
+                server.autopilot_pick_target(client, at, move |server, client, target| {
+                    server.autopilot_ask_counts(client, repo, note, target, was)
+                });
+            }
+            None => {}
+        });
+    }
+
+    /// "Land on:": the branches picked here before, the most recent first
+    /// (src/cmd/work_recent.rs), then the repository's default branch, so
+    /// with nothing picked yet Enter lands there, then its other local
+    /// branches by name, read from git's files off the task, then "Another
+    /// branch…" to type one; `then` given the branch, empty for the default
+    /// one, and the pick kept for next time. The palette's "Start work on a
+    /// note's checklist items" asks it too, after the items.
+    pub(crate) fn autopilot_pick_target(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        then: impl FnOnce(&mut Server, ClientId, String) + Send + 'static,
+    ) {
+        self.off_task(
+            client,
+            move || {
+                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+                let (default, branches, recent) = common
+                    .as_deref()
+                    .map(|c| {
+                        let mut branches = crate::tabs::git::local_branches(c);
+                        let recent = work_recent::branches(c);
+                        // A branch only origin has, picked through "Another
+                        // branch…", is made a local one only as an item
+                        // starts, so it stays listed while origin has it.
+                        let remote_only: Vec<String> = recent
+                            .iter()
+                            .filter(|b| !b.is_empty() && !branches.contains(b))
+                            .filter(|b| crate::tabs::git::on_origin(c, b))
+                            .cloned()
+                            .collect();
+                        branches.extend(remote_only);
+                        (crate::tabs::git::default_branch(c), branches, recent)
+                    })
+                    .unwrap_or_default();
+                (common, default, branches, recent)
+            },
+            move |server, client, (common, default, branches, recent)| {
+                let keep = move |branch: &str| {
+                    if let Some(common) = common {
+                        let branch = branch.to_string();
+                        work_recent::in_background(move || {
+                            work_recent::pick_branch(&common, &branch)
+                        });
+                    }
+                };
+                let items = mode::target_choices(default.as_deref(), &branches, &recent)
+                    .into_iter()
+                    .map(|(label, value)| PickItem::new(label, value))
+                    .collect();
+                let picker = Picker::new("Land on:", items)
+                    .named("branches")
+                    .prompt("branch> ");
+                server.pick(client, picker, move |server, client, picked| match picked {
+                    Some(p) if p.value == mode::ANOTHER_BRANCH => {
+                        let ask = Ask::new(
+                            "Land on which branch?",
+                            "A local branch, or one on origin, which is made a local branch tracking it.",
+                        );
+                        server.open(
+                            client,
+                            Box::new(ask),
+                            Some(Box::new(move |server: &mut Server, client, outcome| {
+                                let Outcome::Picked(p) = outcome else {
+                                    return;
+                                };
+                                match mode::typed_branch(&p.value) {
+                                    Some(b) => {
+                                        keep(&b);
+                                        then(server, client, b)
+                                    }
+                                    None => server.mission_note(
+                                        client,
+                                        format!("Not a branch name: {}", p.value),
+                                    ),
+                                }
+                            })),
+                        );
+                    }
+                    Some(p) => {
+                        keep(&p.value);
+                        then(server, client, p.value)
+                    }
+                    None => {}
+                });
+            },
+        );
+    }
+
+    /// The setup's slots and cap, each typed in starting from what it was.
+    fn autopilot_ask_counts(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        note: String,
+        target: String,
+        was: Mode,
+    ) {
+        let (slots_were, cap_was, limit_was) = (was.slots, was.cap, was.spend_limit);
+        self.autopilot_number(
+            client,
+            "Tabs working at once",
+            "How many of its tabs work at once; one waiting on you doesn't count.",
+            slots_were,
+            move |server, client, slots| {
+                server.autopilot_number(
+                    client,
+                    "Tabs open at most",
+                    "The most of its tabs open at once, those waiting on you included.",
+                    cap_was.max(slots),
+                    move |server, client, cap| {
+                        if cap < slots {
+                            server.mission_note(
+                                client,
+                                format!("Tabs open at most: at least {slots}"),
+                            );
+                            return;
+                        }
+                        server.autopilot_ask_limit(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap),
+                            limit_was,
+                        );
+                    },
+                );
+            },
+        );
+    }
+
+    /// A whole number asked for in a box, `was` typed in already.
+    fn autopilot_number(
+        &mut self,
+        client: ClientId,
+        title: &'static str,
+        hint: &'static str,
+        was: u32,
+        then: impl FnOnce(&mut Server, ClientId, u32) + Send + 'static,
+    ) {
+        let ask = Ask::new(title, hint).text(was.to_string()).empty_ok();
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                match whole(&p.value, was) {
+                    Some(n) => then(server, client, n),
+                    None => {
+                        server.mission_note(client, format!("{title}: a whole number, 1 or more"))
+                    }
+                }
+            })),
+        );
+    }
+
+    /// The setup's spend limit, then the mode on.
+    fn autopilot_ask_limit(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        (note, target): (String, String),
+        (slots, cap): (u32, u32),
+        was: f64,
+    ) {
+        let ask = Ask::new(
+            "Spend limit",
+            "Open no more tabs once today's Claude spend passes this many dollars, as the Usage view counts it; empty for none.",
+        )
+        .text(if was > 0.0 { was.to_string() } else { String::new() })
+        .empty_ok();
+        self.open(
+            client,
+            Box::new(ask),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let Some(limit) = dollars(&p.value) else {
+                    server.mission_note(client, "Spend limit: dollars, or empty for none");
+                    return;
+                };
+                // The note by its ID too, which the mode follows it by,
+                // given one when it has none; off the task, since that
+                // writes the note.
+                let notes = worktree_from_note::notes_dir();
+                let file = notes.join(&note);
+                server.off_task(
+                    client,
+                    move || crate::notes::id::ensure_id(&file, &notes).ok(),
+                    move |server, client, note_id| {
+                        server.autopilot_start(
+                            client,
+                            repo,
+                            (note, target),
+                            (slots, cap, limit),
+                            note_id,
+                        )
+                    },
+                );
+            })),
+        );
+    }
+
+    /// The mode on, as set up.
+    fn autopilot_start(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        (note, target): (String, String),
+        (slots, cap, limit): (u32, u32, f64),
+        note_id: Option<String>,
+    ) {
+        let written = Mode::update(&paths::state_dir(), |m| {
+            // Skipped items keep their note's ID, so another note's stay
+            // skipped in that note alone; one from before notes had IDs,
+            // of the note worked before, goes.
+            if m.note != note {
+                m.skipped.retain(|x| !x.note.is_empty());
+            }
+            m.on = true;
+            m.paused = false;
+            m.said.clear();
+            m.note = note.clone();
+            m.note_id = note_id.unwrap_or_default();
+            m.repo = repo.clone();
+            m.slots = slots;
+            m.cap = cap;
+            m.spend_limit = limit;
+            m.target = target.clone();
+        });
+        match written {
+            Ok(_) => {
+                self.autopilot.pilot.reset();
+                self.autopilot_tick();
+                self.mission_note(
+                    client,
+                    format!(
+                        "Working {}: {slots} at a time, up to {cap} tabs, in {}, landing on {}",
+                        note_title(&note),
+                        paths::tilde(&repo),
+                        if target.is_empty() {
+                            "the default branch"
+                        } else {
+                            &target
+                        }
+                    ),
+                );
+            }
+            Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
+        }
+    }
+
+    /// Its menu's "Change the target branch…": "Land on:" asked again, for
+    /// the tabs it opens from now; those open land where they were cut from.
+    fn autopilot_change_target(&mut self, client: ClientId) {
+        let repo = Mode::read(&paths::state_dir()).repo;
+        self.autopilot_pick_target(client, repo, |server, client, target| {
+            let said = if target.is_empty() {
+                "Its new tabs land on the default branch".to_string()
+            } else {
+                format!("Its new tabs land on {target}")
+            };
+            match Mode::update(&paths::state_dir(), |m| m.target = target) {
+                Ok(_) => {
+                    server.autopilot.pilot.reset();
+                    server.autopilot_tick();
+                    server.mission_note(client, said);
+                }
+                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
+            }
+        });
+    }
+
+    // ── Its menu ────────────────────────────────────────────────────────────
+
+    /// The menu Enter on its line in mission control opens, moved through
+    /// with j and k as mission control's other menus are.
+    pub fn autopilot_menu(&mut self, client: ClientId) {
+        let mode = Mode::read(&paths::state_dir());
+        let close = settings::current_settings()
+            .into_iter()
+            .find(|o| o.key == "autopilot_close")
+            .map(|o| o.value_words())
+            .unwrap_or_default();
+        let list = line::choices(&mode, &self.autopilot.pilot.next.text, &close);
+        let options = list
+            .iter()
+            .map(|(_, label, _)| MenuOption::new(label.clone()))
+            .collect();
+        let menu = Menu::new(format!("Working {}", note_title(&mode.note)), options);
+        self.choose(client, menu, move |server, client, chose| {
+            if let Some((_, _, act)) = chose.and_then(|i| list.into_iter().nth(i)) {
+                server.autopilot_act(client, act);
+            }
+        });
+    }
+
+    /// Does what an option of its menu, or of its notification's, says.
+    pub fn autopilot_act(&mut self, client: ClientId, act: Act) {
+        let state = paths::state_dir();
+        match act {
+            Act::Change => {
+                let repo = Mode::read(&state).repo;
+                let dir = if repo.as_os_str().is_empty() {
+                    paths::home()
+                } else {
+                    repo
+                };
+                self.autopilot_setup(client, &dir);
+            }
+            Act::ChangeTarget => self.autopilot_change_target(client),
+            Act::ToTabs => self.open_mission(client, super::opening()),
+            Act::Dismiss => {
+                self.autopilot_say("");
+                self.mission_note(client, "Dismissed.");
+            }
+            // The autopilot_close setting to its next choice, as Settings
+            // changes it.
+            Act::CycleClose => {
+                let Some(option) = settings::read_settings()
+                    .into_iter()
+                    .find(|o| o.key == "autopilot_close")
+                else {
+                    return;
+                };
+                if let Err(e) = settings::write_setting("autopilot_close", option.next_value()) {
+                    self.mission_note(client, format!("Couldn't save it: {e}"));
+                    return;
+                }
+                let now = settings::reload_settings()
+                    .into_iter()
+                    .find(|o| o.key == "autopilot_close")
+                    .map(|o| o.value_words())
+                    .unwrap_or_default();
+                self.mission_note(client, format!("Landed tabs close: {now}"));
+            }
+            // Asked first, naming what it skips and keeps; no is no.
+            Act::LandWithoutAsking => {
+                let (question, list) = line::land_question();
+                self.ask(
+                    client,
+                    crate::ui::Confirm::new(question).list(list),
+                    |server, client, yes| {
+                        if yes {
+                            server.autopilot_change(client, Act::LandWithoutAsking);
+                        }
+                    },
+                );
+            }
+            act => self.autopilot_change(client, act),
+        }
+    }
+
+    /// What an option of its menu changes in the mode, done and said.
+    fn autopilot_change(&mut self, client: ClientId, act: Act) {
+        let mut said = None;
+        match Mode::update(&paths::state_dir(), |m| said = line::apply(&act, m)) {
+            Ok(_) => {
+                self.autopilot.pilot.reset();
+                self.autopilot_tick();
+                if let Some(said) = said {
+                    self.mission_note(client, said);
+                }
+            }
+            Err(e) => self.mission_note(client, format!("Couldn't save it: {e}")),
+        }
+    }
+
+    /// What mission control's line shows, while the mode is on and has no
+    /// view of its own (src/autopilot/view.rs) to say it in instead.
+    pub fn autopilot_summary(&self) -> Option<Summary> {
+        let mode = &self.autopilot.mode;
+        (settings::is_on("autopilot") && mode.on && !super::has_view())
+            .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
+    }
+
+    /// Its own view in mission control (`view`), with UX 2.0 and the
+    /// view_autopilot setting on: while the mode is on, or `keep` (a client
+    /// has it in front). `landing` is the Landing view's items, whose
+    /// entries say where each tab's worktree is in its landing queue. Built
+    /// from what the server holds, reading no file.
+    pub fn autopilot_view(
+        &self,
+        keep: bool,
+        landing: &[crate::items::Item],
+    ) -> Option<Vec<crate::items::Item>> {
+        if !super::has_view() {
+            return None;
+        }
+        let mode = &self.autopilot.mode;
+        if !(mode.on || keep) {
+            return None;
+        }
+        let marked = |opts: &std::collections::BTreeMap<String, String>, name: &str| {
+            opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        let mut rows = Vec::new();
+        for model in self.sidebar_all_tabs() {
+            let Some(tab) = self.tabs.get(&model.id) else {
+                continue;
+            };
+            if !marked(&tab.opts, OPENED) {
+                continue;
+            }
+            let id = model.id.to_string();
+            let landing = landing.iter().find_map(|i| {
+                let l = i.data.get("landing")?;
+                (l.get("tab").and_then(serde_json::Value::as_str) == Some(id.as_str()))
+                    .then(|| l.clone())
+            });
+            rows.push(super::view::Row {
+                tab: model.id,
+                index: model.index,
+                item: tab
+                    .opts
+                    .get(ITEM)
+                    .cloned()
+                    .unwrap_or_else(|| model.name.clone()),
+                state: model.state,
+                was_in: marked(&tab.opts, IN),
+                loop_skill: model.loop_skill.clone(),
+                phase: model.phase.clone(),
+                landing,
+                left: marked(&tab.opts, LEFT) || model.autopilot_landed,
+                autoland: model.autopilot_autoland,
+            });
+        }
+        let summary = self.autopilot.pilot.summary(mode, self.away_now());
+        let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
+        Some(super::view::items(
+            &summary,
+            &mode.said,
+            &rows,
+            &self.autopilot.pilot.next.queue,
+            &skipped,
+        ))
+    }
+
+    // ── The check ───────────────────────────────────────────────────────────
+
+    /// Every tick: the mode read again, its tabs marked, and the next item
+    /// read or opened when it is time.
+    pub fn autopilot_tick(&mut self) {
+        let state = paths::state_dir();
+        let mode = Mode::read(&state);
+        self.autopilot_notices(&mode);
+        let on = settings::is_on("autopilot");
+        let repo = mode
+            .repo
+            .canonicalize()
+            .unwrap_or_else(|_| mode.repo.clone());
+        let mine = if mode.set_up() {
+            self.autopilot_mine(&repo)
+        } else {
+            Vec::new()
+        };
+        let notes = worktree_from_note::notes_dir();
+        let mtime = (mode.set_up() && !mode.note.is_empty())
+            .then(|| modified_ms(&notes.join(&mode.note)))
+            .flatten();
+        let here = (on && mode.on && !mode.note_id.is_empty() && mtime.is_some())
+            .then(|| self.autopilot_id_at(&notes.join(&mode.note)))
+            .flatten();
+        let away = self.away_now();
+        let counts = self.autopilot.pilot.counts;
+        let close = settings::cached("autopilot_close")
+            .and_then(|v| v.as_str().and_then(super::pilot::close_after));
+        let check = self.autopilot.pilot.check(
+            &mode,
+            on,
+            close,
+            &mine,
+            away,
+            util::now_ms(),
+            mtime,
+            here.as_deref(),
+            &notes,
+        );
+        let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
+        let lost_said = mode.said.starts_with("Can't find the note");
+        self.autopilot.mode = mode;
+        self.autopilot_marks(&check.marks, &mine);
+        if check.found_again && lost_said {
+            self.autopilot_say("");
+        }
+        if let Some(said) = check.said {
+            self.autopilot_say(&said);
+        }
+        if let Some(keep) = check.keep {
+            self.autopilot_keep(keep, notes.clone());
+        }
+        if let Some(job) = check.read_next {
+            self.autopilot_read_next(job, notes.clone());
+        }
+        if let Some(job) = check.open {
+            self.autopilot_look(job, notes);
+        }
+        if changed {
+            self.autopilot_redraw();
+        }
+    }
+
+    /// The ID the note at `file` holds, read again only once the file
+    /// changes, since a check runs every tick: its last bytes, a small read.
+    fn autopilot_id_at(&mut self, file: &Path) -> Option<String> {
+        let stamp = stamp_of(file)?;
+        if let Some((seen, at, id)) = &self.autopilot.seen_id
+            && seen == file
+            && *at == stamp
+        {
+            return id.clone();
+        }
+        let id = crate::notes::id::of_file(file);
+        self.autopilot.seen_id = Some((file.to_path_buf(), stamp, id.clone()));
+        id
+    }
+
+    /// Following the note by its ID, off the task.
+    fn autopilot_keep(&mut self, keep: Keep, notes: PathBuf) {
+        let followed = keep.follows();
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.autopilot
+                .pilot
+                .kept(&Kept::default(), followed, util::now_ms());
+            return;
+        }
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let kept = keep.run(&notes);
+            let _ = tx.send(Event::Autopilot(AutopilotEvent::Kept { kept, followed }));
+        });
+    }
+
+    /// What following the note found, written back: the ID it was given
+    /// (its skipped items from before IDs with it), the path it was found
+    /// at, older tabs' notes' IDs, and what was said of it gone once it is
+    /// found.
+    fn autopilot_kept(&mut self, kept: Kept, followed: bool) {
+        self.autopilot.pilot.kept(&kept, followed, util::now_ms());
+        for claim in &kept.unplaced {
+            eprintln!("autopilot: couldn't find the note of the claim \"{claim}\", left as it was");
+        }
+        for (tab, note_id) in &kept.tabs {
+            let Some(t) = self.tabs.get_mut(tab) else {
+                continue;
+            };
+            if !t.opts.contains_key(OPENED) || t.opts.contains_key(NOTE) {
+                continue;
+            }
+            t.opts.insert(NOTE.into(), note_id.clone());
+            self.dirty_tab(*tab);
+        }
+        let back = kept.found.is_some() || kept.gave_back;
+        if kept.given.is_none() && !back {
+            return;
+        }
+        let written = Mode::update(&paths::state_dir(), |m| {
+            if let Some(given) = &kept.given
+                && m.note == kept.note
+                && m.note_id.is_empty()
+            {
+                m.note_id = given.clone();
+                for x in m.skipped.iter_mut().filter(|x| x.note.is_empty()) {
+                    x.note = given.clone();
+                }
+            }
+            if let Some(found) = &kept.found
+                && !m.note_id.is_empty()
+                && m.note_id == kept.note_id
+            {
+                m.note = found.clone();
+            }
+            if back && m.said.starts_with("Can't find the note") {
+                m.said.clear();
+            }
+        });
+        if let Some(found) = &kept.found {
+            eprintln!("autopilot: {} is now {found}", kept.note);
+        }
+        match written {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+                self.autopilot.pilot.reset_next();
+                self.autopilot_redraw();
+            }
+            Err(e) => eprintln!("autopilot: couldn't keep its note's ID: {e}"),
+        }
+    }
+
+    /// The tabs it opened, as a check needs them.
+    fn autopilot_mine(&self, repo: &Path) -> Vec<Mine> {
+        let opened = |opts: &std::collections::BTreeMap<String, String>| {
+            opts.get(OPENED)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .filter(|n| *n != 0.0)
+        };
+        if !self.tabs.values().any(|t| opened(&t.opts).is_some()) {
+            return Vec::new();
+        }
+        let models: std::collections::HashMap<TabId, _> = self
+            .sidebar_all_tabs()
+            .into_iter()
+            .map(|t| (t.id, t))
+            .collect();
+        let mut out = Vec::new();
+        for session in &self.sessions {
+            for id in &session.tabs {
+                let Some(tab) = self.tabs.get(id) else {
+                    continue;
+                };
+                let Some(since) = opened(&tab.opts) else {
+                    continue;
+                };
+                let model = models.get(id);
+                let panes = tab.layout.panes();
+                let state = self
+                    .parked_state(&panes)
+                    .or(model.map(|m| m.state))
+                    .unwrap_or_default();
+                // Where it works: its Claude's directory, else its panes'
+                // (Notes, which M-e may have put beside it, runs in your home).
+                let mut dirs: Vec<PathBuf> = model
+                    .and_then(|m| m.claude.as_ref()?.cwd.as_ref().map(PathBuf::from))
+                    .into_iter()
+                    .chain(model.and_then(|m| m.path.clone()))
+                    .collect();
+                for pane in &panes {
+                    let Some(slot) = self.panes.get(pane) else {
+                        continue;
+                    };
+                    let marked = |name: &str| {
+                        slot.opts
+                            .get(name)
+                            .is_some_and(|v| !v.is_empty() && v != "0")
+                    };
+                    if marked("@sidebar") || marked("@notes_pane") {
+                        continue;
+                    }
+                    dirs.extend(slot.pane.cwd());
+                }
+                let marked = |name: &str| {
+                    tab.opts
+                        .get(name)
+                        .is_some_and(|v| !v.is_empty() && v != "0")
+                };
+                let landed = tab
+                    .opts
+                    .get(LEFT)
+                    .and_then(|v| v.trim().parse::<f64>().ok())
+                    .filter(|n| *n != 0.0);
+                // Its Claude's own pane, idle, in a main clone: whichever,
+                // since the mode may have moved to another repository since
+                // it opened the tab. Only Claude's pane counts when it has
+                // one, since a shell beside it may be in the main clone
+                // already while queue-and-clean still asks something.
+                let claude_dirs: Vec<PathBuf> = match self.agents.leader(&panes) {
+                    Some((p, _, _)) => self
+                        .panes
+                        .get(&p)
+                        .and_then(|s| s.pane.cwd())
+                        .into_iter()
+                        .collect(),
+                    None => dirs.clone(),
+                };
+                let home = state == TabState::Idle && in_main_clone(&claude_dirs);
+                let everywhere = self.panes_with_parked(*id);
+                let prompted_since = landed.is_some_and(|at| {
+                    state != TabState::Idle
+                        && everywhere
+                            .iter()
+                            .any(|p| self.agents.get(*p).is_some_and(|a| a.since as f64 > at))
+                });
+                let stand_in = panes.iter().any(|p| {
+                    self.panes
+                        .get(p)
+                        .is_some_and(|s| s.opts.contains_key(PARKED_PANE))
+                });
+                out.push(Mine {
+                    tab: *id,
+                    since,
+                    was_in: marked(IN),
+                    item: tab.opts.get(ITEM).filter(|v| !v.is_empty()).cloned(),
+                    note: tab.opts.get(NOTE).filter(|v| !v.is_empty()).cloned(),
+                    tab_note: tab.opts.get("@tab_note").filter(|v| !v.is_empty()).cloned(),
+                    state,
+                    in_worktree: in_worktree_of(&dirs, repo),
+                    in_main: in_main_clone(&dirs),
+                    landed,
+                    seen: marked(SEEN),
+                    front: self.tab_in_front(*id),
+                    stand_in,
+                    home,
+                    prompted_since,
+                    land: tab.opts.get(LAND).is_some_and(|v| v == "1"),
+                });
+            }
+        }
+        out
+    }
+
+    /// While a tool stands in for a tab's pane (M-d's diff), the state of
+    /// the pane parked behind it, background work included, as the tab's
+    /// own would be.
+    fn parked_state(&self, panes: &[PaneId]) -> Option<TabState> {
+        let parked: PaneId = panes
+            .iter()
+            .find_map(|p| self.panes.get(p)?.opts.get(PARKED_PANE)?.parse().ok())?;
+        self.panes.get(&parked)?;
+        let work = self.sidebar.panes.get(&parked).map(|r| &r.work);
+        let agent = self.agents.state(parked);
+        Some(
+            if agent == Some(State::Waiting) || work.is_some_and(|w| w.api_error.is_some()) {
+                TabState::Waiting
+            } else if agent == Some(State::Working) {
+                TabState::Working
+            } else if work.is_some_and(|w| w.count > 0 || w.scheduled.is_some()) {
+                TabState::Background
+            } else if agent == Some(State::Done) {
+                TabState::Done
+            } else {
+                TabState::Idle
+            },
+        )
+    }
+
+    /// Its tabs marked as they reach their worktree, land and are seen,
+    /// unmarked as they leave the mode, and closed once landed and left,
+    /// one closed without your having seen it kept for the notifications.
+    fn autopilot_marks(&mut self, marks: &[Mark], mine: &[Mine]) {
+        for mark in marks {
+            let tab = match *mark {
+                Mark::Note(t, _)
+                | Mark::In(t)
+                | Mark::Land(t, _)
+                | Mark::Left(t)
+                | Mark::Landed(t, _)
+                | Mark::Seen(t) => t,
+                Mark::Close(t) => {
+                    if let Some(m) = mine.iter().find(|m| m.tab == t && !m.seen) {
+                        self.autopilot_closed_unseen(m);
+                    }
+                    self.autopilot_close_tab(t);
+                    continue;
+                }
+            };
+            let Some(t) = self.tabs.get_mut(&tab) else {
+                continue;
+            };
+            match mark {
+                Mark::Note(_, note_id) => {
+                    t.opts.insert(NOTE.into(), note_id.clone());
+                }
+                Mark::In(_) => {
+                    t.opts.insert(IN.into(), "1".into());
+                }
+                Mark::Land(_, true) => {
+                    t.opts.insert(LAND.into(), "1".into());
+                }
+                Mark::Land(_, false) => {
+                    t.opts.remove(LAND);
+                }
+                Mark::Landed(_, at) => {
+                    t.opts.insert(LEFT.into(), at.to_string());
+                }
+                Mark::Seen(_) => {
+                    t.opts.insert(SEEN.into(), "1".into());
+                }
+                Mark::Left(_) | Mark::Close(_) => {
+                    for option in MARKS {
+                        t.opts.remove(option);
+                    }
+                }
+            }
+            self.dirty_tab(tab);
+        }
+    }
+
+    /// A landed tab about to close unseen, kept in its file for the
+    /// notifications: "Closed <item>: landed <short hash>", the hash the
+    /// main clone's commit as its Claude's pane finds it there.
+    fn autopilot_closed_unseen(&mut self, m: &Mine) {
+        let panes = self
+            .tabs
+            .get(&m.tab)
+            .map(|t| t.layout.panes())
+            .unwrap_or_default();
+        let dir = self
+            .agents
+            .leader(&panes)
+            .map(|(p, _, _)| p)
+            .into_iter()
+            .chain(panes.iter().copied())
+            .find_map(|p| self.panes.get(&p)?.pane.cwd());
+        let hash = dir
+            .and_then(|d| head_of(&d))
+            .map(|h| h.chars().take(7).collect())
+            .unwrap_or_default();
+        let item = m.item.clone().unwrap_or_else(|| self.tab_label(m.tab));
+        let id = format!("{}@{}", m.tab.0, m.since);
+        let written = Mode::update(&paths::state_dir(), |mode| {
+            if mode.closed.iter().any(|c| c.id == id) {
+                return;
+            }
+            mode.closed.push(mode::Closed {
+                id,
+                item,
+                hash,
+                at: util::now_ms(),
+            });
+            let over = mode.closed.len().saturating_sub(mode::CLOSED_KEPT);
+            mode.closed.drain(..over);
+        });
+        match written {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+            }
+            Err(e) => eprintln!("autopilot: couldn't keep the tab it closed: {e}"),
+        }
+    }
+
+    /// The landed tabs it closed unseen, put away: the one with this id, or
+    /// every one.
+    pub fn autopilot_dismiss_closed(&mut self, id: Option<&str>) {
+        match Mode::update(&paths::state_dir(), |m| match id {
+            Some(id) => m.closed.retain(|c| c.id != id),
+            None => m.closed.clear(),
+        }) {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+            }
+            Err(e) => eprintln!("autopilot: couldn't save it: {e}"),
+        }
+    }
+
+    /// A landed tab closed: with Notes moved beside it (M-e), only its own
+    /// panes, so Notes, left alone, goes back to its tab and the tab closes
+    /// (`notes_orphan`); else the tab.
+    fn autopilot_close_tab(&mut self, tab: TabId) {
+        let Some(t) = self.tabs.get(&tab) else {
+            return;
+        };
+        let panes = t.layout.panes();
+        let notes = |p: &PaneId| {
+            self.panes
+                .get(p)
+                .and_then(|s| s.opts.get("@notes_pane"))
+                .is_some_and(|v| !v.is_empty() && v != "0")
+        };
+        if panes.iter().any(notes) {
+            let own: Vec<PaneId> = panes.iter().copied().filter(|p| !notes(p)).collect();
+            for p in own {
+                self.kill_pane(p);
+            }
+        } else {
+            self.kill_tab(tab);
+        }
+        eprintln!("autopilot: closed {tab}, landed");
+    }
+
+    /// The next item read again, off the task, for mission control's line.
+    fn autopilot_read_next(&mut self, job: Job, notes: PathBuf) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.autopilot.pilot.cancel();
+            return;
+        }
+        let tx = self.tx.clone();
+        let state = paths::state_dir();
+        tokio::task::spawn_blocking(move || {
+            let queue: Vec<String> = job
+                .items(&notes, &state)
+                .unwrap_or_default()
+                .into_iter()
+                .take(super::pilot::QUEUE_SHOWN)
+                .map(|i| i.text)
+                .collect();
+            let text = queue.first().cloned().unwrap_or_default();
+            let _ = tx.send(Event::Autopilot(AutopilotEvent::Next {
+                key: job.key,
+                text,
+                queue,
+            }));
+        });
+    }
+
+    /// The next item to open looked for, off the task.
+    fn autopilot_look(&mut self, job: Job, notes: PathBuf) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            self.autopilot.pilot.cancel();
+            return;
+        }
+        let state = paths::state_dir();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let found = job.find(&notes, &state, util::now_ms());
+            let _ = tx.send(Event::Autopilot(AutopilotEvent::Found {
+                found,
+                mtime: job.mtime,
+            }));
+        });
+    }
+
+    /// What the looks off the task found.
+    pub fn autopilot_event(&mut self, event: AutopilotEvent) {
+        match event {
+            AutopilotEvent::Next { key, text, queue } => {
+                let changed = self.autopilot.pilot.next.text != text
+                    || self.autopilot.pilot.next.queue != queue;
+                self.autopilot.pilot.next_read(key, text, util::now_ms());
+                self.autopilot.pilot.next.queue = queue;
+                if changed {
+                    self.autopilot_redraw();
+                }
+            }
+            AutopilotEvent::Kept { kept, followed } => self.autopilot_kept(kept, followed),
+            AutopilotEvent::Found { found, mtime } => {
+                let mode = Mode::read(&paths::state_dir());
+                let opened = self
+                    .autopilot
+                    .pilot
+                    .opened(&mode, found, mtime, util::now_ms());
+                if let Some(e) = opened.failed {
+                    eprintln!("autopilot: {e}");
+                }
+                if let Some(said) = opened.said {
+                    self.autopilot_say(&said);
+                }
+                if let Some(item) = opened.take {
+                    self.autopilot_open(&mode, item);
+                }
+                self.autopilot_redraw();
+            }
+        }
+    }
+
+    /// A tab for the item found, unless the mode was paused or stopped
+    /// meanwhile: in the session used last, in the background, marked as
+    /// the mode's.
+    fn autopilot_open(&mut self, mode: &Mode, item: Item) {
+        if !settings::is_on("autopilot") || !mode.on || mode.paused || self.away_now() {
+            return;
+        }
+        let Some(client) = self.latest_client() else {
+            return;
+        };
+        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item, &mode.target)
+        else {
+            return;
+        };
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.insert(OPENED.into(), util::now_secs().to_string());
+            t.opts.insert(ITEM.into(), item.text.clone());
+            if !mode.note_id.is_empty() {
+                t.opts.insert(NOTE.into(), mode.note_id.clone());
+            }
+        }
+        self.dirty_tab(tab);
+        self.autopilot
+            .pilot
+            .took(&mode.note_id, &item.text, util::now_ms());
+        eprintln!(
+            "autopilot: opened line {} of {} in {tab}",
+            item.line, mode.note
+        );
+        if mode.said.starts_with("Nothing left") {
+            self.autopilot_say("");
+        }
+    }
+
+    // ── What it says ────────────────────────────────────────────────────────
+
+    /// Its notification put away: what it said, forgotten.
+    pub fn autopilot_dismiss(&mut self) {
+        self.autopilot_say("");
+    }
+
+    /// What it has to say, kept in its file for the notifications; empty
+    /// for nothing.
+    fn autopilot_say(&mut self, said: &str) {
+        match Mode::update(&paths::state_dir(), |m| m.said = said.to_string()) {
+            Ok(mode) => {
+                self.autopilot_notices(&mode);
+                self.autopilot.mode = mode;
+            }
+            Err(e) => eprintln!("autopilot: couldn't save what it said: {e}"),
+        }
+    }
+
+    /// Its notifications, while the autopilot setting is on: what it said,
+    /// and each landed tab it closed without your seeing it; and each
+    /// landing its tabs made without asking, until dismissed, whatever the
+    /// setting says now.
+    fn autopilot_notices(&mut self, mode: &Mode) {
+        let on = settings::is_on("autopilot");
+        let items = if on && !mode.said.is_empty() {
+            vec![crate::items::Item::new("said", &mode.said).detail("autopilot")]
+        } else {
+            Vec::new()
+        };
+        self.set_notices("autopilot", items);
+        let closed = if on {
+            mode.closed
+                .iter()
+                .map(|c| {
+                    let mut item = crate::items::Item::new(&c.id, c.title())
+                        .detail("autopilot")
+                        .time(c.at);
+                    item.lines = vec![
+                        "Closed by autopilot once it landed, without your seeing it (Settings' Close a worked note's landed tabs); its item's Done: line in the note says what landed".to_string(),
+                    ];
+                    item
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.set_notices("landed", closed);
+        let autolanded = super::landed::read(&paths::state_dir())
+            .iter()
+            .map(|l| {
+                let mut item = crate::items::Item::new(&l.hash, l.title())
+                    .detail("without asking")
+                    .time(l.at);
+                let at = util::local_at_ms(l.at).strftime("%-I:%M %p").to_string();
+                item.lines = vec![format!(
+                    "Landed on the default branch without asking, as autopilot's \"Land without asking\" allows, at {at}"
+                )];
+                item.data = serde_json::json!({ "tab": l.tab });
+                item
+            })
+            .collect();
+        self.set_notices("autolanded", autolanded);
+    }
+
+    /// The landings made without asking put away: the one with this hash,
+    /// or every one.
+    pub fn autopilot_dismiss_autolanded(&mut self, hash: Option<&str>) {
+        if let Err(e) = super::landed::dismiss(&paths::state_dir(), hash) {
+            eprintln!("autopilot: couldn't put the landing away: {e}");
+        }
+        let mode = self.autopilot.mode.clone();
+        self.autopilot_notices(&mode);
+    }
+
+    /// The tab a landing without asking was made in, while it is open.
+    pub fn autopilot_landed_tab(&self, item: &crate::items::Item) -> Option<TabId> {
+        let tab: TabId = item.data.get("tab")?.as_str()?.parse().ok()?;
+        self.tabs.contains_key(&tab).then_some(tab)
+    }
+
+    /// Mission control drawn again wherever it is open, for its line.
+    fn autopilot_redraw(&mut self) {
+        for c in self.clients.values_mut() {
+            if c.overlays.find::<Mission>().is_some() {
+                c.dirty = true;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_and_dollars_as_typed() {
+        assert_eq!(whole("", 3), Some(3), "empty keeps what it was");
+        assert_eq!(whole("4", 3), Some(4));
+        assert_eq!(whole("4.0", 3), Some(4));
+        for bad in ["0", "-1", "2.5", "two"] {
+            assert_eq!(whole(bad, 3), None, "{bad}");
+        }
+        assert_eq!(dollars(""), Some(0.0), "empty for none");
+        assert_eq!(dollars("$20"), Some(20.0));
+        assert_eq!(dollars("7.5"), Some(7.5));
+        assert_eq!(dollars("-1"), None);
+        assert_eq!(dollars("lots"), None);
+    }
+}

@@ -1,104 +1,112 @@
 # Switchboard
 
-A terminal workspace for working with coding agents: tmux, Neovim, lazygit and a set of scripts, built around Claude Code. Every tab says what its agent is doing and whether it is waiting on you, one key takes you to the next one that needs you, and a ticket goes from idea to merged PR without leaving the keyboard.
+A terminal workspace for working with coding agents, built around Claude Code. Every tab says what its agent is doing and whether it is waiting on you, one key takes you to the next one that needs you, and a ticket goes from idea to merged PR without leaving the keyboard.
+
+Switchboard is its own terminal multiplexer: a server in the background owns every pane, so closing the terminal never stops an agent, and `switchboard` attaches to it again, as tmux did. The sidebar, mission control, the command palette, the PR and ticket views, a diff viewer that tells a change as a story, a notes app and a Slack relay for when you are away are built in. It is one program, `switchboard`.
 
 It is opinionated: the defaults are how it is meant to be used, and Settings (`M-p`, then Settings) turns off the parts you don't want.
 
 ## Requirements
 
-- macOS, with zsh as your shell. Linux isn't supported yet: the scripts use pbcopy, osascript, open and the Keychain, and `setup.sh` stops at its first check there.
-- [Homebrew](https://brew.sh)
-- A terminal that passes Option through as Alt and shows 24-bit color: [Ghostty](https://ghostty.org) (`brew install --cask ghostty`; setup links its config) or iTerm2. `setup.sh` makes Option act as Alt in Ghostty (a config of your own too), iTerm2 and Terminal, after asking, and says what to add for WezTerm, kitty or Alacritty; Terminal.app still has no 24-bit color.
-- [Claude Code](https://claude.com/claude-code) 2.1.280 or newer, which every tab runs: `curl -fsSL https://claude.ai/install.sh | bash`
+- Linux on x86_64 (another architecture builds from source), or macOS on Apple silicon or Intel. On Linux it uses the desktop's keyring, notifications and idle time where there are any, and does without them where there aren't.
+- [Claude Code](https://claude.com/claude-code), which the tabs run, 2.1.280 or later to load Switchboard as a plugin (an older one gets it in `~/.claude`, as before), and git.
+- A terminal with 24-bit color. On a Mac, Option has to act as Alt, since every `M-` key is Alt: in Ghostty, `macos-option-as-alt = true`; in iTerm2, Settings, Profiles, Keys, "Left Option key: Esc+"; in Terminal, Settings, Profiles, Keyboard, "Use Option as Meta key". `switchboard setup` offers to set it in Ghostty, Terminal and iTerm2. Pictures in notes need a terminal that draws kitty's graphics protocol, such as Ghostty or kitty.
 
-## Set up
+Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex each turn on a part of it when you have them; the [guide](docs/guide.md) says what each needs.
 
-```
-curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | bash
-```
-
-It clones `main` into `~/switchboard`, the same branch updates come from, and runs the guided `setup.sh` there. Or do the same by hand:
+## Install
 
 ```
-git clone https://github.com/cquinones100/switchboard.git ~/switchboard
-~/switchboard/setup.sh
+curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
 ```
 
-`setup.sh` checks what the workspace needs and asks before it installs anything or changes `~/.zshrc`: Homebrew's `tmux jq fzf gh glow lazygit neovim git-delta ripgrep`, Node through nvm, the MesloLGS NF font, the links for the tmux, Neovim and lazygit configs and the scripts in `bin/`, the worktree shell functions, Ghostty's config, and Neovim's plugins. Then it asks about the optional parts (Claude Code's hooks for tab states, the skills that ship with Switchboard such as `/wt`, `/shape` and `/review-loop`, this repo's whole Claude Code setup: its owner's skills, commands and hooks, linked in place of yours rather than merged with them, while your settings are merged and your CLAUDE.md kept; the git hooks) and lists what GitHub, Linear, the Slack relay, the PR image view (mermaid-cli), `/walkthrough` and `/deploy-test` (ffmpeg) and `/review-loop` (Codex, else Claude reviews) need. It ends with a list of anything left to do; run it again until it says Ready. Running it again any time changes only what isn't in place, and `./setup.sh --check` only reports.
+It downloads the newest release for this computer, refuses it unless it matches the SHA-256 published beside it, puts `switchboard` in `~/.local/bin` (saying how to add that to your PATH when it isn't there), and runs `switchboard setup`, which asks before it changes anything.
 
-Then start tmux:
+Or download a release yourself: each one on the repository's Releases page has `switchboard-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin` and `x86_64-apple-darwin`, with its `.sha256`. Unpack it, put `switchboard` on your PATH, and run `switchboard setup`.
+
+Or build it from a clone, with [rustup](https://rustup.rs) and a C compiler (the Rust it needs is pinned in `rust-toolchain.toml`, which rustup installs):
 
 ```
-tmux new-session -A -s main
+git clone https://github.com/cquinones100/switchboard.git
+cd switchboard
+cargo build --release
+install -m 755 target/release/switchboard ~/.local/bin/
+switchboard setup
 ```
+
+Then start it:
+
+```
+switchboard
+```
+
+`switchboard setup` puts in place what Claude Code needs for the workspace. Switchboard's hooks, which tell each tab what its Claude is doing, its instructions (how to read the tabs, the notes app) and the skills that ship with it (`/wt`, `/shape`, `/review-loop` and the rest) are a Claude Code plugin, `~/.local/share/switchboard/plugin`, which only the Claude in Switchboard's panes loads, so Claude elsewhere is as you set it up. The statusline and the permissions its skills run with, which a plugin can't carry, are merged into your own `~/.claude/settings.json` after asking, keeping a copy of the file before. With Settings' "Load Switchboard as a plugin" off, a Claude Code older than 2.1.280, or managed settings of your organization's that set `disableSideloadFlags`, setup puts the hooks, a `~/.claude/CLAUDE.md` import of Switchboard's part and the skills in `~/.claude` instead, for every Claude of yours, as earlier versions did; an install of an earlier version is asked once which it wants. Setup also offers to make Option act as Alt in a Mac's terminal, to tidy the links and `~/.zshrc` lines a tmux version of Switchboard left, and says which optional parts are missing (the GitHub and Linear sign-ins, Chrome, ffmpeg, Codex and the rest), each with what it is for. Run again, it changes only what isn't in place; `switchboard setup --check` only says what would change.
+
+As a plugin, a Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
 
 ## First keys
 
+`M` is Alt (Option on a Mac), and a capital letter is with Shift: `M-N` is Alt+Shift+n.
+
 | Key | What it does |
 |---|---|
-| `M-p` | Find any command by what it does, Settings included; what you picked after typing the same words comes first; the ⌘ Commands button in the status bar opens it too |
-| `M-/` | Every key, in mission control's Keys view: tmux's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a tmux key |
-| `M-a` | Go to the next tab that needs you, one waiting on you before one that finished, and last the notifications |
+| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line opens it too |
+| `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a workspace key |
+| `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
 | `M-A` | Go to the next idle tab, in the sidebar's Idle order |
-| `M-j` | Find a tab by typing its name |
-| `M-S-f` | Search your notes, Linear, GitHub and Slack at once |
-| `M-Space` | Mission control: every tab, the Work map, PRs, Settings |
+| `M-Space` | Mission control: every tab as a card, the Work map, PRs, CI, tickets, your day, Settings |
 | `M-t` | New tab running Claude, in a directory you pick |
+| `M-j` | Find a tab by typing its name |
+| `M-F` | Search your notes, Linear, GitHub and Slack at once |
 | `M-s` | Into the sidebar and back out |
-| `C-w h` `j` `k` `l` | To the pane on that side, and between Neovim's windows on the way; `M-Left`, `M-Down`, `M-Up` and `M-Right` do the same |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
-| `M-T` | This tab's whole title, which the sidebar and status line cut, in a box (`y` copies it) |
 | `M-f` | Pin the tab to the top of Needs you |
-| `M-v` / `M-d` | The branch's PR description / its diff, as GitHub shows them, with any changes not yet committed too, marked ● and listed in a last chapter (a box says so when there is nothing to show), its changes grouped into chapters that tell the change as a story, from the whole diff and its commit messages, with a note over each change worth one (`yS` copying it as Markdown, `]c` / `[c` between them, `]p` / `[p` a chapter at a time as if each were a commit, each of them saying why when there is no story, `E` narrowing or widening the file list, `ga` asking Haiku a question about the change, which reads the story, the diff and the repository to answer), the story told in the background for each new commit so it opens at once, and while one is being told, each chapter shown as Haiku names it (`t` shows its answer as it comes); `M-p`'s "Clear this tab's diff cache" drops the story, file order and PR base kept for the tab's branch, so the next `M-d` asks again (a story being told right now is kept) |
+| `M-T` | This tab's whole title, which the sidebar and status line cut, in a box (`y` copies it) |
+| `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
+| `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
+| `M-[` `M-]`, `M-1` … `M-9` | The previous or next tab, or a tab by number |
+| `M-w` | Close the pane, asking first when something runs in it |
+| `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |
+| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story, what isn't committed yet included, marked ● and listed last (`R` reads it again); `M-p`'s "Clear this tab's diff cache" makes the next one ask again |
+| `M-N` / `M-e` | Notes in its own tab / beside the pane you are in |
+| `M-b d` | Detach, leaving everything running; `switchboard` attaches again |
 
-`M` is Option. Tips in the top-right corner teach the rest the first time each would help. Menus and questions take a click too: one click takes an option or answers Yes or No, and a click outside a box closes it.
+`M-b` is the prefix for the rest, and `M-/` (or `M-b ?`) lists every key. Tips in the top-right corner teach the others the first time each would help. Menus and questions take a click too, and a click outside a box closes it.
 
-Vim's keys are the default, and you don't need to know them. Notes has a toolbar over each note, a button for each of its styles. Settings' Easy mode (off at first) lets Shift-arrows and the mouse select in Notes, typing replace a selection, and Cmd-S, Cmd-Z, Cmd-Shift-Z and Cmd-X save, undo, redo and cut there (through Switchboard's Ghostty config); it gives `M-d`'s diff a row of buttons for its keys, and both a line at the bottom naming the keys that work.
+Vim's keys are the default in Notes and the diff, and you don't need to know them: Notes has a toolbar over each note, and Settings' Easy mode lets Shift-arrows and the mouse select, typing replace a selection, and gives the diff a row of buttons for its keys.
 
 ## Staying up to date
 
-Each time tmux opens, and hourly after that, it checks GitHub for new commits and offers them in a popup that updates the clone and runs `setup.sh`. With the git hooks on, a `git pull` links whatever it added too, and so does a commit in the clone that adds a script. `M-p`'s "Update Switchboard" runs the setup even when there is nothing new, so a clone you pulled by hand gets set up too. To run the setup again yourself, say to set up something you turned down the first time, use `M-p`, "Run Switchboard's setup". "Check Switchboard's setup" says what isn't in place without changing anything (`./setup.sh --check`), and "Run a part of Switchboard's setup" runs or checks one part (`./setup.sh <part>`), picked from a list.
+A release keeps itself current: each time you attach, and hourly after that, the server looks for a newer release and offers it in a box, which downloads it, checks it, puts it in place of the binary and runs `switchboard setup` for what it brings, then offers to restart the workspace on it, which keeps every tab and what runs in it (`switchboard upgrade`). `switchboard update` does the same from a shell, and `M-p`'s "Update Switchboard" any time. A binary you built is left to you: `git pull`, `cargo build --release` and `switchboard setup` again. The skills, hooks and Switchboard's part of CLAUDE.md are compiled into the binary; the server writes a new build's plugin as it starts, and the setup takes them to `~/.claude` when Switchboard is set up there; the first time a new build attaches, it brings the parts you have set up up to date by itself, and `switchboard setup` says what it did.
 
 ## Making it yours
 
-Your own settings go in `~/.config/switchboard/`, which is never in this repository, so updates leave them be. Each file is read after Switchboard's own, so what it sets wins:
+Everything of your own is in `~/.config/switchboard/`, which nothing writes over but Settings, so an update leaves it be:
 
-| File | Read by |
+| File | What it holds |
 |---|---|
-| `tmux.conf` | tmux, at the end of its config |
-| `nvim.lua` | Neovim, at the end of its config |
-| `ghostty` | Ghostty, after its config |
-| `lazygit.yml` | lazygit, over its config, in panes tmux starts |
-| `CLAUDE.md` | Claude Code, your own rules, imported into `~/.claude/CLAUDE.md` |
-| `claude.json` | where your CLAUDE.md's rules come from, a file or a git repository |
-| `repos.json` | how each repository lands its work, through a PR or straight on its default branch, and a direct landing's tests, squash, review and command before the push |
-| `browser.json` | the Chrome profile each site's links open in (`hosts`), `awsapps.com` for the AWS login, and the `default` profile for any other site |
-| `linear.json` | your Linear workspace, the team and labels `/shape` files tickets with |
-| `slack-updates.json` | the channels the Slack view shows in full |
-| `slack-relay.json` | your Slack member ID, the one person the relay listens to |
-| `oncall.json`, `oncall-rules.md` | the channels `/oncall` watches and your team's rules |
-| `sidebar.json`, `sidebar-plugins/` | the sidebar's and mission control's sizes, and the plugins that load |
-| `trusted-dirs` | the directories whose own scripts may run |
+| `settings.json` | What you changed in Settings, only the settings that differ from their defaults; you may edit it by hand |
+| `keys.json` | Keys bound to other actions, or unbound |
+| `CLAUDE.md` | Your own Claude rules, imported into `~/.claude/CLAUDE.md` |
+| `claude.json` | Where your rules come from instead: another file, or a git repository of yours |
+| `browser.json` | The Chrome profile each site's links open in, and the default one |
+| `linear.json` | Your Linear workspace, and the team and labels `/shape` files tickets with |
+| `slack-updates.json` | The Slack channels the Slack view shows in full |
+| `slack-relay.json` | Your Slack member ID, the one person the relay listens to |
+| `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules |
+| `sidebar.json`, `sidebar-plugins/` | The sidebar's and mission control's sizes, and the plugins that add views |
+| `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests, squash, review and command before the push, and what a change landed there needs to take effect |
+| `leak-check.txt` | Your organization's and company's names, usernames and internal hosts, one a line, which `switchboard leak-check` finds in what a landing would push to a public repository |
+| `trusted-dirs` | The directories whose own scripts may run |
+| `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |
 
-Switchboard's skills (`/wt`, `/shape`, `/review-loop` and the rest), the hooks that show each tab's state and its instructions for Claude (`claude/switchboard.md`: the tabs, the notes app) are a plugin, `claude/plugin`, which tmux hands every pane it starts (`CLAUDE_CODE_PLUGIN_DIRS`), so they load in Switchboard's tabs and in no other Claude session on your Mac: a Claude outside tmux works without them, and the Slack relay doesn't hear of it. A plugin can't carry a statusline or permissions, so `setup.sh` adds those (the statusline that gives the sidebar each session's context use, and the permissions its loops run with) to your `~/.claude/settings.json` and leaves the rest of it yours. An install from before, with them written into `~/.claude`, is asked once whether to move them; with Settings' "Load Switchboard as a plugin" off, `setup.sh` writes them into `~/.claude` instead, the hooks into `settings.json`, the instructions imported into `~/.claude/CLAUDE.md` and the skills linked one by one into `~/.claude/skills`, beside your own, a skill of yours with the same name kept rather than Switchboard's. Your `~/.claude/CLAUDE.md` imports your own rules, from `~/.config/switchboard/CLAUDE.md`, or from where `~/.config/switchboard/claude.json` says: a file (`{"path": "~/somewhere/CLAUDE.md"}`) or a git repository of yours (`{"repo": "<url>", "file": "CLAUDE.md"}`, its CLAUDE.md at the root or in a folder found without `file`, cloned, signing in through `gh` when it is on GitHub or a gist, and pulled each hour with Switchboard's update check and on every setup run), so you can keep your rules in a repository of your own and share them across machines. Settings' "Your CLAUDE.md" sets it for you, and `./setup.sh claude_md` writes it again.
+Settings lists each setting in these files under the file's name, and Enter changes it there. What Switchboard keeps for itself (the socket, the saved layout, tips shown, what it counted) is in `~/.local/state/switchboard/`, its caches in `~/.cache/switchboard/` and `~/.cache/wt-revive/`, and what setup writes for Claude Code (Switchboard's plugin, its part of your CLAUDE.md when that imports it, the clone of your rules' repository) in `~/.local/share/switchboard/`.
 
-Settings (`M-p`) keeps what you change there in the same folder, as `settings.json`, and lists every setting in the files above too, under each file's name: Enter types a value in, or opens a whole file in Neovim. Setup moves these files here from where they were kept before (`~/.config/worktree-from-ticket`, `slack-relay`, `slack-updates`, `oncall`, `tmux-sidebar`, `aws-login`).
+## More
 
-## Where things are
-
-| Directory | What is in it |
-|---|---|
-| `tmux/` | `tmux.conf`, the tab states, sidebar launcher, palette, settings and tips |
-| `lib/sidebar/`, `bin/tmux-sidebar` | The sidebar and mission control |
-| `bin/` | The scripts: worktrees (`wt`, `wtpr`, `wtb`, `wtr`, `wtn`), the notes app, the Slack relay, and more; see [bin/README.md](bin/README.md) |
-| `nvim/`, `notes/` | Neovim's config, and the notes app built on it |
-| `claude/` | Claude Code's settings, hooks, statusline and skills |
-| `lazygit/`, `ghostty/`, `karabiner/`, `pgcli/` | Those tools' configs |
-| `test/` | `node --test test/*.test.js`, against a throwaway tmux and a temporary home |
-
-[bin/README.md](bin/README.md) describes every script and feature in full.
+[docs/guide.md](docs/guide.md) describes every feature, key and command. [ARCHITECTURE.md](ARCHITECTURE.md) describes the code, and [CLAUDE.md](CLAUDE.md) how it is worked on.
 
 ## Contributing
 
-Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's Mac: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (setup, hooks, Claude's settings and skills, packages) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard-try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `pr-risk` and `switchboard-try --sealed` in [bin/README.md](bin/README.md).
+Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's computer: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (git's hooks, setup, Claude's settings and skills, build scripts, crates) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `switchboard pr-risk` and `switchboard try --sealed` in [the guide](docs/guide.md#someone-elses-pr).

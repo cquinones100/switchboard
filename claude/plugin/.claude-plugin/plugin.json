@@ -1,4 +1,0 @@
-{
-  "name": "switchboard",
-  "description": "Switchboard's skills, its hooks that show each Claude session's state in tmux, and its instructions, loaded only in Switchboard's tmux panes through CLAUDE_CODE_PLUGIN_DIRS"
-}
