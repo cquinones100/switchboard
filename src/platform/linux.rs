@@ -399,13 +399,19 @@ pub fn reveal(file: &std::path::Path) -> Result<()> {
     open(&folder.to_string_lossy())
 }
 
-/// What Windows PowerShell runs under WSL for the clipboard's picture: the
-/// image there (a screenshot, a picture copied in a browser) saved as a
-/// PNG and written to stdout as it is, past PowerShell's text pipeline, so
-/// nothing changes a byte on its way to WSL; it exits 1 when there is none.
-/// The clipboard wants a single-threaded apartment, which `-Sta` gives.
+/// What Windows PowerShell runs under WSL for the clipboard's picture,
+/// saved as a PNG and written to stdout as it is, past PowerShell's text
+/// pipeline, so nothing changes a byte on its way to WSL; it exits 1 when
+/// there is none. A picture file copied in Explorer is read from the file
+/// itself, whole and with its transparency (Explorer puts only the file
+/// there, or a bitmap of it beside it); otherwise the image on the
+/// clipboard is taken (a screenshot, a picture copied in a browser). The
+/// clipboard wants a single-threaded apartment, which `-Sta` gives.
 const WINDOWS_CLIPBOARD_PNG: &str = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; \
-     $image = [System.Windows.Forms.Clipboard]::GetImage(); \
+     $image = $null; \
+     foreach ($file in [System.Windows.Forms.Clipboard]::GetFileDropList()) { \
+     try { $image = [System.Drawing.Image]::FromFile($file); break } catch {} }; \
+     if ($image -eq $null) { $image = [System.Windows.Forms.Clipboard]::GetImage() }; \
      if ($image -eq $null) { exit 1 }; \
      $png = New-Object System.IO.MemoryStream; \
      $image.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); \
