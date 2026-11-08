@@ -17,7 +17,7 @@ Nothing else has to be installed. GitHub, Linear, the calendar, Slack and Codex 
 ## Install
 
 ```
-curl -fsSL https://raw.githubusercontent.com/cooljacob204/switchboard/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
 ```
 
 It downloads the newest release for this computer, refuses it unless it matches the SHA-256 published beside it, puts `switchboard` in `~/.local/bin` (saying how to add that to your PATH when it isn't there), and runs `switchboard setup`, which asks before it changes anything.
@@ -27,7 +27,7 @@ Or download a release yourself: each one on the repository's Releases page has `
 Or build it from a clone, with [rustup](https://rustup.rs) and a C compiler (the Rust it needs is pinned in `rust-toolchain.toml`, which rustup installs):
 
 ```
-git clone https://github.com/cooljacob204/switchboard.git
+git clone https://github.com/cquinones100/switchboard.git
 cd switchboard
 cargo build --release
 install -m 755 target/release/switchboard ~/.local/bin/
