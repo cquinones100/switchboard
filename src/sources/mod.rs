@@ -76,13 +76,24 @@ pub struct TabInfo {
     pub path: Option<PathBuf>,
     /// Its branch's PR, from the tab names' lookup.
     pub pr: Option<u64>,
-    /// The GitHub repository its directory belongs to.
+    /// The repository that PR is in, where the lookup found it; `None` when
+    /// only its number is known (a `wtpr` directory's), its origin's then.
+    pub pr_in: Option<Repo>,
+    /// The GitHub repository its directory belongs to: its origin's.
     pub repo: Option<Repo>,
     /// What its PR is asked for by, when it leads to one.
     pub key: Option<PrKey>,
     /// Where it works, for the landing queue: its directory, then its panes'
     /// (Notes, which M-e may have put beside it and focused, left out).
     pub dirs: Vec<PathBuf>,
+}
+
+impl TabInfo {
+    /// The repository its PR is in: where the lookup found it, else its
+    /// origin.
+    pub fn pr_repo(&self) -> Option<&Repo> {
+        self.pr_in.as_ref().or(self.repo.as_ref())
+    }
 }
 
 impl Default for TabInfo {
@@ -93,6 +104,7 @@ impl Default for TabInfo {
             name: String::new(),
             path: None,
             pr: None,
+            pr_in: None,
             repo: None,
             key: None,
             dirs: Vec::new(),

@@ -390,6 +390,7 @@ impl Server {
                     name: self.tab_label(*id),
                     path,
                     pr: self.tab_pr(*id),
+                    pr_in: self.tab_pr_repo(*id).cloned(),
                     repo: None,
                     key: None,
                     dirs,
@@ -413,7 +414,7 @@ impl Server {
                 &tab.name,
                 tab.path.as_deref(),
                 tab.pr,
-                tab.repo.as_ref(),
+                tab.pr_repo(),
                 &mut origin,
             );
         }

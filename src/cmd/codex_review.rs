@@ -538,9 +538,11 @@ fn ensure_clean() -> Reviewed<()> {
 // ── The pull request ────────────────────────────────────────────────────────
 
 /// The PR for the branch, which carries both the description and the branch
-/// it targets, looked for in the repository gh would ask (`github::repo_of`:
-/// the one `gh repo set-default` named, else the project an `upstream`
-/// remote names when origin is a fork). Without one the review still runs,
+/// it targets, looked for as the tab names look (`github::branch_pr`: in the
+/// repository `gh repo set-default` named, else in origin and the project an
+/// `upstream` remote names, origin's winning); a number given with `--pr` is
+/// one in the repository gh would ask (`github::repo_of`: the default, else
+/// upstream when origin is a fork). Without one the review still runs,
 /// the prompt saying so and the base falling back to origin's default. Only
 /// a repository GitHub doesn't have counts as having none; a failure to ask
 /// must not quietly turn into a review against the wrong base. A PR named
@@ -569,15 +571,13 @@ fn pull_request(root: &Path, named: Option<&str>) -> Reviewed<Option<PrDetails>>
         };
     }
     let found = util::block_on(async {
-        let repo = match github::repo_of(root).await {
-            Ok(repo) => repo,
-            // GitHub couldn't be asked whether origin is a fork.
+        let (repo, pr) = match github::branch_pr(root, source).await {
+            Ok(Some(found)) => found,
+            Ok(None) => return Ok(None),
+            // GitHub couldn't be asked.
             Err(e) if crate::net::kind_of(&e).is_some() => return Err(e),
             // Not on GitHub: there is no PR to find.
             Err(_) => return Ok(None),
-        };
-        let Some(pr) = github::pr_for_branch(root, source).await? else {
-            return Ok(None);
         };
         worktree::pr_details(&repo, pr.number, source).await
     });

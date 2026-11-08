@@ -6,6 +6,12 @@
 //! `restore`), as the scripts kept them in files there, so a restart shows
 //! them at once rather than asking GitHub and Linear again for every tab.
 //!
+//! A branch's PR is looked for where `github::branch_pr` looks: in origin
+//! and, in a fork's clone, the project its `upstream` remote names, so a PR
+//! opened from your fork against the project is the tab's too. The
+//! repository it was found in is kept with its number, so what the sidebar
+//! asks of it (`sources::prs`) is asked of that repository.
+//!
 //! A directory's answer is kept while its branch stays the one it was
 //! worked out on: ten minutes once it has a PR, whose number never changes,
 //! one minute before, about as often as a branch with no PR is asked about
@@ -33,7 +39,8 @@ use serde_json::{Value, json};
 use super::color::{self, Rgb};
 use super::git::{self, GitPlace};
 use super::label;
-use crate::integrations::{github, linear};
+use crate::integrations::github::{self, Repo};
+use crate::integrations::linear;
 use crate::{net, settings};
 
 /// How long a directory's answer holds once it has a PR, and before.
@@ -112,6 +119,18 @@ pub struct Facts {
     pub label: String,
     /// Its branch's pull request.
     pub pr: Option<u64>,
+    /// The repository that PR is in, where its lookup found it; `None` for
+    /// a `wtpr` directory's number, or one kept by a build that didn't say,
+    /// which is its directory's origin's.
+    pub pr_repo: Option<Repo>,
+}
+
+/// A branch's PR as its lookup found it: its number, and the repository it
+/// is in (`None` for one kept by a build before that said, asked again).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BranchPr {
+    pub number: u64,
+    pub repo: Option<Repo>,
 }
 
 struct Kept {
@@ -162,7 +181,7 @@ pub enum Answer {
     Pr {
         repo: PathBuf,
         branch: String,
-        found: Result<Option<u64>, String>,
+        found: Result<Option<BranchPr>, String>,
     },
     Title {
         id: String,
@@ -175,8 +194,11 @@ impl Ask {
     pub async fn run(self) -> Answer {
         match self {
             Ask::Pr { dir, repo, branch } => {
-                let found = match github::pr_for_branch(&dir, "tab name: PR").await {
-                    Ok(pr) => Ok(pr.map(|p| p.number)),
+                let found = match github::branch_pr(&dir, "tab name: PR").await {
+                    Ok(pr) => Ok(pr.map(|(repo, p)| BranchPr {
+                        number: p.number,
+                        repo: Some(repo),
+                    })),
                     // A service's failure keeps what was known; anything else
                     // (no origin, a remote not on GitHub) is a definite "no
                     // PR", as gh failing was to window-pr.sh.
@@ -204,7 +226,7 @@ impl Ask {
 #[derive(Default)]
 pub struct Names {
     kept: HashMap<PathBuf, Kept>,
-    prs: HashMap<(PathBuf, String), Known<Option<u64>>>,
+    prs: HashMap<(PathBuf, String), Known<Option<BranchPr>>>,
     titles: HashMap<String, Known<Option<String>>>,
     switches: Switches,
     switches_read: Option<Instant>,
@@ -310,7 +332,10 @@ impl Names {
         let pr = if !switches.prs() {
             None
         } else if let Some(n) = github::pr_number_from_dir(dir) {
-            Some(n)
+            Some(BranchPr {
+                number: n,
+                repo: None,
+            })
         } else {
             place.filter(|p| p.on_branch()).and_then(|p| {
                 // Keyed on the repository rather than the worktree, so a
@@ -329,10 +354,19 @@ impl Names {
                         branch: p.branch.clone(),
                     });
                 }
-                known.value
+                known.value.clone()
             })
         };
-        Facts { color, label, pr }
+        let (pr, pr_repo) = match pr {
+            Some(found) => (Some(found.number), found.repo),
+            None => (None, None),
+        };
+        Facts {
+            color,
+            label,
+            pr,
+            pr_repo,
+        }
     }
 
     /// Takes a lookup's answer in. Gives whether it changed what is known,
@@ -383,12 +417,17 @@ impl Names {
             .prs
             .iter()
             .filter_map(|((repo, branch), known)| {
-                Some(json!({
+                let found = known.value.as_ref()?;
+                let mut entry = json!({
                     "repo": repo.to_string_lossy(),
                     "branch": branch,
-                    "pr": known.value?,
+                    "pr": found.number,
                     "until": until(known.next),
-                }))
+                });
+                if let Some(at) = &found.repo {
+                    entry["in"] = json!(at.to_string());
+                }
+                Some(entry)
             })
             .collect();
         let mut titles: Vec<Value> = self
@@ -425,10 +464,20 @@ impl Names {
             ) else {
                 continue;
             };
+            // One kept without the repository it is in, by a build before
+            // that said, shows at once and is asked about again now.
+            let at = entry
+                .get("in")
+                .and_then(Value::as_str)
+                .and_then(github::parse_name_with_owner);
+            let next = if at.is_some() { next } else { now };
             self.prs
                 .entry((PathBuf::from(repo), branch.to_string()))
                 .or_insert(Known {
-                    value: Some(pr),
+                    value: Some(BranchPr {
+                        number: pr,
+                        repo: at,
+                    }),
                     next,
                     asked: None,
                 });
@@ -491,6 +540,13 @@ mod tests {
         (names, now)
     }
 
+    fn found(number: u64, repo: &str) -> Result<Option<BranchPr>, String> {
+        Ok(Some(BranchPr {
+            number,
+            repo: github::parse_name_with_owner(repo),
+        }))
+    }
+
     #[test]
     fn what_was_found_is_kept_across_a_restart_until_it_would_be_asked_again() {
         let now = Instant::now();
@@ -499,7 +555,7 @@ mod tests {
             Answer::Pr {
                 repo: PathBuf::from("/r/.git"),
                 branch: "eng-42".into(),
-                found: Ok(Some(12)),
+                found: found(12, "acme/upstream"),
             },
             now,
         );
@@ -519,6 +575,7 @@ mod tests {
         );
         let saved = names.saved(now, 1_000);
         assert_eq!(saved["prs"][0]["pr"], 12);
+        assert_eq!(saved["prs"][0]["in"], "acme/upstream");
         assert_eq!(saved["prs"][0]["until"], 1_000 + 24 * 3600);
         assert_eq!(
             saved["titles"].as_array().unwrap().len(),
@@ -531,7 +588,7 @@ mod tests {
         let mut again = Names::default();
         again.restore(&saved, later, 1_000 + 3600);
         let pr = &again.prs[&(PathBuf::from("/r/.git"), "eng-42".to_string())];
-        assert_eq!(pr.value, Some(12));
+        assert_eq!(pr.value, found(12, "acme/upstream").unwrap());
         assert!(pr.next > later + Duration::from_secs(22 * 3600));
         assert_eq!(
             again.titles["ENG-42"].value.as_deref(),
@@ -541,6 +598,25 @@ mod tests {
         let mut stale = Names::default();
         stale.restore(&saved, later, 1_000 + 25 * 3600);
         assert!(stale.prs.is_empty() && stale.titles.is_empty());
+
+        // One a build before kept, which didn't say which repository it is
+        // in, shows at once and is asked about again now.
+        let mut older = saved.clone();
+        older["prs"][0].as_object_mut().unwrap().remove("in");
+        let mut again = Names::default();
+        again.restore(&older, later, 1_000 + 3600);
+        let pr = again
+            .prs
+            .get_mut(&(PathBuf::from("/r/.git"), "eng-42".to_string()))
+            .unwrap();
+        assert_eq!(
+            pr.value,
+            Some(BranchPr {
+                number: 12,
+                repo: None
+            })
+        );
+        assert!(pr.due(later));
     }
 
     #[test]
@@ -587,12 +663,17 @@ mod tests {
         let pr = Answer::Pr {
             repo: repo_dir.clone(),
             branch: "eng-42-fix-login".into(),
-            found: Ok(Some(12)),
+            found: found(12, "acme/app"),
         };
         assert!(names.answer(pr, now));
         let (facts, asks) = names.facts(&dir, now);
         assert_eq!(facts.label, "ENG-42: Fix the login");
         assert_eq!(facts.pr, Some(12));
+        assert_eq!(
+            facts.pr_repo.map(|r| r.to_string()).as_deref(),
+            Some("acme/app"),
+            "with the repository it was found in"
+        );
         assert!(asks.is_empty());
 
         // A failure keeps what was known.
@@ -670,7 +751,7 @@ mod tests {
         assert!(git(&dir, &["checkout", "-q", "-b", "someone-fix"]));
         let (mut names, now) = names(Switches::default());
         let (facts, asks) = names.facts(&dir, now);
-        assert_eq!(facts.pr, Some(77));
+        assert_eq!((facts.pr, facts.pr_repo), (Some(77), None));
         assert!(asks.is_empty());
     }
 

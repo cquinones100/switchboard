@@ -152,9 +152,11 @@ pub fn elsewhere(name: &str, branch: &str) -> bool {
     matches!((named, ours), (Some(n), Some(o)) if n != o)
 }
 
-/// What a tab's PR is asked for by: its PR in its repository, else a gone
-/// worktree's branch, unless its name is about another ticket. `origin` reads
-/// a directory's repository (the server's cache of `origin_of`).
+/// What a tab's PR is asked for by: its PR in the repository it is in
+/// (`repo`: where the tab names' lookup found it, else the tab's origin),
+/// else a gone worktree's branch, unless its name is about another ticket.
+/// `origin` reads a directory's repository (the server's cache of
+/// `origin_of`).
 pub fn key_of(
     name: &str,
     path: Option<&Path>,
