@@ -35,11 +35,17 @@ fn an_item_added_is_said_once_settled_and_the_note_going_is_said_too() {
         }
     });
     std::thread::sleep(Duration::from_millis(150));
+    // Saved as the notes app saves (`util::write_atomic`): written beside
+    // it and moved into its place, so a look at it never finds it emptied
+    // half way through a write, which would read as its items all gone and
+    // then all new.
+    let saving = tmp.path().join("Work.md.saving");
     std::fs::write(
-        &note,
+        &saving,
         "# Work\n\n- [ ] already here\n- [ ] something new  \n- [ ] \n",
     )
     .unwrap();
+    std::fs::rename(&saving, &note).unwrap();
     let line = rx.recv_timeout(Duration::from_secs(5)).expect("a line");
     assert_eq!(line, "NEW: something new");
     std::fs::remove_file(&note).unwrap();
