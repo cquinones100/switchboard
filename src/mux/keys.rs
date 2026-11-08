@@ -95,6 +95,10 @@ pub enum Action {
     WorkOnBranch,
     /// Work on a pull request in a new tab running `wtpr`.
     WorkOnPr,
+    /// Review a contributor's open PR in a new tab in the main clone running
+    /// `/review-pr <number>`, listed only in a repository with that project
+    /// skill (src/cmd/work.rs).
+    ReviewPr,
     /// Work on a note's checklist items, each in a new tab running `wtn` (M-I).
     WorkOnNote,
     /// Carry on shaping Linear tickets, each in a new tab running `shape`.
@@ -230,6 +234,7 @@ impl Action {
             "work-on-tickets" => Action::WorkOnTickets,
             "work-on-branch" => Action::WorkOnBranch,
             "work-on-pr" => Action::WorkOnPr,
+            "review-pr" => Action::ReviewPr,
             "work-on-note" => Action::WorkOnNote,
             "continue-shaping" => Action::ContinueShaping,
             "shape-note" => Action::ShapeNote,
@@ -299,6 +304,7 @@ impl Action {
             Action::WorkOnTickets => "work-on-tickets".into(),
             Action::WorkOnBranch => "work-on-branch".into(),
             Action::WorkOnPr => "work-on-pr".into(),
+            Action::ReviewPr => "review-pr".into(),
             Action::WorkOnNote => "work-on-note".into(),
             Action::ContinueShaping => "continue-shaping".into(),
             Action::ShapeNote => "shape-note".into(),
@@ -378,6 +384,7 @@ impl Action {
                 "Start work on a branch, new or existing, in a new tab (wtb)".into()
             }
             Action::WorkOnPr => "Start work on a PR in a new tab (wtpr)".into(),
+            Action::ReviewPr => "Review a contributor's PR in a new tab (/review-pr)".into(),
             Action::WorkOnNote => "Start work on a note's checklist items in new tabs (wtn)".into(),
             Action::ContinueShaping => "Continue shaping Linear tickets, each in a new tab".into(),
             Action::ShapeNote => "Shape a note's checklist items as Linear tickets".into(),
@@ -445,6 +452,7 @@ impl Action {
             Action::WorkOnTickets => &["linear", "ticket", "worktree", "new"],
             Action::WorkOnBranch => &["git", "branch", "worktree", "new"],
             Action::WorkOnPr => &["github", "pr", "worktree", "new"],
+            Action::ReviewPr => &["github", "pr", "review"],
             Action::WorkOnNote => &["notes", "worktree", "new"],
             Action::ContinueShaping => &["linear", "ticket", "shape"],
             Action::ShapeNote => &["notes", "linear", "shape"],
@@ -522,6 +530,7 @@ impl Action {
             Action::ToggleTheme,
             Action::ToggleSidebar,
             Action::WorkOnPr,
+            Action::ReviewPr,
             Action::ContinueShaping,
             Action::ShapeNote,
             Action::ShapeNewTicket,

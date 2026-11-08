@@ -9,6 +9,14 @@
 //!   headers script. Each is removed; a link that still leads somewhere, or
 //!   into anything but a Switchboard clone, is yours and left alone. (The
 //!   skills part replaces the old links in `~/.claude/skills` itself.)
+//!   One Claude Code still uses is put back as a file instead: a link that
+//!   `~/.claude/settings.json` names (a hook's command, `otelHeadersHelper`;
+//!   not the statusline, which the `claude` part moves onto `switchboard
+//!   statusline`), and `~/.claude/commands`, which Claude reads by
+//!   itself, are each replaced with a copy of what they led to, taken from
+//!   the clone's history (the commit before the one that removed it). Removed
+//!   instead, the guard hooks, the OTel headers and the commands would stop
+//!   without a word. One that can't be found there is left alone, and said.
 //! - The lines setup.sh added to `~/.zshrc`, `eval "$(worktree-from-ticket
 //!   init zsh)"` and the rest, with the comments it wrote above them: each
 //!   is taken out, since every tab, menu and skill that runs a worktree
@@ -32,8 +40,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use regex::Regex;
 
-use super::{Report, home_tilde, is_link, stamp};
-use crate::{paths, util};
+use serde_json::Value;
+
+use super::{Report, claude_settings, home_tilde, is_link, stamp};
+use crate::{paths, util, worktree};
 
 /// The worktree commands setup.sh's `~/.zshrc` lines ran by their scripts'
 /// names.
@@ -76,26 +86,191 @@ fn rc_files() -> Vec<PathBuf> {
 /// version's, or the Rust version's, which has no such files), or is gone
 /// and was named as a clone is.
 pub fn dead_clone_link(link: &Path) -> bool {
+    clone_target(link).is_some()
+}
+
+/// The clone a link leading nowhere into its `bin/`, `tmux/` or `claude/`
+/// led into, and the path it led to inside it (`claude/hooks/enforce.sh`).
+fn clone_target(link: &Path) -> Option<(PathBuf, PathBuf)> {
     if !is_link(link) || link.exists() {
-        return false;
+        return None;
     }
-    let Ok(target) = fs::read_link(link) else {
-        return false;
-    };
+    let target = fs::read_link(link).ok()?;
     // A relative link leads from the folder it is in.
     let target = match link.parent() {
         Some(dir) => dir.join(&target),
         None => target,
     };
     let parts: Vec<_> = target.components().collect();
-    (1..parts.len()).any(|i| {
+    (1..parts.len()).find_map(|i| {
         let name = parts[i].as_os_str();
         if name != "bin" && name != "tmux" && name != "claude" {
-            return false;
+            return None;
         }
         let clone: PathBuf = parts[..i].iter().collect();
-        is_clone(&clone)
+        is_clone(&clone).then(|| (clone, parts[i..].iter().collect()))
     })
+}
+
+/// Why Claude Code still uses a link setup.sh made into `~/.claude`, or
+/// `None` when nothing does: `commands/`, which Claude reads by itself,
+/// and any link whose path a string in `~/.claude/settings.json` names
+/// (a hook's command, `otelHeadersHelper`), as `~/`,
+/// `$HOME/` or in full. The `hooks` folder as one link counts when a
+/// string names anything in it. Permissions are left out, since allowing a
+/// command doesn't run it. Settings that can't be read (`None`) may run any
+/// link in `~/.claude`, so each counts.
+fn still_used(link: &Path, settings: Option<&Value>) -> Option<&'static str> {
+    let claude = paths::claude_dir();
+    if link == claude.join("commands") {
+        return Some("Claude Code reads it");
+    }
+    // The `claude` part moves a statusline running it onto `switchboard
+    // statusline`, but only while the script isn't a file of yours, which a
+    // copy put back would be.
+    if link == claude.join("statusline-command.sh") {
+        return None;
+    }
+    let Some(settings) = settings else {
+        return link
+            .starts_with(&claude)
+            .then_some("~/.claude/settings.json can't be read, so it may run it");
+    };
+    let rest = link.strip_prefix(paths::home()).ok()?.to_string_lossy();
+    let full = link.to_string_lossy();
+    let mut names = [
+        format!("~/{rest}"),
+        format!("$HOME/{rest}"),
+        format!("${{HOME}}/{rest}"),
+        full.into_owned(),
+    ];
+    if link == claude.join("hooks") {
+        names.iter_mut().for_each(|n| n.push('/'));
+    }
+    let mut strings = Vec::new();
+    if let Value::Object(map) = settings {
+        for (key, value) in map {
+            if key != "permissions" {
+                collect_strings(value, &mut strings);
+            }
+        }
+    }
+    let named = strings.iter().any(|s| {
+        names.iter().any(|n| {
+            s.match_indices(n.as_str()).any(|(at, _)| {
+                // Not a longer name that starts the same.
+                s[at + n.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| n.ends_with('/') || !(c.is_alphanumeric() || "._-".contains(c)))
+            })
+        })
+    });
+    named.then_some("~/.claude/settings.json runs it")
+}
+
+fn collect_strings<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    match value {
+        Value::String(s) => out.push(s),
+        Value::Array(list) => list.iter().for_each(|v| collect_strings(v, out)),
+        Value::Object(map) => map.values().for_each(|v| collect_strings(v, out)),
+        _ => {}
+    }
+}
+
+/// A file from a clone's history: its path below the link, whether it runs,
+/// and what it holds.
+type Held = (PathBuf, bool, Vec<u8>);
+
+/// What `rel` (a file or a folder) held in `clone` before it was removed,
+/// each file with its path below `rel`, or `None` when the clone's history
+/// doesn't have it. Each file is taken from the commit before the last one
+/// that removed it, since a folder's files may have gone in different
+/// commits; a move counts as a removal (`--no-renames`), as the file is gone
+/// from where the link led either way.
+fn held_in_history(clone: &Path, rel: &Path) -> Option<Vec<Held>> {
+    let rel_str = rel.to_str()?;
+    let removed = worktree::git_at(
+        clone,
+        &[
+            "log",
+            "--no-renames",
+            "--diff-filter=D",
+            "--name-only",
+            "--format=",
+            "-z",
+            "--",
+            rel_str,
+        ],
+    )
+    .ok()?;
+    let mut files: Vec<&str> = removed
+        .split(['\0', '\n'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    files.sort();
+    files.dedup();
+    let mut held = Vec::new();
+    for file in files {
+        // Only plain names below `rel`, so nothing lands outside the link.
+        let below = Path::new(file).strip_prefix(rel).ok()?.to_path_buf();
+        if !below
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let commit = worktree::git_at(
+            clone,
+            &[
+                "log",
+                "-1",
+                "--no-renames",
+                "--diff-filter=D",
+                "--format=%H",
+                "--",
+                file,
+            ],
+        )
+        .ok()
+        .filter(|h| !h.is_empty())?;
+        let entry =
+            worktree::git_at(clone, &["ls-tree", &format!("{commit}^"), "--", file]).ok()?;
+        let (meta, _) = entry.split_once('\t')?;
+        let mut meta = meta.split(' ');
+        let (mode, kind, object) = (meta.next()?, meta.next()?, meta.next()?);
+        if kind != "blob" || mode == "120000" {
+            continue;
+        }
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(clone)
+            .args(["cat-file", "blob", object])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        held.push((below, mode == "100755", out.stdout));
+    }
+    (!held.is_empty()).then_some(held)
+}
+
+/// Puts what a link led to in its place, as files of its own.
+fn put_back(link: &Path, held: &[Held]) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let shown = home_tilde(link);
+    fs::remove_file(link).with_context(|| format!("can't remove {shown}"))?;
+    for (below, runs, bytes) in held {
+        let path = if below.as_os_str().is_empty() {
+            link.to_path_buf()
+        } else {
+            link.join(below)
+        };
+        util::write_atomic(&path, bytes)
+            .with_context(|| format!("can't write {}", home_tilde(&path)))?;
+        let mode = if *runs { 0o755 } else { 0o644 };
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 /// A Switchboard clone: the tmux version's (setup.sh and tmux.conf), the
@@ -240,7 +415,30 @@ pub fn rc_unshadowed(text: &str) -> Option<String> {
 
 /// The part.
 pub fn run(r: &mut Report) -> Result<()> {
+    let settings = claude_settings::as_claude_reads();
+    let mut left = Vec::new();
     for link in dead_links() {
+        if let Some(why) = still_used(&link, settings.as_ref()) {
+            let shown = home_tilde(&link);
+            let Some((clone, rel)) = clone_target(&link) else {
+                continue;
+            };
+            let Some(held) = held_in_history(&clone, &rel) else {
+                left.push(format!(
+                    "{shown} leads to {}, which isn't there and can't be found in its clone's history, and {why}; left alone",
+                    clone.join(&rel).display()
+                ));
+                continue;
+            };
+            if !r.check {
+                put_back(&link, &held)?;
+            }
+            r.change(format!(
+                "replace {shown}, which led to what the tmux version had, with a copy of it from {}'s history, since {why}",
+                home_tilde(&clone)
+            ));
+            continue;
+        }
         if !r.check {
             fs::remove_file(&link)
                 .with_context(|| format!("can't remove {}", home_tilde(&link)))?;
@@ -284,6 +482,9 @@ pub fn run(r: &mut Report) -> Result<()> {
             }
         }
         r.change(format!("{} in {}", done.join(", and "), home_tilde(&rc)));
+    }
+    if !left.is_empty() {
+        anyhow::bail!("{}", left.join("\n"));
     }
     Ok(())
 }
