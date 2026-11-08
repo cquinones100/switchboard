@@ -19,6 +19,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use common::TestServer;
+use common::stand_in::Claude;
 use serde_json::{Value, json};
 use switchboard::relay::mux::{Mux, Server};
 
@@ -181,16 +182,10 @@ fn a_claude_with_no_session_file_yet_still_counts() {
     settings(&server);
     let mut client = server.attach(100, 30);
     client.wait_text("$");
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\necho 'Do you trust the files in this folder?'\nwhile :; do sleep 1; done\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Claude Code at its first question, waiting for an answer.
+    let claude = Claude::new()
+        .answer("echo 'Do you trust the files in this folder?'\nwhile :; do sleep 1; done")
+        .install(&server.home.join("bin"));
     let opened = server.ok(&[
         "new-tab",
         "-d",

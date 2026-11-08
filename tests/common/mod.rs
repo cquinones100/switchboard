@@ -21,6 +21,9 @@ use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::vte::ansi::Processor;
 use switchboard::mux::proto::{self, ClientMsg, ServerMsg};
 
+pub mod http;
+pub mod stand_in;
+
 pub const BIN: &str = env!("CARGO_BIN_EXE_switchboard");
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -211,7 +214,13 @@ impl TestServer {
             .env_remove("SWITCHBOARD_SETTINGS")
             .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .env_remove("TMUX")
-            .env_remove("TMUX_PANE");
+            .env_remove("TMUX_PANE")
+            // No token of the person running the tests reaches a stand-in
+            // service, which would refuse it as GitHub refuses a wrong one;
+            // a test gives its own (`start_with_env`).
+            .env_remove("GH_TOKEN")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("LINEAR_API_KEY");
     }
 
     pub fn socket(&self) -> PathBuf {
@@ -282,8 +291,14 @@ impl TestServer {
 }
 
 impl Drop for TestServer {
+    /// Ends the server, then fails the test if a stand-in on its PATH
+    /// refused a call: the code made one the real program would refuse,
+    /// however quietly it took the failure.
     fn drop(&mut self) {
         self.stop();
+        if !std::thread::panicking() {
+            stand_in::assert_none_refused(&self.home.join("bin"));
+        }
     }
 }
 

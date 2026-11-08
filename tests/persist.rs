@@ -4,10 +4,10 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use common::TestServer;
+use common::stand_in::Claude;
 use serde_json::Value;
 
 fn tabs(list: &Value) -> Vec<Value> {
@@ -37,10 +37,9 @@ fn tabs_panes_names_options_and_screens_come_back() {
     let proj = server.home.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     // A stand-in for Claude, so the test never starts the real one.
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("claude"), "#!/bin/sh\necho \"resumed $*\"\n").unwrap();
-    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("echo \"resumed $*\"")
+        .install(&server.home.join("bin"));
 
     let mut client = server.attach(100, 30);
     client.wait_text("$");

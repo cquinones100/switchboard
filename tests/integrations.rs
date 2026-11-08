@@ -9,13 +9,15 @@
 
 #![cfg(feature = "net")]
 
-use std::io::{BufRead, BufReader, Read, Write};
+mod common;
+
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread;
+use std::sync::{Mutex, MutexGuard};
 
+use common::http::{self, Reply, Service};
+use common::stand_in;
 use serde_json::{Value, json};
 use switchboard::integrations::{github, linear};
 use switchboard::net::{self, ErrorKind};
@@ -41,94 +43,56 @@ impl Seen {
     }
 }
 
-/// A canned answer: status, extra headers, body.
-struct Canned {
-    status: u16,
-    headers: Vec<(&'static str, String)>,
-    body: String,
+fn answer(status: u16, body: Value) -> Reply {
+    Reply::json(status, body)
 }
 
-fn answer(status: u16, body: Value) -> Canned {
-    Canned {
-        status,
-        headers: Vec::new(),
-        body: body.to_string(),
-    }
-}
-
-/// A server answering each connection with the next canned answer, then
-/// closing it, so every request comes on a connection of its own.
+/// GitHub or Linear on 127.0.0.1, as strict as the real one about how it is
+/// asked (tests/common/http.rs: the method, the path, the token), answering
+/// each request it takes with the next canned answer, on a connection of
+/// its own.
 struct Fake {
     url: String,
-    seen: Arc<Mutex<Vec<Seen>>>,
+    http: http::Fake,
 }
 
 impl Fake {
-    fn start(answers: Vec<Canned>) -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let log = seen.clone();
-        thread::spawn(move || {
-            for canned in answers {
-                let Ok((stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut reader = BufReader::new(stream);
-                let mut first = String::new();
-                if reader.read_line(&mut first).is_err() {
-                    return;
-                }
-                let mut parts = first.split_whitespace();
-                let method = parts.next().unwrap_or("").to_string();
-                let path = parts.next().unwrap_or("").to_string();
-                let mut headers = Vec::new();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let line = line.trim_end();
-                    if line.is_empty() {
-                        break;
-                    }
-                    if let Some((n, v)) = line.split_once(':') {
-                        headers.push((n.trim().to_ascii_lowercase(), v.trim().to_string()));
-                    }
-                }
-                let length = headers
-                    .iter()
-                    .find(|(n, _)| n == "content-length")
-                    .and_then(|(_, v)| v.parse::<usize>().ok())
-                    .unwrap_or(0);
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                log.lock().unwrap().push(Seen {
-                    method,
-                    path,
-                    headers,
-                    body: serde_json::from_slice(&body).unwrap_or(Value::Null),
-                });
-                let mut reply = format!(
-                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
-                    canned.status,
-                    canned.body.len()
-                );
-                for (n, v) in &canned.headers {
-                    reply.push_str(&format!("{n}: {v}\r\n"));
-                }
-                reply.push_str("\r\n");
-                reply.push_str(&canned.body);
-                let mut stream = reader.into_inner();
-                let _ = stream.write_all(reply.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        Fake { url, seen }
+    /// GitHub, whose token is `token`.
+    fn github(token: &str, answers: Vec<Reply>) -> Fake {
+        Fake::of(http::Fake::canned(
+            Service::GitHub {
+                token: token.into(),
+            },
+            answers,
+        ))
+    }
+
+    /// Linear, whose API key is `key`.
+    fn linear(key: &str, answers: Vec<Reply>) -> Fake {
+        Fake::of(http::Fake::canned(
+            Service::Linear { key: key.into() },
+            answers,
+        ))
+    }
+
+    fn of(http: http::Fake) -> Fake {
+        Fake {
+            url: http.url.clone(),
+            http,
+        }
     }
 
     fn seen(&self) -> Vec<Seen> {
-        self.seen.lock().unwrap().clone()
+        self.http
+            .seen()
+            .into_iter()
+            .map(|r| Seen {
+                body: r.json(),
+                method: r.method,
+                path: r.target,
+                headers: r.headers,
+            })
+            .collect()
     }
 }
 
@@ -240,10 +204,13 @@ fn counted(service: &str, protocol: &str) -> usize {
 fn github_graphql_sends_the_token_and_query_and_is_counted() {
     let env = Env::new("gh-graphql");
     set("GH_TOKEN", "tok-1");
-    let fake = Fake::start(vec![answer(
-        200,
-        json!({ "data": { "viewer": { "login": "me" } } }),
-    )]);
+    let fake = Fake::github(
+        "tok-1",
+        vec![answer(
+            200,
+            json!({ "data": { "viewer": { "login": "me" } } }),
+        )],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -281,7 +248,10 @@ fn github_graphql_sends_the_token_and_query_and_is_counted() {
 fn github_rest_asks_for_its_own_json() {
     let _env = Env::new("gh-rest");
     set("GITHUB_TOKEN", "tok-2");
-    let fake = Fake::start(vec![answer(200, json!({ "default_branch": "trunk" }))]);
+    let fake = Fake::github(
+        "tok-2",
+        vec![answer(200, json!({ "default_branch": "trunk" }))],
+    );
     set("SWITCHBOARD_GITHUB_API", &fake.url);
     let body = util::block_on(github::rest("GET", "/repos/acme/widgets", None, "test")).unwrap();
     assert_eq!(body["default_branch"], "trunk");
@@ -301,29 +271,29 @@ fn github_failures_say_what_kind() {
     let _env = Env::new("gh-errors");
     set("GH_TOKEN", "tok-3");
     let reset = util::now_secs() + 600;
-    let fake = Fake::start(vec![
+    let fake = Fake::github(
+        "tok-3",
+        vec![
         answer(
             200,
             json!({ "data": { "repository": null }, "errors": [{ "type": "NOT_FOUND",
                 "message": "Could not resolve to a Repository with the name 'acme/nope'." }] }),
         ),
-        Canned {
-            status: 200,
-            headers: vec![("x-ratelimit-reset", reset.to_string())],
-            body: json!({ "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }] })
-                .to_string(),
-        },
-        Canned {
-            status: 403,
-            headers: vec![
-                ("x-ratelimit-remaining", "0".into()),
-                ("x-ratelimit-reset", reset.to_string()),
-            ],
-            body: json!({ "message": "API rate limit exceeded for user." }).to_string(),
-        },
+        answer(
+            200,
+            json!({ "errors": [{ "type": "RATE_LIMITED", "message": "API rate limit exceeded" }] }),
+        )
+        .header("x-ratelimit-reset", reset.to_string()),
+        answer(
+            403,
+            json!({ "message": "API rate limit exceeded for user." }),
+        )
+        .header("x-ratelimit-remaining", "0")
+        .header("x-ratelimit-reset", reset.to_string()),
         answer(401, json!({ "message": "Bad credentials" })),
         answer(500, json!({ "message": "Server Error" })),
-    ]);
+    ],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -416,14 +386,9 @@ fn without_a_token_it_says_how_to_store_one() {
     // stand-in here, never your Keychain); elsewhere, with no keyring, the
     // file only you can read.
     if switchboard::platform::NAME == "macOS" {
-        let security = env.home.join("bin/security");
-        std::fs::write(
-            &security,
-            "#!/bin/sh\ncase \"$*\" in *github-token*) echo from-file ;; *) exit 44 ;; esac\n",
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&security, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let keychain = env.home.join("keychain");
+        stand_in::security(&env.home.join("bin"), &keychain);
+        stand_in::keychain_item(&keychain, "github-token", "", "from-file");
     }
     std::fs::create_dir_all(env.home.join(".config/switchboard")).unwrap();
     std::fs::write(
@@ -442,6 +407,7 @@ fn without_a_token_it_says_how_to_store_one() {
     // The variables come first.
     set("GH_TOKEN", "from-env");
     assert_eq!(util::block_on(github::token()).unwrap(), "from-env");
+    stand_in::assert_none_refused(&env.home.join("bin"));
 }
 
 fn pr_node(number: u64, state: &str, owner: &str, head: &str) -> Value {
@@ -462,13 +428,16 @@ fn the_pr_for_a_branch() {
     let env = Env::new("pr");
     set("GH_TOKEN", "tok-6");
     let dir = env.repo("widgets", "git@github.com:acme/widgets.git", "eng-42-thing");
-    let fake = Fake::start(vec![answer(
-        200,
-        json!({ "data": { "repository": { "pullRequests": { "nodes": [
+    let fake = Fake::github(
+        "tok-6",
+        vec![answer(
+            200,
+            json!({ "data": { "repository": { "pullRequests": { "nodes": [
             pr_node(9, "CLOSED", "acme", "eng-42-thing"),
             pr_node(7, "OPEN", "acme", "eng-42-thing"),
         ] } } } }),
-    )]);
+        )],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -521,13 +490,16 @@ fn a_fork_s_pr_is_found_by_the_branch_it_tracks() {
             "refs/heads/feature",
         ],
     );
-    let fake = Fake::start(vec![answer(
-        200,
-        json!({ "data": { "repository": { "pullRequests": { "nodes": [
+    let fake = Fake::github(
+        "tok-7",
+        vec![answer(
+            200,
+            json!({ "data": { "repository": { "pullRequests": { "nodes": [
             pr_node(11, "OPEN", "acme", "feature"),
             pr_node(10, "OPEN", "someone", "feature"),
         ] } } } }),
-    )]);
+        )],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -546,10 +518,13 @@ fn a_stranger_s_pr_from_the_same_branch_name_is_not_the_branch_s() {
     let dir = env.repo("widgets", "git@github.com:acme/widgets.git", "main");
     let mut stranger = pr_node(30, "OPEN", "someone", "main");
     stranger["isCrossRepository"] = json!(true);
-    let fake = Fake::start(vec![answer(
-        200,
-        json!({ "data": { "repository": { "pullRequests": { "nodes": [stranger] } } } }),
-    )]);
+    let fake = Fake::github(
+        "tok-9",
+        vec![answer(
+            200,
+            json!({ "data": { "repository": { "pullRequests": { "nodes": [stranger] } } } }),
+        )],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -581,13 +556,16 @@ fn a_fork_s_clone_looks_in_the_project_upstream_names() {
     );
     let mut mine = pr_node(41, "OPEN", "me", "feature");
     mine["isCrossRepository"] = json!(true);
-    let fake = Fake::start(vec![
-        answer(200, json!({ "data": { "repository": { "isFork": true } } })),
-        answer(
-            200,
-            json!({ "data": { "repository": { "pullRequests": { "nodes": [mine] } } } }),
-        ),
-    ]);
+    let fake = Fake::github(
+        "tok-10",
+        vec![
+            answer(200, json!({ "data": { "repository": { "isFork": true } } })),
+            answer(
+                200,
+                json!({ "data": { "repository": { "pullRequests": { "nodes": [mine] } } } }),
+            ),
+        ],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -617,18 +595,21 @@ fn a_wtpr_directory_is_looked_up_by_its_number() {
     let dir = env.repo("pr-12", "git@github.com:acme/widgets.git", "x");
     let mut node = pr_node(12, "MERGED", "acme", "x");
     node.as_object_mut().unwrap().remove("headRepositoryOwner");
-    let fake = Fake::start(vec![
-        answer(
-            200,
-            json!({ "data": { "repository": { "pullRequest": node } } }),
-        ),
-        answer(
-            200,
-            json!({ "data": { "repository": { "pullRequest": null } }, "errors": [{
+    let fake = Fake::github(
+        "tok-8",
+        vec![
+            answer(
+                200,
+                json!({ "data": { "repository": { "pullRequest": node } } }),
+            ),
+            answer(
+                200,
+                json!({ "data": { "repository": { "pullRequest": null } }, "errors": [{
                 "type": "NOT_FOUND",
                 "message": "Could not resolve to a PullRequest with the number of 12." }] }),
-        ),
-    ]);
+            ),
+        ],
+    );
     set(
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
@@ -648,27 +629,30 @@ fn a_wtpr_directory_is_looked_up_by_its_number() {
 fn a_linear_ticket() {
     let _env = Env::new("linear");
     set("LINEAR_API_KEY", "lin_api_x");
-    let fake = Fake::start(vec![
-        answer(
-            200,
-            json!({ "data": { "issue": {
+    let fake = Fake::linear(
+        "lin_api_x",
+        vec![
+            answer(
+                200,
+                json!({ "data": { "issue": {
                 "id": "uuid-1", "identifier": "ENG-1", "title": "Fix the login",
                 "url": "https://linear.app/acme/issue/ENG-1",
                 "state": { "name": "In Progress" },
                 "assignee": { "id": "u1", "name": "jo", "displayName": "Jo" } } } }),
-        ),
-        answer(
-            400,
-            json!({ "errors": [{ "message": "Entity not found: Issue",
+            ),
+            answer(
+                400,
+                json!({ "errors": [{ "message": "Entity not found: Issue",
                 "extensions": { "code": "INPUT_ERROR", "type": "invalid input" } }] }),
-        ),
-        answer(
-            400,
-            json!({ "errors": [{ "message": "Authentication required, not authenticated",
+            ),
+            answer(
+                400,
+                json!({ "errors": [{ "message": "Authentication required, not authenticated",
                 "extensions": { "code": "AUTHENTICATION_ERROR" } }] }),
-        ),
-    ]);
-    set("SWITCHBOARD_LINEAR_API", &fake.url);
+            ),
+        ],
+    );
+    set("SWITCHBOARD_LINEAR_API", fake.http.graphql_url());
     let ticket = util::block_on(linear::ticket("ENG-1", "test: ticket"))
         .unwrap()
         .unwrap();

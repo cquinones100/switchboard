@@ -171,20 +171,19 @@ pub fn question(titles: &[String]) -> (String, Vec<String>) {
 mod tests {
     use super::*;
     use crate::notes::store::tests::{set_mtime, temp, write};
-    use std::os::unix::fs::PermissionsExt;
 
-    /// A stand-in `claude -p` that keeps what it was given and answers.
+    /// A stand-in `claude -p`, as strict as Claude Code about how it is
+    /// called, that keeps what it was given and answers.
     fn stand_in(dir: &Path, answer: &str) -> (PathBuf, PathBuf) {
+        use crate::stand_in::{Claude, sh_quote};
         let asked = dir.join("asked");
-        let program = dir.join("claude");
-        let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\ncat >> '{}'\nprintf '{}'\n",
-            asked.display(),
-            asked.display(),
-            answer.replace('\n', "\\n")
-        );
-        std::fs::write(&program, script).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let file = sh_quote(&asked.to_string_lossy());
+        let program = Claude::new()
+            .answer(&format!(
+                "printf '%s\\n' \"$@\" > {file}\ncat >> {file}\nprintf '%s' {}",
+                sh_quote(answer)
+            ))
+            .install(dir);
         (program, asked)
     }
 

@@ -24,6 +24,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use common::stand_in::{self, Claude, sh_quote};
 use common::{BIN, TestServer};
 use serde_json::{Value, json};
 
@@ -95,11 +96,10 @@ fn repository(root: &Path) -> std::path::PathBuf {
     work
 }
 
-/// A stand-in claude: reads what it is given, notes that it was asked,
-/// and streams an answer a chapter at a time, then the whole of it.
+/// A stand-in claude, as strict as Claude Code about how it is called:
+/// reads what it is given, notes that it was asked, and streams an answer
+/// a chapter at a time, then the whole of it.
 fn stand_in_claude(home: &Path) {
-    let bin = home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
     let pieces = [
         r#"{"chapters": [{"title": "Change the core", "why": "a changes.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]}"#,
         r#", {"title": "Follow it", "why": "b follows.", "hunks": ["src/b.js#1"]}]}"#,
@@ -113,17 +113,14 @@ fn stand_in_claude(home: &Path) {
         .collect();
     lines.push(json!({"type": "result", "result": pieces.concat()}).to_string());
     let asked = home.join("claude-asked");
-    let mut script = format!(
-        "#!/bin/sh\ncat > /dev/null\necho \"asked $*\" >> '{}'\n",
-        asked.display()
+    let mut answer = format!(
+        "cat > /dev/null\necho \"asked $*\" >> {}\n",
+        sh_quote(&asked.to_string_lossy())
     );
     for line in lines {
-        script.push_str(&format!("sleep 0.2\nprintf '%s\\n' '{line}'\n"));
+        answer.push_str(&format!("sleep 0.2\nprintf '%s\\n' {}\n", sh_quote(&line)));
     }
-    let file = bin.join("claude");
-    std::fs::write(&file, script).unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new().answer(&answer).install(&home.join("bin"));
 }
 
 /// How many stories the stand-in was asked for, told by the story's own
@@ -468,16 +465,7 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
     }
 
     // A stand-in lazygit, which waits until C-c, lazygit's own quit.
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let lazygit = bin.join("lazygit");
-    std::fs::write(
-        &lazygit,
-        "#!/bin/sh\necho \"stand-in lazygit in $(pwd)\"\nexec sleep 60\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stand_in::lazygit(&server.home.join("bin"));
     server.ok(&["press", "lazygit"]);
     client.wait_text("stand-in lazygit in");
     let shown = panes(&server);

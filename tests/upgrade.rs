@@ -7,10 +7,10 @@
 
 mod common;
 
-use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use common::TestServer;
+use common::stand_in::Release;
 use serde_json::Value;
 use switchboard::mux::proto::{self, ClientMsg};
 
@@ -248,10 +248,10 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
     client.wait_text("tick2");
     let before = server.list();
 
-    // Another build in its place, one that takes over in another format.
+    // Another build in its place (the copy a link to the test's binary,
+    // which is left alone), one that takes over in another format.
     std::fs::remove_file(&bin).unwrap();
-    std::fs::write(&bin, "#!/bin/sh\necho 99\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Release::new("9.9.9").handover(99).install(&bin);
     let (code, out, err) = server.run(&["upgrade"]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
@@ -260,11 +260,7 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
     );
 
     // One from before upgrades, which doesn't know the question.
-    std::fs::write(
-        &bin,
-        "#!/bin/sh\necho 'Usage: switchboard server' >&2\nexit 2\n",
-    )
-    .unwrap();
+    Release::new("0.1.0").install(&bin);
     let (code, _, err) = server.run(&["upgrade"]);
     assert_eq!(code, 1);
     assert!(err.contains("before upgrades"), "{err}");

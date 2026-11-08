@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use common::stand_in::{Claude, sh_quote};
 use common::{BIN, TestServer};
 use serde_json::Value;
 
@@ -126,20 +127,13 @@ fn shape_batch_runs_shape_in_a_tab_per_item_which_names_it_and_starts_claude_the
     client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
     let pane = first_pane(&server);
     let repo = repo(&server);
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
     let args_file = server.home.join("claude-args");
-    std::fs::write(
-        bin.join("claude"),
-        format!(
-            "#!/bin/sh\nprintf '%s|%s\\n' \"$PWD\" \"$*\" >> '{}'\n",
-            args_file.display()
-        ),
-    )
-    .unwrap();
-    let mut perms = std::fs::metadata(bin.join("claude")).unwrap().permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
-    std::fs::set_permissions(bin.join("claude"), perms).unwrap();
+    Claude::new()
+        .answer(&format!(
+            "printf '%s|%s\\n' \"$PWD\" \"$*\" >> {}",
+            sh_quote(&args_file.to_string_lossy())
+        ))
+        .install(&server.home.join("bin"));
 
     let out = batch(
         &server,

@@ -8,62 +8,47 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 
+use common::http::{self, Reply};
 use common::{BIN, TempDir};
 use serde_json::{Value, json};
 
-/// A GitHub answering each request by its path, through `route`, which is
-/// given the path and how many times it has been asked for before.
+/// A GitHub as strict as GitHub about how it is asked (tests/common/http.rs:
+/// a User-Agent, the token `test-token`), answering each GET by its path and
+/// query, through `route`, which is given them and how many times they have
+/// been asked for before.
 struct Fake {
     url: String,
     seen: Arc<Mutex<Vec<String>>>,
+    _github: http::Fake,
 }
 
 impl Fake {
-    fn start(route: impl Fn(&str, usize) -> (u16, Value) + Send + 'static) -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
+    fn start(route: impl Fn(&str, usize) -> (u16, Value) + Send + Sync + 'static) -> Fake {
         let seen = Arc::new(Mutex::new(Vec::<String>::new()));
         let log = seen.clone();
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let mut reader = BufReader::new(stream);
-                let mut first = String::new();
-                if reader.read_line(&mut first).is_err() {
-                    continue;
-                }
-                let path = first.split_whitespace().nth(1).unwrap_or("").to_string();
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-                        break;
-                    }
-                }
-                let before = {
-                    let mut log = log.lock().unwrap();
-                    let before = log.iter().filter(|p| **p == path).count();
-                    log.push(path.clone());
-                    before
-                };
-                let (status, body) = route(&path, before);
-                let body = body.to_string();
-                let reply = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let mut stream = reader.into_inner();
-                let _ = stream.write_all(reply.as_bytes());
-                let _ = stream.flush();
+        let github = http::Fake::github("test-token", move |request| {
+            if request.method != "GET" {
+                return None;
             }
+            let path = request.target.clone();
+            let before = {
+                let mut log = log.lock().unwrap();
+                let before = log.iter().filter(|p| **p == path).count();
+                log.push(path.clone());
+                before
+            };
+            let (status, body) = route(&path, before);
+            Some(Reply::json(status, body))
         });
-        Fake { url, seen }
+        Fake {
+            url: github.url.clone(),
+            seen,
+            _github: github,
+        }
     }
 }
 

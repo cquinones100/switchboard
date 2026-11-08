@@ -14,7 +14,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{TempDir, TestServer};
+use common::{TempDir, TestServer, stand_in};
 use serde_json::{Value, json};
 
 const ALT: &str = "\x1b";
@@ -241,12 +241,7 @@ fn a_claude_parked_behind_a_tool_still_marks_its_tab_and_is_seen_there() {
     let server = TestServer::start();
     settings(&server, json!({}));
     // A stand-in lazygit to take the pane's place.
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let lazygit = bin.join("lazygit");
-    std::fs::write(&lazygit, "#!/bin/sh\nexec sleep 60\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -286,12 +281,7 @@ fn say(file: &Path, entry: Value) {
 fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
     let server = TestServer::start();
     settings(&server, json!({}));
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let lazygit = bin.join("lazygit");
-    std::fs::write(&lazygit, "#!/bin/sh\nexec sleep 60\n").unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
@@ -633,21 +623,15 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
 }
 
 /// Stand-ins for the desktop's clipboard tools, first on the PATH, so a
-/// copy reaches a file in the test's home rather than the real clipboard.
+/// copy reaches a file in the test's home (`copied`) rather than the real
+/// clipboard.
 fn stand_in_clipboard(server: &TestServer) {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let copied = server.home.join("copied");
-    for name in ["clip.exe", "wl-copy", "xclip", "xsel", "pbcopy"] {
-        let script = bin.join(name);
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\ncat > '{}'\n", copied.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    stand_in::desktop(
+        &server.home.join("bin"),
+        stand_in::CLIPBOARD,
+        &server.home.join("clipboard-log"),
+        &server.home.join("copied"),
+    );
 }
 
 #[test]

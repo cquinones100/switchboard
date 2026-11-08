@@ -17,7 +17,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{TestClient, TestServer};
+use common::{TestClient, TestServer, stand_in};
 use serde_json::{Value, json};
 
 const ALT: &str = "\x1b";
@@ -376,16 +376,7 @@ fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
     let server = TestServer::start();
     settings(&server, json!({}));
     // A stand-in lazygit, as tests/diff.rs has.
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let lazygit = bin.join("lazygit");
-    std::fs::write(
-        &lazygit,
-        "#!/bin/sh\necho stand-in lazygit\nexec sleep 60\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&lazygit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    stand_in::lazygit(&server.home.join("bin"));
     let mut client = server.attach(120, 30);
     client.wait_text("$");
     let first = tabs(&server.list())[0]["panes"][0]["id"]

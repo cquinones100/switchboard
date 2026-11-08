@@ -880,18 +880,11 @@ fn a_squash_asks_first_then_shows_its_progress_and_esc_cancels_it() {
     let (dir, mut store) = temp("squash");
     let a = store.create("", Some("First"));
     let b = store.create("", Some("Second"));
-    let bin = dir.path.join(".bin");
-    fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    fs::write(
-        &claude,
-        "#!/bin/sh\ncat >/dev/null\nsleep 1\nprintf '# Both\\n'\n",
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // A Claude as strict as Claude Code about how it is called, which
+    // takes a moment to answer.
+    let claude = crate::stand_in::Claude::new()
+        .answer("cat >/dev/null\nsleep 1\nprintf '# Both\\n'")
+        .install(&dir.path.join(".bin"));
     let (mut app, rx) = app_in(store, options());
     app.start();
     app.claude = Some(claude);

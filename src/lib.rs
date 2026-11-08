@@ -60,6 +60,10 @@
 //!   the AWS login, M-0 and `C-w` between panes.
 //! - `autopilot`: working a note's checklist continuously, a tab opened for
 //!   each item as the last lands.
+//!
+//! And for the unit tests alone, the integration tests' strict stand-ins
+//! for the programs and services Switchboard reaches (tests/common), so
+//! each kind is written once: `stand_in` and `fake_http`.
 
 pub mod agent;
 pub mod autopilot;
@@ -95,3 +99,10 @@ pub mod usage;
 pub mod util;
 pub mod views;
 pub mod worktree;
+
+#[cfg(all(test, feature = "net"))]
+#[path = "../tests/common/http.rs"]
+pub(crate) mod fake_http;
+#[cfg(test)]
+#[path = "../tests/common/stand_in.rs"]
+pub(crate) mod stand_in;

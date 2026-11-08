@@ -880,21 +880,18 @@ mod tests {
 
     #[test]
     fn only_a_binary_that_answers_this_version_passes() {
+        use crate::stand_in::Release;
         let dir = temp_dir("check");
-        let script = |name: &str, body: &str| {
-            let path = dir.join(name);
-            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            path
-        };
-        let right = script(
-            "right",
-            &format!("[ \"$1 $2\" = 'server --handover-version' ] && echo {VERSION}"),
-        );
+        // Stand-in builds, each a switchboard in a folder of its own, as
+        // strict as one about its name and commands.
+        let build =
+            |name: &str, release: Release| release.install(&dir.join(name).join("switchboard"));
+        let right = build("right", Release::new("0.3.0").handover(VERSION));
         assert_eq!(check(&right), Ok(()));
-        let other = script("other", &format!("echo {}", VERSION + 1));
+        let other = build("other", Release::new("0.4.0").handover(VERSION + 1));
         assert!(check(&other).unwrap_err().contains("format"));
-        let old = script("old", "echo 'Usage: switchboard server' >&2; exit 2");
+        // One from before upgrades, whose server knew no such option.
+        let old = build("old", Release::new("0.1.0"));
         assert!(check(&old).unwrap_err().contains("before upgrades"));
         assert!(
             check(&dir.join("missing"))

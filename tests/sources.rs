@@ -9,8 +9,7 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -18,6 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use common::TestServer;
+use common::http::{Fake, Reply};
 use serde_json::{Value, json};
 
 /// Runs git in `dir` with an identity of its own.
@@ -56,65 +56,38 @@ fn pr(merged: bool) -> Value {
     })
 }
 
-/// A stand-in for GitHub's GraphQL endpoint, answering by what it is asked:
-/// the tabs' PRs, the branch's PR (for the tab's name), the searches, the
-/// merge queues. `merged` turns the PR merged.
-fn fake_github(merged: Arc<AtomicBool>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { return };
-            let mut reader = BufReader::new(stream);
-            let mut length = 0;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let line = line.trim_end();
-                if line.is_empty() {
-                    break;
-                }
-                if let Some((name, value)) = line.split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut body = vec![0; length];
-            let _ = reader.read_exact(&mut body);
-            let asked = String::from_utf8_lossy(&body);
-            let pr = pr(merged.load(Ordering::SeqCst));
-            let answer = if asked.contains("pullRequest(number:") {
-                json!({"data": {"r0": {"a0": pr}}})
-            } else if asked.contains("pullRequests(headRefName") {
-                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
-            } else if asked.contains("search(") {
-                json!({"data": {"open": {"nodes": [pr]}, "merged": {"nodes": []}, "search": {"nodes": []}}})
-            } else if asked.contains("mergeQueue {") {
-                json!({"data": {"r0": {"mergeQueue": {
-                    "url": "https://github.com/acme/widgets/queue/main",
-                    "entries": {"nodes": [{
-                        "position": 2, "state": "AWAITING_CHECKS",
-                        "enqueuedAt": "2026-11-03T10:00:00Z", "estimatedTimeToMerge": 600,
-                        "pullRequest": {"number": 12, "title": "Fix the login",
-                            "url": "https://github.com/acme/widgets/pull/12", "author": {"login": "me"}}
-                    }]}
-                }}}})
-            } else {
-                json!({"data": {}})
-            }
-            .to_string();
-            let mut stream = reader.into_inner();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-                answer.len()
-            );
+/// A stand-in for GitHub (tests/common/http.rs), as strict as GitHub about
+/// how it is asked, its GraphQL answering by what it is asked: the tabs'
+/// PRs, the branch's PR (for the tab's name), the searches, the merge
+/// queues. `merged` turns the PR merged.
+fn fake_github(merged: Arc<AtomicBool>) -> Fake {
+    Fake::github("test-token", move |request| {
+        if request.path() != "/graphql" {
+            return None;
         }
-    });
-    url
+        let asked = request.text();
+        let pr = pr(merged.load(Ordering::SeqCst));
+        let answer = if asked.contains("pullRequest(number:") {
+            json!({"data": {"r0": {"a0": pr}}})
+        } else if asked.contains("pullRequests(headRefName") {
+            json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+        } else if asked.contains("search(") {
+            json!({"data": {"open": {"nodes": [pr]}, "merged": {"nodes": []}, "search": {"nodes": []}}})
+        } else if asked.contains("mergeQueue {") {
+            json!({"data": {"r0": {"mergeQueue": {
+                "url": "https://github.com/acme/widgets/queue/main",
+                "entries": {"nodes": [{
+                    "position": 2, "state": "AWAITING_CHECKS",
+                    "enqueuedAt": "2026-11-03T10:00:00Z", "estimatedTimeToMerge": 600,
+                    "pullRequest": {"number": 12, "title": "Fix the login",
+                        "url": "https://github.com/acme/widgets/pull/12", "author": {"login": "me"}}
+                }]}
+            }}}})
+        } else {
+            json!({"data": {}})
+        };
+        Some(Reply::json(200, answer))
+    })
 }
 
 /// Waits for `pred` to hold of what `read` gives.
@@ -136,11 +109,11 @@ fn wait(what: &str, read: impl Fn() -> Value, pred: impl Fn(&Value) -> bool) -> 
 #[test]
 fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
     let merged = Arc::new(AtomicBool::new(false));
-    let url = fake_github(merged.clone());
+    let fake = fake_github(merged.clone());
     let server = TestServer::start_with_env(&[
         ("GH_TOKEN", "test-token"),
-        ("SWITCHBOARD_GITHUB_GRAPHQL", &url),
-        ("SWITCHBOARD_GITHUB_API", &url),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &fake.url),
     ]);
     // poll_fast off, so the PR is asked about again within its minute only
     // when something asks for it.

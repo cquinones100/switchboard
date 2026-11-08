@@ -2,7 +2,7 @@
 //! that moves into a git repository gives its tab the repository's name and
 //! branch, drawn in the project's accent color; a name given to the tab
 //! wins; and with GitHub and Linear on, the branch's PR number and ticket
-//! title arrive from the background, here from a stand-in for both services
+//! title arrive from the background, here from a stand-in for each service
 //! on 127.0.0.1.
 
 mod common;
@@ -201,73 +201,47 @@ fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
 #[cfg(feature = "net")]
 mod from_the_services {
     use super::*;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
+    use crate::common::http::{Fake, Reply};
 
-    /// A stand-in for GitHub's and Linear's GraphQL endpoints, answering
-    /// whatever it is asked, on a connection each: a PR for a question about
-    /// pull requests, a ticket for one about an issue.
-    fn fake_services() -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let mut reader = BufReader::new(stream);
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let line = line.trim_end();
-                    if line.is_empty() {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                let asked = String::from_utf8_lossy(&body);
-                let answer = if asked.contains("pullRequests") {
+    /// Stand-ins for GitHub and Linear (tests/common/http.rs), each as
+    /// strict as the real one about how it is asked: the branch's PR from
+    /// GitHub's GraphQL, its ticket from Linear's.
+    fn fake_services() -> (Fake, Fake) {
+        let github = Fake::github("test-token", |request| {
+            (request.path() == "/graphql" && request.text().contains("pullRequests")).then(|| {
+                Reply::json(
+                    200,
                     json!({"data": {"repository": {"pullRequests": {"nodes": [{
                         "number": 12, "url": "https://github.com/acme/widgets/pull/12",
                         "title": "Fix the login", "state": "OPEN", "isDraft": false,
                         "baseRefName": "main", "headRefName": "eng-42-fix-login",
                         "headRepositoryOwner": {"login": "acme"}
-                    }]}}}})
-                } else {
-                    json!({"data": {"issue": {
-                        "id": "i1", "identifier": "ENG-42", "title": "Fix the login",
-                        "url": "https://linear.app/acme/issue/ENG-42",
-                        "state": {"name": "In Progress"}, "assignee": null
-                    }}})
-                }
-                .to_string();
-                let mut stream = reader.into_inner();
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-                    answer.len()
-                );
-            }
+                    }]}}}}),
+                )
+            })
         });
-        url
+        let linear = Fake::linear("test-key", |_| {
+            Some(Reply::json(
+                200,
+                json!({"data": {"issue": {
+                    "id": "i1", "identifier": "ENG-42", "title": "Fix the login",
+                    "url": "https://linear.app/acme/issue/ENG-42",
+                    "state": {"name": "In Progress"}, "assignee": null
+                }}}),
+            ))
+        });
+        (github, linear)
     }
 
     #[test]
     fn the_pr_number_and_ticket_title_arrive_from_the_background() {
-        let url = fake_services();
+        let (github, linear) = fake_services();
         let server = TestServer::start_with_env(&[
             ("GH_TOKEN", "test-token"),
             ("LINEAR_API_KEY", "test-key"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &url),
-            ("SWITCHBOARD_GITHUB_API", &url),
-            ("SWITCHBOARD_LINEAR_API", &url),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &github.url),
+            ("SWITCHBOARD_LINEAR_API", &linear.graphql_url()),
         ]);
         settings(&server, json!({}));
         let work = server.dir.path().join("widgets");

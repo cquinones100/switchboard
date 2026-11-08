@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::TestServer;
+use common::{TestServer, stand_in};
 
 const ALT: &str = "\x1b";
 
@@ -563,21 +563,15 @@ fn ctrl_shift_p_reaches_a_program_that_asked_for_it_and_a_shell_gets_ctrl_p() {
 }
 
 /// Stand-ins for the desktop's clipboard tools, first on the PATH, so a
-/// copy reaches a file in the test's home rather than the real clipboard.
+/// copy reaches a file in the test's home (`copied`) rather than the real
+/// clipboard.
 fn stand_in_clipboard(server: &TestServer) {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let copied = server.home.join("copied");
-    for name in ["clip.exe", "wl-copy", "xclip", "xsel", "pbcopy"] {
-        let script = bin.join(name);
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\ncat > '{}'\n", copied.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    stand_in::desktop(
+        &server.home.join("bin"),
+        stand_in::CLIPBOARD,
+        &server.home.join("clipboard-log"),
+        &server.home.join("copied"),
+    );
 }
 
 /// Waits until the client has been sent `text` for the clipboard (OSC 52).

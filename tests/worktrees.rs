@@ -8,12 +8,10 @@
 
 mod common;
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
 
+use common::http::{self, Reply};
 use common::{BIN, TempDir};
 use serde_json::{Value, json};
 
@@ -169,65 +167,43 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// A GraphQL service of the test's own, answering every request with what
-/// `answer` makes of its body, and keeping the bodies it was sent.
+/// GitHub's or Linear's GraphQL endpoint, of the test's own and as strict as
+/// the real one about how it is asked (tests/common/http.rs: GitHub's token
+/// `test-token`, Linear's key `lin_test`), answering every query with what
+/// `answer` makes of its body, and keeping what it was sent.
 struct Fake {
-    url: String,
-    seen: Arc<Mutex<Vec<Value>>>,
+    http: http::Fake,
 }
 
 impl Fake {
-    fn start(answer: fn(&Value) -> Value) -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let log = seen.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let mut reader = BufReader::new(stream);
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_err() {
-                    continue;
-                }
-                let mut length = 0;
-                loop {
-                    let mut header = String::new();
-                    if reader.read_line(&mut header).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let header = header.trim_end();
-                    if header.is_empty() {
-                        break;
-                    }
-                    if let Some((n, v)) = header.split_once(':')
-                        && n.eq_ignore_ascii_case("content-length")
-                    {
-                        length = v.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                let reply = answer(&body).to_string();
-                log.lock().unwrap().push(body);
-                let mut stream = reader.into_inner();
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-                    reply.len()
-                );
-            }
-        });
-        Fake { url, seen }
+    fn github(answer: fn(&Value) -> Value) -> Fake {
+        Fake {
+            http: http::Fake::github("test-token", move |request| {
+                (request.path() == "/graphql").then(|| Reply::json(200, answer(&request.json())))
+            }),
+        }
     }
 
+    fn linear(answer: fn(&Value) -> Value) -> Fake {
+        Fake {
+            http: http::Fake::linear("lin_test", move |request| {
+                Some(Reply::json(200, answer(&request.json())))
+            }),
+        }
+    }
+
+    /// The GraphQL endpoint.
+    fn graphql(&self) -> String {
+        self.http.graphql_url()
+    }
+
+    /// The queries it answered.
     fn queries(&self) -> Vec<String> {
-        self.seen
-            .lock()
-            .unwrap()
+        self.http
+            .seen()
             .iter()
-            .map(|b| b["query"].as_str().unwrap_or("").to_string())
+            .filter(|r| r.method == "POST" && r.path() == "/graphql")
+            .map(|r| r.query())
             .collect()
     }
 }
@@ -418,9 +394,9 @@ fn pr_answer(body: &Value) -> Value {
 
 fn github_world(prefix: &str) -> (World, Fake) {
     let mut w = World::new(prefix);
-    let fake = Fake::start(pr_answer);
-    w.set("SWITCHBOARD_GITHUB_GRAPHQL", &fake.url);
-    w.set("SWITCHBOARD_GITHUB_API", &fake.url);
+    let fake = Fake::github(pr_answer);
+    w.set("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql());
+    w.set("SWITCHBOARD_GITHUB_API", &fake.http.url);
     w.set("GH_TOKEN", "test-token");
     (w, fake)
 }
@@ -959,8 +935,8 @@ fn ticket_answer(body: &Value) -> Value {
 #[test]
 fn a_ticket_gets_a_worktree_on_linears_branch_name_its_prompt_saying_its_closed_state() {
     let mut w = World::new("wt");
-    let fake = Fake::start(ticket_answer);
-    w.set("SWITCHBOARD_LINEAR_API", &fake.url);
+    let fake = Fake::linear(ticket_answer);
+    w.set("SWITCHBOARD_LINEAR_API", &fake.graphql());
     w.set("LINEAR_API_KEY", "lin_test");
     let repo = w.path("repo");
     w.init(&repo, false);
@@ -1068,8 +1044,8 @@ fn done_answer(_: &Value) -> Value {
 #[test]
 fn done_lists_the_worktrees_whose_ticket_is_finished_and_removes_nothing_without_a_terminal() {
     let mut w = World::new("wtd");
-    let fake = Fake::start(done_answer);
-    w.set("SWITCHBOARD_LINEAR_API", &fake.url);
+    let fake = Fake::linear(done_answer);
+    w.set("SWITCHBOARD_LINEAR_API", &fake.graphql());
     w.set("LINEAR_API_KEY", "lin_test");
     let repo = w.path("repo");
     w.init(&repo, false);
@@ -1863,16 +1839,10 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
     let dir = TempDir::new("sbw-claude");
     let home = dir.path().join("home");
     let bin = home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
     // A stand-in claude saying the plugin folders it was started with.
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\necho \"dirs=${CLAUDE_CODE_PLUGIN_DIRS-unset}\"\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    common::stand_in::Claude::new()
+        .answer("echo \"dirs=${CLAUDE_CODE_PLUGIN_DIRS-unset}\"")
+        .install(&bin);
     let plugin = home.join(".local/share/switchboard/plugin");
     let ours = plugin.to_string_lossy().into_owned();
     let settings = dir.path().join("settings.json");
@@ -1917,4 +1887,5 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
         format!("dirs={with}"),
         "outside the workspace, left as it is"
     );
+    common::stand_in::assert_none_refused(&bin);
 }

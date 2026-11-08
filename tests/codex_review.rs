@@ -12,6 +12,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
+use common::stand_in::{Claude, sh_quote};
 use common::{BIN, TempDir};
 
 fn env(cmd: &mut Command, home: &Path) {
@@ -144,39 +145,13 @@ fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     assert!(text(&nowhere.stderr).contains("no directory no-such-dir"));
 }
 
-/// A GitHub GraphQL service of the test's own, answering every request with
-/// `answer`, on 127.0.0.1.
-fn github_answering(answer: serde_json::Value) -> String {
-    use std::io::{BufRead, BufReader, Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/graphql", listener.local_addr().unwrap());
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { return };
-            let mut reader = BufReader::new(stream);
-            let mut length = 0;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-                    break;
-                }
-                if let Some((name, value)) = line.split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    length = value.trim().parse().unwrap_or(0);
-                }
-            }
-            let mut body = vec![0; length];
-            let _ = reader.read_exact(&mut body);
-            let reply = answer.to_string();
-            let _ = write!(
-                reader.into_inner(),
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-                reply.len()
-            );
-        }
-    });
-    url
+/// A GitHub of the test's own on 127.0.0.1, as strict as GitHub about how
+/// it is asked (tests/common/http.rs, the token the tests' `env` gives),
+/// its GraphQL answering every query with `answer`.
+fn github_answering(answer: serde_json::Value) -> common::http::Fake {
+    common::http::Fake::github("not-a-token", move |request| {
+        (request.path() == "/graphql").then(|| common::http::Reply::json(200, answer.clone()))
+    })
 }
 
 #[test]
@@ -192,7 +167,7 @@ fn a_pr_named_puts_its_description_in_the_prompt() {
     fs::write(work.join("b.txt"), "b\n").unwrap();
     git(home, &work, &["add", "."]);
     git(home, &work, &["commit", "-q", "-m", "Their fix"]);
-    let graphql = github_answering(
+    let github = github_answering(
         serde_json::json!({ "data": { "repository": { "pullRequest": {
         "number": 12345, "title": "Their fix", "body": "What it does", "url": "https://github.com/o/r/pull/12345",
         "state": "OPEN", "baseRefName": "main", "headRefName": "main", "isCrossRepository": true
@@ -215,7 +190,7 @@ fn a_pr_named_puts_its_description_in_the_prompt() {
         .current_dir(home)
         .stdin(Stdio::null());
         env(&mut cmd, home);
-        cmd.env("SWITCHBOARD_GITHUB_GRAPHQL", &graphql);
+        cmd.env("SWITCHBOARD_GITHUB_GRAPHQL", github.graphql_url());
         cmd.output().unwrap()
     };
     let run = named("https://github.com/o/r/pull/12345");
@@ -401,18 +376,13 @@ fn claude_reviews_without_switchboard_s_plugin_from_the_pane() {
     // A stand-in Claude that says which plugin directories it was given,
     // and finds nothing.
     let bin = home.join("bin");
-    fs::create_dir_all(&bin).unwrap();
     let said = home.join("plugin-dirs");
-    fs::write(
-        bin.join("claude"),
-        format!(
-            "#!/bin/sh\ncat >/dev/null\nprintf '%s' \"${{CLAUDE_CODE_PLUGIN_DIRS-unset}}\" > '{}'\necho '{{\"structured_output\":{{\"findings\":[]}}}}'\n",
-            said.display()
-        ),
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer(&format!(
+            "cat >/dev/null\nprintf '%s' \"${{CLAUDE_CODE_PLUGIN_DIRS-unset}}\" > {}\necho '{{\"structured_output\":{{\"findings\":[]}}}}'",
+            sh_quote(&said.to_string_lossy())
+        ))
+        .install(&bin);
     let plugin = home.join(".local/share/switchboard/plugin");
     let run = |dirs: &str| {
         let mut cmd = Command::new(BIN);
@@ -433,4 +403,5 @@ fn claude_reviews_without_switchboard_s_plugin_from_the_pane() {
         "the pane's plugin left out, yours kept"
     );
     assert_eq!(run(&plugin.to_string_lossy()), "unset");
+    common::stand_in::assert_none_refused(&bin);
 }

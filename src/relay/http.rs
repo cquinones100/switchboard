@@ -352,72 +352,24 @@ mod tests {
         );
     }
 
-    /// A server of the test's own on 127.0.0.1, answering each request with
-    /// the next of `answers` (status, headers, body), and handing back each
-    /// request it read.
-    #[cfg(feature = "net")]
-    fn stand_in(
-        answers: Vec<(u16, &'static str, String)>,
-    ) -> (String, std::sync::mpsc::Receiver<String>) {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}/api/", listener.local_addr().unwrap());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            for (status, headers, body) in answers {
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let mut request = Vec::new();
-                let mut buf = [0u8; 4096];
-                loop {
-                    let n = stream.read(&mut buf).unwrap_or(0);
-                    if n == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&buf[..n]);
-                    let text = String::from_utf8_lossy(&request);
-                    if let Some(end) = text.find("\r\n\r\n") {
-                        let length = text[..end]
-                            .lines()
-                            .find_map(|l| {
-                                l.to_ascii_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().unwrap_or(0))
-                            })
-                            .unwrap_or(0);
-                        if request.len() >= end + 4 + length {
-                            break;
-                        }
-                    }
-                }
-                let _ = tx.send(String::from_utf8_lossy(&request).into_owned());
-                let reply = format!(
-                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{headers}\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(reply.as_bytes());
-            }
-        });
-        (base, rx)
-    }
-
     #[cfg(feature = "net")]
     #[test]
     fn the_api_client_form_encodes_waits_out_rate_limits_and_reports_refusals() {
-        let (base, requests) = stand_in(vec![
-            (
-                429,
-                "Retry-After: 1\r\n",
-                r#"{"ok":false,"error":"ratelimited"}"#.into(),
-            ),
-            (200, "", r#"{"ok":true,"ts":"1.2"}"#.into()),
-            (
-                200,
-                "",
-                r#"{"ok":false,"error":"channel_not_found"}"#.into(),
-            ),
-        ]);
+        use crate::fake_http::{Fake, Reply, Service};
+        // A Slack of the test's own, as strict as Slack about the token and
+        // the method, answering each request with the next of these.
+        let fake = Fake::canned(
+            Service::Slack {
+                token: "xoxb-test".into(),
+            },
+            vec![
+                Reply::json(429, json!({ "ok": false, "error": "ratelimited" }))
+                    .header("Retry-After", "1"),
+                Reply::json(200, json!({ "ok": true, "ts": "1.2" })),
+                Reply::json(200, json!({ "ok": false, "error": "channel_not_found" })),
+            ],
+        );
+        let base = format!("{}/api/", fake.url);
         let mut https = Https::new(base, "xoxb-test".into()).unwrap();
         https.audit = false;
         let slack = crate::relay::slack::Slack::new(Box::new(https));
@@ -449,18 +401,13 @@ mod tests {
                 .unwrap_err();
             assert!(elsewhere.to_string().contains("only uses its DM, not C2"));
         });
-        let first = requests.recv().unwrap();
-        assert!(first.starts_with("POST /api/chat.postMessage"));
-        assert!(
-            first
-                .to_ascii_lowercase()
-                .contains("authorization: bearer xoxb-test")
-        );
-        assert!(first.ends_with("channel=D1&text=hi+there"));
+        let seen = fake.seen();
         assert_eq!(
-            requests.try_iter().count(),
-            2,
-            "three requests in all, none for C2"
+            (seen[0].method.as_str(), seen[0].path()),
+            ("POST", "/api/chat.postMessage")
         );
+        assert_eq!(seen[0].header("authorization"), Some("Bearer xoxb-test"));
+        assert_eq!(seen[0].text(), "channel=D1&text=hi+there");
+        assert_eq!(seen.len(), 3, "three requests in all, none for C2");
     }
 }

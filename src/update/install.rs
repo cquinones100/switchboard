@@ -265,12 +265,9 @@ mod tests {
 
     /// A stand-in release that, as switchboard 0.2.0 did, says its version
     /// only when its file is named `switchboard`, reading any other name as
-    /// a command it doesn't have.
+    /// a command it doesn't have (tests/common/stand_in.rs).
     fn release(version: &str) -> Vec<u8> {
-        format!(
-            "#!/bin/sh\nname=$(basename \"$0\")\n[ \"$name\" = switchboard ] || {{ echo \"switchboard: no command named $name\" >&2; exit 2; }}\necho 'switchboard {version}'\n"
-        )
-        .into_bytes()
+        crate::stand_in::Release::new(version).script().into_bytes()
     }
 
     #[test]
@@ -295,6 +292,8 @@ mod tests {
         let dir = temp("bad");
         let target = dir.join("switchboard");
         fs::write(&target, OLD).unwrap();
+        // Broken on purpose: not a program, one that fails, and one that
+        // doesn't say it is switchboard.
         for broken in [
             &b"\x7fELF not really a binary"[..],
             b"#!/bin/sh\nexit 3\n",

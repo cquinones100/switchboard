@@ -542,53 +542,27 @@ mod tests {
         assert_eq!(picture_kind(""), None);
     }
 
-    /// A stand-in for the web on 127.0.0.1, answering each path as `answer`
-    /// says (status, type, body), and counting what it was asked.
+    /// A stand-in for the web on 127.0.0.1 (crate::fake_http), answering
+    /// each path as `answer` says (status, type, body), a 302 sending on to
+    /// /landed.png, and keeping what it was asked.
     #[cfg(feature = "net")]
-    fn stand_in(
-        answer: fn(&str) -> (u16, &'static str, Vec<u8>),
-    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-        use std::io::{BufRead, BufReader, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let log = asked.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let mut reader = BufReader::new(stream);
-                let mut first = String::new();
-                let _ = reader.read_line(&mut first);
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-                        break;
-                    }
-                }
-                let path = first.split(' ').nth(1).unwrap_or("/").to_string();
-                log.lock().unwrap().push(path.clone());
-                let (status, kind, body) = answer(&path);
-                let mut stream = reader.into_inner();
-                let location = if status == 302 {
-                    "Location: /landed.png\r\n"
-                } else {
-                    ""
-                };
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 {status} X\r\nContent-Type: {kind}\r\n{location}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                let _ = stream.write_all(&body);
-            }
-        });
-        (base, asked)
+    fn stand_in(answer: fn(&str) -> (u16, &'static str, Vec<u8>)) -> crate::fake_http::Fake {
+        use crate::fake_http::{Fake, Reply, Service};
+        Fake::start(Service::Web, move |request| {
+            let (status, kind, body) = answer(&request.target);
+            let reply = Reply::bytes(status, kind, body);
+            Some(if status == 302 {
+                reply.header("Location", "/landed.png")
+            } else {
+                reply
+            })
+        })
     }
 
     #[cfg(feature = "net")]
     #[test]
     fn what_the_page_loads_is_fetched_once_and_kept_only_when_whole() {
-        let (base, asked) = stand_in(|path| match path {
+        let web = stand_in(|path| match path {
             "/a.png" | "/landed.png" => (200, "image/png", b"picture".to_vec()),
             "/script.js" => (200, "application/javascript", b"let x = 1;".to_vec()),
             "/sign-in" => (200, "text/html", b"<html>".to_vec()),
@@ -597,7 +571,7 @@ mod tests {
         });
         let root = Root::new("fetch");
         let cache = Cache::at(&root.0);
-        let url = |p: &str| format!("{base}{p}");
+        let url = |p: &str| format!("{}{p}", web.url);
         let script = Pin {
             url: Box::leak(url("/script.js").into_boxed_str()),
             integrity: Box::leak(
@@ -628,12 +602,12 @@ mod tests {
             "a redirected picture is kept under the link asked for"
         );
         assert!(local[script.url].to_string_lossy().ends_with(".js"));
-        let first = asked.lock().unwrap().len();
+        let first = web.seen().len();
         // Asked again: the copies are used and nothing is fetched but what
         // wasn't kept.
         let again = cache.local_copies(&[script], &pictures[..1]);
         assert_eq!(again.len(), 2);
-        assert_eq!(asked.lock().unwrap().len(), first, "nothing fetched again");
+        assert_eq!(web.seen().len(), first, "nothing fetched again");
     }
 
     #[test]

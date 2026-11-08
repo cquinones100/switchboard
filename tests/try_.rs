@@ -8,10 +8,10 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use common::stand_in::{self, Claude, sh_quote};
 use common::{BIN, TempDir};
 use serde_json::{Value, json};
 
@@ -33,20 +33,17 @@ impl Setup {
         for d in [&real, &wt, &bin] {
             fs::create_dir_all(d).unwrap();
         }
-        let cargo = bin.join("cargo");
-        fs::write(
-            &cargo,
-            format!(
-                "#!/bin/sh\ntouch {built}\necho '{{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"switchboard\"}},\"executable\":\"{BIN}\"}}'\n",
-                built = dir.path().join("built").display()
+        // A cargo as strict as cargo about `cargo build`, which says it
+        // built this test's binary.
+        stand_in::cargo(
+            &bin,
+            &format!(
+                "touch {built}\necho '{{\"reason\":\"compiler-artifact\",\"target\":{{\"name\":\"switchboard\"}},\"executable\":\"{BIN}\"}}'",
+                built = sh_quote(&dir.path().join("built").to_string_lossy())
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         // A stand-in Claude Code, which the try's setup asks its version.
-        let claude = bin.join("claude");
-        fs::write(&claude, "#!/bin/sh\necho '2.1.319 (Claude Code)'\n").unwrap();
-        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+        Claude::new().version("2.1.319").install(&bin);
         write(
             &wt.join("Cargo.toml"),
             "[package]\nname = \"switchboard\"\n",
@@ -118,8 +115,12 @@ impl Setup {
 }
 
 impl Drop for Setup {
+    /// Ends the try, then fails the test if a stand-in refused a call.
     fn drop(&mut self) {
         let _ = self.try_(&["--clean"]);
+        if !std::thread::panicking() {
+            stand_in::assert_none_refused(&self.bin);
+        }
     }
 }
 

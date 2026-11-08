@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use common::stand_in::Claude;
 use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
@@ -265,15 +266,9 @@ fn notes_left_alone_in_a_tab_it_was_brought_beside_goes_home() {
 fn press_runs_an_action_by_name_and_opens_a_notes_tab() {
     let rig = Rig::new();
     // A stand-in Claude that keeps what it was started with.
-    let bin = rig.server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("for a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$HOME/claude-args\"\nexec sleep 30")
+        .install(&rig.server.home.join("bin"));
     let mut client = rig.server.attach(140, 36);
     client.wait_text("$");
 

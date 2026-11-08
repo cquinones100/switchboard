@@ -12,6 +12,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use common::TestServer;
+use common::stand_in::Claude;
 use serde_json::Value;
 
 fn git(dir: &Path, args: &[&str]) {
@@ -39,16 +40,9 @@ fn world() -> (TestServer, PathBuf, common::TestClient) {
         ("LINEAR_API_KEY", "lin_test"),
         ("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9"),
     ]);
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\necho \"$PWD $*\" >> \"$HOME/claude-ran\"\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("echo \"$PWD $*\" >> \"$HOME/claude-ran\"")
+        .install(&server.home.join("bin"));
     let repo = server.home.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);

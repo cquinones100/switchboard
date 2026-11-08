@@ -14,7 +14,7 @@ mod common;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{BIN, TempDir};
+use common::{BIN, TempDir, stand_in};
 use serde_json::json;
 // What only the tests against a stand-in for GitHub use, which need the
 // `net` feature.
@@ -73,69 +73,40 @@ fn wait_panes(server: &TestServer, n: usize) -> Vec<Value> {
 #[cfg(feature = "net")]
 mod with_github {
     use super::*;
-    use std::io::{BufRead, BufReader, Read, Write};
-    use std::net::TcpListener;
+    use crate::common::http::{Fake, Reply};
 
-    /// A stand-in for GitHub's GraphQL endpoint: the PR on a branch for a
-    /// question about pull requests, its description for one about a pull
-    /// request by its number.
-    fn fake_github() -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let mut reader = BufReader::new(stream);
-                let mut length = 0;
-                loop {
-                    let mut line = String::new();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    let line = line.trim_end();
-                    if line.is_empty() {
-                        break;
-                    }
-                    if let Some((name, value)) = line.split_once(':')
-                        && name.eq_ignore_ascii_case("content-length")
-                    {
-                        length = value.trim().parse().unwrap_or(0);
-                    }
-                }
-                let mut body = vec![0; length];
-                let _ = reader.read_exact(&mut body);
-                let asked = String::from_utf8_lossy(&body);
-                let pr = json!({
-                    "number": 12, "url": "https://github.com/acme/widgets/pull/12",
-                    "title": "Fix the login", "state": "OPEN", "isDraft": false,
-                    "baseRefName": "main", "headRefName": "feature-x",
-                    "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
-                    "body": "## Why\n\nThe token went **stale**.\n\n```mermaid\nflowchart LR\n  A[Login] --> B[Token]\n```\n"
-                });
-                let answer = if asked.contains("pullRequests") {
-                    json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
-                } else {
-                    json!({"data": {"repository": {"pullRequest": pr}}})
-                }
-                .to_string();
-                let mut stream = reader.into_inner();
-                let _ = write!(
-                    stream,
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}",
-                    answer.len()
-                );
+    /// A stand-in for GitHub (tests/common/http.rs), as strict as GitHub
+    /// about how it is asked: the PR on a branch for a question about pull
+    /// requests, its description for one about a pull request by its number.
+    fn fake_github() -> Fake {
+        Fake::github("test-token", |request| {
+            if request.path() != "/graphql" {
+                return None;
             }
-        });
-        url
+            let asked = request.text();
+            let pr = json!({
+                "number": 12, "url": "https://github.com/acme/widgets/pull/12",
+                "title": "Fix the login", "state": "OPEN", "isDraft": false,
+                "baseRefName": "main", "headRefName": "feature-x",
+                "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "body": "## Why\n\nThe token went **stale**.\n\n```mermaid\nflowchart LR\n  A[Login] --> B[Token]\n```\n"
+            });
+            let answer = if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else {
+                json!({"data": {"repository": {"pullRequest": pr}}})
+            };
+            Some(Reply::json(200, answer))
+        })
     }
 
     #[test]
     fn m_v_opens_the_pr_to_the_right_and_closes_it_again() {
-        let url = fake_github();
+        let fake = fake_github();
         let server = TestServer::start_with_env(&[
             ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &url),
-            ("SWITCHBOARD_GITHUB_API", &url),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
         ]);
         settings(&server, json!({"linear": false}));
         let work = server.dir.path().join("widgets");
@@ -205,11 +176,11 @@ mod with_github {
 
     #[test]
     fn the_branch_s_ticket_and_pr_are_copied_and_its_merge_queue_opened() {
-        let url = fake_github();
+        let fake = fake_github();
         let server = TestServer::start_with_env(&[
             ("GH_TOKEN", "test-token"),
-            ("SWITCHBOARD_GITHUB_GRAPHQL", &url),
-            ("SWITCHBOARD_GITHUB_API", &url),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
             ("LINEAR_WORKSPACE", "acme"),
         ]);
         settings(&server, json!({"sidebar": false}));
@@ -282,20 +253,14 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
     let bin = home.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let opened = dir.path().join("opened");
-    // Chrome on Linux, `open` on macOS: each writes down what it was given.
-    for name in ["google-chrome", "open"] {
-        let script = bin.join(name);
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n",
-                opened.display()
-            ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // Chrome on Linux, `open` on macOS: each writes down what it was given,
+    // after its name.
+    stand_in::desktop(
+        &bin,
+        &["google-chrome", "open"],
+        &opened,
+        &dir.path().join("clipboard"),
+    );
     // Chrome's profiles, where it keeps them on either.
     let local_state = json!({"profile": {"info_cache": {
         "Default": {"name": "Person 1"}, "Profile 2": {"name": "Work"}
@@ -344,9 +309,9 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
     };
     let chrome = |profile: &str, url: &str| {
         if cfg!(target_os = "macos") {
-            format!("-na Google Chrome --args --profile-directory={profile} {url}")
+            format!("open -na Google Chrome --args --profile-directory={profile} {url}")
         } else {
-            format!("--profile-directory={profile} {url}")
+            format!("google-chrome --profile-directory={profile} {url}")
         }
     };
     let ticket = "https://linear.app/x/issue/AB-1";
@@ -357,6 +322,7 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
     );
     let pr = "https://github.com/o/r/pull/12345#linear.app";
     assert_eq!(open(pr), chrome("Default", pr), "else the default profile");
+    stand_in::assert_none_refused(&bin);
 }
 
 #[test]
@@ -381,27 +347,16 @@ fn a_link_a_program_writes_reaches_the_terminal_as_a_link() {
     assert!(open < text && text < close);
 }
 
-/// Stand-ins for what copies and opens on each desktop, each writing down
-/// what it was given in `did`, so a test touches neither the clipboard nor
-/// the desktop.
+/// Stand-ins for what copies and opens on each desktop, each as strict as
+/// the real one about how it is called and writing down what it was given
+/// in `did`, so a test touches neither the clipboard nor the desktop.
 fn desktop_stand_ins(home: &Path, did: &Path) {
-    let bin = home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    for name in [
-        "open", "xdg-open", "wslview", "gio", "pbcopy", "wl-copy", "xclip", "xsel", "clip.exe",
-    ] {
-        let script = bin.join(name);
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nprintf '%s %s\\n' \"${{0##*/}}\" \"$*\" >> '{}'\n",
-                did.display()
-            ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let tools: Vec<&str> = stand_in::OPENERS
+        .iter()
+        .chain(stand_in::CLIPBOARD)
+        .copied()
+        .collect();
+    stand_in::desktop(&home.join("bin"), &tools, did, &home.join("clipboard"));
 }
 
 #[test]

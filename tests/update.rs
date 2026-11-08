@@ -11,8 +11,7 @@
 mod common;
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -20,6 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use common::http::{self, Reply, Service};
+use common::stand_in;
 use common::{BIN, TempDir, TestServer};
 use serde_json::{Value, json};
 use switchboard::update::{self, Release, install, release};
@@ -34,57 +35,40 @@ const TARGETS: [&str; 3] = [
 /// Each path's status and body.
 type Routes = Arc<Mutex<HashMap<String, (u16, Vec<u8>)>>>;
 
-/// A stand-in for GitHub: each path's answer, changeable while it runs, and
-/// how many times each path was asked for.
+/// A stand-in for GitHub, as strict as GitHub's API is for a public
+/// repository (tests/common/http.rs: a User-Agent, GET, no token needed and
+/// a wrong one refused): each path's answer, changeable while it runs, the
+/// release's files served from it too, and how many times each path was
+/// asked for.
 struct Fake {
     url: String,
     routes: Routes,
-    asked: Arc<Mutex<HashMap<String, usize>>>,
+    http: http::Fake,
 }
 
 impl Fake {
     fn start() -> Fake {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
-        let url = format!("http://{}", listener.local_addr().unwrap());
         let routes: Routes = Arc::default();
-        let asked: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
-        let (r, a) = (routes.clone(), asked.clone());
-        thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(stream) = stream else { return };
-                let (r, a) = (r.clone(), a.clone());
-                thread::spawn(move || {
-                    let mut reader = BufReader::new(stream);
-                    let mut first = String::new();
-                    if reader.read_line(&mut first).is_err() {
-                        return;
-                    }
-                    loop {
-                        let mut line = String::new();
-                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                            break;
-                        }
-                    }
-                    let target = first.split_whitespace().nth(1).unwrap_or("/");
-                    let path = target.split('?').next().unwrap_or(target).to_string();
-                    *a.lock().unwrap().entry(path.clone()).or_default() += 1;
-                    let (status, body) = r
-                        .lock()
-                        .unwrap()
-                        .get(&path)
-                        .cloned()
-                        .unwrap_or((404, br#"{"message":"Not Found"}"#.to_vec()));
-                    let mut stream = reader.into_inner();
-                    let _ = write!(
-                        stream,
-                        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = stream.write_all(&body);
-                });
+        let r = routes.clone();
+        let http = http::Fake::start(Service::GitHubPublic { token: None }, move |request| {
+            if request.method != "GET" {
+                return None;
             }
+            let kind = if request.path().starts_with("/dl/") {
+                "application/octet-stream"
+            } else {
+                "application/json; charset=utf-8"
+            };
+            r.lock()
+                .unwrap()
+                .get(request.path())
+                .map(|(status, body)| Reply::bytes(*status, kind, body.clone()))
         });
-        Fake { url, routes, asked }
+        Fake {
+            url: http.url.clone(),
+            routes,
+            http,
+        }
     }
 
     fn serve(&self, path: &str, status: u16, body: impl Into<Vec<u8>>) {
@@ -95,7 +79,7 @@ impl Fake {
     }
 
     fn asked(&self, path: &str) -> usize {
-        self.asked.lock().unwrap().get(path).copied().unwrap_or(0)
+        self.http.seen().iter().filter(|r| r.path() == path).count()
     }
 
     /// A release `tag` whose archive for every target holds `binary`, each
@@ -164,16 +148,16 @@ fn archive_of(path: &str, bytes: &[u8]) -> Vec<u8> {
     gz.finish().unwrap()
 }
 
-/// What the release's binary is in these tests: a script that says a
-/// version and notes in `$SB_MARK` that its setup ran.
+/// What the release's binary is in these tests: a stand-in release
+/// (tests/common/stand_in.rs) that says a version and notes in `$SB_MARK`
+/// that its setup ran. Named anything but switchboard, it fails as
+/// switchboard 0.2.0 did, reading its own name as a command it doesn't
+/// have, so an installer that runs it under another name is caught here.
 fn stub(version: &str) -> Vec<u8> {
-    // Named anything but switchboard, it fails as switchboard 0.2.0 did,
-    // reading its own name as a command it doesn't have, so an installer
-    // that runs it under another name is caught here.
-    format!(
-        "#!/bin/sh\nname=$(basename \"$0\")\n[ \"$name\" = switchboard ] || {{ echo \"switchboard: no command named $name\" >&2; exit 2; }}\ncase \"$1\" in\n  --version) echo 'switchboard {version} (stub)' ;;\n  setup) echo \"setup $*\" >> \"$SB_MARK\" ;;\nesac\n"
-    )
-    .into_bytes()
+    stand_in::Release::new(&format!("{version} (stub)"))
+        .on_setup("echo \"setup $*\" >> \"$SB_MARK\"")
+        .script()
+        .into_bytes()
 }
 
 #[test]
@@ -486,21 +470,11 @@ fn the_server_doesnt_look_with_the_check_off() {
 // ── install.sh ──────────────────────────────────────────────────────────────
 
 /// A folder of stand-ins for `uname` (saying `os` and `arch`) and, on a
-/// Mac, `sysctl` (saying whether the shell runs under Rosetta).
+/// Mac, `sysctl` (saying whether the shell runs under Rosetta), each as
+/// strict as the real one about how it is called.
 fn stubbed_platform(dir: &Path, os: &str, arch: &str, translated: &str) -> PathBuf {
     let stubs = dir.join("stubs");
-    std::fs::create_dir_all(&stubs).unwrap();
-    for (name, body) in [
-        (
-            "uname",
-            format!("#!/bin/sh\ncase \"$1\" in -s) echo {os} ;; -m) echo {arch} ;; esac\n"),
-        ),
-        ("sysctl", format!("#!/bin/sh\necho {translated}\n")),
-    ] {
-        let path = stubs.join(name);
-        std::fs::write(&path, body).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    stand_in::platform(&stubs, os, arch, translated);
     stubs
 }
 
@@ -546,6 +520,7 @@ fn install_sh_picks_the_archive_for_each_platform() {
                 );
             }
         }
+        stand_in::assert_none_refused(&stubs);
     }
 }
 
@@ -623,4 +598,6 @@ fn install_sh_installs_a_checked_release_and_runs_its_setup() {
         "setup setup\n"
     );
     assert_eq!(fake.asked(&format!("{}/latest", Fake::list_path())), 2);
+    stand_in::assert_none_refused(&stubs);
+    stand_in::assert_none_refused(&dir.path().join(".local/bin"));
 }

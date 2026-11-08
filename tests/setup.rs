@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use common::stand_in::{Claude, Gh};
 use common::{BIN, TempDir};
 
 /// A home of the test's own, with `bin` for its stand-ins for programs.
@@ -35,14 +36,10 @@ impl Home {
         h
     }
 
-    /// The stand-in Claude Code, saying it is `version`.
+    /// The stand-in Claude Code, as strict as it about how it is called,
+    /// saying it is `version`.
     fn claude_version(&self, version: &str) {
-        self.stand_in(
-            "claude",
-            &format!(
-                "#!/bin/sh\n[ \"$1\" = --version ] && echo '{version} (Claude Code)'\nexit 0\n"
-            ),
-        );
+        Claude::new().version(version).install(&self.path("bin"));
     }
 
     /// Switchboard's own settings file, holding `settings`.
@@ -166,13 +163,14 @@ impl Home {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+}
 
-    /// A program on the test's PATH: `switchboard` linked to the binary,
-    /// anything else a script.
-    fn stand_in(&self, name: &str, script: &str) {
-        let file = self.path("bin").join(name);
-        fs::write(&file, script).unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+impl Drop for Home {
+    /// Fails the test if a stand-in on its PATH refused a call.
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            common::stand_in::assert_none_refused(&self.path("bin"));
+        }
     }
 }
 
@@ -576,8 +574,8 @@ fn claude_md_imports_your_rules_from_a_file_or_a_repository_and_switchboard_s_pa
     assert!(!none.status.success());
     assert!(stderr(&none).contains("no CLAUDE.md in your rules' repository"));
 
-    // The guided setup lists it as left to do, with Claude Code there.
-    h.stand_in("claude", "#!/bin/sh\n");
+    // The guided setup lists it as left to do, with Claude Code there
+    // (Home's stand-in).
     let guided = run(&["setup", "--check"]);
     assert!(
         stdout(&guided).contains("✗ your CLAUDE.md: no CLAUDE.md in your rules' repository"),
@@ -589,19 +587,10 @@ fn claude_md_imports_your_rules_from_a_file_or_a_repository_and_switchboard_s_pa
 #[test]
 fn claude_md_adds_gh_as_a_credential_helper_of_a_rules_clone_on_github_once() {
     let h = Home::new("setup-md-gh");
-    // A space in gh's path, which the helper has to quote.
+    // A space in gh's path, which the helper has to quote; signed in once
+    // SIGNED_IN is there.
     let bin = h.path("my bin");
-    fs::create_dir_all(&bin).unwrap();
-    let gh = bin.join("gh");
-    fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\n[ \"$1 $2\" = \"auth token\" ] && [ -e \"{}/SIGNED_IN\" ]\n",
-            h.home.display()
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let gh = Gh::signed_in_while(&h.path("SIGNED_IN")).install(&bin);
     let url = "https://gist.github.com/abc123.git";
     fs::create_dir_all(h.path(".config/switchboard")).unwrap();
     fs::write(
@@ -665,6 +654,7 @@ fn claude_md_adds_gh_as_a_credential_helper_of_a_rules_clone_on_github_once() {
         "gh's, quoted, after the clone's own"
     );
     assert!(!stdout(&run(&["setup", "claude-md"])).contains("credential helper"));
+    common::stand_in::assert_none_refused(&bin);
 }
 
 #[test]

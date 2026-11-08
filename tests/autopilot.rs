@@ -15,6 +15,7 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
+use common::stand_in::Claude;
 use common::{TempDir, TestServer};
 use serde_json::{Value, json};
 
@@ -79,16 +80,9 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     // can't be sure of, so it doesn't pause while you're away.
     let settings = json!({"notifications": false, "tips": false, "github": false, "linear": false, "pause_when_away": false});
     std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let claude = bin.join("claude");
-    std::fs::write(
-        &claude,
-        "#!/bin/sh\necho \"$PWD\" >> \"$HOME/claude-ran\"\n",
-    )
-    .unwrap();
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Claude::new()
+        .answer("echo \"$PWD\" >> \"$HOME/claude-ran\"")
+        .install(&server.home.join("bin"));
     let repo = server.home.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q"]);

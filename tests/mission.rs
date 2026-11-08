@@ -9,6 +9,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
+use common::stand_in::Claude;
 use common::{TestClient, TestServer};
 use serde_json::{Value, json};
 
@@ -275,18 +276,9 @@ fn your_claude_md_row_names_where_the_rules_come_from_and_runs_setup() {
     let (server, mut client) = two_tabs(json!({}));
     std::fs::write(server.home.join("rules.md"), "Be brief.\n").unwrap();
     // The Claude Code setup asks the version of: a stand-in.
-    let bin = server.home.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(
-        bin.join("claude"),
-        "#!/bin/sh\necho '2.1.319 (Claude Code)'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        bin.join("claude"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    Claude::new()
+        .version("2.1.319")
+        .install(&server.home.join("bin"));
     open(&mut client);
     client.type_text("vsett\r");
     client.wait_text("INTEGRATIONS");
