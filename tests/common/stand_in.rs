@@ -505,6 +505,22 @@ impl Claude {
         }
     }
 
+    /// A Claude Code that isn't signed in, as one is in a home of a test's
+    /// own: a prompt fails and asks for /login, and it knows no connector.
+    pub fn signed_out() -> Claude {
+        Claude::new().answer(
+            r#"case $CLAUDE_CALL in
+  'mcp get')
+    printf 'No MCP server found with name: %s\n' "$3" >&2
+    exit 1 ;;
+  'mcp list') printf 'No MCP servers configured. Use `claude mcp add` to add a server.\n' ;;
+  *)
+    printf 'Not logged in · Please run /login\n'
+    exit 1 ;;
+esac"#,
+        )
+    }
+
     /// The version `claude --version` says.
     pub fn version(mut self, version: &str) -> Claude {
         self.version = version.into();

@@ -33,6 +33,8 @@ impl Home {
         fs::create_dir_all(home.join("bin")).unwrap();
         let h = Home { _dir: dir, home };
         h.claude_version("2.1.319");
+        // And a gh that isn't signed in, so the real one isn't asked.
+        Gh::new().install(&h.path("bin"));
         h
     }
 
