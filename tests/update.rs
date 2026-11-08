@@ -216,7 +216,10 @@ fn update_puts_the_release_in_place_and_runs_its_setup() {
     let said = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{said}");
     assert!(
-        said.contains("Switchboard 9.9.9 is out; you have 0.1.0."),
+        said.contains(&format!(
+            "Switchboard 9.9.9 is out; you have {}.",
+            env!("CARGO_PKG_VERSION")
+        )),
         "{said}"
     );
     assert!(said.contains("• Everything in 9.9.9 (abc1234)"), "{said}");
