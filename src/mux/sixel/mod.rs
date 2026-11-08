@@ -146,14 +146,14 @@ impl Key {
 /// a picture whole loses a sliver of its bottom edge, and one a box cuts
 /// into pieces a row tall a sliver under each row, less than a band
 /// reaching into the row below would cover.
-pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fitted>), String> {
+pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fitted>), Failure> {
     let cell = (key.fit.cell.0.max(1) as u32, key.fit.cell.1.max(1) as u32);
     let fitted = match fitted {
         Some(f) => f,
         None => {
-            let image = encode::read_png(&key.fit.path)?;
+            let image = encode::read_png(&key.fit.path).map_err(Failure::Picture)?;
             let cells = encode::cells_of(key.fit.given, image.dimensions(), cell);
-            Arc::new(encode::prepare(&image, cells, cell)?)
+            Arc::new(encode::prepare(&image, cells, cell).map_err(Failure::Picture)?)
         }
     };
     let (col, row, cols, rows) = key.crop;
@@ -166,16 +166,25 @@ pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fi
         height,
     );
     if crop.2 > encode::MOST || crop.3 > encode::MOST {
-        return Err("a piece too large to draw".into());
+        return Err(Failure::Piece("a piece too large to draw".into()));
     }
     let sixel = encode::encode(&fitted, crop);
     if sixel.len() > MOST_BYTES {
-        return Err(format!(
+        return Err(Failure::Piece(format!(
             "a piece of {} bytes, more than a terminal should be sent at once",
             sixel.len()
-        ));
+        )));
     }
     Ok((sixel.into(), fitted))
+}
+
+/// Why a piece couldn't be drawn: its picture (not a PNG, gone), which no
+/// other piece of it can be drawn from either, or the piece alone (too
+/// large to send), when a smaller piece of the same picture still can be.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    Picture(String),
+    Piece(String),
 }
 
 /// What the work off the server's task found.
@@ -192,7 +201,7 @@ pub enum SixelEvent {
     /// A piece drawn, or why it couldn't be.
     Drawn {
         key: Key,
-        made: Result<(Arc<[u8]>, Arc<Fitted>), String>,
+        made: Result<(Arc<[u8]>, Arc<Fitted>), Failure>,
     },
 }
 
@@ -260,8 +269,11 @@ pub struct Sixel {
     /// is drawn by until its own look comes, so it doesn't blink.
     looks: HashMap<PathBuf, Look>,
     /// Pictures that couldn't be drawn (not a PNG, gone), not tried again
-    /// until given again.
+    /// until their file changes (`Fit` holds its look).
     failed: HashSet<Fit>,
+    /// Pieces too large to draw, not tried again while their picture and
+    /// crop stay the same; the picture's other pieces still are.
+    failed_pieces: HashSet<Key>,
     /// Transmissions counted, newest highest.
     serial: u64,
     /// Whether sixel was chosen when last looked, so a change draws every
@@ -280,6 +292,7 @@ impl Default for Sixel {
             looking: HashSet::new(),
             looks: HashMap::new(),
             failed: HashSet::new(),
+            failed_pieces: HashSet::new(),
             serial: 0,
             on: false,
         }
@@ -490,6 +503,7 @@ impl Server {
             || self.sixel.drawing.len() >= AT_ONCE
             || self.sixel.drawing.contains(&key)
             || self.sixel.failed.contains(&key.fit)
+            || self.sixel.failed_pieces.contains(&key)
         {
             return;
         }
@@ -540,12 +554,19 @@ impl Server {
                         let bytes = sixel.len();
                         self.sixel.encoded.insert(key, sixel, bytes);
                     }
-                    Err(e) => {
+                    Err(Failure::Picture(e)) => {
                         eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
                         if self.sixel.failed.len() >= 256 {
                             self.sixel.failed.clear();
                         }
                         self.sixel.failed.insert(key.fit);
+                    }
+                    Err(Failure::Piece(e)) => {
+                        eprintln!("switchboard server: a picture couldn't be drawn as sixel: {e}");
+                        if self.sixel.failed_pieces.len() >= 256 {
+                            self.sixel.failed_pieces.clear();
+                        }
+                        self.sixel.failed_pieces.insert(key);
                     }
                 }
             }
@@ -636,9 +657,23 @@ mod tests {
             crop: (0, 0, 4, 2),
             ..key.clone()
         };
-        let (sixel, _) = draw(&other, Some(fitted)).unwrap();
+        let (sixel, _) = draw(&other, Some(fitted.clone())).unwrap();
         assert_eq!(encode::tests::decode(&sixel).0, 40);
-        assert!(draw(&key, None).is_err(), "the file gone, none to read");
+        let too_wide = Key {
+            crop: (0, 0, 2000, 1),
+            ..key.clone()
+        };
+        assert!(
+            matches!(
+                draw(&too_wide, Some(fitted.clone())),
+                Err(Failure::Piece(_))
+            ),
+            "the piece alone, not its picture"
+        );
+        assert!(
+            matches!(draw(&key, None), Err(Failure::Picture(_))),
+            "the file gone, none to read"
+        );
         assert_ne!(key.number(), other.number());
         let _ = std::fs::remove_dir_all(&dir);
     }
