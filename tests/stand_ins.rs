@@ -38,7 +38,12 @@ fn run(program: &Path, args: &[&str], input: Option<&str>, dir: &Path) -> Output
         .unwrap_or_else(|e| panic!("{} runs: {e}", program.display()));
     if let Some(text) = input {
         let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(text.as_bytes()).unwrap();
+        // A stand-in refusing its call exits without reading its input, as
+        // the real program does, sometimes before this is written: the pipe
+        // closing then is the refusal the test looks at, not a failure.
+        if let Err(e) = stdin.write_all(text.as_bytes()) {
+            assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+        }
     }
     child.wait_with_output().unwrap()
 }
