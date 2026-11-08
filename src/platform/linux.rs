@@ -399,29 +399,58 @@ pub fn reveal(file: &std::path::Path) -> Result<()> {
     open(&folder.to_string_lossy())
 }
 
-/// The clipboard's PNG, through Wayland's or X's clipboard tool.
+/// What Windows PowerShell runs under WSL for the clipboard's picture: the
+/// image there (a screenshot, a picture copied in a browser) saved as a
+/// PNG and written to stdout as it is, past PowerShell's text pipeline, so
+/// nothing changes a byte on its way to WSL; it exits 1 when there is none.
+/// The clipboard wants a single-threaded apartment, which `-Sta` gives.
+const WINDOWS_CLIPBOARD_PNG: &str = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; \
+     $image = [System.Windows.Forms.Clipboard]::GetImage(); \
+     if ($image -eq $null) { exit 1 }; \
+     $png = New-Object System.IO.MemoryStream; \
+     $image.Save($png, [System.Drawing.Imaging.ImageFormat]::Png); \
+     $out = [Console]::OpenStandardOutput(); \
+     $out.Write($png.ToArray(), 0, $png.Length); \
+     $out.Flush()";
+
+/// The clipboard's PNG, through Wayland's or X's clipboard tool, or
+/// Windows' through its PowerShell under WSL.
 pub fn paste_image(file: &std::path::Path) -> bool {
-    let out = match clipboard_tool() {
-        Some(("wl-copy", _, _)) => Command::new("wl-paste")
-            .args(["--type", "image/png"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok(),
-        Some(("xclip", _, _)) => Command::new("xclip")
-            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .ok(),
+    let png = match clipboard_tool() {
+        Some(("clip.exe", _, _)) => windows_png(std::path::Path::new("powershell.exe")),
+        Some(("wl-copy", _, _)) => png_from(Command::new("wl-paste").args(["--type", "image/png"])),
+        Some(("xclip", _, _)) => png_from(Command::new("xclip").args([
+            "-selection",
+            "clipboard",
+            "-t",
+            "image/png",
+            "-o",
+        ])),
         _ => None,
     };
-    match out {
-        Some(out) if out.status.success() && out.stdout.starts_with(b"\x89PNG") => {
-            std::fs::write(file, out.stdout).is_ok()
-        }
-        _ => false,
-    }
+    png.is_some_and(|png| std::fs::write(file, png).is_ok())
+}
+
+/// The picture on Windows' clipboard as a PNG, from its PowerShell
+/// (`powershell`) under WSL, when there is one.
+fn windows_png(powershell: &std::path::Path) -> Option<Vec<u8>> {
+    png_from(Command::new(powershell).args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Sta",
+        "-Command",
+        WINDOWS_CLIPBOARD_PNG,
+    ]))
+}
+
+/// What `command` writes, when it succeeds and that is a PNG.
+fn png_from(command: &mut Command) -> Option<Vec<u8>> {
+    let out = command
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    (out.status.success() && out.stdout.starts_with(b"\x89PNG")).then_some(out.stdout)
 }
 
 /// Linux has no Quick Look: the file opens in what the desktop opens it with.
@@ -462,4 +491,27 @@ pub fn user_dir() -> Option<PathBuf> {
 
 pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
     (Vec::new(), Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Under WSL the clipboard's picture comes from Windows PowerShell
+    /// called as here, which a stand-in as strict as it takes: nothing when
+    /// the clipboard holds no picture, its PNG when it does.
+    #[test]
+    fn windows_clipboard_s_picture_comes_through_powershell() {
+        let dir = std::env::temp_dir().join(format!("sb-wsl-png-{}", std::process::id()));
+        let bin = dir.join("bin");
+        let clipboard = dir.join("clipboard");
+        crate::stand_in::desktop(&bin, &["powershell.exe"], &dir.join("log"), &clipboard);
+        let powershell = bin.join("powershell.exe");
+        assert_eq!(windows_png(&powershell), None, "no picture there");
+        let png = b"\x89PNG\r\n\x1a\nthe rest".to_vec();
+        std::fs::write(dir.join("clipboard.png"), &png).unwrap();
+        assert_eq!(windows_png(&powershell), Some(png));
+        crate::stand_in::assert_none_refused(&bin);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
