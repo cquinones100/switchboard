@@ -295,6 +295,8 @@ A note's pictures and the PR and ticket image views are drawn with the kitty gra
 
 While sixel is chosen the workspace asks each terminal as it attaches for its cell's size in pixels (`CSI 16 t`) and draws pictures to fill their cells at that size. Windows Terminal answers with the 10 by 20 pixels a cell its sixel works in, whatever its font, and scales each cell's share of a picture to the font; where a terminal doesn't answer, the cell its window's size in pixels makes is used, else the same 10 by 20. Other terminals that draw sixel and not kitty's pictures (foot, WezTerm, xterm with sixel on, mlterm) take the setting too. A picture takes up to 256 colors, its own when it has that few, as a screenshot of text often does. A change to the setting reaches the terminals attached at once, each asked for its cell then; a workspace whose server started from a build without the setting takes it after `switchboard upgrade` (or `M-p`'s "Restart Switchboard on the latest build on disk").
 
+With UX 2.0 (`ux2`), a picture is drawn under the tab's header, never over it: one scrolled up past the top of its pane is cut there, its rows still in the pane drawn from the pane's first. With the status line gone, a pane reaches the screen's last row, and a sixel there would scroll the whole screen, so the part of a picture on that row is left blank; Notes and the image views keep their own last row for their messages and footer, so their pictures never reach it. Mission control's cards, which show each tab's last lines, and a peek at a tab's screen copy its text, not its pictures: the cells a picture covers show blank there, and a picture is drawn only where its own pane shows it.
+
 ## The palette, messages, tips and menus
 
 ### The palette

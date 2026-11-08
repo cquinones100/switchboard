@@ -13,13 +13,24 @@
 //! inside the workspace whatever the terminal is called. The server reads
 //! the commands from the panes allowed to send them, as before, and keeps
 //! what each image is (`kitty`: its path and placement), forgetting it as
-//! they delete it, never forwarding them. As each frame is composed, after
-//! everything drawn over the panes, the placeholder cells still showing
-//! are found and blanked and gathered into pieces of one picture each
-//! (`place`), and each piece is drawn as sixel beside the frame's cells
-//! (`compose::Frame::pictures`, as the hyperlinks ride beside them), which
-//! `compose::Screen` writes over its cells, so a picture is placed,
-//! scrolled, cut off and covered exactly as its placeholders are.
+//! they delete it, never forwarding them. As each frame is composed, the
+//! placeholder cells those panes drew are noted before anything is drawn
+//! over them, and after everything is, every placeholder cell in the
+//! frame is blanked and those still as their pane drew them are gathered
+//! into pieces of one picture each (`place`), and each piece is drawn as
+//! sixel beside the frame's cells (`compose::Frame::pictures`, as the
+//! hyperlinks ride beside them), which `compose::Screen` writes over its
+//! cells, so a picture is placed, scrolled, cut off and covered exactly as
+//! its placeholders are, and a copy of them (UX 2.0's mission control
+//! cards show each tab's last lines, a peek a tab's screen) is never
+//! taken for the picture.
+//!
+//! UX 2.0 (`ux2`) changes where panes are, not how: its header's rows are
+//! above the panes, so a picture scrolled up out of a pane is cut at the
+//! pane's top, under the header; and with no status line a pane reaches
+//! the screen's last row, which no piece is drawn on (`place`), so a
+//! picture there loses that row. Notes and the image view keep their own
+//! last row for a message or footer, so theirs never reach it.
 //!
 //! Nothing on the drawing path waits: a picture's file is looked at (its
 //! time and length) and read, fitted, quantised and encoded (`encode`) off
@@ -344,16 +355,41 @@ impl Server {
         self.sixel.images.remove(&pane);
     }
 
-    /// The pictures a frame shows, while sixel is chosen: the placeholder
-    /// cells in `panes` (each pane's area on the screen) blanked, and each
-    /// piece of a picture ready put beside the frame's cells; one not
-    /// ready yet is looked at or drawn off the task.
-    pub(super) fn place_pictures(&mut self, frame: &mut Frame, panes: &[(PaneId, Rect)]) {
+    /// Once the panes are drawn (`panes`, each drawn and its area on the
+    /// screen) and before anything is drawn over them, while sixel is
+    /// chosen: the placeholder cells drawn by the panes allowed to send
+    /// pictures, as they drew them (`place::Drawn`).
+    pub(super) fn pictures_drawn(
+        &self,
+        frame: &Frame,
+        panes: &[(PaneId, Rect)],
+    ) -> Option<place::Drawn> {
         if !chosen() {
-            return;
+            return None;
         }
+        let allowed = panes
+            .iter()
+            .filter(|(pane, _)| {
+                self.panes
+                    .get(pane)
+                    .is_some_and(|s| super::passthrough::graphics_allowed(&s.opts))
+            })
+            .copied()
+            .collect();
+        Some(place::Drawn::of(&frame.buf, allowed))
+    }
+
+    /// The pictures a frame shows, while sixel is chosen, once everything
+    /// is drawn: every placeholder cell in it blanked, and each piece of a
+    /// picture still showing in its pane as the pane drew it (`drawn`,
+    /// from `pictures_drawn`) put beside the frame's cells when ready; one
+    /// not ready yet is looked at or drawn off the task.
+    pub(super) fn place_pictures(&mut self, frame: &mut Frame, drawn: Option<place::Drawn>) {
+        let Some(drawn) = drawn else {
+            return;
+        };
         let bottom = frame.area().bottom().saturating_sub(1);
-        let pieces = place::find(&mut frame.buf, panes, bottom);
+        let pieces = place::find(&mut frame.buf, &drawn, bottom);
         if pieces.is_empty() {
             return;
         }

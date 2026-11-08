@@ -2927,14 +2927,17 @@ impl Server {
             Some(s) => self.compose(&mut frame, s, c),
             None => Default::default(),
         };
+        // With sixel chosen, the pictures' cells as the panes drew them,
+        // before anything is drawn over them (src/mux/sixel).
+        let pictures = self.pictures_drawn(&frame, &panes);
         let c = self.clients.get_mut(&id).expect("checked above");
         frame.cover_links(|frame| c.overlays.draw(frame));
         c.status_hits = hits;
         c.header_keys = header_keys;
         c.dirty = false;
-        // Pictures as sixel where placeholders still show, once everything
-        // over the panes is drawn (src/mux/sixel).
-        self.place_pictures(&mut frame, &panes);
+        // Pictures as sixel where the panes' own placeholders still show,
+        // once everything over the panes is drawn.
+        self.place_pictures(&mut frame, pictures);
         let c = self.clients.get_mut(&id).expect("checked above");
         let bytes = c.screen.render(&frame);
         let _ = c.tx.send(ServerMsg::Output(bytes));

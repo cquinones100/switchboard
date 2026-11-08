@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{TestServer, stand_in};
+use common::{TestServer, sent, sixel_at, stand_in};
 
 const ALT: &str = "\x1b";
 
@@ -448,11 +448,6 @@ fn first_pane(server: &TestServer) -> String {
         .to_string()
 }
 
-/// Whether `needle` is anywhere in what the client was sent.
-fn sent(raw: &[u8], needle: &[u8]) -> bool {
-    raw.windows(needle.len()).any(|w| w == needle)
-}
-
 #[test]
 fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
     let server = TestServer::start();
@@ -508,15 +503,6 @@ fn graphics_commands_reach_the_terminal_only_from_a_pane_allowed_them() {
     // more and sent no sixel.
     assert!(!sent(&client.raw, b"\x1b[16t"));
     assert!(!sent(&client.raw, b"\x1bP"));
-}
-
-/// The sixel string the client was sent at a cell (0-based), up to its end.
-fn sixel_at(raw: &[u8], line: usize, col: usize) -> Option<String> {
-    let at = format!("\x1b[{};{}H\x1bP", line + 1, col + 1);
-    let raw = String::from_utf8_lossy(raw);
-    let start = raw.find(&at)? + at.len() - 2;
-    let end = raw[start..].find("\x1b\\")? + start + 2;
-    Some(raw[start..end].to_string())
 }
 
 #[test]

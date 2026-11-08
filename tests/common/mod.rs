@@ -634,6 +634,51 @@ pub fn picture_bytes(png: &Path, id: u32, cols: u16, rows: u16, lead: &str) -> V
     out.into_bytes()
 }
 
+/// Whether `needle` is anywhere in what a client was sent.
+pub fn sent(raw: &[u8], needle: &[u8]) -> bool {
+    raw.windows(needle.len()).any(|w| w == needle)
+}
+
+/// The sixel string a client was sent at a cell (0-based), up to its end.
+pub fn sixel_at(raw: &[u8], line: usize, col: usize) -> Option<String> {
+    let at = format!("\x1b[{};{}H\x1bP", line + 1, col + 1);
+    let raw = String::from_utf8_lossy(raw);
+    let start = raw.find(&at)? + at.len() - 2;
+    let end = raw[start..].find("\x1b\\")? + start + 2;
+    Some(raw[start..end].to_string())
+}
+
+/// Every sixel a client was sent, in order: the cell (0-based) the cursor
+/// was moved to just before it, as the server always moves it, and the
+/// size its raster attributes give in pixels, width and height.
+pub fn sixels(raw: &[u8]) -> Vec<((usize, usize), (u32, u32))> {
+    const START: &str = "\x1bP0;1;0q\"1;1;";
+    let raw = String::from_utf8_lossy(raw);
+    let mut out = Vec::new();
+    let mut rest = &raw[..];
+    while let Some(i) = rest.find(START) {
+        let at = rest[..i]
+            .rfind("\x1b[")
+            .and_then(|j| {
+                let (row, col) = rest[j + 2..i].strip_suffix('H')?.split_once(';')?;
+                Some((
+                    row.parse::<usize>().ok()?.checked_sub(1)?,
+                    col.parse::<usize>().ok()?.checked_sub(1)?,
+                ))
+            })
+            .unwrap_or_else(|| panic!("a sixel with no cursor move before it, at byte {i}"));
+        rest = &rest[i + START.len()..];
+        let size = rest
+            .split('#')
+            .next()
+            .and_then(|s| s.split_once(';'))
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))
+            .unwrap_or_else(|| panic!("a sixel with no size, at byte {i}"));
+        out.push((at, size));
+    }
+    out
+}
+
 /// A PNG of four colours, a quarter each (red, green, blue, yellow from
 /// the top left), `size` pixels a side.
 pub fn four_colours(file: &Path, size: u32) {
