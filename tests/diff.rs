@@ -126,6 +126,19 @@ fn stand_in_claude(home: &Path) {
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// How many stories the stand-in was asked for, told by the story's own
+/// prompt: the server asks its claude other things meanwhile (a connector's
+/// lookup, which streams too, a few seconds after it starts), and Haiku's
+/// order of the files, so counting every ask, or every streamed one, counts
+/// whatever a slow run lets in.
+fn stories_asked(home: &Path) -> usize {
+    std::fs::read_to_string(home.join("claude-asked"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("telling it as a short story"))
+        .count()
+}
+
 fn panes(server: &TestServer) -> Vec<Value> {
     server.list()["sessions"][0]["tabs"][0]["panes"]
         .as_array()
@@ -188,8 +201,9 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     assert_ne!(shown[0]["id"], first.as_str());
     assert_eq!(shown[0]["options"]["@in_place"], "diff");
     assert_eq!(shown[0]["options"]["@parked_pane"], first.as_str());
-    assert!(
-        std::fs::read_to_string(server.home.join("claude-asked")).is_ok(),
+    assert_eq!(
+        stories_asked(&server.home),
+        1,
         "the story was asked of claude"
     );
     // Kept for the next time, under the diff's key.
@@ -230,23 +244,15 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     client.type_text("echo pane-is-back\r");
     client.wait_text("pane-is-back");
 
-    // M-d again opens the story kept, with no new ask for it: the stories
-    // asked, which stream, apart from Haiku's order of the files.
-    let log = |home: &Path| std::fs::read_to_string(home.join("claude-asked")).unwrap_or_default();
-    let stories = |home: &Path| {
-        log(home)
-            .lines()
-            .filter(|l| l.contains("stream-json"))
-            .count()
-    };
-    let before = stories(&server.home);
+    // M-d again opens the story kept, with no new ask for it.
+    let before = stories_asked(&server.home);
     client.send(b"\x1bd");
     client.wait_text("1/2 Change the core");
     assert_eq!(
-        stories(&server.home),
+        stories_asked(&server.home),
         before,
         "the story came from the cache; asked:\n{}",
-        log(&server.home)
+        std::fs::read_to_string(server.home.join("claude-asked")).unwrap_or_default()
     );
     // M-d pressed in the diff closes it too.
     client.send(b"\x1bd");
@@ -306,12 +312,7 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again()
     );
     assert!(!marked(&screen, "a.js"), "{screen:?}");
     // The commits' story kept: editing tells no new one.
-    let stories = std::fs::read_to_string(server.home.join("claude-asked"))
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| l.contains("stream-json"))
-        .count();
-    assert_eq!(stories, 1);
+    assert_eq!(stories_asked(&server.home), 1);
     // The new file, the file on disk on its side, its bar saying so.
     client.type_text("G");
     let screen = client.wait_text("export const c = 1;");
@@ -365,9 +366,12 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
     let screen = client.wait_text("1/1 Not committed yet");
     assert!(marked(&screen, "notes.txt"), "{screen:?}");
     client.wait_text("a thought");
+    // Neither a story nor Haiku's order: the only asks are the server's
+    // own, a connector's lookup, which names its tool.
+    let asked = std::fs::read_to_string(server.home.join("claude-asked")).unwrap_or_default();
     assert!(
-        !server.home.join("claude-asked").exists(),
-        "Haiku isn't asked"
+        asked.lines().all(|l| l.contains("mcp__")),
+        "Haiku isn't asked: {asked}"
     );
     client.type_text("q");
     back(&server);
