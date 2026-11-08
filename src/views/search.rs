@@ -156,7 +156,9 @@ pub fn notes(dir: &Path, query: &str) -> Vec<Found> {
     let mut hits: Vec<(std::time::SystemTime, PathBuf, String)> = files
         .into_iter()
         .filter_map(|file| {
-            let text = std::fs::read_to_string(&file).ok()?;
+            // Without the note's ID line (src/notes/id.rs), which every
+            // note has.
+            let text = crate::notes::id::strip(&std::fs::read_to_string(&file).ok()?);
             let lower = text.to_lowercase();
             if !words.iter().all(|w| lower.contains(w.as_str())) {
                 return None;

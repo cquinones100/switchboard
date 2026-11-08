@@ -29,6 +29,12 @@
 //!                     @agent_phase, its loop marked queue-and-clean's
 //!                     (@agent_loop), since a session following the skill by
 //!                     reading it never invokes it; no words clear it
+//! land-lock autolanded <short hash> [item]
+//!                     says this tab landed without asking (the work-a-note
+//!                     mode's "Land without asking"): marks the tab
+//!                     @autopilot_autoland with the hash, which the sidebar
+//!                     shows, and adds the landing to the notifications
+//!                     (autolanded.json in the state directory)
 //! ```
 //!
 //! A landing holds it only to rebase, test and push, but one whose change no
@@ -63,7 +69,7 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock take|wait|release|leave|holder|queue|move|phase [words]";
+const USAGE: &str = "usage: land-lock take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [item]";
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let command = args.first().map(String::as_str).unwrap_or("");
@@ -72,6 +78,11 @@ pub fn main(args: Vec<String>) -> ExitCode {
     if command == "phase" {
         phase(&args[1..]);
         return ExitCode::SUCCESS;
+    }
+    // Needs no repository either: it runs once the landing has pushed,
+    // whatever the cleanup has removed since.
+    if command == "autolanded" {
+        return autolanded(&args[1..]);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let found = common_dir(&cwd).and_then(|common| {
@@ -167,6 +178,39 @@ fn phase(words: &[String]) {
     } else {
         let _ = socket::ask(&["set", "@agent_phase", &words]);
         let _ = socket::ask(&["set", "@agent_loop", "queue"]);
+    }
+}
+
+/// A landing made without asking, said: the caller's tab marked
+/// `@autopilot_autoland` with the hash (its tab whether a tool stands in for
+/// Claude's pane or not, since a parked pane keeps its tab), and the landing
+/// added to `autolanded.json`, which the server reads into the
+/// notifications ("Landed <hash>: <item>"), naming the tab while it is
+/// open.
+fn autolanded(args: &[String]) -> ExitCode {
+    let Some(hash) = args.first().filter(|h| !h.is_empty()) else {
+        eprintln!("usage: land-lock autolanded <short hash> [item]");
+        return ExitCode::from(2);
+    };
+    let mut tab = String::new();
+    if socket::in_pane() {
+        let _ = socket::ask(&["set", "@autopilot_autoland", hash]);
+        tab = socket::ask_ok(&["display", "tab"])
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default();
+    }
+    let landing = crate::autopilot::landed::Landing {
+        hash: hash.clone(),
+        item: worktree::one_line(&args[1..].join(" ")),
+        tab,
+        at: util::now_ms(),
+    };
+    match crate::autopilot::landed::add(&crate::paths::state_dir(), landing) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("land-lock: couldn't keep the landing: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

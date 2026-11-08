@@ -203,6 +203,10 @@ pub fn paragraph(doc: &mut Doc, first: usize, last: usize, style: Paragraph) {
     };
     for (n, row) in (first..=last).enumerate() {
         let line = doc.line(row);
+        // A note's ID line (id.rs), pasted in, is never a paragraph to style.
+        if super::id::is_line(&line) {
+            continue;
+        }
         let (indent, _, text) = split(&line);
         let marker = if style == Paragraph::Number {
             format!("{}. ", n + 1)

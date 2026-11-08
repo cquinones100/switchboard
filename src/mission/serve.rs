@@ -662,7 +662,13 @@ impl Server {
                 );
                 if let Ok(out) = out {
                     let text = String::from_utf8_lossy(&out.stdout);
-                    found.insert(main.clone(), views::parse_worktrees(&main, &text));
+                    // Never someone else's PR, which no Claude is started
+                    // in (src/trust.rs), by its path alone.
+                    let trees = views::parse_worktrees(&main, &text)
+                        .into_iter()
+                        .filter(|w| !crate::trust::in_review_dir(&w.path))
+                        .collect();
+                    found.insert(main.clone(), trees);
                 }
             }
             let _ = tx.send(Event::Mission(MissionEvent::Worktrees(found)));
@@ -1426,6 +1432,7 @@ impl Server {
             "inbox" => self.inbox_dismiss(item),
             "autopilot" => self.autopilot_dismiss(),
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
+            "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "habits" => {}
             _ => self.day_dismiss(source, item),
         }
@@ -3127,6 +3134,7 @@ mod tests {
             ready_only: false,
             skipped: 0,
             spend_limit: 0.0,
+            lands_alone: false,
         });
         m.cursor = 1;
         let to = row_step(&m, -1);

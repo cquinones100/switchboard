@@ -44,12 +44,16 @@
 //! through them (a git config, gh signing in again) is made to the real one.
 //!
 //! Since its build and its setup run with your credentials within reach, a
-//! worktree is tried only when its code is yours (`trust`, the script's
-//! checks): its `.git` leads back to it, its commits beyond its origin's
-//! branches are found on no other remote and were written and committed
-//! under your git email, and it isn't partway through bringing in other
-//! commits; else only when `~/.config/switchboard/trusted-dirs` lists it by
-//! its exact real path.
+//! worktree is tried only when its code is yours (the script's checks, now
+//! src/trust.rs's `yours_or_listed`): its `.git` leads back to it, its
+//! commits beyond its origin's branches are found on no other remote and
+//! were written and committed under your git email, and it isn't partway
+//! through bringing in other commits; else only when
+//! `~/.config/switchboard/trusted-dirs` lists it by its exact real path. A
+//! PR `wtpr --untrusted` checked out is never tried this way, whatever
+//! trusted-dirs says: only with `--sealed` (src/cmd/try_sealed.rs), in a
+//! home holding nothing of yours under macOS's sandbox. A home made one way
+//! is never laid out the other way until `--clean` has removed it.
 //!
 //! Alone it attaches to the try in this terminal, which must not be one of
 //! Switchboard's panes, since the workspace around it would take every key;
@@ -80,7 +84,7 @@ use crate::worktree::shell_quote;
 use crate::{paths, util};
 
 /// Where the tries' homes are made.
-const ROOT: &str = "/tmp";
+pub(crate) const ROOT: &str = "/tmp";
 
 /// The settings a try starts with turned off, over yours: what would do
 /// twice what your real workspace does, or spend on its own.
@@ -167,19 +171,8 @@ const STARTUP: &[&str] = &[
 /// The first line of a startup file the try wrote.
 const STARTUP_MARK: &str = "# switchboard try:";
 
-/// git's files that say a merge, rebase, cherry-pick or revert is under way.
-const MIDWAY: &[&str] = &[
-    "MERGE_HEAD",
-    "SQUASH_MSG",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "REBASE_HEAD",
-    "rebase-merge",
-    "rebase-apply",
-];
-
 #[derive(Debug, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Attach,
     Print,
     Detached,
@@ -188,14 +181,34 @@ enum Mode {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
+    // What a sealed try runs of Switchboard's own, in a sandbox that
+    // reaches its server alone (try_sealed.rs).
+    if args.first().map(String::as_str) == Some("--sealed-call") {
+        return super::try_sealed::call_main(&args[1..]);
+    }
     let mut mode = Mode::Attach;
     let mut target: Option<PathBuf> = None;
-    for arg in &args {
-        match arg.as_str() {
+    let mut sealed = false;
+    let mut fetch = false;
+    let mut run: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
             "--print" => mode = Mode::Print,
             "--detached" => mode = Mode::Detached,
             "--clean" => mode = Mode::Clean,
             "--clean-all" => mode = Mode::CleanAll,
+            "--sealed" => sealed = true,
+            "--fetch" => fetch = true,
+            // Everything after it is the command, run sealed.
+            "--run" => {
+                run = args[i + 1..].to_vec();
+                if run.is_empty() {
+                    eprintln!("switchboard try: --run needs a command");
+                    return ExitCode::from(2);
+                }
+                break;
+            }
             "-h" | "--help" => {
                 usage();
                 return ExitCode::SUCCESS;
@@ -206,10 +219,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
             }
             dir => target = Some(PathBuf::from(dir)),
         }
+        i += 1;
+    }
+    for (given, flag) in [(!run.is_empty(), "--run"), (fetch, "--fetch")] {
+        if given && !sealed {
+            eprintln!("switchboard try: {flag} works only with --sealed");
+            return ExitCode::from(2);
+        }
     }
     let result = match mode {
         Mode::CleanAll => clean_all(Path::new(ROOT)),
         Mode::Clean => clean_named(target.as_deref()),
+        _ if sealed => super::try_sealed::start(mode, target.as_deref(), fetch, &run),
         _ => start(mode, target.as_deref()),
     };
     match result {
@@ -223,12 +244,18 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 fn usage() {
     println!("Usage: switchboard try [--print | --detached] [dir]");
+    println!("       switchboard try --sealed [--fetch] [--print | --detached] [dir]");
+    println!("       switchboard try --sealed [--fetch] [dir] --run <command>...");
     println!("       switchboard try --clean [dir] | --clean-all\n");
     println!("Builds a Switchboard worktree (the one you are in, or dir) and runs it under");
     println!("a home of its own, /tmp/sb-<hash>, leaving your workspace alone. Alone it");
     println!("attaches here; --print prints the environment to export in another terminal;");
     println!("--detached starts its server with no client and prints how to drive it.");
-    println!("--clean ends its server and removes its home; --clean-all does every try's.");
+    println!("--sealed tries someone else's code (a PR wtpr --untrusted checked out) in a");
+    println!("home holding nothing of yours, its build, server and clients in macOS's");
+    println!("sandbox; --fetch fetches a Cargo.lock other than your clone's from crates.io;");
+    println!("--run runs a command there (its tests). --clean ends its server and removes");
+    println!("its home; --clean-all does every try's.");
 }
 
 /// The try's home for a worktree: `/tmp/sb-` and the first eight hex digits
@@ -280,10 +307,32 @@ fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
             "you're in one of Switchboard's panes, whose workspace would take every key of the try's; run it in a terminal of its own, or there eval \"$(switchboard try --print)\" and then switchboard, or use --detached to drive it with commands"
         );
     }
+    // Someone else's PR checked out untrusted runs only sealed, whatever
+    // trusted-dirs says.
+    if crate::trust::is_untrusted(&wt) {
+        bail!(
+            "{} holds a PR wtpr --untrusted set up, whose code runs only sealed: switchboard try --sealed{}",
+            wt.display(),
+            if crate::platform::sandbox_ready().is_ok() {
+                ""
+            } else {
+                ", which needs macOS"
+            }
+        );
+    }
     let real = paths::home();
-    trust(&real, &wt).map_err(|why| anyhow!("{why}"))?;
-    let bin = build(&wt)?;
+    crate::trust::yours_or_listed(&real, &wt).map_err(|why| anyhow!("{why}"))?;
     let home = home_of(Path::new(ROOT), &wt);
+    // A sealed home is the try's code's to change: never laid out again
+    // with your files linked in.
+    if super::try_sealed::is_sealed(&home) {
+        bail!(
+            "{} was made with --sealed; run switchboard try --clean {} first",
+            home.display(),
+            shell_quote(&wt.to_string_lossy())
+        );
+    }
+    let bin = build(&wt)?;
     let layout = Try {
         real: real.clone(),
         home: home.clone(),
@@ -424,16 +473,23 @@ fn start_detached(env: &Env, bin: &Path, home: &Path, wt: &Path) -> Result<()> {
     }
     command.spawn().context("couldn't start its server")?;
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut stream = loop {
-        match UnixStream::connect(&socket) {
-            Ok(stream) => break stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-            Err(_) => bail!(
+    while UnixStream::connect(&socket).is_err() {
+        if Instant::now() >= deadline {
+            bail!(
                 "its server didn't start; {} says why",
                 state.join("server.log").display()
-            ),
+            );
         }
-    };
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    make_session(&socket)
+}
+
+/// Gives the server on `socket` a session by attaching and leaving at once,
+/// as `tmux new -d` does. A sealed try's runs in a sandbox of its own
+/// (try_sealed.rs's `call`), since its server is the try's code.
+pub(crate) fn make_session(socket: &Path) -> Result<()> {
+    let mut stream = UnixStream::connect(socket).context("its server doesn't answer")?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     stream.write_all(&proto::encode_client(&ClientMsg::Attach {
         session: None,
@@ -965,6 +1021,12 @@ fn copy_in(source: &Path, dest: &Path) -> Result<()> {
     }
 }
 
+/// A folder of Switchboard's own copied whole, for a sealed try's crates
+/// (on a Mac each file a clone of the other, which costs nothing).
+pub(crate) fn copy_tree(source: &Path, dest: &Path) -> Result<()> {
+    copy_follow(source, dest, &mut HashSet::new())
+}
+
 /// `cp -RL`: a file or folder copied with every link followed. A folder a
 /// link leads back into (one already being copied) is left out, as is
 /// anything neither a file nor a folder.
@@ -1037,10 +1099,10 @@ fn walk_links(dir: &Path, skip: &Path) -> Vec<PathBuf> {
     found
 }
 
-// ── Whose code it is ────────────────────────────────────────────────────────
+// ── git ──────────────────────────────────────────────────────────────────────
 
 /// A git command's output in `dir`, trimmed; `None` when it fails.
-fn git(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Option<String> {
     let mut command = Command::new("git");
     command.arg("-C").arg(dir).args(args);
     util::run_command(&mut command)
@@ -1048,174 +1110,25 @@ fn git(dir: &Path, args: &[&str]) -> Option<String> {
         .map(|s| s.trim_end().to_string())
 }
 
-/// Lines of a git command's output, none when it fails.
-fn git_lines(dir: &Path, args: &[&str]) -> Vec<String> {
-    git(dir, args)
-        .map(|s| {
-            s.lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn real_dir(path: &Path) -> Option<PathBuf> {
-    path.canonicalize().ok()
-}
-
-/// Whether `~/.config/switchboard/trusted-dirs` lists `dir` by its exact
-/// real path: one a line, absolute or from `~/`, blank lines and those
-/// starting with `#` ignored; a missing file trusts nothing.
-pub fn listed(real: &Path, dir: &Path) -> bool {
-    let Some(want) = real_dir(dir) else {
-        return false;
-    };
-    let Some(text) = util::read_text(real.join(".config/switchboard/trusted-dirs")) else {
-        return false;
-    };
-    text.lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| match l.strip_prefix("~/") {
-            Some(rest) => real.join(rest),
-            None if l == "~" => real.to_path_buf(),
-            None => PathBuf::from(l),
-        })
-        .any(|p| real_dir(&p).as_ref() == Some(&want))
-}
-
-/// Whether the worktree's code is yours to build and run with your
-/// credentials, as the script decided; the refusal, saying how to trust it,
-/// when it isn't.
-pub fn trust(real: &Path, wt: &Path) -> Result<(), String> {
-    let mut midway = None;
-    let mut foreign = false;
-    let mut own = leads_back(wt);
-    if own {
-        let ours = origin_branches(wt);
-        let theirs: Vec<String> =
-            git_lines(wt, &["for-each-ref", "--format=%(refname)", "refs/remotes"])
-                .into_iter()
-                .filter(|r| !ours.contains(r))
-                .collect();
-        let not_ours = |from: &[String]| -> HashSet<String> {
-            let mut args: Vec<&str> = vec!["rev-list"];
-            args.extend(from.iter().map(String::as_str));
-            args.push("--not");
-            args.extend(ours.iter().map(String::as_str));
-            args.push("--");
-            git_lines(wt, &args).into_iter().collect()
-        };
-        // A commit of HEAD's found on another remote's ref (a fork's, or
-        // origin's PR heads) is someone else's.
-        if !theirs.is_empty() && !not_ours(&["HEAD".to_string()]).is_disjoint(&not_ours(&theirs)) {
-            foreign = true;
-        }
-        // Nor partway through bringing in other commits, whose files are in
-        // the tree before any of them is in HEAD.
-        for op in MIDWAY {
-            // Relative to the worktree, as git gives it: --path-format is
-            // newer than the git some still have.
-            if let Some(path) = git(wt, &["rev-parse", "--git-path", op])
-                && wt.join(path).exists()
-            {
-                midway = Some(*op);
-                own = false;
-            }
-        }
-        // And written and committed under your git email, since a PR
-        // fetched straight to a local branch, or a fork's ref pruned since,
-        // leaves no ref.
-        let me = git(wt, &["config", "user.email"]).unwrap_or_default();
-        let mut args = vec!["log", "--format=%ae%n%ce", "HEAD", "--not"];
-        args.extend(ours.iter().map(String::as_str));
-        args.push("--");
-        if me.is_empty() || git_lines(wt, &args).iter().any(|e| *e != me) {
-            foreign = true;
-        }
-        own = own && !foreign;
-    }
-    if own || listed(real, wt) {
-        return Ok(());
-    }
-    let wt = wt.display();
-    if let Some(op) = midway {
-        return Err(format!(
-            "{wt} is partway through bringing in other commits (git's {op} is there), whose files may not be yours; finish or abort it first, or list it in ~/.config/switchboard/trusted-dirs"
-        ));
-    }
-    if foreign {
-        return Err(format!(
-            "{wt} holds commits that aren't yours (a fork's PR, say), whose build would run with your credentials; read them, then list it in ~/.config/switchboard/trusted-dirs to try it"
-        ));
-    }
-    Err(format!(
-        "{wt}'s .git doesn't lead back to it, so whose code it holds can't be told; list it in ~/.config/switchboard/trusted-dirs to try it"
-    ))
-}
-
-/// Whether the worktree's git directory is its repository's own for exactly
-/// this path: the main clone's `.git`, or the one the repository keeps for a
-/// worktree here. A `.git` file can name any git directory, so sharing one
-/// proves nothing by itself.
-fn leads_back(wt: &Path) -> bool {
-    let Some(want) = real_dir(wt) else {
-        return false;
-    };
-    let dir = |args: &[&str]| git(wt, args).and_then(|p| real_dir(&wt.join(p)));
-    let (Some(common), Some(own)) = (
-        dir(&["rev-parse", "--git-common-dir"]),
-        dir(&["rev-parse", "--absolute-git-dir"]),
-    ) else {
-        return false;
-    };
-    if own == common {
-        return common.parent().and_then(real_dir) == Some(want);
-    }
-    if own.parent() != Some(common.join("worktrees").as_path()) {
-        return false;
-    }
-    // Kept relative to the worktree's git directory by
-    // worktree.useRelativePaths.
-    let Some(back) = util::read_text(own.join("gitdir")) else {
-        return false;
-    };
-    let back = own.join(back.trim());
-    back.parent().and_then(real_dir) == Some(want)
-}
-
-/// Origin's branches: its refs but wtpr's `pr/` ones, and wherever a fetch
-/// refspec of origin's maps anything but its branches (pull requests'
-/// heads, forks' included).
-fn origin_branches(wt: &Path) -> Vec<String> {
-    let not_branches: Vec<String> = git_lines(wt, &["config", "--get-all", "remote.origin.fetch"])
-        .iter()
-        .filter_map(|spec| {
-            let (from, to) = spec.trim_start_matches('+').split_once(':')?;
-            (!from.starts_with("refs/heads/"))
-                .then(|| to.split('*').next().unwrap_or("").to_string())
-        })
-        .filter(|p| !p.is_empty())
-        .collect();
-    git_lines(
-        wt,
-        &["for-each-ref", "--format=%(refname)", "refs/remotes/origin"],
-    )
-    .into_iter()
-    .filter(|r| !r.starts_with("refs/remotes/origin/pr/"))
-    .filter(|r| !not_branches.iter().any(|p| r.starts_with(p.as_str())))
-    .collect()
-}
-
 // ── Cleaning up ─────────────────────────────────────────────────────────────
 
 /// Ends the try's server, if one answers on its socket, and removes its
 /// home. Nothing is followed out of it: its links into your home are
-/// removed as links.
+/// removed as links. A sealed try's server is stopped from a sandbox
+/// (try_sealed.rs), since a link to your own server's socket could stand
+/// in for its own.
 pub fn clean(home: &Path) -> Result<()> {
-    let socket = socket_of(home);
-    if let Ok(mut stream) = UnixStream::connect(&socket) {
+    if super::try_sealed::is_sealed(home) {
+        return super::try_sealed::clean(home);
+    }
+    stop_server(&socket_of(home));
+    fs::remove_dir_all(home).with_context(|| format!("could not remove {}", home.display()))
+}
+
+/// Has the server on `socket` end, if one answers, and waits a little for
+/// it to go.
+pub(crate) fn stop_server(socket: &Path) {
+    if let Ok(mut stream) = UnixStream::connect(socket) {
         let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
         let _ = stream.write_all(&proto::encode_client(&ClientMsg::Command {
             args: vec!["kill-server".into()],
@@ -1225,11 +1138,10 @@ pub fn clean(home: &Path) -> Result<()> {
         }));
         let _ = proto::read_server(&mut stream);
         let deadline = Instant::now() + Duration::from_secs(3);
-        while UnixStream::connect(&socket).is_ok() && Instant::now() < deadline {
+        while UnixStream::connect(socket).is_ok() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    fs::remove_dir_all(home).with_context(|| format!("could not remove {}", home.display()))
 }
 
 /// `--clean [dir]`: the try of the worktree named, found by its path written
@@ -1257,7 +1169,7 @@ fn clean_named(target: Option<&Path>) -> Result<ExitCode> {
         home = home_of(root, &top);
         wt = top;
     }
-    if !home.is_dir() {
+    if !home.is_dir() && !super::try_sealed::is_sealed(&home) {
         println!("Nothing to clean for {}.", wt.display());
         return Ok(ExitCode::SUCCESS);
     }
@@ -1306,7 +1218,18 @@ pub fn is_try_home(dir: &Path) -> bool {
 /// `--clean-all`: every try of yours in the root.
 fn clean_all(root: &Path) -> Result<ExitCode> {
     let mut cleaned = false;
-    for home in entries(root).into_iter().filter(|h| is_try_home(h)) {
+    let mut homes: Vec<PathBuf> = entries(root)
+        .into_iter()
+        .filter(|h| is_try_home(h))
+        .collect();
+    // A sealed try's, by its rules in your cache, whatever its code did to
+    // its home.
+    for home in super::try_sealed::homes(root) {
+        if !homes.contains(&home) {
+            homes.push(home);
+        }
+    }
+    for home in homes {
         clean(&home)?;
         println!("Removed {} and stopped its server.", home.display());
         cleaned = true;
@@ -1346,33 +1269,6 @@ mod tests {
     fn write(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
-    }
-
-    fn sh(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .output()
-            .unwrap();
-        assert!(ok.status.success(), "git {args:?}: {:?}", ok);
-    }
-
-    /// A Switchboard clone of `me`'s, with one commit.
-    fn clone_of(dir: &Path, me: &str) {
-        write(
-            &dir.join("Cargo.toml"),
-            "[package]\nname = \"switchboard\"\n",
-        );
-        fs::create_dir_all(dir.join("assets/skills")).unwrap();
-        write(&dir.join("src/mux/mod.rs"), "\n");
-        sh(dir, &["init", "-q"]);
-        sh(dir, &["config", "user.email", me]);
-        sh(dir, &["config", "user.name", "Me"]);
-        sh(dir, &["add", "."]);
-        sh(dir, &["commit", "-q", "-m", "first"]);
     }
 
     #[test]
@@ -1666,79 +1562,6 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).trim(),
             format!("{}/.config|unset|unset", home.display())
         );
-    }
-
-    #[test]
-    fn only_your_own_code_is_tried_unless_it_is_listed() {
-        let t = Temp::new("trust");
-        let real = t.0.join("real");
-        fs::create_dir_all(&real).unwrap();
-        let wt = t.0.join("wt");
-        fs::create_dir_all(&wt).unwrap();
-        clone_of(&wt, "me@example.com");
-        assert!(is_switchboard(&wt));
-        assert_eq!(trust(&real, &wt), Ok(()));
-
-        // A commit someone else wrote, as a fork's PR brings.
-        write(&wt.join("x"), "theirs\n");
-        sh(&wt, &["add", "x"]);
-        sh(
-            &wt,
-            &[
-                "-c",
-                "user.email=them@example.com",
-                "commit",
-                "-q",
-                "-m",
-                "theirs",
-            ],
-        );
-        let why = trust(&real, &wt).unwrap_err();
-        assert!(why.contains("aren't yours"), "{why}");
-        assert!(why.contains("trusted-dirs"), "{why}");
-
-        // Listed by its path, it is tried; a folder above it isn't enough.
-        write(
-            &real.join(".config/switchboard/trusted-dirs"),
-            &format!("# mine\n{}\n", t.0.display()),
-        );
-        assert!(trust(&real, &wt).is_err());
-        write(
-            &real.join(".config/switchboard/trusted-dirs"),
-            &format!("\n{}\n", wt.display()),
-        );
-        assert_eq!(trust(&real, &wt), Ok(()));
-    }
-
-    #[test]
-    fn a_worktree_partway_through_a_merge_is_refused() {
-        let t = Temp::new("midway");
-        let wt = t.0.join("wt");
-        fs::create_dir_all(&wt).unwrap();
-        clone_of(&wt, "me@example.com");
-        write(
-            &wt.join(".git/MERGE_HEAD"),
-            "0000000000000000000000000000000000000000\n",
-        );
-        let why = trust(&t.0, &wt).unwrap_err();
-        assert!(why.contains("MERGE_HEAD"), "{why}");
-    }
-
-    #[test]
-    fn a_linked_worktree_leads_back_to_its_clone() {
-        let t = Temp::new("linked");
-        let main = t.0.join("main");
-        fs::create_dir_all(&main).unwrap();
-        clone_of(&main, "me@example.com");
-        sh(&main, &["worktree", "add", "-q", "-b", "side", "../side"]);
-        let side = t.0.join("side");
-        assert!(leads_back(&side));
-        assert_eq!(trust(&t.0, &side), Ok(()));
-        // A copy of its .git file, elsewhere, leads to the other folder.
-        let copy = t.0.join("copy");
-        fs::create_dir_all(&copy).unwrap();
-        fs::copy(side.join(".git"), copy.join(".git")).unwrap();
-        assert!(!leads_back(&copy));
     }
 
     #[test]

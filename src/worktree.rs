@@ -810,8 +810,8 @@ pub fn choose_numbered(prompt: &str, count: usize) -> usize {
 // ── Pull requests ───────────────────────────────────────────────────────────
 
 /// A pull request as `gh pr view --json` gave the worktree commands it:
-/// enough to check out its branch (a fork's included), to say whose it is,
-/// and, for codex-review, its description and base.
+/// enough to check out its branch (a fork's included), to say whose it is
+/// and how big, and, for codex-review, its description and base.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PrDetails {
     pub number: u64,
@@ -828,13 +828,20 @@ pub struct PrDetails {
     pub head_owner: Option<String>,
     pub is_cross_repository: bool,
     pub maintainer_can_modify: bool,
+    /// When the author's GitHub account was made (RFC 3339), when it is a
+    /// person's: how long they have been on GitHub, for someone else's PR.
+    pub author_since: Option<String>,
+    /// Its size: the files it changes, and the lines it adds and takes out.
+    pub changed_files: u64,
+    pub additions: u64,
+    pub deletions: u64,
 }
 
 const PR_DETAILS: &str = "query($owner: String!, $name: String!, $number: Int!) { \
      repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
-     number title body url state author { login } baseRefName headRefName \
-     headRepository { name } headRepositoryOwner { login } isCrossRepository \
-     maintainerCanModify } } }";
+     number title body url state author { login ... on User { createdAt } } \
+     baseRefName headRefName headRepository { name } headRepositoryOwner { login } \
+     isCrossRepository maintainerCanModify changedFiles additions deletions } } }";
 
 /// A pull request's details, or `None` when the repository has no such PR.
 pub async fn pr_details(repo: &Repo, number: u64, source: &str) -> Result<Option<PrDetails>> {
@@ -895,6 +902,10 @@ pub fn pr_details_from(pr: &Value) -> PrDetails {
             .get("maintainerCanModify")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        author_since: some("/author/createdAt"),
+        changed_files: pr.get("changedFiles").and_then(Value::as_u64).unwrap_or(0),
+        additions: pr.get("additions").and_then(Value::as_u64).unwrap_or(0),
+        deletions: pr.get("deletions").and_then(Value::as_u64).unwrap_or(0),
     }
 }
 

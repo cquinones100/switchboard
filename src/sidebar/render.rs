@@ -468,13 +468,14 @@ pub fn sidebar_lines(
                 parts.push("✎ Notes here".into());
             }
             // A tab the mode working a note opened says so, and that it
-            // landed once back in the main clone, closing soon.
+            // landed once back in the main clone, closing soon, and whether
+            // it landed without asking.
             if tab.autopilot {
                 parts.push(
-                    if tab.autopilot_landed {
-                        "landed"
-                    } else {
-                        "auto"
+                    match (tab.autopilot_landed, tab.autopilot_autoland) {
+                        (true, true) => "landed without asking",
+                        (true, false) => "landed",
+                        _ => "auto",
                     }
                     .into(),
                 );
@@ -1253,6 +1254,39 @@ mod tests {
             Some(Theme::DARK.panel),
             "under the mouse"
         );
+    }
+
+    // test/tmux-sidebar.test.js's "a landing without asking marks its tab":
+    // the sidebar says so once it has landed.
+    #[test]
+    fn a_tab_of_the_work_a_note_mode_says_auto_then_landed_and_whether_without_asking() {
+        let r = rules();
+        let mut auto = tab(1, "one", TabState::Working);
+        auto.autopilot = true;
+        let mut landed = tab(2, "two", TabState::Idle);
+        landed.autopilot = true;
+        landed.autopilot_landed = true;
+        let mut alone = tab(3, "three", TabState::Idle);
+        alone.autopilot = true;
+        alone.autopilot_landed = true;
+        alone.autopilot_autoland = true;
+        let tabs = vec![auto, landed, alone];
+        let out = sidebar_lines(
+            &tabs,
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            40,
+            &view(1),
+            &r,
+            &Theme::DARK,
+        );
+        let text = texts(&out).join("\n");
+        assert!(text.contains("auto"), "{text}");
+        assert!(text.contains("landed without asking"), "{text}");
+        assert_eq!(text.matches("landed").count(), 2, "{text}");
     }
 
     #[test]

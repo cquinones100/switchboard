@@ -17,7 +17,9 @@ pub mod claude_reply;
 pub mod codex_review;
 pub mod land_lock;
 pub mod landing;
+pub mod leak_check;
 pub mod platform;
+pub mod pr_risk;
 pub mod respawn;
 pub mod setting;
 pub mod shape;
@@ -30,6 +32,7 @@ pub mod statusline;
 pub mod tabs;
 pub mod today_save;
 pub mod try_;
+pub mod try_sealed;
 pub mod update_main;
 pub mod wait_deploy;
 pub mod watch_note;
@@ -71,7 +74,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "try",
         run: try_::main,
-        about: "Build a Switchboard worktree and run it under a home of its own (--detached, --print, --clean)",
+        about: "Build a Switchboard worktree and run it under a home of its own (--detached, --print, --clean; --sealed for someone else's code, in a sandbox)",
     },
     Command {
         name: "update",
@@ -127,6 +130,11 @@ pub const COMMANDS: &[Command] = &[
         name: "codex-review",
         run: codex_review::main,
         about: "Review a branch's changes with Codex (or Claude)",
+    },
+    Command {
+        name: "pr-risk",
+        run: pr_risk::main,
+        about: "What someone else's PR changes that runs without being asked, read from git alone",
     },
     Command {
         name: "shape",
@@ -207,6 +215,11 @@ pub const COMMANDS: &[Command] = &[
         name: "landing",
         run: landing::main,
         about: "How the repository here lands its work: through a PR or straight on its default branch, and a direct landing's steps",
+    },
+    Command {
+        name: "leak-check",
+        run: leak_check::main,
+        about: "What a range of commits adds that may identify you or your employer, before a push to a public repository",
     },
     Command {
         name: "apply-actions",
@@ -299,6 +312,7 @@ const OWN_HELP: &[&str] = &[
     "setting",
     "platform",
     "codex-review",
+    "pr-risk",
     "shape",
     "shape-batch",
     "skill-path",

@@ -20,7 +20,8 @@
 //! that item cut short (`cut_of`), so a tab renamed since shows its new
 //! name. A tab opened before falls back to the work-a-note mode's
 //! `@autopilot_item`, and this box then to the item its branch is for
-//! (`wtnItem` in git's config, read from its file). Ported from
+//! (`wtnItem` in git's config, read from its file, the note named by its ID
+//! or, from before notes had IDs, its path). Ported from
 //! wtn-open.zsh's `open_tab`, model.js's `cutOf` and tab-title.sh's
 //! `cut_of`.
 
@@ -75,8 +76,9 @@ fn strip_pr(name: &str) -> &str {
 }
 
 /// The item a branch is for, from the text of a repository's git config:
-/// `branch.<branch>.wtnItem`, `<note>: <item's first line>`, the note's
-/// path left off.
+/// `branch.<branch>.wtnItem`, `<note's ID>: <item's first line>`, or
+/// `<note's path>: <item's first line>` from before notes had IDs, the note
+/// left off.
 pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
     let mut in_branch = false;
     for line in config.lines() {
@@ -100,6 +102,9 @@ pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
             continue;
         }
         let value = unquote(value.trim());
+        if let Some((_, item)) = crate::notes::id::claim_of(&value) {
+            return Some(item.to_string());
+        }
         let item = match value.split_once(".md: ") {
             Some((_, item)) => item.to_string(),
             None => value,
@@ -204,6 +209,12 @@ mod tests {
             Some("Copy \"the\" reply")
         );
         assert_eq!(wtn_item(config, "main"), None);
+        let by_id = "[branch \"note/copy\"]\n\twtnItem = n-0123456789ab: Copy the .md: reply\n";
+        assert_eq!(
+            wtn_item(by_id, "note/copy").as_deref(),
+            Some("Copy the .md: reply"),
+            "a claim by the note's ID too"
+        );
     }
 
     #[test]

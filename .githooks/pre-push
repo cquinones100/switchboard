@@ -26,13 +26,16 @@
 # Claude can't get around it (.claude/hooks/enforce-push-review.sh blocks
 # `git push --no-verify`); you can, by hand, with `git push --no-verify`.
 #
-# Enabled per clone with `git config core.hooksPath .githooks`.
+# Enabled per clone with `git config core.hooksPath "$PWD/.githooks"` at its
+# top: the full path, so a worktree runs this, the main clone's hook, and
+# never one its branch carries, which git would run from a relative path.
 
 # The switchboard asked for the setting and the patch: the one on the PATH,
-# else the one this clone built.
+# else the one built in the clone this hook is in, never the worktree the
+# push runs in, whose build is its branch's code.
 sb=$(command -v switchboard 2>/dev/null)
-top=$(git rev-parse --show-toplevel 2>/dev/null)
-for built in "$top/target/release/switchboard" "$top/target/debug/switchboard"; do
+clone=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd -P)
+for built in "$clone/target/release/switchboard" "$clone/target/debug/switchboard"; do
   [ -z "$sb" ] && [ -x "$built" ] && sb=$built
 done
 

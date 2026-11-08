@@ -282,6 +282,14 @@ pub const OWN_FILES: &[OwnFile] = &[
         )],
     },
     OwnFile {
+        file: "leak-check.txt",
+        category: "Your files",
+        rows: &[whole(
+            "Identifying words",
+            "Your organization's and company's names, usernames and internal hosts, one a line, which leak-check finds in what a landing would push to a public repository",
+        )],
+    },
+    OwnFile {
         file: "trusted-dirs",
         category: "Your files",
         rows: &[whole(
@@ -967,6 +975,11 @@ mod tests {
             "a profile by the name Chrome shows"
         );
         assert_eq!(row(&items, "own:trusted-dirs:").data["value"], "not there");
+        assert_eq!(
+            row(&items, "own:leak-check.txt:").data["own"]["kind"],
+            "file",
+            "leak-check's word list, opened from Settings"
+        );
         assert_eq!(row(&items, "own:trusted-dirs:").data["own"]["kind"], "file");
 
         write_own(

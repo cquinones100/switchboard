@@ -15,7 +15,9 @@
 //! them with no pane inside it: its repository and branch, how long since
 //! it was last used, and the last prompt Claude was given there, most
 //! recent first. Worktrees git marks prunable (their directory is gone) are
-//! left out.
+//! left out, and so are those of someone else's PR, checked out untrusted
+//! in `~/.cache/switchboard/pr-review` (src/trust.rs), which no Claude is
+//! started in.
 //!
 //! What a transcript says (its last directory and last prompt) is cached in
 //! `~/.cache/wt-revive/index.json` against the file's size and modified
@@ -349,6 +351,8 @@ fn worktrees_of(repo: &str) -> Vec<(String, String)> {
     crate::worktree::parse_worktrees(&porcelain)
         .into_iter()
         .filter(|w| !w.prunable && !w.bare)
+        // Never someone else's PR, which no Claude is started in.
+        .filter(|w| !crate::trust::in_review_dir(&w.path))
         .map(|w| {
             let branch = if w.detached {
                 "(detached)".to_string()

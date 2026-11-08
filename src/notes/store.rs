@@ -10,8 +10,9 @@
 //! Two things in it aren't notes: `.trash/`, where a deleted note goes (the
 //! "Recently Deleted" folder; deleting it from there removes it for good),
 //! and `.notes.json`, which records the pinned notes and the note open last,
-//! by their paths in the notes directory. Nothing else is kept anywhere, so
-//! the notes stay plain files any editor can open.
+//! by their paths in the notes directory. A note's last line holds its
+//! stable ID (id.rs), which the app writes and never shows. Nothing else is
+//! kept anywhere, so the notes stay plain files any editor can open.
 //!
 //! The directory is the `Store`'s, given when it is made, rather than read
 //! from the environment each time as the plugin did, so the tests each give
@@ -25,6 +26,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::{Map, Value};
 
+use super::id;
 use crate::util;
 
 pub const TRASH: &str = ".trash";
@@ -95,6 +97,9 @@ pub struct TabLinks {
     pub last: String,
     pub arrived: String,
     pub name: String,
+    /// The ID of the note the work-a-note mode opened it for
+    /// (`@autopilot_note`).
+    pub pilot_note: String,
 }
 
 fn dirname(rel: &str) -> &str {
@@ -308,9 +313,12 @@ impl Store {
         if !meta.is_file() {
             return None;
         }
-        let text = fs::read(path)
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
-            .unwrap_or_default();
+        // Without its ID line, which no list, search or tag should find.
+        let text = id::strip(
+            &fs::read(path)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default(),
+        );
         let rel = self.relative(path);
         Some(NoteEntry {
             path: path.to_path_buf(),
@@ -387,9 +395,9 @@ impl Store {
     }
 
     /// A new note in `folder` ("" for the notes directory itself), with
-    /// `title` as its first line, written as a title. Without one, the first
-    /// line is an empty title to type, and the file is "New Note" until
-    /// there is one.
+    /// `title` as its first line, written as a title, and an ID of its own.
+    /// Without one, the first line is an empty title to type, and the file
+    /// is "New Note" until there is one.
     pub fn create(&mut self, folder: &str, title: Option<&str>) -> PathBuf {
         self.ensure();
         let title = title.map(str::trim).unwrap_or("");
@@ -401,7 +409,7 @@ impl Store {
         if let Some(dir) = path.parent() {
             let _ = fs::create_dir_all(dir);
         }
-        let _ = fs::write(&path, format!("# {title}\n\n"));
+        let _ = fs::write(&path, id::with(&format!("# {title}\n\n"), &id::new()));
         path
     }
 
@@ -499,6 +507,56 @@ impl Store {
             mode.insert("said".into(), "".into());
         }
         let _ = util::write_atomic(&file, util::json_pretty(&mode));
+    }
+
+    /// The IDs the work-a-note mode keeps for notes squashed into one
+    /// (`renumber`, each squashed note's ID to the merged note's) follow
+    /// too: its note's, its skipped items' and its tabs' (`@autopilot_note`),
+    /// whichever of the squashed notes they were.
+    pub fn renumber(&self, renumber: &std::collections::HashMap<String, String>) {
+        if renumber.is_empty() {
+            return;
+        }
+        let file = self.state.join("autopilot.json");
+        if let Some(Value::Object(mut mode)) = util::read_json(&file) {
+            let mut changed = false;
+            if let Some(to) = mode
+                .get("noteId")
+                .and_then(Value::as_str)
+                .and_then(|id| renumber.get(id))
+            {
+                mode.insert("noteId".into(), to.clone().into());
+                changed = true;
+            }
+            if let Some(Value::Array(skipped)) = mode.get_mut("skipped") {
+                for item in skipped.iter_mut() {
+                    let Some(to) = item
+                        .get("note")
+                        .and_then(Value::as_str)
+                        .and_then(|id| renumber.get(id))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    item["note"] = to.into();
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = util::write_atomic(&file, util::json_pretty(&mode));
+            }
+        }
+        if !self.server {
+            return;
+        }
+        let Ok(listed) = crate::mux::socket::ask_ok(&["list"]) else {
+            return;
+        };
+        for tab in tab_links(&listed) {
+            if let Some(to) = renumber.get(&tab.pilot_note) {
+                let _ = crate::mux::socket::ask(&["set", "-t", &tab.id, "@autopilot_note", to]);
+            }
+        }
     }
 
     /// Moves a note's file, keeping its pin and the tabs linked to it, and
@@ -788,6 +846,7 @@ pub fn tab_links(listed: &str) -> Vec<TabLinks> {
                 last: opt("@tab_note_last"),
                 arrived: opt("@tab_note_arrived"),
                 name: opt("@tab_name"),
+                pilot_note: opt("@autopilot_note"),
             });
         }
     }
@@ -833,7 +892,8 @@ static HEADING_MARKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*#+\s*"
 /// The title from a note's text: its first line that isn't blank, without
 /// Markdown's heading marks, or "New Note" for an empty one.
 pub fn title_of(text: &str) -> String {
-    text.split('\n')
+    id::strip(text)
+        .split('\n')
         .map(|line| HEADING_MARKS.replace(line, "").trim().to_string())
         .find(|t| !t.is_empty())
         .unwrap_or_else(|| "New Note".into())
@@ -847,7 +907,7 @@ static PREVIEW_MARKUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[*_~=`|]"
 pub fn preview_of(text: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     let mut seen_title = false;
-    for line in text.split('\n') {
+    for line in id::strip(text).split('\n') {
         if !seen_title {
             if !line.trim().is_empty() {
                 seen_title = true;

@@ -16,6 +16,16 @@
 //! The change is GitHub's "Files changed": the branch's commits since it
 //! left its base, `git diff <merge base> HEAD`, committed changes only.
 //!
+//! With the diff_uncommitted setting on (diffview.lua's `uncommitted_mode`
+//! and `look_uncommitted`, and pane-in-place.sh, as upstream's 7b85aa7
+//! changed them), M-d's change runs from the merge base to the working tree
+//! instead, clean or not, so edits made while the diff is open come in when
+//! it is read again: the branch's commits and its changes not yet committed
+//! together, files git doesn't know yet among them as added, with which
+//! files have changes not yet committed (staged, unstaged or untracked) and
+//! the committed part beside it, whose story is the one told
+//! (`read_to_work_tree`).
+//!
 //! Asked for, the change is instead the working tree's, as diffview's
 //! plain `:DiffviewOpen` showed it: the changes staged (HEAD against the
 //! index) and those not (the index against the files, files git doesn't
@@ -23,6 +33,7 @@
 //! the story read from both, the staged first, as diffview.lua's
 //! `read_diff` ran them.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -260,7 +271,10 @@ impl Entry {
 /// merge base and the branch's commit), the files, the diff as the story
 /// reads it, and the commits' messages as `story::commits` reads them. A
 /// working tree's has HEAD on both sides, its staged changes' diff in
-/// `staged` and its changes not staged in `diff`, and no commits.
+/// `staged` and its changes not staged in `diff`, and no commits. One
+/// running from the merge base to the working tree has the files on disk
+/// for its new side, HEAD as `right`, and what isn't committed in
+/// `uncommitted`.
 #[derive(Clone, Debug, Default)]
 pub struct Change {
     pub top: PathBuf,
@@ -271,12 +285,76 @@ pub struct Change {
     pub diff: String,
     pub staged: Option<String>,
     pub raw_commits: String,
+    pub uncommitted: Option<Uncommitted>,
+}
+
+/// What a change running to the working tree knows of what isn't committed
+/// yet: each file with changes not yet committed (`dirty`: staged, unstaged
+/// or untracked, and the path a renamed one came from), and the committed
+/// part, from the merge base to HEAD, read as `read_change` reads it, whose
+/// story the diff tells, so it is the one told ahead, under the same key.
+#[derive(Clone, Debug, Default)]
+pub struct Uncommitted {
+    pub dirty: BTreeSet<String>,
+    pub committed: Box<Change>,
 }
 
 impl Change {
     /// Whether it is a working tree's.
     pub fn working(&self) -> bool {
         self.staged.is_some()
+    }
+
+    /// Whether it runs from the merge base to the working tree (M-d with
+    /// the diff_uncommitted setting on).
+    pub fn to_work_tree(&self) -> bool {
+        self.uncommitted.is_some()
+    }
+
+    /// Whether `path` has changes not yet committed, in a change running to
+    /// the working tree.
+    pub fn dirty(&self, path: &str) -> bool {
+        self.uncommitted
+            .as_ref()
+            .is_some_and(|u| u.dirty.contains(path))
+    }
+
+    /// The part whose story is told: the committed part of a change running
+    /// to the working tree, so editing tells no new story; else the whole.
+    pub fn told_part(&self) -> &Change {
+        self.uncommitted.as_ref().map_or(self, |u| &u.committed)
+    }
+
+    /// The sides Haiku's order of its files is kept under
+    /// (`order::order_file`): the commits compared, the working tree's side
+    /// "" in a change running to it, as diffview.lua's `order_path` named a
+    /// side with no commit.
+    pub fn order_sides(&self) -> (&str, &str) {
+        if self.to_work_tree() {
+            (&self.left, "")
+        } else {
+            (&self.left, &self.right)
+        }
+    }
+
+    /// What a box says when M-d has nothing to show, as pane-in-place.sh
+    /// said it rather than open an empty diff: no change past the base (and,
+    /// running to the working tree, nothing uncommitted either). `None` when
+    /// there is something, and always for a working tree's changes.
+    pub fn nothing_to_show(&self) -> Option<String> {
+        if self.working() {
+            return None;
+        }
+        match &self.uncommitted {
+            Some(u) if u.committed.entries.is_empty() && u.dirty.is_empty() => Some(format!(
+                "Nothing to show: no commits past {} and no uncommitted changes",
+                self.base
+            )),
+            None if self.entries.is_empty() => {
+                Some(format!("Nothing to show: no commits past {}", self.base))
+            }
+            _ => None,
+        }
     }
 
     /// The diff's runs, as `story::split` reads them: the staged changes
@@ -289,10 +367,12 @@ impl Change {
     }
 
     /// What a file's two sides are read from (`text_at`): the commits
-    /// compared, else HEAD and the index for a staged file, the index and
-    /// the working tree for one not staged.
+    /// compared (the merge base and the file on disk, for a change running
+    /// to the working tree), else HEAD and the index for a staged file, the
+    /// index and the working tree for one not staged.
     pub fn sides(&self, entry: &Entry) -> (String, String) {
         match entry.section {
+            Section::Committed if self.to_work_tree() => (self.left.clone(), WORK_TREE.into()),
             Section::Committed => (self.left.clone(), self.right.clone()),
             Section::Staged => (self.right.clone(), INDEX.into()),
             Section::Unstaged => (INDEX.into(), WORK_TREE.into()),
@@ -463,6 +543,7 @@ fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Cha
         diff,
         staged: None,
         raw_commits,
+        uncommitted: None,
     })
 }
 
@@ -499,42 +580,8 @@ pub fn read_working(top: &Path) -> Result<Change> {
         entries.extend(listed.into_iter().map(|e| Entry { section, ..e }));
         texts.push(with(&["--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M"])?);
     }
-    let untracked = git(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
-    for path in untracked.split('\0').filter(|p| !p.is_empty()) {
-        let Some(text) = text_at(top, WORK_TREE, path) else {
-            entries.push(Entry {
-                path: path.to_string(),
-                old_path: None,
-                status: 'A',
-                additions: 0,
-                deletions: 0,
-                binary: true,
-                section: Section::Unstaged,
-            });
-            continue;
-        };
-        let lines: Vec<&str> = text.lines().collect();
-        let shown = &lines[..lines.len().min(NEW_FILE_LINES)];
-        let unstaged = texts.last_mut().expect("two runs");
-        unstaged.push_str(&format!(
-            "diff --git a/{path} b/{path}\nnew file\n@@ -0,0 +1,{} @@\n",
-            shown.len()
-        ));
-        for line in shown {
-            unstaged.push('+');
-            unstaged.push_str(line);
-            unstaged.push('\n');
-        }
-        entries.push(Entry {
-            path: path.to_string(),
-            old_path: None,
-            status: 'A',
-            additions: lines.len(),
-            deletions: 0,
-            binary: false,
-            section: Section::Unstaged,
-        });
-    }
+    let unstaged = texts.last_mut().expect("two runs");
+    add_untracked(top, &mut entries, unstaged, Section::Unstaged)?;
     let diff = texts.pop().unwrap_or_default();
     Ok(Change {
         top: top.to_path_buf(),
@@ -545,7 +592,137 @@ pub fn read_working(top: &Path) -> Result<Change> {
         diff,
         staged: texts.pop(),
         raw_commits: String::new(),
+        uncommitted: None,
     })
+}
+
+/// Files git doesn't know yet, which its diff leaves out: each listed in
+/// `section` as added, its first lines added to `diff` as an addition; one
+/// the list has already is left as it is.
+fn add_untracked(
+    top: &Path,
+    entries: &mut Vec<Entry>,
+    diff: &mut String,
+    section: Section,
+) -> Result<()> {
+    let untracked = git(top, &["ls-files", "--others", "--exclude-standard", "-z"])?;
+    for path in untracked.split('\0').filter(|p| !p.is_empty()) {
+        if entries
+            .iter()
+            .any(|e| e.path == path && e.section == section)
+        {
+            continue;
+        }
+        let Some(text) = text_at(top, WORK_TREE, path) else {
+            entries.push(Entry {
+                path: path.to_string(),
+                old_path: None,
+                status: 'A',
+                additions: 0,
+                deletions: 0,
+                binary: true,
+                section,
+            });
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        let shown = &lines[..lines.len().min(NEW_FILE_LINES)];
+        diff.push_str(&format!(
+            "diff --git a/{path} b/{path}\nnew file\n@@ -0,0 +1,{} @@\n",
+            shown.len()
+        ));
+        for line in shown {
+            diff.push('+');
+            diff.push_str(line);
+            diff.push('\n');
+        }
+        entries.push(Entry {
+            path: path.to_string(),
+            old_path: None,
+            status: 'A',
+            additions: lines.len(),
+            deletions: 0,
+            binary: false,
+            section,
+        });
+    }
+    Ok(())
+}
+
+/// The change from `base`'s merge base with HEAD to the working tree, clean
+/// or not, as diffview.lua's `uncommitted_mode` showed `:DiffviewOpen <merge
+/// base>`: the branch's commits and its changes not yet committed together,
+/// files git doesn't know yet among them as added (diffview listed those
+/// only against the index, and M-d's diff lists them here too), with which
+/// files have changes not yet committed and the committed part beside it
+/// (`Uncommitted`).
+pub fn read_to_work_tree(top: &Path, base: &str) -> Result<Change> {
+    let committed = read_change(top, base)?;
+    let left = committed.left.clone();
+    let run = |extra: &[&str]| -> Result<String> {
+        let mut args: Vec<&str> = PLAIN.to_vec();
+        args.extend_from_slice(extra);
+        args.push(left.as_str());
+        git(top, &args)
+    };
+    let mut entries = parse_entries(
+        &run(&["-M", "-z", "--name-status"])?,
+        &run(&["-M", "-z", "--numstat"])?,
+    );
+    let mut diff = run(&["--src-prefix=a/", "--dst-prefix=b/", "-U2", "-M"])?;
+    add_untracked(top, &mut entries, &mut diff, Section::Committed)?;
+    // Read without the index's lock, which git status otherwise takes to
+    // refresh it, so a commit being made meanwhile isn't refused.
+    let status = git(
+        top,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )?;
+    Ok(Change {
+        top: top.to_path_buf(),
+        base: base.to_string(),
+        left,
+        right: committed.right.clone(),
+        entries,
+        diff,
+        staged: None,
+        raw_commits: committed.raw_commits.clone(),
+        uncommitted: Some(Uncommitted {
+            dirty: parse_status(&status),
+            committed: Box::new(committed),
+        }),
+    })
+}
+
+/// The files `git status --porcelain=v1 -z` names: each whose index or
+/// working tree differs from HEAD, files git doesn't know yet among them,
+/// and the path a renamed one came from, which is gone from the index, so
+/// changed too (diffview.lua's `look_uncommitted`).
+pub fn parse_status(status: &str) -> BTreeSet<String> {
+    let mut dirty = BTreeSet::new();
+    let mut fields = status.split('\0');
+    while let Some(field) = fields.next() {
+        let (Some(xy), Some(path)) = (field.get(..2), field.get(3..)) else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        dirty.insert(path.to_string());
+        // A rename or copy names the path it came from next.
+        if xy.contains(['R', 'C']) {
+            let from = fields.next().unwrap_or("");
+            if xy.contains('R') && !from.is_empty() {
+                dirty.insert(from.to_string());
+            }
+        }
+    }
+    dirty
 }
 
 /// A file's text at a commit (`INDEX` for the index's, `WORK_TREE` for the
@@ -638,6 +815,104 @@ mod tests {
         assert_eq!(default_base(&dir), "master");
         run(&["branch", "-q", "main"]);
         assert_eq!(default_base(&dir), "main");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_names_each_file_not_committed_a_renamed_ones_old_path_too() {
+        let status = [
+            " M src/a.js",
+            "A  src/new.js",
+            "R  src/moved.js",
+            "src/was.js",
+            "C  src/copy.js",
+            "src/source.js",
+            "?? notes.txt",
+            "",
+        ]
+        .join("\0");
+        let dirty: Vec<String> = parse_status(&status).into_iter().collect();
+        assert_eq!(
+            dirty,
+            [
+                "notes.txt",
+                "src/a.js",
+                "src/copy.js",
+                "src/moved.js",
+                "src/new.js",
+                "src/was.js"
+            ],
+            "a copy's source is still there, unchanged"
+        );
+        assert!(parse_status("").is_empty());
+    }
+
+    #[test]
+    fn a_change_to_the_working_tree_has_its_commits_and_what_isnt_committed() {
+        let dir = std::env::temp_dir().join(format!("sb-diff-work-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.name=T", "-c", "user.email=t@example.com"])
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .current_dir(&dir)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        run(&["init", "-q"]);
+        run(&["checkout", "-q", "-b", "main"]);
+        std::fs::write(dir.join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "b\n").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "first"]);
+        run(&["checkout", "-q", "-b", "feature"]);
+        let clean = read_to_work_tree(&dir, "main").unwrap();
+        assert!(clean.entries.is_empty());
+        assert_eq!(
+            clean.nothing_to_show().as_deref(),
+            Some("Nothing to show: no commits past main and no uncommitted changes")
+        );
+        let commits = read_change(&dir, "main").unwrap();
+        assert_eq!(
+            commits.nothing_to_show().as_deref(),
+            Some("Nothing to show: no commits past main")
+        );
+        std::fs::write(dir.join("a.txt"), "A\n").unwrap();
+        run(&["commit", "-q", "-am", "second"]);
+        std::fs::write(dir.join("b.txt"), "B\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "one\ntwo\n").unwrap();
+        let change = read_to_work_tree(&dir, "main").unwrap();
+        assert_eq!(change.nothing_to_show(), None);
+        let mut paths: Vec<&str> = change.entries.iter().map(|e| e.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(paths, ["a.txt", "b.txt", "new.txt"]);
+        let new = change.entries.iter().find(|e| e.path == "new.txt").unwrap();
+        assert_eq!(
+            (new.status, new.additions, new.section),
+            ('A', 2, Section::Committed),
+            "a file git doesn't know yet, as added"
+        );
+        assert!(change.diff.contains("+two\n"), "{}", change.diff);
+        assert!(change.dirty("b.txt") && change.dirty("new.txt"));
+        assert!(!change.dirty("a.txt"), "changed only in a commit");
+        let committed = change.told_part();
+        assert_eq!(committed.entries.len(), 1, "the commits' part alone");
+        assert_eq!(
+            crate::diff::story::key_of(committed).0,
+            crate::diff::story::key_of(&read_change(&dir, "main").unwrap()).0,
+            "its story the one told ahead"
+        );
+        assert_eq!(
+            change.sides(new),
+            (change.left.clone(), WORK_TREE.to_string())
+        );
+        assert_eq!(change.order_sides(), (change.left.as_str(), ""));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

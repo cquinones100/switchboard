@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 
 use super::{
     ACCENT, ADDED, App, BUTTONS, Button, COVER_BLANK, Cell, Focus, Line, ListRow, REMOVED,
-    SHORT_WHY, Telling, blend,
+    SHORT_WHY, Telling, UNCOMMITTED, blend,
 };
 use crate::diff::git::Entry;
 use crate::diff::sides::{self, Kind};
@@ -44,6 +44,16 @@ impl App {
                     ("Press any key to close.".into(), self.faint()),
                 ],
             );
+            return None;
+        }
+        if let Some(text) = self.nothing.clone() {
+            let mut lines: Vec<(String, Style)> = text
+                .lines()
+                .map(|l| (l.to_string(), Style::new()))
+                .collect();
+            lines.push((String::new(), Style::new()));
+            lines.push(("Press any key to close.".into(), self.faint()));
+            self.centred(buf, &lines);
             return None;
         }
         if let Some(text) = self.loading.clone() {
@@ -316,7 +326,20 @@ impl App {
                         Some((d, n)) => (format!("{d}/"), n.to_string()),
                         None => (String::new(), e.path.clone()),
                     };
-                    let room = w.saturating_sub(cw + 1);
+                    // A file with changes not yet committed: a ● before its
+                    // counts, as diffview.lua marked its row.
+                    let marked = self.changed_since(e);
+                    if marked {
+                        Self::put(
+                            buf,
+                            w.saturating_sub(cw + 2),
+                            y,
+                            2,
+                            " ●",
+                            with(Style::new().fg(UNCOMMITTED)),
+                        );
+                    }
+                    let room = w.saturating_sub(cw + 1 + if marked { 2 } else { 0 });
                     let mut x = Self::put(
                         buf,
                         1,
@@ -390,6 +413,13 @@ impl App {
         used += width(&dir) + width(&name);
         out.push((dir, self.faint()));
         out.push((name, Style::new().add_modifier(Modifier::BOLD)));
+        // A file with changes not yet committed says so over the side that
+        // shows them.
+        if (new_side || self.side_widths().1 == 0) && self.changed_since(entry) {
+            let text = "   ● uncommitted";
+            used += width(text);
+            out.push((text.into(), Style::new().fg(UNCOMMITTED)));
+        }
         // A list too narrow for a whole why heads its chapter with the
         // first sentence: the whole why goes here, cut to fit.
         if self.list_width < SHORT_WHY
@@ -415,6 +445,8 @@ impl App {
             if let Some(change) = &self.change {
                 let text = if change.working() {
                     "No changes in the working tree.".to_string()
+                } else if change.to_work_tree() {
+                    format!("No changes between {} and the working tree.", change.base)
                 } else if self.title.is_some() {
                     "This commit changes no files.".to_string()
                 } else {
@@ -568,12 +600,17 @@ impl App {
     }
 
     /// The lines of the hunks of another chapter than the page's, which a
-    /// page dims, since it can't leave part of a file out.
+    /// page dims, since it can't leave part of a file out; none in a file
+    /// changed since its commits, whose story's hunks are at the committed
+    /// lines.
     fn dimmed(&self, entry: &Entry) -> HashSet<(bool, usize)> {
         let mut out = HashSet::new();
         let (Some(page), Some(story)) = (self.page, &self.story) else {
             return out;
         };
+        if self.changed_since(entry) {
+            return out;
+        }
         let run = self.run_of(entry);
         for hunk in story
             .hunks
@@ -654,7 +691,7 @@ impl App {
             x += w + 1;
         }
         if self.opts.key_help {
-            let mut help = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link".to_string();
+            let mut help = "↑↓ choose a file · Enter open it · ]c [c chapters · ]p [p pages · E widen · yl copy a link · R refresh".to_string();
             if self.opts.ask {
                 help.push_str(" · ga ask Claude");
             }

@@ -12,7 +12,11 @@
 //!
 //! M-d opens `switchboard diff` in the pane's place, in the pane's
 //! directory; the program works out the base itself (fetching it while it
-//! says so on its own screen), so the key never waits on the network.
+//! says so on its own screen), so the key never waits on the network. With
+//! nothing to show (no commits past the base, and, with diff_uncommitted
+//! on, nothing uncommitted), the program has the workspace say so in its
+//! box (`switchboard say`) and closes, giving the pane its place back, as
+//! pane-in-place.sh said so rather than open the diff.
 //! Pressed again in the diff, or in the pane the diff stands in for beside
 //! it, it closes the diff, which gives the pane its place back.
 

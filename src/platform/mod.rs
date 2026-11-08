@@ -1,9 +1,12 @@
 //! What differs between macOS and Linux, behind one set of functions, so the
 //! rest never asks which it runs on. macOS answers through the commands it
 //! ships with (`security`, `pbcopy`, `osascript`, `ioreg`, `caffeinate`,
-//! `lsappinfo`, `open`); Linux through the desktop's own D-Bus services
+//! `lsappinfo`, `open`, and `sandbox-exec` for a sealed try, whose rules
+//! are `sandbox`'s); Linux through the desktop's own D-Bus services
 //! (the Secret Service, notifications, logind) and the tools a desktop ships
-//! with, so nothing has to be installed for any of it. `switchboard platform <what>` gives the shell scripts the same.
+//! with, so nothing has to be installed for any of it, which is why Linux
+//! has no sealed try. `switchboard platform <what>` gives the shell scripts
+//! the same.
 
 use std::path::PathBuf;
 
@@ -20,6 +23,8 @@ use macos as os;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("Switchboard runs on macOS and Linux");
+
+pub mod sandbox;
 
 /// "macOS" or "Linux", for words shown to the person.
 pub const NAME: &str = os::NAME;
@@ -175,6 +180,39 @@ pub enum TerminalApp {
 /// opened, or this isn't a Mac).
 pub fn option_as_alt(app: TerminalApp) -> Option<(bool, String)> {
     os::option_as_alt(app)
+}
+
+/// Whether a program can be run sealed here (`switchboard try --sealed`):
+/// macOS's own `sandbox-exec`. Linux has no sandbox without installing
+/// another program, which the error says.
+pub fn sandbox_ready() -> Result<(), String> {
+    os::sandbox_ready()
+}
+
+/// The words that run `program` under the sandbox profile in the file
+/// `profile` (src/platform/sandbox.rs writes its rules), everything it
+/// starts in it too; the program's own arguments follow. Its environment is
+/// the caller's to make from nothing.
+pub fn sandboxed(
+    profile: &std::path::Path,
+    program: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    os::sandboxed(profile, program)
+}
+
+/// Your per-user temporary and cache folders, as a real path, where the
+/// computer keeps them apart from `/tmp` (macOS's `DARWIN_USER_DIR`'s
+/// parent), which a sealed try may not read.
+pub fn user_dir() -> Option<PathBuf> {
+    os::user_dir()
+}
+
+/// For a sealed try's build: the folders put first on its PATH and the
+/// environment it adds, so nothing in the sandbox finds a tool through a
+/// shim that reads or writes outside it (on macOS the C compiler's and
+/// git's own folders, not /usr/bin's xcrun shims, and the SDK's path).
+pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
+    os::sealed_build()
 }
 
 /// Makes Option act as Alt in `app`'s default profile, through macOS's own

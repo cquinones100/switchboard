@@ -68,7 +68,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-[` `M-]`, `M-1` … `M-9` | The previous or next tab, or a tab by number |
 | `M-w` | Close the pane, asking first when something runs in it |
 | `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |
-| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story; `M-p`'s "Clear this tab's diff cache" makes the next one ask again |
+| `M-d` | The branch's diff against its PR's base, in place of the pane, its changes told as a story, what isn't committed yet included, marked ● and listed last (`R` reads it again); `M-p`'s "Clear this tab's diff cache" makes the next one ask again |
 | `M-N` / `M-e` | Notes in its own tab / beside the pane you are in |
 | `M-b d` | Detach, leaving everything running; `switchboard` attaches again |
 
@@ -97,6 +97,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules |
 | `sidebar.json`, `sidebar-plugins/` | The sidebar's and mission control's sizes, and the plugins that add views |
 | `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests, squash, review and command before the push, and what a change landed there needs to take effect |
+| `leak-check.txt` | Your organization's and company's names, usernames and internal hosts, one a line, which `switchboard leak-check` finds in what a landing would push to a public repository |
 | `trusted-dirs` | The directories whose own scripts may run |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |
 
@@ -105,3 +106,7 @@ Settings lists each setting in these files under the file's name, and Enter chan
 ## More
 
 [docs/guide.md](docs/guide.md) describes every feature, key and command. [ARCHITECTURE.md](ARCHITECTURE.md) describes the code, and [CLAUDE.md](CLAUDE.md) how it is worked on.
+
+## Contributing
+
+Pull requests are welcome. One from a fork is reviewed before any of its code runs on a maintainer's computer: it is checked out where no git hook, Claude session or setup of its own runs, what in it runs without being asked (git's hooks, setup, Claude's settings and skills, build scripts, crates) is read first, it is reviewed from outside its worktree, and it is tried in a sealed `switchboard try` that can't reach the maintainer's files, credentials or network. See `wtpr --untrusted`, `switchboard pr-risk` and `switchboard try --sealed` in [the guide](docs/guide.md#someone-elses-pr).

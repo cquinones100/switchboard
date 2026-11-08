@@ -14,6 +14,8 @@
 //! - `worktree`: what the worktree commands share.
 //! - `net`: HTTPS requests, each counted in the request audit.
 //! - `integrations`: GitHub and Linear over their APIs.
+//! - `trust`: whose code a directory holds: trusted-dirs, your own code,
+//!   and someone else's PR checked out untrusted.
 //!
 //! - `facts`: what GitHub and the landing queue say of each tab.
 //! - `items`: what mission control's views list, in one shape for every source.
@@ -86,6 +88,7 @@ pub mod sidebar;
 pub mod sources;
 pub mod status;
 pub mod tabs;
+pub mod trust;
 pub mod ui;
 pub mod update;
 pub mod usage;

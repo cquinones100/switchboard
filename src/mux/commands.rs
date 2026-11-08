@@ -696,8 +696,8 @@ impl Server {
     }
 
     /// `set -t %3 @agent_state working`: an option on a pane, or with a tab
-    /// target (`-t @2`), on the tab. An option whose name starts `@tab_` or
-    /// `@agent` (but `@agent_` pane options) goes on a tab: the one named,
+    /// target (`-t @2`), on the tab. An option whose name starts `@tab_`,
+    /// `@autopilot` or `@agent` (but `@agent_` pane options) goes on a tab: the one named,
     /// else the named pane's, else the caller's; any other on the pane.
     fn cmd_set(&mut self, rest: &[String], caller: Option<PaneId>) -> Result<Reply, String> {
         let a = Args::parse(rest, "t")?;
@@ -767,7 +767,11 @@ impl Server {
         caller: Option<PaneId>,
         name: &str,
     ) -> Result<Target, String> {
+        // The work-a-note mode's marks (src/autopilot) are its tab's too, so
+        // a skill in one of its tabs reads `@autopilot_land` as the tab has
+        // it, a tool standing in for Claude's pane or not.
         let tab_option = name.starts_with("@tab_")
+            || name.starts_with("@autopilot")
             || (name.starts_with("@agent") && !name.starts_with("@agent_"));
         // A pane named for a tab's option means its tab, as without `-t`.
         if let Some(t) = a.value('t') {

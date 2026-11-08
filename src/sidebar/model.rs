@@ -117,6 +117,8 @@ pub struct TabModel {
     pub autopilot: bool,
     /// Landed and back in the main clone, closing soon (`@autopilot_left`).
     pub autopilot_landed: bool,
+    /// Landed without asking (`@autopilot_autoland`, the commit pushed).
+    pub autopilot_autoland: bool,
     /// The one Notes, brought beside this tab's pane with M-e rather than
     /// in a tab of its own (src/notes/serve.rs).
     pub notes_here: bool,
@@ -183,6 +185,7 @@ impl TabModel {
             remind_note: None,
             autopilot: false,
             autopilot_landed: false,
+            autopilot_autoland: false,
             notes_here: false,
             notes_away: false,
             notes_owner: None,

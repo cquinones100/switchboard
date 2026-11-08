@@ -581,6 +581,12 @@ fn target_dir() -> String {
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let target = target_dir();
+    // Never in a worktree of someone else's PR, whose project settings and
+    // hooks Claude would load (src/trust.rs).
+    if crate::trust::is_untrusted(Path::new(&target)) {
+        eprintln!("{}", crate::trust::refusal(Path::new(&target)));
+        return ExitCode::from(1);
+    }
     status(&format!(
         "searching for claude sessions in {}",
         printable(&target)

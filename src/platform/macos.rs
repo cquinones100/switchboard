@@ -284,6 +284,65 @@ pub fn option_as_alt(app: super::TerminalApp) -> Option<(bool, String)> {
     Some((set, profile))
 }
 
+// ── The sandbox ─────────────────────────────────────────────────────────────
+
+/// macOS's own sandbox, which applies a profile (src/platform/sandbox.rs) to
+/// a program and everything it starts. Deprecated in its manual page for
+/// years, it is still how macOS's own tools and Codex sandbox a command.
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+pub fn sandbox_ready() -> Result<(), String> {
+    if std::path::Path::new(SANDBOX_EXEC).exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "--sealed needs macOS's sandbox, and {SANDBOX_EXEC} isn't there"
+        ))
+    }
+}
+
+pub fn sandboxed(
+    profile: &std::path::Path,
+    program: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    sandbox_ready()?;
+    Ok(vec![
+        SANDBOX_EXEC.to_string(),
+        "-f".to_string(),
+        profile.to_string_lossy().into_owned(),
+        program.to_string_lossy().into_owned(),
+    ])
+}
+
+/// `getconf DARWIN_USER_DIR`'s parent, which holds your per-user temporary
+/// (`T`) and cache (`C`) folders, every Neovim's socket among them.
+pub fn user_dir() -> Option<PathBuf> {
+    let dir = util::try_run("getconf", ["DARWIN_USER_DIR"])?;
+    std::path::Path::new(dir.trim())
+        .parent()?
+        .canonicalize()
+        .ok()
+}
+
+/// The C compiler's and git's own folders, as `xcrun -f` finds them, and the
+/// SDK's path: /usr/bin's `cc` and `git` are shims that ask xcrun, which
+/// keeps a cache in your per-user folder, which the sandbox closes.
+pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    for tool in ["cc", "git"] {
+        if let Some(found) = util::try_run("xcrun", ["-f", tool])
+            && let Some(dir) = std::path::Path::new(found.trim()).parent()
+            && !dirs.iter().any(|d| d == dir)
+        {
+            dirs.push(dir.to_path_buf());
+        }
+    }
+    let env = util::try_run("xcrun", ["--show-sdk-path"])
+        .map(|sdk| vec![("SDKROOT".to_string(), sdk.trim().to_string())])
+        .unwrap_or_default();
+    (dirs, env)
+}
+
 pub fn set_option_as_alt(app: super::TerminalApp) -> Result<()> {
     let prefs = Exported::of(app).ok_or_else(|| anyhow!("couldn't read its preferences"))?;
     let (entries, _, _) =

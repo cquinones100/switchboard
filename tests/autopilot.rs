@@ -3,7 +3,9 @@
 //! asked from a pane in a throwaway repository, the note picked and the
 //! counts kept as they were, and the server opens a background tab for the
 //! note's first item running `wtn`, marked as the mode's, then one for the
-//! next, until the note has nothing left, which it says. A stand-in
+//! next, until the note has nothing left, which it says; its menu's "Land
+//! without asking" marks its tabs after a yes; and it follows the note by
+//! its stable ID once it is renamed outside Notes. A stand-in
 //! `claude` in the test home's `bin` says where it ran, and the notes are in
 //! a directory of the test's own, so nothing reads your real ones.
 
@@ -133,6 +135,10 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
         (mode["slots"].clone(), mode["cap"].clone()),
         (json!(3), json!(5))
     );
+    // The note by its stable ID too, which it was given as the mode was set
+    // up, so a rename anywhere is followed.
+    let note_id = switchboard::notes::id::of_file(&note).expect("the note given an ID");
+    assert_eq!(mode["noteId"], note_id.as_str());
 
     wait("a tab for the first item", &server, || {
         opened(&server)
@@ -142,6 +148,11 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     let first = opened(&server).remove(0);
     assert_eq!(first["options"]["@tab_name"], "First thing");
     assert_eq!(first["options"]["@tab_note"], "Work.md");
+    assert_eq!(
+        first["options"]["@autopilot_note"],
+        note_id.as_str(),
+        "its item held in its own note alone"
+    );
     assert_eq!(first["current"], false, "opened in the background");
     let tree = repo.join(".claude/worktrees/note-first-thing");
     wait("Claude in the item's worktree", &server, || {
@@ -166,4 +177,42 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
             .is_some_and(|m| m["said"] == "Nothing left to take in Work")
     });
     assert_eq!(opened(&server).len(), 2, "one tab an item, each once");
+
+    // Its menu's "Land without asking", after a yes naming what it skips
+    // and keeps: its tabs not landed yet are marked, and its line says so.
+    // Mission control is open still, its line above the cards: k reaches
+    // it, and Enter opens its menu.
+    client.type_text("kkkk");
+    client.type_text("\r");
+    client.wait_text("Land without asking");
+    client.type_text("jjj\r");
+    let screen = client.wait_text("without asking to push?");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Kept: the tests, two clean review rounds")),
+        "{}",
+        screen.join("\n")
+    );
+    client.type_text("\r");
+    wait("its tabs marked to land without asking", &server, || {
+        std::fs::read_to_string(server.state.join("autopilot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|m| m["landWithoutAsking"] == true)
+            && opened(&server)
+                .iter()
+                .all(|t| t["options"]["@autopilot_land"] == "1")
+    });
+    client.wait_text("lands on its own");
+
+    // Renamed outside Notes: followed by its ID, its new path kept.
+    std::fs::create_dir_all(notes.path().join("Projects")).unwrap();
+    std::fs::rename(&note, notes.path().join("Projects/Renamed.md")).unwrap();
+    wait("the note followed to its new path", &server, || {
+        std::fs::read_to_string(server.state.join("autopilot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|m| m["note"] == "Projects/Renamed.md" && m["noteId"] == note_id.as_str())
+    });
 }

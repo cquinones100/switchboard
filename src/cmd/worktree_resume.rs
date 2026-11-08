@@ -13,6 +13,9 @@
 //!
 //! `init zsh` prints the `wtr` function, which cd's into the worktree and
 //! runs `claude-here` itself, as `wt` runs Claude (worktree_from_ticket.rs).
+//!
+//! A worktree of someone else's PR, checked out untrusted, is refused
+//! (src/trust.rs): its CLAUDE.md, settings and hooks are its author's.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -192,6 +195,10 @@ pub fn main(args: Vec<String>) -> ExitCode {
         let at = worktree::choose_numbered("Select worktree [1]: ", present.len());
         present.remove(at).1
     };
+    // Never a worktree of someone else's PR (src/trust.rs).
+    if crate::trust::is_untrusted(&chosen.path) {
+        return worktree::fail(&crate::trust::refusal(&chosen.path));
+    }
     eprintln!("Target:   {}", target.label);
     if let Some(branch) = &chosen.branch {
         eprintln!("Branch:   {branch}");

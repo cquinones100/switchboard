@@ -282,6 +282,7 @@ fn a_note_changed_outside_while_open_shows_the_change_and_a_save_keeps_both() {
     let (mut app, _) = app_in(store, options());
     app.start();
     app.open_note(&path, false, false);
+    let given = crate::notes::id::of_file(&path).expect("given an ID as it opened");
     app.editor.doc.row = 4;
     app.editor.doc.col = 4;
     // Nothing unsaved: the change shows up on its own, the cursor where it was.
@@ -307,7 +308,11 @@ fn a_note_changed_outside_while_open_shows_the_change_and_a_save_keeps_both() {
     app.save();
     assert_eq!(
         fs::read_to_string(&path).unwrap(),
-        "# Plan\n\n- [ ] one (ABC-1)\n- [ ] two, typed\n- [ ] three (ABC-2)\n"
+        format!(
+            "# Plan\n\n- [ ] one (ABC-1)\n- [ ] two, typed\n- [ ] three (ABC-2)\n\n{}\n",
+            crate::notes::id::line(&given)
+        ),
+        "with its ID, which the outside change left out, put back last"
     );
     // The app's own save doesn't come back as a change.
     let before = app.editor.doc.text.clone();
@@ -946,4 +951,142 @@ fn the_note_window_numbers_its_lines_relative_to_the_cursor() {
     bare.start();
     bare.draw(&mut Buffer::empty(Rect::new(0, 0, 120, 30)));
     assert_eq!(bare.geo.text.x, bare.geo.note.x, "off, the note is bare");
+}
+
+// test/notes.test.js's "each note has a stable ID as its last line: made
+// with it, given one when first opened without it, kept last on save, put
+// back when deleted, hidden, and a copy gets one of its own".
+#[test]
+fn each_note_keeps_a_stable_id_last_never_shown_given_once_and_a_copy_gets_its_own() {
+    use crate::notes::id;
+    let (dir, mut store) = temp("ids");
+    let made = store.create("", Some("Fresh"));
+    let made_text = fs::read_to_string(&made).unwrap();
+    assert!(
+        regex::Regex::new(r"^# Fresh\n\n\n<!-- note-id: n-[0-9a-f]{12} -->\n$")
+            .unwrap()
+            .is_match(&made_text),
+        "a new note is made with its ID: {made_text:?}"
+    );
+    // An old note with no ID, last changed long ago.
+    let old = dir.path.join("Old.md");
+    write(&old, "# Old\n\n- [ ] one\n");
+    set_mtime(&old, 1_767_225_600);
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&old, false, false);
+    let given = fs::read_to_string(&old).unwrap();
+    let note_id = id::in_text(&given).expect("given one as it opened");
+    assert_eq!(
+        given,
+        format!("# Old\n\n- [ ] one\n\n{}\n", id::line(&note_id))
+    );
+    assert_eq!(
+        crate::notes::store::mtime(&old),
+        Some(1_767_225_600),
+        "without its modified time changing, so it doesn't move up the list"
+    );
+    assert_eq!(lines(&app), ["# Old", "", "- [ ] one"], "and never shown");
+    assert!(!screen(&mut app).iter().any(|l| l.contains("note-id")));
+    // Typed at the end: the save keeps it last.
+    keys(&mut app, "Go- [ ] two<Esc>");
+    app.save();
+    let below = format!("# Old\n\n- [ ] one\n- [ ] two\n\n{}\n", id::line(&note_id));
+    assert_eq!(fs::read_to_string(&old).unwrap(), below);
+    // Rewritten outside without it: the save puts it back.
+    write(&old, "# Old\n\n- [ ] one\n- [ ] two\n");
+    app.check();
+    app.save();
+    assert_eq!(fs::read_to_string(&old).unwrap(), below, "put back");
+    // Another note's text pasted at its end, that note's ID line with it,
+    // and one wrapped in bold.
+    app.editor.change(|doc| {
+        let end = doc.text.len();
+        doc.text.set_lines(
+            end,
+            end,
+            &[
+                "# Other",
+                "- [ ] pasted",
+                "**<!-- note-id: n-bbbbbbbbbbbb -->**",
+                "",
+                "<!-- note-id: n-bbbbbbbbbbbb -->",
+            ],
+        );
+    });
+    app.save();
+    assert_eq!(
+        fs::read_to_string(&old).unwrap(),
+        format!(
+            "# Old\n\n- [ ] one\n- [ ] two\n# Other\n- [ ] pasted\n\n\n{}\n",
+            id::line(&note_id)
+        ),
+        "another note's ID pasted in is dropped, and the note keeps its own"
+    );
+    assert!(!lines(&app).iter().any(|l| l.contains("note-id")));
+    // A copy of the note's file, changed later, holds the same ID until
+    // opened.
+    let copy = dir.path.join("Old copy.md");
+    fs::copy(&old, &copy).unwrap();
+    set_mtime(&copy, crate::util::now_secs() + 10);
+    app.open_note(&copy, false, false);
+    let copied = id::of_file(&copy).unwrap();
+    assert_ne!(copied, note_id, "a copy gets an ID of its own");
+    assert_eq!(
+        id::of_file(&old).as_deref(),
+        Some(note_id.as_str()),
+        "the original keeps its own"
+    );
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("Old copy.md is a copy of Old.md")),
+        "said once"
+    );
+    // Never a title, a preview or a search's find.
+    assert_eq!(
+        crate::notes::store::title_of("\n<!-- note-id: n-0123456789ab -->\n"),
+        "New Note"
+    );
+    assert_eq!(
+        crate::notes::store::preview_of("# T\n\nwords\n\n<!-- note-id: n-0123456789ab -->\n"),
+        "words"
+    );
+    assert!(app.store.search("note").is_empty());
+}
+
+// test/notes.test.js's "renaming a new, empty note gives its first line
+// the title, never its hidden ID line", and "a note's ID line is left out
+// of the Format menu's paragraph styles ... and stays hidden inside an
+// unclosed code block".
+#[test]
+fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styled_or_shown() {
+    use crate::notes::id;
+    let (_dir, mut store) = temp("id-title");
+    let path = store.create("", None);
+    let other = store.create("", Some("Other"));
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&other, false, false);
+    let to = app.retitle(&path, "Named");
+    let text = fs::read_to_string(&to).unwrap();
+    assert!(text.starts_with("# Named\n"), "{text:?}");
+    assert_eq!(
+        text.matches("note-id").count(),
+        1,
+        "and the ID line kept, once"
+    );
+    assert!(id::in_text(&text).is_some());
+
+    let line = "<!-- note-id: n-0123456789ab -->";
+    let kinds = crate::notes::render::kinds(&["# T", "```", "code", line]);
+    assert_eq!(
+        kinds[3],
+        crate::notes::render::Kind::Id,
+        "hidden inside an unclosed code block"
+    );
+    let mut doc = crate::notes::format::Doc::new(Text::from_lines(&["# T", "one", line]));
+    crate::notes::format::paragraph(&mut doc, 1, 2, crate::notes::format::Paragraph::Check);
+    assert_eq!(doc.line(1), "- [ ] one");
+    assert_eq!(doc.line(2), line, "the ID line isn't made a checklist item");
 }

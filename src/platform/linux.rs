@@ -439,3 +439,27 @@ pub fn option_as_alt(_app: super::TerminalApp) -> Option<(bool, String)> {
 pub fn set_option_as_alt(_app: super::TerminalApp) -> Result<()> {
     Err(anyhow!("Option as Alt is a Mac terminal's setting"))
 }
+
+// ── The sandbox ─────────────────────────────────────────────────────────────
+
+// Linux has namespaces and seccomp, but a sandbox made of them is a program
+// of its own to install (bubblewrap, firejail), which Switchboard doesn't
+// ask for, so someone else's code isn't run sealed here.
+pub fn sandbox_ready() -> Result<(), String> {
+    Err("--sealed needs a sandbox, and Linux has none without installing another program (macOS has sandbox-exec built in), so someone else's code isn't run here: read it with switchboard pr-risk, review it with switchboard codex-review -C, and try it on a Mac".into())
+}
+
+pub fn sandboxed(
+    _profile: &std::path::Path,
+    _program: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    sandbox_ready().map(|_| Vec::new())
+}
+
+pub fn user_dir() -> Option<PathBuf> {
+    None
+}
+
+pub fn sealed_build() -> (Vec<PathBuf>, Vec<(String, String)>) {
+    (Vec::new(), Vec::new())
+}

@@ -1642,6 +1642,7 @@ mod tests {
             ready_only: false,
             skipped: 1,
             spend_limit: 0.0,
+            lands_alone: false,
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);

@@ -1,11 +1,19 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
-//! directory as lib/sidebar/autopilot.js kept it: `{ on, note, repo, slots,
-//! cap, paused, readyOnly, skipped, spendLimit, said, closed }`. `note` is
-//! the note's path within the notes directory, `repo` the main clone its
-//! items are worked in, `skipped` the first lines of the items skipped,
-//! `said` what the notifications show for it, and `closed` the landed tabs
-//! it closed without your having seen them, `[{ id, item, hash, at }]`,
-//! each `id` the tab's and its `@autopilot` time, for the notifications.
+//! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
+//! slots, cap, paused, readyOnly, skipped, spendLimit, landWithoutAsking,
+//! said, closed }`.
+//! `note` is the note's path within the notes directory and `noteId` its
+//! stable ID (src/notes/id.rs), which the mode follows the note by when it
+//! has been renamed or moved, outside Notes too, writing its path back;
+//! `repo` the main clone its items are worked in, `skipped` the items
+//! skipped, `[{ note, text }]`, each by its note's ID and first line, so a
+//! skipped item hides only in its own note (a first line alone, from before
+//! notes had IDs, was the mode's note's); `landWithoutAsking` whether its
+//! tabs land on the default branch without asking to push (its menu's
+//! "Land without asking"); `said` what the notifications show
+//! for it, and `closed` the landed tabs it closed without your having seen
+//! them, `[{ id, item, hash, at }]`, each `id` the tab's and its `@autopilot`
+//! time, for the notifications.
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (src/notes/store.rs's `relink_mode`), so it is read again on every
@@ -30,6 +38,8 @@ pub struct Mode {
     pub on: bool,
     /// The note's path within the notes directory, ".md" and all.
     pub note: String,
+    /// The note's stable ID; empty until it is given one.
+    pub note_id: String,
     /// The main clone of the note's repository; empty before it is set up.
     pub repo: PathBuf,
     /// How many of its tabs work at once.
@@ -39,16 +49,25 @@ pub struct Mode {
     pub paused: bool,
     /// Only items whose plan is settled.
     pub ready_only: bool,
-    /// The items skipped, by their first line.
-    pub skipped: Vec<String>,
+    /// The items skipped, each by its note's ID and its first line.
+    pub skipped: Vec<Skipped>,
     /// Today's Claude spend, in dollars, past which it opens no more tabs;
     /// 0 for none.
     pub spend_limit: f64,
+    /// Its tabs land on the default branch without asking to push.
+    pub land_without_asking: bool,
     /// What it has to say, in the notifications; empty for nothing.
     pub said: String,
     /// The landed tabs it closed without your seeing them, the last
     /// `CLOSED_KEPT`, oldest first.
     pub closed: Vec<Closed>,
+}
+
+/// An item skipped: its note's ID and its first line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skipped {
+    pub note: String,
+    pub text: String,
 }
 
 /// A landed tab closed without your having seen it.
@@ -84,6 +103,7 @@ impl Default for Mode {
         Mode {
             on: false,
             note: String::new(),
+            note_id: String::new(),
             repo: PathBuf::new(),
             slots: 3,
             cap: 5,
@@ -91,6 +111,7 @@ impl Default for Mode {
             ready_only: false,
             skipped: Vec::new(),
             spend_limit: 0.0,
+            land_without_asking: false,
             said: String::new(),
             closed: Vec::new(),
         }
@@ -114,6 +135,7 @@ impl Mode {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .map_or(or, |n| n as u32)
         };
+        let note_id = text("noteId").unwrap_or_default();
         Mode {
             on: flag("on", d.on),
             note: text("note").unwrap_or_default(),
@@ -122,11 +144,22 @@ impl Mode {
             cap: count("cap", d.cap),
             paused: flag("paused", d.paused),
             ready_only: flag("readyOnly", d.ready_only),
+            // A first line alone, from before notes had IDs, was the mode's
+            // note's.
             skipped: match map.get("skipped") {
                 Some(Value::Array(list)) => list
                     .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
+                    .filter_map(|x| match x {
+                        Value::String(text) => Some(Skipped {
+                            note: note_id.clone(),
+                            text: text.clone(),
+                        }),
+                        Value::Object(o) => Some(Skipped {
+                            note: o.get("note").and_then(Value::as_str)?.to_string(),
+                            text: o.get("text").and_then(Value::as_str)?.to_string(),
+                        }),
+                        _ => None,
+                    })
                     .collect(),
                 _ => Vec::new(),
             },
@@ -135,6 +168,7 @@ impl Mode {
                 .and_then(Value::as_f64)
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
+            land_without_asking: flag("landWithoutAsking", d.land_without_asking),
             said: text("said").unwrap_or_default(),
             closed: match map.get("closed") {
                 Some(Value::Array(list)) => list
@@ -152,6 +186,7 @@ impl Mode {
                     .collect(),
                 _ => Vec::new(),
             },
+            note_id,
         }
     }
 
@@ -164,6 +199,7 @@ impl Mode {
     fn into_map(self, map: &mut Map<String, Value>) {
         map.insert("on".into(), self.on.into());
         map.insert("note".into(), self.note.into());
+        map.insert("noteId".into(), self.note_id.into());
         map.insert(
             "repo".into(),
             self.repo.to_string_lossy().into_owned().into(),
@@ -174,9 +210,15 @@ impl Mode {
         map.insert("readyOnly".into(), self.ready_only.into());
         map.insert(
             "skipped".into(),
-            Value::Array(self.skipped.into_iter().map(Value::from).collect()),
+            Value::Array(
+                self.skipped
+                    .into_iter()
+                    .map(|x| serde_json::json!({ "note": x.note, "text": x.text }))
+                    .collect(),
+            ),
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
+        map.insert("landWithoutAsking".into(), self.land_without_asking.into());
         map.insert("said".into(), self.said.into());
         map.insert(
             "closed".into(),
@@ -210,6 +252,14 @@ impl Mode {
     /// Whether it is set up to work a note.
     pub fn set_up(&self) -> bool {
         !self.repo.as_os_str().is_empty()
+    }
+
+    /// The skipped items of the mode's note, by their first line.
+    pub fn skipped_here(&self) -> impl Iterator<Item = &str> {
+        self.skipped
+            .iter()
+            .filter(|x| x.note == self.note_id)
+            .map(|x| x.text.as_str())
     }
 }
 
@@ -281,7 +331,7 @@ mod tests {
         let mode = Mode::read(&dir);
         assert!(mode.on);
         assert_eq!(mode.slots, 3, "a count that isn't one is the default");
-        assert_eq!(mode.skipped, Vec::<String>::new(), "Lua's empty object");
+        assert_eq!(mode.skipped, Vec::<Skipped>::new(), "Lua's empty object");
         assert_eq!(mode.spend_limit, 2.5);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -293,7 +343,11 @@ mod tests {
         let mode = Mode::update(&dir, |m| {
             m.on = true;
             m.spend_limit = 20.0;
-            m.skipped.push("One".into());
+            m.note_id = "n-0123456789ab".into();
+            m.skipped.push(Skipped {
+                note: m.note_id.clone(),
+                text: "One".into(),
+            });
         })
         .unwrap();
         assert!(mode.on);
@@ -301,8 +355,27 @@ mod tests {
         assert_eq!(written["later"], 1);
         assert_eq!(written["spendLimit"], 20);
         assert_eq!(written["readyOnly"], false);
-        assert_eq!(written["skipped"][0], "One");
+        assert_eq!(
+            written["skipped"][0],
+            serde_json::json!({ "note": "n-0123456789ab", "text": "One" })
+        );
         assert_eq!(written["note"], "Work.md");
+        assert_eq!(written["noteId"], "n-0123456789ab");
+        assert_eq!(written["landWithoutAsking"], false);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_skipped_item_from_before_notes_had_ids_is_the_modes_notes_and_hides_only_there() {
+        let dir = temp("skipped");
+        fs::write(
+            Mode::file(&dir),
+            r#"{"note":"Work.md","noteId":"n-0123456789ab","skipped":["Old",{"note":"n-ffffffffffff","text":"Elsewhere"},{"note":"n-0123456789ab","text":"Here"}]}"#,
+        )
+        .unwrap();
+        let mode = Mode::read(&dir);
+        assert_eq!(mode.skipped[0].note, "n-0123456789ab");
+        assert_eq!(mode.skipped_here().collect::<Vec<_>>(), ["Old", "Here"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

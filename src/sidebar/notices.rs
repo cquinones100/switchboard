@@ -36,15 +36,17 @@ pub const MARK: &str = "@notices_window";
 /// The kinds of notification by the source that gives them, in the order
 /// they are shown (daemon.js's `notices`): the meeting about to start,
 /// Slack's new messages, what changed on today's calendar, notes written
-/// for you, the Linear inbox, what the mode working a note has to say, the
-/// landed tabs it closed without your seeing them, and suggestions. A
-/// source not named here goes after them.
-pub const ORDER: [&str; 8] = [
+/// for you, the Linear inbox, the landings its tabs made without asking,
+/// what the mode working a note has to say, the landed tabs it closed
+/// without your seeing them, and suggestions. A source not named here goes
+/// after them.
+pub const ORDER: [&str; 9] = [
     "meeting",
     "slack",
     "calendar",
     "new-notes",
     "inbox",
+    "autolanded",
     "autopilot",
     "landed",
     "habits",
@@ -97,6 +99,12 @@ pub fn summary(source: &str, items: &[Item]) -> (String, String) {
         "inbox" => (
             format!("{n} in your Linear inbox"),
             first.detail.split(": ").next().unwrap_or("").to_string(),
+        ),
+        // The landings made without asking: the last one, when several.
+        "autolanded" if one => (first.title.clone(), "without asking".into()),
+        "autolanded" => (
+            format!("Landed {n} changes without asking"),
+            items.last().map(|i| i.title.clone()).unwrap_or_default(),
         ),
         // The landed tabs closed unseen: the last one closed, when several.
         "landed" if one => (first.title.clone(), first.detail.clone()),

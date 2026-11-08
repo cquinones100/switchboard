@@ -26,6 +26,21 @@
 //! moving to the next commit and the one before, and `c`, `q` or `Esc`
 //! back to the whole branch.
 //!
+//! With the diff_uncommitted setting on, M-d's change runs from the merge
+//! base to the working tree (git.rs's `read_to_work_tree`, diffview.lua's
+//! `uncommitted_mode` as upstream's 7b85aa7 added it): each file with
+//! changes not yet committed is marked ● in the list and "uncommitted" in
+//! its bar, and `yl` gives no link from its working-tree side. The story
+//! stays the commits' own, the one told ahead, with the files only
+//! uncommitted in a last "Not committed yet" chapter drawn without asking
+//! Haiku (story.rs's `with_uncommitted`), the commits in a "Committed"
+//! chapter before it when they have no story, and with nothing committed
+//! that chapter alone, under no cover; a file changed since its commits
+//! has no notes, its story's hunks being at the committed lines. With
+//! nothing to show at all, the workspace says so in its box and the diff
+//! closes. `R` reads the change again, as diffview's refresh did, so edits
+//! made while it is open come in, the story kept while its key is the same.
+//!
 //! Asked for (`--working`), it shows the working tree's changes instead,
 //! the changes not staged and those staged in a section each, as
 //! diffview's plain `:DiffviewOpen` listed them (git.rs's `read_working`),
@@ -104,6 +119,9 @@ pub struct Options {
     pub notes: bool,
     /// The list opens wide enough for its longest path (diff_list_wide).
     pub list_wide: bool,
+    /// M-d's change runs to the working tree, what isn't committed yet
+    /// marked apart (diff_uncommitted); off, the commits alone.
+    pub uncommitted: bool,
     /// ga asks Haiku about the diff (diff_ask).
     pub ask: bool,
     /// A row of buttons for the list's keys (easy_keys), with the keys
@@ -144,6 +162,7 @@ impl Options {
             progress: story && on("diff_story_progress"),
             notes: story && on("diff_story_notes"),
             list_wide: on("diff_list_wide"),
+            uncommitted: on("diff_uncommitted"),
             ask: on("diff_ask"),
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
@@ -173,7 +192,13 @@ pub enum Msg {
     Loading(String),
     /// The change, with anything to say about how it was read.
     Loaded(Result<(Box<Change>, Option<String>), String>),
-    Heard(Heard),
+    /// The change has nothing to show, and what to say so.
+    Nothing(String),
+    /// The change read again (R), by the reading's number.
+    Refreshed(u64, Result<Box<Change>, String>),
+    /// What telling a story comes to, by the story's number, so an answer
+    /// to one asked before the change was read again is dropped.
+    Heard(u64, Heard),
     /// Haiku's order of the code, by path.
     Order(Vec<String>),
     /// A side of a file coloured, by the file's key (`Entry::key`).
@@ -331,16 +356,22 @@ enum Button {
 }
 
 /// easy mode's buttons: each presses its keys in the list.
-const BUTTONS: [(&str, &str); 8] = [
+const BUTTONS: [(&str, &str); 9] = [
     ("◀ Chapter", "[c"),
     ("Chapter ▶", "]c"),
     ("◀ Page", "[p"),
     ("Page ▶", "]p"),
     ("Widen", "E"),
     ("Copy link", "yl"),
+    ("Refresh", "R"),
     ("Ask", "ga"),
     ("Close", "q"),
 ];
+
+/// The ● beside a file with changes not yet committed, and its bar's word:
+/// the terminal's yellow, base16's base0A, as diffview.lua linked them to
+/// the colorscheme's Type.
+const UNCOMMITTED: Color = Color::Indexed(3);
 
 /// One of the diff's keys for mission control's Keys view: the keys that do
 /// it, apart by spaces and written as the views write keys (`esc`, `↵`,
@@ -385,6 +416,10 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
             key_row(
                 "c",
                 "the branch's commits, one at a time; c again goes back",
+            ),
+            key_row(
+                "R",
+                "read the change again, edits made since it opened included",
             ),
             key_row("v V", "select lines in a side of the diff, for yp and yl"),
             key_row("yp", "copy path:line"),
@@ -461,6 +496,10 @@ pub struct App {
     /// While the change is read, what it says; and why it couldn't be.
     loading: Option<String>,
     failed: Option<String>,
+    /// Why there is nothing to show, said on the diff's own screen outside
+    /// the workspace; in it, the workspace says so and the diff closes.
+    nothing: Option<String>,
+    closed: bool,
     change: Option<Change>,
     /// The diff as the story reads it: its hunks and what Haiku is given.
     hunks: story::Hunks,
@@ -494,7 +533,19 @@ pub struct App {
     top: usize,
     /// Haiku's order of the code by its paths, when no story is told.
     smart: HashMap<String, usize>,
+    /// The story shown, and the one told of the change (of its commits
+    /// alone, in a change running to the working tree, whose files not
+    /// committed yet the story shown adds in a last chapter).
     story: Option<Story>,
+    told: Option<Story>,
+    /// The key of the story asked for, and its number, so an answer to one
+    /// asked before the change was read again is dropped.
+    story_key: Option<String>,
+    tells: u64,
+    /// How many times the change has been read again (R), for the number
+    /// of the latest, and whether Haiku's order of the files was asked for.
+    refreshes: u64,
+    asked_order: bool,
     telling: Telling,
     /// The answer so far while the story is told, and when the cover went
     /// up (none once it is down); `raw` shows the answer itself on it.
@@ -557,6 +608,8 @@ impl App {
             rows: rows.max(5),
             loading: Some("Reading the change…".into()),
             failed: None,
+            nothing: None,
+            closed: false,
             change: None,
             hunks: Default::default(),
             input: String::new(),
@@ -576,6 +629,11 @@ impl App {
             top: 0,
             smart: HashMap::new(),
             story: None,
+            told: None,
+            story_key: None,
+            tells: 0,
+            refreshes: 0,
+            asked_order: false,
             telling: Telling::Off,
             progress: None,
             cover: None,
@@ -695,11 +753,21 @@ impl App {
                     self.say(said);
                 }
             }
-            Msg::Heard(Heard::Progress(p)) => self.progress = Some(p),
-            Msg::Heard(Heard::Told(told)) => self.told(*told),
-            Msg::Heard(Heard::Untold(why)) => {
+            Msg::Nothing(text) => self.nothing_to_show(text),
+            Msg::Refreshed(id, read) if id == self.refreshes => match read {
+                Ok(change) => self.refreshed(*change),
+                Err(why) => self.say(format!("Couldn't read the change again: {why}")),
+            },
+            Msg::Refreshed(..) => {}
+            // An answer to a story asked before the change was read again.
+            Msg::Heard(id, _) if id != self.tells => {}
+            Msg::Heard(_, Heard::Progress(p)) => self.progress = Some(p),
+            Msg::Heard(_, Heard::Told(told)) => self.told(*told),
+            Msg::Heard(_, Heard::Untold(why)) => {
                 self.telling = Telling::Untold(why);
                 self.cover = None;
+                self.show_story(None);
+                self.sort();
                 self.ask_order();
             }
             Msg::Order(order) => {
@@ -732,41 +800,156 @@ impl App {
     /// shown, and its story asked for.
     pub fn loaded(&mut self, change: Change) {
         self.loading = None;
-        let (diffs, hunks) = story::split(&change.runs());
-        // A working tree's file both staged and changed since is one file
-        // to Haiku, as it was in diffview's story.
-        let mut entries: Vec<story::Entry> = Vec::new();
-        for e in &change.entries {
-            match entries.iter_mut().find(|s| s.path == e.path) {
-                Some(seen) => {
-                    seen.additions += e.additions;
-                    seen.deletions += e.deletions;
-                }
-                None => entries.push(story::Entry {
-                    path: e.path.clone(),
-                    additions: e.additions,
-                    deletions: e.deletions,
-                }),
-            }
-        }
-        let commits = story::commits(&change.raw_commits);
-        self.input = story::input(&entries, &diffs, &hunks, &commits);
-        self.reading = Reading {
-            files: entries.len(),
-            additions: entries.iter().map(|e| e.additions).sum(),
-            deletions: entries.iter().map(|e| e.deletions).sum(),
-            estimate: Some(story::estimate(story::count(&hunks))),
-        };
-        self.hunks = hunks;
-        let (key, paths) = story::key_of(&change);
+        self.read_input(&change);
         self.change = Some(change);
         self.order = (0..self.entries().len()).collect();
+        self.show_story(None);
         self.sort();
         if self.opts.list_wide {
             self.list_width = self.fit_width();
         }
         self.pick_first();
-        self.ask_story(key, paths);
+        self.ask_story(true);
+    }
+
+    /// What Haiku is given of the whole change for a question (`ga`), and
+    /// its hunks, which a question's cursor is found in: the whole diff
+    /// shown, what isn't committed yet included.
+    fn read_input(&mut self, change: &Change) {
+        let (diffs, hunks) = story::split(&change.runs());
+        let commits = story::commits(&change.raw_commits);
+        self.input = story::input(&story_entries(change), &diffs, &hunks, &commits);
+        self.hunks = hunks;
+    }
+
+    /// The change has nothing to show, as pane-in-place.sh found before it
+    /// opened the diff: in the workspace, its box says so and the diff
+    /// closes, giving the pane its place back; elsewhere, or with no
+    /// answer from the workspace, the diff's own screen says so.
+    fn nothing_to_show(&mut self, text: String) {
+        self.loading = None;
+        let said = self.opts.server
+            && crate::mux::socket::ask(&["say", "--", &text]).is_ok_and(|(code, ..)| code == 0);
+        if said {
+            self.closed = true;
+        } else {
+            self.nothing = Some(text);
+        }
+    }
+
+    /// Whether the diff has closed itself, its work done.
+    pub fn closed(&self) -> bool {
+        self.closed
+    }
+
+    /// The story the list shows: the one told (`told`), and, in a change
+    /// running to the working tree with files not committed yet, those
+    /// files in a last chapter of their own (`story::with_uncommitted`),
+    /// the commits in a "Committed" chapter before it when they have no
+    /// story, as diffview.lua's `show_story` showed them. A page the story
+    /// no longer has goes back to the whole diff.
+    fn show_story(&mut self, told: Option<Story>) {
+        self.story = match &self.change {
+            Some(change) if self.opts.story => {
+                let (dirty, committed) = uncommitted_orders(change);
+                if dirty.is_empty() {
+                    told.clone()
+                } else {
+                    Some(story::with_uncommitted(told.as_ref(), &dirty, &committed))
+                }
+            }
+            _ => told.clone(),
+        };
+        self.told = told;
+        if self
+            .page
+            .is_some_and(|p| self.story.as_ref().is_none_or(|s| p > s.chapters.len()))
+        {
+            self.page = None;
+            self.whole_at = None;
+        }
+    }
+
+    /// R: the change read again off the screen's thread, as it was read
+    /// (the same base, or the working tree's changes), so edits made since
+    /// it opened come in, as diffview's refresh read them. A commit of the
+    /// history, which doesn't change, isn't.
+    fn refresh(&mut self) {
+        if self.in_history {
+            return;
+        }
+        let Some(change) = &self.change else {
+            return;
+        };
+        let (top, base) = (change.top.clone(), change.base.clone());
+        let (working, to_work_tree) = (change.working(), change.to_work_tree());
+        self.refreshes += 1;
+        let id = self.refreshes;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let read = if working {
+                git::read_working(&top)
+            } else if to_work_tree {
+                git::read_to_work_tree(&top, &base)
+            } else {
+                git::read_change(&top, &base)
+            };
+            let _ = tx.send(Msg::Refreshed(
+                id,
+                read.map(Box::new).map_err(|e| e.to_string()),
+            ));
+        });
+    }
+
+    /// The change read again: its files listed anew, the cursor kept on its
+    /// file (the file now in its place when it is gone), and the story kept
+    /// while its key is the same (the commits' own, for a change running to
+    /// the working tree, so editing tells no new story), what isn't
+    /// committed put in its last chapter again; else asked for, with no
+    /// cover over a diff already open.
+    fn refreshed(&mut self, change: Change) {
+        let keep = self.current().map(Entry::key);
+        let was = self.at;
+        // Each file's sides read again, the index and the files on disk
+        // anew; a commit's text doesn't change.
+        self.files.clear();
+        self.texts
+            .retain(|(commit, _), _| commit != git::INDEX && commit != git::WORK_TREE);
+        self.lines = None;
+        self.visual = None;
+        self.read_input(&change);
+        let (key, _) = story::key_of(change.told_part());
+        self.change = Some(change);
+        self.order = (0..self.entries().len()).collect();
+        if self.story_key.as_deref() == Some(key.as_str()) {
+            let told = self.told.clone();
+            self.show_story(told);
+            // Haiku's order of the files listed now, when it was asked for
+            // those listed before.
+            if self.asked_order {
+                self.ask_order();
+            }
+        } else {
+            self.asked_order = false;
+            // A story still being told of what the diff showed before is
+            // of no use now: it ends, and this one's is asked for.
+            if self.telling == Telling::Waiting {
+                self.teller.stop();
+                self.teller = Teller::default();
+            }
+            self.show_story(None);
+            self.ask_story(false);
+        }
+        self.sort();
+        let entries = self.entries();
+        let at = keep.and_then(|k| self.order.iter().position(|&i| entries[i].key() == k));
+        match at {
+            Some(at) => {
+                self.at = at;
+                self.load_shown();
+            }
+            None => self.show_at(was),
+        }
     }
 
     fn entries(&self) -> &[Entry] {
@@ -841,12 +1024,45 @@ impl App {
         LIST_WIDTH.max((longest + 14).min(self.cols / 2))
     }
 
-    /// The story asked for, under the cover, unless there is none to tell:
-    /// two files of someone's at least, since generated files go last
-    /// whatever is said.
-    fn ask_story(&mut self, key: String, paths: Vec<String>) {
+    /// The story asked for, under the cover (with `cover`), unless there is
+    /// none to tell: two files of someone's at least, since generated files
+    /// go last whatever is said. In a change running to the working tree it
+    /// is its commits' story, the one told ahead, found under the same key;
+    /// with nothing committed there is none to wait for, only the files not
+    /// committed yet in their chapter.
+    fn ask_story(&mut self, cover: bool) {
+        let Some(change) = &self.change else {
+            return;
+        };
+        let told = change.told_part();
+        let (key, paths) = story::key_of(told);
+        let entries = story_entries(told);
+        let (input, hunks) = if change.to_work_tree() {
+            let (diffs, hunks) = story::split(&told.runs());
+            let commits = story::commits(&told.raw_commits);
+            (story::input(&entries, &diffs, &hunks, &commits), hunks)
+        } else {
+            (self.input.clone(), self.hunks.clone())
+        };
+        let nothing_committed = change.to_work_tree() && told.entries.is_empty();
+        let conflict = change.entries.iter().any(|e| e.status == 'U');
+        // What Haiku is given, for the cover's first line.
+        self.reading = Reading {
+            files: entries.len(),
+            additions: entries.iter().map(|e| e.additions).sum(),
+            deletions: entries.iter().map(|e| e.deletions).sum(),
+            estimate: Some(story::estimate(story::count(&hunks))),
+        };
+        self.story_key = Some(key.clone());
+        // A new number, so an answer to a story asked before goes unheard.
+        self.tells += 1;
+        let id = self.tells;
         if !self.opts.story {
             self.ask_order();
+            return;
+        }
+        if nothing_committed {
+            self.telling = Telling::Untold("nothing is committed yet".into());
             return;
         }
         let written = paths.iter().filter(|p| !order::generated(p)).count();
@@ -860,7 +1076,7 @@ impl App {
         }
         // A file still in conflict has no story, its markers no change of
         // anyone's to tell (diffview.lua's guard).
-        if self.entries().iter().any(|e| e.status == 'U') {
+        if conflict {
             self.telling = Telling::Untold("a merge conflict is unresolved".into());
             return;
         }
@@ -873,18 +1089,20 @@ impl App {
             return;
         }
         self.telling = Telling::Waiting;
-        self.cover = Some(Instant::now());
+        if cover {
+            self.cover = Some(Instant::now());
+        }
         let asked = Asked {
             key,
-            input: self.input.clone(),
+            input,
             paths,
-            hunks: self.hunks.clone(),
+            hunks,
         };
         let teller = self.teller.clone();
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             teller.tell(&asked, &|heard| {
-                let _ = tx.send(Msg::Heard(heard));
+                let _ = tx.send(Msg::Heard(id, heard));
             });
         });
     }
@@ -901,11 +1119,9 @@ impl App {
         if files.is_empty() {
             return;
         }
-        let (top, left, right) = (
-            change.top.clone(),
-            change.left.clone(),
-            change.right.clone(),
-        );
+        self.asked_order = true;
+        let (left, right) = change.order_sides();
+        let (top, left, right) = (change.top.clone(), left.to_string(), right.to_string());
         let tx = self.tx.clone();
         std::thread::spawn(move || {
             if let Some(order) = order::ask_order(&top, &left, &right, &files) {
@@ -919,7 +1135,7 @@ impl App {
         if let Some(missed) = story::missed_text(&story) {
             self.say(format!("{missed}."));
         }
-        self.story = Some(story);
+        self.show_story(Some(story));
         self.telling = Telling::Told;
         self.cover = None;
         self.sort();
@@ -1061,6 +1277,12 @@ impl App {
         }
     }
 
+    /// Whether a file has changes not yet committed, in a change running to
+    /// the working tree: marked ● in the list and "uncommitted" in its bar.
+    fn changed_since(&self, entry: &Entry) -> bool {
+        self.change.as_ref().is_some_and(|c| c.dirty(&entry.path))
+    }
+
     /// The chapter a file is shown under: the page's, else its own.
     fn home(&self, path: &str) -> Option<usize> {
         self.page.or_else(|| {
@@ -1092,9 +1314,12 @@ impl App {
             return Vec::new();
         };
         // Each note goes over the line its hunk starts at, on the side it
-        // changes: the new, or the old for lines only taken out.
+        // changes: the new, or the old for lines only taken out. A file
+        // changed since its commits has none: its story's hunks are at the
+        // committed lines, which the working tree may have moved.
         let mut notes: HashMap<(bool, usize), Vec<String>> = HashMap::new();
         if self.opts.notes
+            && !self.changed_since(entry)
             && let Some(story) = &self.story
             && let Some(home) = self.home(&entry.path)
         {
@@ -1322,7 +1547,7 @@ impl App {
             }
             return Act::Redraw;
         }
-        if self.failed.is_some() {
+        if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
         if self.loading.is_some() {
@@ -1388,6 +1613,7 @@ impl App {
                 return Act::Same;
             }
             KeyCode::Char('E') => self.widen(),
+            KeyCode::Char('R') if !ctrl => self.refresh(),
             KeyCode::Char('c') if !ctrl && self.in_history => self.wants = Some(Wants::Leave),
             KeyCode::Char('c') if !ctrl => self.open_history(),
             KeyCode::Tab => {
@@ -1984,6 +2210,15 @@ impl App {
         let (Some(change), Some(entry)) = (&self.change, self.current()) else {
             return;
         };
+        // The working tree's side of a file with changes not yet committed
+        // has no line on GitHub to link to yet.
+        if new_side && change.dirty(&entry.path) {
+            let text = format!(
+                "{} has uncommitted changes, so this side has no GitHub link yet",
+                entry.path
+            );
+            return self.say(text);
+        }
         let Some(repo) = git::github_repo(&change.top) else {
             return self.say("origin isn't on GitHub");
         };
@@ -2444,7 +2679,7 @@ impl App {
         }
         // A click closes a message and goes on to do what it does.
         let closed = self.message.take().is_some();
-        if self.failed.is_some() {
+        if self.failed.is_some() || self.nothing.is_some() {
             return Act::Quit;
         }
         if self.loading.is_some() || (self.cover.is_some() && self.telling == Telling::Waiting) {
@@ -2573,6 +2808,52 @@ fn alt_arrow(key: &KeyEvent) -> Option<char> {
     }
 }
 
+/// A change's files as Haiku reads them: a working tree's file both staged
+/// and changed since is one file, as it was in diffview's story.
+fn story_entries(change: &Change) -> Vec<story::Entry> {
+    let mut entries: Vec<story::Entry> = Vec::new();
+    for e in &change.entries {
+        match entries.iter_mut().find(|s| s.path == e.path) {
+            Some(seen) => {
+                seen.additions += e.additions;
+                seen.deletions += e.deletions;
+            }
+            None => entries.push(story::Entry {
+                path: e.path.clone(),
+                additions: e.additions,
+                deletions: e.deletions,
+            }),
+        }
+    }
+    entries
+}
+
+/// In a change running to the working tree, the files it lists with
+/// changes not yet committed, and those its commits change, each in the
+/// kinds' order, then A to Z (diffview.lua's `look_uncommitted`); none in
+/// any other change.
+fn uncommitted_orders(change: &Change) -> (Vec<String>, Vec<String>) {
+    let Some(u) = &change.uncommitted else {
+        return (Vec::new(), Vec::new());
+    };
+    let none = HashMap::new();
+    let listed: HashSet<&str> = change.entries.iter().map(|e| e.path.as_str()).collect();
+    let in_order = |paths: Vec<&String>| -> Vec<String> {
+        let mut kept: Vec<String> = paths
+            .into_iter()
+            .filter(|p| listed.contains(p.as_str()))
+            .cloned()
+            .collect();
+        kept.sort_by(|a, b| order::reading_order(a, b, None, &none));
+        kept.dedup();
+        kept
+    };
+    (
+        in_order(u.dirty.iter().collect()),
+        in_order(u.committed.entries.iter().map(|e| &e.path).collect()),
+    )
+}
+
 /// Lines as `yp` and `yl` name them: one line alone, else the first and
 /// the last, the last after `mark` (GitHub's `#L12-L20`).
 fn span(first: usize, last: usize, mark: &str) -> String {
@@ -2611,8 +2892,10 @@ fn md_style(s: &crate::views::markdown::Style) -> Style {
 
 /// Reads the change in `dir` off the screen's thread: the base kept for
 /// the branch's commit, else asked for and fetched (said on the screen
-/// meanwhile), then the change against it.
-fn load(dir: PathBuf, base: Option<String>, working: bool, tx: Sender<Msg>) {
+/// meanwhile), then the change against it, to the working tree with
+/// `uncommitted` (the diff_uncommitted setting); with nothing to show, says
+/// so (`Change::nothing_to_show`) rather than give an empty diff.
+fn load(dir: PathBuf, base: Option<String>, working: bool, uncommitted: bool, tx: Sender<Msg>) {
     let result = (|| -> Result<(Box<Change>, Option<String>), String> {
         let facts = git::facts(&dir).map_err(|e| e.to_string())?;
         if working {
@@ -2639,10 +2922,24 @@ fn load(dir: PathBuf, base: Option<String>, working: bool, tx: Sender<Msg>) {
                 }
             },
         };
-        let change = git::read_change(&facts.top, &base).map_err(|e| e.to_string())?;
+        let change = if uncommitted {
+            git::read_to_work_tree(&facts.top, &base)
+        } else {
+            git::read_change(&facts.top, &base)
+        }
+        .map_err(|e| e.to_string())?;
         Ok((Box::new(change), said))
     })();
-    let _ = tx.send(Msg::Loaded(result));
+    let nothing = result
+        .as_ref()
+        .ok()
+        .and_then(|(change, said)| Some((change.nothing_to_show()?, said)));
+    let msg = match nothing {
+        Some((text, Some(said))) => Msg::Nothing(format!("{text}\n\n{said}")),
+        Some((text, None)) => Msg::Nothing(text),
+        None => Msg::Loaded(result),
+    };
+    let _ = tx.send(msg);
 }
 
 /// The terminal as the diff wants it while it runs, and put back however
@@ -2696,7 +2993,8 @@ pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
     let mut app = App::new(opts, cols, rows, tx.clone());
     {
         let tx = tx.clone();
-        std::thread::spawn(move || load(dir, base, working, tx));
+        let uncommitted = opts.uncommitted;
+        std::thread::spawn(move || load(dir, base, working, uncommitted, tx));
     }
     // The pane closed under it (M-w), or the server ending: the loop ends
     // as it does on q, so the ask under way and its partial file go too.
@@ -2729,6 +3027,9 @@ pub fn run(dir: PathBuf, base: Option<String>, working: bool) -> ExitCode {
         while let Ok(msg) = rx.try_recv() {
             app.event(msg);
             dirty = true;
+        }
+        if app.closed() {
+            break;
         }
         if last_tick.elapsed() >= Duration::from_millis(100) {
             last_tick = Instant::now();
@@ -2787,6 +3088,7 @@ mod tests {
             progress: true,
             notes: true,
             list_wide: false,
+            uncommitted: true,
             ask: true,
             easy: false,
             key_help: true,
@@ -2849,6 +3151,7 @@ mod tests {
             diff,
             staged: None,
             raw_commits: String::new(),
+            uncommitted: None,
         });
         app
     }
@@ -2887,6 +3190,8 @@ mod tests {
     fn easy_mode_puts_a_button_for_each_key_at_the_bottom_and_a_click_presses_it() {
         let mut app = app();
         app.opts.easy = true;
+        // Wide enough for every button and the keys named after them.
+        app.resize(220, 16);
         let shown = screen(&mut app);
         let bar = shown.last().unwrap();
         for label in [
@@ -2896,11 +3201,13 @@ mod tests {
             "Page ▶",
             "Widen",
             "Copy link",
+            "Refresh",
             "Ask",
             "Close",
         ] {
             assert!(bar.contains(label), "{label} in {bar:?}");
         }
+        assert!(bar.contains("R refresh"), "{bar:?}");
         assert!(
             bar.contains("choose a file"),
             "the keys named after them: {bar:?}"
@@ -2928,7 +3235,7 @@ mod tests {
         let (_, close) = *app
             .buttons
             .iter()
-            .find(|(b, _)| *b == Button::Bar(7))
+            .find(|(b, _)| *b == Button::Bar(8))
             .unwrap();
         let click = MouseEvent {
             column: close.x + 1,
@@ -2936,6 +3243,252 @@ mod tests {
             ..click
         };
         assert_eq!(app.mouse(click), Act::Quit);
+    }
+
+    /// A change running to the working tree, its commits' part changing
+    /// src/a.js and src/b.js, `b` the line src/b.js has on disk now, and
+    /// `dirty` the files not committed: src/new.js not at all.
+    fn to_work_tree(b: &str, dirty: &[&str], extra: &[&str]) -> Change {
+        let header = |p: &str| format!("diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n");
+        let committed_diff = format!(
+            "{}@@ -1 +1 @@\n-a = 1\n+a = 2\n{}@@ -1 +1 @@\n-b = 1\n+b = 2\n",
+            header("src/a.js"),
+            header("src/b.js")
+        );
+        let mut diff = format!(
+            "{}@@ -1 +1 @@\n-a = 1\n+a = 2\n{}@@ -1 +1 @@\n-b = 1\n+{b}\n{}@@ -0,0 +1 @@\n+fresh\n",
+            header("src/a.js"),
+            header("src/b.js"),
+            header("src/new.js")
+        );
+        let mut entries = vec![
+            entry("src/a.js", 'M', 1, 1),
+            entry("src/b.js", 'M', 1, 1),
+            entry("src/new.js", 'A', 1, 0),
+        ];
+        for path in extra {
+            diff.push_str(&format!("{}@@ -0,0 +1 @@\n+more\n", header(path)));
+            entries.push(entry(path, 'A', 1, 0));
+        }
+        let committed = Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "H".into(),
+            entries: vec![entry("src/a.js", 'M', 1, 1), entry("src/b.js", 'M', 1, 1)],
+            diff: committed_diff,
+            ..Change::default()
+        };
+        Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "H".into(),
+            entries,
+            diff,
+            uncommitted: Some(git::Uncommitted {
+                dirty: dirty.iter().map(|p| p.to_string()).collect(),
+                committed: Box::new(committed),
+            }),
+            ..Change::default()
+        }
+    }
+
+    /// The diff of `to_work_tree`, with each file's sides.
+    fn working_app() -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        app.give_text("L", "src/a.js", Some("a = 1\n".into()));
+        app.give_text(git::WORK_TREE, "src/a.js", Some("a = 2\n".into()));
+        app.give_text("L", "src/b.js", Some("b = 1\n".into()));
+        app.give_text(git::WORK_TREE, "src/b.js", Some("b = 3\n".into()));
+        app.give_text(git::WORK_TREE, "src/new.js", Some("fresh\n".into()));
+        app.loaded(to_work_tree("b = 3", &["src/b.js", "src/new.js"], &[]));
+        app
+    }
+
+    /// The story of the commits' part alone, as Haiku tells it.
+    fn commits_story() -> Story {
+        let change = to_work_tree("b = 3", &[], &[]);
+        let committed = change.told_part();
+        let (_, hunks) = story::split(&committed.runs());
+        let answer = r#"{"chapters": [
+            {"title": "Bump a", "why": "a moves.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]},
+            {"title": "Bump b", "why": "b follows.", "hunks": [{"id": "src/b.js#1", "note": "Check b."}]}
+        ]}"#;
+        let (_, paths) = story::key_of(committed);
+        story::parse(answer, &paths, order::generated, &hunks).unwrap()
+    }
+
+    #[test]
+    fn whats_not_committed_is_marked_and_listed_in_a_last_chapter_after_the_commits_story() {
+        let mut app = working_app();
+        // Wide enough for a side's bar to say it whole.
+        app.resize(160, 16);
+        // No story of the commits (Haiku isn't asked here): they go first,
+        // in a chapter of their own.
+        let names = list(&screen(&mut app));
+        let at = |names: &[String], text: &str| {
+            names
+                .iter()
+                .position(|l| l.contains(text))
+                .unwrap_or_else(|| panic!("{text} in {names:?}"))
+        };
+        assert!(
+            at(&names, "1/2 Committed") < at(&names, "a.js")
+                && at(&names, "b.js") < at(&names, "2/2 Not committed yet")
+                && at(&names, "2/2 Not committed yet") < at(&names, "new.js"),
+            "{names:?}"
+        );
+        // The story told of the commits: its chapters, then the files only
+        // uncommitted, one in both kept in its committed chapter.
+        app.told(commits_story());
+        let shown = screen(&mut app);
+        let names = list(&shown);
+        assert!(
+            at(&names, "1/3 Bump a") < at(&names, "a.js")
+                && at(&names, "2/3 Bump b") < at(&names, "b.js")
+                && at(&names, "b.js") < at(&names, "3/3 Not committed yet")
+                && at(&names, "3/3 Not committed yet") < at(&names, "new.js"),
+            "{names:?}"
+        );
+        let marked: Vec<&String> = names.iter().filter(|l| l.contains('●')).collect();
+        assert_eq!(marked.len(), 2, "b.js and new.js marked: {names:?}");
+        assert!(!names[at(&names, "a.js")].contains('●'));
+        assert_eq!(app.current().unwrap().path, "src/a.js");
+        assert!(!shown[0].contains("uncommitted"), "{:?}", shown[0]);
+        assert!(
+            shown.iter().any(|l| l.contains("▎ Check a.")),
+            "a file changed only in its commits keeps its notes"
+        );
+        press(&mut app, "j");
+        let shown = screen(&mut app);
+        assert_eq!(app.current().unwrap().path, "src/b.js");
+        assert!(shown[0].contains("● uncommitted"), "{:?}", shown[0]);
+        assert!(
+            !shown.iter().any(|l| l.contains("Check b.")),
+            "no note at the committed lines of a file changed since: {shown:?}"
+        );
+        assert!(
+            shown.iter().any(|l| l.contains("b = 3")),
+            "its new side the file on disk"
+        );
+        // yl gives no link to a line not committed.
+        press(&mut app, "jyl");
+        assert_eq!(
+            app.message.take().unwrap().0,
+            "src/new.js has uncommitted changes, so this side has no GitHub link yet"
+        );
+        press(&mut app, "ggyl");
+        assert_eq!(app.message.take().unwrap().0, "origin isn't on GitHub");
+        press(&mut app, "yS");
+        assert!(app.message.take().unwrap().0.contains("3 chapters"));
+    }
+
+    #[test]
+    fn read_again_the_commits_story_is_kept_and_whats_not_committed_comes_in() {
+        let mut app = working_app();
+        app.told(commits_story());
+        press(&mut app, "jj");
+        assert_eq!(app.current().unwrap().path, "src/new.js");
+        // A file written since, while the commits stay as they were.
+        app.refreshed(to_work_tree(
+            "b = 3",
+            &["src/b.js", "src/c.js", "src/new.js"],
+            &["src/c.js"],
+        ));
+        assert_eq!(app.telling, Telling::Told, "the story kept");
+        let titles: Vec<String> = app
+            .story
+            .as_ref()
+            .unwrap()
+            .chapters
+            .iter()
+            .map(|c| c.title.clone())
+            .collect();
+        assert_eq!(titles, ["Bump a", "Bump b", "Not committed yet"]);
+        assert_eq!(
+            app.story.as_ref().unwrap().chapters[2].files,
+            ["src/c.js", "src/new.js"]
+        );
+        assert_eq!(
+            app.current().unwrap().path,
+            "src/new.js",
+            "the cursor kept on its file"
+        );
+        // A new commit: the story told is of commits no longer the
+        // branch's, so it goes, the commits in a chapter of their own until
+        // theirs is told.
+        let mut moved = to_work_tree("b = 3", &["src/new.js"], &[]);
+        if let Some(u) = &mut moved.uncommitted {
+            u.committed.diff = u.committed.diff.replace("+b = 2", "+b = 3");
+        }
+        app.refreshed(moved);
+        assert_eq!(
+            app.telling,
+            Telling::Untold("Haiku isn't asked here".into())
+        );
+        let titles: Vec<String> = app
+            .story
+            .as_ref()
+            .unwrap()
+            .chapters
+            .iter()
+            .map(|c| c.title.clone())
+            .collect();
+        assert_eq!(titles, ["Committed", "Not committed yet"]);
+        // An answer to the story asked before is dropped.
+        let before = app.tells;
+        app.event(Msg::Heard(
+            before + 1,
+            Heard::Told(Box::new(commits_story())),
+        ));
+        assert_eq!(
+            app.telling,
+            Telling::Untold("Haiku isn't asked here".into())
+        );
+    }
+
+    #[test]
+    fn with_nothing_committed_the_uncommitted_chapter_stands_alone_and_nothing_at_all_is_said() {
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        let mut change = to_work_tree("b = 3", &["src/new.js"], &[]);
+        change.entries.retain(|e| e.path == "src/new.js");
+        if let Some(u) = &mut change.uncommitted {
+            u.committed.entries.clear();
+            u.committed.diff.clear();
+        }
+        app.loaded(change);
+        assert_eq!(
+            app.telling,
+            Telling::Untold("nothing is committed yet".into())
+        );
+        assert_eq!(app.cover, None, "no story to wait for under a cover");
+        let names = list(&screen(&mut app));
+        assert!(
+            names.iter().any(|l| l.contains("1/1 Not committed yet")),
+            "{names:?}"
+        );
+        // Nothing to show: outside the workspace, the diff's own screen
+        // says so, and any key closes it.
+        let (tx, _rx) = channel();
+        let mut app = App::new(opts(), 100, 16, tx);
+        app.event(Msg::Nothing(
+            "Nothing to show: no commits past origin/main and no uncommitted changes".into(),
+        ));
+        assert!(!app.closed());
+        let shown = screen(&mut app);
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("no commits past origin/main and no uncommitted changes")),
+            "{shown:?}"
+        );
+        assert_eq!(
+            app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Act::Quit
+        );
     }
 
     #[test]

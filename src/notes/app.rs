@@ -27,8 +27,19 @@
 //! it, and its file is renamed when its title changes (store.rs). Every save
 //! first brings in what changed in the file from outside since it was read
 //! (`check`, sync.rs), and a watch on the notes directory brings changes in
-//! as they happen; nothing writes a note but `save`. Nothing in a note is
-//! sent anywhere but by a squash, after a yes.
+//! as they happen; nothing writes a note but `save`, and `open_note` giving
+//! a note its ID. Nothing in a note is sent anywhere but by a squash, after
+//! a yes.
+//!
+//! A note's stable ID, its last line (id.rs), is kept out of the text the
+//! editor holds: read off as a note opens, so it is never shown, typed over
+//! or styled, and written back last on every save, so a save puts it back
+//! when the file lost it and drops another note's ID pasted in. A note
+//! opened without one, or a copy of another note's file holding the same,
+//! is given one at once, its modified time kept, so opening an old note
+//! doesn't move it up the list; a note in Recently Deleted is left as it
+//! is. Only the file given another ID outside the app (wtn or the mode
+//! giving a copy one of its own) changes the one the note keeps.
 //!
 //! The screen is drawn into a cell buffer and only what changed is sent,
 //! through the multiplexer's renderer, so the app is tested by drawing it
@@ -46,6 +57,7 @@ use ratatui::layout::Rect;
 
 use super::editor::{Editor, Effect, Mode};
 use super::format::{self, Selection};
+use super::id;
 use super::images::{self, Images};
 use super::menu::{self, Act as FormatAct, Ask, FormatMenu, Progress};
 use super::palette::{self, Act as PaletteAct};
@@ -189,6 +201,9 @@ struct Open {
     title: String,
     /// Its file went from under it, said once.
     gone: bool,
+    /// Its stable ID, written as its last line on every save; `None` for a
+    /// note in Recently Deleted that had none.
+    id: Option<String>,
 }
 
 /// What comes of a box when it closes.
@@ -571,14 +586,16 @@ impl App {
             self.say(format!("notes: can't read {}", self.store.relative(path)));
             return;
         };
+        let (text, note_id) = self.give_id(path, text);
         if let Some(o) = &self.open {
             let left = o.path.clone();
             let kept = self.editor.put_away();
             self.kept.insert(left, kept);
         }
+        let shown = Text::from_file(&id::body_of(&text));
         match self.kept.remove(path) {
-            Some(kept) => self.editor.take_back(Text::from_file(&text), kept),
-            None => self.editor.load(Text::from_file(&text)),
+            Some(kept) => self.editor.take_back(shown, kept),
+            None => self.editor.load(shown),
         }
         self.open = Some(Open {
             path: path.to_path_buf(),
@@ -586,6 +603,7 @@ impl App {
             saved: self.editor.doc.text.clone(),
             title: store::title_of(&text),
             gone: false,
+            id: note_id,
         });
         if let Some(&(row, col, top)) = self.cursors.get(path) {
             self.editor.doc.row = row;
@@ -611,6 +629,46 @@ impl App {
             self.editor.doc.row = 0;
             self.editor.insert_at(len);
         }
+    }
+
+    /// A note's ID as it opens: the one its file holds, else a new one,
+    /// written at once with the file's times kept, as is a copy of another
+    /// note's file holding the same, said once. A note in Recently Deleted
+    /// keeps what it has. Gives the file's text as it is now, and the ID.
+    fn give_id(&mut self, path: &Path, text: String) -> (String, Option<String>) {
+        let held = id::in_text(&text);
+        if self.store.in_trash(path) {
+            return (text, held);
+        }
+        let copy = held
+            .as_deref()
+            .and_then(|held| id::copy_of(path, held, self.store.root()));
+        if held.is_some() && copy.is_none() {
+            return (text, held);
+        }
+        let fresh = id::new();
+        let given = id::with(&text, &fresh);
+        let written = std::fs::metadata(path).and_then(|was| {
+            util::write_atomic(path, &given)?;
+            id::keep_times(path, &was)
+        });
+        if written.is_err() {
+            // Written with the next save instead.
+            return (text, Some(fresh));
+        }
+        if let Some(original) = copy {
+            let name = |p: &Path| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            self.say(format!(
+                "notes: {} is a copy of {}, so it has an ID of its own now",
+                name(path),
+                name(&original)
+            ));
+        }
+        (given, Some(fresh))
     }
 
     /// Brings in a change made to the open note's file from outside, if
@@ -651,8 +709,19 @@ impl App {
             return true;
         }
         let before = self.editor.doc.text.lines();
+        // The ID line kept apart, as the editor holds the note without it:
+        // the file's own taken when it has one, so one given outside the
+        // app (a copy given its own) is the note's from now on.
+        let disk_body = id::body_of(&disk);
+        if let Some(given) = id::in_text(&disk) {
+            o.id = Some(given);
+        }
         let new = if modified {
-            let (merged, clashes) = sync::merge(&base, &self.editor.doc.text.file_text(), &disk);
+            let (merged, clashes) = sync::merge(
+                &id::body_of(&base),
+                &self.editor.doc.text.file_text(),
+                &disk_body,
+            );
             if clashes > 0 {
                 let name = path
                     .file_name()
@@ -664,14 +733,14 @@ impl App {
             }
             merged
         } else {
-            disk.clone()
+            disk_body.clone()
         };
         let new_text = Text::from_file(&new);
         self.editor.change(|doc| doc.text = new_text);
         self.editor.clamp();
         if let Some(o) = &mut self.open {
             o.base = Some(disk.clone());
-            o.saved = Text::from_file(&disk);
+            o.saved = Text::from_file(&disk_body);
         }
         let after = self.editor.doc.text.lines();
         self.editor.folds.follow(&before, &after);
@@ -700,8 +769,21 @@ impl App {
         }
         let Some(open) = &self.open else { return };
         let path = open.path.clone();
-        if self.modified() {
-            let text = self.editor.doc.text.file_text();
+        // Another note's ID pasted in, or formatting wrapped round one,
+        // taken out: the note keeps its own, written last below.
+        let lines = self.editor.doc.text.lines();
+        if id::any_in(&lines) {
+            let kept = Text::from_lines(&id::without_ids(&lines));
+            self.editor.change(|doc| doc.text = kept);
+            self.editor.clamp();
+        }
+        let Some(open) = &self.open else { return };
+        let text = match &open.id {
+            Some(note_id) => id::file_of(&self.editor.doc.text.lines(), note_id),
+            None => self.editor.doc.text.file_text(),
+        };
+        // Written when typed in, or when the file lost its ID.
+        if open.base.as_deref() != Some(text.as_str()) {
             if util::write_atomic(&path, &text).is_err() {
                 self.say(format!(
                     "notes: couldn't save {}",
@@ -805,9 +887,9 @@ impl App {
     /// its new path.
     pub fn retitle(&mut self, path: &Path, title: &str) -> PathBuf {
         let rewrite = |lines: &mut Vec<String>| {
+            // Never its hidden ID line, which a note not open still holds.
             let at = lines.iter().position(|l| {
-                !store::title_of(l).is_empty()
-                    && !l.trim().trim_start_matches('#').trim().is_empty()
+                !id::is_line(l) && !l.trim().trim_start_matches('#').trim().is_empty()
             });
             match at {
                 Some(i) => {

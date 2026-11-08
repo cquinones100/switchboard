@@ -846,7 +846,16 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     }
     let mut own = item.clone();
     own.id = id;
-    let mut out = if let Some(open) = notice_opens(&source, item) {
+    let mut out = if source == "autolanded" {
+        // A landing made without asking: its tab, while it is open.
+        item.data
+            .get("tab")
+            .and_then(Value::as_str)
+            .and_then(|t| t.parse::<TabId>().ok())
+            .filter(|t| ctx.tabs.iter().any(|m| m.id == *t))
+            .map(|t| vec![choice('o', "Go to its tab", Do::GoTo(t))])
+            .unwrap_or_default()
+    } else if let Some(open) = notice_opens(&source, item) {
         vec![choice(
             'o',
             match &open {
@@ -1175,5 +1184,25 @@ mod tests {
         assert_eq!(keys(&choices), "ox");
         assert_eq!(choices[0].act, Do::OpenView("calendar".into()));
         assert_eq!(notice_opens("slack", &change), None);
+    }
+
+    // test/tmux-sidebar.test.js's "a landing without asking ... its menu goes
+    // to its tab".
+    #[test]
+    fn a_landing_made_without_asking_goes_to_its_tab_while_it_is_open() {
+        let tabs = vec![tab(3, "Make the thing")];
+        let repo = |_: &Path| None;
+        let c = ctx(&tabs, &repo);
+        let landed = Item::new("autolanded\tabc1234", "Landed abc1234: Make the thing")
+            .data(json!({ "tab": "@3" }));
+        let choices = notice_choices(&landed, &c);
+        assert_eq!(
+            choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            ["Go to its tab", "Dismiss it"]
+        );
+        assert_eq!(choices[0].act, Do::GoTo(TabId(3)));
+        let gone =
+            Item::new("autolanded\tdef5678", "Landed def5678: Other").data(json!({ "tab": "@9" }));
+        assert_eq!(keys(&notice_choices(&gone, &c)), "x", "its tab closed");
     }
 }

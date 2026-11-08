@@ -4,7 +4,8 @@
 //! worktree has a live session: one worktree at a time holds the lock,
 //! waiters take it in the queue's order, and a gone landing's lock or place
 //! is taken over. And the landing's phase, set on a pane of a test server of
-//! its own. Ported from test/worktree-from-note.test.js's landing tests.
+//! its own, and a landing made without asking, which marks its tab and shows
+//! in the notifications. Ported from test/worktree-from-note.test.js's landing tests.
 
 mod common;
 
@@ -378,6 +379,84 @@ fn the_landing_s_phase_marks_the_pane_with_its_step_and_queue_and_clean_s_loop()
     );
     assert_eq!(shown(), "|queue");
     std::thread::sleep(Duration::from_millis(10));
+}
+
+// test/tmux-sidebar.test.js's "a landing without asking marks its tab,
+// shows in the notifications until dismissed, and its menu goes to its tab",
+// with the Notifications window off, so Enter in the sidebar acts at once.
+#[test]
+fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_acted_on() {
+    let server = TestServer::start();
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("settings.json"),
+        json!({ "tips": false, "notifications": false, "notice_list": false }).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
+    let list = server.list();
+    let tab = list["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pane = list["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let inside = |args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .current_dir(server.dir.path())
+            .env("HOME", &server.home)
+            .env("SWITCHBOARD_STATE_DIR", &server.state)
+            .env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    // The mode's switch on its tab, as queue-and-clean reads it from its
+    // pane.
+    server.ok(&["set", "-t", &tab, "@autopilot_land", "1"]);
+    let shown = inside(&["show", "@autopilot_land"]);
+    assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), "1");
+
+    let said = inside(&["land-lock", "autolanded", "abc1234", "Make", "the", "thing"]);
+    assert!(
+        said.status.success(),
+        "{}",
+        String::from_utf8_lossy(&said.stderr)
+    );
+    assert_eq!(
+        server
+            .ok(&["show", "-t", &tab, "@autopilot_autoland"])
+            .trim(),
+        "abc1234",
+        "its tab marked"
+    );
+    client.wait_text("Landed abc1234: Make the thing");
+
+    // A second tab in front; Enter on the notification goes back to the
+    // landing's tab and dismisses it.
+    server.ok(&["new-tab"]);
+    client.type_text("\x1bs");
+    client.type_text("n");
+    client.type_text("\r");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while server.list()["sessions"][0]["tabs"][0]["current"] != true {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the landing's tab in front"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    client.wait_for("the notification let go", |s| {
+        !s.iter().any(|l| l.contains("Landed abc1234"))
+    });
+    let kept = std::fs::read_to_string(server.state.join("autolanded.json")).unwrap();
+    assert_eq!(kept.trim(), "[]");
 }
 
 /// `switchboard landing`, as queue-and-clean asks it how a repository lands.

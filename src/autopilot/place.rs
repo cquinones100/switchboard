@@ -49,6 +49,12 @@ pub struct Mine {
     pub was_in: bool,
     /// The first line of the item it was opened for (`@autopilot_item`).
     pub item: Option<String>,
+    /// The ID of that item's note (`@autopilot_note`); `None` on a tab
+    /// opened before tabs kept it.
+    pub note: Option<String>,
+    /// The note the tab is linked to, by its path in the notes directory
+    /// (`@tab_note`), which names the note of an older tab's item.
+    pub tab_note: Option<String>,
     /// What its Claude is doing: the tab's, or, while a tool stands in for
     /// Claude's pane (M-d's diff), the pane parked behind it.
     pub state: TabState,
@@ -71,6 +77,8 @@ pub struct Mine {
     /// Whether its Claude has been prompted since it landed: a state begun
     /// after then, which makes it yours.
     pub prompted_since: bool,
+    /// Whether it is marked to land without asking (`@autopilot_land`).
+    pub land: bool,
 }
 
 /// Whether the first of a tab's directories that is in a git repository is
@@ -132,6 +140,8 @@ pub(crate) mod tests {
             since,
             was_in: in_worktree,
             item: Some(format!("item {tab}")),
+            note: None,
+            tab_note: None,
             state,
             in_worktree,
             in_main: !in_worktree,
@@ -141,6 +151,7 @@ pub(crate) mod tests {
             stand_in: false,
             home: false,
             prompted_since: false,
+            land: false,
         }
     }
 

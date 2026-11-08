@@ -414,6 +414,7 @@ impl Server {
             .and_then(|v| v.trim().parse::<f64>().ok())
             .is_some_and(|n| n != 0.0);
         t.autopilot_landed = t.autopilot && opt("@autopilot_left").is_some();
+        t.autopilot_autoland = t.autopilot && opt("@autopilot_autoland").is_some();
         // Notes beside this tab's work, or, on Notes' own tab while it is
         // away, where it went (model.js's notesHere, notesAway, notesOwner).
         let marked = |p: &PaneId, name: &str| {
@@ -1516,6 +1517,26 @@ impl Server {
             // The landed tabs closed unseen are only to be read: Enter
             // dismisses them.
             "landed" => self.autopilot_dismiss_closed(None),
+            // The newest landing made without asking: its tab, while it is
+            // open, which dismisses it.
+            "autolanded" => {
+                let Some(last) = self
+                    .notices
+                    .get("autolanded")
+                    .and_then(|i| i.last())
+                    .cloned()
+                else {
+                    return;
+                };
+                self.autopilot_dismiss_autolanded(Some(&last.id));
+                match self.autopilot_landed_tab(&last) {
+                    Some(tab) => self.mission_go(client, tab),
+                    None => self.say(
+                        Some(client),
+                        &format!("Landed {}; its tab has closed", last.id),
+                    ),
+                }
+            }
             other => self.open_mission(client, view(other)),
         }
     }
@@ -1531,7 +1552,7 @@ impl Server {
             "inbox" if on("linear") && on("view_inbox") => view("inbox"),
             "meeting" | "calendar" if on("view_calendar") => view("calendar"),
             "habits" => Some(crate::mission::Opening::Settings),
-            "autopilot" => Some(crate::mission::Opening::Tabs),
+            "autopilot" | "autolanded" => Some(crate::mission::Opening::Tabs),
             _ => None,
         }
     }

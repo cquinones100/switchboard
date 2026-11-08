@@ -409,7 +409,7 @@ fn pr_answer(body: &Value) -> Value {
             json!({ "number": 5, "title": "Fix", "author": { "login": "t" }, "headRefName": "fix", "headRepository": { "name": "thing" }, "headRepositoryOwner": { "login": "other" }, "isCrossRepository": false, "state": "OPEN", "url": "https://github.com/other/thing/pull/5", "baseRefName": "main", "body": "" })
         }
         ("acme", 9) => {
-            json!({ "number": 9, "title": "Fix", "author": { "login": "alice" }, "headRefName": "main", "headRepository": { "name": "widgets" }, "headRepositoryOwner": { "login": "alice" }, "isCrossRepository": true, "maintainerCanModify": true, "state": "OPEN", "url": "https://github.com/acme/widgets/pull/9", "baseRefName": "main", "body": "" })
+            json!({ "number": 9, "title": "Fix", "author": { "login": "alice", "createdAt": "2015-01-01T00:00:00Z" }, "headRefName": "main", "headRepository": { "name": "widgets" }, "headRepositoryOwner": { "login": "alice" }, "isCrossRepository": true, "maintainerCanModify": true, "state": "OPEN", "url": "https://github.com/acme/widgets/pull/9", "baseRefName": "main", "body": "", "changedFiles": 4, "additions": 4, "deletions": 4 })
         }
         _ => Value::Null,
     };
@@ -569,8 +569,8 @@ fn a_pr_url_from_another_repository_opens_in_a_clone_of_that_one_found_among_you
 }
 
 #[test]
-fn a_forks_pr_opens_on_owner_branch_tracking_the_forks_branch_from_a_remote_named_after_its_owner()
-{
+fn a_forks_pr_opened_trusted_is_on_owner_branch_tracking_the_forks_branch_from_a_remote_named_after_its_owner()
+ {
     let (w, _fake) = github_world("wtpr");
     let origin = w.path("widgets.git");
     let fork = w.path("fork.git");
@@ -612,6 +612,7 @@ fn a_forks_pr_opens_on_owner_branch_tracking_the_forks_branch_from_a_remote_name
         &[
             "worktree-from-pr",
             "--no-claude",
+            "--trusted",
             "--cd-file",
             cd.to_str().unwrap(),
             "9",
@@ -645,6 +646,303 @@ fn a_forks_pr_opens_on_owner_branch_tracking_the_forks_branch_from_a_remote_name
         w.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
         "alice/main"
     );
+}
+
+#[test]
+fn a_forks_pr_opens_untrusted_by_default_outside_the_clone_running_no_hook_with_nothing_linked_and_no_claude()
+ {
+    let (w, _fake) = github_world("wtpr-untrusted");
+    let origin = w.path("widgets.git");
+    let clone = w.path("clone");
+    let ran = w.path("ran");
+    w.init(&origin, true);
+    std::fs::write(
+        w.path(".gitconfig"),
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = git@github.com:acme/widgets.git\n",
+            origin.display()
+        ),
+    )
+    .unwrap();
+    w.clone_into("git@github.com:acme/widgets.git", &clone);
+    let write_hooks = |whose: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(clone.join(".githooks")).unwrap();
+        for name in ["post-checkout", "post-merge", "post-commit", "pre-commit"] {
+            let file = clone.join(".githooks").join(name);
+            std::fs::write(
+                &file,
+                format!("#!/bin/sh\necho \"{whose} $0\" >> '{}'\n", ran.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    };
+    // Your clone's hooks, committed.
+    write_hooks("ours");
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "start"]);
+    w.git(&clone, &["push", "-q", "origin", "main"]);
+    // The fork's commit, kept by GitHub under refs/pull/9/head, with hooks
+    // of its own and a .gitattributes choosing a filter of yours.
+    w.git(&clone, &["checkout", "-q", "-b", "theirs"]);
+    write_hooks("theirs");
+    std::fs::write(clone.join(".gitattributes"), "*.txt filter=mine\n").unwrap();
+    std::fs::write(clone.join("f.txt"), "theirs\n").unwrap();
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "their hooks"]);
+    let last = w.git(&clone, &["rev-parse", "HEAD"]);
+    w.git(&clone, &["push", "-q", "origin", "theirs"]);
+    w.git(&origin, &["update-ref", "refs/pull/9/head", &last]);
+    w.git(&origin, &["branch", "-q", "-D", "theirs"]);
+    w.git(&clone, &["checkout", "-q", "main"]);
+    w.git(&clone, &["branch", "-q", "-D", "theirs"]);
+    // From now on your clone runs its hooks by their full path, and names a
+    // filter.
+    let hooks_dir = clone.join(".githooks");
+    w.git(
+        &clone,
+        &["config", "core.hooksPath", hooks_dir.to_str().unwrap()],
+    );
+    w.git(
+        &clone,
+        &[
+            "config",
+            "filter.mine.smudge",
+            &format!("echo filter >> '{}'; cat", ran.display()),
+        ],
+    );
+    std::fs::create_dir_all(clone.join(".claude")).unwrap();
+    std::fs::write(clone.join(".claude/settings.local.json"), "{}").unwrap();
+    let _ = std::fs::remove_file(&ran);
+
+    let cd = w.path("cd");
+    let run = |dir: &Path| {
+        w.run(
+            dir,
+            &[
+                "worktree-from-pr",
+                "--no-claude",
+                "--cd-file",
+                cd.to_str().unwrap(),
+                "9",
+            ],
+        )
+    };
+    let out = run(&clone);
+    let said = stderr(&out);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "which the wtpr function reads as nothing to go into: {said}"
+    );
+    assert!(read(&cd).is_empty(), "no directory or prompt handed to it");
+    let worktree = w.path(".cache/switchboard/pr-review/acme-widgets/9");
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "HEAD"]),
+        last,
+        "at the PR's commit"
+    );
+    assert_eq!(
+        w.git(&worktree, &["branch", "--show-current"]),
+        "pr-review/9"
+    );
+    assert_eq!(
+        w.git(&worktree, &["config", "core.hooksPath"]),
+        "/dev/null",
+        "hooks off for that worktree"
+    );
+    assert_eq!(
+        w.git(&clone, &["config", "core.hooksPath"]),
+        hooks_dir.to_str().unwrap(),
+        "and still on in your clone"
+    );
+    assert_eq!(
+        w.git(&worktree, &["config", "switchboard.untrusted"]),
+        "true"
+    );
+    assert_eq!(w.git(&worktree, &["config", "core.fsmonitor"]), "false");
+    assert_eq!(
+        w.git(&worktree, &["config", "submodule.recurse"]),
+        "false",
+        "nor its submodules fetched from wherever its .gitmodules says"
+    );
+    assert_eq!(w.git(&worktree, &["config", "filter.mine.smudge"]), "");
+    assert!(
+        !worktree.join(".claude/settings.local.json").exists(),
+        "nothing linked"
+    );
+    assert_eq!(
+        w.git(&clone, &["remote"]),
+        "origin",
+        "no remote added for the fork"
+    );
+    assert!(said.contains("PR:       #9 from alice's fork"), "{said}");
+    assert!(
+        regex::Regex::new(r"Author: {3}alice \(on GitHub \d+ years\)")
+            .unwrap()
+            .is_match(&said),
+        "{said}"
+    );
+    assert!(said.contains("Changes:  4 files, +4 −4"), "{said}");
+    assert!(
+        said.contains("git       M .githooks/post-checkout"),
+        "pr-risk lists the hooks it changes: {said}"
+    );
+    assert!(
+        !said.contains("Fix"),
+        "not the title its author wrote: {said}"
+    );
+    assert!(said.contains("switchboard codex-review -C"), "{said}");
+
+    // A commit and a merge there run no hook or filter, theirs or yours.
+    std::fs::write(worktree.join("g.txt"), "x\n").unwrap();
+    w.git(&worktree, &["add", "g.txt"]);
+    w.git(&worktree, &["commit", "-q", "-m", "a commit there"]);
+    w.git(&worktree, &["merge", "-q", "--no-edit", "--no-ff", "main"]);
+    assert!(!ran.exists(), "nothing ran: {}", read(&ran));
+
+    // Run again from another worktree of the same clone, it moves the
+    // review worktree to the PR's newest commit.
+    w.git(&worktree, &["reset", "-q", "--hard", &last]);
+    let other = w.path("other");
+    w.git(
+        &clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "other",
+            other.to_str().unwrap(),
+        ],
+    );
+    let _ = std::fs::remove_file(&ran);
+    let again = run(&other);
+    assert_eq!(again.status.code(), Some(3), "{}", stderr(&again));
+    assert!(stderr(&again).contains("moved to the PR's newest commit"));
+    assert!(!ran.exists(), "nothing ran: {}", read(&ran));
+
+    // Claude is never started there.
+    let here = w.run(&worktree, &["claude-here", "--print"]);
+    assert_eq!(here.status.code(), Some(1));
+    assert!(stderr(&here).contains("Claude isn't started there"));
+
+    let both = w.run(
+        &clone,
+        &["worktree-from-pr", "--untrusted", "--trusted", "9"],
+    );
+    assert_eq!(both.status.code(), Some(1));
+    assert!(stderr(&both).contains("can't go together"));
+
+    // Your clone still runs its own hooks, as the review worktree never did.
+    w.git(&clone, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+    assert!(read(&ran).contains("ours"), "{}", read(&ran));
+}
+
+#[test]
+fn any_pr_opens_untrusted_when_asked_and_the_wtpr_function_goes_nowhere() {
+    let (w, _fake) = github_world("wtpr-asked");
+    let origin = w.path("origin.git");
+    std::fs::write(
+        w.path(".gitconfig"),
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = git@github.com:o/r.git\n",
+            origin.display()
+        ),
+    )
+    .unwrap();
+    let clone = w.path("clone");
+    w.init(&origin, true);
+    w.clone_into("git@github.com:o/r.git", &clone);
+    w.git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    w.git(&clone, &["push", "-q", "origin", "main"]);
+    w.git(&clone, &["commit", "-q", "--allow-empty", "-m", "feature"]);
+    let last = w.git(&clone, &["rev-parse", "HEAD"]);
+    w.git(&clone, &["push", "-q", "origin", "HEAD:feat"]);
+    w.git(&origin, &["update-ref", "refs/pull/7/head", &last]);
+    w.git(&origin, &["branch", "-q", "-D", "feat"]);
+    w.git(&clone, &["reset", "-q", "--hard", "HEAD~1"]);
+
+    // The wtpr function, as a shell runs it: no cd, no Claude, and 0.
+    let function =
+        String::from_utf8_lossy(&w.run(&clone, &["worktree-from-pr", "init", "bash"]).stdout)
+            .into_owned();
+    let script = format!("{function}\nwtpr --untrusted 7; echo \"rc=$? pwd=$PWD\"");
+    let out = w
+        .command("bash")
+        .args(["-c", &script])
+        .current_dir(&clone)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        said.contains(&format!("rc=0 pwd={}", clone.display())),
+        "{said}{}",
+        stderr(&out)
+    );
+    let worktree = w.path(".cache/switchboard/pr-review/o-r/7");
+    assert_eq!(w.git(&worktree, &["rev-parse", "HEAD"]), last);
+    assert_eq!(
+        w.git(&worktree, &["config", "switchboard.untrusted"]),
+        "true"
+    );
+}
+
+#[test]
+fn with_the_hooks_path_in_full_a_worktree_runs_the_clones_hooks_never_its_branchs() {
+    // Why CLAUDE.md has every clone set core.hooksPath to its .githooks by
+    // its full path: a relative one is read from each worktree's top.
+    let w = World::new("hooks-path");
+    let clone = w.path("clone");
+    let ran = w.path("ran");
+    w.init(&clone, false);
+    let write_hook = |whose: &str| {
+        use std::os::unix::fs::PermissionsExt;
+        let file = clone.join(".githooks/post-checkout");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(
+            &file,
+            format!("#!/bin/sh\necho {whose} >> '{}'\n", ran.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    write_hook("ours");
+    w.git(&clone, &["add", "."]);
+    w.git(&clone, &["commit", "-q", "-m", "start"]);
+    // A branch, as a fork's PR may be, whose own hook would run anything.
+    w.git(&clone, &["checkout", "-q", "-b", "theirs"]);
+    write_hook("theirs");
+    w.git(&clone, &["commit", "-q", "-am", "their hook"]);
+    w.git(&clone, &["checkout", "-q", "main"]);
+
+    let hooks = clone.join(".githooks");
+    w.git(
+        &clone,
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+    let _ = std::fs::remove_file(&ran);
+    let full = w.path("full");
+    w.git(
+        &clone,
+        &["worktree", "add", "-q", full.to_str().unwrap(), "theirs"],
+    );
+    // A checkout in the worktree, as working on the branch there runs one.
+    let _ = std::fs::remove_file(&ran);
+    w.git(&full, &["checkout", "-q", "-b", "mine"]);
+    assert_eq!(
+        read(&ran),
+        "ours\n",
+        "the clone's hook ran, never the branch's"
+    );
+
+    // Relative, as it once was: read from the worktree's top, so the hook
+    // that runs there is the one its branch carries.
+    w.git(&clone, &["config", "core.hooksPath", ".githooks"]);
+    let _ = std::fs::remove_file(&ran);
+    w.git(&full, &["checkout", "-q", "-b", "mine-too"]);
+    assert_eq!(read(&ran), "theirs\n", "the branch's hook ran");
 }
 
 // ── worktree-from-ticket ────────────────────────────────────────────────────
@@ -902,6 +1200,20 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
         worktree.to_str().unwrap(),
         "a second run reuses it"
     );
+    // The note got an ID, a blank line and its own line after what was
+    // there, so the lines appended below come two further down.
+    let note_id = switchboard::notes::id::of_file(&notes.join("Work Notes.md")).unwrap();
+    assert_eq!(
+        w.git(
+            &repo,
+            &[
+                "config",
+                "branch.note/copy-claudes-last-reply-with-a-key.wtnItem"
+            ]
+        ),
+        format!("{note_id}: Copy Claude's last reply (with a key!)"),
+        "the branch's claim names the note by its ID"
+    );
 
     let append = |text: &str| {
         let file = notes.join("Work Notes.md");
@@ -919,7 +1231,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "11",
+            "13",
         ],
     );
     assert_ne!(clash.status.code(), Some(0));
@@ -968,7 +1280,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "12",
+            "14",
         ],
     );
     assert!(
@@ -993,7 +1305,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "13",
+            "15",
         ],
     );
     let third = PathBuf::from(read(&cd).lines().next().unwrap());
@@ -1011,7 +1323,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "16",
+            "18",
         ],
     );
     w.ok(
@@ -1022,7 +1334,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "16",
+            "18",
         ],
     );
     let twice = w.run(
@@ -1033,7 +1345,7 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
             "--note",
             "Work Notes",
             "--item",
-            "14",
+            "16",
         ],
     );
     assert!(stderr(&twice).contains("more than one item reading \"Twice\""));
@@ -1301,7 +1613,11 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         ],
     );
     let claims = read(&w.path("state/wtn-claims.tsv"));
-    assert!(claims.contains("\tWork.md\tPlain\n"), "{claims}");
+    let work_id = switchboard::notes::id::of_file(&notes.join("Work.md")).unwrap();
+    assert!(
+        claims.contains(&format!("\t{work_id}\tPlain\n")),
+        "each by its note's ID: {claims}"
+    );
     let tree = repo.join(".claude/worktrees/note-plain");
     w.git(&repo, &["worktree", "remove", tree.to_str().unwrap()]);
     w.git(&repo, &["branch", "-D", "note/plain"]);
@@ -1309,6 +1625,237 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
         !taken(&[], false).contains(&"3\tPlain".to_string()),
         "claimed lately, so still taken"
     );
+}
+
+// test/worktree-from-note.test.js's "a claim names its note by ID, so a
+// note renamed with mv keeps its item out of the picker and wtn reuses the
+// claim; claims from before IDs are brought to them once, by path or by
+// title".
+#[test]
+fn a_claim_names_its_note_by_id_so_a_renamed_notes_item_stays_taken_and_older_claims_are_brought_to_ids_once()
+ {
+    use switchboard::cmd::worktree_from_note::{Item, unclaimed};
+    use switchboard::notes::id;
+
+    let w = World::new("wtn-ids");
+    let notes = w.path("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Work.md"),
+        "# Work\n\n- [ ] Add search\n- [ ] Other\n",
+    )
+    .unwrap();
+    let repo = w.path("repo");
+    w.init(&repo, false);
+    w.git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let config = |key: &str| {
+        String::from_utf8_lossy(
+            &w.command("git")
+                .args(["-C", repo.to_str().unwrap(), "config", key])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .trim()
+        .to_string()
+    };
+    let wtn = |note: &str, item: &str| {
+        w.run(
+            &repo,
+            &[
+                "worktree-from-note",
+                "--no-claude",
+                "--note",
+                note,
+                "--item",
+                item,
+            ],
+        )
+    };
+
+    assert!(wtn("Work", "3").status.success());
+    let work_id = id::of_file(&notes.join("Work.md")).unwrap();
+    assert_eq!(
+        config("branch.note/add-search.wtnItem"),
+        format!("{work_id}: Add search")
+    );
+
+    std::fs::create_dir_all(notes.join("Projects")).unwrap();
+    let renamed = notes.join("Projects/Renamed.md");
+    std::fs::rename(notes.join("Work.md"), &renamed).unwrap();
+    let rows = || {
+        unclaimed(&repo, "Projects/Renamed.md", &read(&renamed))
+            .iter()
+            .map(Item::row)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows(),
+        ["4\tOther"],
+        "renamed outside Notes, its item is still taken"
+    );
+    std::fs::write(&renamed, read(&renamed).replace("-->\n", "-->  \n")).unwrap();
+    assert_eq!(
+        rows(),
+        ["4\tOther"],
+        "and with spaces an editor left after its ID line"
+    );
+    std::fs::write(&renamed, read(&renamed).replace("-->  \n", "-->\n")).unwrap();
+    let again = wtn("Projects/Renamed", "3");
+    assert!(
+        again.status.success(),
+        "wtn on it reuses the claim rather than failing: {}",
+        stderr(&again)
+    );
+    assert!(stderr(&again).contains("reusing it"), "{}", stderr(&again));
+
+    // Claims from before notes had IDs, by the note's path: one still
+    // there, one whose note was renamed since (found by its title), one lost.
+    std::fs::write(notes.join("Kept.md"), "# Kept\n\n- [ ] Kept item\n").unwrap();
+    std::fs::write(notes.join("Moved.md"), "# Gone\n\n- [ ] Moved item\n").unwrap();
+    w.git(&repo, &["config", "--unset", "switchboard.wtnClaimsById"]);
+    w.git(
+        &repo,
+        &[
+            "config",
+            "branch.note/kept-item.wtnItem",
+            "Kept.md: Kept item",
+        ],
+    );
+    w.git(
+        &repo,
+        &[
+            "config",
+            "branch.note/moved-item.wtnItem",
+            "Gone.md: Moved item",
+        ],
+    );
+    w.git(
+        &repo,
+        &[
+            "config",
+            "branch.note/lost-item.wtnItem",
+            "Lost.md: Lost item",
+        ],
+    );
+    // A note renamed, and an unrelated one made under its old name since.
+    std::fs::write(
+        notes.join("Old name.md"),
+        "# Unrelated\n\n- [ ] Something else\n",
+    )
+    .unwrap();
+    std::fs::write(
+        notes.join("New name.md"),
+        "# New name\n\n- [ ] Renamed item\n",
+    )
+    .unwrap();
+    w.git(
+        &repo,
+        &[
+            "config",
+            "branch.note/renamed-item.wtnItem",
+            "Old name.md: Renamed item",
+        ],
+    );
+    std::fs::write(notes.join("More.md"), "# More\n\n- [ ] Something\n").unwrap();
+    let run = wtn("More", "3");
+    assert!(run.status.success(), "{}", stderr(&run));
+    let id_of = |name: &str| id::of_file(&notes.join(name)).unwrap();
+    assert_eq!(
+        config("branch.note/kept-item.wtnItem"),
+        format!("{}: Kept item", id_of("Kept.md")),
+        "by its path"
+    );
+    assert_eq!(
+        config("branch.note/moved-item.wtnItem"),
+        format!("{}: Moved item", id_of("Moved.md")),
+        "by its title after a rename"
+    );
+    assert_eq!(
+        config("branch.note/lost-item.wtnItem"),
+        "Lost.md: Lost item",
+        "one it can't place left as it was"
+    );
+    assert_eq!(
+        config("branch.note/renamed-item.wtnItem"),
+        format!("{}: Renamed item", id_of("New name.md")),
+        "not the unrelated note at its old path, but the one holding its item"
+    );
+    assert!(stderr(&run).contains("Lost.md: Lost item"), "and listed");
+    let later = wtn("More", "3");
+    assert!(!stderr(&later).contains("Lost.md"), "once");
+    // The lost note back at its path: wtn takes the old claim as its item's
+    // and brings it to the ID.
+    std::fs::write(notes.join("Lost.md"), "# Lost\n\n- [ ] Lost item\n").unwrap();
+    let back = wtn("Lost", "3");
+    assert!(
+        back.status.success(),
+        "an old claim by path is still its item's: {}",
+        stderr(&back)
+    );
+    assert_eq!(
+        config("branch.note/lost-item.wtnItem"),
+        format!("{}: Lost item", id_of("Lost.md")),
+        "and brought to the ID"
+    );
+
+    // Another item whose branch is taken: named by its words and its
+    // note's title, wherever it is now.
+    let mut more = read(&notes.join("More.md"));
+    more.push_str("- [ ] Add search!\n");
+    std::fs::write(notes.join("More.md"), more).unwrap();
+    let line = read(&notes.join("More.md"))
+        .lines()
+        .position(|l| l == "- [ ] Add search!")
+        .unwrap()
+        + 1;
+    let clash = wtn("More", &line.to_string());
+    assert!(
+        stderr(&clash).contains("is for another item: \"Add search\" in Work."),
+        "{}",
+        stderr(&clash)
+    );
+}
+
+// test/worktree-from-note.test.js's "several wtn started at once on old
+// path-form claims bring them to IDs once, none of them failing", here
+// several threads at once.
+#[test]
+fn several_bringing_old_claims_to_ids_at_once_do_it_once_and_none_fails() {
+    let w = World::new("wtn-migrate-race");
+    let notes = w.path("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let repo = w.path("repo");
+    w.init(&repo, false);
+    for n in 0..8 {
+        std::fs::write(
+            notes.join(format!("N{n}.md")),
+            format!("# N{n}\n\n- [ ] item {n}\n"),
+        )
+        .unwrap();
+        w.git(
+            &repo,
+            &[
+                "config",
+                &format!("branch.note/item-{n}.wtnItem"),
+                &format!("N{n}.md: item {n}"),
+            ],
+        );
+    }
+    let unplaced: Vec<Vec<String>> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..5)
+            .map(|_| s.spawn(|| switchboard::notes::id::migrate_claims(&repo, &notes)))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert!(unplaced.iter().all(Vec::is_empty), "{unplaced:?}");
+    for n in 0..8 {
+        let note_id = switchboard::notes::id::of_file(&notes.join(format!("N{n}.md"))).unwrap();
+        assert_eq!(
+            w.git(&repo, &["config", &format!("branch.note/item-{n}.wtnItem")]),
+            format!("{note_id}: item {n}")
+        );
+    }
 }
 
 #[test]

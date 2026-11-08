@@ -66,6 +66,9 @@ pub enum Kind {
     Fence,
     Code,
     Body,
+    /// A note's ID (id.rs), which the editor keeps out of the text, here
+    /// one pasted in before the save takes it out: hidden.
+    Id,
 }
 
 impl Kind {
@@ -83,6 +86,7 @@ impl Kind {
             Kind::Fence => "fence",
             Kind::Code => "code",
             Kind::Body => "body",
+            Kind::Id => "id",
         }
     }
 
@@ -137,6 +141,9 @@ pub fn indent_of(line: &str) -> usize {
 /// the note's first line with text, which is its title, written as one or
 /// not. Fences are told apart by the caller (`kinds`).
 pub fn line_kind(line: &str, first_text_line: bool) -> Kind {
+    if super::id::is_line(line) {
+        return Kind::Id;
+    }
     let indent = indent_of(line);
     let rest = &line[indent..];
     let b = rest.as_bytes();
@@ -207,8 +214,11 @@ pub fn kinds<S: AsRef<str>>(lines: &[S]) -> Vec<Kind> {
     let mut seen_text = false;
     for line in lines {
         let line = line.as_ref();
-        let has_text = line.bytes().any(|b| !is_space(b));
-        let kind = if in_code {
+        let has_text = line.bytes().any(|b| !is_space(b)) && !super::id::is_line(line);
+        let kind = if super::id::is_line(line) {
+            // Hidden even inside a code block left open.
+            Kind::Id
+        } else if in_code {
             if line.trim_start().starts_with("```") {
                 Kind::Fence
             } else {
@@ -796,8 +806,9 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
                 table::draw(line, header, &mut look);
             }
             Kind::Body => {}
+            Kind::Id => look.conceal(0, len, None),
         }
-        if !matches!(k, Kind::Code | Kind::Fence) {
+        if !matches!(k, Kind::Code | Kind::Fence | Kind::Id) {
             for span in inline(line, text_from.min(len)) {
                 let group = match &span.note {
                     Some(title) if !(d.note_exists)(title) => Hl::NoteLinkMissing,

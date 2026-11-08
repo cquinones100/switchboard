@@ -195,6 +195,32 @@ fn skill_path_finds_the_repository_s_copy_then_switchboard_s_personal_one_then_t
     let own = skill(&worktree);
     assert_eq!(out(&worktree), own, "the worktree's own first");
 
+    // A worktree of someone else's PR, as wtpr --untrusted marks it: its own
+    // copy is the PR author's, so the main clone's is followed.
+    git(&[
+        "-C",
+        repo.to_str().unwrap(),
+        "config",
+        "extensions.worktreeConfig",
+        "true",
+    ]);
+    git(&[
+        "-C",
+        worktree.to_str().unwrap(),
+        "config",
+        "--worktree",
+        "switchboard.untrusted",
+        "true",
+    ]);
+    let passed = run(&worktree);
+    assert_eq!(
+        String::from_utf8_lossy(&passed.stdout).trim(),
+        main,
+        "an untrusted worktree's own copy passed over"
+    );
+    assert!(String::from_utf8_lossy(&passed.stderr).contains("holds an untrusted PR"));
+    assert_eq!(out(&repo), main, "the main clone is still its own");
+
     let usage = Command::new(BIN)
         .args(["skill-path", "-x"])
         .output()
@@ -305,6 +331,113 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
         "Plan: [[Plan - <name>]]",
     ] {
         assert!(text.contains(shape), "{shape}");
+    }
+}
+
+// test/skills.test.js's "a tab of the work-a-note mode lands without asking
+// only once leak-check finds nothing, and its review loop fixes mediums
+// without asking".
+#[test]
+fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds_nothing() {
+    let all = skills();
+    let text = |name: &str| {
+        all.iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.clone())
+            .unwrap()
+    };
+    let queue = text("queue-and-clean");
+    let step = |start: &str| {
+        queue
+            .lines()
+            .find(|l| l.starts_with(start))
+            .unwrap_or_else(|| panic!("no {start}"))
+            .to_string()
+    };
+    let check = "switchboard show @autopilot_land";
+    let step7 = step("7. **Ask before pushing**");
+    let leak = step7
+        .find("switchboard leak-check <base>..HEAD")
+        .expect("step 7 runs leak-check");
+    let reads = step7.find(check).expect("step 7 reads the tab's switch");
+    assert!(leak < reads, "leak-check runs first");
+    assert!(
+        regex::Regex::new(r"`leak-check` exited 0, the landing ran both the tests and the review loop .*two clean rounds of this very change .*take the answer as \*\*Push to <name>\*\* without asking")
+            .unwrap()
+            .is_match(&step7),
+        "{step7}"
+    );
+    assert!(
+        queue.contains("<lock> autolanded <short hash>"),
+        "it says so after landing"
+    );
+    let step11 = step("11. **Push**");
+    let again = step11
+        .find("read `@autopilot_land` again")
+        .expect("it reads the switch again");
+    let push = step11.find("git push origin HEAD:<name>").unwrap();
+    assert!(again < push, "just before the push");
+    let review = text("review-loop");
+    assert!(
+        review.contains(check),
+        "the review loop reads the same switch"
+    );
+    assert!(review.contains("fix a `medium` one you agree with as a `high` one is"));
+}
+
+#[test]
+fn review_loop_reviews_someone_elses_pr_from_outside_its_worktree_and_only_reports() {
+    let all = skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "review-loop").unwrap();
+    let section = text
+        .split("## Someone else's PR, from outside its worktree\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the section");
+    for said in [
+        "`switchboard codex-review -C <worktree> --pr <number> --base <base> --notes <notes-file>`",
+        "`--text --no-textconv --no-ext-diff`",
+        "`switchboard try --sealed`",
+        "Nothing is fixed, committed, pushed, or edited on GitHub",
+        "Write no `review-loop-clean` record.",
+        "**For the author**",
+    ] {
+        assert!(section.contains(said), "{said}");
+    }
+    // The flags it names are codex-review's own.
+    let usage = Command::new(BIN)
+        .args(["codex-review", "--help"])
+        .output()
+        .unwrap();
+    let usage = String::from_utf8_lossy(&usage.stderr);
+    for flag in [
+        "-C <dir>",
+        "--pr <number|url>",
+        "--base <ref>",
+        "--notes <file>",
+    ] {
+        assert!(usage.contains(flag), "codex-review takes {flag}: {usage}");
+    }
+}
+
+#[test]
+fn review_pr_runs_none_of_the_prs_code_outside_the_sealed_try() {
+    let all = project_skills();
+    let (_, text) = all.iter().find(|(name, _)| name == "review-pr").unwrap();
+    assert!(
+        text.lines().any(|l| l == "disable-model-invocation: true"),
+        "it checks out someone else's code, so only you start it"
+    );
+    for said in [
+        "`switchboard worktree-from-pr --untrusted <pr>`",
+        "`switchboard pr-risk <worktree> <base>`",
+        "`--text --no-textconv --no-ext-diff`",
+        "`switchboard skill-path review-loop`",
+        "`switchboard try --sealed <worktree> --run cargo test`",
+        "on Linux `switchboard try --sealed` refuses",
+        "never `cd` a shell into it",
+    ] {
+        assert!(text.contains(said), "{said}");
     }
 }
 

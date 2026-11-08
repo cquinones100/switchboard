@@ -291,6 +291,28 @@ fn new_in_a_place_that_isnt_one_starts_nothing() {
 }
 
 #[test]
+fn new_in_a_worktree_of_someone_elses_pr_starts_nothing() {
+    let rig = Rig::new();
+    // As wtpr --untrusted checks a PR out, in the review folder.
+    std::fs::create_dir_all(rig.home().join(".cache/switchboard/pr-review/o-r/12345")).unwrap();
+    rig.block_on(handle(
+        &rig.cx,
+        message(
+            &now_ts(12),
+            "new ~/.cache/switchboard/pr-review/o-r/12345: look around",
+            None,
+        ),
+    ))
+    .unwrap();
+    assert!(
+        rig.posts()[0]
+            .body
+            .contains("holds someone else's PR, checked out untrusted")
+    );
+    assert!(rig.mux.opened.borrow().is_empty());
+}
+
+#[test]
 fn new_in_a_typed_path_starts_there_as_typed_links_and_all() {
     let rig = Rig::new();
     let real = rig.root.join("elsewhere");

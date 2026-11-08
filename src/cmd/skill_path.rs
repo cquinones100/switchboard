@@ -24,6 +24,11 @@
 //! runs it for the bare name, and Switchboard's, run as
 //! `/switchboard:<name>` or handed off to, follows its own text rather than
 //! yours.
+//!
+//! In a worktree of someone else's PR (`wtpr --untrusted`, src/trust.rs),
+//! the worktree's own copy is passed over, saying so on stderr, and its
+//! main clone's comes first: its skills are the PR author's, and a
+//! review-loop of theirs would rewrite the review of their change.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -84,11 +89,19 @@ pub fn find(name: &str, dir: &Path) -> Option<PathBuf> {
         // it relative to the top whatever directory asked, and don't know
         // `--path-format`.
         let top = PathBuf::from(top);
-        if let Some(main) = worktree::repo_root_of(&top) {
-            roots.push(top);
-            roots.push(main);
+        // A worktree of someone else's PR, checked out untrusted: its own
+        // skills are its author's, and a review-loop of theirs would rewrite
+        // the review of their change (src/trust.rs).
+        if crate::trust::is_untrusted(&top) {
+            eprintln!(
+                "skill-path: {} holds an untrusted PR, so its own skills are passed over",
+                top.display()
+            );
         } else {
-            roots.push(top);
+            roots.push(top.clone());
+        }
+        if let Some(main) = worktree::repo_root_of(&top) {
+            roots.push(main);
         }
     }
     if crate::setup::skills::switchboard_s(name) {

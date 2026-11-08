@@ -18,6 +18,14 @@
 //! the note and the repository the same way: `items`, `item_text`,
 //! `unclaimed`, `plan_of` and `queue`, for the server's palette command and
 //! the autopilot.
+//!
+//! A branch's item is kept by its note's stable ID (src/notes/id.rs, the
+//! note given one here when it has none), so a note renamed or moved, in
+//! Notes or outside it, keeps its items' worktrees: the picker and the mode
+//! still leave them out, and wtn on one reuses its worktree. Claims from
+//! before notes had IDs, by the note's path, are brought to IDs once per
+//! repository (`id::migrate_claims`); one it can't place is listed, and
+//! still read by path.
 
 use std::collections::HashSet;
 use std::fs;
@@ -27,14 +35,16 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::notes::id;
 use crate::paths;
 use crate::worktree::{self, Given, Purpose};
 
 /// A branch name short enough to read in a tab and a prompt.
 const SLUG_LENGTH: usize = 50;
 
-/// Each item wtn starts, kept a day, `<seconds>\t<note>\t<item's first
-/// line>`: the work-a-note mode's queue takes an item claimed in the last
+/// Each item wtn starts, kept a day, `<seconds>\t<note's ID>\t<item's
+/// first line>` (the note's path in a row from before notes had IDs): the
+/// work-a-note mode's queue takes an item claimed in the last
 /// `CLAIMED_S` as taken even once its worktree is gone, since
 /// queue-and-clean may remove it a moment before ticking the item.
 pub fn claims_file() -> PathBuf {
@@ -83,15 +93,18 @@ fn claim(note: &str, item: &str) {
     let _ = crate::util::write_atomic(&file, kept);
 }
 
-/// The items of a note (its path within the notes directory) wtn started
-/// in the last `CLAIMED_S` before `now` (seconds), by their first line.
-pub fn claimed_lately(text: &str, note: &str, now: i64) -> HashSet<String> {
+/// The items of a note wtn started in the last `CLAIMED_S` before `now`
+/// (seconds), by their first line: the note's by its ID (`None` while it
+/// has none), or, in a row from before notes had IDs, by its path within
+/// the notes directory.
+pub fn claimed_lately(text: &str, note_id: Option<&str>, note: &str, now: i64) -> HashSet<String> {
     text.lines()
         .filter_map(|row| {
             let mut fields = row.splitn(3, '\t');
             let at: i64 = fields.next()?.trim().parse().ok()?;
-            (fields.next()? == note && now - at < CLAIMED_S)
-                .then(|| fields.next().map(str::to_string))?
+            let whose = fields.next()?;
+            let ours = whose == note || note_id.is_some_and(|id| id == whose);
+            (ours && now - at < CLAIMED_S).then(|| fields.next().map(str::to_string))?
         })
         .collect()
 }
@@ -343,11 +356,14 @@ pub fn item_text(text: &str, line: usize) -> String {
 
 /// The items no worktree is working on yet. wtn keeps the item a branch is
 /// for in the repository's git config, `branch.<branch>.wtnItem`, as
-/// `<note>: <item's first line>`, the note's path within the notes
-/// directory; an item counts as taken only while its branch is checked out
-/// in a worktree, so one whose worktree was removed, its branch kept, shows
-/// again. `repo` is any directory of the repository.
+/// `<note's ID>: <item's first line>`, the ID read from the note's text, so
+/// a note renamed or moved keeps its claims; a claim from before notes had
+/// IDs that wtn couldn't place still reads `<note's path within the notes
+/// directory>: <item's first line>`. An item counts as taken only while its
+/// branch is checked out in a worktree, so one whose worktree was removed,
+/// its branch kept, shows again. `repo` is any directory of the repository.
 pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
+    let note_id = id::in_text(text);
     let checked_out: HashSet<String> = worktree::worktrees(repo)
         .unwrap_or_default()
         .into_iter()
@@ -365,7 +381,12 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
         .collect();
     items(text)
         .into_iter()
-        .filter(|item| !claimed.contains(format!("{note}: {}", item.text).as_str()))
+        .filter(|item| {
+            let by_id = note_id
+                .as_ref()
+                .is_some_and(|id| claimed.contains(format!("{id}: {}", item.text).as_str()));
+            !by_id && !claimed.contains(format!("{note}: {}", item.text).as_str())
+        })
         .collect()
 }
 
@@ -423,6 +444,7 @@ pub fn queue(
     let mut unplanned = Vec::new();
     let lately = claimed_lately(
         &fs::read_to_string(claims).unwrap_or_default(),
+        id::in_text(&text).as_deref(),
         note,
         crate::util::now_secs(),
     );
@@ -633,20 +655,59 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     eprintln!("Branch:   {branch}");
     eprintln!("Worktree: {}", path.display());
 
-    // Which item the branch is for, the note's path within the notes
-    // directory and the item's first line, kept in its git config, so
+    // Which item the branch is for, the note's ID (given one here when it
+    // has none) and the item's first line, kept in its git config, so
     // another item whose first line slugs the same, in this note or another,
-    // is refused rather than started inside this one's work.
+    // is refused rather than started inside this one's work, and the note
+    // renamed or moved since is still the same note. Claims from before
+    // notes had IDs, by the note's path, are brought to IDs once first.
+    let unplaced = id::migrate_claims(&root, &dir);
+    if !unplaced.is_empty() {
+        eprintln!(
+            "Couldn't find the note of these older claims, left as they were:\n{}",
+            unplaced
+                .iter()
+                .map(|c| format!("  {c}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    let note_id =
+        id::ensure_id(&file, &dir).map_err(|e| format!("couldn't give {name} its ID: {e}"))?;
     let relative = file
         .strip_prefix(&dir)
         .map(|r| r.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let identity = format!("{relative}: {first}");
+    let identity = format!("{note_id}: {first}");
     let key = format!("branch.{branch}.wtnItem");
     let recorded = worktree::git_at(&root, &["config", "--get", &key]).unwrap_or_default();
-    if !recorded.is_empty() && recorded != identity {
+    // A claim from before IDs that the migration couldn't place, its note
+    // back at that path since, is this item's too, and is rewritten below.
+    let by_path = recorded == format!("{relative}: {first}");
+    if !recorded.is_empty() && recorded != identity && !by_path {
+        // The other item named by its words and its note's title, found by
+        // its ID wherever it is now.
+        let other = match id::claim_of(&recorded) {
+            Some((other_id, other_text)) => {
+                let title = id::find_by_id(other_id, &dir).map(|f| {
+                    fs::read_to_string(&f)
+                        .ok()
+                        .and_then(|t| id::title_of(&t))
+                        .unwrap_or_else(|| {
+                            f.file_stem()
+                                .map(|s| s.to_string_lossy().into_owned())
+                                .unwrap_or_default()
+                        })
+                });
+                format!(
+                    "\"{other_text}\" in {}",
+                    title.unwrap_or_else(|| "a note no longer there".into())
+                )
+            }
+            None => format!("\"{recorded}\""),
+        };
         return Err(format!(
-            "{branch} is for another item: \"{recorded}\".\n\
+            "{branch} is for another item: {other}.\n\
              Land or remove that worktree first, or, if the item was only reworded, tell git it is the same one:\n  \
              git config {key} '{}'",
             identity.replace('\'', r"'\''")
@@ -663,7 +724,7 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     if !worktree::git_ok(&root, &["config", &key, &identity]) {
         return Err(format!("could not record the item in git config ({key})"));
     }
-    claim(&relative, &first);
+    claim(&note_id, &first);
     worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
 
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
@@ -722,8 +783,19 @@ mod tests {
             now - CLAIMED_S - 1,
             now - 60
         );
-        let lately = claimed_lately(&claims, "Work.md", now);
+        let lately = claimed_lately(&claims, None, "Work.md", now);
         assert_eq!(lately, HashSet::from(["Fresh".to_string()]));
+        let by_id = format!(
+            "{}\tn-0123456789ab\tBy its ID\n{}\tWork.md\tBy its path\n{}\tn-ffffffffffff\tAnother note's\n",
+            now - 60,
+            now - 60,
+            now - 60
+        );
+        assert_eq!(
+            claimed_lately(&by_id, Some("n-0123456789ab"), "Work.md", now),
+            HashSet::from(["By its ID".to_string(), "By its path".to_string()]),
+            "by the note's ID, or by its path in a row from before IDs"
+        );
     }
 
     // tmux/wtn-open.zsh's `items`, from test/worktree-from-note.test.js.

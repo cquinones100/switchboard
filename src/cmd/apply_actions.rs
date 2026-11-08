@@ -435,7 +435,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
         switchboard: is_switchboard(&repo),
         release: update::is_release_build(),
         relay: crate::relay::cli::running(&crate::relay::Paths::current()),
-        trusted: super::try_::listed(&paths::home(), &repo),
+        trusted: crate::trust::trusted(&paths::home(), &repo),
         own: repos::apply_of(&repo),
         repo,
         changed,
@@ -480,12 +480,20 @@ pub fn apply_main(args: Vec<String>) -> ExitCode {
 
 /// Builds the clone, puts the build in place of the running binary and runs
 /// its setup's refresh. Only your own clone, or one in trusted-dirs, since
-/// a build runs the clone's code.
+/// a build runs the clone's code, and never someone else's PR checked out
+/// untrusted (src/trust.rs).
 fn install(repo: &Path) -> Result<String, String> {
     let repo = repo
         .canonicalize()
         .map_err(|e| format!("{}: {e}", repo.display()))?;
-    if !is_switchboard(&repo) && !super::try_::listed(&paths::home(), &repo) {
+    // Someone else's PR, checked out untrusted, whatever trusted-dirs says.
+    if crate::trust::is_untrusted(&repo) {
+        return Err(format!(
+            "{} holds a PR wtpr --untrusted set up, whose code runs only in switchboard try --sealed, so it isn't built",
+            paths::tilde(&repo)
+        ));
+    }
+    if !is_switchboard(&repo) && !crate::trust::trusted(&paths::home(), &repo) {
         return Err(format!(
             "{} is neither ~/switchboard nor in ~/.config/switchboard/trusted-dirs, so its code isn't built",
             paths::tilde(&repo)

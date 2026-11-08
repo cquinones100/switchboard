@@ -8,7 +8,9 @@
 //! clone, and the worktree is named after the branch made flat
 //! (`feature/login` → `feature-login`), so a branch with a slash doesn't
 //! nest its worktree inside a shared directory. `init zsh` prints the `wtb`
-//! function, which works as `wt` does (worktree_from_ticket.rs).
+//! function, which works as `wt` does (worktree_from_ticket.rs). A branch
+//! already checked out in a worktree of someone else's PR, checked out
+//! untrusted, is refused (src/trust.rs).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -185,6 +187,10 @@ fn run(given: &Given, target: &str, branch: &str) -> Result<ExitCode, String> {
         eprintln!("Branch is already checked out elsewhere, using that.");
     }
     let finished = existing.clone().unwrap_or_else(|| path.clone());
+    // Never a worktree of someone else's PR (src/trust.rs).
+    if existing.as_deref().is_some_and(crate::trust::is_untrusted) {
+        return Err(crate::trust::refusal(&finished));
+    }
     eprintln!("Worktree: {}", finished.display());
     if existing.is_none() {
         create_worktree(&path, branch, &root)?;

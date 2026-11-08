@@ -1,5 +1,6 @@
-//! `codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules]
-//! [--reviewer <codex|claude>] [--model <name>] [--dry-run]`: Codex as a
+//! `codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes
+//! <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model
+//! <name>] [--dry-run]`: Codex as a
 //! skeptical, read-only static reviewer of the current branch, its findings
 //! printed as JSON on stdout. Ported from `bin/codex-review`.
 //!
@@ -21,6 +22,14 @@
 //! (no token, the github setting off, the network) stops the review rather
 //! than quietly reviewing against the wrong base.
 //!
+//!   -C <dir>          review the repository at <dir> rather than the one
+//!                     you are in: a worktree of someone else's PR, reviewed
+//!                     from your main clone so no Claude session ever starts
+//!                     in it (`wtpr --untrusted`, /review-pr)
+//!   --pr <n|url>      the PR whose description goes in the prompt, when the
+//!                     branch's name doesn't lead to it (an untrusted review
+//!                     worktree's `pr-review/<n>`); a PR named that isn't
+//!                     there stops the review
 //!   --base <ref>      base to diff against; defaults to the PR's base (the
 //!                     remote copy, since that defines what the PR contains),
 //!                     then origin's default branch. A ref that exists as
@@ -70,6 +79,11 @@
 //! Findings that mention a path outside the repository are flagged in a
 //! "warnings" array so the caller can look before acting.
 //!
+//! The change is given to the reviewer as text (`git diff --text
+//! --no-textconv --no-ext-diff`), whatever the branch's `.gitattributes`
+//! say: a `-diff` there would show a changed file as binary and hide its
+//! lines, and a textconv driver would run a program of your config's on it.
+//!
 //! Only committed changes are reviewed, so the working tree has to be clean:
 //! each round reviews exactly what the next round will be compared against.
 //! Progress from Codex is discarded; only the JSON reaches stdout. Set
@@ -87,7 +101,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::integrations::github;
+use crate::integrations::github::{self, Repo};
 use crate::worktree::{self, PrDetails, normalize};
 use crate::{paths, requests, settings, util};
 
@@ -140,12 +154,14 @@ fn schema() -> Value {
     })
 }
 
-const USAGE: &str = "Usage: codex-review [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
+const USAGE: &str = "Usage: codex-review [-C <dir>] [--pr <number|url>] [--base <ref>] [--notes <file>] [--include-low] [--no-rules] [--reviewer <codex|claude>] [--model <name>] [--dry-run]
        codex-review --patch-id <from> <to>
 
 Runs Codex (or Claude, when Codex isn't available) as a skeptical, read-only static
 reviewer of the current branch and prints its findings as JSON.
 
+  -C <dir>           review the repository at <dir> (someone else's PR, from your main clone)
+  --pr <number|url>  the PR to read the description of, when the branch doesn't lead to it
   --base <ref>       base to diff against (default: the PR's remote base, else origin's default)
   --notes <file>     disputed findings and accepted known gaps, each with a reason
   --include-low      report low-severity findings too
@@ -174,6 +190,8 @@ fn fail<T>(message: impl Into<String>) -> Reviewed<T> {
 
 #[derive(Default)]
 struct Opts {
+    dir: Option<String>,
+    pr: Option<String>,
     base: Option<String>,
     notes: Option<String>,
     include_low: bool,
@@ -186,12 +204,16 @@ struct Opts {
 static MODEL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._-]*$").unwrap());
 
+/// A PR named with `--pr`: its number, or its URL on GitHub.
+static PR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+|https://github\.com/[^/\s]+/[^/\s]+/pull/\d+)$").unwrap());
+
 /// Only named options are accepted. A general passthrough to codex exec
 /// would let whoever builds the command line hand Codex flags that undo the
 /// sandbox, so the one Codex option with a reason to vary, the model, is
 /// taken on its own. `Err` is the exit for usage.
 fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
-    const VALUED: [&str; 4] = ["--base", "--notes", "--model", "--reviewer"];
+    const VALUED: [&str; 6] = ["-C", "--pr", "--base", "--notes", "--model", "--reviewer"];
     let mut opts = Opts::default();
     for (i, arg) in args.iter().enumerate() {
         if i > 0 && VALUED.contains(&args[i - 1].as_str()) {
@@ -205,6 +227,15 @@ fn parse_args(args: &[String]) -> Result<Opts, ExitCode> {
             }
         };
         match arg.as_str() {
+            "-C" => opts.dir = Some(value()?),
+            "--pr" => {
+                let pr = value()?;
+                if !PR.is_match(&pr) {
+                    eprintln!("--pr must be a PR number or URL, got: {pr}");
+                    return Err(usage());
+                }
+                opts.pr = Some(pr);
+            }
             "--base" => opts.base = Some(value()?),
             "--notes" => opts.notes = Some(value()?),
             "--model" => {
@@ -512,9 +543,31 @@ fn ensure_clean() -> Reviewed<()> {
 /// remote names when origin is a fork). Without one the review still runs,
 /// the prompt saying so and the base falling back to origin's default. Only
 /// a repository GitHub doesn't have counts as having none; a failure to ask
-/// must not quietly turn into a review against the wrong base.
-fn pull_request(root: &Path) -> Reviewed<Option<PrDetails>> {
+/// must not quietly turn into a review against the wrong base. A PR named
+/// (`--pr`, by number in that repository or by its URL) must be there.
+fn pull_request(root: &Path, named: Option<&str>) -> Reviewed<Option<PrDetails>> {
     let source = "codex-review: the PR";
+    if let Some(named) = named {
+        let Some((number, in_url)) = worktree::pr_from(named) else {
+            return fail(format!("--pr must be a PR number or URL, got: {named}"));
+        };
+        let found = util::block_on(async {
+            let repo = match in_url.as_deref().and_then(|r| r.split_once('/')) {
+                Some((owner, name)) => Repo {
+                    owner: owner.into(),
+                    name: name.into(),
+                },
+                None => github::repo_of(root).await?,
+            };
+            let pr = worktree::pr_details(&repo, number, source).await?;
+            Ok::<_, anyhow::Error>((repo, pr))
+        });
+        return match found {
+            Ok((_, Some(pr))) => Ok(Some(pr)),
+            Ok((repo, None)) => fail(format!("{repo} has no pull request #{number}")),
+            Err(e) => fail(format!("GitHub couldn't be asked for PR {named}:\n{e}")),
+        };
+    }
     let found = util::block_on(async {
         let repo = match github::repo_of(root).await {
             Ok(repo) => repo,
@@ -745,11 +798,11 @@ fn build_prompt(p: &PromptParts) -> String {
     };
     let scope = match p.diff_path {
         Some(diff) => format!(
-            "The change under review is exactly `git diff {merge_base}..{head}`, saved in {}, and the commits that make it up are listed below. You cannot run commands: read the diff, and the repository's files, which are at {head}, with your tools.",
+            "The change under review is exactly `git diff --text --no-textconv --no-ext-diff {merge_base}..{head}`, saved in {}, and the commits that make it up are listed below. You cannot run commands: read the diff, and the repository's files, which are at {head}, with your tools.",
             diff.display()
         ),
         None => format!(
-            "The change under review is exactly `git diff {merge_base}..{head}`, and the commits that make it up are `git log {merge_base}..{head}`. Use those SHAs rather than HEAD so the scope stays fixed."
+            "The change under review is exactly `git diff --text --no-textconv --no-ext-diff {merge_base}..{head}` (as text, since the branch's .gitattributes could mark a changed file binary and hide its lines), and the commits that make it up are `git log {merge_base}..{head}`. Use those SHAs rather than HEAD so the scope stays fixed."
         ),
     };
     let notes_block = if notes_section.is_empty() {
@@ -1330,6 +1383,13 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
                 .join(n),
         )
     });
+    // -C: the repository at <dir>, as git's own -C reads it, a relative
+    // one from where this runs.
+    if let Some(dir) = &opts.dir
+        && let Err(e) = std::env::set_current_dir(dir)
+    {
+        return fail(format!("no directory {dir}: {e}"));
+    }
     let root = repo_root()?;
     if let Err(e) = std::env::set_current_dir(&root) {
         return fail(format!("could not move to {root}: {e}"));
@@ -1346,7 +1406,7 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
     // targets (`resolve_base`), which fails when no remote does, so it needs
     // no `--base` of its own, where the Node version, comparing with origin,
     // refused one.
-    let pr = pull_request(&root_path)?;
+    let pr = pull_request(&root_path, opts.pr.as_deref())?;
     let base_name = match &opts.base {
         Some(base) => base.clone(),
         None => default_base(pr.as_ref())?,
@@ -1474,10 +1534,18 @@ fn run(opts: &Opts) -> Reviewed<ExitCode> {
         println!("{prompt}");
         return Ok(ExitCode::SUCCESS);
     }
+    // As text, whatever the branch's .gitattributes say: a -diff there
+    // would show a changed file as binary and hide its lines.
     if claude {
         write(
             &diff_path,
-            &git(&["diff", &format!("{merge_base}..{head}")])?,
+            &git(&[
+                "diff",
+                "--text",
+                "--no-textconv",
+                "--no-ext-diff",
+                &format!("{merge_base}..{head}"),
+            ])?,
         )?;
     }
 

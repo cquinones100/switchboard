@@ -6,7 +6,9 @@
 //! of Opus's cost. Where two notes clash and nothing says which is right,
 //! the one changed last wins. The new note goes in the first one's folder,
 //! the originals go to Recently Deleted, so nothing is lost, and every tab
-//! linked to one of them links to the new one.
+//! linked to one of them links to the new one. No note's ID (id.rs) is sent:
+//! the merged note gets one of its own, which the work-a-note mode's note,
+//! its skipped items and its tabs take in place of any squashed note's.
 //!
 //! `ask` runs Claude, off the screen's thread, and gives its answer;
 //! `finish` makes the note from it, on the app's, which first lets go of
@@ -15,6 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use super::id;
 use super::store::{self, Retitled, Store};
 use crate::util;
 
@@ -33,8 +36,11 @@ Write nothing but the note: no preamble, no code fence around it.";
 pub fn input(store: &Store, paths: &[PathBuf]) -> Result<String, String> {
     let mut parts = Vec::new();
     for (i, path) in paths.iter().enumerate() {
-        let text = util::read_text(path)
-            .ok_or_else(|| format!("couldn't read {}", store.relative(path)))?;
+        // Without its ID line: the merged note gets an ID of its own.
+        let text = id::strip(
+            &util::read_text(path)
+                .ok_or_else(|| format!("couldn't read {}", store.relative(path)))?,
+        );
         let changed = store::mtime(path)
             .and_then(|s| jiff::Timestamp::from_second(s).ok())
             .map(|t| t.strftime("%Y-%m-%dT%H:%M:%SZ").to_string())
@@ -110,14 +116,19 @@ pub fn finish(store: &mut Store, paths: &[PathBuf], text: &str) -> Result<PathBu
     let folder = rel.rfind('/').map_or("", |i| &rel[..i]).to_string();
     let title = store::title_of(text);
     let path = store.create(&folder, Some(&title));
-    std::fs::write(&path, format!("{text}\n")).map_err(|_| "couldn't write the new note")?;
+    let new_id = id::new();
+    std::fs::write(&path, id::with(text, &new_id)).map_err(|_| "couldn't write the new note")?;
     let folders: Vec<&Path> = paths.iter().filter_map(|p| p.parent()).collect();
     if let Some(here) = path.parent() {
         store::copy_attachments(text, &folders, here);
     }
     let mut rels = Vec::new();
     let mut titles = Vec::new();
+    let mut renumber = std::collections::HashMap::new();
     for old in paths {
+        if let Some(old_id) = id::of_file(old) {
+            renumber.insert(old_id, new_id.clone());
+        }
         rels.push(store.relative(old));
         titles.push(store::title_of(&util::read_text(old).unwrap_or_default()));
         store.delete(old);
@@ -138,6 +149,7 @@ pub fn finish(store: &mut Store, paths: &[PathBuf], text: &str) -> Result<PathBu
             store.relink(&|_| None, Some(&retitled));
         }
     }
+    store.renumber(&renumber);
     Ok(path)
 }
 
@@ -192,17 +204,26 @@ mod tests {
             "# Groceries and errands\n\n- [ ] milk\n- [ ] post office\n",
         );
         let a = s.create("", Some("Groceries"));
-        write(&a, "# Groceries\n\n- [ ] milk\n");
+        write(
+            &a,
+            "# Groceries\n\n- [ ] milk\n\n<!-- note-id: n-aaaaaaaaaaaa -->\n",
+        );
         let b = s.create("", Some("Errands"));
         write(&b, "# Errands\n\n- [ ] post office\n");
         set_mtime(&a, 1_767_225_600);
         let text = run(&s, &program, &[a.clone(), b.clone()]).unwrap();
         let made = finish(&mut s, &[a.clone(), b.clone()], &text).unwrap();
         assert_eq!(s.relative(&made), "Groceries and errands.md");
+        let merged = std::fs::read_to_string(&made).unwrap();
+        let new_id = id::in_text(&merged).expect("an ID of its own");
         assert_eq!(
-            std::fs::read_to_string(&made).unwrap(),
-            "# Groceries and errands\n\n- [ ] milk\n- [ ] post office\n"
+            merged,
+            format!(
+                "# Groceries and errands\n\n- [ ] milk\n- [ ] post office\n\n{}\n",
+                id::line(&new_id)
+            )
         );
+        assert_ne!(new_id, "n-aaaaaaaaaaaa", "the merged note's ID is its own");
         assert!(!a.exists() && !b.exists(), "the originals leave the notes");
         assert!(
             s.root().join(".trash/Groceries.md").exists()
@@ -216,6 +237,52 @@ mod tests {
         );
         assert!(regex::Regex::new(r#"<note 1 changed="2026-01-01T00:00:00Z">\n# Groceries[\s\S]*<note 2 changed="\d{4}-[^"]+">\n# Errands"#).unwrap().is_match(&given), "each note with when it was last changed");
         assert!(given.contains("keep the version from the note changed most recently"));
+        assert!(!given.contains("note-id"), "no note's ID is sent");
+    }
+
+    // test/notes.test.js's "tabs linked to squashed notes link to the new
+    // note, and the IDs the work-a-note mode keeps for any of them become
+    // the new note's", the mode's file here; its tabs' @autopilot_note are
+    // set through the server, as their @tab_note are.
+    #[test]
+    fn the_ids_the_work_a_note_mode_keeps_for_squashed_notes_become_the_merged_notes() {
+        let (dir, mut s) = temp("squash-ids");
+        let bin = dir.path.join(".bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let (program, _) = stand_in(&bin, "# Both\n\n- one\n- two\n");
+        let a = s.create("", Some("One"));
+        let b = s.create("", Some("Two"));
+        let (one, two) = (id::of_file(&a).unwrap(), id::of_file(&b).unwrap());
+        std::fs::create_dir_all(&s.state).unwrap();
+        let state = s.state.join("autopilot.json");
+        std::fs::write(
+            &state,
+            serde_json::json!({
+                "on": true, "note": "Two.md", "noteId": two,
+                "skipped": [{ "note": one, "text": "skipped" }, { "note": "n-ffffffffffff", "text": "elsewhere" }],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let text = run(&s, &program, &[a.clone(), b.clone()]).unwrap();
+        let made = finish(&mut s, &[a, b], &text).unwrap();
+        let new_id = id::of_file(&made).unwrap();
+        let mode = util::read_json(&state).unwrap();
+        assert_eq!(mode["note"], "Both.md");
+        assert_eq!(
+            mode["noteId"],
+            new_id.as_str(),
+            "the mode's note by the merged note's ID"
+        );
+        assert_eq!(
+            mode["skipped"][0]["note"],
+            new_id.as_str(),
+            "its skipped item with it"
+        );
+        assert_eq!(
+            mode["skipped"][1]["note"], "n-ffffffffffff",
+            "another note's left alone"
+        );
     }
 
     #[test]

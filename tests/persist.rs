@@ -53,6 +53,9 @@ fn tabs_panes_names_options_and_screens_come_back() {
     let split = server.ok(&["split", "-t", pane, "-D", "-d"]);
     let split = split.trim();
     server.ok(&["set", "-t", tab, "@tab_note", "Today's plan"]);
+    // The work-a-note mode's marks, as tmux/window-options.sh carried them.
+    server.ok(&["set", "-t", tab, "@autopilot_land", "1"]);
+    server.ok(&["set", "-t", tab, "@autopilot_autoland", "abc1234"]);
     server.ok(&["set", "-t", split, "@role", "logs"]);
     // A pane running Claude: a process with a session file by its pid.
     server.ok(&[
@@ -96,6 +99,8 @@ fn tabs_panes_names_options_and_screens_come_back() {
         "the current tab is current again"
     );
     assert_eq!(restored[1]["options"]["@tab_note"], "Today's plan");
+    assert_eq!(restored[1]["options"]["@autopilot_land"], "1");
+    assert_eq!(restored[1]["options"]["@autopilot_autoland"], "abc1234");
     assert_eq!(restored[1]["panes"][1]["options"]["@role"], "logs");
     for p in restored[1]["panes"].as_array().unwrap() {
         assert_eq!(

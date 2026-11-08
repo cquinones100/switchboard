@@ -46,11 +46,12 @@ Shared by every part:
 | `settings` | The workspace's options: the schema in `assets/settings.json`, what you changed in `~/.config/switchboard/settings.json` |
 | `requests` | The request audit: every request to a service outside the computer counted as it is made |
 | `net` | HTTPS through one client per runtime (reqwest on rustls), each request counted |
-| `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, opening a file or link |
+| `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, opening a file or link, and the sandbox a sealed try runs in (`sandbox`: its rules, as macOS's `sandbox-exec` reads them; Linux has none) |
 | `presence` | Whether you're at the computer |
 | `connector` | One call to a Claude connector through a headless Haiku |
 | `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for where gh looked (`gh repo set-default`, else upstream when origin is a fork) |
 | `worktree` | What the worktree commands share |
+| `trust` | Whose code a directory holds, the one place that decides: the directories listed in `trusted-dirs`, a worktree whose code is your own (what `switchboard try` builds), and someone else's PR checked out untrusted, which nothing starts Claude in, lists to reopen or builds |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
 | `repos` | Your settings for each repository, `repos.json`, by its origin's `owner/name`: how its work lands (through a PR or straight on its default branch, worked out from GitHub's rules and its CLAUDE.md when not set) and what a landed change needs |
 
@@ -70,14 +71,14 @@ The workspace:
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |
 | `views` | Reading beside your work: the PR description, the ticket, a link, a pane's links and images, search everything, whether a PR can merge, and the branch's merge queue, Linear project, ticket and PR opened or copied |
-| `diff` | `M-d`'s diff in a pane's place, told as a story, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
+| `diff` | `M-d`'s diff in a pane's place, from the merge base to the working tree, told as a story of its commits with what isn't committed in a last chapter, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
 | `setup` | `switchboard setup`: Switchboard's plugin for Claude Code (its hooks, skills and instructions), or the same in `~/.claude` the old way, and which way (`way`); Claude Code's statusline and permissions; your CLAUDE.md; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
 | `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab and naming a new one, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
-| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `land-lock`, `apply-actions`, `wait-deploy` and the rest) |
+| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `pr-risk`, `land-lock`, `apply-actions`, `wait-deploy` and the rest) |
 
 `src/lib.rs` lists them with a line each, and every module opens with a comment saying what it is and why it works as it does.
 
@@ -85,10 +86,10 @@ The workspace:
 
 | What | Where |
 | --- | --- |
-| Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `repos.json`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
+| Your settings and own files | `~/.config/switchboard/`: `settings.json`, `keys.json`, `sidebar.json` and `sidebar-plugins/`, `browser.json`, `linear.json`, `claude.json` and `CLAUDE.md`, `slack-updates.json`, `slack-relay.json`, `oncall.json` and `oncall-rules.md`, `repos.json`, `leak-check.txt`, `trusted-dirs`, and `secrets.json` on Linux without a keyring. Never written over by Switchboard but through Settings |
 | State | `~/.local/state/switchboard/` (`SWITCHBOARD_STATE_DIR` moves it): the socket (`sock`), `server.lock` and `server.log`, the layout (`layout.json`), the handover to a new build during `switchboard upgrade` (`handover.json`, removed once read), tips, habits, requests, connectors, the day's files, Notes' socket, the mode working a note (`autopilot.json`), how each repository lands as last worked out (`repos-landing.json`), the items `wtn` started lately (`wtn-claims.tsv`), setup's note that an earlier install kept in `~/.claude` hasn't been asked about the plugin yet (`claude-plugin-unasked`), and the statusline's `context/` and `usage/` |
 | The Slack relay's state | `~/.local/state/slack-relay/`, where the Node relay kept it |
-| Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies, what the PR and ticket image views load and draw (`assets/`, `pr-image/pages/`, held to 300 MB together), the PRs and ticket titles the tabs show (`tab-names.json`); `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |
+| Caches | `~/.cache/switchboard/`: the diff's order and stories, Notes' pictures, the PR and ticket views' last copies, what the PR and ticket image views load and draw (`assets/`, `pr-image/pages/`, held to 300 MB together), the PRs and ticket titles the tabs show (`tab-names.json`), the worktrees of someone else's PRs `wtpr --untrusted` checks out (`pr-review/<owner>-<repo>/<number>`), a sealed try's sandbox rules, which also mark its home as sealed, and the crates sealed tries fetch (`sealed/`); `~/.cache/wt-revive/index.json`, what each Claude transcript says of its worktree |
 | What setup writes for Claude Code | `~/.local/share/switchboard/`: `plugin/` (Switchboard's plugin: `.claude-plugin/plugin.json`, `hooks/hooks.json` made from `assets/claude-settings.json`'s hooks, `skills/`; written by setup and by the server as it starts, unless it has a state directory of its own), `switchboard.md` (Switchboard's part of CLAUDE.md, imported from `~/.claude/CLAUDE.md` the old way), `claude-md/` (the clone of your rules' repository), `setup-build` (the build whose parts were last put in place) |
 | `/oncall`'s state | `~/.local/state/oncall/state.md`, kept by the skill |
 | Claude Code | `~/.claude/settings.json` (merged into, never linked: the statusline and permissions, and the hooks the old way), `~/.claude/CLAUDE.md` (your rules, and Switchboard's part the old way), `~/.claude/skills/` (Switchboard's the old way); the panes' `CLAUDE_CODE_PLUGIN_DIRS` names the plugin as a plugin |
@@ -126,6 +127,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | glow, mermaid-ascii, less | `src/views/` (pulldown-cmark, a Mermaid flowchart and sequence drawer, a pager) |
 | diffview.nvim, `diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `src/diff/` (syntect for highlighting, similar for the line and word diffs) |
 | the notes app (`notes/`, Neovim), `bin/notes` | `src/notes/` (ropey for the text, notify for the watch, image for pictures other than PNGs) |
+| a note's stable ID (`notes/lua/notes/id.lua`, `lib/note-id.js`) | `src/notes/id.rs`, which the app, `wtn` and the work-a-note mode share |
 | the sidebar daemon (`bin/tmux-sidebar`, `lib/sidebar/`) | `src/sidebar/`, `src/mission/`, `src/sources/`, `src/day/`, `src/usage/` |
 | `bin/slack-relay`, `lib/slack-relay/` | `src/relay/` |
 | `gh` | GitHub's API over reqwest; the token from `GH_TOKEN` or `GITHUB_TOKEN`, `gh auth token` when gh is there, else a stored secret |
@@ -134,14 +136,16 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (the plugin, or hooks and skills in `~/.claude`; the statusline, the terminal, the leftovers, the optional report), a new build's first run, and release downloads |
 | the hourly update popup (git pull) | the same box, offering a new release |
 | `lib/sidebar/autopilot.js`, `tmux/wtn-open.zsh`'s `queue` and `next` | `src/autopilot/`, `src/cmd/worktree_from_note.rs`'s `queue` |
-| `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`) |
+| `bin/switchboard-try` (a tmux server under `/tmp/sb-<hash>`; `--sealed`'s under macOS's sandbox) | `switchboard try` (`src/cmd/try_.rs`: the build under that home, its server with no client for `--detached`; `src/cmd/try_sealed.rs`: `--sealed`, the build, server and clients in the sandbox) |
 | `bin/*` Node programs, `lib/` | `src/cmd/`, `src/integrations/`, `src/relay/`, ... |
 
 ### Not ported
 
 What the tmux version did that the binary doesn't yet, so a part that brings one back knows where it stood:
 
+- **The diff**: diffview read the change again by itself when Neovim got the focus back and on a save, as well as on `R`; `M-d`'s diff reads it again on `R` alone (`src/diff/app.rs`'s `refresh`).
 - **Commands**: Rename's ticket and shaping shortcuts (tab-name.zsh's `t` and `s`): "Rename the tab" takes a typed name, and the shortcuts are in the name asked for after `M-t` alone (`src/extras/naming.rs`).
+- **Sealed tries**: on Linux, which has no sandbox without installing another program (bubblewrap, firejail), `--sealed` refuses. On macOS, the try attaches in the terminal it was run from, or `--print`'s command in another, where the script opened a Ghostty window; `--npm-ci` for lib's packages is `--fetch` for the crates.
 - **Elsewhere**: `switchboard setup` adding the worktree commands' shell functions to your shell's startup file (nothing of the workspace's needs them: its keys and mission control's menus start work as the tab's own command, through the binary).
 
 ### Before this lands

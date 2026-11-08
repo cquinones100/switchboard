@@ -131,6 +131,11 @@ fn offered(here: &Path, panes: &[PathBuf], wanted: Wanted) -> Vec<PathBuf> {
         if dir.as_os_str().is_empty() || !dir.is_dir() {
             continue;
         }
+        // Never someone else's PR, checked out untrusted (src/trust.rs), for
+        // a new Claude tab; its main clone is yours.
+        if wanted == Wanted::Any && crate::trust::in_review_dir(&dir) {
+            continue;
+        }
         let dir = match wanted {
             Wanted::Repo => match main_clone(&dir) {
                 Some(root) => root,
@@ -532,6 +537,14 @@ impl Server {
     /// interactive shell of yours for your PATH, left at that shell when
     /// Claude exits.
     fn open_claude_tab(&mut self, client: ClientId, dir: &Path) {
+        // Never in a worktree of someone else's PR, whose project settings
+        // and hooks Claude would load: known by its path alone, since this
+        // runs on the server's task (src/trust.rs).
+        if crate::trust::in_review_dir(dir) {
+            let refusal = crate::trust::refusal(dir);
+            self.say(Some(client), &refusal);
+            return;
+        }
         let command = worktree::tab_command("claude", "claude", &[]);
         if let Some(tab) = self.work_tab(client, dir, command, true) {
             self.front(client, &[tab]);

@@ -8,9 +8,11 @@
 //! Haiku is given (`split`, `input`, `commits`), the key a story is kept
 //! under (`key`), how its answer becomes the list's order and headings
 //! (`parse`), how an answer still streaming reads on the cover (`partial`,
-//! `progress`), and the lines a chapter's heading and a hunk's note are drawn
-//! in (`heading`, `note_lines`), all as the Lua module had them, so a story
-//! cached by Neovim reads the same here.
+//! `progress`), the lines a chapter's heading and a hunk's note are drawn
+//! in (`heading`, `note_lines`), and the story of a diff running to the
+//! working tree, its files not committed yet in a last chapter
+//! (`with_uncommitted`), all as the Lua module had them, so a story cached
+//! by Neovim reads the same here.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::LazyLock;
@@ -1104,6 +1106,65 @@ pub fn note_lines(story: &Story, hunk: &HunkNote, home: usize, cols: usize) -> O
     Some(wrap(&text, cols, "▎ ", "▎ "))
 }
 
+/// The last chapter's title in a diff running to the working tree, and the
+/// first's when the commits have no story of their own.
+pub const NOT_COMMITTED: &str = "Not committed yet";
+pub const COMMITTED: &str = "Committed";
+
+/// The story of a diff running to the working tree (M-d with uncommitted
+/// changes, diffstory.lua's `with_uncommitted`): the committed part's story
+/// (`None` when nothing is committed or it has none), and after its
+/// chapters a last one, "Not committed yet", with no why, holding the files
+/// with uncommitted changes the story doesn't already place, in the order
+/// of `paths` (each file with uncommitted changes). A file in both keeps its
+/// committed chapter; the last one touches every such file, so its page
+/// shows them all. Drawn without asking Haiku, so editing tells no new
+/// story. The story as given when no file is left for the last chapter.
+/// With no story of the commits, `committed` (their files, in the list's
+/// order) go first, in a "Committed" chapter, so the last one stays last.
+pub fn with_uncommitted(story: Option<&Story>, paths: &[String], committed: &[String]) -> Story {
+    let mut made = story.cloned().unwrap_or_else(|| Story {
+        chapters: Vec::new(),
+        place: HashMap::new(),
+        chapter: HashMap::new(),
+        hunks: HashMap::new(),
+        missed: None,
+    });
+    if story.is_none() && !committed.is_empty() {
+        made.chapters.push(Chapter {
+            title: COMMITTED.into(),
+            why: String::new(),
+            files: committed.to_vec(),
+            touches: committed.to_vec(),
+        });
+        for (i, path) in committed.iter().enumerate() {
+            made.place.insert(path.clone(), i + 1);
+            made.chapter.insert(path.clone(), 1);
+        }
+    }
+    let fresh: Vec<String> = paths
+        .iter()
+        .filter(|p| !made.chapter.contains_key(p.as_str()))
+        .cloned()
+        .collect();
+    if fresh.is_empty() {
+        return made;
+    }
+    made.chapters.push(Chapter {
+        title: NOT_COMMITTED.into(),
+        why: String::new(),
+        files: fresh.clone(),
+        touches: paths.to_vec(),
+    });
+    let placed = made.place.len();
+    let last = made.chapters.len();
+    for (i, path) in fresh.into_iter().enumerate() {
+        made.place.insert(path.clone(), placed + i + 1);
+        made.chapter.insert(path, last);
+    }
+    made
+}
+
 /// The story as Markdown, to share: each chapter's number, title and why,
 /// the files it touches, and each hunk's note under its file as path:line.
 pub fn markdown(story: &Story) -> String {
@@ -1611,6 +1672,70 @@ mod tests {
             ),
             Err(None),
             "an answer naming only generated files' hunks isn't said to miss"
+        );
+    }
+
+    #[test]
+    fn a_diff_to_the_working_tree_puts_the_files_only_uncommitted_in_a_last_chapter() {
+        let titles = |story: &Story| -> Vec<String> {
+            story.chapters.iter().map(|c| c.title.clone()).collect()
+        };
+        let story = Story {
+            chapters: vec![Chapter {
+                title: "Change the model".into(),
+                why: "Why.".into(),
+                files: strings(&["a.js"]),
+                touches: strings(&["a.js"]),
+            }],
+            place: HashMap::from([("a.js".to_string(), 1)]),
+            chapter: HashMap::from([("a.js".to_string(), 1)]),
+            hunks: HashMap::new(),
+            missed: None,
+        };
+        let both = with_uncommitted(Some(&story), &strings(&["a.js", "new.js"]), &[]);
+        assert_eq!(titles(&both), ["Change the model", "Not committed yet"]);
+        assert_eq!(
+            both.chapters[1],
+            Chapter {
+                title: "Not committed yet".into(),
+                why: String::new(),
+                files: strings(&["new.js"]),
+                touches: strings(&["a.js", "new.js"]),
+            },
+            "a file in both keeps its committed chapter; the last one's page shows every uncommitted file"
+        );
+        assert_eq!(both.place["new.js"], 2);
+        assert_eq!((both.chapter["a.js"], both.chapter["new.js"]), (1, 2));
+        assert_eq!(story.chapters.len(), 1, "the story told is left as it was");
+        assert_eq!(
+            with_uncommitted(Some(&story), &strings(&["a.js"]), &[])
+                .chapters
+                .len(),
+            1,
+            "no last chapter when every uncommitted file has one"
+        );
+        let alone = with_uncommitted(None, &strings(&["b.js", "c.js"]), &[]);
+        assert_eq!(
+            titles(&alone),
+            ["Not committed yet"],
+            "with nothing committed, that chapter alone"
+        );
+        assert_eq!((alone.place["b.js"], alone.place["c.js"]), (1, 2));
+        let untold = with_uncommitted(None, &strings(&["a.js", "b.js"]), &strings(&["a.js"]));
+        assert_eq!(
+            titles(&untold),
+            ["Committed", "Not committed yet"],
+            "with no story told of the commits, they go first, so the uncommitted chapter stays last"
+        );
+        assert_eq!((untold.place["a.js"], untold.place["b.js"]), (1, 2));
+        assert_eq!((untold.chapter["a.js"], untold.chapter["b.js"]), (1, 2));
+        // Headed with no why under its title.
+        assert_eq!(
+            heading(&untold, 2, 40, false),
+            vec![
+                (String::new(), Look::Normal),
+                ("2/2 Not committed yet".into(), Look::Title)
+            ]
         );
     }
 }

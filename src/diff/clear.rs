@@ -1,7 +1,9 @@
 //! M-p's "Clear this tab's diff cache": what M-d's diff keeps of a tab's
 //! branch, removed, so its next opening asks Haiku again (ported from
 //! tmux/diff-cache-clear.sh and diffview.lua's `clear`). That is Haiku's
-//! order of its files (`order::order_file`), its story's answer
+//! order of its files (`order::order_file`), both of its commits and of the
+//! diff from the same merge base to the working tree as it is now, which
+//! M-d opens with the diff_uncommitted setting on, its story's answer
 //! (`diff-story/<key>.txt`, by `story::key_of`) and the PR base kept for
 //! the worktree (`git::forget_base`), each found from the same change M-d
 //! would read, by the same functions M-d's diff and the story told ahead use,
@@ -48,16 +50,23 @@ pub fn clear(dir: &Path) -> Result<Cleared, String> {
     };
     // The base as M-d finds it: kept for this commit, else fetched.
     let base = git::cached_base(dir).or_else(|| git::fetch_base(dir).map(|b| b.base));
-    match base.map(|b| git::read_change(&facts.top, &b)) {
+    match base.map(|b| git::read_to_work_tree(&facts.top, &b)) {
         None => done.missed = Some("its PR base couldn't be worked out".into()),
         Some(Err(e)) => done.missed = Some(format!("its diff couldn't be read ({e})")),
-        Some(Ok(change)) => {
-            let files = order::ordered(&change);
-            if !files.is_empty() {
-                let file = order::order_file(&change.top, &change.left, &change.right, &files);
-                remove(&file, &mut done);
+        Some(Ok(whole)) => {
+            // The order of the branch's commits, and of the diff M-d opens
+            // with the diff_uncommitted setting, from the same merge base
+            // to the working tree as it is now.
+            let change = whole.told_part();
+            for each in [change, &whole] {
+                let files = order::ordered(each);
+                if !files.is_empty() {
+                    let (left, right) = each.order_sides();
+                    let file = order::order_file(&each.top, left, right, &files);
+                    remove(&file, &mut done);
+                }
             }
-            let (key, _) = story::key_of(&change);
+            let (key, _) = story::key_of(change);
             if tell::being_told(&key) {
                 done.telling = true;
             } else {

@@ -102,6 +102,20 @@ fn every_worktree_with_no_tab_newest_first_with_its_last_prompt() {
     let home = tmp.path().join("home");
     let (repo, one, two) = layout(tmp.path(), &home);
     let state = tmp.path().join("s");
+    // Someone else's PR, checked out untrusted, which is never listed.
+    let review = home.join(".cache/switchboard/pr-review/o-r/1");
+    fs::create_dir_all(review.parent().unwrap()).unwrap();
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "pr-review/1",
+            &review.to_string_lossy(),
+        ],
+    );
 
     let (code, out, err) = run(&repo, &home, &state, &["--json"]);
     assert_eq!(code, 0, "{err}");
@@ -115,7 +129,10 @@ fn every_worktree_with_no_tab_newest_first_with_its_last_prompt() {
         two.to_str().unwrap(),
     ];
     every.sort();
-    assert_eq!(trees, every, "every worktree, the main clone's included");
+    assert_eq!(
+        trees, every,
+        "every worktree, the main clone's included, but someone else's PR"
+    );
     let first = &found[0];
     let keys: Vec<&String> = first.as_object().unwrap().keys().collect();
     assert_eq!(

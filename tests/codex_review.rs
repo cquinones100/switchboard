@@ -117,6 +117,120 @@ fn on_main_with_no_pr_it_reviews_the_commits_not_yet_on_origin() {
     );
     assert!(pushed.status.success(), "{}", text(&pushed.stderr));
     assert!(text(&pushed.stdout).contains("Not pushed yet"));
+    assert!(
+        text(&pushed.stdout).contains("--text --no-textconv --no-ext-diff"),
+        "the change given as text, whatever its .gitattributes say"
+    );
+
+    // From another directory, as someone else's PR's untrusted worktree is
+    // reviewed from your main clone.
+    let elsewhere = review(
+        home,
+        home,
+        &[
+            "-C",
+            work.to_str().unwrap(),
+            "--dry-run",
+            "--reviewer",
+            "claude",
+            "--base",
+            "HEAD~1",
+        ],
+    );
+    assert!(elsewhere.status.success(), "{}", text(&elsewhere.stderr));
+    assert!(text(&elsewhere.stdout).contains("Not pushed yet"));
+    let nowhere = review(home, home, &["-C", "no-such-dir", "--dry-run"]);
+    assert_eq!(nowhere.status.code(), Some(1));
+    assert!(text(&nowhere.stderr).contains("no directory no-such-dir"));
+}
+
+/// A GitHub GraphQL service of the test's own, answering every request with
+/// `answer`, on 127.0.0.1.
+fn github_answering(answer: serde_json::Value) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/graphql", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let mut reader = BufReader::new(stream);
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = reader.read_exact(&mut body);
+            let reply = answer.to_string();
+            let _ = write!(
+                reader.into_inner(),
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        }
+    });
+    url
+}
+
+#[test]
+fn a_pr_named_puts_its_description_in_the_prompt() {
+    let tmp = TempDir::new("cr-pr");
+    let home = tmp.path();
+    let work = clone(home);
+    fs::write(work.join("a.txt"), "a\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Pushed already"]);
+    git(home, &work, &["push", "-q", "origin", "main"]);
+    git(home, &work, &["checkout", "-q", "-b", "pr-review/12345"]);
+    fs::write(work.join("b.txt"), "b\n").unwrap();
+    git(home, &work, &["add", "."]);
+    git(home, &work, &["commit", "-q", "-m", "Their fix"]);
+    let graphql = github_answering(
+        serde_json::json!({ "data": { "repository": { "pullRequest": {
+        "number": 12345, "title": "Their fix", "body": "What it does", "url": "https://github.com/o/r/pull/12345",
+        "state": "OPEN", "baseRefName": "main", "headRefName": "main", "isCrossRepository": true
+    } } } }),
+    );
+    let named = |pr: &str| {
+        let mut cmd = Command::new(BIN);
+        cmd.args([
+            "codex-review",
+            "-C",
+            work.to_str().unwrap(),
+            "--pr",
+            pr,
+            "--dry-run",
+            "--reviewer",
+            "claude",
+            "--base",
+            "origin/main",
+        ])
+        .current_dir(home)
+        .stdin(Stdio::null());
+        env(&mut cmd, home);
+        cmd.env("SWITCHBOARD_GITHUB_GRAPHQL", &graphql);
+        cmd.output().unwrap()
+    };
+    let run = named("https://github.com/o/r/pull/12345");
+    assert!(run.status.success(), "{}", text(&run.stderr));
+    let out = text(&run.stdout);
+    assert!(
+        out.contains("What it does"),
+        "its description in the prompt"
+    );
+    assert!(out.contains("https://github.com/o/r/pull/12345"));
+    assert!(out.contains("Their fix"));
+
+    let bad = named("12345; rm -rf ~");
+    assert_eq!(bad.status.code(), Some(1));
+    assert!(text(&bad.stderr).contains("--pr must be a PR number or URL"));
 }
 
 #[test]

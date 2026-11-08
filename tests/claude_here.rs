@@ -276,3 +276,36 @@ fn print_lists_the_sessions_of_the_repository_it_runs_in() {
     assert_eq!(none.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&none.stderr).contains("No Claude sessions found for"));
 }
+
+#[test]
+fn a_worktree_of_someone_elses_pr_is_never_resumed_in() {
+    let tmp = TempDir::new("here-untrusted");
+    let home = tmp.path().join("home");
+    // Checked out by wtpr --untrusted, in the review folder, with a session
+    // there all the same.
+    let review = home.join(".cache/switchboard/pr-review/o-r/12345");
+    fs::create_dir_all(&review).unwrap();
+    let ok = Command::new("git")
+        .args(["init", "-q"])
+        .arg(&review)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .status()
+        .unwrap();
+    assert!(ok.success());
+    let mut p = Projects {
+        dir: &home.join(".claude/projects"),
+        opened: ms("2026-12-31T00:00:00Z"),
+    };
+    p.session(&review.to_string_lossy(), "2026-03-01", None);
+    let out = Command::new(BIN)
+        .args(["claude-here", "--print"])
+        .current_dir(&review)
+        .env("HOME", &home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(said.contains("Claude isn't started there"), "{said}");
+    assert!(out.stdout.is_empty(), "no session listed");
+}

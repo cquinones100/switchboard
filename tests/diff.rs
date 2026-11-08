@@ -12,7 +12,11 @@
 //! staged (a file git doesn't know yet among them) and those staged. `c`
 //! in the diff goes through the branch's commits one at a time. M-p's
 //! "Clear this tab's diff cache" removes the story, order and PR base kept
-//! for the tab's branch after a yes, keeping a story being told.
+//! for the tab's branch after a yes, keeping a story being told. With the
+//! diff_uncommitted setting on, M-d runs to the working tree: what isn't
+//! committed is marked ● and listed in a last chapter after the commits'
+//! story, edits made while the diff is open come in on R, and a branch with
+//! nothing to show gets a box saying so in place of the diff.
 
 mod common;
 
@@ -249,6 +253,136 @@ fn m_d_puts_the_diff_in_the_panes_place_and_q_puts_the_pane_back() {
     wait_until("the pane back again", || {
         panes(&server)[0]["id"] == first.as_str()
     });
+}
+
+/// Whether a row of the screen holding `name` (the list's row for it) is
+/// marked ● as not committed yet.
+fn marked(screen: &[String], name: &str) -> bool {
+    screen
+        .iter()
+        .filter(|l| l.contains(name))
+        .any(|l| l.contains('●'))
+}
+
+#[test]
+fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+
+    // A clean branch: its commits' story, nothing marked.
+    client.send(b"\x1bd");
+    let screen = client.wait_text("2/2 Follow it");
+    assert!(!screen.iter().any(|l| l.contains('●')), "{screen:?}");
+    // Edits made while the diff is open come in on R: b.js changed again
+    // and a file git doesn't know yet, in a last chapter, each marked.
+    std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
+    std::fs::write(work.join("src/c.js"), "export const c = 1;\n").unwrap();
+    client.type_text("R");
+    let screen = client.wait_text("3/3 Not committed yet");
+    let at = |text: &str| screen.iter().position(|l| l.contains(text)).unwrap();
+    assert!(
+        at("1/3 Change the core") < at("2/3 Follow it")
+            && at("2/3 Follow it") < at("3/3 Not committed yet"),
+        "the commits' chapters, then the last: {screen:?}"
+    );
+    assert!(at("3/3 Not committed yet") < at("c.js"), "{screen:?}");
+    assert!(
+        at("b.js") < at("3/3 Not committed yet"),
+        "a file in both keeps its committed chapter: {screen:?}"
+    );
+    assert!(
+        marked(&screen, "b.js") && marked(&screen, "c.js"),
+        "{screen:?}"
+    );
+    assert!(!marked(&screen, "a.js"), "{screen:?}");
+    // The commits' story kept: editing tells no new one.
+    let stories = std::fs::read_to_string(server.home.join("claude-asked"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.contains("stream-json"))
+        .count();
+    assert_eq!(stories, 1);
+    // The new file, the file on disk on its side, its bar saying so.
+    client.type_text("G");
+    let screen = client.wait_text("export const c = 1;");
+    assert!(
+        screen[0].contains("c.js") && screen[0].contains("● uncommitted"),
+        "{:?}",
+        screen[0]
+    );
+    client.type_text("q");
+    wait_until("the pane back", || {
+        panes(&server)[0]["options"].get("@in_place").is_none()
+    });
+}
+
+#[test]
+fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() {
+    let server = TestServer::start();
+    settings(&server);
+    stand_in_claude(&server.home);
+    let work = repository(server.dir.path());
+    // No commits past the base, and nothing changed.
+    git(&work, &["reset", "-q", "--hard", "origin/main"]);
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let first = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait_until("the shell to cd", || {
+        panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("work"))
+    });
+    let back = |server: &TestServer| {
+        wait_until("the pane back", || {
+            let now = panes(server);
+            now.len() == 1 && now[0]["id"] == first.as_str()
+        });
+    };
+
+    client.send(b"\x1bd");
+    client.wait_text("Nothing to show: no commits past origin/main and no uncommitted changes");
+    back(&server);
+    client.type_text("\x1b");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Nothing to show"))
+    });
+
+    // A file git doesn't know yet: the uncommitted chapter alone, with no
+    // story asked for.
+    std::fs::write(work.join("notes.txt"), "a thought\n").unwrap();
+    client.send(b"\x1bd");
+    let screen = client.wait_text("1/1 Not committed yet");
+    assert!(marked(&screen, "notes.txt"), "{screen:?}");
+    client.wait_text("a thought");
+    assert!(
+        !server.home.join("claude-asked").exists(),
+        "Haiku isn't asked"
+    );
+    client.type_text("q");
+    back(&server);
+
+    // With the setting off, the commits alone, which have nothing to show.
+    let dir = server.home.join(".config/switchboard");
+    let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_uncommitted": false});
+    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    client.send(b"\x1bd");
+    let screen = client.wait_text("Nothing to show: no commits past origin/main");
+    assert!(
+        !screen.iter().any(|l| l.contains("no uncommitted changes")),
+        "{screen:?}"
+    );
+    back(&server);
 }
 
 #[test]
@@ -532,6 +666,21 @@ fn clearing_the_tabs_diff_cache_removes_its_story_order_and_base_after_a_yes() {
     let order = cache.join("diff-order").join(order.file_name().unwrap());
     std::fs::create_dir_all(order.parent().unwrap()).unwrap();
     std::fs::write(&order, r#"["src/a.js", "src/b.js"]"#).unwrap();
+    // And of the diff M-d opens with the diff_uncommitted setting, from the
+    // same merge base to the working tree.
+    let whole = switchboard::diff::git::read_to_work_tree(&work, "origin/main").unwrap();
+    let (left, right) = whole.order_sides();
+    let working_order = switchboard::diff::order::order_file(
+        &whole.top,
+        left,
+        right,
+        &switchboard::diff::order::ordered(&whole),
+    );
+    let working_order = cache
+        .join("diff-order")
+        .join(working_order.file_name().unwrap());
+    assert_ne!(working_order, order);
+    std::fs::write(&working_order, r#"["src/b.js", "src/a.js"]"#).unwrap();
 
     let mut client = server.attach(140, 36);
     client.wait_text("$");
@@ -561,10 +710,11 @@ fn clearing_the_tabs_diff_cache_removes_its_story_order_and_base_after_a_yes() {
     std::fs::write(&partial, "{}").unwrap();
     clear(
         &mut client,
-        "This tab's diff cache is cleared: 2 files. Its story is being told",
+        "This tab's diff cache is cleared: 3 files. Its story is being told",
     );
     assert!(story.exists(), "the story being told kept");
     assert!(!order.exists(), "the order gone");
+    assert!(!working_order.exists(), "the working tree's order gone too");
     assert_eq!(based(), 0, "the PR base gone");
     // Then the base is asked for again, and cleared with the story.
     std::fs::remove_file(&partial).unwrap();

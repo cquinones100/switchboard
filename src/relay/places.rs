@@ -5,7 +5,9 @@
 //! has run in over the last `RECENT_DAYS`. A repository's own name picks
 //! its main checkout; otherwise the name is matched against each
 //! worktree's branch and directory, so a ticket ID finds its worktree.
-//! Exactly one match, or nothing is started.
+//! Exactly one match, or nothing is started. A worktree of someone else's
+//! PR, checked out untrusted (src/trust.rs), is never a place: it is left
+//! out of the lists, and refused when named.
 //!
 //! The New tab form's menu of places lists every repository checkout a
 //! Claude session has ever run in, or an open tab is in, at its top level,
@@ -164,6 +166,10 @@ pub fn places(cx: &Relay) -> Vec<Place> {
             let Some(tree) = lines.iter().find_map(|l| l.strip_prefix("worktree ")) else {
                 continue;
             };
+            // Never someone else's PR, which no Claude is started in.
+            if crate::trust::in_review_dir_of(&cx.paths.home, Path::new(tree)) {
+                continue;
+            }
             let branch = lines
                 .iter()
                 .find_map(|l| l.strip_prefix("branch refs/heads/"))
@@ -201,14 +207,20 @@ pub fn resolve_place(cx: &Relay, spec: &str) -> Result<(PathBuf, String), String
         // `path.resolve` did: the reply names, and the tab starts in, the
         // path you gave.
         let dir = crate::worktree::normalize(&dir);
-        return if dir.is_dir() {
-            let said = format!("`{}`", cx.paths.short(&dir));
-            Ok((dir, said))
-        } else {
-            Err(format!(
+        if !dir.is_dir() {
+            return Err(format!(
                 "There's no directory `{spec}`, so I didn't start anything."
-            ))
-        };
+            ));
+        }
+        // Never someone else's PR, whose project settings and hooks Claude
+        // would load.
+        if crate::trust::is_untrusted_of(&cx.paths.home, &dir) {
+            return Err(format!(
+                "`{spec}` holds someone else's PR, checked out untrusted, so I didn't start anything there."
+            ));
+        }
+        let said = format!("`{}`", cx.paths.short(&dir));
+        return Ok((dir, said));
     }
     let all = places(cx);
     let wanted = spec.to_lowercase();
@@ -229,6 +241,10 @@ pub fn resolve_place(cx: &Relay, spec: &str) -> Result<(PathBuf, String), String
             .collect()
     };
     match matches.len() {
+        // Never someone else's PR, wherever its worktree was moved.
+        1 if crate::trust::is_untrusted_of(&cx.paths.home, &matches[0].path) => Err(format!(
+            "`{spec}` is someone else's PR, checked out untrusted, so I didn't start anything there."
+        )),
         1 => Ok((matches[0].path.clone(), describe(&cx.paths, matches[0]))),
         0 => Err(format!(
             "Nothing matches `{spec}`: no repository by that name, and no worktree whose branch or directory contains it. Nothing started."
@@ -273,7 +289,7 @@ pub fn place_choices(cx: &Relay) -> Vec<(String, Vec<Choice>)> {
     // Each directory counted for its checkout's top level.
     let mut tops: HashMap<PathBuf, (Option<PathBuf>, i64)> = HashMap::new();
     for (dir, at) in latest {
-        if !dir.is_dir() {
+        if !dir.is_dir() || crate::trust::in_review_dir_of(&cx.paths.home, &dir) {
             continue;
         }
         let shown = git(

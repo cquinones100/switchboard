@@ -142,7 +142,8 @@ impl Command {
 
 /// `switchboard diff [--base <ref> | --working] [--ahead] [dir]`: the
 /// change in `dir` (where it runs, else) against `<ref>`, or, without one,
-/// its PR's base as M-d works it out; with `--working`, the working tree's
+/// its PR's base as M-d works it out, to the working tree with the
+/// diff_uncommitted setting on; with `--working`, the working tree's
 /// changes, staged and not; with `--ahead`, its story told and kept for
 /// M-d, with nothing drawn.
 pub fn main(args: Vec<String>) -> ExitCode {
