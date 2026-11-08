@@ -2161,3 +2161,52 @@ AppleScript, asks the Keychain, reads gh's token or SSH keys, or opens a
 socket, and the hosts the PR names that the base names nowhere. `wtpr
 --untrusted` prints its file list, and `/review-pr` (a skill of this
 repository's own, not installed for others) reads all of it first.
+
+## switchboard-handoff
+
+Hands this tmux workspace to the Rust port of Switchboard
+(`cooljacob204/switchboard`, branch `rust-conversion`), and brings it back.
+
+```
+switchboard-handoff                    write the port's layout.json and copy the state files
+switchboard-handoff --back             recreate the port's tabs in tmux and copy the state files back
+  --state-dir <dir>                    the port's state directory (default ~/.local/state/switchboard-rs)
+  --port <clone>                       copy only the state files the port's source names
+  --dry-run                            say what it would do, writing nothing
+```
+
+M-p's "Hand this workspace to the Rust port" and "Bring the workspace back
+from the Rust port" run the dry run in a popup, then ask before running it.
+
+The handoff writes `<state dir>/layout.json` in the shape the port's
+`src/mux/persist.rs` restores when its server starts with no sessions: each
+session with its tabs in order, each tab's splits (the sidebar's space given to
+the pane beside it, since the port draws its own), its options (`@tab_name`,
+`@tab_title`, the note, the reminder, the pin, the work-a-note mode's marks),
+its active pane and zoom, and each pane's directory, `@` options (but the
+daemon's), the Claude session it runs, and with `save_contents` on its screen
+and last 2,000 lines. A pane with a tool in its place (M-d, lazygit) is handed
+off as the pane the tool stands for, and the Notes pane as `switchboard notes`.
+The Notifications window and parked windows are left out. The file before is
+kept as `layout.json.1`. It then copies the state files the port reads
+(`STATE_FILES` in the script: the work-a-note mode's, the Usage, Sessions and
+habits counts, the Calendar, Slack and meeting state, the connectors' health,
+the tips, the request counts) into the port's state directory, keeping their
+times. It copies, so this workspace keeps working; your config, Notes, caches,
+the relay's state and Claude's sessions are where both read them already.
+
+`--back` reads the port's `layout.json` (`layout.json.1` when it is missing)
+and recreates each session in tmux, adding the tabs after the ones of a session
+that is already there: each tab's splits and options, each pane's options,
+`claude --resume <id>` typed into each Claude pane, Notes started where it ran,
+the active pane, zoom and tab. Other programs come back as their shell, and
+saved text isn't replayed, since tmux can't feed a pane its history. Each state
+file is copied back only where the port's copy is newer than ours.
+
+Both refuse while a port server runs on that state directory (its
+`server.lock`), since a running server ignores `layout.json` and writes over
+it, and refuse `~/.local/state/switchboard`, which is this workspace's own.
+Neither stops anything. To cut over: run it, quit each Claude on the side you
+leave (or `tmux kill-server`, or the port's server), then start the other side,
+the port with `SWITCHBOARD_STATE_DIR=<dir> switchboard`. Two Claudes resuming
+the same conversation would both write to it, so it says which still run.
