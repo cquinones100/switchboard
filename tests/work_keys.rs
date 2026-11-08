@@ -403,6 +403,7 @@ fn land_on_lists_the_branch_picked_last_time_first() {
 /// Waits for the tab just opened to be in front, its row `row` in the
 /// sidebar, and for the server to read its pane's directory as `dir`,
 /// which the palette reads as it opens.
+#[cfg(feature = "net")]
 fn in_front_at(server: &TestServer, client: &mut common::TestClient, row: &str, dir: &Path) {
     client.wait_for("the tab in front", |s| s.iter().any(|l| l.contains(row)));
     let dir = dir.canonicalize().unwrap();
