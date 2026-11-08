@@ -419,11 +419,16 @@ const WINDOWS_CLIPBOARD_PNG: &str = "Add-Type -AssemblyName System.Windows.Forms
      $out.Write($png.ToArray(), 0, $png.Length); \
      $out.Flush()";
 
-/// The clipboard's PNG, through Wayland's or X's clipboard tool, or
-/// Windows' through its PowerShell under WSL.
+/// The clipboard's PNG: Windows' through its PowerShell under WSL, asked
+/// first since WSLg sets `WAYLAND_DISPLAY` and `DISPLAY`, so a Linux
+/// clipboard tool installed there would otherwise be chosen and see only
+/// what WSLg passes over; else, or when PowerShell can't be reached,
+/// Wayland's or X's clipboard tool.
 pub fn paste_image(file: &std::path::Path) -> bool {
-    let png = match clipboard_tool() {
-        Some(("clip.exe", _, _)) => windows_png(std::path::Path::new("powershell.exe")),
+    let windows = wsl()
+        .then(|| windows_png(std::path::Path::new("powershell.exe")))
+        .flatten();
+    let png = windows.or_else(|| match clipboard_tool() {
         Some(("wl-copy", _, _)) => png_from(Command::new("wl-paste").args(["--type", "image/png"])),
         Some(("xclip", _, _)) => png_from(Command::new("xclip").args([
             "-selection",
@@ -433,7 +438,7 @@ pub fn paste_image(file: &std::path::Path) -> bool {
             "-o",
         ])),
         _ => None,
-    };
+    });
     png.is_some_and(|png| std::fs::write(file, png).is_ok())
 }
 

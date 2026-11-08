@@ -56,7 +56,9 @@
 //! panes are still given the cell its window's pixels make (or 8 by 16),
 //! so the apps size and lay pictures out as before, the image view a page
 //! as wide as the text around it; a picture is scaled to its cells either
-//! way, its shape kept.
+//! way, its shape kept. The cell is one for the server, the last terminal
+//! to answer's: two attached at once that answer differently get pictures
+//! sized for that one, as the terminal's colours are one for the server.
 //!
 //! What a pane's program gave is part of what `switchboard upgrade` hands
 //! the new build (src/mux/upgrade.rs), since a program gives a picture
@@ -138,7 +140,12 @@ impl Key {
 
 /// Draws a piece, off the server's task: its picture read and fitted,
 /// unless `fitted` has it, and its part encoded, a whole number of sixel
-/// bands tall.
+/// bands tall (encode.rs says why). Its height is cut down to that, so a
+/// piece loses up to 4 pixel rows at its foot (with Windows Terminal's
+/// 20-pixel cell, 2 for a piece one row tall, 4 for two, none for three):
+/// a picture whole loses a sliver of its bottom edge, and one a box cuts
+/// into pieces a row tall a sliver under each row, less than a band
+/// reaching into the row below would cover.
 pub fn draw(key: &Key, fitted: Option<Arc<Fitted>>) -> Result<(Arc<[u8]>, Arc<Fitted>), String> {
     let cell = (key.fit.cell.0.max(1) as u32, key.fit.cell.1.max(1) as u32);
     let fitted = match fitted {
