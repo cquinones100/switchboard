@@ -1,0 +1,759 @@
+[
+  {
+    "key": "github",
+    "category": "Integrations",
+    "label": "GitHub",
+    "description": "PR commands in M-p, the PRs view, PR numbers and merge states in tabs and the Work map; off, the workspace asks GitHub nothing by itself (programs you run, such as codex-review and wtpr, still do)",
+    "default": true
+  },
+  {
+    "key": "linear",
+    "category": "Integrations",
+    "label": "Linear",
+    "description": "Ticket commands in M-p, ticket titles in tab names and tickets in the Work map; off, the workspace asks Linear nothing by itself (programs you run, such as wt and worktree-done, still do)",
+    "default": true
+  },
+  {
+    "key": "image_cache",
+    "category": "Integrations",
+    "label": "Cache PR and ticket images",
+    "description": "Keeps the pictures, stylesheet, scripts and drawn pages of the PR and ticket image views on this computer, up to 300 MB, so one opened again shows at once; off, everything is fetched and drawn each time",
+    "default": true
+  },
+  {
+    "key": "notifications",
+    "category": "Notifications",
+    "label": "Push notifications",
+    "description": "A desktop notification, named for the tab, when a Claude tab waits on you",
+    "default": true
+  },
+  {
+    "key": "done_clears",
+    "category": "Notifications",
+    "label": "Finished tabs clear",
+    "description": "When a tab's finished mark goes: once you look at the tab, or only when you next prompt it",
+    "choices": [
+      {
+        "value": "look",
+        "label": "when seen"
+      },
+      {
+        "value": "prompt",
+        "label": "on prompt"
+      }
+    ],
+    "default": "look"
+  },
+  {
+    "key": "sidebar",
+    "category": "Sidebar",
+    "label": "Sidebar",
+    "description": "The sidebar on the left of every window; M-s still hides or shows it for now",
+    "default": true
+  },
+  {
+    "key": "sidebar_half_page",
+    "category": "Sidebar",
+    "label": "Half-page scrolling",
+    "description": "C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do",
+    "default": true
+  },
+  {
+    "key": "reminders",
+    "category": "Sidebar",
+    "label": "Reminders",
+    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due; off, reminders are neither set nor shown",
+    "default": true
+  },
+  {
+    "key": "build_failing",
+    "category": "Sidebar",
+    "label": "Build failing",
+    "description": "A Build failing group in the sidebar and mission control for the tabs whose open PR has a failing check, asked of GitHub every minute, an idle one wearing a red ✗; off, they stay in Working or Idle with the failing count in their words #github",
+    "default": true
+  },
+  {
+    "key": "landing_queue",
+    "category": "Sidebar",
+    "label": "Show the landing queue",
+    "description": "Tabs landing on the default branch with queue-and-clean, or waiting their turn, get a Landing group in the sidebar and mission control, in the landing queue's order, which a waiting tab's menu changes; off, they show as Working, and the queue still orders the landings",
+    "default": true
+  },
+  {
+    "key": "autopilot",
+    "category": "Sessions",
+    "label": "Work a note continuously",
+    "description": "With it on, M-p's 'Work the note continuously' keeps tabs working through a note's checklist, opening the next item with wtn as each lands; the mode itself starts off until you turn it on there. Off, it opens no tabs, and its line in mission control and its notification go",
+    "default": true
+  },
+  {
+    "key": "autopilot_close",
+    "category": "Sessions",
+    "label": "Close a worked note's landed tabs",
+    "description": "When a tab the mode working a note opened closes once queue-and-clean has landed it and moved it back to the main clone: when seen, as soon as you leave it after seeing it, or 30 minutes after landing if you never look; at once, as soon as it lands; after 5 minutes, or sooner once seen and left; never, left open for you to close. Whatever the choice, a tab in front stays until you leave it and a prompt typed in it after landing keeps it open; one closed without being seen leaves a notification",
+    "choices": [
+      {
+        "value": "seen",
+        "label": "when seen"
+      },
+      {
+        "value": "now",
+        "label": "at once"
+      },
+      {
+        "value": "5m",
+        "label": "after 5 minutes"
+      },
+      {
+        "value": "off",
+        "label": "never"
+      }
+    ],
+    "default": "seen"
+  },
+  {
+    "key": "sidebar_notifications",
+    "category": "Sidebar",
+    "label": "Notifications",
+    "description": "The Notifications block at the bottom of the sidebar: new Slack messages and your Linear inbox, which a click opens in mission control",
+    "default": true
+  },
+  {
+    "key": "needs_notices",
+    "category": "Sidebar",
+    "label": "M-a goes to notifications",
+    "description": "M-a's walk of what needs you ends at the notifications while there are any, after the tabs, opening them as the sidebar's n does",
+    "default": true
+  },
+  {
+    "key": "notice_list",
+    "category": "Sidebar",
+    "label": "Notifications window",
+    "description": "Moving the sidebar's cursor onto a notification, or clicking one, brings the Notifications window to the front as moving onto a tab does: a tab of its own listing every one with its whole message, Enter opening its menu and Esc going back, which M-p's \"Go to the notifications\" brings to the front too; off, Enter or a click on one in the sidebar does what it leads to",
+    "default": true
+  },
+  {
+    "key": "new_notes",
+    "category": "Sidebar",
+    "label": "New notes",
+    "description": "In the sidebar's notifications, a note written for you (a meeting's from Fathom, the standup) until you read it, Enter offering to open it in Notes",
+    "default": true
+  },
+  {
+    "key": "next_meeting",
+    "category": "Sidebar",
+    "label": "Next meeting",
+    "description": "In the sidebar's notifications, from five minutes before a meeting until ten after it starts: its name, the tickets and PRs it mentions, and Enter or a click to join its call",
+    "default": true
+  },
+  {
+    "key": "link_view_docs",
+    "category": "Integrations",
+    "label": "Docs in the link view",
+    "description": "The link view reads a Notion page or a Google Doc or Slides deck through Claude's connectors, a headless Haiku fetching it; off, they are read as any other page, which a private one won't let it",
+    "default": true
+  },
+  {
+    "key": "chrome_profiles",
+    "category": "Integrations",
+    "label": "Chrome profiles",
+    "description": "Links Switchboard opens (mission control, the link view, M-r, M-l, switchboard open-url) open in the Chrome profile browser.json gives their site, else its default profile; off, every link opens in the default browser",
+    "default": true
+  },
+  {
+    "key": "standup_note",
+    "category": "Integrations",
+    "label": "Standup note",
+    "description": "Each weekday from 6am, a note in Standups written from the last working day: the PRs you merged, opened, worked on and reviewed, your tickets that changed state and your commits, then what is in progress today and the reviews waiting on you",
+    "default": true
+  },
+  {
+    "key": "standup_summary",
+    "category": "Integrations",
+    "label": "Standup summary",
+    "description": "Over the standup note's list of the last working day, two or three sentences summing it up, written by Claude (Haiku, no tools) from the PR, ticket and commit titles in that list",
+    "default": true
+  },
+  {
+    "key": "todo_note",
+    "category": "Integrations",
+    "label": "Today's todo note",
+    "description": "Each weekday at the time below, a note Todos/Today's Todo <date> that Claude (Sonnet) writes from your notes' unticked items, today's calendar, and what mission control last read of GitHub, Linear and Slack; off by default, since it sends your notes' unticked items to Claude",
+    "default": false
+  },
+  {
+    "key": "todo_note_time",
+    "category": "Integrations",
+    "label": "Todo note time",
+    "description": "When Today's todo note is written each weekday, or as soon as the computer is on after it",
+    "choices": [
+      {
+        "value": "7",
+        "label": "7am"
+      },
+      {
+        "value": "8",
+        "label": "8am"
+      },
+      {
+        "value": "9",
+        "label": "9am"
+      },
+      {
+        "value": "10",
+        "label": "10am"
+      },
+      {
+        "value": "11",
+        "label": "11am"
+      }
+    ],
+    "default": "9"
+  },
+  {
+    "key": "meeting_notes",
+    "category": "Integrations",
+    "label": "Meeting notes",
+    "description": "Each meeting of yours Fathom recorded as a note in Meetings, with its summary, action items and transcript, through Claude's Fathom connector (a Haiku call every 30 minutes from 7am to 9pm, and two for each new meeting)",
+    "default": true
+  },
+  {
+    "key": "search_everything",
+    "category": "Integrations",
+    "label": "Search everything",
+    "description": "M-S-f asks for a search and lists what your notes, Linear, GitHub and Slack hold for it, each read beside the pane with Enter",
+    "default": true
+  },
+  {
+    "key": "search_slack",
+    "category": "Integrations",
+    "label": "Slack in search everything",
+    "description": "M-S-f searches Slack too, through Claude's connector, a headless Haiku making that one call, its results arriving a few seconds after the others",
+    "default": true
+  },
+  {
+    "key": "diff_order",
+    "category": "Diff",
+    "label": "Files in reading order",
+    "description": "M-d lists the changed files flat, documentation first and tests last, with Haiku ordering the code from most abstract to most concrete; off, flat, A to Z",
+    "default": true
+  },
+  {
+    "key": "diff_story",
+    "category": "Diff",
+    "label": "Diff told as a story",
+    "description": "M-d's file list grouped into a few chapters Haiku names from the whole diff and the commits' messages, each with a heading and two or three sentences on what it does and why it is built so, read from the change's core to its edges ([c and ]c move between them, yS copies the story as Markdown); off, the files keep the reading order by kind. Sends the diff's text and the commit messages, not only the paths, to Claude",
+    "default": true
+  },
+  {
+    "key": "menu_mouse",
+    "category": "Mission control",
+    "label": "Click in menus",
+    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone",
+    "default": true
+  },
+  {
+    "key": "tab_focus",
+    "category": "Mission control",
+    "label": "Tab moves focus",
+    "description": "Tab and Shift-Tab move a highlight through what can be clicked, as on a webpage, and Enter presses it (Space too, but in the sidebar, where Space peeks): in mission control the views' names, the filter and the items, with [ ] switching views; in the sidebar each of its rows, M-Space opening mission control; and the options of every box and menu; off, Tab switches views in mission control and opens it from the sidebar",
+    "default": true
+  },
+  {
+    "key": "hover_highlight",
+    "category": "Mission control",
+    "label": "Highlight on hover",
+    "description": "What a click would press lights under the mouse: in mission control the views' names, the filter, the cards and rows, a menu's options, Yes and No, an answer's options and easy mode's ×; the sidebar's tabs and notifications; the options of M-m's, the update box's and M-w's menus; and the buttons of Notes' toolbar, its boxes' × and M-d's diff; off, nothing follows the mouse. Takes effect at once in mission control and the sidebar, and when a menu, Notes or the diff next opens",
+    "default": true
+  },
+  {
+    "key": "diff_story_progress",
+    "category": "Diff",
+    "label": "Diff story progress",
+    "description": "While M-d's story is told, its cover shows what Haiku is reading, each chapter as Haiku names it and the time taken, t showing Haiku's answer itself as it comes; off, a spinner alone",
+    "default": true
+  },
+  {
+    "key": "diff_story_ahead",
+    "category": "Diff",
+    "label": "Diff story told ahead",
+    "description": "When a tab's branch has a new commit, its M-d story is told in the background, so M-d opens on it at once rather than waiting under its cover; sends that branch's diff and commit messages to Claude (Haiku) for each new commit, a run taking up to five and a half minutes",
+    "default": true
+  },
+  {
+    "key": "diff_list_wide",
+    "category": "Diff",
+    "label": "Diff file list wide",
+    "description": "M-d's file list opens wide enough for its longest path (at most half the screen), E narrowing it; off, it opens narrow and E widens it",
+    "default": true
+  },
+  {
+    "key": "diff_story_pages",
+    "category": "Diff",
+    "label": "Diff story a page at a time",
+    "description": "]p and [p in M-d's diff open the story's chapters one at a time, each a diff of its own as if it were a commit, [p from the first going back to the whole diff; off, they do nothing",
+    "default": true
+  },
+  {
+    "key": "diff_ask",
+    "category": "Diff",
+    "label": "Ask Claude about the diff",
+    "description": "ga in M-d's diff, and M-p's command while the diff is open, ask Haiku a question about the change: it reads the story, the diff and where the cursor is, and may read the repository's files to answer, its answer streamed into a window beside the diff. Sends the diff and the question to Claude",
+    "default": true
+  },
+  {
+    "key": "diff_story_notes",
+    "category": "Diff",
+    "label": "Diff story notes on changes",
+    "description": "M-d's diff shows Haiku's note over each change worth one, what it does and what to check, and names the chapter of a change that belongs to another one than its file; off, only the list's chapters",
+    "default": true
+  },
+  {
+    "key": "view_work_map",
+    "category": "Mission control",
+    "label": "Work map",
+    "description": "Mission control's Work map: every piece of work in your tabs' repositories (M-j and M-o open it whatever this says)",
+    "default": true
+  },
+  {
+    "key": "view_calendar",
+    "category": "Mission control",
+    "label": "Calendar",
+    "description": "Mission control's Calendar view: today from the day /today last saved",
+    "default": true
+  },
+  {
+    "key": "view_slack",
+    "category": "Mission control",
+    "label": "Slack",
+    "description": "Mission control's Slack view: your mentions, DMs, thread replies and chosen channels from the last day, as /slack-updates saved them",
+    "default": true
+  },
+  {
+    "key": "view_closed",
+    "category": "Mission control",
+    "label": "Closed tabs",
+    "description": "Mission control's Closed view: the tabs closed last, to reopen",
+    "default": true
+  },
+  {
+    "key": "view_sessions",
+    "category": "Mission control",
+    "label": "Sessions",
+    "description": "Mission control's Sessions view: each Claude session's context, model and age",
+    "default": true
+  },
+  {
+    "key": "view_resources",
+    "category": "Mission control",
+    "label": "Resources",
+    "description": "Mission control's Resources view: a table of the CPU and memory each tab's processes use, heaviest overall first, read with ps every few seconds only while the view is in front",
+    "default": true
+  },
+  {
+    "key": "request_audit",
+    "category": "Mission control",
+    "label": "Requests in Usage",
+    "description": "The Usage view lists today's requests to services outside this computer (GitHub, Linear, Slack, Anthropic and the rest), by protocol and by service, as Switchboard counts them; off, it leaves them out",
+    "default": true
+  },
+  {
+    "key": "usage",
+    "category": "Mission control",
+    "label": "Usage",
+    "description": "Mission control's Usage view: today's Claude spend and how much of the rate limits is used",
+    "default": true
+  },
+  {
+    "key": "view_keys",
+    "category": "Mission control",
+    "label": "Keys",
+    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', with / to filter and Enter to press a workspace key; off, M-/ reaches the pane",
+    "default": true
+  },
+  {
+    "key": "idle_walk",
+    "category": "Tabs and status bar",
+    "label": "M-A cycles idle tabs",
+    "description": "M-A goes to the next idle tab, in the sidebar's Idle order, wrapping at the end, as M-a walks the tabs that need you; off, M-A reaches the pane",
+    "default": true
+  },
+  {
+    "key": "one_claude_per_tab",
+    "category": "Tabs and status bar",
+    "label": "One Claude to a tab",
+    "description": "A Claude session started in a tab already running one moves to a tab of its own, since the sidebar, the Slack relay, M-c and M-m each take a tab's Claude to be one pane",
+    "default": true
+  },
+  {
+    "key": "name_new_tabs",
+    "category": "Tabs and status bar",
+    "label": "Name new tabs",
+    "description": "M-t and M-n ask what to call the tab they open: a name typed in, its ticket and the ticket's title, or shaping a ticket, each optional; off, the tab is named after its directory",
+    "default": true
+  },
+  {
+    "key": "message_boxes",
+    "category": "Tabs and status bar",
+    "label": "Messages in a box",
+    "description": "What a key or script has to say shows in a small box in the middle of the screen, which any key closes, rather than on the status line for a moment",
+    "default": true
+  },
+  {
+    "key": "calendar_changes",
+    "category": "Sidebar",
+    "label": "Calendar changes",
+    "description": "In the sidebar's notifications, what changed on today's calendar since you last looked at it: an event added, moved, renamed or gone; looking at the Calendar view clears them",
+    "default": true
+  },
+  {
+    "key": "notes_hide_sidebar",
+    "category": "Notes",
+    "label": "Hide the sidebar beside a tab",
+    "description": "When M-e brings Notes beside another tab's pane, put the notes app's sidebar away so the note has the room, and show it again in Notes' own tab",
+    "default": true
+  },
+  {
+    "key": "notes_palette",
+    "category": "Notes",
+    "label": "Notes command palette",
+    "description": "Ctrl-Shift-P in Notes lists every command Notes has, each with its key; off, Ctrl-Shift-P says the palette is off",
+    "default": true
+  },
+  {
+    "key": "notes_ctrl_v_image",
+    "category": "Notes",
+    "label": "Ctrl-V pastes an image",
+    "description": "Ctrl-V while typing in a note pastes the clipboard's image under the line, as in Claude Code, when the clipboard holds one; off, or with no image there, Ctrl-V types the next key as it is, as in Vim",
+    "default": true
+  },
+  {
+    "key": "notes_images",
+    "category": "Notes",
+    "label": "Images drawn in a note",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do); off, it is its name, which Enter opens in Quick Look or the desktop's image viewer",
+    "default": true
+  },
+  {
+    "key": "notes_toolbar",
+    "category": "Notes",
+    "label": "Toolbar",
+    "description": "A row of buttons over each note, one for each of the Format menu's styles (bold, italic, headings, lists, checklist, table, link, image) and ⋯ for the whole menu, each acting on the line or the selection; off, the Format menu is Ctrl-P alone",
+    "default": true
+  },
+  {
+    "key": "note_tab_prompt",
+    "category": "Notes",
+    "label": "Tell a note's new tab its note",
+    "description": "A new tab opened for a note from Notes starts Claude knowing the note's title and file (added to its system prompt, no turn spent), to read only when you ask; off, it starts as any other tab",
+    "default": true
+  },
+  {
+    "key": "wtpr_prompt",
+    "category": "Sessions",
+    "label": "wtpr asks where the PR stands",
+    "description": "Claude, started in a PR's worktree by wtpr (or mission control's \"work on it in a new tab\"), first reads the PR, its review threads, failing checks and ticket and says where it stands and what it would do next, changing nothing until you say; off, it starts with no prompt",
+    "default": true
+  },
+  {
+    "key": "note_tab_beside",
+    "category": "Notes",
+    "label": "Notes beside a note's tab",
+    "description": "Opening a note's tab from Notes (t, or M-p's Open the tab for the note) moves Notes beside the tab's Claude showing the note, as M-e does; off, it only goes to the tab",
+    "default": true
+  },
+  {
+    "key": "wtn_item_preview",
+    "category": "Notes",
+    "label": "Show a note's item whole in wtn's list",
+    "description": "M-p's \"Start work on a note's checklist items\" shows the item under the cursor whole in the lower half of its list, its full text and what is indented under it, since the list cuts each item to one line; off, the list has the whole box",
+    "default": true
+  },
+  {
+    "key": "ask_tab_note",
+    "category": "Notes",
+    "label": "Ask for a tab's note",
+    "description": "When M-e brings Notes beside a tab with no note of its own yet, ask which note is the tab's, the likely ones first, and show that note beside it from then on",
+    "default": true
+  },
+  {
+    "key": "calendar_rsvp",
+    "category": "Mission control",
+    "label": "RSVP from the Calendar",
+    "description": "Answer an invitation yes, maybe or no from its Enter menu in the Calendar view, through Claude's Google Calendar connector",
+    "default": true
+  },
+  {
+    "key": "slack_background",
+    "category": "Mission control",
+    "label": "Slack without a tab",
+    "description": "Mission control looks at Slack itself every minute, through cheap headless Haiku calls, instead of a Slack tab looping /slack-updates",
+    "default": true
+  },
+  {
+    "key": "pause_when_away",
+    "category": "Mission control",
+    "label": "Pause lookups while away",
+    "description": "Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return",
+    "default": true
+  },
+  {
+    "key": "poll_fast",
+    "category": "Mission control",
+    "label": "Look often",
+    "description": "Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes",
+    "default": true
+  },
+  {
+    "key": "pr_board",
+    "category": "Mission control",
+    "label": "PR board",
+    "description": "Mission control's PRs view, which asks GitHub about your pull requests every two minutes",
+    "default": true
+  },
+  {
+    "key": "ticket_board",
+    "category": "Mission control",
+    "label": "Ticket board",
+    "description": "Mission control's Tickets view, which asks Linear about the issues assigned to you every two minutes",
+    "default": true
+  },
+  {
+    "key": "view_inbox",
+    "category": "Mission control",
+    "label": "Inbox",
+    "description": "Mission control's Inbox view and the sidebar's count of it: your unread Linear mentions, comments and assignments, asked of Linear every two minutes #linear",
+    "default": true
+  },
+  {
+    "key": "view_ci",
+    "category": "Mission control",
+    "label": "CI",
+    "description": "Mission control's CI view: your pull requests with failing checks and why, asked of GitHub every two minutes #github",
+    "default": true
+  },
+  {
+    "key": "view_landing",
+    "category": "Mission control",
+    "label": "Landing view",
+    "description": "While a tab is landing or waiting to land, mission control shows each repository's landing queue or merge queue (everyone's PRs in it, asked of GitHub every 15 seconds), in queue order, with the tab that has each; a waiting one's menu moves it or takes it out",
+    "default": true
+  },
+  {
+    "key": "second_status",
+    "category": "Tabs and status bar",
+    "label": "Second status line",
+    "description": "The line under the tabs with the tab's name, branch, PR and Claude session",
+    "default": false
+  },
+  {
+    "key": "tab_lookups",
+    "category": "Tabs and status bar",
+    "label": "PRs and tickets in tab names",
+    "description": "Look up each tab's PR number on GitHub and its ticket's title on Linear, in the background",
+    "default": true
+  },
+  {
+    "key": "accent_colors",
+    "category": "Tabs and status bar",
+    "label": "Project colors",
+    "description": "A color of its own for each project's tab, made from its directory; off, every tab is gray",
+    "default": true
+  },
+  {
+    "key": "health_light",
+    "category": "Tabs and status bar",
+    "label": "Health light",
+    "description": "A red mark in the status bar when saves, the sidebar or the Slack relay quietly stop",
+    "default": true
+  },
+  {
+    "key": "theme",
+    "category": "Appearance",
+    "label": "Theme",
+    "description": "The status line's, the pane borders' and the boxes' colors; system follows the terminal's own background, which it is asked for as it attaches",
+    "choices": [
+      {
+        "value": "dark",
+        "label": "dark"
+      },
+      {
+        "value": "light",
+        "label": "light"
+      },
+      {
+        "value": "system",
+        "label": "system"
+      }
+    ],
+    "default": "dark"
+  },
+  {
+    "key": "copy_reply",
+    "category": "Sessions",
+    "label": "Copy Claude's reply",
+    "description": "M-y copies the latest reply of the tab's Claude to the clipboard, read from its session transcript; off, the key reaches the pane",
+    "default": true
+  },
+  {
+    "key": "tab_title",
+    "category": "Tabs and status bar",
+    "label": "Show a tab's full title",
+    "description": "M-T, the sidebar's i and a tab's menu in mission control show the tab's whole title in a box, with its branch, directory, PR and ticket, which the sidebar and the status line cut; off, the key reaches the pane",
+    "default": true
+  },
+  {
+    "key": "save_contents",
+    "category": "Sessions",
+    "label": "Save what panes show",
+    "description": "Keep each pane's screen in the layout saves, to show again after a restart; it can hold secrets",
+    "default": true
+  },
+  {
+    "key": "apply_after_landing",
+    "category": "Sessions",
+    "label": "Offer to apply a landed change",
+    "description": "After queue-and-clean lands work, it lists what the change needs to take effect (Switchboard built and put in place, the Slack relay restarted, an install, a migration) and offers to do it",
+    "default": true
+  },
+  {
+    "key": "auto_restore",
+    "category": "Sessions",
+    "label": "Restore on start",
+    "description": "Bring back the last saved tabs and panes, each Claude resumed, when the server starts with none open",
+    "default": true
+  },
+  {
+    "key": "claude_plugin",
+    "category": "Sessions",
+    "label": "Load Switchboard as a plugin",
+    "description": "Claude in Switchboard's panes loads its hooks (the tabs' Claude states), skills and instructions as a plugin, and setup keeps them out of ~/.claude, so Claude elsewhere has only your own; it needs Claude Code 2.1.280 or later, and managed settings that don't set disableSideloadFlags. Off, setup puts them in ~/.claude as before, for every Claude of yours. Changing it moves them over",
+    "default": true
+  },
+  {
+    "key": "review_rules",
+    "category": "Safety",
+    "label": "Rules in reviews",
+    "description": "codex-review gives the reviewer the repository's CLAUDE.md and AGENTS.md as the base has them and your own ~/.claude/CLAUDE.md with what it imports, and reports a change that breaks one; off, it reviews without them, and your rules aren't sent to the reviewer",
+    "default": true
+  },
+  {
+    "key": "review_before_push",
+    "category": "Safety",
+    "label": "Review before pushing",
+    "description": "In this repository, a push to main needs a clean /review-loop first (.githooks/pre-push); off, it pushes without one",
+    "default": true
+  },
+  {
+    "key": "palette_learn",
+    "category": "Palette",
+    "label": "Learn from what you pick",
+    "description": "M-p remembers what you typed before each pick, and puts that command first when you type the same again",
+    "default": true
+  },
+  {
+    "key": "palette_button",
+    "category": "Palette",
+    "label": "Commands button",
+    "description": "A ⌘ Commands button in the status bar, after the session name, that opens M-p when clicked",
+    "default": true
+  },
+  {
+    "key": "review_security",
+    "category": "Safety",
+    "label": "Security review in the review loop",
+    "description": "/review-loop runs Claude Code's /security-review on the branch once before its first round, its findings fixed or asked about as the rounds' are",
+    "default": true
+  },
+  {
+    "key": "confirm_close",
+    "category": "Safety",
+    "label": "Ask before closing a pane",
+    "description": "M-w asks first when a program runs in the pane (a shell at its prompt closes at once); off, it closes the pane at once whatever runs in it",
+    "default": true
+  },
+  {
+    "key": "tips",
+    "category": "Help",
+    "label": "Tips",
+    "description": "A box in the top-right corner, once each, when a key would help (M-a, M-j, putting a pane back); any key closes it",
+    "default": true
+  },
+  {
+    "key": "habits",
+    "category": "Help",
+    "label": "Suggestions from how you work",
+    "description": "Count the keys you press, the commands you pick in M-p and the mission control views you open, on this computer only and never sent anywhere, and suggest in the notifications a view to turn off that you never open, a key for a command you keep picking in M-p, or a feature that is off which what you do would use; off, what was counted is removed",
+    "default": true
+  },
+  {
+    "key": "easy_keys",
+    "category": "Help",
+    "label": "Easy mode",
+    "description": "Keys for people who don't know Vim's, in Notes and M-d's diff: Shift-arrows and the mouse select, typing replaces a selection, Cmd-S saves, Cmd-Z undoes, Cmd-Shift-Z redoes and Cmd-X cuts in a note (where the terminal sends them as the guide says), and the diff gets a row of buttons for its keys; mission control's boxes, M-m's, the update box's and M-w's menus, messages, tips, and Notes' Format menu, palette and finder get a × in their top-right corner that a click or Tab and Enter closes, with Click in menus on (lists to pick from, such as M-p's, keep Esc alone); Vim's keys keep working. Takes effect when Notes or the diff next opens",
+    "default": false
+  },
+  {
+    "key": "key_help_line",
+    "category": "Help",
+    "label": "Key help line",
+    "description": "With Easy mode on, a line at the bottom of Notes and M-d's diff naming the keys that work there",
+    "default": true
+  },
+  {
+    "key": "pane_arrows",
+    "category": "Help",
+    "label": "Alt-arrows move between panes",
+    "description": "M-Left, M-Right, M-Up and M-Down move to the pane on that side, as C-w h, l, k and j do in Vim; off, they reach the pane",
+    "default": true
+  },
+  {
+    "key": "ctrl_w_panes",
+    "category": "Help",
+    "label": "C-w then h, j, k or l moves between panes",
+    "description": "C-w followed by h, j, k or l moves to the pane on that side, as in Vim, which itself still gets C-w; C-w twice sends one to the pane. Off, C-w reaches the pane as it is, deleting a word in a shell or Claude's prompt",
+    "default": true
+  },
+  {
+    "key": "extended_keys",
+    "category": "Help",
+    "label": "Extended keys",
+    "description": "Your terminal is asked to tell keys such as Ctrl-Shift-P from Ctrl-P and Shift-Enter from Enter, as tmux's extended-keys did, and a program that asks for them (Notes, Neovim, the kitty keyboard protocol's) gets them so, while the rest get the keys as before; off, every key reaches every program as a plain terminal sends it. Takes effect when a terminal next attaches and for panes opened after",
+    "default": true
+  },
+  {
+    "key": "update_check",
+    "category": "Updates",
+    "label": "Update check",
+    "description": "Offer a new release of Switchboard: when a terminal attaches and every hour, only when one attaches, or never",
+    "choices": [
+      {
+        "value": "hourly",
+        "label": "open, hourly"
+      },
+      {
+        "value": "open",
+        "label": "open only"
+      },
+      {
+        "value": "off",
+        "label": "off"
+      }
+    ],
+    "default": "hourly"
+  },
+  {
+    "key": "upgrade_after_update",
+    "category": "Updates",
+    "label": "Offer to restart after an update",
+    "description": "Once switchboard update has put a new release in place, ask whether to restart the workspace on it now, keeping every tab and what runs in it; off, it only says how (switchboard upgrade)",
+    "default": true
+  },
+  {
+    "key": "haiku_summaries",
+    "category": "Slack relay",
+    "label": "Haiku summaries",
+    "description": "One line on what each tab is doing in the relay's Home tab and progress, each a paid Haiku call",
+    "default": true
+  }
+]

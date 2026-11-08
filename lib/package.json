@@ -1,9 +1,0 @@
-{
-  "name": "switchboard-lib",
-  "private": true,
-  "description": "Switchboard's Node packages, for lib/: ical.js, for the Calendar view's iCal feed (sidebar/calendar-feed.js), and turndown, for reading a web page in a pane (link-view.js).",
-  "dependencies": {
-    "ical.js": "2.2.1",
-    "turndown": "7.2.4"
-  }
-}

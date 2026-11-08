@@ -1,0 +1,101 @@
+[package]
+name = "switchboard"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "A terminal workspace for working with coding agents: its own multiplexer, with the sidebar, mission control, the diff, notes and the Slack relay built in, as one binary"
+publish = false
+default-run = "switchboard"
+
+# One binary for every program: it runs the program its first argument
+# names (`switchboard <name>`), or the one a link to it is named after.
+[[bin]]
+name = "switchboard"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+# Pure-Rust crates only, so building needs nothing beyond what rustup gives
+# and a C compiler (which linking needs anyway): TLS is rustls, D-Bus is zbus,
+# and no crate links a system library the person would have to install.
+[dependencies]
+anyhow = "1"
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+# Objects keep their keys in insertion order, as JavaScript's do, so files
+# written here read as they did when Node wrote them.
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+jiff = "0.2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "net", "time", "io-util", "fs", "sync", "signal"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2", "charset"], optional = true }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# The multiplexer: each pane's PTY and terminal emulator, and the screens
+# drawn into a cell buffer that is sent to each client as what changed.
+portable-pty = "0.9"
+alacritty_terminal = "0.26"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+# Matching what is typed in the palette and the pickers, as fzf did.
+nucleo-matcher = "0.3"
+# The Markdown views (a PR's description, a ticket, a page read beside a
+# pane), in place of glow: Markdown parsed, and a web page's HTML turned
+# into Markdown first, as turndown did for the link view.
+pulldown-cmark = { version = "0.13", default-features = false }
+htmd = "0.5"
+syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+similar = "3.2.1"
+# The Slack relay's tall screenshots, cut into slices: PNG's zlib, in Rust.
+miniz_oxide = "0.9"
+# Updates (src/update): a release's archive unpacked (flate2 on miniz_oxide,
+# Rust's own inflate) and checked against the SHA-256 published beside it.
+sha2 = "0.11"
+flate2 = "1"
+# `codex-review --patch-id`: git's patch-id worked out here, which is SHA-1.
+sha1 = "0.11"
+tar = { version = "0.4", default-features = false }
+# The notes app (src/notes), in place of the Neovim plugin: a note's text as
+# a rope, whose clones share their pieces, so each undo step keeps the whole
+# text for little; the notes directory watched for files changed from
+# outside; and a picture in a note other than a PNG made one, the only kind
+# the terminal draws, as macOS's sips did.
+ropey = { version = "1.6", default-features = false, features = ["simd"] }
+notify = "8.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The desktop's services on Linux, where macOS has a command for each: the
+# Secret Service (the Keychain's part), notifications, logind's idle, lock and
+# sleep inhibitor.
+zbus = { version = "6", default-features = false, features = ["default-rt", "proxy"] }
+
+[features]
+default = ["net"]
+# HTTPS and WebSockets (GitHub, Linear, Slack, the calendar). Their TLS is the
+# only C the build compiles, so `cargo check --no-default-features --target
+# aarch64-apple-darwin` type-checks every macOS path from Linux.
+net = ["dep:reqwest", "dep:tokio-tungstenite"]
+
+[dev-dependencies]
+
+# Debug builds keep only line tables, and the crates none: every integration
+# test is a binary of its own linking all of them, and full debug info made
+# the target directory tens of gigabytes. Backtraces still name lines.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+# Small and quick to start, since Claude Code's hooks run it before and
+# after every tool call.
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+strip = "debuginfo"

@@ -17,34 +17,37 @@
 # commits that add something and take it out again would leave the same
 # change and an unreviewed history): its third field is the reviewed
 # range's patch (codex-review's patchId), which must equal the patch from main
-# on the remote to the tip pushed (codex-review --patch-id, the one place it is
-# worked out). The patch takes in each change's context lines, so a commit
-# rebased past a change beside its own no longer matches and needs a review of
-# its own; queue-and-clean's landing checks the same before it pushes.
+# on the remote to the tip pushed (switchboard codex-review --patch-id, the one
+# place it is worked out). The patch takes in each change's context lines, so
+# a commit rebased past a change beside its own no longer matches and needs a
+# review of its own; queue-and-clean's landing checks the same before it
+# pushes.
 #
-# Claude can't get around it (claude/hooks/enforce-git-hooks-run.sh blocks
+# Claude can't get around it (.claude/hooks/enforce-push-review.sh blocks
 # `git push --no-verify`); you can, by hand, with `git push --no-verify`.
 #
-# Enabled per clone by `./setup.sh git`, which points core.hooksPath at
-# .githooks.
+# Enabled per clone with `git config core.hooksPath .githooks`.
 
-# Turned off in Settings (review_before_push), it asks for nothing.
-settings=${SWITCHBOARD_SETTINGS:-$HOME/.config/switchboard/settings.json}
-# Only JSON false counts, read with the parser Settings reads it with
-# (JSON.parse, in lib/settings.js): a string "false", or a file Settings can't
-# read, is not off. Without node to read it, it is on.
-command -v node >/dev/null 2>&1 && node -e '
-  const s = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
-  process.exit(s && typeof s === "object" && !Array.isArray(s) && s.review_before_push === false ? 0 : 1);
-' "$settings" 2>/dev/null && exit 0
+# The switchboard asked for the setting and the patch: the one on the PATH,
+# else the one this clone built.
+sb=$(command -v switchboard 2>/dev/null)
+top=$(git rev-parse --show-toplevel 2>/dev/null)
+for built in "$top/target/release/switchboard" "$top/target/debug/switchboard"; do
+  [ -z "$sb" ] && [ -x "$built" ] && sb=$built
+done
+
+# Turned off in Settings (review_before_push), it asks for nothing, read as
+# Settings reads it: a value Settings can't read, or a file it can't, is on.
+# Without a switchboard to ask, it is on.
+[ -n "$sb" ] && [ "$("$sb" setting review_before_push 2>/dev/null)" = off ] && exit 0
 
 read -r reviewed reviewed_base reviewed_patch 2>/dev/null <"$(git rev-parse --git-path review-loop-clean)"
 same_patch() {
-  [ -n "$reviewed_patch" ] && [ "$remote_sha" != "$zero" ] && [ -n "$reviewed_base" ] &&
+  [ -n "$sb" ] && [ -n "$reviewed_patch" ] && [ "$remote_sha" != "$zero" ] && [ -n "$reviewed_base" ] &&
     git merge-base --is-ancestor "$reviewed_base" "$remote_sha" 2>/dev/null &&
     [ "$(git rev-list --parents -n 1 "$local_sha" 2>/dev/null)" = "$local_sha $remote_sha" ] &&
     [ "$(git log -1 --format=%B "$local_sha" 2>/dev/null)" = "$(git log -1 --format=%B "$reviewed" 2>/dev/null)" ] &&
-    [ "$("$(dirname "$0")/../bin/codex-review" --patch-id "$remote_sha" "$local_sha" 2>/dev/null)" = "$reviewed_patch" ]
+    [ "$("$sb" codex-review --patch-id "$remote_sha" "$local_sha" 2>/dev/null)" = "$reviewed_patch" ]
 }
 zero=0000000000000000000000000000000000000000
 status=0

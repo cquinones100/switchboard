@@ -1,0 +1,88 @@
+# Every push and pull request: the formatting checked, clippy with its
+# warnings as errors (with the net feature and without it, the build that
+# type-checks macOS's paths from Linux), and the tests, on x86_64 Linux and
+# on an Apple silicon Mac, with a build for Intel Macs cross-compiled on the
+# same Mac by its own toolchain. The Rust is the one rust-toolchain.toml pins, installed by
+# rustup as that file says; cargo's registry and each job's target folder
+# are cached, keyed on Cargo.lock and the toolchain.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request makes an older run moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  fmt:
+    name: Formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - run: cargo fmt --all --check
+
+  test:
+    name: Clippy and tests (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+          - name: macOS arm64
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-test-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-test-
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy without the net feature
+        run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
+      - name: Tests
+        # Every test binary runs whatever one before it failed, so a run
+        # names every failure rather than the first binary's.
+        run: cargo test --locked --no-fail-fast
+
+  intel-mac:
+    name: Build (macOS x86_64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain and the Intel target
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-apple-darwin
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-x86_64-apple-darwin-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-x86_64-apple-darwin-
+      - run: cargo build --locked --target x86_64-apple-darwin
