@@ -66,7 +66,7 @@ The workspace:
 | `ui` | The boxes over the workspace: messages, tips, questions, menus, pickers, the palette |
 | `sidebar` | Every tab on the left, most in need of you first, the Notifications window, and the model mission control shares |
 | `mission` | Mission control: every tab as a card and every view beside them |
-| `sources` | What GitHub and Linear say, looked up in the background on a schedule |
+| `sources` | What GitHub and Linear say, looked up in the background on a schedule, about the repositories the tabs are in: each one's origin, and in a fork's clone the project its `upstream` remote names, where its PRs are |
 | `day` | Your day: the calendar, Slack, the notes written for you |
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |

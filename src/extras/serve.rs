@@ -586,8 +586,10 @@ impl Server {
 
     /// "Open a PR in the browser by number or URL" (pr-open.zsh): typed,
     /// the clipboard's when it holds one; empty is this tab's PR, as M-r
-    /// opens it. A number is a PR of the pane's repository. Then the browser,
-    /// or a new tab working on it (`wtpr`).
+    /// opens it. A number is a PR of the pane's repository: in a fork's
+    /// clone, the project its `upstream` remote names, where the PRs are, as
+    /// gh and `wtpr` take a bare number there. Then the browser, or a new tab
+    /// working on it (`wtpr`).
     fn open_pr_number(&mut self, client: ClientId, pane: Option<PaneId>) {
         let dir = self.pane_dir(pane);
         self.off_task(
@@ -625,7 +627,8 @@ impl Server {
         let (url, number) = match super::pr_typed(typed) {
             Some(PrTyped::Url { url, number }) => (url, number),
             Some(PrTyped::Number(number)) => {
-                let Some(repo) = crate::sources::repo::origin_of(&dir) else {
+                let here = crate::sources::repo::remotes_of(&dir);
+                let Some(repo) = here.upstream.or(here.origin) else {
                     self.say(
                         Some(client),
                         &format!(

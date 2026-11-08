@@ -1418,7 +1418,12 @@ impl Server {
     /// What an item's menu offers, with what the menus need to know of the
     /// tabs, the repositories and the suggestions.
     fn item_choices(&self, view: &ViewId, item: &Item, shown: &[Item]) -> Vec<Choice> {
-        let repo_of = |p: &Path| crate::sources::repo::origin_of(p).map(|r| r.to_string());
+        let repos_of = |p: &Path| {
+            crate::sources::repo::remotes_of(p)
+                .all()
+                .map(|r| r.to_string())
+                .collect()
+        };
         let tabs = self.sidebar_all_tabs();
         let suggestions: Vec<(String, Vec<crate::usage::habits::Choice>)> = self
             .usage
@@ -1435,7 +1440,7 @@ impl Server {
         };
         let ctx = Ctx {
             tabs: &tabs,
-            repo_of: &repo_of,
+            repos_of: &repos_of,
             home: paths::home(),
             habit: &habit,
         };

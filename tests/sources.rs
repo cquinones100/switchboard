@@ -244,6 +244,18 @@ fn a_fork_s_tab_gets_its_pr_from_the_project_upstream_names() {
             && asked.contains(r#"repository(owner: \"acme\", name: \"widgets\")"#)
         {
             json!({"data": {"r0": {"a0": fork_pr(41, "acme/widgets", "me")}}})
+        } else if asked.contains("search(") {
+            // Your PRs are searched for in origin and upstream alike.
+            let open = request.json()["variables"]["open"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let nodes = if open.contains("repo:me/widgets") && open.contains("repo:acme/widgets") {
+                vec![fork_pr(41, "acme/widgets", "me")]
+            } else {
+                Vec::new()
+            };
+            json!({"data": {"open": {"nodes": nodes}, "merged": {"nodes": []}}})
         } else {
             json!({"data": {}})
         };
@@ -309,5 +321,15 @@ fn a_fork_s_tab_gets_its_pr_from_the_project_upstream_names() {
         tab()["label"].as_str().unwrap().starts_with("#41 "),
         "{}",
         tab()["label"]
+    );
+
+    // The PR board has it, from the search over both repositories.
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    let views = wait("the PR board", sources, |s| {
+        s["views"]["prs"]["items"][0]["title"] == "#41 Feature 41"
+    });
+    assert_eq!(
+        views["views"]["prs"]["items"][0]["data"]["pr"]["repo"],
+        "acme/widgets"
     );
 }

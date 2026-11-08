@@ -360,11 +360,12 @@ pub fn tab_choices(
 }
 
 /// What a menu needs to know beyond the item: the tabs, the GitHub
-/// repository a directory is in, your home (where work starts when no tab
-/// is in the repository), and the suggestions' own menus.
+/// repositories a directory's PRs may be in (its origin, and in a fork's
+/// clone the project its upstream names), your home (where work starts when
+/// no tab is in the repository), and the suggestions' own menus.
 pub struct Ctx<'a> {
     pub tabs: &'a [TabModel],
-    pub repo_of: &'a dyn Fn(&Path) -> Option<String>,
+    pub repos_of: &'a dyn Fn(&Path) -> Vec<String>,
     pub home: PathBuf,
     pub habit: &'a dyn Fn(&str) -> Vec<habits::Choice>,
 }
@@ -387,13 +388,15 @@ fn text<'a>(v: &'a Value, pointer: &str) -> &'a str {
 }
 
 /// The tab a PR is open in, and the directory of a tab in its repository
-/// (else your home), where work on it starts.
+/// (else your home), where work on it starts. A fork's clone is in the
+/// project its upstream names too, where its PRs are opened.
 fn pr_places(ctx: &Ctx<'_>, number: u64, repo: &str) -> (Option<TabModel>, PathBuf) {
     let in_repo = |t: &&TabModel| {
-        t.path
-            .as_deref()
-            .and_then(|p| (ctx.repo_of)(p))
-            .is_some_and(|r| r == repo)
+        t.path.as_deref().is_some_and(|p| {
+            (ctx.repos_of)(p)
+                .iter()
+                .any(|r| r.eq_ignore_ascii_case(repo))
+        })
     };
     let tab = ctx
         .tabs
@@ -1004,10 +1007,10 @@ mod tests {
         choices.iter().map(|c| c.key).collect()
     }
 
-    fn ctx<'a>(tabs: &'a [TabModel], repo: &'a dyn Fn(&Path) -> Option<String>) -> Ctx<'a> {
+    fn ctx<'a>(tabs: &'a [TabModel], repo: &'a dyn Fn(&Path) -> Vec<String>) -> Ctx<'a> {
         Ctx {
             tabs,
-            repo_of: repo,
+            repos_of: repo,
             home: "/home/me".into(),
             habit: &|_| Vec::new(),
         }
@@ -1074,7 +1077,7 @@ mod tests {
         let mut open = tab(2, "#12 the fix");
         open.pr = Some(12);
         let tabs = vec![open];
-        let repo = |_: &Path| Some("acme/app".to_string());
+        let repo = |_: &Path| vec!["acme/app".to_string()];
         let item = Item::new("u", "#12 the fix")
             .target(Target::Url("https://github.com/acme/app/pull/12".into()))
             .data(json!({ "pr": { "number": 12, "repo": "acme/app" }, "url": "https://github.com/acme/app/pull/12" }));
@@ -1095,6 +1098,26 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn a_pr_in_a_fork_s_upstream_is_open_in_the_fork_s_tab() {
+        // The fork's clone is in its origin, me/app, and the project its
+        // upstream names, acme/app, where its PR #41 is.
+        let mut open = tab(2, "#41 the feature");
+        open.pr = Some(41);
+        let tabs = vec![open];
+        let repos = |_: &Path| vec!["me/app".to_string(), "acme/app".to_string()];
+        let url = "https://github.com/acme/app/pull/41";
+        let item = Item::new("u", "#41 the feature")
+            .target(Target::Url(url.into()))
+            .data(json!({ "pr": { "number": 41, "repo": "acme/app" }, "url": url }));
+        let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &repos));
+        assert_eq!(choices[0].act, Do::GoTo(TabId(2)));
+        // Without the upstream, the tab is no tab of that repository's.
+        let origin = |_: &Path| vec!["me/app".to_string()];
+        let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &origin));
+        assert!(!choices.iter().any(|c| c.act == Do::GoTo(TabId(2))));
     }
 
     #[test]
@@ -1131,7 +1154,7 @@ mod tests {
         let mut open = tab(2, "#12 the fix");
         open.pr = Some(12);
         let tabs = vec![open];
-        let repo = |_: &Path| Some("acme/app".to_string());
+        let repo = |_: &Path| vec!["acme/app".to_string()];
         let url = "https://github.com/acme/app/pull/12";
         let ci = |logged: bool| {
             Item::new(url, "#12 the fix").data(json!({ "ci": {
@@ -1160,7 +1183,7 @@ mod tests {
     #[test]
     fn a_ticket_offers_work_shaping_and_closing_and_the_inbox_marks_read() {
         let tabs = vec![tab(7, "AB-30: other"), tab(8, "AB-3: this one")];
-        let repo = |_: &Path| None;
+        let repo = |_: &Path| Vec::new();
         let item = Item::new("n1", "AB-3 Do it")
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1", "url": "https://linear.app/x/issue/AB-3" }));
@@ -1173,7 +1196,7 @@ mod tests {
     #[test]
     fn a_suggestion_takes_its_own_choices_and_a_notification_can_be_dismissed() {
         let tabs: Vec<TabModel> = Vec::new();
-        let repo = |_: &Path| None;
+        let repo = |_: &Path| Vec::new();
         let habit = |id: &str| {
             vec![habits::Choice {
                 key: 'y',
@@ -1183,7 +1206,7 @@ mod tests {
         };
         let c = Ctx {
             tabs: &tabs,
-            repo_of: &repo,
+            repos_of: &repo,
             home: "/h".into(),
             habit: &habit,
         };
@@ -1216,7 +1239,7 @@ mod tests {
     #[test]
     fn a_work_map_row_offers_its_diff_and_lazygit_and_merged_work_is_removed() {
         let tabs: Vec<TabModel> = vec![tab(3, "AB-1: Fix it")];
-        let repo = |_: &Path| None;
+        let repo = |_: &Path| Vec::new();
         let c = ctx(&tabs, &repo);
         let open = Item::new("/r/wt/ab-1", "AB-1  Fix it").target(Target::Tab(TabId(3)));
         let choices = item_choices(&ViewId::WorkMap, &open, &[], &c);
@@ -1241,7 +1264,7 @@ mod tests {
     #[test]
     fn a_new_note_opens_in_notes_and_a_calendar_change_opens_the_calendar() {
         let tabs: Vec<TabModel> = Vec::new();
-        let repo = |_: &Path| None;
+        let repo = |_: &Path| Vec::new();
         let c = ctx(&tabs, &repo);
         let note = Item::new("new-notes\tnote:Meetings/Standup.md", "Standup")
             .data(json!({ "kind": "note", "path": "Meetings/Standup.md" }));
@@ -1262,7 +1285,7 @@ mod tests {
     #[test]
     fn a_landing_made_without_asking_goes_to_its_tab_while_it_is_open() {
         let tabs = vec![tab(3, "Make the thing")];
-        let repo = |_: &Path| None;
+        let repo = |_: &Path| Vec::new();
         let c = ctx(&tabs, &repo);
         let landed = Item::new("autolanded\tabc1234", "Landed abc1234: Make the thing")
             .data(json!({ "tab": "@3" }));
