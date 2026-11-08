@@ -71,6 +71,8 @@ end
 -- What a line is, as { kind, ... }. `in_code` is whether it is between
 -- fences, which the caller tracks from the lines before it.
 function M.line_kind(line, first_text_line)
+  -- The note's ID (id.lua), hidden.
+  if require("notes.id").of_line(line) then return { kind = "id" } end
   local indent, rest = line:match("^(%s*)(.*)$")
   local fence = rest:match("^```")
   if fence then return { kind = "fence" } end
@@ -201,7 +203,9 @@ function M.kinds(lines)
   local kinds, in_code, seen_text = {}, false, false
   for i, line in ipairs(lines) do
     local kind
-    if in_code then
+    if require("notes.id").of_line(line) then
+      kind = { kind = "id" }
+    elseif in_code then
       kind = line:match("^%s*```") and { kind = "fence" } or { kind = "code" }
     else
       kind = M.line_kind(line, not seen_text and line:match("%S") ~= nil)
@@ -228,7 +232,9 @@ function M.draw(buf)
     if ticked and (line:match("%S") == nil or own <= ticked) then ticked = nil end
     if ticked and M.options.strike_checked then hl(buf, row, own, #line, "NotesCheckedStrike", 120) end
     if k.kind == "check" and k.done and not ticked then ticked = k.indent end
-    if k.kind == "fence" then
+    if k.kind == "id" then
+      conceal(buf, row, 0, #line)
+    elseif k.kind == "fence" then
       hl(buf, row, 0, #line, "NotesFence")
     elseif k.kind == "code" then
       mark(buf, row, 0, { line_hl_group = "NotesMonoBlock", priority = 100 })
@@ -261,7 +267,7 @@ function M.draw(buf)
     elseif k.kind == "table" then
       require("notes.table").draw(buf, row, line, kinds[i - 1] == nil or kinds[i - 1].kind ~= "table", mark)
     end
-    if k.kind ~= "code" and k.kind ~= "fence" then
+    if k.kind ~= "code" and k.kind ~= "fence" and k.kind ~= "id" then
       for _, span in ipairs(M.inline(line, text_from)) do
         local group = span.hl
         if span.note and not store.find_by_title(span.note) then group = "NotesNoteLinkMissing" end

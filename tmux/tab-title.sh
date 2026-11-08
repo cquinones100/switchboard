@@ -129,7 +129,8 @@ tilde="~"
 # name (@tab_name, wtn-open.zsh) and its whole first line as its full title:
 # @tab_title, else, for a tab opened before there was one, the work-a-note
 # mode's @autopilot_item, else the item its branch is for (wtnItem in git's
-# config, "<note>: <item's first line>"). Each counts only while the name is
+# config, "<note's ID>: <item's first line>", or "<note's path>: <item's
+# first line>" from before notes had IDs). Each counts only while the name is
 # still that item cut short, so a tab renamed since shows its new name.
 cut_of() {
   local short=$1 whole=$2
@@ -152,7 +153,10 @@ if cut_of "$tab_name" "$tab_title"; then title=$tab_title
 elif cut_of "$tab_name" "$item"; then title=$item
 elif [ -n "$path" ] && [ -n "$branch" ] && [ "$branch" != HEAD ]; then
   wtn_item=$(git -C "$path" --no-optional-locks config --get "branch.$branch.wtnItem" 2>/dev/null)
-  wtn_item=${wtn_item#*.md: }
+  case $wtn_item in
+    n-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]': '*) wtn_item=${wtn_item#*: } ;;
+    *) wtn_item=${wtn_item#*.md: } ;;
+  esac
   cut_of "$tab_name" "$wtn_item" && title=$wtn_item
 fi
 if [ -n "$title" ]; then

@@ -11,6 +11,7 @@
 local M = {}
 
 local store = require("notes.store")
+local ids = require("notes.id")
 
 M.options = { model = "sonnet" }
 
@@ -34,7 +35,8 @@ function M.run(paths, done)
     -- no clock change puts two out of order.
     local stat = vim.uv.fs_stat(path)
     local changed = stat and os.date("!%Y-%m-%dT%H:%M:%SZ", stat.mtime.sec) or "unknown"
-    table.insert(parts, ("<note %d changed=\"%s\">\n%s\n</note %d>"):format(i, changed, f:read("*a"), i))
+    -- Without its ID line: the merged note gets an ID of its own.
+    table.insert(parts, ("<note %d changed=\"%s\">\n%s\n</note %d>"):format(i, changed, ids.strip(f:read("*a")), i))
     f:close()
   end
   local ok, job = pcall(vim.system, { "claude", "-p", "--model", M.options.model, "--tools", "", "--no-session-persistence", PROMPT }, { text = true, stdin = table.concat(parts, "\n\n") }, function(out)
@@ -47,7 +49,7 @@ function M.run(paths, done)
       local path = store.create(folder == "." and "" or folder, store.title_of(text))
       local f = io.open(path, "w")
       if not f then return done(nil, "couldn't write the new note") end
-      f:write(text .. "\n")
+      f:write(ids.with(ids.strip(text), ids.new()))
       f:close()
       -- Each image the merged note names, copied into its folder from the
       -- folder of the note it came from when that is another, before the
@@ -65,9 +67,12 @@ function M.run(paths, done)
           end
         end
       end
-      local rels, titles = {}, {}
+      local rels, titles, renumber = {}, {}, {}
+      local new_id = ids.of_file(path)
       for _, old in ipairs(paths) do
         table.insert(rels, store.relative(old))
+        local old_id = ids.of_file(old)
+        if old_id and new_id then renumber[old_id] = new_id end
         local file = io.open(old, "r")
         table.insert(titles, store.title_of(file and file:read("*a") or ""))
         if file then file:close() end
@@ -79,7 +84,7 @@ function M.run(paths, done)
       local old = {}
       for _, rel in ipairs(rels) do old[rel] = true end
       local to, title = store.relative(path), store.title_of(text)
-      store.relink(function(rel) return old[rel] and to or nil end, { path = to, from = titles[1], to = title })
+      store.relink(function(rel) return old[rel] and to or nil end, { path = to, from = titles[1], to = title }, renumber)
       for i = 2, #titles do store.relink(function() return nil end, { path = to, from = titles[i], to = title }) end
       done(path)
     end)

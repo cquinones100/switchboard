@@ -6,7 +6,7 @@
 # beside it, and @tab_note_arrived, the note Notes came beside it with,
 # notes-open.sh), and whether the mode working a note opened it (@autopilot,
 # @autopilot_in, @autopilot_item, @autopilot_left, @autopilot_seen,
-# @autopilot_land, @autopilot_autoland,
+# @autopilot_land, @autopilot_autoland, @autopilot_note,
 # lib/sidebar/autopilot.js). Resurrect saves panes and layouts only, so
 # without this every reminder and every tab's note was gone once the Mac
 # restarted.
@@ -26,7 +26,7 @@ export LC_ALL=en_US.UTF-8
 
 # A save holds them by column, so a new one goes at the end, where an older
 # save simply has none.
-OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived @autopilot @autopilot_in @autopilot_item @autopilot_left @autopilot_seen @tab_title @tab_name @autopilot_land @autopilot_autoland)
+OPTIONS=(@remind_at @remind_note @remind_said @tab_note @tab_note_last @tab_note_asked @tab_note_arrived @autopilot @autopilot_in @autopilot_item @autopilot_left @autopilot_seen @tab_title @tab_name @autopilot_land @autopilot_autoland @autopilot_note)
 
 # Resurrect's own folder, found as it finds it.
 dir=$("${0%/*}/resurrect-dir.sh")

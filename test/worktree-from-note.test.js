@@ -14,6 +14,7 @@ const path = require("node:path");
 
 const script = path.join(__dirname, "../bin/worktree-from-note");
 const lock = path.join(__dirname, "../claude/skills/queue-and-clean/scripts/land-lock.js");
+const noteIdOf = (file) => fs.readFileSync(file, "utf8").match(/<!-- note-id: (n-[0-9a-f]{12}) -->\n$/)?.[1];
 
 test("an item of a note gets a worktree on note/<its slug>, the prompt holding the item, the lines under it and its plan; a second run reuses it", () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-test-")));
@@ -40,10 +41,14 @@ test("an item of a note gets a worktree on note/<its slug>, the prompt holding t
 
     execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "--note", "Work Notes.md", "--item", "3"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
     assert.equal(fs.readFileSync(cdFile, "utf8").split("\n")[0], worktree, "a second run reuses the worktree");
+    // The note got an ID, a blank line and its own line after what was there,
+    // so the lines appended below come two further down.
+    const id = noteIdOf(path.join(tmp, "Notes/Work Notes.md"));
+    assert.equal(execFileSync("git", ["-C", repo, "config", "branch.note/copy-claudes-last-reply-with-a-key.wtnItem"], { env, encoding: "utf8" }).trim(), `${id}: Copy Claude's last reply (with a key!)`, "the branch's claim names the note by its ID");
 
     // Another item whose first line slugs the same: refused, not started in this one's worktree.
     fs.appendFileSync(path.join(tmp, "Notes/Work Notes.md"), "- [ ] Copy Claude's last reply (with a key)?\n");
-    const clash = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "11"], { cwd: repo, env, encoding: "utf8" });
+    const clash = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "13"], { cwd: repo, env, encoding: "utf8" });
     assert.notEqual(clash.status, 0, "another item with the same slug is refused");
     assert.match(clash.stderr, /is for another item/);
 
@@ -54,20 +59,20 @@ test("an item of a note gets a worktree on note/<its slug>, the prompt holding t
     // A worktree of another branch where this item's would go: refused.
     fs.appendFileSync(path.join(tmp, "Notes/Work Notes.md"), "- [ ] Add search\n");
     execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "note-add-search", path.join(repo, ".claude/worktrees/note-add-search")], { env });
-    const taken = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "12"], { cwd: repo, env, encoding: "utf8" });
+    const taken = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "14"], { cwd: repo, env, encoding: "utf8" });
     assert.match(taken.stderr, /on branch note-add-search, not note\/add-search/, "a directory of another branch is never taken for the item's");
 
     // Opened from another item's worktree, which has a commit of its own not yet landed.
     execFileSync("git", ["-C", worktree, "commit", "-q", "--allow-empty", "-m", "unlanded"], { env });
     fs.appendFileSync(path.join(tmp, "Notes/Work Notes.md"), "- [ ] Third thing\n- [ ] Twice\n- [ ]  Twice  \n");
-    execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "--note", "Work Notes", "--item", "13"], { cwd: worktree, env, stdio: ["ignore", "ignore", "pipe"] });
+    execFileSync(process.execPath, [script, "--no-claude", "--cd-file", cdFile, "--note", "Work Notes", "--item", "15"], { cwd: worktree, env, stdio: ["ignore", "ignore", "pipe"] });
     const third = fs.readFileSync(cdFile, "utf8").split("\n")[0];
     assert.equal(execFileSync("git", ["-C", third, "rev-parse", "HEAD"], { env, encoding: "utf8" }).trim(), execFileSync("git", ["-C", repo, "rev-parse", "main"], { env, encoding: "utf8" }).trim(), "a new item's branch starts from main, not the worktree it was opened from");
     // An item ending in spaces, as Markdown's line break leaves one, reopens its own worktree.
     fs.appendFileSync(path.join(tmp, "Notes/Work Notes.md"), "- [ ] Spaced out  \n");
-    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "16"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
-    assert.equal(spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "16"], { cwd: repo, env }).status, 0, "an item ending in spaces is reused, not taken for another");
-    const twice = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "14"], { cwd: repo, env, encoding: "utf8" });
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "18"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    assert.equal(spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "18"], { cwd: repo, env }).status, 0, "an item ending in spaces is reused, not taken for another");
+    const twice = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "16"], { cwd: repo, env, encoding: "utf8" });
     assert.match(twice.stderr, /more than one item reading "Twice"/, "two items worded alike are refused");
 
     const ticked = spawnSync(process.execPath, [script, "--no-claude", "--note", "Work Notes", "--item", "10"], { cwd: repo, env, encoding: "utf8" });
@@ -444,7 +449,123 @@ test("working a note continuously never takes an item wtn started in the last 30
 
     fs.writeFileSync(claims, fs.readFileSync(claims, "utf8").replace(/^\d+/m, String(old - 2 * 24 * 60 * 60)));
     execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "4"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
-    assert.deepEqual(fs.readFileSync(claims, "utf8").trim().split("\n").map((row) => row.split("\t").slice(1).join("\t")), ["Work.md\tOther"], "a claim over a day old dropped by the next");
+    assert.deepEqual(fs.readFileSync(claims, "utf8").trim().split("\n").map((row) => row.split("\t").slice(1).join("\t")), [`${noteIdOf(path.join(tmp, "Notes/Work.md"))}\tOther`], "a claim over a day old dropped by the next, each by its note's ID");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a claim names its note by ID, so a note renamed with mv keeps its item out of the picker and wtn reuses the claim; claims from before IDs are brought to them once, by path or by title", () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-ids-")));
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@e", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@e" };
+  const popup = path.join(__dirname, "../tmux/wtn-open.zsh");
+  try {
+    const repo = path.join(tmp, "repo");
+    const notes = path.join(tmp, "Notes");
+    fs.mkdirSync(notes, { recursive: true });
+    fs.writeFileSync(path.join(notes, "Work.md"), "# Work\n\n- [ ] Add search\n- [ ] Other\n");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    execFileSync("git", ["-C", repo, "commit", "-q", "--allow-empty", "-m", "start"], { env });
+    const config = (key) => spawnSync("git", ["-C", repo, "config", key], { env, encoding: "utf8" }).stdout.trim();
+    const items = (file) => execFileSync("zsh", [popup, "items", file], { cwd: repo, env, encoding: "utf8" }).trim().split("\n");
+
+    execFileSync(process.execPath, [script, "--no-claude", "--note", "Work", "--item", "3"], { cwd: repo, env, stdio: ["ignore", "ignore", "pipe"] });
+    const id = noteIdOf(path.join(notes, "Work.md"));
+    assert.equal(config("branch.note/add-search.wtnItem"), `${id}: Add search`);
+
+    fs.mkdirSync(path.join(notes, "Projects"));
+    fs.renameSync(path.join(notes, "Work.md"), path.join(notes, "Projects/Renamed.md"));
+    assert.deepEqual(items(path.join(notes, "Projects/Renamed.md")), ["4\tOther"], "renamed outside Notes, its item is still taken");
+    const renamed = path.join(notes, "Projects/Renamed.md");
+    fs.writeFileSync(renamed, fs.readFileSync(renamed, "utf8").replace(/-->\n$/, "-->  \n"));
+    assert.deepEqual(items(renamed), ["4\tOther"], "and with spaces an editor left after its ID line");
+    fs.writeFileSync(renamed, fs.readFileSync(renamed, "utf8").replace(/-->  \n$/, "-->\n"));
+    const again = spawnSync(process.execPath, [script, "--no-claude", "--note", "Projects/Renamed", "--item", "3"], { cwd: repo, env, encoding: "utf8" });
+    assert.equal(again.status, 0, `wtn on it reuses the claim rather than failing: ${again.stderr}`);
+    assert.match(again.stderr, /reusing it/);
+
+    // Claims from before notes had IDs, by the note's path: one still there,
+    // one whose note was renamed since (found by its title), one lost.
+    fs.writeFileSync(path.join(notes, "Kept.md"), "# Kept\n\n- [ ] Kept item\n");
+    fs.writeFileSync(path.join(notes, "Moved.md"), "# Gone\n\n- [ ] Moved item\n");
+    execFileSync("git", ["-C", repo, "config", "--unset", "switchboard.wtnClaimsById"], { env });
+    execFileSync("git", ["-C", repo, "config", "branch.note/kept-item.wtnItem", "Kept.md: Kept item"], { env });
+    execFileSync("git", ["-C", repo, "config", "branch.note/moved-item.wtnItem", "Gone.md: Moved item"], { env });
+    execFileSync("git", ["-C", repo, "config", "branch.note/lost-item.wtnItem", "Lost.md: Lost item"], { env });
+    // A note renamed, and an unrelated one made under its old name since.
+    fs.writeFileSync(path.join(notes, "Old name.md"), "# Unrelated\n\n- [ ] Something else\n");
+    fs.writeFileSync(path.join(notes, "New name.md"), "# New name\n\n- [ ] Renamed item\n");
+    execFileSync("git", ["-C", repo, "config", "branch.note/renamed-item.wtnItem", "Old name.md: Renamed item"], { env });
+    fs.writeFileSync(path.join(notes, "More.md"), "# More\n\n- [ ] Something\n");
+    const run = spawnSync(process.execPath, [script, "--no-claude", "--note", "More", "--item", "3"], { cwd: repo, env, encoding: "utf8" });
+    assert.equal(run.status, 0, run.stderr);
+    assert.equal(config("branch.note/kept-item.wtnItem"), `${noteIdOf(path.join(notes, "Kept.md"))}: Kept item`, "by its path");
+    assert.equal(config("branch.note/moved-item.wtnItem"), `${noteIdOf(path.join(notes, "Moved.md"))}: Moved item`, "by its title after a rename");
+    assert.equal(config("branch.note/lost-item.wtnItem"), "Lost.md: Lost item", "one it can't place left as it was");
+    assert.equal(config("branch.note/renamed-item.wtnItem"), `${noteIdOf(path.join(notes, "New name.md"))}: Renamed item`, "not the unrelated note at its old path, but the one holding its item");
+    assert.match(run.stderr, /Lost\.md: Lost item/, "and listed");
+    const later = spawnSync(process.execPath, [script, "--no-claude", "--note", "More", "--item", "3"], { cwd: repo, env, encoding: "utf8" });
+    assert.doesNotMatch(later.stderr, /Lost\.md/, "once");
+    // The lost note back at its path: wtn takes the old claim as its item's and brings it to the ID.
+    fs.writeFileSync(path.join(notes, "Lost.md"), "# Lost\n\n- [ ] Lost item\n");
+    const back = spawnSync(process.execPath, [script, "--no-claude", "--note", "Lost", "--item", "3"], { cwd: repo, env, encoding: "utf8" });
+    assert.equal(back.status, 0, `an old claim by path is still its item's: ${back.stderr}`);
+    assert.equal(config("branch.note/lost-item.wtnItem"), `${noteIdOf(path.join(notes, "Lost.md"))}: Lost item`, "and brought to the ID");
+
+    // Another item whose branch is taken: named by its words and its note's title.
+    fs.appendFileSync(path.join(notes, "More.md"), "- [ ] Add search!\n");
+    const clash = spawnSync(process.execPath, [script, "--no-claude", "--note", "More", "--item", "6"], { cwd: repo, env, encoding: "utf8" });
+    assert.match(clash.stderr, /is for another item: "Add search" in Work\./, "its note named by its title, wherever it is now");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("several wtn giving one note its ID at once all claim by the one ID the note keeps", async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-race-")));
+  try {
+    const note = path.join(tmp, "Race.md");
+    fs.writeFileSync(note, "# Race\n\n- [ ] a\n");
+    const code = `process.stdout.write(require(${JSON.stringify(path.join(__dirname, "../lib/note-id.js"))}).ensureId(process.argv[1], process.argv[2]))`;
+    const { spawn } = require("node:child_process");
+    const ids = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, ["-e", code, note, tmp]);
+          let out = "";
+          child.stdout.on("data", (d) => (out += d));
+          child.on("close", () => resolve(out));
+        }),
+      ),
+    );
+    const kept = noteIdOf(note);
+    assert.ok(kept);
+    assert.deepEqual(ids, ids.map(() => kept), "every one got the ID the note kept");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("several wtn started at once on old path-form claims bring them to IDs once, none of them failing", async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wtn-migrate-race-")));
+  const env = { ...process.env, HOME: tmp, NOTES_DIR: path.join(tmp, "Notes"), GIT_CONFIG_GLOBAL: "/dev/null" };
+  try {
+    const repo = path.join(tmp, "repo");
+    const notes = path.join(tmp, "Notes");
+    fs.mkdirSync(notes, { recursive: true });
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env });
+    for (let n = 0; n < 8; n++) {
+      fs.writeFileSync(path.join(notes, `N${n}.md`), `# N${n}\n\n- [ ] item ${n}\n`);
+      execFileSync("git", ["-C", repo, "config", `branch.note/item-${n}.wtnItem`, `N${n}.md: item ${n}`], { env });
+    }
+    const code = `process.stdout.write(JSON.stringify(require(${JSON.stringify(path.join(__dirname, "../lib/note-id.js"))}).migrateClaims(process.argv[1], process.argv[2])))`;
+    const { spawn } = require("node:child_process");
+    const codes = await Promise.all(Array.from({ length: 5 }, () => new Promise((resolve) => spawn(process.execPath, ["-e", code, repo, notes], { env }).on("close", resolve))));
+    assert.deepEqual(codes, codes.map(() => 0), "none failed");
+    for (let n = 0; n < 8; n++) {
+      const value = execFileSync("git", ["-C", repo, "config", `branch.note/item-${n}.wtnItem`], { env, encoding: "utf8" }).trim();
+      assert.equal(value, `${noteIdOf(path.join(notes, `N${n}.md`))}: item ${n}`);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -577,7 +577,7 @@ test("a note changed from outside while it is open shows the change, and a save 
   assert.equal(result.after_shown.lines, "# Plan\n\n- [ ] one (ABC-1)\n- [ ] two\n- [ ] three");
   assert.equal(result.after_shown.modified, false, "and has nothing unsaved because of it");
   assert.deepEqual(result.after_shown.cursor, [5, 4]);
-  assert.equal(result.saved, "# Plan\n\n- [ ] one (ABC-1)\n- [ ] two, typed\n- [ ] three (ABC-2)\n");
+  assert.match(result.saved, /^# Plan\n\n- \[ \] one \(ABC-1\)\n- \[ \] two, typed\n- \[ \] three \(ABC-2\)\n\n<!-- note-id: n-[0-9a-f]{12} -->\n$/, "with its ID, which the outside change left out, put back last");
   assert.equal(result.own, true);
   assert.equal(result.recreated, false);
   assert.equal(result.kept, true, "the text stays in the note window");
@@ -936,7 +936,7 @@ test("squashing notes merges them with Claude into a new note, in the first one'
   const { result, dir } = lua(`
     local s = require("notes.store")
     local a = s.create("", "Groceries")
-    local f = io.open(a, "w"); f:write("# Groceries\\n\\n- [ ] milk\\n"); f:close()
+    local f = io.open(a, "w"); f:write("# Groceries\\n\\n- [ ] milk\\n\\n<!-- note-id: n-aaaaaaaaaaaa -->\\n"); f:close()
     local b = s.create("", "Errands")
     local g = io.open(b, "w"); g:write("# Errands\\n\\n- [ ] post office\\n"); g:close()
     vim.uv.fs_utime(a, 1767225600, 1767225600)
@@ -947,7 +947,7 @@ test("squashing notes merges them with Claude into a new note, in the first one'
   `);
   assert.equal(result.made.why, undefined);
   assert.equal(result.made.path, "Groceries and errands.md");
-  assert.equal(result.text, "# Groceries and errands\n\n- [ ] milk\n- [ ] post office\n");
+  assert.match(result.text, /^# Groceries and errands\n\n- \[ \] milk\n- \[ \] post office\n\n<!-- note-id: (n-[0-9a-f]{12}) -->\n$/, "with an ID of its own");
   assert.equal(result.a, false, "the originals leave the notes");
   assert.equal(result.b, false);
   assert.ok(fs.existsSync(path.join(dir, ".trash", "Groceries.md")) && fs.existsSync(path.join(dir, ".trash", "Errands.md")), "to Recently Deleted");
@@ -955,9 +955,11 @@ test("squashing notes merges them with Claude into a new note, in the first one'
   assert.match(given, /^-p\n--model\nsonnet\n--tools\n\n--no-session-persistence\n/);
   assert.match(given, /<note 1 changed="2026-01-01T00:00:00Z">\n# Groceries[\s\S]*<note 2 changed="\d{4}-[^"]+">\n# Errands/, "each note with when it was last changed");
   assert.match(given, /keep the version from the note changed most recently/);
+  assert.doesNotMatch(given, /note-id/, "no note's ID is sent");
+  assert.notEqual(result.text.match(/note-id: (n-[0-9a-f]{12})/)[1], "n-aaaaaaaaaaaa", "the merged note's ID is its own");
 });
 
-test("tabs linked to squashed notes link to the new note", (t) => {
+test("tabs linked to squashed notes link to the new note, and the IDs the work-a-note mode keeps for any of them become the new note's", (t) => {
   const bin = fs.mkdtempSync(path.join(tmp, "claude-bin-"));
   fs.writeFileSync(path.join(bin, "claude"), `#!/bin/sh\ncat >/dev/null\nprintf '# Both\\n\\n- one\\n- two\\n'\n`, { mode: 0o755 });
   const socket = path.join(fs.mkdtempSync("/tmp/sq-"), "tmux.sock");
@@ -971,20 +973,36 @@ test("tabs linked to squashed notes link to the new note", (t) => {
   const saved = { PATH: process.env.PATH, TMUX: process.env.TMUX };
   process.env.PATH = `${bin}:${saved.PATH}`;
   process.env.TMUX = `${socket},${pid},0`;
+  const state = fs.mkdtempSync(path.join(tmp, "state-"));
+  process.env.TMUX_SIDEBAR_STATE_DIR = state;
   t.after(() => {
     process.env.PATH = saved.PATH;
     delete process.env.TMUX;
+    delete process.env.TMUX_SIDEBAR_STATE_DIR;
     execFileSync("tmux", ["-S", socket, "kill-server"]);
   });
-  lua(`
+  const { result } = lua(`
     local s = require("notes.store")
     local a = s.create("", "One")
     local b = s.create("", "Two")
+    -- The mode works Two now, with a tab still open for an item of One,
+    -- which it worked before, and an item of One skipped.
+    local id = require("notes.id").of_file(a)
+    local f = io.open("${state}/autopilot.json", "w")
+    f:write(vim.json.encode({ on = true, note = "Two.md", noteId = require("notes.id").of_file(b), skipped = { { note = id, text = "skipped" } } }))
+    f:close()
+    vim.system({ "tmux", "set", "-w", "-t", "${window}", "@autopilot_note", id }):wait()
     local done
     require("notes.squash").run({ a, b }, function(path) done = path or false end)
     vim.wait(5000, function() return done ~= nil end, 20)
-    io.write(vim.json.encode({}))
+    io.write(vim.json.encode({ old = id, new = done and require("notes.id").of_file(done) }))
   `);
+  const mode = JSON.parse(fs.readFileSync(path.join(state, "autopilot.json"), "utf8"));
+  assert.ok(result.new && result.new !== result.old);
+  assert.equal(mode.note, "Both.md");
+  assert.equal(mode.noteId, result.new, "the mode's note by the merged note's ID");
+  assert.deepEqual(mode.skipped, [{ note: result.new, text: "skipped" }], "its skipped item with it");
+  assert.equal(execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", window, "@autopilot_note"], { encoding: "utf8" }).trim(), result.new, "and its tab's, opened for the other squashed note");
   const show = (w, option) => execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", w, option], { encoding: "utf8" }).trim();
   assert.equal(show(window, "@tab_note"), "Both.md");
   assert.equal(show(other, "@tab_note_last"), "Both.md");
@@ -1026,7 +1044,7 @@ test("a note renamed from the sidebar takes its tabs' links along, and a tab nam
   `);
   const show = (w, option) => execFileSync("tmux", ["-S", socket, "show", "-wqv", "-t", w, option], { encoding: "utf8" }).trim();
   assert.equal(result.to, "Weekend plans.md", "the file is named for the new title");
-  assert.equal(result.text, "# Weekend plans\n\n- [ ] ship it\n", "only the title changed");
+  assert.match(result.text, /^# Weekend plans\n\n- \[ \] ship it\n\n<!-- note-id: n-[0-9a-f]{12} -->\n$/, "only the title changed");
   assert.equal(result.same_file, "Plans- 2.md");
   assert.equal(show(named, "@tab_note"), "Plans- 2.md");
   assert.equal(show(named, "@tab_name"), "Plans: 2", "a tab named for the note takes each new title");
@@ -1193,7 +1211,7 @@ test("an image under a checklist item moves with it when an item is ticked, and 
     s.delete(moved)
     io.write(vim.json.encode({ sorted = sorted, deleted = deleted, moved = s.relative(moved), data = data == nil }))
   `);
-  assert.deepEqual(result.sorted, ["- [ ] second", "  ![shot](.attachments/Bugs/shot.png)", "", "- [x] first"], "the image stays under its item");
+  assert.deepEqual(result.sorted.slice(0, 4), ["- [ ] second", "  ![shot](.attachments/Bugs/shot.png)", "", "- [x] first"], "the image stays under its item");
   assert.deepEqual(result.deleted, ["- [ ] keep"], "a ticked item deleted with its image line, which isn't left under another");
   assert.equal(result.moved, "Work/Bugs.md");
   assert.ok(fs.existsSync(path.join(dir, "Work/.attachments/Bugs/shot.png")), "the image went along with the note");
@@ -1500,4 +1518,110 @@ test("a note renamed takes the mode working it continuously along, which keeps i
   `);
   const mode = JSON.parse(fs.readFileSync(path.join(state, "autopilot.json"), "utf8"));
   assert.deepEqual([mode.note, mode.on, mode.repo, mode.slots, mode.cap, mode.said], ["Weekend plans.md", true, "/r", 3, 5, ""]);
+});
+
+test("each note has a stable ID as its last line: made with it, given one when first opened without it, kept last on save, put back when deleted, hidden, and a copy gets one of its own", () => {
+  const { result, dir } = lua(`
+    local s = require("notes.store")
+    local ids = require("notes.id")
+    local n = require("notes")
+    local made = s.create("", "Fresh")
+    local made_text = io.open(made):read("*a")
+    -- An old note with no ID, last changed long ago.
+    local old = s.root() .. "/Old.md"
+    local f = io.open(old, "w"); f:write("# Old\\n\\n- [ ] one\\n"); f:close()
+    vim.uv.fs_utime(old, 1767225600, 1767225600)
+    vim.cmd("Notes")
+    n.open(old)
+    local buf = vim.api.nvim_get_current_buf()
+    local given = io.open(old):read("*a")
+    local id = ids.in_text(given)
+    local kept_time = vim.uv.fs_stat(old).mtime.sec
+    -- Hidden: the whole line concealed.
+    require("notes.render").draw(buf)
+    local last = vim.api.nvim_buf_line_count(buf) - 1
+    local concealed = false
+    for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, require("notes.render").ns, { last, 0 }, { last, -1 }, { details = true })) do
+      if m[4].conceal == "" and m[4].end_col == #vim.api.nvim_buf_get_lines(buf, last, last + 1, false)[1] then concealed = true end
+    end
+    -- Typed below it: the save moves it last.
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "- [ ] two" })
+    n.save(buf)
+    local below = io.open(old):read("*a")
+    -- Deleted: the save puts it back.
+    vim.api.nvim_buf_set_lines(buf, -2, -1, false, {})
+    n.save(buf)
+    local deleted = io.open(old):read("*a")
+    -- Another note's text pasted at its end, that note's ID line with it.
+    vim.api.nvim_buf_set_lines(buf, -1, -1, false, { "# Other", "", "- [ ] pasted", "", "<!-- note-id: n-bbbbbbbbbbbb -->" })
+    n.save(buf)
+    local pasted = io.open(old):read("*a")
+    -- A copy of the note's file, changed later, holds the same ID until opened.
+    local copy = s.root() .. "/Old copy.md"
+    local g = io.open(copy, "w"); g:write((deleted:gsub("# Old", "# Old copy"))); g:close()
+    n.open(copy)
+    local copied = io.open(copy):read("*a")
+    io.write(vim.json.encode({
+      made = made_text, id = id, pasted = pasted, given = given, kept_time = kept_time, concealed = concealed, below = below, deleted = deleted,
+      copied = ids.in_text(copied), original = ids.of_file(old),
+      title = s.title_of("\\n<!-- note-id: n-0123456789ab -->\\n"), preview = s.preview_of("# T\\n\\nwords\\n\\n<!-- note-id: n-0123456789ab -->\\n"),
+      found = #s.search("note"),
+    }))
+  `);
+  assert.match(result.made, /^# Fresh\n\n<!-- note-id: n-[0-9a-f]{12} -->\n$/, "a new note is made with its ID");
+  assert.match(result.id ?? "", /^n-[0-9a-f]{12}$/);
+  assert.equal(result.given, `# Old\n\n- [ ] one\n\n<!-- note-id: ${result.id} -->\n`, "an old note gets one when first opened");
+  assert.equal(result.kept_time, 1767225600, "without its modified time changing, so it doesn't move up the list");
+  assert.equal(result.concealed, true, "the line is hidden");
+  assert.equal(result.below, `# Old\n\n- [ ] one\n\n- [ ] two\n\n<!-- note-id: ${result.id} -->\n`, "a line typed below it moves it last, every other line left as it is");
+  assert.equal(result.deleted, result.below, "deleted, it comes back on save");
+  assert.equal(result.pasted, `# Old\n\n- [ ] one\n\n- [ ] two\n\n# Other\n\n- [ ] pasted\n\n<!-- note-id: ${result.id} -->\n`, "another note's ID pasted in is dropped, and the note keeps its own");
+  assert.equal(result.original, result.id, "the original keeps its ID");
+  assert.ok(result.copied && result.copied !== result.id, "a copy gets an ID of its own");
+  assert.equal(result.title, "New Note", "the ID line is never a title");
+  assert.equal(result.preview, "words", "nor in a preview");
+  assert.equal(result.found, 0, "nor found by a search");
+  assert.ok(fs.existsSync(path.join(dir, "Old copy.md")));
+});
+
+test("a note's ID line is left out of the Format menu's paragraph styles, loses formatting wrapped round it on save, and stays hidden inside an unclosed code block", () => {
+  const { result } = lua(`
+    local s = require("notes.store")
+    local n = require("notes")
+    local path = s.create("", "Tasks")
+    vim.cmd("Notes")
+    n.open(path)
+    local buf = vim.api.nvim_get_current_buf()
+    vim.api.nvim_buf_set_lines(buf, 1, 2, false, { "one", "two" })
+    local count = vim.api.nvim_buf_line_count(buf)
+    require("notes.format").paragraph(buf, 2, count, "check")
+    local checked = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    -- Formatting wrapped round the ID some other way: the save takes it out.
+    vim.api.nvim_buf_set_lines(buf, count - 1, count, false, { "**" .. vim.api.nvim_buf_get_lines(buf, count - 1, count, false)[1] .. "**" })
+    n.save(buf)
+    local saved = io.open(path):read("*a")
+    -- An unclosed code block above it.
+    vim.api.nvim_buf_set_lines(buf, 1, 1, false, { "\`\`\`" })
+    local kinds = require("notes.render").kinds(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+    io.write(vim.json.encode({ checked = checked, saved = saved, last = kinds[#kinds].kind }))
+  `);
+  assert.deepEqual(result.checked.slice(1, 3), ["- [ ] one", "- [ ] two"]);
+  assert.match(result.checked.at(-1), /^<!-- note-id: n-[0-9a-f]{12} -->$/, "the ID line isn't made a checklist item");
+  assert.match(result.saved, /^# Tasks\n- \[ \] one\n- \[ \] two\n(- \[ \] \n)?\n<!-- note-id: n-[0-9a-f]{12} -->\n$/, "nor kept wrapped in bold");
+  assert.doesNotMatch(result.saved, /\*\*/);
+  assert.equal(result.last, "id", "hidden inside an unclosed code block");
+});
+
+test("renaming a new, empty note gives its first line the title, never its hidden ID line", () => {
+  const { result } = lua(`
+    local s = require("notes.store")
+    local n = require("notes")
+    local path = s.create("", nil)
+    vim.cmd("Notes")
+    local to = n.retitle(path, "Named")
+    io.write(vim.json.encode({ text = io.open(to):read("*a") }))
+  `);
+  assert.match(result.text, /^# Named\n/, "the title on the first line");
+  assert.equal(result.text.match(/note-id/g).length, 1, "and the ID line kept, once");
+  assert.match(result.text, /\n<!-- note-id: n-[0-9a-f]{12} -->\n$/);
 });

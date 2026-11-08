@@ -105,7 +105,7 @@ end
 
 -- Puts `text` in the buffer by changing only the lines that differ, so the
 -- cursor, the view and undo stay where they are.
-local function put(buf, text)
+function M.put(buf, text)
   local current = text_of(buf)
   if current == text then return end
   local changes = hunks(current, text)
@@ -144,11 +144,11 @@ function M.check(buf, changed)
   if base[buf] == nil or disk == base[buf] then return true end
   local before = text_of(buf)
   if not vim.bo[buf].modified then
-    put(buf, disk)
+    M.put(buf, disk)
     vim.bo[buf].modified = false
   else
     local merged, clashes = M.merge(base[buf], text_of(buf), disk)
-    put(buf, merged)
+    M.put(buf, merged)
     if clashes > 0 then
       vim.notify(("notes: %s was changed outside Notes where you were typing; both versions are kept, yours first"):format(vim.fs.basename(path)), vim.log.levels.WARN)
     end

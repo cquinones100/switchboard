@@ -4621,7 +4621,7 @@ test("the Close landed tabs setting closes a landed tab of the mode at once, aft
     state: "idle",
     claudePane: `%${id}`,
     panes: [{ pane_id: `%${id}`, pane_current_path: repo, "@agent_since": "" }],
-    autopilot: { since: now - 3600, inWorktree: true, item: `Item ${id}`, ...autopilot },
+    autopilot: { since: now - 3600, inWorktree: true, item: `Item ${id}`, note: "n-000000000000", ...autopilot },
   });
   const check = (...tabs) => {
     sent.length = 0;
@@ -4860,6 +4860,14 @@ test("the mode holds a landed tab's item while it lands and once it has left, un
     sidebar.writeAutopilot({ on: true, note: "Work.md", repo, slots: 1, cap: 5, paused: false, said: "" });
     fs.rmSync(worktree, { recursive: true });
     assert.ok((await skipped([tab(worktree)])).includes("One"), "landing, its slot free but its item held");
+    assert.ok(batches.some((cmd) => cmd.includes("@autopilot_note") && cmd.includes(sidebar.readAutopilot().noteId)), "a tab from before tabs kept their note's ID gets the mode's note's");
+    // Another note with no ID yet: given one, and the tab takes it.
+    fs.writeFileSync(path.join(notes, "Other.md"), "# Other\n\n- [ ] One\n");
+    const other = { ...tab(repo), id: "@2", autopilot: { ...tab(repo).autopilot, tabNote: "Other.md" } };
+    batches.length = 0;
+    await skipped([other]);
+    const otherId = fs.readFileSync(path.join(notes, "Other.md"), "utf8").match(/note-id: (n-[0-9a-f]{12})/)?.[1];
+    assert.ok(otherId && batches.some((cmd) => cmd.includes("@autopilot_note") && cmd.includes(otherId)), "and one opened for another note, that note's, given one");
     assert.ok((await skipped([tab(repo)])).includes("One"), "the check it leaves on");
     assert.ok(batches.some((cmd) => cmd.includes("@autopilot_left") || (cmd.includes("@autopilot") && cmd.includes("-u"))), "marked landed as it leaves");
     assert.ok((await skipped([tab(repo, false)])).includes("One"), "still held once it has left, while the note lists it unticked");
@@ -4873,6 +4881,75 @@ test("the mode holds a landed tab's item while it lands and once it has left, un
     assert.ok(!(await skipped([tab(repo, false)])).includes("One"), "let go after 10 minutes with no tick");
   } finally {
     Date.now = realNow;
+    Object.keys(process.env).filter((key) => !(key in saved)).forEach((key) => delete process.env[key]);
+    Object.assign(process.env, saved);
+    sidebar.writeAutopilot({ on: false });
+  }
+});
+
+test("the mode follows its note by its ID when the note is renamed outside Notes, and a skipped item hides only in its own note", async () => {
+  const dir = path.join(tmp, "autopilot-follow");
+  const repo = path.join(dir, "repo");
+  const notes = path.join(dir, "Notes");
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+  fs.mkdirSync(notes, { recursive: true });
+  const ago = (file) => fs.utimesSync(file, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+  fs.writeFileSync(path.join(notes, "Work.md"), "# Work\n\n- [ ] One\n- [ ] Two\n");
+  fs.writeFileSync(path.join(notes, "Other.md"), "# Other\n\n- [ ] One\n");
+  ago(path.join(notes, "Work.md"));
+  ago(path.join(notes, "Other.md"));
+  // A stand-in for wtn-open.zsh's next, which says which note it was given and what to skip, and opens nothing real.
+  const stub = path.join(dir, "wtn-open.zsh");
+  const told = path.join(dir, "told");
+  fs.writeFileSync(stub, ["[[ $1 == queue ]] && exit 0", `print -r -- "$2"$'\\n'"$WTN_SKIP" > ${JSON.stringify(told)}`, "print -r -- $'9\\t@99\\tother'"].join("\n"));
+  const saved = { ...process.env };
+  Object.assign(process.env, { TMUX_SIDEBAR_WTN_OPEN: stub, NOTES_DIR: notes });
+  const pilot = sidebar.autopilot({ batch: () => {}, gapMs: 0 });
+  const tell = async () => {
+    fs.rmSync(told, { force: true });
+    pilot.check([], { away: false });
+    for (let i = 0; i < 100 && !fs.existsSync(told); i++) await wait(50);
+    await wait(50);
+    const [note, ...skip] = fs.readFileSync(told, "utf8").split("\n");
+    return { note, skip: skip.filter(Boolean) };
+  };
+  try {
+    // From before notes had IDs: a path, and a skipped item by its first line alone.
+    sidebar.writeAutopilot({ on: true, note: "Work.md", noteId: "", repo, slots: 1, cap: 5, paused: false, said: "", skipped: ["Two"] });
+    assert.deepEqual(await tell(), { note: "Work.md", skip: ["Two"] }, "the old skipped item stays the note's");
+    const { noteId, skipped } = sidebar.readAutopilot();
+    assert.match(noteId, /^n-[0-9a-f]{12}$/, "the note given an ID");
+    assert.match(fs.readFileSync(path.join(notes, "Work.md"), "utf8"), new RegExp(`<!-- note-id: ${noteId} -->\\n$`));
+    assert.deepEqual(skipped, [{ note: noteId, text: "Two" }], "its skipped item scoped to it");
+
+    // Items a script appended below the ID, more than its last 300 bytes, before the rename.
+    fs.appendFileSync(path.join(notes, "Work.md"), "- [ ] An item appended below the ID line by a script\n".repeat(10));
+    ago(path.join(notes, "Work.md"));
+    fs.mkdirSync(path.join(notes, "Projects"));
+    fs.renameSync(path.join(notes, "Work.md"), path.join(notes, "Projects/Renamed.md"));
+    assert.equal((await tell()).note, "Projects/Renamed.md", "renamed with mv, the note is followed by its ID, wherever in the note it is");
+    assert.equal(sidebar.readAutopilot().note, "Projects/Renamed.md", "and its new path kept");
+
+    // Rewritten outside Notes without its ID line: given it back.
+    fs.writeFileSync(path.join(notes, "Projects/Renamed.md"), "# Work\n\n- [ ] One\n- [ ] Two\n");
+    ago(path.join(notes, "Projects/Renamed.md"));
+    assert.equal((await tell()).note, "Projects/Renamed.md", "still worked");
+    assert.match(fs.readFileSync(path.join(notes, "Projects/Renamed.md"), "utf8"), new RegExp(`<!-- note-id: ${noteId} -->\\n$`), "its ID given back");
+
+    // Deleted, and another note made at its path: nothing is taken from that one.
+    fs.mkdirSync(path.join(notes, ".trash"));
+    fs.renameSync(path.join(notes, "Projects/Renamed.md"), path.join(notes, ".trash/Renamed.md"));
+    fs.writeFileSync(path.join(notes, "Projects/Renamed.md"), "# Something else\n\n- [ ] Unrelated\n\n<!-- note-id: n-ffffffffffff -->\n");
+    ago(path.join(notes, "Projects/Renamed.md"));
+    fs.rmSync(told, { force: true });
+    sidebar.autopilot({ batch: () => {}, gapMs: 0 }).check([], { away: false });
+    await wait(500);
+    assert.ok(!fs.existsSync(told), "another note at its path is not worked");
+    assert.match(sidebar.readAutopilot().said, /^Can't find the note Renamed/, "and it says so");
+
+    sidebar.writeAutopilot({ note: "Other.md", noteId: "" });
+    assert.deepEqual(await tell(), { note: "Other.md", skip: [] }, "another note's skipped item isn't skipped here");
+  } finally {
     Object.keys(process.env).filter((key) => !(key in saved)).forEach((key) => delete process.env[key]);
     Object.assign(process.env, saved);
     sidebar.writeAutopilot({ on: false });

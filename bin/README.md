@@ -247,7 +247,13 @@ and `--note` the note's path within your notes directory (`$NOTES_DIR` or
 `~/Notes`), `.md` optional; a ticked item, a line that isn't one, or a file
 outside the notes directory is refused. It reuses the worktree, and refuses a
 second Claude in it, as `wt` does, and shares that code with it
-(`lib/worktree.js`).
+(`lib/worktree.js`). The branch's git config records which item it is for
+(`branch.<branch>.wtnItem`), the note by its ID and the item by its first
+line, so a note renamed or moved, in Notes or outside it, keeps its items'
+worktrees: the picker below still leaves them out, and `wtn` on one reuses
+its worktree. Claims from before notes had IDs, by the note's path, are
+rewritten once, the note found at that path, by its title or by the item;
+one it can't place is listed and left to be read by path as before.
 
 `/wtn` in a Claude session hands its tab to `wtn` as `/wt` does: it settles
 the note as `/note-watch` does, lists the note's unticked items to pick from
@@ -295,7 +301,9 @@ without your seeing it leaves a notification, "Closed <item>: landed <hash>",
 which Enter dismisses. The mode's menu changes the setting too. Its tabs say `auto` in the
 sidebar, and while it is on, mission
 control's Tabs view leads with its line: the note, how many work and are open,
-and the item it takes next. `k` from the top row of tabs (or a click) reaches
+and the item it takes next. It keeps the note by its ID too, so a note renamed
+or moved, in Notes or outside it, is followed, and an item skipped is skipped
+in its own note alone. `k` from the top row of tabs (or a click) reaches
 it, and Enter there pauses or resumes it, skips the next item, takes only
 items with a settled plan or those with none too, lands without asking or
 asks before landing again (below), changes its settings, or stops it; M-p's
@@ -1581,7 +1589,13 @@ checklist items as ☐ and ☑, a quote with a bar, a table with box lines.
 Notes are kept in `$NOTES_DIR`, or `~/Notes`, one Markdown file each, in
 folders that are directories. A note's title is its first line, and its file
 is named for it and renamed when it changes. They save themselves a moment
-after each change. Pinned notes are listed in `.notes.json` there, and deleted
+after each change. Each note's last line is its ID, `<!-- note-id: n-… -->`,
+which the app hides, keeps last and puts back if you delete it; it gives a
+note one when it makes it or first opens it, and a copy of a note's file,
+which carries the original's, one of its own, saying so once. The ID survives
+a rename or move anywhere, so what keeps a note by it (`wtn`'s worktrees, the
+work-a-note mode) still finds it; another editor shows it as an HTML comment.
+Pinned notes are listed in `.notes.json` there, and deleted
 notes go to `.trash/`, the Recently Deleted folder; deleting one from there
 removes it for good. While it runs, the app holds `.notes.lock` there, with its
 process ID: notes save themselves as you type, so a second app on the same

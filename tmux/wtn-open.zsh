@@ -25,7 +25,8 @@
 # and its first line; next opens each tab as a pick below does, in the
 # background, marks it @autopilot with the time it opened, and prints its line
 # number, window and first line, tab-separated, and keeps the first line as
-# the tab's @autopilot_item, which the daemon skips while the tab is open, so a
+# the tab's @autopilot_item and the note's ID as its @autopilot_note, which
+# the daemon skips while the tab is open, so a
 # tab whose wtn failed before making its branch doesn't have its item taken again. WTN_SESSION names the tmux
 # session to open them in.
 #
@@ -45,6 +46,9 @@
 # new tab with -e, never typed.
 
 zmodload zsh/datetime
+# extended_glob for the patterns that read a note's ID and take the colors
+# out of a pick.
+setopt extended_glob
 
 dim=$'\e[38;5;244m' red=$'\e[31m' yellow=$'\e[33m' reset=$'\e[0m'
 
@@ -80,13 +84,24 @@ item() {
   ' "$1"
 }
 
+# A note's ID, from its last line holding one (lib/note-id.js), read with
+# zsh alone; nothing when it has none yet.
+note_id() {
+  local line
+  for line in "${(@Oa)${(f)"$(<$1)"}}"; do
+    [[ $line == (#b)[[:space:]]#'<!-- note-id: '(n-[0-9a-f](#c12))' -->'[[:space:]]# ]] && { print -r -- $match[1]; return; }
+  done
+}
+
 # Those of them no worktree is working on yet. wtn keeps the item a branch is
-# for in its git config, branch.<branch>.wtnItem, as "<note>: <item's first
-# line>", the note's path within the notes directory; an item counts as taken
+# for in its git config, branch.<branch>.wtnItem, as "<note's ID>: <item's
+# first line>", so a note renamed or moved keeps its claims; a claim from
+# before notes had IDs that wtn couldn't place still reads "<note's path
+# within the notes directory>: <item's first line>". An item counts as taken
 # only while its branch is checked out in a worktree, so one whose worktree
 # was removed, its branch kept, shows again.
 unclaimed() {
-  local file=$1 note=${1#${NOTES_DIR:-$HOME/Notes}/} key value row text
+  local file=$1 note=${1#${NOTES_DIR:-$HOME/Notes}/} id=$(note_id "$1") key value row text
   local -A claimed checked_out
   git worktree list --porcelain 2>/dev/null | while read -r key value; do
     [[ $key == branch ]] && checked_out[${value#refs/heads/}]=1
@@ -97,7 +112,9 @@ unclaimed() {
   done
   for row in ${(f)"$(items "$file")"}; do
     text=${${row#*$'\t'}%' (needs a choice)'}
-    (( ${+claimed[$note: $text]} )) || print -r -- "$row"
+    (( ${+claimed[$note: $text]} )) && continue
+    [[ -n $id ]] && (( ${+claimed[$id: $text]} )) && continue
+    print -r -- "$row"
   done
 }
 
@@ -116,14 +133,15 @@ plan_of() {
 }
 
 # The items wtn started in the last 30 minutes, from its claims file
-# (bin/worktree-from-note), one a line, for the note at path $1 within the
-# notes directory: taken even once their worktree is gone, since
-# queue-and-clean may remove it a moment before it ticks the item.
+# (bin/worktree-from-note), one a line, for the note whose ID is $1 (or, in a
+# row from before notes had IDs, at path $2 within the notes directory):
+# taken even once their worktree is gone, since queue-and-clean may remove it
+# a moment before it ticks the item.
 claimed_lately() {
   local claims=$HOME/.local/state/switchboard/wtn-claims.tsv row
   [[ -r $claims ]] || return 0
   for row in ${(f)"$(<$claims)"}; do
-    [[ ${row#*$'\t'} == "$1"$'\t'* ]] || continue
+    [[ ( -n $1 && ${row#*$'\t'} == "$1"$'\t'* ) || ${row#*$'\t'} == "$2"$'\t'* ]] || continue
     (( EPOCHSECONDS - ${row%%$'\t'*} < 1800 )) && print -r -- "${row#*$'\t'*$'\t'}"
   done
 }
@@ -134,7 +152,7 @@ queue() {
   local -a settled unplanned
   local -A skip
   for text in ${(f)WTN_SKIP:-}; do skip[$text]=1; done
-  for text in ${(f)"$(claimed_lately "${file#${NOTES_DIR:-$HOME/Notes}/}")"}; do skip[$text]=1; done
+  for text in ${(f)"$(claimed_lately "$(note_id "$file")" "${file#${NOTES_DIR:-$HOME/Notes}/}")"}; do skip[$text]=1; done
   for row in ${(f)"$(unclaimed "$file")"}; do
     [[ $row == *' (needs a choice)' ]] && continue
     line=${row%%$'\t'*} text=${row#*$'\t'}
@@ -183,13 +201,14 @@ if [[ ${1:-} == (queue|next) ]]; then
     queue "$file" "${(M)3:#--ready-only}"
     exit
   fi
-  count=${3:-1}
+  count=${3:-1} id=$(note_id "$file")
   for row in ${(f)"$(queue "$file" "${(M)4:#--ready-only}")"}; do
     (( count-- > 0 )) || break
     line=${row%%$'\t'*} text=${row#*$'\t'}
     window=$(open_tab "$2" "$line" "$text") || { print -u2 "tmux could not open a tab for: $text"; exit 1; }
     tmux set-option -w -t "$window" @autopilot "$EPOCHSECONDS"
     tmux set-option -w -t "$window" @autopilot_item "$text"
+    tmux set-option -w -t "$window" @autopilot_note "$id"
     print -r -- "$line"$'\t'"$window"$'\t'"$text"
   done
   exit 0
@@ -203,9 +222,6 @@ if [[ ${1:-} == item ]]; then
   item "$2" "$3"
   exit
 fi
-
-# extended_glob for the # in the pattern that takes the colors out of a pick.
-setopt extended_glob
 
 # Esc cancels; KEYTIMEOUT=1 keeps it from waiting for an escape sequence.
 KEYTIMEOUT=1

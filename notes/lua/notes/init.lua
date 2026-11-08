@@ -31,6 +31,7 @@ local links = require("notes.links")
 local tables = require("notes.table")
 local sync = require("notes.sync")
 local easy = require("notes.easy")
+local ids = require("notes.id")
 
 M.options = {
   -- Notes' "Move checked items to bottom", on so a list leads with what is
@@ -123,12 +124,28 @@ local function redraw(buf, rows)
   render.draw(buf)
 end
 
+-- The note's ID kept as its last line (id.lua): the one it was opened with,
+-- put back when typing removed it, moved last when lines were typed or
+-- brought in below it, and never another note's pasted into it, which is
+-- dropped. Only the file holding another ID, given it outside Notes (wtn or
+-- the mode giving a copy one of its own), changes it.
+local function keep_id(buf)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local on_disk = ids.of_file(vim.api.nvim_buf_get_name(buf))
+  local id = on_disk or vim.b[buf].notes_id or ids.in_lines(lines)
+  if not id then return end
+  vim.b[buf].notes_id = id
+  local kept = ids.kept_last(lines, id)
+  if kept then sync.put(buf, table.concat(kept, "\n") .. "\n") end
+end
+
 -- Saves a note, and renames its file if its title changed. A change made to
 -- its file from outside is brought in first, so it isn't written over.
 function M.save(buf)
   if not is_note(buf) then return end
   if not sync.check(buf, redraw) then return end
   local path = vim.api.nvim_buf_get_name(buf)
+  if not store.in_trash(path) then keep_id(buf) end
   if vim.bo[buf].modified then
     vim.api.nvim_buf_call(buf, function() vim.cmd("silent! keepalt write!") end)
     sync.written(buf)
@@ -350,6 +367,32 @@ function M.menu(buf, visual, typing_col)
   require("notes.easy").close_button(win, function() pick(nil) end, true)
 end
 
+-- A note opened without an ID gets one, and a copy of another note, holding
+-- its ID, a new one, said once; written at once with its modified time
+-- kept, so opening an old note doesn't move it up the list. Deleted notes
+-- are left as they are.
+local function give_id(buf)
+  local path = vim.api.nvim_buf_get_name(buf)
+  if store.in_trash(path) then return end
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local id = ids.in_lines(lines)
+  local copy, of = false, nil
+  if id then copy, of = ids.is_copy(path, id) end
+  if id and not copy then
+    vim.b[buf].notes_id = id
+    return
+  end
+  vim.b[buf].notes_id = ids.new()
+  local stat = vim.uv.fs_stat(path)
+  sync.put(buf, table.concat(ids.kept_last(lines, vim.b[buf].notes_id) or lines, "\n") .. "\n")
+  vim.api.nvim_buf_call(buf, function() vim.cmd("silent! keepalt write!") end)
+  if stat then vim.uv.fs_utime(path, stat.atime.sec, stat.mtime.sec) end
+  sync.written(buf)
+  if copy then
+    vim.notify(("notes: %s is a copy of %s, so it has an ID of its own now"):format(vim.fs.basename(path), vim.fs.basename(of)), vim.log.levels.INFO)
+  end
+end
+
 local function setup_buffer(buf)
   if vim.b[buf].notes_ready then return end
   vim.b[buf].notes = true
@@ -367,6 +410,8 @@ local function setup_buffer(buf)
   -- loaded in the notes app at all (nvim/lua/plugins/lsp.lua), since it set
   -- its own Ctrl-P on a note each time typing started, over the Format menu's.
   vim.b[buf].copilot_enabled = false
+  -- Only once it keeps no undo file, since giving it an ID writes it.
+  give_id(buf)
   render.attach(buf)
 
   local map = function(modes, lhs, fn, desc) vim.keymap.set(modes, lhs, fn, { buffer = buf, silent = true, desc = desc }) end
@@ -510,7 +555,7 @@ function M.retitle(path, title)
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local row
   for i, line in ipairs(lines) do
-    if vim.trim((line:gsub("^%s*#+%s*", ""))) ~= "" then
+    if vim.trim((line:gsub("^%s*#+%s*", ""))) ~= "" and not ids.of_line(line) then
       row = i - 1
       break
     end

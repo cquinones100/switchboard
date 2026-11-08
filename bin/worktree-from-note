@@ -22,6 +22,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { slugify, gitOutput, gitRun, repoRoot, linkLocalSettings, ensureWorktree } = require("../lib/worktree");
 const { count } = require("../lib/requests");
+const { ensureId, findById, migrateClaims, titleOf } = require("../lib/note-id");
 
 const DEFAULT_WORKTREE_DIR = ".claude/worktrees";
 const SELF = fs.realpathSync(process.argv[1]);
@@ -83,7 +84,7 @@ const shellFunction = () => `wtn() {
   claude "$prompt"
 }`;
 
-// Each item wtn starts, kept a day, `<seconds>\t<note>\t<item's first line>`:
+// Each item wtn starts, kept a day, `<seconds>\t<note's ID>\t<item's first line>`:
 // the work-a-note mode (wtn-open.zsh next) takes an item claimed in the last
 // 30 minutes as taken even once its worktree is gone, since queue-and-clean
 // may remove it a moment before ticking the item.
@@ -207,11 +208,16 @@ const main = () => {
   console.error(`Branch:   ${branch}`);
   console.error(`Worktree: ${worktreePath}`);
 
-  // Which item the branch is for, the note's path within the notes
-  // directory and the item's first line, kept in its git config, so another
-  // item whose first line slugs the same, in this note or another, is refused
-  // rather than started inside this one's work.
-  const identity = `${path.relative(dir, file)}: ${first}`;
+  // Which item the branch is for, the note's ID (lib/note-id.js, given one
+  // here when it has none) and the item's first line, kept in its git config,
+  // so another item whose first line slugs the same, in this note or another,
+  // is refused rather than started inside this one's work, and the note
+  // renamed or moved since is still the same note. Claims from before notes
+  // had IDs, by the note's path, are rewritten once first.
+  const unplaced = migrateClaims(root, dir);
+  if (unplaced.length) console.error(`Couldn't find the note of these older claims, left as they were:\n${unplaced.map((claim) => `  ${claim}`).join("\n")}`);
+  const noteId = ensureId(file, dir);
+  const identity = `${noteId}: ${first}`;
   const recorded = (() => {
     try {
       return gitOutput(["-C", root, "config", "--get", `branch.${branch}.wtnItem`]);
@@ -219,9 +225,16 @@ const main = () => {
       return "";
     }
   })();
-  if (recorded && recorded !== identity) {
+  // A claim from before IDs that the migration couldn't place, its note
+  // back at that path since, is this item's too, and is rewritten below.
+  const byPath = recorded === `${path.relative(dir, file)}: ${first}`;
+  if (recorded && recorded !== identity && !byPath) {
+    // The other item named by its words and its note's title, found by ID.
+    const [, otherId, otherText] = recorded.match(/^(n-[0-9a-f]{12}): (.*)$/s) ?? [];
+    const otherFile = otherId && findById(otherId, dir);
+    const other = otherId ? `"${otherText}" in ${otherFile ? titleOf(fs.readFileSync(otherFile, "utf8")) || path.basename(otherFile, ".md") : "a note no longer there"}` : `"${recorded}"`;
     fail(
-      `${branch} is for another item: "${recorded}".\n` +
+      `${branch} is for another item: ${other}.\n` +
         `Land or remove that worktree first, or, if the item was only reworded, tell git it is the same one:\n` +
         `  git config branch.${branch}.wtnItem '${identity.replace(/'/g, "'\\''")}'`,
     );
@@ -260,7 +273,7 @@ const main = () => {
   })();
   ensureWorktree(worktreePath, branch, { work: "item", command: "wtn", start });
   gitRun(["-C", root, "config", `branch.${branch}.wtnItem`, identity]);
-  claim(path.relative(dir, file), first);
+  claim(noteId, first);
   linkLocalSettings(root, worktreePath);
 
   const extra = prompts.join(" ").replace(/\s+/g, " ").trim();

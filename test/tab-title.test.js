@@ -97,6 +97,8 @@ esac
     assert.equal(title(short, "none", "none"), `#12 ${short}`, "nothing kept: the name");
     execFileSync("git", ["-C", repo, "config", "branch.note/long-item.wtnItem", `Work/Notes.md: ${whole}`], { env: env0 });
     assert.equal(title(short, "none", "none"), `#12 ${whole}`, "the item its branch is for");
+    execFileSync("git", ["-C", repo, "config", "branch.note/long-item.wtnItem", `n-0123456789ab: ${whole}`], { env: env0 });
+    assert.equal(title(short, "none", "none"), `#12 ${whole}`, "a claim by the note's ID too");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -9,12 +9,14 @@
 -- Two things in it aren't notes: `.trash/`, where a deleted note goes (the
 -- "Recently Deleted" folder; deleting it from there removes it for good), and
 -- `.notes.json`, which records the pinned notes and the note open last, by
--- their paths in the notes directory. Nothing else is kept anywhere, so the notes stay plain files any
+-- their paths in the notes directory. A note's last line holds its stable ID
+-- (see id.lua), which the app writes and hides. Nothing else is kept anywhere, so the notes stay plain files any
 -- editor can open.
 
 local M = {}
 
 local uv = vim.uv or vim.loop
+local ids = require("notes.id")
 
 M.TRASH = ".trash"
 M.META = ".notes.json"
@@ -165,7 +167,7 @@ end
 -- The title from a note's text: its first line that isn't blank, without
 -- Markdown's heading marks, or "New Note" for an empty one.
 function M.title_of(text)
-  for line in (text or ""):gmatch("[^\n]*") do
+  for line in ids.strip(text):gmatch("[^\n]*") do
     local title = vim.trim((line:gsub("^%s*#+%s*", "")))
     if title ~= "" then return title end
   end
@@ -175,7 +177,7 @@ end
 -- The text under the title, flattened to one line, for the sidebar.
 function M.preview_of(text)
   local lines, seen_title = {}, false
-  for line in (text or ""):gmatch("[^\n]*") do
+  for line in ids.strip(text):gmatch("[^\n]*") do
     if not seen_title then
       if vim.trim(line) ~= "" then seen_title = true end
     else
@@ -210,7 +212,8 @@ end
 local function note_entry(path)
   local stat = uv.fs_stat(path)
   if not stat or stat.type ~= "file" then return nil end
-  local text = read_file(path) or ""
+  -- Without its ID line, which no list, search or tag should find.
+  local text = ids.strip(read_file(path) or "")
   local rel = M.relative(path)
   local folder = vim.fs.dirname(rel)
   return {
@@ -276,13 +279,14 @@ function M.folders()
 end
 
 -- A new note in `folder` ("" for the notes directory itself), with `title`
--- as its first line, written as a title. Without one, the first line is an
--- empty title to type, and the file is "New Note" until there is one.
+-- as its first line, written as a title, and an ID of its own. Without one,
+-- the first line is an empty title to type, and the file is "New Note" until
+-- there is one.
 function M.create(folder, title)
   M.ensure()
   title = title and vim.trim(title) or ""
   local path = M.file_for(folder or "", title ~= "" and title or "New Note")
-  write_file(path, "# " .. title .. "\n\n")
+  write_file(path, ids.with("# " .. title .. "\n", ids.new()))
   return path
 end
 
@@ -330,14 +334,32 @@ end
 -- is, takes the new title as its name (its @tab_name, which the tab bar
 -- then shows). One tmux call to look, and none
 -- outside tmux.
-function M.relink(follow, title)
+function M.relink(follow, title, renumber)
   -- The note the sidebar daemon's mode works continuously
-  -- (lib/sidebar/autopilot.js), kept in its state file, follows too.
+  -- (lib/sidebar/autopilot.js), kept in its state file, follows too. With
+  -- `renumber` (each squashed note's ID to the merged note's), the IDs the
+  -- mode keeps follow as well: its note's, its skipped items' and its tabs'
+  -- (@autopilot_note), whichever of the squashed notes they were.
+  renumber = renumber or {}
   local state = (vim.env.TMUX_SIDEBAR_STATE_DIR or vim.fn.expand("~/.local/state/tmux-sidebar")) .. "/autopilot.json"
   local ok, mode = pcall(vim.json.decode, read_file(state) or "")
-  local to_mode = ok and type(mode) == "table" and type(mode.note) == "string" and mode.note ~= "" and follow(mode.note)
-  if to_mode then
-    mode.note = to_mode
+  mode = ok and type(mode) == "table" and mode or nil
+  local to_mode = mode and type(mode.note) == "string" and mode.note ~= "" and follow(mode.note)
+  local renumbered = false
+  if mode then
+    if renumber[mode.noteId] then
+      mode.noteId = renumber[mode.noteId]
+      renumbered = true
+    end
+    for _, item in ipairs(type(mode.skipped) == "table" and mode.skipped or {}) do
+      if type(item) == "table" and renumber[item.note] then
+        item.note = renumber[item.note]
+        renumbered = true
+      end
+    end
+  end
+  if to_mode or renumbered then
+    mode.note = to_mode or mode.note
     if mode.said and mode.said:find("^Can't find the note") then mode.said = "" end
     local f = io.open(state .. ".tmp", "w")
     if f then
@@ -347,11 +369,12 @@ function M.relink(follow, title)
     end
   end
   if (vim.env.TMUX or "") == "" then return end
-  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_note_arrived}\t#{@tab_name}" }, { text = true }):wait()
+  local listed = vim.system({ "tmux", "list-windows", "-a", "-F", "#{window_id}\t#{session_name}\t#{@tab_note}\t#{@tab_note_last}\t#{@tab_note_arrived}\t#{@autopilot_note}\t#{@tab_name}" }, { text = true }):wait()
   if listed.code ~= 0 then return end
   local renamed = {}
   for line in (listed.stdout or ""):gmatch("[^\n]+") do
-    local window, session, note, last, arrived, name = unpack(vim.split(line, "\t", { plain = true }))
+    local window, session, note, last, arrived, pilot_note, name = unpack(vim.split(line, "\t", { plain = true }))
+    if renumber[pilot_note] then vim.system({ "tmux", "set-option", "-w", "-t", window, "@autopilot_note", renumber[pilot_note] }):wait() end
     local to_note = note ~= "" and follow(note) or nil
     local to_last = last ~= "" and follow(last) or nil
     local to_arrived = arrived ~= "" and follow(arrived) or nil

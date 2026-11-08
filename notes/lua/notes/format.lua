@@ -78,6 +78,8 @@ function M.paragraph(buf, first, last, style)
   if style_of(first_marker) == style then style = "body" end
   local n = 0
   for row = first, last do
+    -- The note's hidden ID line (id.lua) is never a paragraph to style.
+    if require("notes.id").of_line(get_line(buf, row)) then goto continue end
     local indent, _, text = M.split(get_line(buf, row))
     local marker = M.PARAGRAPH[style]
     if style == "number" then
@@ -86,6 +88,7 @@ function M.paragraph(buf, first, last, style)
     end
     if style == "title" or style == "heading" or style == "subheading" then indent = "" end
     set_line(buf, row, indent .. marker .. text)
+    ::continue::
   end
   -- A cursor left on the marker goes to the text, so typing starts there.
   local win = vim.fn.bufwinid(buf)
