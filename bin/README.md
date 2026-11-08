@@ -2165,7 +2165,7 @@ repository's own, not installed for others) reads all of it first.
 ## switchboard-handoff
 
 Hands this tmux workspace to the Rust port of Switchboard
-(`cooljacob204/switchboard`, branch `rust-conversion`), and brings it back.
+(`cooljacob204/switchboard`, on its `main`), and brings it back.
 
 ```
 switchboard-handoff                    write the port's layout.json and copy the state files
