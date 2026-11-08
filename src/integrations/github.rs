@@ -751,6 +751,48 @@ pub async fn pr_by_number(repo: &Repo, number: u64, source: &str) -> Result<Opti
         .and_then(|pr| serde_json::from_value(pr.clone()).ok()))
 }
 
+/// An open PR from a fork, and who opened it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForkPr {
+    pub pr: PullRequest,
+    pub author: String,
+}
+
+/// The repository's open PRs from forks, the most recently updated first
+/// (the newest hundred PRs looked through).
+pub async fn open_fork_prs(repo: &Repo, source: &str) -> Result<Vec<ForkPr>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Open {
+        #[serde(flatten)]
+        pr: PullRequest,
+        is_cross_repository: bool,
+        author: Option<Login>,
+    }
+    let data = graphql(
+        &format!(
+            "query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) {{ \
+             pullRequests(states: OPEN, first: 100, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{ \
+             nodes {{ {FIELDS} isCrossRepository author {{ login }} }} }} }} }}"
+        ),
+        json!({ "owner": repo.owner, "name": repo.name }),
+        source,
+    )
+    .await?;
+    Ok(data
+        .pointer("/repository/pullRequests/nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|n| serde_json::from_value::<Open>(n.clone()).ok())
+        .filter(|n| n.is_cross_repository)
+        .map(|n| ForkPr {
+            pr: n.pr,
+            author: n.author.map(|a| a.login).unwrap_or_default(),
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

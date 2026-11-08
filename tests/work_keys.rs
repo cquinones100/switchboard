@@ -399,3 +399,145 @@ fn land_on_lists_the_branch_picked_last_time_first() {
     );
     client.send(b"\x1b");
 }
+
+/// Waits for the tab just opened to be in front, its row `row` in the
+/// sidebar, and for the server to read its pane's directory as `dir`,
+/// which the palette reads as it opens.
+fn in_front_at(server: &TestServer, client: &mut common::TestClient, row: &str, dir: &Path) {
+    client.wait_for("the tab in front", |s| s.iter().any(|l| l.contains(row)));
+    let dir = dir.canonicalize().unwrap();
+    wait("the pane's directory", || {
+        tabs(server)
+            .iter()
+            .filter(|t| t["current"] == true)
+            .flat_map(|t| t["panes"].as_array().cloned().unwrap_or_default())
+            .any(|p| {
+                p["cwd"]
+                    .as_str()
+                    .and_then(|c| Path::new(c).canonicalize().ok())
+                    .is_some_and(|c| c == dir)
+            })
+    });
+}
+
+/// The palette's "Review a contributor's PR": listed only in a repository
+/// whose main clone has a review-pr project skill, it lists the open PRs
+/// from forks (GitHub a stand-in, as strict as the real one) and opens a
+/// tab in the main clone running Claude with `/review-pr <number>`.
+#[cfg(feature = "net")]
+#[test]
+fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_clone() {
+    use common::http::{Fake, Reply};
+    use serde_json::json;
+
+    let github = Fake::github("test-token", |request| {
+        (request.path() == "/graphql" && request.text().contains("states: OPEN")).then(|| {
+            let pr = |number: u64, title: &str, cross: bool, author: &str| {
+                json!({
+                    "number": number, "url": format!("https://github.com/acme/widgets/pull/{number}"),
+                    "title": title, "state": "OPEN", "isDraft": false,
+                    "baseRefName": "main", "headRefName": "topic",
+                    "isCrossRepository": cross, "author": {"login": author}
+                })
+            };
+            Reply::json(
+                200,
+                json!({"data": {"repository": {"pullRequests": {"nodes": [
+                    pr(7, "Add a theme", true, "someone"),
+                    pr(8, "Our own branch", false, "acme"),
+                ]}}}}),
+            )
+        })
+    });
+    let server = TestServer::start_with_env(&[
+        ("LINEAR_API_KEY", "lin_test"),
+        ("SWITCHBOARD_LINEAR_API", "http://127.0.0.1:9"),
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &github.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &github.url),
+    ]);
+    Claude::new()
+        .answer("echo \"$PWD $*\" >> \"$HOME/claude-ran\"")
+        .install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(
+        &repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    let repo = repo.canonicalize().unwrap();
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+
+    // With no skill, it isn't listed.
+    in_front_at(&server, &mut client, "▌ ○  2 repo", &repo);
+    client.type_text("\x1bp");
+    client.wait_text("action>");
+    client.type_text("a PR in a new tab");
+    let screen = client.wait_text("Start work on a PR");
+    assert!(
+        !screen.iter().any(|l| l.contains("Review a contributor")),
+        "{screen:#?}"
+    );
+    client.type_text("\x1b");
+    client.wait_for("the palette to close", |s| {
+        !s.iter().any(|l| l.contains("action>"))
+    });
+
+    // In a worktree of a repository whose main clone has it, it is.
+    std::fs::create_dir_all(repo.join(".claude/skills/review-pr")).unwrap();
+    std::fs::write(repo.join(".claude/skills/review-pr/SKILL.md"), "x").unwrap();
+    let worktree = repo.join(".claude/worktrees/w");
+    git(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    server.ok(&["new-tab", "-c", worktree.to_str().unwrap()]);
+    in_front_at(&server, &mut client, "▌ ○  3 w", &worktree);
+    client.type_text("\x1bp");
+    client.wait_text("action>");
+    client.type_text("a PR in a new tab");
+    client.wait_text("› Review a contributor's PR");
+    client.type_text("\x1b");
+    client.wait_for("the palette to close", |s| {
+        !s.iter().any(|l| l.contains("action>"))
+    });
+
+    let before = tabs(&server).len();
+    server.ok(&["press", "review-pr"]);
+    let screen = client.wait_text("#7 Add a theme");
+    assert!(screen.iter().any(|l| l.contains("@someone")), "{screen:#?}");
+    assert!(
+        !screen.iter().any(|l| l.contains("Our own branch")),
+        "only PRs from forks: {screen:#?}"
+    );
+    client.type_text("\r");
+    // The workspace's own background `claude -p` calls (its connectors)
+    // write to the same file, so the tab's is one line among them.
+    let ran = format!("{} /review-pr 7", repo.display());
+    wait("Claude to run in the main clone", || {
+        std::fs::read_to_string(server.home.join("claude-ran"))
+            .is_ok_and(|t| t.lines().any(|l| l == ran))
+    });
+    let all = tabs(&server);
+    assert_eq!(all.len(), before + 1);
+    let tab = all.last().unwrap();
+    assert_eq!(tab["options"]["@tab_name"], "Review PR #7");
+    assert_eq!(tab["current"], false, "in the background");
+}

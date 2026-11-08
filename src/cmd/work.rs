@@ -7,6 +7,9 @@
 //! a list to pick a directory from, then what to work on, then a tab for
 //! each. New in the Rust version, Notes' `gw` starts the one item under its
 //! cursor the same way, the note and the item already known.
+//! The palette's "Review a contributor's PR", listed only where the main
+//! clone has a review-pr project skill, lists a repository's open PRs from
+//! forks and starts `/review-pr <number>` in a tab in the main clone.
 //!
 //! The directory list is pick-dir.zsh's: the one you are in first, then
 //! every open tab's, then every one a Claude session ran in, most recent
@@ -34,6 +37,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::cmd::{work_recent, worktree_from_note};
+use crate::integrations::github;
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::mux::{PaneId, TabId};
@@ -92,6 +96,13 @@ struct Found {
 }
 
 // ── Directories ─────────────────────────────────────────────────────────────
+
+/// The main clone of the repository `dir` is in, when it has a review-pr
+/// project skill (`.claude/skills/review-pr/SKILL.md`), where the palette's
+/// "Review a contributor's PR" is listed. Files alone, no git process.
+pub fn review_repo(dir: &Path) -> Option<PathBuf> {
+    main_clone(dir).filter(|root| root.join(".claude/skills/review-pr/SKILL.md").is_file())
+}
 
 /// The main clone of the repository `dir` is in, read from the files under
 /// `.git` with no git process: the checkout whose `.git` is a directory, or,
@@ -744,6 +755,94 @@ impl Server {
         });
     }
 
+    /// The palette's "Review a contributor's PR", pressed in `pane`: the
+    /// open PRs from forks of the repository the pane is in, the most
+    /// recently updated first (a number typed taken too), then a tab in its
+    /// main clone running Claude with `/review-pr <number>`, which opens
+    /// the PR's worktree itself, untrusted. Never in the PR's own worktree.
+    pub(crate) fn review_pr(&mut self, client: ClientId, pane: Option<PaneId>) {
+        let here = pane
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|s| s.pane.cwd());
+        let Some(repo) = here.as_deref().and_then(review_repo) else {
+            self.say(
+                Some(client),
+                "Review a contributor's PR works in a repository with a review-pr skill of its own (.claude/skills/review-pr)",
+            );
+            return;
+        };
+        let at = repo.clone();
+        self.off_task(
+            client,
+            move || {
+                tokio::runtime::Handle::current().block_on(async {
+                    let repo = github::repo_of(&at).await?;
+                    github::open_fork_prs(&repo, "M-p review a PR").await
+                })
+            },
+            move |server, client, found| {
+                let prs = match found {
+                    Ok(prs) => prs,
+                    Err(e) => {
+                        server.say(Some(client), &format!("Couldn't list the open PRs: {e}"));
+                        return;
+                    }
+                };
+                // Its author wrote the title, which may hold what a
+                // terminal acts on: shown without control characters.
+                let items = prs
+                    .iter()
+                    .map(|p| PickItem {
+                        text: format!(
+                            "#{} {}",
+                            p.pr.number,
+                            p.pr.title
+                                .chars()
+                                .filter(|c| !c.is_control())
+                                .collect::<String>()
+                        ),
+                        tags: format!("@{}", p.author),
+                        value: p.pr.number.to_string(),
+                        ..PickItem::default()
+                    })
+                    .collect();
+                let title = if prs.is_empty() {
+                    "No open PRs from forks: a PR number to review"
+                } else {
+                    "Review a contributor's PR"
+                };
+                let picker = Picker::new(title, items)
+                    .named("review-pr")
+                    .prompt("PR: ")
+                    .free();
+                server.pick(client, picker, move |server, client, picked| {
+                    let Some(picked) = picked else {
+                        return;
+                    };
+                    let Some(PrAsked::Number(number)) = parse_pr(&picked.value) else {
+                        server.say(
+                            Some(client),
+                            &format!("Not a PR number: {}", picked.value.trim()),
+                        );
+                        return;
+                    };
+                    let command = worktree::tab_command(
+                        "claude \"$@\"",
+                        "claude",
+                        &[format!("/review-pr {number}")],
+                    );
+                    if let Some(tab) = server.work_tab(client, &repo, command, false)
+                        && let Some(t) = server.tabs.get_mut(&tab)
+                    {
+                        t.opts
+                            .insert("@tab_name".into(), format!("Review PR #{number}"));
+                        server.dirty_tab(tab);
+                    }
+                });
+            },
+        );
+    }
+
     /// The palette's "Start work on a note's checklist items", once the
     /// repository is picked: which note, the most recently changed first,
     /// then which of its unticked items no worktree has yet, each marked
@@ -1184,6 +1283,34 @@ mod tests {
         assert_eq!(main_clone(&linked.join("src")), Some(main_real.clone()));
         assert_eq!(main_clone(&main), Some(main_real));
         assert_eq!(main_clone(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reviewing_a_pr_is_offered_where_the_main_clone_has_the_skill() {
+        let dir = std::env::temp_dir().join(format!("sb-review-repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let main = dir.join("main");
+        std::fs::create_dir_all(main.join(".git/worktrees/w")).unwrap();
+        std::fs::write(main.join(".git/worktrees/w/commondir"), "../..\n").unwrap();
+        let linked = main.join(".claude/worktrees/w");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", main.join(".git/worktrees/w").display()),
+        )
+        .unwrap();
+        assert_eq!(review_repo(&main), None, "no skill, not listed");
+        // A worktree's own copy doesn't count: the main clone's does.
+        std::fs::create_dir_all(linked.join(".claude/skills/review-pr")).unwrap();
+        std::fs::write(linked.join(".claude/skills/review-pr/SKILL.md"), "x").unwrap();
+        assert_eq!(review_repo(&linked), None);
+        std::fs::create_dir_all(main.join(".claude/skills/review-pr")).unwrap();
+        std::fs::write(main.join(".claude/skills/review-pr/SKILL.md"), "x").unwrap();
+        let main_real = main.canonicalize().unwrap();
+        assert_eq!(review_repo(&main), Some(main_real.clone()));
+        assert_eq!(review_repo(&linked), Some(main_real), "a worktree counts");
+        assert_eq!(review_repo(&dir), None, "outside a repository");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
