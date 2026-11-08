@@ -152,5 +152,5 @@ What the tmux version did that the binary doesn't yet, so a part that brings one
 
 Decisions left to the maintainer before the rewrite is merged:
 
-- **The release repository.** `src/update/release.rs`'s `REPO`, `install.sh`'s `REPO` and the line in its opening comment, and README's install line and clone URL all name the repository the rewrite was made in. They change together, to the repository it lands in.
+- **The first release here.** `src/update/release.rs`'s `REPO`, `install.sh` and the README name this repository, which has no release of the Rust version yet, so the installer and `switchboard update` find nothing until a `v*` tag publishes one.
 - **The review loop over the branch** (`/review-loop`, Claude reviewing where Codex isn't installed), offered before the PR.

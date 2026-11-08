@@ -1,7 +1,7 @@
 #!/bin/sh
 # Switchboard's one-line install, for someone new:
 #
-#   curl -fsSL https://raw.githubusercontent.com/cooljacob204/switchboard/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/cquinones100/switchboard/main/install.sh | sh
 #
 # It finds the newest release for this computer (x86_64 Linux, or an Intel
 # or Apple silicon Mac), downloads its archive and the SHA-256 published
@@ -30,7 +30,7 @@
 set -eu
 
 # The repository releases come from; src/update/release.rs's REPO.
-REPO=cooljacob204/switchboard
+REPO=cquinones100/switchboard
 
 say() { printf '%s\n' "$*"; }
 fail() {

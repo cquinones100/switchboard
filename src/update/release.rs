@@ -21,9 +21,11 @@ use serde_json::Value;
 use crate::integrations::github;
 use crate::net::{self, Audit, ErrorKind, ServiceError};
 
-/// The repository releases come from. One constant, so the PR that brings
-/// the Rust version home points it at cquinones100/switchboard in one place.
-pub const REPO: &str = "cooljacob204/switchboard";
+/// The repository releases come from, the one the code lives in: a `v*`
+/// tag pushed there publishes one (.github/workflows/release.yml).
+/// install.sh's `REPO` and the README's install line and clone URL name it
+/// too, and change with it.
+pub const REPO: &str = "cquinones100/switchboard";
 
 /// A version as a tag names it (`v0.2.0`, `0.2.0`, `1.0.0-rc.1`): its three
 /// numbers and what follows a `-`, compared as semver does, a version
