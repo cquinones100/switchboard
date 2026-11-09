@@ -5,8 +5,16 @@
 //!
 //! Before a client with mission control open is drawn, and before each of
 //! its keys, what it shows is put together again from the server's state
-//! (`mission_prepare`), so a tab closing or a lookup answering while it is
-//! open shows at once, and a key always acts on what is on the screen.
+//! (`mission_prepare`) once anything may have changed it since, so a tab
+//! closing or a lookup answering while it is open shows at once, and a key
+//! always acts on what is on the screen. Every event but a pane's output, a
+//! spinner's turn and mission control's own keys counts as such a change
+//! (`MissionState::changes`); a key that only moves the cursor or Tab's
+//! focus, the mouse lighting what it is over, a spinner's turn and a pane's
+//! output leave the snapshot standing, and take again only the spinners'
+//! frame and the screens of the panes that changed, each pane's kept with
+//! its `version` (`mission_refresh`), so moving about with many tabs open
+//! costs only the draw.
 //! Bringing a view to the front counts it for the habits and tells its
 //! source, as the daemon's `cameTo` did: the Inbox and CI views and the
 //! Landing view's merge queues ask again, the Calendar reads its feed, Slack looks, the usage
@@ -305,38 +313,96 @@ impl Server {
 
     // ── What it shows ───────────────────────────────────────────────────────
 
-    /// Before a client is drawn: its mission control's snapshot taken again.
+    /// Before a client is drawn: its mission control's snapshot taken again
+    /// once anything has changed since, else only what changes without an
+    /// event.
     pub fn mission_before_draw(&mut self, client: ClientId) {
-        if self.mission_open(client) {
+        if !self.mission_open(client) {
+            return;
+        }
+        if self.mission_stands(client) {
+            self.mission_refresh(client);
+        } else {
             self.mission_prepare(client);
         }
     }
 
+    /// Something that may change what mission control shows has happened:
+    /// every snapshot taken before it is put together again.
+    pub(crate) fn mission_changed(&mut self) {
+        self.mission.changes += 1;
+    }
+
+    /// Whether a client's snapshot was taken since the last change.
+    fn mission_stands(&self, client: ClientId) -> bool {
+        self.clients
+            .get(&client)
+            .and_then(|c| c.overlays.find::<Mission>())
+            .is_some_and(|m| m.taken_at == Some(self.mission.changes))
+    }
+
+    /// What a standing snapshot takes again: the spinners' frame, and with
+    /// UX 2.0 the screens of the panes that have changed.
+    fn mission_refresh(&mut self, client: ClientId) {
+        let ux2 = self
+            .clients
+            .get(&client)
+            .and_then(|c| c.overlays.find::<Mission>())
+            .is_some_and(|m| m.snap.rules.ux2);
+        let screens = ux2.then(|| self.mission_screens());
+        let boxed = self.mission_boxed(client);
+        let Some(m) = self.mission_mut(client) else {
+            return;
+        };
+        if let Some(screens) = screens {
+            m.snap.screens = screens;
+        }
+        m.snap.frame = spin_frame(m, boxed);
+    }
+
+    /// Whether a box other than the busy box is over a client's mission
+    /// control, which holds the spinners back.
+    fn mission_boxed(&self, client: ClientId) -> bool {
+        self.clients
+            .get(&client)
+            .is_some_and(|c| !matches!(c.overlays.top(), None | Some("mission" | "busy")))
+    }
+
     /// Each tab's screen for UX 2.0's cards: the lines of its Claude's pane
     /// (else its active one) in the pane's own colors, from its emulator in
-    /// memory, and the branch its directory was last named on.
-    fn mission_screens(&self) -> std::collections::HashMap<TabId, super::Screen> {
-        self.tabs
-            .iter()
-            .map(|(&id, tab)| {
-                let pane = self
-                    .sidebar
-                    .panes
-                    .iter()
-                    .find(|(p, r)| r.claude && tab.layout.panes().contains(p))
-                    .map_or(tab.active, |(p, _)| *p);
-                let lines = self
-                    .panes
-                    .get(&pane)
-                    .map(|slot| slot.pane.styled_lines())
-                    .unwrap_or_default();
-                let branch = self
-                    .tab_path(id)
-                    .and_then(|p| self.tab_names.names.branch(p))
-                    .map(str::to_string);
-                (id, super::Screen { lines, branch })
-            })
-            .collect()
+    /// memory, and the branch its directory was last named on. A pane is
+    /// drawn again only when its `version` has changed since it was last.
+    fn mission_screens(&mut self) -> std::collections::HashMap<TabId, super::Screen> {
+        let mut cache = std::mem::take(&mut self.mission.screens);
+        let mut kept = std::collections::HashMap::new();
+        let mut out = std::collections::HashMap::new();
+        for (&id, tab) in &self.tabs {
+            let pane = self
+                .sidebar
+                .panes
+                .iter()
+                .find(|(p, r)| r.claude && tab.layout.panes().contains(p))
+                .map_or(tab.active, |(p, _)| *p);
+            let lines = match self.panes.get(&pane) {
+                Some(slot) => {
+                    let version = slot.pane.version();
+                    let lines = match cache.remove(&pane) {
+                        Some((drawn, lines)) if drawn == version => lines,
+                        _ => slot.pane.styled_lines().into(),
+                    };
+                    kept.insert(pane, (version, super::Lines::clone(&lines)));
+                    lines
+                }
+                None => super::Lines::default(),
+            };
+            let branch = self
+                .tab_path(id)
+                .and_then(|p| self.tab_names.names.branch(p))
+                .map(str::to_string);
+            out.insert(id, super::Screen { lines, branch });
+        }
+        self.mission.screens = kept;
+        out
     }
 
     /// Puts together what a client's mission control shows, and does what
@@ -362,11 +428,7 @@ impl Server {
         } else {
             Default::default()
         };
-        // A box over mission control, other than the busy box.
-        let boxed = self
-            .clients
-            .get(&client)
-            .is_some_and(|c| !matches!(c.overlays.top(), None | Some("mission" | "busy")));
+        let boxed = self.mission_boxed(client);
         let Some(mut m) = self.take_mission(client) else {
             return;
         };
@@ -428,14 +490,7 @@ impl Server {
             ));
         }
         let now = util::now_ms();
-        // The spinners' frame by the clock, held behind a box until
-        // BOXED_SPIN_MS has passed since they last turned.
-        let frame = if boxed && now - m.spun_at < BOXED_SPIN_MS {
-            m.snap.frame
-        } else {
-            m.spun_at = now;
-            (now as u64 / SPINNER_MS) as usize
-        };
+        let frame = spin_frame(&mut m, boxed);
         m.snap = Snapshot {
             tabs,
             views,
@@ -477,12 +532,8 @@ impl Server {
         {
             m.cursor = at as isize;
         }
-        let count = match m.current() {
-            Some(v) => v.data.items.len(),
-            None => m.snap.tabs.len(),
-        } as isize;
-        m.cursor = m.cursor.min(count - 1).max(floor(&m));
-        settle(&mut m);
+        fit_cursor(&mut m);
+        m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
         let title = now_view
@@ -504,6 +555,10 @@ impl Server {
             }
             if let Some((id, _)) = &now_view {
                 self.mission_came_to(id);
+            }
+            // What going to it changed is taken up before it is drawn.
+            if let Some(m) = self.mission_mut(client) {
+                m.taken_at = None;
             }
         }
         // The views kept up to date only while one looks at them.
@@ -1022,7 +1077,9 @@ impl Server {
     }
 
     fn mission_key(&mut self, client: ClientId, key: Key) {
-        self.mission_prepare(client);
+        if !self.mission_stands(client) {
+            self.mission_prepare(client);
+        }
         let Some(mut m) = self.take_mission(client) else {
             return;
         };
@@ -1030,16 +1087,26 @@ impl Server {
         m.hover = None;
         // A key pressed with the Calendar view in front, whole, is the
         // calendar looked at: what it shows is seen.
-        if m.current().is_some_and(|v| v.id == ViewId::Calendar)
+        let looked = m.current().is_some_and(|v| v.id == ViewId::Calendar)
             && m.filter.as_ref().is_none_or(|f| f.text.is_empty())
             && settings::is_on("calendar_changes")
-            && self.notices.contains_key("calendar")
-        {
+            && self.notices.contains_key("calendar");
+        if looked {
             self.calendar_looked_at();
         }
+        let view = m.view;
+        let only_moving = !looked && only_moves(&m, key);
         self.mission_key_in(client, &mut m, key);
+        // A move leaves the snapshot standing; anything else may have
+        // changed what it shows.
+        let stands = only_moving && m.view == view;
+        if stands {
+            fit_cursor(&mut m);
+        }
         self.put_mission(client, m);
-        self.mission_prepare(client);
+        if !stands {
+            self.mission_prepare(client);
+        }
     }
 
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
@@ -2918,6 +2985,51 @@ fn pilot_menu_here(m: &Mission) -> bool {
 /// In Settings the cursor rests on a setting, never on a category's
 /// heading, which Enter does nothing on: opened, filtered or sent to the
 /// top, it goes down to the first setting under the heading.
+/// The spinners' frame by the clock, held behind a box until
+/// BOXED_SPIN_MS has passed since they last turned.
+fn spin_frame(m: &mut Mission, boxed: bool) -> usize {
+    let now = util::now_ms();
+    if boxed && now - m.spun_at < BOXED_SPIN_MS {
+        m.snap.frame
+    } else {
+        m.spun_at = now;
+        (now as u64 / SPINNER_MS) as usize
+    }
+}
+
+/// The cursor kept within the view in front, off a group's heading.
+fn fit_cursor(m: &mut Mission) {
+    let count = match m.current() {
+        Some(v) => v.data.items.len(),
+        None => m.snap.tabs.len(),
+    } as isize;
+    m.cursor = m.cursor.min(count - 1).max(floor(m));
+    settle(m);
+}
+
+/// Whether a key only moves the cursor or Tab's focus (`mission_key_in`'s
+/// h j k l, the arrows, C-n and C-p, g and G, Home and End, a tab's number,
+/// Tab and Shift-Tab with tab_focus), which leaves the snapshot standing:
+/// not while a filter or a view's name is typed, and not Enter or Space,
+/// which press what the focus is on.
+fn only_moves(m: &Mission, key: Key) -> bool {
+    let k = key.normalized();
+    if m.filter.as_ref().is_some_and(|f| f.typing) || m.jump.is_some() {
+        return false;
+    }
+    let none = plain(&k);
+    let ctrl = k.mods == Mods::CTRL;
+    match k.code {
+        KeyCode::Char('h' | 'j' | 'k' | 'l' | 'g') => none,
+        KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down | KeyCode::Home => none,
+        KeyCode::Char('n' | 'p') => ctrl,
+        KeyCode::Char('G') | KeyCode::End => true,
+        KeyCode::Tab | KeyCode::BackTab => m.snap.tab_focus,
+        KeyCode::Char('1'..='9') => none && m.view == 0,
+        _ => false,
+    }
+}
+
 fn settle(m: &mut Mission) {
     let Some(view) = m.current().filter(|v| views::grouped(&v.id)) else {
         return;
@@ -3315,6 +3427,30 @@ mod tests {
             },
             loaded: true,
         }
+    }
+
+    #[test]
+    fn only_a_key_that_moves_leaves_the_snapshot_standing() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = mission(3, vec![list("Closed", 3)]);
+        for k in ["j", "k", "h", "l", "Down", "g", "G", "C-n", "3", "Tab"] {
+            assert!(only_moves(&m, key(k)), "{k}");
+        }
+        for k in ["Enter", "Space", "]", "/", "v", "q", "Escape", "r"] {
+            assert!(!only_moves(&m, key(k)), "{k}");
+        }
+        // A tab's number moves only among the cards.
+        m.view = 1;
+        assert!(!only_moves(&m, key("3")));
+        // Typed into a filter, j is text.
+        m.filter = Some(Filter {
+            text: String::new(),
+            typing: true,
+        });
+        assert!(!only_moves(&m, key("j")));
+        m.filter = None;
+        m.jump = Some(Jump::default());
+        assert!(!only_moves(&m, key("j")));
     }
 
     #[test]

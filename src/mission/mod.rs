@@ -17,9 +17,9 @@
 //!
 //! The overlay (`Mission`) holds only what one client is doing with it (the
 //! view, the cursor, the filter, the focus) and a snapshot of what it shows,
-//! which the server takes before each draw and each key (`serve`), so
-//! drawing is a plain function of the snapshot (`render`), and the keys are
-//! handled with the whole server at hand.
+//! which the server takes again before a draw or a key once anything has
+//! changed since (`serve`), so drawing is a plain function of the snapshot
+//! (`render`), and the keys are handled with the whole server at hand.
 //!
 //! - `views`: the views after the tabs, the Work map and Settings among them.
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
@@ -46,6 +46,7 @@ pub mod views;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use ratatui::buffer::Buffer;
@@ -158,11 +159,15 @@ impl Default for Snapshot {
     }
 }
 
+/// A pane's screen as styled lines, shared between the server's cache and
+/// the snapshots that show it.
+pub type Lines = Arc<[Vec<ratatui::text::Span<'static>>]>;
+
 /// What a UX 2.0 card shows of a tab's pane: its screen's lines in the
 /// pane's own colors, and the branch its directory is on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Screen {
-    pub lines: Vec<Vec<ratatui::text::Span<'static>>>,
+    pub lines: Lines,
     pub branch: Option<String>,
 }
 
@@ -185,6 +190,11 @@ pub struct Mission {
     /// What the last action did, in the footer until the next key.
     pub note: Option<String>,
     pub snap: Snapshot,
+    /// The server's count of changes (`MissionState::changes`) when the
+    /// snapshot was put together: while it is the same, the snapshot
+    /// stands, and a draw or a key needs only the panes' screens and the
+    /// spinners' frame again.
+    pub(crate) taken_at: Option<u64>,
     /// Where each part was last drawn, for clicks and the mouse.
     pub hits: Vec<HitBox>,
     /// The meters it last drew, placed as images over its text (`images`),
@@ -223,6 +233,7 @@ impl Mission {
             show_merged: false,
             note: None,
             snap: Snapshot::default(),
+            taken_at: None,
             hits: Vec::new(),
             meters: Vec::new(),
             size: (0, 0),
@@ -374,6 +385,14 @@ pub enum MissionEvent {
 /// What the server keeps for mission control across clients.
 #[derive(Default)]
 pub struct MissionState {
+    /// Counts the events that may change what mission control shows (all
+    /// but a pane's output, a spinner's turn and a client's keys, which
+    /// mission control's own handling accounts for), so a snapshot taken
+    /// since stands.
+    pub(crate) changes: u64,
+    /// Each pane's screen as a card shows it, with the pane's `version`
+    /// when it was drawn, so only a pane that has changed is drawn again.
+    pub(crate) screens: HashMap<PaneId, (u64, Lines)>,
     pub(crate) spin_pending: bool,
     pub(crate) worktrees: HashMap<PathBuf, Vec<Worktree>>,
     pub(crate) worktrees_at: Option<Instant>,

@@ -3,7 +3,9 @@
 //! keys): M-Space opens it over the whole screen, `]` moves to the next
 //! view, Enter on a tab's card opens its menu and "Go to tab" goes there,
 //! the Settings view changes a setting in the settings file, M-j opens the
-//! Work map as a picker of the open tabs, and q closes it.
+//! Work map as a picker of the open tabs, and q closes it. With UX 2.0 and
+//! many tabs, moving about leaves what it shows standing, while a tab's new
+//! output and a tab closing still show.
 
 mod common;
 
@@ -169,6 +171,57 @@ fn the_landing_view_opens_with_nothing_landing_saying_so_and_goes_once_left() {
     client.type_text("[");
     let screen = client.wait_text("No notifications.");
     assert!(!screen[0].contains("Landing"), "{:?}", screen[0]);
+}
+
+#[test]
+fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(200, 50);
+    client.wait_text("$");
+    for n in 2..=6 {
+        server.ok(&["new-tab", "-n", &format!("tab{n}")]);
+    }
+    let list = wait_list(&server, "six tabs", |l| tabs(l).len() == 6);
+    let id = |at: usize, key: &str| -> String {
+        let tab = &tabs(&list)[at];
+        let value = if key == "pane" {
+            &tab["panes"][0]["id"]
+        } else {
+            &tab["id"]
+        };
+        value.as_str().unwrap().to_string()
+    };
+    open(&mut client);
+    // Three cards along, Enter opens the fourth tab's menu.
+    for _ in 0..3 {
+        client.type_text("l");
+    }
+    client.type_text("\r");
+    client.wait_text("Go to tab 4");
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Go to tab 4"))
+    });
+    // Back to the first card: a tab's output shows on its card as it comes.
+    client.type_text("g");
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &id(0, "pane"),
+        "echo shown-$((6*7))",
+        "Enter",
+    ]);
+    client.wait_text("shown-42");
+    // A tab closing takes its card away, and the cursor stays on a card.
+    server.ok(&["kill-tab", "-t", &id(2, "tab")]);
+    client.wait_for("the third tab's card gone", |s| {
+        !s.iter().any(|l| l.contains("tab3"))
+    });
+    // The last card, now tab 5, the tabs after the closed one renumbered.
+    client.type_text("G");
+    client.type_text("\r");
+    client.wait_text("Go to tab 5");
 }
 
 #[test]

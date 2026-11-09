@@ -1014,6 +1014,16 @@ impl Server {
     }
 
     pub fn handle(&mut self, event: Event) {
+        // A client's keys count for mission control as `dispatch` says;
+        // a spinner's turn changes only its frame.
+        if !matches!(
+            event,
+            Event::Input(..)
+                | Event::FlushInput(_)
+                | Event::Mission(crate::mission::MissionEvent::Spin)
+        ) {
+            self.mission_changed();
+        }
         match event {
             Event::Attach {
                 id,
@@ -1135,6 +1145,7 @@ impl Server {
                 self.dirty_tab(tab);
             }
             PaneEvent::Exited(id, generation, code) => {
+                self.mission_changed();
                 match self.panes.get_mut(&id) {
                     // A program `respawn` replaced ending late leaves the
                     // new one where it is.
@@ -2189,14 +2200,18 @@ impl Server {
         if parsed.input == Input::Unknown {
             let colour = self.terminal_reply(&parsed.raw);
             if self.status_reply(&parsed.raw) || colour {
+                self.mission_changed();
                 return;
             }
         }
         // Mission control takes them while it is the box on top
-        // (src/mission); any other overlay up takes them (src/ui).
+        // (src/mission), and says itself what changed; any other overlay
+        // up takes them (src/ui), and whatever they do may change what it
+        // shows.
         let Some(parsed) = self.mission_input(id, parsed) else {
             return;
         };
+        self.mission_changed();
         let Some(parsed) = self.overlay_input(id, parsed) else {
             return;
         };

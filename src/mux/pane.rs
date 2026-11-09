@@ -211,10 +211,18 @@ static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 /// accident.
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
+/// The next number a pane's `version` takes, shared by every pane, so a
+/// pane respawned in another's place never has a version it had.
+static NEXT_VERSION: AtomicU64 = AtomicU64::new(1);
+
 pub struct Pane {
     id: PaneId,
     /// Which program of the pane's this is, as its events carry it.
     generation: u64,
+    /// Changed whenever what the pane draws may have (its output, its size,
+    /// colors, scrolling, a selection, copy mode), so mission control's
+    /// cards draw its screen again only then (src/mission/serve.rs).
+    version: u64,
     term: Term<Listener>,
     parser: Processor,
     /// What the emulator reported while reading, until `process` handles it.
@@ -447,6 +455,7 @@ impl Pane {
         Pane {
             id,
             generation,
+            version: NEXT_VERSION.fetch_add(1, Ordering::Relaxed),
             term,
             parser: Processor::new(),
             events: queued,
@@ -508,6 +517,15 @@ impl Pane {
         self.generation
     }
 
+    /// What `styled_lines` gives is the same while this is.
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn changed(&mut self) {
+        self.version = NEXT_VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Whether the program is still running (not yet reaped).
     pub fn running(&self) -> bool {
         self.exited.is_none() && !self.pty.reaped()
@@ -533,6 +551,7 @@ impl Pane {
     /// half-drawn frame is never shown; one that never ends is let through
     /// after 150ms, here when more output comes, else by `flush_sync`.
     pub fn process(&mut self, bytes: &[u8]) -> Vec<TermNotice> {
+        self.changed();
         // The emulator drops what it doesn't draw, kitty's commands with it,
         // so they are picked out first.
         let mut notices: Vec<TermNotice> = match &mut self.graphics {
@@ -572,6 +591,7 @@ impl Pane {
 
     /// Draws what a synchronized update has held back, ended or not.
     pub fn flush_sync(&mut self) -> Vec<TermNotice> {
+        self.changed();
         if self.sync_deadline().is_some() {
             self.parser.stop_sync(&mut self.term);
         }
@@ -640,6 +660,7 @@ impl Pane {
 
     /// Resizes the PTY and the emulator; a no-op when the size is the same.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.changed();
         let (cols, rows) = clamp_size(cols, rows);
         if (cols, rows) == (self.cols, self.rows) {
             return;
@@ -658,6 +679,7 @@ impl Pane {
     /// The colours the terminal said it draws in, for the program's
     /// questions from now on.
     pub fn set_colors(&mut self, colors: super::terminal::Colors) {
+        self.changed();
         self.colors = colors;
     }
 
@@ -869,11 +891,13 @@ impl Pane {
 
     /// Scrolls the view back (positive) or forward (negative) by lines.
     pub fn scroll(&mut self, lines: i32) {
+        self.changed();
         self.term.scroll_display(Scroll::Delta(lines));
     }
 
     /// Back to the live screen.
     pub fn scroll_to_bottom(&mut self) {
+        self.changed();
         self.term.scroll_display(Scroll::Bottom);
     }
 
@@ -897,6 +921,7 @@ impl Pane {
     /// `row` from its top left); `block` for a rectangle. Nothing is
     /// selected until it is extended, so a click alone selects nothing.
     pub fn select_start(&mut self, col: u16, row: u16, block: bool) {
+        self.changed();
         let point = self.screen_point(col, row);
         let ty = if block {
             SelectionType::Block
@@ -918,6 +943,7 @@ impl Pane {
     /// than kept here, since the emulator moves a selection with its text
     /// as output scrolls the screen.
     pub fn select_extend(&mut self, col: u16, row: u16) {
+        self.changed();
         let point = self.screen_point(col, row);
         let Some(selection) = self.term.selection.as_mut() else {
             return;
@@ -978,6 +1004,7 @@ impl Pane {
 
     /// Selects the word, or with `line` the line, at a point.
     pub fn select_semantic(&mut self, col: u16, row: u16, line: bool) {
+        self.changed();
         let point = self.screen_point(col, row);
         let ty = if line {
             SelectionType::Lines
@@ -989,6 +1016,7 @@ impl Pane {
     }
 
     pub fn select_clear(&mut self) {
+        self.changed();
         self.term.selection = None;
     }
 
@@ -1007,6 +1035,7 @@ impl Pane {
     /// it moves through the history, scrolling the view to keep in sight,
     /// and drags a selection's moving end with it.
     pub fn copy_begin(&mut self) {
+        self.changed();
         if !self.copying() {
             self.term.toggle_vi_mode();
         }
@@ -1015,6 +1044,7 @@ impl Pane {
     /// Copy mode ends: its cursor and selection go, and the view goes back
     /// to the live screen.
     pub fn copy_end(&mut self) {
+        self.changed();
         if self.copying() {
             self.term.toggle_vi_mode();
         }
@@ -1029,6 +1059,7 @@ impl Pane {
 
     /// Moves copy mode's cursor, the view scrolling to keep it in sight.
     pub fn copy_move(&mut self, motion: Motion) {
+        self.changed();
         if !self.copying() {
             return;
         }
@@ -1075,6 +1106,7 @@ impl Pane {
     /// its other end; the same kind again takes it away, and another kind
     /// changes it, as v, V and C-v do in tmux's copy-mode-vi.
     pub fn copy_select(&mut self, kind: SelectKind) {
+        self.changed();
         if !self.copying() {
             return;
         }
@@ -1119,6 +1151,7 @@ impl Pane {
     /// isn't a regular expression is looked for as it is written. Gives
     /// whether there was a match.
     pub fn copy_search(&mut self, pattern: &str, forward: bool) -> bool {
+        self.changed();
         if !self.copying() || pattern.is_empty() {
             return false;
         }
@@ -1822,6 +1855,19 @@ mod tests {
             .render(&mut buf, Rect::new(0, 0, 2, 1), &PaneView::default());
         assert_eq!(buf[(0, 0)].symbol(), "a");
         assert_eq!(buf[(1, 0)].symbol(), " ");
+    }
+
+    #[test]
+    fn its_version_changes_with_what_it_draws_and_not_with_reading_it() {
+        let mut run = idle(10, 4);
+        let at = run.pane.version();
+        run.pane.styled_lines();
+        assert_eq!(run.pane.version(), at, "reading changes nothing");
+        run.pane.process(b"x");
+        let after_output = run.pane.version();
+        assert_ne!(after_output, at);
+        run.pane.resize(12, 4);
+        assert_ne!(run.pane.version(), after_output);
     }
 
     #[test]

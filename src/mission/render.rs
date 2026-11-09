@@ -561,7 +561,7 @@ fn card_ux2(
     ];
     // The screen's last lines, down to the footer.
     let room = h.saturating_sub(3);
-    let lines: &[Vec<Span<'static>>] = screen.map_or(&[], |s| &s.lines);
+    let lines: &[Vec<Span<'static>>] = screen.map_or(&[], |s| &s.lines[..]);
     let shown = &lines[lines.len().saturating_sub(room)..];
     let mut inside: Vec<Vec<Span<'static>>> = vec![Vec::new(); room - shown.len()];
     inside.extend(shown.iter().cloned());
@@ -3220,7 +3220,8 @@ mod tests {
             crate::mission::Screen {
                 lines: (1..=40)
                     .map(|n| vec![Span::raw(format!("line {n}"))])
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .into(),
                 branch: Some("md-uncommitted".into()),
             },
         );
@@ -3263,7 +3264,7 @@ mod tests {
         m.snap.screens.insert(
             TabId(3),
             crate::mission::Screen {
-                lines: vec![vec![Span::raw("$ "), Span::styled("passed", lit)]],
+                lines: vec![vec![Span::raw("$ "), Span::styled("passed", lit)]].into(),
                 branch: Some("colors-branch".into()),
             },
         );
