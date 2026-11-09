@@ -80,9 +80,7 @@ impl Server {
                 (kind, *p == tab.active)
             })
             .collect();
-        let dir = label::naming_pane(&kinds)
-            .and_then(|i| self.panes.get(&panes[i]))
-            .and_then(|slot| slot.pane.cwd());
+        let dir = label::naming_pane(&kinds).and_then(|i| self.pane_dir(panes[i]));
         // A directory that can't be read (the pane's program just ended)
         // leaves the tab as it was.
         let Some(dir) = dir else {

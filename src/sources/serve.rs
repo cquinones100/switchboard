@@ -395,7 +395,7 @@ impl Server {
                     if marked("@sidebar") || marked("@notes_pane") {
                         continue;
                     }
-                    if let Some(cwd) = slot.pane.cwd()
+                    if let Some(cwd) = self.pane_dir(pane)
                         && !dirs.contains(&cwd)
                     {
                         dirs.push(cwd);

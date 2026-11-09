@@ -382,8 +382,7 @@ impl Server {
     /// pane is `pane`.
     pub fn work_action(&mut self, client: ClientId, action: Action, pane: Option<PaneId>) {
         let here = pane
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+            .and_then(|p| self.pane_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let wanted = match action {
@@ -444,13 +443,13 @@ impl Server {
     /// Every pane's directory, for the directory list.
     fn pane_dirs(&self) -> Vec<PathBuf> {
         self.panes
-            .values()
-            .filter(|s| {
+            .iter()
+            .filter(|(_, s)| {
                 s.opts
                     .get("@sidebar")
                     .is_none_or(|v| v.is_empty() || v == "0")
             })
-            .filter_map(|s| s.pane.cwd())
+            .filter_map(|(p, _)| self.pane_dir(*p))
             .collect()
     }
 
@@ -465,8 +464,7 @@ impl Server {
     ) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+            .and_then(|p| self.pane_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let title = title.to_string();
@@ -761,9 +759,7 @@ impl Server {
     /// main clone running Claude with `/review-pr <number>`, which opens
     /// the PR's worktree itself, untrusted. Never in the PR's own worktree.
     pub(crate) fn review_pr(&mut self, client: ClientId, pane: Option<PaneId>) {
-        let here = pane
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd());
+        let here = pane.and_then(|p| self.pane_dir(p));
         let Some(repo) = here.as_deref().and_then(review_repo) else {
             self.say(
                 Some(client),
@@ -1003,8 +999,7 @@ impl Server {
     pub fn work_on_item(&mut self, client: ClientId, note: String, line: usize) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+            .and_then(|p| self.pane_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let file = worktree_from_note::notes_dir().join(&note);
@@ -1141,8 +1136,7 @@ impl Server {
     ) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+            .and_then(|p| self.pane_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let file = worktree_from_note::notes_dir().join(&note);

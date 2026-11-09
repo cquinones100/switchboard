@@ -568,8 +568,7 @@ impl Server {
         // Reviewing a contributor's PR only in a repository with the skill.
         let reviews = self
             .current_pane(client)
-            .and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+            .and_then(|p| self.pane_dir(p))
             .is_some_and(|dir| crate::cmd::work::review_repo(&dir).is_some());
         entries.retain(|e| reviews || e.action != crate::mux::keys::Action::ReviewPr);
         let entries = palette::recent_first(entries, &palette::read_recent());

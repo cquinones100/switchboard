@@ -227,6 +227,15 @@ pub async fn run_async(
 
 // ── Files ───────────────────────────────────────────────────────────────────
 
+/// The directory itself when it exists, else its nearest ancestor that
+/// does: for a directory removed under a program still in it. A `stat` or
+/// so, never a process. `None` for a relative path that runs out.
+pub fn nearest_existing(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|d| !d.as_os_str().is_empty() && d.is_dir())
+        .map(Path::to_path_buf)
+}
+
 /// A file's text, or `None` when it can't be read.
 pub fn read_text(path: impl AsRef<Path>) -> Option<String> {
     fs::read_to_string(path).ok()
@@ -424,6 +433,16 @@ pub fn unbase64(text: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nearest_existing_climbs_out_of_a_removed_directory() {
+        let kept = std::env::temp_dir().join(format!("sbutil-nearest-{}", std::process::id()));
+        fs::create_dir_all(&kept).unwrap();
+        assert_eq!(nearest_existing(&kept), Some(kept.clone()));
+        let removed = kept.join("worktree/sub");
+        assert_eq!(nearest_existing(&removed), Some(kept.clone()));
+        let _ = fs::remove_dir_all(&kept);
+    }
 
     #[test]
     fn base64_pads_as_the_standard_says() {

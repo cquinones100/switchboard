@@ -581,7 +581,14 @@ impl Persist {
                     }
                     panes.push(SavedPane {
                         id,
-                        cwd: slot.pane.cwd().map(|d| d.to_string_lossy().into_owned()),
+                        // Where its program started, which `claude --resume` finds
+                        // its session by, rather than where Claude moved to
+                        // since; never a directory since removed.
+                        cwd: slot
+                            .pane
+                            .cwd()
+                            .and_then(|d| util::nearest_existing(&d))
+                            .map(|d| d.to_string_lossy().into_owned()),
                         opts: slot.opts.clone(),
                         command,
                         claude,

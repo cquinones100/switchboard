@@ -74,11 +74,7 @@ impl Server {
         let dir = tab
             .and_then(|t| self.tab_path(t))
             .map(std::path::Path::to_path_buf)
-            .or_else(|| {
-                self.current_pane(client)
-                    .and_then(|p| self.panes.get(&p))
-                    .and_then(|s| s.pane.cwd())
-            })
+            .or_else(|| self.current_pane(client).and_then(|p| self.pane_dir(p)))
             .unwrap_or_else(paths::home);
         self.ask(
             client,
@@ -210,11 +206,7 @@ impl Server {
         let Some(pane) = self.current_pane(client) else {
             return;
         };
-        let dir = self
-            .panes
-            .get(&pane)
-            .and_then(|s| s.pane.cwd())
-            .unwrap_or_else(paths::home);
+        let dir = self.pane_dir(pane).unwrap_or_else(paths::home);
         if crate::tabs::git::locate(&dir).is_none() {
             self.say(
                 Some(client),

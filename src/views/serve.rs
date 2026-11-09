@@ -174,7 +174,7 @@ impl Server {
     fn here(&self, client: ClientId) -> Option<(PaneId, TabId, PathBuf)> {
         let pane = self.current_pane(client)?;
         let slot = self.panes.get(&pane)?;
-        let dir = slot.pane.cwd().unwrap_or_else(paths::home);
+        let dir = self.pane_dir(pane).unwrap_or_else(paths::home);
         Some((pane, slot.tab, dir))
     }
 
@@ -678,8 +678,8 @@ impl Server {
         });
         // The repositories the tabs are in, for GitHub's.
         let mut dirs: Vec<PathBuf> = Vec::new();
-        for slot in self.panes.values() {
-            if let Some(dir) = slot.pane.cwd()
+        for pane in self.panes.keys() {
+            if let Some(dir) = self.pane_dir(*pane)
                 && !dirs.contains(&dir)
             {
                 dirs.push(dir);

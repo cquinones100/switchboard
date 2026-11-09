@@ -701,7 +701,7 @@ impl Server {
         let Some((tab, dir)) = self
             .panes
             .get(&pane)
-            .map(|s| (s.tab, s.pane.cwd().unwrap_or_else(paths::home)))
+            .map(|s| (s.tab, self.pane_dir(pane).unwrap_or_else(paths::home)))
         else {
             return;
         };

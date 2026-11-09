@@ -1493,7 +1493,7 @@ impl Server {
             .get(&target)
             .map(|s| s.tab)
             .ok_or_else(|| anyhow!("no pane {target}"))?;
-        let cwd = cwd.or_else(|| self.panes.get(&target).and_then(|s| s.pane.cwd()));
+        let cwd = cwd.or_else(|| self.pane_dir(target));
         let area = self
             .session_of_tab(tab_id)
             .map(Session::main_area)
@@ -2167,6 +2167,21 @@ impl Server {
         Some(self.tabs.get(&s.current)?.active)
     }
 
+    /// The directory a pane is in now: where its Claude last said it works,
+    /// while that Claude is still in front, else the directory of its
+    /// program (`Pane::cwd`), whose process stays in the directory it
+    /// started in. Never a directory that no longer exists (a worktree
+    /// removed under it), its nearest ancestor that does taking its place.
+    pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
+        let slot = self.panes.get(&pane)?;
+        let said = slot
+            .pane
+            .foreground_pgid()
+            .and_then(|group| self.agents.dir(pane, group))
+            .map(std::path::Path::to_path_buf);
+        crate::util::nearest_existing(&said.or_else(|| slot.pane.cwd())?)
+    }
+
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
         // The terminal's answers about its colours, asked as it attached,
         // are the server's (src/mux/terminal.rs, and the background's for
@@ -2351,9 +2366,7 @@ impl Server {
                 }
             }
             Action::NewTab => {
-                let cwd = pane
-                    .and_then(|p| self.panes.get(&p))
-                    .and_then(|s| s.pane.cwd());
+                let cwd = pane.and_then(|p| self.pane_dir(p));
                 if let Err(e) = self.new_tab(&session, cwd, None, None, false) {
                     self.say(Some(id), &format!("Couldn't open a tab: {e}"));
                 }

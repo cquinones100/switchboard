@@ -49,7 +49,7 @@ impl Server {
             .ok_or_else(|| anyhow!("no pane {pane}"))?;
         let tab_id = slot.tab;
         let (cols, rows) = slot.pane.size();
-        let cwd = slot.pane.cwd();
+        let cwd = self.pane_dir(pane);
         if !self
             .tabs
             .get(&tab_id)

@@ -20,6 +20,7 @@
 //! starting or ending ends any.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -334,6 +335,12 @@ fn one_line(text: &str) -> String {
 #[derive(Debug, Default)]
 pub struct Agents {
     panes: HashMap<PaneId, PaneAgent>,
+    /// The directory each pane's Claude last said it works in (a hook's
+    /// `cwd`, which follows its Bash tool's `cd`, where its own process
+    /// stays where it started), with the process group in front on the pane
+    /// when it said so: once another program is in front, it no longer
+    /// counts.
+    dirs: HashMap<PaneId, (u32, PathBuf)>,
     /// When every marked pane was last checked for a Claude still running.
     pub(super) swept: Option<Instant>,
 }
@@ -394,6 +401,29 @@ impl Agents {
     /// Forgets the panes that are gone.
     pub fn retain(&mut self, alive: impl Fn(PaneId) -> bool) {
         self.panes.retain(|p, _| alive(*p));
+        self.dirs.retain(|p, _| alive(*p));
+    }
+
+    /// A pane's Claude, in front as process group `group`, said it works in
+    /// `dir`. Gives whether that changed the directory kept for the pane.
+    pub fn moved(&mut self, pane: PaneId, group: u32, dir: &Path) -> bool {
+        let entry = (group, dir.to_path_buf());
+        self.dirs.insert(pane, entry.clone()) != Some(entry)
+    }
+
+    /// A pane's Claude ended: its directory no longer counts. Gives whether
+    /// one was kept.
+    pub fn forget_dir(&mut self, pane: PaneId) -> bool {
+        self.dirs.remove(&pane).is_some()
+    }
+
+    /// The directory a pane's Claude last said it works in, while the same
+    /// process group is in front on the pane.
+    pub fn dir(&self, pane: PaneId, group: u32) -> Option<&Path> {
+        self.dirs
+            .get(&pane)
+            .filter(|(g, _)| *g == group)
+            .map(|(_, d)| d.as_path())
     }
 
     /// Applies a hook to its pane, `front` saying whether the pane's tab is in
@@ -733,6 +763,23 @@ mod tests {
     use super::*;
 
     const P: PaneId = PaneId(1);
+
+    #[test]
+    fn a_reported_directory_counts_only_while_its_program_is_in_front() {
+        let mut agents = Agents::default();
+        assert!(agents.moved(P, 40, Path::new("/repo/wt")));
+        assert!(!agents.moved(P, 40, Path::new("/repo/wt")));
+        assert_eq!(agents.dir(P, 40), Some(Path::new("/repo/wt")));
+        assert_eq!(agents.dir(P, 41), None);
+        assert!(agents.moved(P, 40, Path::new("/repo")));
+        assert_eq!(agents.dir(P, 40), Some(Path::new("/repo")));
+        assert!(agents.forget_dir(P));
+        assert_eq!(agents.dir(P, 40), None);
+        assert!(!agents.forget_dir(P));
+        agents.moved(P, 40, Path::new("/repo"));
+        agents.retain(|_| false);
+        assert_eq!(agents.dir(P, 40), None);
+    }
 
     fn hook(event: &str, payload: Value) -> Hook {
         Hook::read(event, &payload)

@@ -946,3 +946,82 @@ fn a_hands_free_tab_has_its_questions_answered_for_claude() {
         "back in the main clone"
     );
 }
+
+#[test]
+fn a_tab_follows_the_directory_its_claude_works_in_and_never_a_removed_one() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, _) = first_pane(&server);
+    let cwd_of = |list: &Value| pane_of(list, &pane)["cwd"].as_str().map(String::from);
+
+    // Claude's hooks say where its Bash tool has moved to, which its own
+    // process (here the shell in front) never follows.
+    let moved = server.home.join("moved");
+    std::fs::create_dir_all(&moved).unwrap();
+    let moved = moved.canonicalize().unwrap();
+    hook(
+        &server,
+        &pane,
+        "PostToolUse",
+        json!({"session_id": "s-1", "cwd": moved, "tool_name": "Bash"}),
+    );
+    let said = moved.to_string_lossy().into_owned();
+    wait_list(&server, "the reported directory", |l| {
+        cwd_of(l).as_deref() == Some(&said)
+    });
+
+    // A directory removed under the pane is never shown: its nearest
+    // ancestor that is still there is.
+    let gone = moved.join("worktree");
+    std::fs::create_dir_all(&gone).unwrap();
+    hook(
+        &server,
+        &pane,
+        "PostToolUse",
+        json!({"session_id": "s-1", "cwd": gone, "tool_name": "Bash"}),
+    );
+    let gone_text = gone.to_string_lossy().into_owned();
+    wait_list(&server, "the worktree", |l| {
+        cwd_of(l).as_deref() == Some(&gone_text)
+    });
+    std::fs::remove_dir_all(&gone).unwrap();
+    wait_list(&server, "the worktree's parent", |l| {
+        cwd_of(l).as_deref() == Some(&said)
+    });
+}
+
+#[test]
+fn a_session_ending_hands_the_tab_back_to_its_program_s_directory() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, _) = first_pane(&server);
+    let cwd_of = |list: &Value| pane_of(list, &pane)["cwd"].as_str().map(String::from);
+    let before = cwd_of(&server.list());
+
+    let moved = server.home.join("moved");
+    std::fs::create_dir_all(&moved).unwrap();
+    let moved = moved.canonicalize().unwrap();
+    hook(
+        &server,
+        &pane,
+        "PostToolUse",
+        json!({"session_id": "s-1", "cwd": moved, "tool_name": "Bash"}),
+    );
+    let said = moved.to_string_lossy().into_owned();
+    wait_list(&server, "the reported directory", |l| {
+        cwd_of(l).as_deref() == Some(&said)
+    });
+    hook(
+        &server,
+        &pane,
+        "SessionEnd",
+        json!({"session_id": "s-1", "cwd": moved, "reason": "exit"}),
+    );
+    wait_list(&server, "the shell's own directory", |l| {
+        cwd_of(l) == before
+    });
+}

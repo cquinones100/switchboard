@@ -475,7 +475,7 @@ impl Server {
                                 Some(json!({
                                     "id": p.to_string(),
                                     "active": p == tab.active,
-                                    "cwd": slot.pane.cwd().map(|d| d.to_string_lossy().into_owned()),
+                                    "cwd": self.pane_dir(p).map(|d| d.to_string_lossy().into_owned()),
                                     "command": slot.pane.foreground_command(),
                                     "title": slot.pane.title(),
                                     "pid": slot.pane.pid(),
@@ -815,9 +815,8 @@ impl Server {
                 .session_of_tab(slot.tab)
                 .map(|s| s.name.clone())
                 .unwrap_or_default(),
-            "cwd" => slot
-                .pane
-                .cwd()
+            "cwd" => self
+                .pane_dir(pane)
                 .map(|d| d.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             "command" => slot.pane.foreground_command().unwrap_or_default(),

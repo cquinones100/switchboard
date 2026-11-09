@@ -247,9 +247,8 @@ impl Server {
     }
 
     /// A pane's directory, your home when it can't be read.
-    fn pane_dir(&self, pane: Option<PaneId>) -> PathBuf {
-        pane.and_then(|p| self.panes.get(&p))
-            .and_then(|s| s.pane.cwd())
+    fn dir_or_home(&self, pane: Option<PaneId>) -> PathBuf {
+        pane.and_then(|p| self.pane_dir(p))
             .unwrap_or_else(paths::home)
     }
 
@@ -459,7 +458,7 @@ impl Server {
     /// repository: said as it starts, since the fetch takes a while, and
     /// what it did in a box until a key.
     fn update_main(&mut self, client: ClientId, pane: Option<PaneId>) {
-        let dir = self.pane_dir(pane);
+        let dir = self.dir_or_home(pane);
         self.say_for(Some(client), "Updating main from origin…", 60);
         self.off_task(
             client,
@@ -592,7 +591,7 @@ impl Server {
     /// project its `upstream` remote names, else origin's. Then the browser,
     /// or a new tab working on it (`wtpr`).
     fn open_pr_number(&mut self, client: ClientId, pane: Option<PaneId>) {
-        let dir = self.pane_dir(pane);
+        let dir = self.dir_or_home(pane);
         self.off_task(
             client,
             || {
@@ -680,7 +679,7 @@ impl Server {
     /// team key of the ticket the branch names. Then the browser, or a new
     /// tab working on it (`wt`) in the pane's repository.
     fn open_ticket_id_typed(&mut self, client: ClientId, pane: Option<PaneId>) {
-        let dir = self.pane_dir(pane);
+        let dir = self.dir_or_home(pane);
         let branch_ticket = pane
             .and_then(|p| self.panes.get(&p))
             .map(|s| s.tab)

@@ -64,7 +64,7 @@ impl Server {
         }
         let tab = slot.tab;
         let (cols, rows) = slot.pane.size();
-        let cwd = cwd.or_else(|| slot.pane.cwd());
+        let cwd = cwd.or_else(|| self.pane_dir(pane));
         let fresh = self.start_program(pane, cwd, command, cols, rows)?;
         let slot = self.panes.get_mut(&pane).expect("checked above");
         let mut old = std::mem::replace(&mut slot.pane, fresh);

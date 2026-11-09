@@ -114,6 +114,27 @@ impl Server {
         if hook.agent.is_empty() {
             self.agents.heard(pane, util::now_ms());
         }
+        // Where the conversation works now, which its Bash tool's `cd`
+        // moves while Claude's own process stays where it started: the tab
+        // is named from it at once (`pane_dir`). Not from a parked pane,
+        // whose program in front is the one standing in for it. A session
+        // ending forgets it, since a shell left in the same process group
+        // (a pane command `sh -c 'claude; exec sh'`) goes on from its own.
+        if hook.event == "SessionEnd" && caller.is_some() && hook.agent.is_empty() {
+            if self.agents.forget_dir(pane) {
+                self.name_tab(tab);
+            }
+        } else if caller.is_some()
+            && hook.agent.is_empty()
+            && let Some(dir) = payload
+                .get("cwd")
+                .and_then(Value::as_str)
+                .filter(|d| d.starts_with('/'))
+            && let Some(group) = self.panes.get(&pane).and_then(|s| s.pane.foreground_pgid())
+            && self.agents.moved(pane, group, std::path::Path::new(dir))
+        {
+            self.name_tab(tab);
+        }
         self.history_hook(pane, &hook, &payload);
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
@@ -143,7 +164,7 @@ impl Server {
                     .get("cwd")
                     .and_then(Value::as_str)
                     .map(std::path::PathBuf::from)
-                    .or_else(|| self.panes.get(&pane).and_then(|s| s.pane.cwd()));
+                    .or_else(|| self.pane_dir(pane));
                 if dir.is_some_and(|d| in_worktree(&d)) {
                     self.tip("worktree", None);
                 }

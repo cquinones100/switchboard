@@ -844,7 +844,7 @@ impl Server {
 
     /// The directory a pane is in, for a picker that offers it first.
     pub(crate) fn dir_of(&self, pane: PaneId) -> Option<PathBuf> {
-        self.panes.get(&pane).and_then(|s| s.pane.cwd())
+        self.pane_dir(pane)
     }
 }
 
