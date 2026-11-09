@@ -89,6 +89,15 @@ impl Server {
             hook.tool.clear();
             hook.wait.clear();
         }
+        // A prompt given in a tab whose work landed is new work, so the
+        // landing no longer files it under Merged.
+        if hook.event == "UserPromptSubmit"
+            && hook.agent.is_empty()
+            && let Some(t) = self.tabs.get_mut(&tab)
+            && t.opts.remove(crate::sidebar::model::LANDED).is_some()
+        {
+            self.dirty_tab(tab);
+        }
         let front = self.tab_in_front(tab);
         let now = util::now_secs();
         let changed = if hook.event == "Notification" {

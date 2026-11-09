@@ -63,6 +63,51 @@ impl TabState {
     }
 }
 
+/// The tab option a direct landing leaves, `<short hash> <branch> <clone
+/// branch> <repo>`, the repository its main clone's git directory and the
+/// clone branch what that main clone had checked out, which `switchboard
+/// land-lock landed` sets. It counts only while the tab is in that main
+/// clone on that branch (`landed_here`), so a tab gone on to other work, a
+/// worktree, another repository or a new branch, however Claude started
+/// there, isn't filed under Merged; a prompt given in the tab
+/// (`Server::agent_hook`) or a worktree command taking the tab up
+/// (`worktree::take_up_work`) takes it off.
+pub const LANDED: &str = "@tab_landed";
+
+/// A direct landing's mark read back: the short hash, the branch landed on,
+/// the main clone's branch then and the repository's git directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LandedMark {
+    pub hash: String,
+    pub branch: String,
+    pub clone_branch: String,
+    pub repo: PathBuf,
+}
+
+/// `@tab_landed`'s value read back, the repository last since its path may
+/// hold spaces.
+pub fn landed_mark(value: &str) -> Option<LandedMark> {
+    let mut words = value.trim().splitn(4, ' ');
+    let (hash, branch, clone_branch) = (words.next()?, words.next()?, words.next()?);
+    let repo = words.next()?.trim();
+    let given = [hash, branch, clone_branch, repo];
+    given.iter().all(|w| !w.is_empty()).then(|| LandedMark {
+        hash: hash.to_string(),
+        branch: branch.to_string(),
+        clone_branch: clone_branch.to_string(),
+        repo: PathBuf::from(repo),
+    })
+}
+
+/// Whether a tab whose checkout git places (`tabs::git::locate`) is still
+/// where its landing left it: the landed repository's main clone, not one
+/// of its worktrees, on the branch it had then.
+pub fn landed_here(mark: &LandedMark, place: &crate::tabs::git::GitPlace) -> bool {
+    place.git_dir == place.common_dir
+        && place.common_dir == mark.repo
+        && place.branch == mark.clone_branch
+}
+
 /// Where a tab's pull request stands on its way in (prs.js's `tab.merge`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MergeState {
@@ -158,6 +203,10 @@ pub struct TabModel {
     /// Its conversation's last turn, for mission control's cards and peeks.
     pub turn: Option<Turn>,
     pub merge: Option<MergeState>,
+    /// Landed straight on a branch rather than through a PR, the short
+    /// hash pushed and the branch (`@tab_landed`, which `land-lock landed`
+    /// sets): filed under Merged as GitHub's merged PRs are.
+    pub landed_on: Option<(String, String)>,
     /// Its place in the merge queue.
     pub position: Option<u32>,
     pub pr_state: Option<PrState>,
@@ -210,6 +259,7 @@ impl TabModel {
             claude: None,
             turn: None,
             merge: None,
+            landed_on: None,
             position: None,
             pr_state: None,
             checks: None,
@@ -290,9 +340,11 @@ fn pinned_first(a: &TabModel, b: &TabModel, r: &Rules) -> Ordering {
 
 /// A merged PR's tab still at work on it: deploy-test waiting for the deploy
 /// or recording its test, or Claude working under /deploy-test or the
-/// /queue-and-clean that follows it after the merge.
+/// /queue-and-clean that follows it after the merge. A direct landing has
+/// no deploy to test: its queue-and-clean cleaning up stays under Merged.
 pub fn testing_deploy(tab: &TabModel) -> bool {
     tab.merge == Some(MergeState::Merged)
+        && tab.landed_on.is_none()
         && (tab.tab_loop.as_ref().is_some_and(|l| l.kind() == "deploy")
             || (tab.state.busy() && matches!(tab.loop_skill.as_deref(), Some("deploy" | "queue"))))
 }
@@ -638,8 +690,16 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
     }
 }
 
-/// Where its PR is: `in merge queue at 3`, `merged`.
+/// Where its PR is: `in merge queue at 3`, `merged`; or, landed straight on
+/// a branch, `landed on main · 1a2b3c4`, `landed on main without asking`.
 pub fn merge_words(tab: &TabModel) -> String {
+    if let Some((hash, branch)) = &tab.landed_on {
+        return if tab.autopilot_autoland {
+            format!("landed on {branch} without asking")
+        } else {
+            format!("landed on {branch} · {hash}")
+        };
+    }
     match tab.merge {
         Some(MergeState::Queued) => match tab.position {
             Some(p) if p > 0 => format!("in merge queue at {p}"),
@@ -888,6 +948,68 @@ pub(crate) mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_saying_where() {
+        let r = rules();
+        let mut landed = tab(1, "landed", TabState::Idle);
+        landed.landed_on = Some(("abc1234".into(), "ux-2-0".into()));
+        landed.merge = Some(MergeState::Merged);
+        assert_eq!(stage_of(&landed, &r), Stage::Merged);
+        assert_eq!(badge_state(&landed, &r), Badge::Merged);
+        assert_eq!(state_words(&landed, &r), "landed on ux-2-0 · abc1234");
+        // Without asking, as autopilot's "Land without asking" marks it.
+        landed.autopilot = true;
+        landed.autopilot_autoland = true;
+        assert!(
+            state_words(&landed, &r).ends_with("landed on ux-2-0 without asking"),
+            "{}",
+            state_words(&landed, &r)
+        );
+        // Its queue-and-clean cleaning up has no deploy to test.
+        let mut cleaning = landed.clone();
+        cleaning.state = TabState::Working;
+        cleaning.loop_skill = Some("queue".into());
+        assert!(!testing_deploy(&cleaning));
+        assert_eq!(stage_of(&cleaning, &r), Stage::Merged);
+        // Still landing, it is under Landing.
+        cleaning.landing = Some(Landing {
+            method: Method::Direct,
+            holding: true,
+            line: 1,
+        });
+        assert_eq!(stage_of(&cleaning, &r), Stage::Landing);
+    }
+
+    #[test]
+    fn a_landing_mark_reads_back_its_hash_branch_and_repository_and_nothing_from_less() {
+        let mark = landed_mark("abc1234 ux-2-0 main /code/my repo/.git").unwrap();
+        assert_eq!(
+            mark,
+            LandedMark {
+                hash: "abc1234".into(),
+                branch: "ux-2-0".into(),
+                clone_branch: "main".into(),
+                repo: "/code/my repo/.git".into(),
+            }
+        );
+        assert_eq!(landed_mark("abc1234 ux-2-0 main"), None);
+        assert_eq!(landed_mark(" ux-2-0 main /r/.git"), None);
+        assert_eq!(landed_mark(""), None);
+        // Only in the landed repository's main clone, on its branch then.
+        let place = |git_dir: &str, common_dir: &str, branch: &str| crate::tabs::git::GitPlace {
+            branch: branch.into(),
+            git_dir: git_dir.into(),
+            common_dir: common_dir.into(),
+        };
+        let repo = "/code/my repo/.git";
+        assert!(landed_here(&mark, &place(repo, repo, "main")));
+        assert!(!landed_here(&mark, &place(repo, repo, "new-work")));
+        let worktree = "/code/my repo/.git/worktrees/next";
+        assert!(!landed_here(&mark, &place(worktree, repo, "main")));
+        let other = "/code/other/.git";
+        assert!(!landed_here(&mark, &place(other, other, "main")));
     }
 
     fn v(names: &[&str]) -> Vec<String> {

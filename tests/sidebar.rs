@@ -527,3 +527,119 @@ fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
         tabs(l)[0]["current"] == true
     });
 }
+
+/// Runs git in `dir` with an identity of its own and no config of yours.
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// The first tab's pane in `dir`, once its shell has gone there.
+fn cd(server: &TestServer, client: &mut TestClient, dir: &Path) {
+    client.type_text(&format!("cd '{}'\r", dir.display()));
+    let want = dir.canonicalize().unwrap();
+    wait_list(server, "the shell to cd", |l| {
+        tabs(l)[0]["panes"][0]["cwd"]
+            .as_str()
+            .and_then(|d| Path::new(d).canonicalize().ok())
+            .is_some_and(|d| d == want)
+    });
+}
+
+#[test]
+fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_main_clone() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let clone = server.dir.path().join("clone");
+    std::fs::create_dir_all(&clone).unwrap();
+    git(&clone, &["init", "-q"]);
+    git(&clone, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    let worktree = server.dir.path().join("next");
+    git(
+        &clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "next",
+            &worktree.to_string_lossy(),
+        ],
+    );
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, _) = first_pane(&server);
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    let land_lock = |dir: &Path, args: &[&str]| {
+        Command::new(common::BIN)
+            .arg("land-lock")
+            .args(args)
+            .current_dir(dir)
+            .env("HOME", &server.home)
+            .env("SWITCHBOARD_STATE_DIR", &server.state)
+            .env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", &pane)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    assert_eq!(
+        land_lock(&worktree, &["landed", "abc1234"]).status.code(),
+        Some(2)
+    );
+    // Landed from the worktree, as queue-and-clean pushes from it.
+    let said = land_lock(&worktree, &["landed", "abc1234", "ux-2-0"]);
+    assert!(
+        said.status.success(),
+        "{}",
+        String::from_utf8_lossy(&said.stderr)
+    );
+    let repo = clone.join(".git").canonicalize().unwrap();
+    assert_eq!(
+        server.ok(&["show", "-t", &tab, "@tab_landed"]).trim(),
+        format!("abc1234 ux-2-0 main {}", repo.display())
+    );
+    // Back in the main clone, as queue-and-clean leaves the tab.
+    cd(&server, &mut client, &clone);
+    let at = row_of(&mut client, "MERGED 1");
+    assert!(row_of(&mut client, "landed on ux-2-0") > at);
+    // Gone on to a worktree, however Claude starts there.
+    cd(&server, &mut client, &worktree);
+    client.wait_for("Merged gone", |s| {
+        !s.iter().any(|l| left(l, 34).contains("MERGED"))
+    });
+    // Back, it is Merged again; a new branch in the main clone is new work.
+    cd(&server, &mut client, &clone);
+    row_of(&mut client, "MERGED 1");
+    git(&clone, &["checkout", "-q", "-b", "new-work"]);
+    client.wait_for("Merged gone on a new branch", |s| {
+        !s.iter().any(|l| left(l, 34).contains("MERGED"))
+    });
+    // Back on its branch, it is Merged until a prompt starts new work there.
+    git(&clone, &["checkout", "-q", "main"]);
+    row_of(&mut client, "MERGED 1");
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "next"}),
+    );
+    client.wait_for("Merged gone on a prompt", |s| {
+        !s.iter().any(|l| left(l, 34).contains("MERGED"))
+    });
+    assert_eq!(server.ok(&["show", "-t", &tab, "@tab_landed"]).trim(), "");
+}

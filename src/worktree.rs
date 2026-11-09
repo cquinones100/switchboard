@@ -758,15 +758,28 @@ pub fn fail(message: &str) -> ExitCode {
     ExitCode::from(1)
 }
 
-/// Writes the cd-file the shell function reads back.
+/// The tab this runs in takes up a worktree's work, so a landing left there
+/// before (`@tab_landed`) no longer files it under Merged. Outside a
+/// Switchboard pane it does nothing.
+fn take_up_work() {
+    if crate::mux::socket::in_pane() {
+        let _ = crate::mux::socket::ask(&["set", "-u", crate::sidebar::model::LANDED]);
+    }
+}
+
+/// Writes the cd-file the shell function reads back, which then starts
+/// Claude in the worktree itself, so the tab takes up its work here.
 pub fn write_cd_file(path: &str, contents: &str) -> Result<()> {
+    take_up_work();
     fs::write(path, contents).map_err(|e| anyhow!("couldn't write {path}: {e}"))
 }
 
 /// Starts `program` (Claude, or `claude-here`) in the worktree with these
 /// arguments, the terminal its own, and gives its exit code; one that isn't
-/// on the PATH is said, with where the worktree is, and is no failure.
+/// on the PATH is said, with where the worktree is, and is no failure. The
+/// tab it runs in takes up this work (`take_up_work`).
 pub fn run_in(program: &str, args: &[String], dir: &Path) -> ExitCode {
+    take_up_work();
     match Command::new(program).args(args).current_dir(dir).status() {
         Ok(status) => match status.code() {
             Some(0) | None => ExitCode::SUCCESS,

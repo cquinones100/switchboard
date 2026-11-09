@@ -574,7 +574,8 @@ pub fn sidebar_lines(
             // A tab autopilot opened says so, and that it
             // landed once back in the main clone, closing soon, and whether
             // it landed without asking.
-            if tab.autopilot {
+            // A direct landing's state words already say it landed.
+            if tab.autopilot && tab.landed_on.is_none() {
                 parts.push(
                     match (tab.autopilot_landed, tab.autopilot_autoland) {
                         (true, true) => "landed without asking",

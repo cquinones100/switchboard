@@ -408,7 +408,7 @@ Each tab is in one group, the same as its stage in mission control's Tabs view, 
 | In merge queue | Its pull request is in the merge queue, in queue order, with Settings' "Show the landing queue" off. |
 | Landing | It holds or waits for the landing lock of `/queue-and-clean`'s "Land on the default branch", in the landing queue's order, or its pull request is in the merge queue ("merging" at its head, else "2nd in line to merge"). |
 | Testing Deploy | Its pull request merged and the tab is still at work on it: `/deploy-test` waiting for the deploy or recording its test, or Claude working under `/deploy-test` or the `/queue-and-clean` that follows the merge. |
-| Merged | Its pull request merged. |
+| Merged | Its work landed: its pull request merged, or `/queue-and-clean` landed it straight on a branch ("landed on main · 1a2b3c4", "landed on main without asking"), while the tab is in that repository's main clone on the branch it had, where the landing leaves it, until a prompt there starts new work. |
 | Idle | A Claude session with nothing to do. |
 | Reminders | A reminder still to come, while nothing else places the tab. |
 | Other | No Claude in it: Notes, the Slack relay, a shell. |
@@ -1545,6 +1545,7 @@ The lock, and the queue of worktrees waiting for it, live in the main clone's gi
 | `land-lock queue` | Prints the holder and each waiter, a line each: place, path, since when |
 | `land-lock move <path> up\|down\|first` | Moves a waiter in the queue |
 | `land-lock phase [words]` | Shows the landing's step in the tab; no words clear it |
+| `land-lock landed <short hash> <branch>` | Says the tab's work landed straight on `<branch>`: marks it `@tab_landed`, which files it under Merged as "landed on <branch>" while the tab is in the repository's main clone on the branch it had |
 | `land-lock autolanded <short hash> [--plan <file> \| --decided <n>] [item]` | Says the tab landed without asking: marks it `@autopilot_autoland` with the hash and adds "Landed <short hash>: <item>" to the notifications (`~/.local/state/switchboard/autolanded.json`), with the count of the plan's `Decided hands-free` lines (the count `--decided` gives for an item with no plan) and a way to open it |
 
 The lock never expires with time, since a landing may wait on you while it holds it. It is taken over only from a landing whose worktree is gone or has no Claude session running in it, and a waiter gone the same way leaves the queue. The sidebar and mission control show the landing tab and those waiting under Landing, in the queue's order ("landing", "2nd in line to land"), and Enter on a waiting tab offers "Land it next", "Move it up in the landing queue" and "Move it down in the landing queue" (Settings' "Show the landing queue", `landing_queue`; off, they show as Working, and the queue still orders the landings).

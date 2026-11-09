@@ -497,6 +497,20 @@ impl Server {
             t.size = Some((p.additions, p.deletions));
         }
         t.landing = facts.and_then(|f| f.landing);
+        // Landed straight on a branch (`land-lock landed`): Merged, as a
+        // merged PR is, unless GitHub answered for a PR of its own.
+        // Only while the tab is still in the landed repository's main
+        // clone, on its branch then, read from git's files.
+        if t.pr_state.is_none()
+            && let Some(mark) = opt(model::LANDED).as_deref().and_then(model::landed_mark)
+            && t.path
+                .as_deref()
+                .and_then(crate::tabs::git::locate)
+                .is_some_and(|p| model::landed_here(&mark, &p))
+        {
+            t.landed_on = Some((mark.hash, mark.branch));
+            t.merge = Some(MergeState::Merged);
+        }
         Some(t)
     }
 

@@ -41,6 +41,13 @@
 //!                     `tests failed [words]` and `review blocked [words]`
 //!                     mark a failed stage, which the Landing view draws red
 //!                     with the words after them
+//! land-lock landed <short hash> <branch>
+//!                     says this tab's work landed straight on <branch>, as
+//!                     every direct landing does once it has pushed: marks
+//!                     the tab @tab_landed, with the repository and its
+//!                     main clone's branch, which files it under Merged in
+//!                     the sidebar and mission control while the tab is in
+//!                     that main clone on that branch
 //! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [item]
 //!                     says this tab landed without asking (autopilot's
 //!                     "Land without asking"): marks the tab
@@ -83,7 +90,7 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [--plan <file> | --decided <n>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -106,6 +113,9 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     // whatever the cleanup has removed since.
     if command == "autolanded" {
         return autolanded(&args[1..]);
+    }
+    if command == "landed" {
+        return landed(&args[1..]);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let found = common_dir(&cwd).and_then(|common| {
@@ -207,6 +217,40 @@ fn phase(words: &[String]) {
         let _ = socket::ask(&["set", "@agent_phase", &words]);
         let _ = socket::ask(&["set", "@agent_loop", "queue"]);
     }
+}
+
+/// A direct landing, said: the caller's tab marked `@tab_landed` with the
+/// hash, the branch it landed on, the main clone's branch and the
+/// repository (its main clone's git directory), read from git's files where
+/// this runs, which the sidebar files under Merged while the tab is in that
+/// main clone on that branch. Outside a Switchboard pane it does nothing.
+fn landed(args: &[String]) -> ExitCode {
+    let [hash, branch] = args else {
+        eprintln!("usage: land-lock landed <short hash> <branch>");
+        return ExitCode::from(2);
+    };
+    let (hash, branch) = (hash.trim(), branch.trim());
+    if hash.is_empty() || branch.is_empty() || hash.contains(' ') || branch.contains(' ') {
+        eprintln!("usage: land-lock landed <short hash> <branch>");
+        return ExitCode::from(2);
+    }
+    if !socket::in_pane() {
+        return ExitCode::SUCCESS;
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let clone = crate::tabs::git::locate(&cwd)
+        .and_then(|here| crate::tabs::git::locate(here.common_dir.parent()?));
+    let Some(clone) = clone else {
+        eprintln!("not in a git repository with a main clone");
+        return ExitCode::from(2);
+    };
+    let mark = format!(
+        "{hash} {branch} {} {}",
+        clone.branch,
+        clone.common_dir.display()
+    );
+    let _ = socket::ask(&["set", crate::sidebar::model::LANDED, &mark]);
+    ExitCode::SUCCESS
 }
 
 /// A landing made without asking, said: the caller's tab marked
