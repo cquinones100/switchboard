@@ -511,7 +511,8 @@ impl Store {
 
     /// The IDs autopilot keeps for notes squashed into one
     /// (`renumber`, each squashed note's ID to the merged note's) follow
-    /// too: its note's, its skipped items' and its tabs' (`@autopilot_note`),
+    /// too: its note's, its skipped items', its landings' and its tabs'
+    /// (`@autopilot_note`),
     /// whichever of the squashed notes they were.
     pub fn renumber(&self, renumber: &std::collections::HashMap<String, String>) {
         if renumber.is_empty() {
@@ -528,8 +529,11 @@ impl Store {
                 mode.insert("noteId".into(), to.clone().into());
                 changed = true;
             }
-            if let Some(Value::Array(skipped)) = mode.get_mut("skipped") {
-                for item in skipped.iter_mut() {
+            for key in ["skipped", "landed"] {
+                let Some(Value::Array(items)) = mode.get_mut(key) else {
+                    continue;
+                };
+                for item in items.iter_mut() {
                     let Some(to) = item
                         .get("note")
                         .and_then(Value::as_str)
@@ -1297,5 +1301,23 @@ pub(crate) mod tests {
         assert_eq!(mode["repo"], "/r");
         assert_eq!(mode["slots"], 3);
         assert_eq!(mode["said"], "", "which keeps its other state");
+    }
+
+    #[test]
+    fn notes_squashed_into_one_take_the_modes_ids_along() {
+        let (_dir, s) = temp("renumber");
+        fs::create_dir_all(&s.state).unwrap();
+        let file = s.state.join("autopilot.json");
+        fs::write(
+            &file,
+            r#"{"noteId":"n-a","skipped":[{"note":"n-a","text":"x"}],"landed":[{"id":"3@1","note":"n-a"},{"id":"4@1","note":"n-c"}]}"#,
+        )
+        .unwrap();
+        s.renumber(&[("n-a".to_string(), "n-b".to_string())].into());
+        let mode = util::read_json(&file).unwrap();
+        assert_eq!(mode["noteId"], "n-b");
+        assert_eq!(mode["skipped"][0]["note"], "n-b");
+        assert_eq!(mode["landed"][0]["note"], "n-b");
+        assert_eq!(mode["landed"][1]["note"], "n-c", "another note's kept");
     }
 }

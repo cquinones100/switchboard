@@ -127,8 +127,9 @@ pub enum Mark {
     /// To take the recommended option of what it would ask, or no longer:
     /// `@autopilot_handsfree`.
     HandsFree(TabId, bool),
-    /// Its marks taken off, so it leaves the mode: landed, with the
-    /// autopilot_close setting at never, or made yours by a prompt.
+    /// Made yours, so it leaves the mode, its item kept: landed, with the
+    /// autopilot_close setting at never, or a prompt typed in it since.
+    /// `@autopilot_yours`, with the marks of what the mode has it do off.
     Left(TabId),
     /// Found back in a main clone once landed, at this time (seconds):
     /// `@autopilot_left`.
@@ -423,15 +424,16 @@ impl Pilot {
 
     /// What becomes of a tab back in the main clone once landed, as the
     /// module's comment says, at `now_ms`, one never looked at closed
-    /// `close_after` seconds after it landed.
-    fn after_landing(&mut self, m: &Mine, now_ms: i64, close_after: f64) -> Option<Mark> {
+    /// `close_after` seconds after it landed; with `None` (never closed),
+    /// made yours on the check after it is marked landed.
+    fn after_landing(&mut self, m: &Mine, now_ms: i64, close_after: Option<f64>) -> Option<Mark> {
         let now = now_ms as f64 / 1000.0;
         let Some(landed) = m.landed else {
             return m.home.then_some(Mark::Landed(m.tab, now as i64));
         };
-        if m.prompted_since {
+        let Some(close_after) = close_after.filter(|_| !m.prompted_since) else {
             return Some(Mark::Left(m.tab));
-        }
+        };
         if m.front {
             let first = *self.fronts.entry(m.tab).or_insert(now_ms);
             return (!m.seen && now_ms - first >= SEEN_MS).then_some(Mark::Seen(m.tab));
@@ -515,9 +517,8 @@ impl Pilot {
             if *kind == Kind::Left && m.hands_free && !hands_free {
                 marks.push(Mark::HandsFree(m.tab, false));
             }
-            match (kind, close) {
-                (Kind::Left, Some(after)) => marks.extend(self.after_landing(m, now_ms, after)),
-                (Kind::Left, None) => marks.push(Mark::Left(m.tab)),
+            match kind {
+                Kind::Left => marks.extend(self.after_landing(m, now_ms, close)),
                 _ => {
                     if m.in_worktree && !m.was_in {
                         marks.push(Mark::In(m.tab));
@@ -1001,8 +1002,11 @@ mod tests {
         w.tab(first).in_main = false;
         assert_eq!(w.settle(), 5, "a tab landing holds its place");
         assert!(w.skip.contains("item 1"), "and its item");
-        // Then it moves the pane back to the main clone.
+        // Then it moves the pane back to the main clone, its Claude idle
+        // there: marked landed, then made yours.
         w.tab(first).in_main = true;
+        w.tab(first).state = TabState::Idle;
+        w.tab(first).home = true;
         w.settle();
         assert!(
             !w.tabs.iter().any(|m| m.tab == first),
@@ -1567,10 +1571,9 @@ mod tests {
                 )
                 .marks
         };
-        assert_eq!(
-            marks(&mut pilot, &tab, now, None),
-            [Mark::Left(TabId(1))],
-            "with the setting off, it leaves the mode as it lands"
+        assert!(
+            marks(&mut pilot, &tab, now, None).is_empty(),
+            "with the setting off, not left before it is marked landed"
         );
         assert!(
             marks(&mut pilot, &tab, now, close_after("seen")).is_empty(),
@@ -1636,5 +1639,39 @@ mod tests {
             [Mark::Close(TabId(1))]
         );
         assert_eq!(close_after("off"), None, "never");
+    }
+
+    #[test]
+    fn with_never_a_landed_tab_is_marked_landed_first_then_made_yours() {
+        let mut pilot = Pilot::default();
+        let mode = Mode {
+            on: true,
+            note: "Work.md".into(),
+            repo: "/repo".into(),
+            ..Mode::default()
+        };
+        let now = 1_700_000_000_000_i64;
+        let secs = (now / 1000) as f64;
+        let mut tab = mine(1, secs - 3_600.0, TabState::Idle, false);
+        tab.was_in = true;
+        tab.home = true;
+        let mut marks = |tab: &Mine, at: i64| {
+            pilot
+                .check(
+                    &mode,
+                    true,
+                    None,
+                    std::slice::from_ref(tab),
+                    false,
+                    at,
+                    None,
+                    None,
+                    Path::new("/nowhere"),
+                )
+                .marks
+        };
+        assert_eq!(marks(&tab, now), [Mark::Landed(TabId(1), secs as i64)]);
+        tab.landed = Some(secs);
+        assert_eq!(marks(&tab, now + 1_000), [Mark::Left(TabId(1))]);
     }
 }

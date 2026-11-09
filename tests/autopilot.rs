@@ -378,3 +378,100 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is
             .is_some_and(|m| m["note"] == "Projects/Renamed.md" && m["noteId"] == note_id.as_str())
     });
 }
+
+/// A Claude Code hook in `pane`, as its Claude would send it.
+fn hook(server: &TestServer, pane: &str, event: &str) {
+    use std::io::Write;
+    let mut child = Command::new(common::BIN)
+        .args(["hook", event])
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", pane)
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(b"{}");
+    assert!(child.wait().unwrap().success(), "hook {event}");
+}
+
+#[test]
+fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed() {
+    let (_notes, _note, server, mut client, repo) = set_up(json!({ "ux2": true }));
+    client.wait_text("Waiting on you");
+    let first = |server: &TestServer| {
+        opened(server)
+            .into_iter()
+            .find(|t| t["options"]["@autopilot_item"] == "First thing")
+    };
+    wait("the first item's tab in its worktree", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_in"] == "1")
+    });
+    let tab = first(&server).unwrap();
+    let tab_id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+
+    // queue-and-clean hands the tab back to the main clone once it lands.
+    server.ok(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        &pane,
+        "-c",
+        repo.to_str().unwrap(),
+    ]);
+    wait("the tab marked landed", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_left"].is_string())
+    });
+    client.wait_text("landed, back");
+    let mode: Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(mode["landed"][0]["item"], "First thing", "{mode}");
+
+    // A prompt typed in it since makes it yours: it keeps its item, and the
+    // board keeps it under Landed.
+    // Its Claude, resumed in the pane, is known by its session file.
+    let pid = first(&server).unwrap()["panes"][0]["pid"].as_u64().unwrap();
+    let sessions = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        json!({ "pid": pid, "entrypoint": "cli", "sessionId": "s-1" }).to_string(),
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(1100));
+    hook(&server, &pane, "UserPromptSubmit");
+    wait("the tab made yours", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_yours"] == "1")
+    });
+    let tab = first(&server).unwrap();
+    assert!(tab["options"]["@autopilot_land"].is_null());
+    std::thread::sleep(Duration::from_millis(500));
+    let screen = client.screen();
+    assert!(
+        screen.iter().any(|l| l.contains("landed, back")),
+        "{screen:#?}"
+    );
+
+    // Closed, its landing is listed still, with the commit it landed.
+    let head = Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["rev-parse", "--short=7", "HEAD"])
+        .output()
+        .unwrap();
+    let landed = format!("landed {}", String::from_utf8_lossy(&head.stdout).trim());
+    server.ok(&["kill-tab", "-t", &tab_id]);
+    let screen = client.wait_text("╭ closed");
+    assert!(
+        screen.iter().any(|l| l.contains("First thing"))
+            && screen.iter().any(|l| l.contains(&landed)),
+        "{screen:#?}"
+    );
+}

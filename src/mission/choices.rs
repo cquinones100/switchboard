@@ -203,6 +203,8 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
         .data
         .pointer("/pilot/tab")
         .and_then(Value::as_str)
+        // A landing whose tab is closed names a tab id another may have since.
+        .filter(|_| item.data.pointer("/pilot/closed") != Some(&Value::Bool(true)))
         .and_then(|t| ctx.tabs.iter().find(|m| m.id.to_string() == t));
     if let Some(t) = tab {
         out.push(choice(
@@ -211,9 +213,12 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             Do::GoTo(t.id),
         ));
     }
+    // A landed item has nothing left to skip.
+    let landed = item.data.pointer("/pilot/left") == Some(&Value::Bool(true));
     let skip = item
         .data
         .pointer("/pilot/item")
+        .filter(|_| !landed)
         .or_else(|| item.data.get("next"))
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());

@@ -5,7 +5,8 @@
 //! paused and why; then every item it works in the column of the board
 //! where it stands (`COLUMNS`: the items it will open next, in the order
 //! it opens them, then its tabs working, waiting on you, landing and
-//! landed), the least far along first, so landed ones come last; then the
+//! landed, today's landings whose tabs are closed with them), the least far
+//! along first, so landed ones come last; then the
 //! ones skipped, listed under the board. Each tab keeps a cell per stage,
 //! which the board's meter counts and its side panel lists
 //! (src/mission/render.rs).
@@ -15,7 +16,9 @@
 //! its Claude's state, its loop and `@agent_phase`, the Landing view's
 //! entry for its worktree (a worktree in the landing queue has passed its
 //! tests, review and leak check, as queue-and-clean takes the lock after
-//! them), and `@autopilot_left` once it landed. A stage nothing says
+//! them), and `@autopilot_left` once it landed; a landing whose tab is
+//! closed from what the mode's file kept of it (`Mode::landed`), read on
+//! every tick. A stage nothing says
 //! anything of yet is a dim "waiting" cell: the tests and the review while
 //! the tab works and no phase names them, the leak check until the lock is
 //! asked for, and closing while the tab is open. The next items are the
@@ -25,6 +28,7 @@
 use serde_json::{Value, json};
 
 use super::line::Summary;
+use super::mode::Landed;
 use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::sidebar::model::TabState;
@@ -68,6 +72,8 @@ pub struct Row {
     pub left: bool,
     /// Landed without asking (`@autopilot_autoland`).
     pub autoland: bool,
+    /// For a landing whose tab is closed, what the mode kept of it.
+    pub closed: Option<Landed>,
 }
 
 /// A stage cell: its look (`done`, `running`, `waiting`, `queued`,
@@ -99,6 +105,9 @@ pub fn stages(r: &Row) -> [Cell; 8] {
             out[at + 1] = done(s);
         }
         out[6] = done(if r.autoland { "on its own" } else { "landed" });
+        if r.closed.is_some() {
+            out[7] = done("closed");
+        }
         return out;
     }
     let landing = r.landing.as_ref().filter(|l| l.is_object());
@@ -187,6 +196,13 @@ pub fn progress(stages: &[Cell; 8]) -> usize {
 
 /// The dim note under a tab's item: its tab, and where it is in words.
 fn note_of(r: &Row) -> String {
+    if let Some(l) = &r.closed {
+        return if l.hash.is_empty() {
+            "landed, its tab closed".into()
+        } else {
+            format!("landed {}, its tab closed", l.hash)
+        };
+    }
     let what = if r.left {
         "landed, back in the main clone".to_string()
     } else if let Some(phase) = r.phase.as_deref().filter(|p| !p.is_empty()) {
@@ -303,30 +319,38 @@ pub fn items(
             .into_iter()
             .map(|(look, words)| json!([look, words]))
             .collect();
-        out.push(
-            Item::new(format!("pilot:{}", r.tab), r.item.clone())
-                .detail(note_of(r))
-                .group(COLUMNS[column])
-                .state(if r.state == TabState::Waiting {
-                    State::Attention
-                } else if r.state.busy() {
-                    State::Active
-                } else {
-                    State::Idle
-                })
-                .target(Target::Tab(r.tab))
-                .data(json!({
-                    "pilot": {
-                        "tab": r.tab.to_string(),
-                        "index": r.index,
-                        "item": r.item,
-                        "stages": cells,
-                        "done": progress,
-                        "failed": failed,
-                    },
-                    "mode": pilot,
-                })),
-        );
+        let id = match &r.closed {
+            Some(l) => format!("pilot:landed:{}", l.id),
+            None => format!("pilot:{}", r.tab),
+        };
+        let item = Item::new(id, r.item.clone())
+            .detail(note_of(r))
+            .group(COLUMNS[column])
+            .state(if r.state == TabState::Waiting {
+                State::Attention
+            } else if r.state.busy() {
+                State::Active
+            } else {
+                State::Idle
+            });
+        // A closed tab's landing has no tab to go to.
+        let item = match r.closed {
+            Some(_) => item,
+            None => item.target(Target::Tab(r.tab)),
+        };
+        out.push(item.data(json!({
+            "pilot": {
+                "tab": r.tab.to_string(),
+                "index": r.index,
+                "item": r.item,
+                "stages": cells,
+                "done": progress,
+                "failed": failed,
+                "closed": r.closed.is_some(),
+                "left": r.left,
+            },
+            "mode": pilot,
+        })));
     }
     if !skipped.is_empty() {
         out.push(
@@ -360,6 +384,7 @@ mod tests {
             landing: None,
             left: false,
             autoland: false,
+            closed: None,
         }
     }
 
@@ -517,6 +542,68 @@ mod tests {
         let landed = items.iter().find(|i| i.title == "item 1").unwrap();
         assert_eq!(landed.data["pilot"]["done"], 7);
         assert_eq!(items[0].data["spend"], Value::Null, "no limit, no spend");
+    }
+
+    #[test]
+    fn a_landing_stands_under_landed_its_tab_open_or_closed() {
+        let open = Row {
+            left: true,
+            ..row(TabState::Idle)
+        };
+        let closed = Row {
+            tab: TabId(9),
+            index: 0,
+            item: "Copy the reply".into(),
+            closed: Some(Landed {
+                id: "9@1700000000".into(),
+                item: "Copy the reply".into(),
+                note: "n-1".into(),
+                hash: "abc1234".into(),
+                at: 1,
+            }),
+            ..open.clone()
+        };
+        let s = stages(&closed);
+        assert_eq!(s[7], done("closed"));
+        assert!(s.iter().all(|c| c.0 == "done"), "{s:?}");
+        assert_eq!(
+            stages(&open)[7].0,
+            "waiting",
+            "closing while its tab is open"
+        );
+        let summary = Summary {
+            note: "Work".into(),
+            busy: 0,
+            open: 1,
+            slots: 2,
+            cap: 5,
+            next: String::new(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 0,
+            spend_limit: 0.0,
+            spent: 0.0,
+            lands_alone: false,
+            hands_free: false,
+            target: String::new(),
+            drained: false,
+        };
+        let items = items(&summary, "", &[open, closed], &[], &[]);
+        let landed: Vec<&Item> = items
+            .iter()
+            .filter(|i| i.group.as_deref() == Some("Landed"))
+            .collect();
+        assert_eq!(landed.len(), 2, "{items:#?}");
+        let gone = landed
+            .iter()
+            .find(|i| i.id == "pilot:landed:9@1700000000")
+            .unwrap();
+        assert_eq!(gone.detail, "landed abc1234, its tab closed");
+        assert_eq!(gone.target, Target::None, "no tab to go to");
+        assert_eq!(gone.data["pilot"]["closed"], true);
+        let here = landed.iter().find(|i| i.id == "pilot:@4").unwrap();
+        assert_eq!(here.target, Target::Tab(TabId(4)));
     }
 
     #[test]

@@ -74,10 +74,11 @@ pub const NUDGED: &str = "@autopilot_nudged";
 /// Pushed, asked about or not, the commit it pushed, which queue-and-clean
 /// sets as soon as its push succeeds, so hands-free sends no turn back after.
 pub const PUSHED: &str = "@autopilot_pushed";
-/// Every mark of the mode's, taken off as a tab leaves it.
-const MARKS: [&str; 11] = [
-    OPENED, IN, ITEM, NOTE, LEFT, SEEN, LAND, AUTOLAND, HANDS_FREE, NUDGED, PUSHED,
-];
+/// Landed and made yours by a prompt typed in it since: the mode lets go
+/// of it, while its item stays under the view's Landed.
+pub const YOURS: &str = "@autopilot_yours";
+/// The marks of what the mode has a tab do, taken off once it is yours.
+const WORKING: [&str; 3] = [LAND, HANDS_FREE, NUDGED];
 
 /// The commit `HEAD` is at in the checkout `dir` is in, read from git's
 /// files: a loose ref, `packed-refs`, or a detached `HEAD`'s own.
@@ -696,8 +697,9 @@ impl Server {
     /// Its own view in mission control (`view`), with UX 2.0 and the
     /// view_autopilot setting on: while the mode is on, or `keep` (a client
     /// has it in front). `landing` is the Landing view's items, whose
-    /// entries say where each tab's worktree is in its landing queue. Built
-    /// from what the server holds, reading no file.
+    /// entries say where each tab's worktree is in its landing queue; then
+    /// today's landings of the mode's note whose tabs are closed. Built from
+    /// what the server holds, reading no file.
     pub fn autopilot_view(
         &self,
         keep: bool,
@@ -714,12 +716,25 @@ impl Server {
             opts.get(name).is_some_and(|v| !v.is_empty() && v != "0")
         };
         let mut rows = Vec::new();
+        let mut open = std::collections::HashSet::new();
         for model in self.sidebar_all_tabs() {
             let Some(tab) = self.tabs.get(&model.id) else {
                 continue;
             };
             if !marked(&tab.opts, OPENED) {
                 continue;
+            }
+            // A tab made yours stays on the board of its own note alone.
+            let other_note = tab.opts.get(NOTE).is_some_and(|n| *n != mode.note_id);
+            if marked(&tab.opts, YOURS) && other_note {
+                continue;
+            }
+            if let Some(since) = tab
+                .opts
+                .get(OPENED)
+                .and_then(|v| v.trim().parse::<f64>().ok())
+            {
+                open.insert(format!("{}@{since}", model.id.0));
             }
             let id = model.id.to_string();
             let landing = landing.iter().find_map(|i| {
@@ -742,6 +757,30 @@ impl Server {
                 landing,
                 left: marked(&tab.opts, LEFT) || model.autopilot_landed,
                 autoland: model.autopilot_autoland,
+                closed: None,
+            });
+        }
+        let now = util::now_ms();
+        for l in &mode.landed {
+            if l.note != mode.note_id || !mode::same_day(l.at, now) || open.contains(&l.id) {
+                continue;
+            }
+            let tab =
+                l.id.split_once('@')
+                    .and_then(|(t, _)| t.parse().ok())
+                    .map_or(TabId(0), TabId);
+            rows.push(super::view::Row {
+                tab,
+                index: 0,
+                item: l.item.clone(),
+                state: TabState::Idle,
+                was_in: true,
+                loop_skill: None,
+                phase: None,
+                landing: None,
+                left: true,
+                autoland: false,
+                closed: Some(l.clone()),
             });
         }
         let summary = self.autopilot.pilot.summary(mode, self.away_now());
@@ -913,9 +952,12 @@ impl Server {
         }
     }
 
-    /// The tabs it opened, as a check needs them.
+    /// The tabs it opened, as a check needs them, those made yours left out.
     fn autopilot_mine(&self, repo: &Path) -> Vec<Mine> {
         let opened = |opts: &std::collections::BTreeMap<String, String>| {
+            if opts.contains_key(YOURS) {
+                return None;
+            }
             opts.get(OPENED)
                 .and_then(|v| v.trim().parse::<f64>().ok())
                 .filter(|n| *n != 0.0)
@@ -1050,9 +1092,10 @@ impl Server {
         )
     }
 
-    /// Its tabs marked as they reach their worktree, land and are seen,
-    /// unmarked as they leave the mode, and closed once landed and left,
-    /// one closed without your having seen it kept for the notifications.
+    /// Its tabs marked as they reach their worktree, land (each landing kept
+    /// for the view) and are seen, made yours as they leave the mode, and
+    /// closed once landed and left, one closed without your having seen it
+    /// kept for the notifications.
     fn autopilot_marks(&mut self, marks: &[Mark], mine: &[Mine]) {
         for mark in marks {
             let tab = match *mark {
@@ -1100,22 +1143,38 @@ impl Server {
                     t.opts.insert(SEEN.into(), "1".into());
                 }
                 Mark::Left(_) | Mark::Close(_) => {
-                    for option in MARKS {
+                    for option in WORKING {
                         t.opts.remove(option);
                     }
+                    t.opts.insert(YOURS.into(), "1".into());
                 }
             }
             self.dirty_tab(tab);
+            if let Mark::Landed(..) = mark
+                && let Some(m) = mine.iter().find(|m| m.tab == tab)
+            {
+                self.autopilot_keep_landed(m);
+            }
         }
     }
 
-    /// A landed tab about to close unseen, kept in its file for the
-    /// notifications: "Closed <item>: landed <short hash>", the hash the
-    /// main clone's commit as its Claude's pane finds it there.
-    fn autopilot_closed_unseen(&mut self, m: &Mine) {
+    /// The commit `tab` landed, short: the one its landing marked it with,
+    /// else the main clone's as its Claude's pane (else any of its panes)
+    /// finds it there.
+    fn autopilot_hash_of(&self, tab: TabId) -> String {
+        // The commit its landing pushed, which queue-and-clean marks it with,
+        // since a target branch other than the main clone's moves no HEAD.
+        let pushed = self.tabs.get(&tab).and_then(|t| {
+            [PUSHED, AUTOLAND]
+                .iter()
+                .find_map(|k| t.opts.get(*k).filter(|v| !v.trim().is_empty()))
+        });
+        if let Some(hash) = pushed {
+            return hash.trim().chars().take(7).collect();
+        }
         let panes = self
             .tabs
-            .get(&m.tab)
+            .get(&tab)
             .map(|t| t.layout.panes())
             .unwrap_or_default();
         let dir = self
@@ -1125,10 +1184,41 @@ impl Server {
             .into_iter()
             .chain(panes.iter().copied())
             .find_map(|p| self.panes.get(&p)?.pane.cwd());
-        let hash = dir
-            .and_then(|d| head_of(&d))
+        dir.and_then(|d| head_of(&d))
             .map(|h| h.chars().take(7).collect())
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
+
+    /// A tab just landed, kept in the mode's file for the view's Landed,
+    /// which lists it once the tab is closed too.
+    fn autopilot_keep_landed(&mut self, m: &Mine) {
+        let landed = mode::Landed {
+            id: format!("{}@{}", m.tab.0, m.since),
+            item: m.item.clone().unwrap_or_else(|| self.tab_label(m.tab)),
+            note: m
+                .note
+                .clone()
+                .unwrap_or_else(|| self.autopilot.mode.note_id.clone()),
+            hash: self.autopilot_hash_of(m.tab),
+            at: util::now_ms(),
+        };
+        let written = Mode::update(&paths::state_dir(), |mode| {
+            if mode.landed.iter().any(|l| l.id == landed.id) {
+                return;
+            }
+            mode.landed.push(landed);
+        });
+        match written {
+            Ok(mode) => self.autopilot.mode = mode,
+            Err(e) => eprintln!("autopilot: couldn't keep the tab that landed: {e}"),
+        }
+    }
+
+    /// A landed tab about to close unseen, kept in its file for the
+    /// notifications: "Closed <item>: landed <short hash>", the hash the
+    /// main clone's commit as its Claude's pane finds it there.
+    fn autopilot_closed_unseen(&mut self, m: &Mine) {
+        let hash = self.autopilot_hash_of(m.tab);
         let item = m.item.clone().unwrap_or_else(|| self.tab_label(m.tab));
         let id = format!("{}@{}", m.tab.0, m.since);
         let written = Mode::update(&paths::state_dir(), |mode| {

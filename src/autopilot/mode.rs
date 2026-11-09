@@ -1,7 +1,7 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
 //! slots, cap, paused, readyOnly, skipped, spendLimit, landWithoutAsking,
-//! handsFree, said, closed }`.
+//! handsFree, said, closed, landed }`.
 //! `note` is the note's path within the notes directory and `noteId` its
 //! stable ID (src/notes/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
@@ -14,14 +14,18 @@
 //! recommended option of what they would ask (its menu's "Hands-free"); `said` what the notifications show
 //! for it, and `closed` the landed tabs it closed without your having seen
 //! them, `[{ id, item, hash, at }]`, each `id` the tab's and its `@autopilot`
-//! time, for the notifications.
+//! time, for the notifications; `landed` today's landings of its tabs,
+//! `[{ id, item, note, hash, at }]`, `id` as `closed`'s, `note` the item's
+//! note's ID, for the view's Landed, which lists them once their tabs are
+//! closed too.
 //!
 //! The notes app writes the file too, when a note it works is renamed or
 //! moved (src/notes/store.rs's `relink_mode`), so it is read again on every
 //! check rather than kept, and written back with whatever keys it holds
 //! that this doesn't know. A file that isn't there or can't be read is the
 //! mode off with its defaults; a `skipped` that isn't a list (Lua's JSON
-//! once wrote an empty one as an object) is none.
+//! once wrote an empty one as an object) is none, as is a `closed` or
+//! `landed` that isn't.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -67,6 +71,8 @@ pub struct Mode {
     /// The landed tabs it closed without your seeing them, the last
     /// `CLOSED_KEPT`, oldest first.
     pub closed: Vec<Closed>,
+    /// Today's landings of its tabs, the last `LANDED_KEPT`, oldest first.
+    pub landed: Vec<Landed>,
 }
 
 /// An item skipped: its note's ID and its first line.
@@ -104,6 +110,29 @@ impl Closed {
 /// The tabs closed unseen kept for the notifications.
 pub const CLOSED_KEPT: usize = 20;
 
+/// One of its tabs landed today.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Landed {
+    /// The tab and when it opened, as `Closed`'s.
+    pub id: String,
+    /// The item's first line, else the tab's name.
+    pub item: String,
+    /// The ID of the item's note.
+    pub note: String,
+    /// The main clone's commit as its Claude's pane found it there, short.
+    pub hash: String,
+    /// When it landed (ms).
+    pub at: i64,
+}
+
+/// Today's landings kept for the view.
+pub const LANDED_KEPT: usize = 50;
+
+/// Whether a time (ms) is on the local day of `now_ms`.
+pub fn same_day(at_ms: i64, now_ms: i64) -> bool {
+    util::ymd(&util::local_at_ms(at_ms)) == util::ymd(&util::local_at_ms(now_ms))
+}
+
 impl Default for Mode {
     fn default() -> Mode {
         Mode {
@@ -122,6 +151,7 @@ impl Default for Mode {
             target: String::new(),
             said: String::new(),
             closed: Vec::new(),
+            landed: Vec::new(),
         }
     }
 }
@@ -196,6 +226,23 @@ impl Mode {
                     .collect(),
                 _ => Vec::new(),
             },
+            landed: match map.get("landed") {
+                Some(Value::Array(list)) => list
+                    .iter()
+                    .filter_map(|l| {
+                        let text = |k: &str| l.get(k).and_then(Value::as_str).unwrap_or("");
+                        let id = text("id");
+                        (!id.is_empty()).then(|| Landed {
+                            id: id.to_string(),
+                            item: text("item").to_string(),
+                            note: text("note").to_string(),
+                            hash: text("hash").to_string(),
+                            at: l.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
             note_id,
         }
     }
@@ -246,16 +293,35 @@ impl Mode {
                     .collect(),
             ),
         );
+        map.insert(
+            "landed".into(),
+            Value::Array(
+                self.landed
+                    .into_iter()
+                    .map(|l| {
+                        serde_json::json!({
+                            "id": l.id, "item": l.item, "note": l.note, "hash": l.hash,
+                            "at": util::js_number(l.at as f64),
+                        })
+                    })
+                    .collect(),
+            ),
+        );
     }
 
     /// Reads the file, changes the mode with `change`, and writes it back
-    /// whole, with any key it holds that the mode doesn't know; gives the
-    /// mode as written.
+    /// whole, with any key it holds that the mode doesn't know, and the
+    /// landings of today alone, the last `LANDED_KEPT`; gives the mode as
+    /// written.
     pub fn update(state: &Path, change: impl FnOnce(&mut Mode)) -> io::Result<Mode> {
         let file = Mode::file(state);
         let mut map = util::read_json_object(&file);
         let mut mode = Mode::from_map(&map);
         change(&mut mode);
+        let now = util::now_ms();
+        mode.landed.retain(|l| same_day(l.at, now));
+        let over = mode.landed.len().saturating_sub(LANDED_KEPT);
+        mode.landed.drain(..over);
         mode.clone().into_map(&mut map);
         util::write_atomic(&file, util::json_pretty(&Value::Object(map)))?;
         Ok(mode)
@@ -489,6 +555,30 @@ mod tests {
         );
         fs::write(Mode::file(&dir), r#"{"closed":{}}"#).unwrap();
         assert!(Mode::read(&dir).closed.is_empty(), "a list or none");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn todays_landings_are_kept_and_earlier_days_dropped_as_it_writes() {
+        let dir = temp("landed");
+        let now = util::now_ms();
+        let landed = |id: &str, at: i64| Landed {
+            id: id.into(),
+            item: "Copy the reply".into(),
+            note: "n-1".into(),
+            hash: "abc1234".into(),
+            at,
+        };
+        Mode::update(&dir, |m| {
+            m.landed.push(landed("3@1700000000", now - 2 * 86_400_000));
+            m.landed.push(landed("4@1700000100", now));
+        })
+        .unwrap();
+        assert_eq!(Mode::read(&dir).landed, [landed("4@1700000100", now)]);
+        fs::write(Mode::file(&dir), r#"{"landed":{}}"#).unwrap();
+        assert!(Mode::read(&dir).landed.is_empty(), "a list or none");
+        fs::write(Mode::file(&dir), r#"{"on":true}"#).unwrap();
+        assert!(Mode::read(&dir).landed.is_empty(), "missing, none");
         let _ = fs::remove_dir_all(&dir);
     }
 

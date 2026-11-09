@@ -907,6 +907,7 @@ mod tests {
             landing: None,
             left: false,
             autoland: false,
+            closed: None,
         };
         let view = View {
             id: ViewId::Autopilot,

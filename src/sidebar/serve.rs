@@ -424,9 +424,11 @@ impl Server {
             .and_then(|v| v.trim().parse::<i64>().ok())
             .filter(|n| *n != 0);
         t.remind_note = opt("@remind_note");
+        // A landed tab made yours (`@autopilot_yours`) is a plain tab here.
         t.autopilot = opt("@autopilot")
             .and_then(|v| v.trim().parse::<f64>().ok())
-            .is_some_and(|n| n != 0.0);
+            .is_some_and(|n| n != 0.0)
+            && opt("@autopilot_yours").is_none();
         t.autopilot_landed = t.autopilot && opt("@autopilot_left").is_some();
         t.autopilot_autoland = t.autopilot && opt("@autopilot_autoland").is_some();
         // Notes beside this tab's work, or, on Notes' own tab while it is

@@ -2297,6 +2297,11 @@ fn pilot_board(
             let edge = kit::card_edge(chosen(index), lit(index).then_some(theme.text), theme);
             let pilot = item.data.get("pilot");
             let (label, where_, frac) = match pilot {
+                Some(p) if p["closed"] == true => (
+                    "closed".to_string(),
+                    item.detail.clone(),
+                    p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0,
+                ),
                 Some(p) => (
                     format!("tab {}", p["index"]),
                     item.detail
@@ -3924,6 +3929,7 @@ mod tests {
             landing: None,
             left: false,
             autoland: false,
+            closed: None,
         }
     }
 
