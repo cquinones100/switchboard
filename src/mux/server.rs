@@ -351,14 +351,15 @@ pub struct Server {
     pub(super) next_pane: u32,
     pub quit: bool,
     /// When a key was last pressed in any client, for telling whether you're
-    /// here where the desktop can't say.
+    /// here when the desktop can't see it: where it can't say, or the client
+    /// is on another computer.
     pub last_input: Instant,
     /// The settings file's modification time when last read, so a change
     /// made in the Settings view or by hand takes effect on the next tick.
     settings_seen: Option<std::time::SystemTime>,
-    /// Whether you're at the computer, read at most every `PRESENCE_EVERY`
-    /// off the server's task (src/presence.rs).
-    presence: Option<crate::presence::Presence>,
+    /// What the desktop says of whether you're at the computer, read at
+    /// most every `PRESENCE_EVERY` off the server's task (src/presence.rs).
+    presence: crate::presence::Desktop,
     presence_asked: Option<Instant>,
     /// Saving the layout and restoring it (`persist`).
     pub(super) persist: super::persist::Persist,
@@ -992,7 +993,7 @@ impl Server {
             quit: false,
             last_input: Instant::now(),
             settings_seen: None,
-            presence: None,
+            presence: Default::default(),
             presence_asked: None,
             persist: Default::default(),
             ui: Default::default(),
@@ -1063,7 +1064,7 @@ impl Server {
                 }
             }
             Event::AgentSeen(tab) => self.agent_seen(tab),
-            Event::Presence(p) => self.presence = Some(p),
+            Event::Presence(p) => self.presence.take(p),
             Event::TabLookup(answer) => self.tab_lookup(answer),
             Event::Sources(answer) => self.source_answer(answer),
             Event::Ui(event) => self.ui_event(event),
@@ -1204,9 +1205,10 @@ impl Server {
 
     /// Whether you're away, for pausing the lookups that only matter while
     /// you're here (GitHub, Linear, the calendar feed; `pause_when_away`
-    /// setting): no client attached, the screen locked, or idle `AWAY_MS` by
-    /// the desktop's reckoning, or, where the desktop can't say, by the last
-    /// key pressed in a client.
+    /// setting): no client attached, the screen locked, or idle `AWAY_MS`
+    /// both by the desktop's reckoning and since a key was pressed in a
+    /// client, which counts for a client on another computer, whose keys the
+    /// desktop never sees (src/presence.rs).
     pub fn away(&self) -> bool {
         crate::settings::is_on("pause_when_away") && self.away_now()
     }
@@ -1218,11 +1220,8 @@ impl Server {
         if self.clients.is_empty() {
             return true;
         }
-        let mut p = self.presence.unwrap_or_default();
-        if p.idle_ms.is_none() {
-            p.idle_ms = Some(self.last_input.elapsed().as_millis() as f64);
-        }
-        crate::presence::away_by(&p, AWAY_MS)
+        let typed = self.last_input.elapsed().as_secs_f64() * 1000.0;
+        crate::presence::away_by(&self.presence.with_keys(Some(typed)), AWAY_MS)
     }
 
     /// The soonest a pane's held frame must be shown.

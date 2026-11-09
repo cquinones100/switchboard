@@ -2,10 +2,19 @@
 //! Slack relay, to hold its notices while you're at the computer, and the
 //! server, to pause its lookups while you're away. Each decides how
 //! long idle counts as away for it; what idle is, is decided here, from
-//! `platform::presence`: macOS's input idle time and lock screen, the Linux
-//! desktop's; where there is no desktop to ask, the server (and the relay,
-//! asking the server) goes by the last key pressed in its clients.
-//! A locked screen is away at once, however recently a key was pressed.
+//! `platform::presence` (macOS's input idle time and lock screen, the Linux
+//! desktop's) and the last key pressed in the workspace's clients
+//! (`Desktop::with_keys`), whichever is the more recent.
+//!
+//! The desktop sees only its own keyboard and mouse, so a key pressed in a
+//! client attached over SSH never reaches its idle time, and with only the
+//! desktop's reading the workspace counted you away the whole time you
+//! worked in it from another computer. A locked screen is away at once,
+//! however recently a key was pressed, unless one is pressed in a client
+//! after the lock was seen: the lock screen takes the computer's own keys,
+//! so that one came from somewhere else.
+
+use std::time::Instant;
 
 pub use crate::platform::Presence;
 
@@ -36,9 +45,66 @@ pub fn away_by(p: &Presence, after_ms: f64) -> bool {
     p.locked == Some(true) || p.idle_ms.unwrap_or(0.0) >= after_ms
 }
 
+/// What the desktop last said, and since when it has said the screen is
+/// locked, for folding in the keys pressed in the workspace's clients.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Desktop {
+    pub reading: Presence,
+    /// When a reading first said the screen is locked, while they still
+    /// say so; a reading that can't tell leaves it as it was.
+    locked_since: Option<Instant>,
+}
+
+impl Desktop {
+    /// Takes a new reading.
+    pub fn take(&mut self, reading: Presence) {
+        self.take_at(reading, Instant::now());
+    }
+
+    fn take_at(&mut self, reading: Presence, now: Instant) {
+        match reading.locked {
+            Some(true) => self.locked_since = self.locked_since.or(Some(now)),
+            Some(false) => self.locked_since = None,
+            None => {}
+        }
+        self.reading = reading;
+    }
+
+    /// The last reading with the last key pressed in one of the
+    /// workspace's clients, `typed_ms` ago, folded in: idle is the shorter
+    /// of the desktop's and the key's (the key's alone where the desktop
+    /// can't say), and a key pressed since the lock was seen unlocks it. A
+    /// key from before the lock leaves it locked, as one pressed at the
+    /// computer just before it was locked was.
+    pub fn with_keys(&self, typed_ms: Option<f64>) -> Presence {
+        self.with_keys_at(typed_ms, Instant::now())
+    }
+
+    fn with_keys_at(&self, typed_ms: Option<f64>, now: Instant) -> Presence {
+        let mut p = self.reading;
+        let Some(typed) = typed_ms else {
+            return p;
+        };
+        let locked_for_ms = self
+            .locked_since
+            .filter(|_| p.locked == Some(true))
+            .map(|at| now.saturating_duration_since(at).as_secs_f64() * 1000.0);
+        if locked_for_ms.is_some_and(|locked| typed >= locked) {
+            p.idle_ms = p.idle_ms.or(Some(typed));
+            return p;
+        }
+        p.idle_ms = Some(p.idle_ms.map_or(typed, |idle| idle.min(typed)));
+        if p.locked == Some(true) {
+            p.locked = Some(false);
+        }
+        p
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn locked_is_away_at_once_and_unknown_is_here() {
@@ -63,5 +129,87 @@ mod tests {
             },
             60_000.0
         ));
+    }
+
+    const AFTER: f64 = 600_000.0;
+
+    fn reading(idle_ms: Option<f64>, locked: Option<bool>) -> Presence {
+        Presence { idle_ms, locked }
+    }
+
+    #[test]
+    fn a_key_typed_over_ssh_counts_though_the_desktop_has_been_idle_for_days() {
+        let mut d = Desktop::default();
+        d.take(reading(Some(3.0 * 86_400_000.0), Some(false)));
+        let p = d.with_keys(Some(5_000.0));
+        assert_eq!(p, reading(Some(5_000.0), Some(false)));
+        assert!(!away_by(&p, AFTER));
+        assert!(away_by(&d.with_keys(Some(AFTER)), AFTER), "keys stopped");
+    }
+
+    #[test]
+    fn the_desktops_input_counts_when_no_key_was_pressed_in_the_workspace() {
+        let mut d = Desktop::default();
+        d.take(reading(Some(2_000.0), Some(false)));
+        assert_eq!(
+            d.with_keys(Some(3_600_000.0)),
+            reading(Some(2_000.0), Some(false))
+        );
+    }
+
+    #[test]
+    fn where_the_desktop_cant_say_the_last_key_is_idle() {
+        let mut d = Desktop::default();
+        d.take(reading(None, None));
+        assert_eq!(d.with_keys(Some(7_000.0)), reading(Some(7_000.0), None));
+        assert_eq!(d.with_keys(None), reading(None, None));
+    }
+
+    #[test]
+    fn a_key_pressed_before_the_lock_was_seen_leaves_it_locked() {
+        let start = Instant::now();
+        let mut d = Desktop::default();
+        d.take_at(reading(Some(1_000.0), Some(true)), start);
+        let later = start + Duration::from_secs(30);
+        let p = d.with_keys_at(Some(31_000.0), later);
+        assert_eq!(p, reading(Some(1_000.0), Some(true)));
+        assert!(away_by(&p, AFTER));
+    }
+
+    #[test]
+    fn a_key_pressed_after_the_lock_was_seen_came_from_another_computer() {
+        let start = Instant::now();
+        let mut d = Desktop::default();
+        d.take_at(reading(Some(86_400_000.0), Some(true)), start);
+        let later = start + Duration::from_secs(30);
+        let p = d.with_keys_at(Some(10_000.0), later);
+        assert_eq!(p, reading(Some(10_000.0), Some(false)));
+        assert!(!away_by(&p, AFTER));
+    }
+
+    #[test]
+    fn a_reading_that_cant_tell_the_lock_keeps_when_it_was_seen() {
+        let start = Instant::now();
+        let mut d = Desktop::default();
+        d.take_at(reading(Some(0.0), Some(true)), start);
+        d.take_at(reading(Some(0.0), None), start + Duration::from_secs(60));
+        d.take_at(
+            reading(Some(0.0), Some(true)),
+            start + Duration::from_secs(120),
+        );
+        // Typed 90s ago: after the lock was first seen, before it was seen
+        // again.
+        let p = d.with_keys_at(Some(90_000.0), start + Duration::from_secs(180));
+        assert_eq!(p.locked, Some(false));
+        d.take_at(
+            reading(Some(0.0), Some(false)),
+            start + Duration::from_secs(200),
+        );
+        d.take_at(
+            reading(Some(0.0), Some(true)),
+            start + Duration::from_secs(240),
+        );
+        let p = d.with_keys_at(Some(90_000.0), start + Duration::from_secs(250));
+        assert_eq!(p.locked, Some(true), "unlocked and locked again since");
     }
 }
