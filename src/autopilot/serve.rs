@@ -144,8 +144,9 @@ fn dollars(text: &str) -> Option<f64> {
 impl Server {
     // ── M-p ─────────────────────────────────────────────────────────────────
 
-    /// M-p's command, pressed with `pane` current: mission control's tabs,
-    /// then the mode set up, or its menu while it is on.
+    /// M-p's command, pressed with `pane` current: mission control on the
+    /// Autopilot view, which shows the mode while it is on (its menu a key
+    /// or a click away there), else the mode set up.
     pub fn autopilot_command(&mut self, client: ClientId, command: Command, pane: Option<PaneId>) {
         match command {
             Command::WorkNote => {
@@ -158,9 +159,7 @@ impl Server {
                     self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
                 }
-                if Mode::read(&paths::state_dir()).on {
-                    self.autopilot_menu(client);
-                } else {
+                if !Mode::read(&paths::state_dir()).on {
                     self.autopilot_setup(client, &dir);
                 }
             }
@@ -574,7 +573,8 @@ impl Server {
 
     // ── Its menu ────────────────────────────────────────────────────────────
 
-    /// The menu Enter on its line in mission control opens, moved through
+    /// The menu `m`, Enter on its line or heading, or its heading's button
+    /// in mission control opens, moved through
     /// with j and k as mission control's other menus are.
     pub fn autopilot_menu(&mut self, client: ClientId) {
         let mode = Mode::read(&paths::state_dir());

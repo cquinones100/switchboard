@@ -192,6 +192,52 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
+fn with_ux2_its_command_opens_the_board_and_m_or_its_button_opens_the_menu() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    client.wait_text("Waiting on you");
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("Waiting on you"))
+    });
+    // M-p's command with the mode on shows the board, no menu over it.
+    client.type_text("\x1bp");
+    client.wait_text("Actions");
+    client.type_text("autopilot");
+    client.wait_text("Autopilot: work a note");
+    client.type_text("\r");
+    client.wait_text("☰ Menu");
+    std::thread::sleep(Duration::from_millis(300));
+    let screen = client.screen();
+    assert!(
+        !screen
+            .iter()
+            .any(|l| l.contains("Pause: open no more tabs")),
+        "{screen:#?}"
+    );
+    // m opens it.
+    client.type_text("m");
+    client.wait_text("Pause: open no more tabs");
+    client.type_text("\x1b");
+    client.wait_for("menu closed", |s| {
+        !s.iter().any(|l| l.contains("Pause: open no more tabs"))
+    });
+    // So does a click on the heading's button.
+    let (row, col) = client.find_cell('☰').unwrap();
+    client.send(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        )
+        .as_bytes(),
+    );
+    client.wait_text("Pause: open no more tabs");
+    drop(server);
+}
+
+#[test]
 fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is_left() {
     let (notes, note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("AUTO Work");

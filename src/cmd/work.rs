@@ -1213,8 +1213,8 @@ impl Server {
     }
 
     /// Notes' M-p with UX 2.0 on (`press work-note <note>`): autopilot
-    /// working that note, in the repository its items are worked in; its
-    /// menu while it is on.
+    /// working that note, in the repository its items are worked in;
+    /// mission control on the mode while it is on.
     pub fn work_note(&mut self, client: ClientId, note: String) {
         if !settings::is_on("autopilot") {
             self.say(Some(client), "Autopilot is off in Settings (Autopilot)");

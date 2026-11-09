@@ -2154,8 +2154,8 @@ fn pilot_tone(item: &Item) -> Tone {
 }
 
 /// UX 2.0's Autopilot view as a board (src/autopilot/view.rs): its heading
-/// (`AUTO`, the note bold, its facts dim, and today's spend against its
-/// limit as a meter at the right), a column per place an item stands, each
+/// (`AUTO`, the note bold, its facts dim, the button that opens its menu,
+/// and today's spend against its limit as a meter at the right), a column per place an item stands, each
 /// item a rounded card of its tab's number (or its place in line), a red ✕
 /// once a stage failed, its first line, where it is dim, and a meter of
 /// its stages done; the chosen card's edge in the accent color. The
@@ -2181,6 +2181,19 @@ fn pilot_board(
     if let Some((at, head)) = items.iter().enumerate().find(|(_, i)| views::is_summary(i)) {
         let spend = head.data.get("spend").and_then(serde_json::Value::as_array);
         let spend_w = if spend.is_some() { SPEND_W + 2 } else { 0 };
+        // Its menu's button, lit under the mouse or while Tab's focus is on
+        // the heading, before the spend.
+        let button_lit = m.hover == Some(Spot::Menu(at as isize))
+            || (m.focus == Some(Focus::Item) && chosen(at));
+        let button = kit::keycap("m", "☰ Menu", button_lit, m.snap.caps, theme);
+        let button_w = spans_width(&button);
+        let button_x = cols.saturating_sub(spend_w + button_w);
+        hits.push(HitBox {
+            y: lines.len() as u16,
+            x0: button_x as u16,
+            x1: (button_x + button_w).saturating_sub(1) as u16,
+            spot: Spot::Menu(at as isize),
+        });
         hits.push(HitBox {
             y: lines.len() as u16,
             x0: 0,
@@ -2196,7 +2209,8 @@ fn pilot_board(
         } else {
             lit(at).then_some(theme.panel)
         };
-        let mut spans = row.fitted(cols.saturating_sub(spend_w), Style::new());
+        let mut spans = row.fitted(cols.saturating_sub(spend_w + button_w), Style::new());
+        spans.extend(button);
         if let Some(spend) = spend {
             let n = |i: usize| {
                 spend
@@ -2547,9 +2561,18 @@ fn hints(m: &Mission, view: Option<&View>) -> Vec<(String, String)> {
         ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
         ViewId::Keys => with(&[("jk", "move"), ("↵", "press it"), ("/", "filter")]),
         ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
-        ViewId::Autopilot if m.snap.rules.ux2 && m.size.0 as usize >= PILOT_BOARD_AT => {
-            with(&[("hl", "column"), ("jk", "move"), ("↵", "actions")])
-        }
+        ViewId::Autopilot if m.snap.rules.ux2 && m.size.0 as usize >= PILOT_BOARD_AT => with(&[
+            ("hl", "column"),
+            ("jk", "move"),
+            ("↵", "actions"),
+            ("m", "menu"),
+        ]),
+        ViewId::Autopilot if pilot_menu_shown(view) => with(&[
+            ("jk", "move"),
+            ("↵", "actions"),
+            ("m", "menu"),
+            ("/", "filter"),
+        ]),
         ViewId::Prs | ViewId::Tickets => with(&[
             ("hl", "column"),
             ("jk", "move"),
@@ -2561,6 +2584,14 @@ fn hints(m: &Mission, view: Option<&View>) -> Vec<(String, String)> {
         }
         _ => with(&[("jk", "move"), ("↵", "actions"), ("/", "filter")]),
     }
+}
+
+/// Whether the Autopilot view shows the mode, whose menu `m` opens.
+pub(super) fn pilot_menu_shown(view: &View) -> bool {
+    view.data
+        .items
+        .iter()
+        .any(|i| i.id == crate::autopilot::view::HEADING)
 }
 
 /// The footer's keys: with UX 2.0 the kit's hints, each key in the accent;

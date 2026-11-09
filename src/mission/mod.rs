@@ -75,13 +75,15 @@ pub enum Focus {
 
 /// What a click on a part of the screen means, and what the mouse is over:
 /// a group's name, a view's name, the filter, a card or a row (by its place in the view;
-/// -1 is a line above the cards), or easy mode's ×.
+/// -1 is a line above the cards), a button on a row that opens its menu
+/// (the Autopilot heading's), or easy mode's ×.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spot {
     Group(Group),
     View(usize),
     Filter,
     Index(isize),
+    Menu(isize),
     Close,
 }
 

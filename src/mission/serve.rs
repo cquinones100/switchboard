@@ -89,6 +89,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     ("v", "go to a view by typing its name (↵ go, esc cancel)"),
     ("r", "refresh a plugin's view"),
+    (
+        "m",
+        "autopilot's menu, in its view or on its line above the tabs",
+    ),
     ("esc q", "close"),
     ("M-w", "close, whatever is open over it"),
     ("?", "these keys"),
@@ -1159,6 +1163,7 @@ impl Server {
                 }
             }
             KeyCode::Enter => self.mission_enter(client, m),
+            KeyCode::Char('m') if none && pilot_menu_here(m) => self.autopilot_menu(client),
             KeyCode::Char(c @ '1'..='9') if none && m.view == 0 => {
                 let n = c.to_digit(10).unwrap_or(0) as usize;
                 let order = m.order();
@@ -2882,6 +2887,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 }
                 Spot::View(_) => Then::Redraw,
                 Spot::Index(i) if i == m.cursor => Then::Enter,
+                // A row's menu button: chosen and opened in one click.
+                Spot::Menu(i) => {
+                    m.cursor = i;
+                    Then::Enter
+                }
                 Spot::Index(i) => {
                     m.cursor = i;
                     Then::Prepare
@@ -2889,6 +2899,15 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             }
         }
         _ => Then::Nothing,
+    }
+}
+
+/// Whether `m` opens autopilot's menu: in its view while it shows the
+/// mode, or on the Tabs view with its line chosen.
+fn pilot_menu_here(m: &Mission) -> bool {
+    match m.current() {
+        Some(v) => v.id == ViewId::Autopilot && super::render::pilot_menu_shown(v),
+        None => m.cursor < 0 && m.snap.pilot.is_some(),
     }
 }
 

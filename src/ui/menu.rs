@@ -9,7 +9,9 @@
 //! option moves the cursor there, as mission control's menus do.
 //!
 //! Text to read above the options (`body`) is wrapped to the box and cut
-//! short with … when the options need the room.
+//! short with … when the options need the room. The box is at most 72
+//! columns or two thirds of the screen, whichever is less, but never
+//! narrower than its title: an option longer than that is cut with ….
 
 use ratatui::buffer::Buffer;
 
@@ -101,6 +103,15 @@ impl Menu {
     }
 }
 
+/// The keys a menu takes, on its bottom row.
+const KEYS: &str = "jk or tab move  ↵ or click choose  esc back";
+
+/// The widest a menu's inside is on a screen `cols` wide: its box 72
+/// columns or two thirds of the screen, whichever is less.
+fn widest(cols: usize) -> usize {
+    (cols * 2 / 3).min(72).saturating_sub(2)
+}
+
 impl Overlay for Menu {
     fn kind(&self) -> &'static str {
         "menu"
@@ -112,7 +123,15 @@ impl Overlay for Menu {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let area = buf.area;
-        let inner = (area.width.saturating_sub(6)).min(72) as usize;
+        let close_w = if look.close {
+            draw::width(draw::CLOSE)
+        } else {
+            0
+        };
+        let inner = widest(area.width as usize)
+            .max(draw::width(&self.title) + 6 + close_w)
+            .max(draw::width(KEYS) + 3)
+            .min((area.width as usize).saturating_sub(2));
         let room = (area.height as usize).saturating_sub(6).max(1);
         let n = self.options.len();
         let fits = n.min(room);
@@ -147,16 +166,19 @@ impl Overlay for Menu {
         }
         self.first_line = lines.len();
         self.first_shown = first;
-        let key_col = self
+        // A row is `   label` and, two columns past the longest label, its
+        // key, inside the box's margin of a column each side.
+        let keyed = self.options.iter().any(|o| o.key.is_some());
+        let label_room = inner.saturating_sub(5 + if keyed { 3 } else { 0 });
+        let labels: Vec<String> = self
             .options
             .iter()
-            .map(|o| draw::width(&o.label))
-            .max()
-            .unwrap_or(0)
-            + 5;
+            .map(|o| draw::cut(&o.label, label_room))
+            .collect();
+        let key_col = labels.iter().map(|l| draw::width(l)).max().unwrap_or(0) + 5;
         for (i, option) in self.options.iter().enumerate().skip(first).take(fits) {
             let chosen = i == self.cursor;
-            let spans = super::kit::option(&option.label, option.key, key_col, chosen, &look.theme);
+            let spans = super::kit::option(&labels[i], option.key, key_col, chosen, &look.theme);
             lines.push(
                 BoxLine::spans(spans)
                     .fill(chosen.then_some(look.theme.highlight))
@@ -164,7 +186,7 @@ impl Overlay for Menu {
             );
         }
         let mut spec = BoxSpec::new(&self.title, &lines);
-        spec.keys = Some("jk or tab move  ↵ or click choose  esc back");
+        spec.keys = Some(KEYS);
         if !shown.is_empty() {
             spec.width = inner as u16;
         }
@@ -369,6 +391,33 @@ mod tests {
         m.draw(&mut Buffer::empty(Rect::new(0, 0, 80, 20)), &off);
         assert_eq!(m.mouse(wheel, &off), Step::Same);
         assert_eq!(m.mouse(wheel, &look), Step::Redraw);
+    }
+
+    #[test]
+    fn a_wide_screens_menu_is_at_most_72_columns_its_long_option_cut() {
+        let look = Look::default();
+        let long = "Skip the next item: ".to_string() + &"a very long item ".repeat(12);
+        let mut m = Menu::new(
+            "Working Work",
+            vec![
+                MenuOption::new("Pause").key('p'),
+                MenuOption::new(long).key('s'),
+            ],
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 200, 30));
+        m.draw(&mut buf, &look);
+        let d = m.drawn.clone().unwrap();
+        assert_eq!(d.outer.width, 72);
+        let s = screen(&buf);
+        let row = s.iter().find(|l| l.contains("Skip the next")).unwrap();
+        assert!(row.contains("…  s  │"), "{row}");
+        // Two thirds of a narrower screen, never narrower than its title.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 90, 30));
+        m.draw(&mut buf, &look);
+        assert_eq!(m.drawn.clone().unwrap().outer.width, 60);
+        let mut titled = Menu::new("T".repeat(70), vec![MenuOption::new("x".repeat(200))]);
+        titled.draw(&mut buf, &look);
+        assert_eq!(titled.drawn.clone().unwrap().outer.width, 78);
     }
 
     #[test]
