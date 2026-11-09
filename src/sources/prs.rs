@@ -204,13 +204,22 @@ pub fn answers(aliases: &[Alias], data: &Value, errors: &[Value]) -> Vec<(PrKey,
             let answer = data.get(&a.repo)?.get(&a.alias)?;
             let pr = match &a.key {
                 PrKey::Branch { from: None, .. } => answer.pointer("/nodes/0")?,
+                // The fork's PR, an open one before the rest, as
+                // `github::branch_pr` chooses.
                 PrKey::Branch {
                     from: Some(from), ..
-                } => answer
-                    .get("nodes")?
-                    .as_array()?
-                    .iter()
-                    .find(|pr| from_fork(pr, from))?,
+                } => {
+                    let fork_s: Vec<&Value> = answer
+                        .get("nodes")?
+                        .as_array()?
+                        .iter()
+                        .filter(|pr| from_fork(pr, from))
+                        .collect();
+                    let open = fork_s
+                        .iter()
+                        .find(|pr| pr.get("state").and_then(Value::as_str) == Some("OPEN"));
+                    *open.or_else(|| fork_s.first())?
+                }
                 PrKey::Number { .. } => answer,
             };
             Some((a.key.clone(), facts_from(pr, &a.key)?))
@@ -360,6 +369,14 @@ mod tests {
         // With only another fork's, none.
         let answer = json!({ "r1": { "a0": { "nodes": [pr(52, "someone", true)] } } });
         assert!(answers(&aliases, &answer, &[]).is_empty());
+        // The fork's open PR before a newer merged one of its own.
+        let mut merged = pr(60, "me", true);
+        merged["state"] = json!("MERGED");
+        let answer = json!({ "r1": { "a0": { "nodes": [merged.clone(), pr(41, "me", true)] } } });
+        assert_eq!(answers(&aliases, &answer, &[])[0].1.number, 41);
+        // With none open, the newest.
+        let answer = json!({ "r1": { "a0": { "nodes": [merged] } } });
+        assert_eq!(answers(&aliases, &answer, &[])[0].1.number, 60);
     }
 
     #[test]

@@ -177,7 +177,7 @@ fn remote_for(root: &Path, repo: &str) -> Option<String> {
 /// The repository a bare PR number is a PR of: the one gh would ask
 /// (`github::repo_of`: `gh repo set-default`'s, else upstream's when origin
 /// is a fork, else origin's), else the first remote's on GitHub.
-fn numbered_repo(root: &Path) -> Result<Repo, String> {
+pub(crate) fn numbered_repo(root: &Path) -> Result<Repo, String> {
     match util::block_on(github::repo_of(root)) {
         Ok(repo) => Ok(repo),
         Err(e) if crate::net::kind_of(&e).is_some() => Err(format!(

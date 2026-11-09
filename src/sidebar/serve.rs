@@ -466,6 +466,7 @@ impl Server {
         t.turn = read.and_then(|r| r.turn.clone());
         // The PR its label shows, else the one GitHub says its branch has.
         t.pr = pr;
+        t.pr_repo = self.tab_pr_repo(id).map(ToString::to_string);
         // What GitHub and the landing queue say of it, as prs.js's mergeOf
         // and landing.js's landingOf gave it; none of GitHub's with the
         // github setting off.

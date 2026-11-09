@@ -328,34 +328,21 @@ impl Names {
         let label = label::facts_label(&window, ticket.as_deref().zip(title.as_deref()));
 
         // A `wtpr` worktree carries its number in its directory's name, which
-        // needs no lookup.
+        // needs no lookup, its repository its origin. In a fork's clone,
+        // `wtpr` took a bare number as gh does (`github::repo_of`), possibly
+        // upstream's, so which one it is is asked, as `branch_pr` does for
+        // such a directory, the number shown meanwhile.
         let pr = if !switches.prs() {
             None
         } else if let Some(n) = github::pr_number_from_dir(dir) {
-            Some(BranchPr {
-                number: n,
-                repo: None,
-            })
+            let repo = place
+                .filter(|_| crate::sources::repo::remotes_of(dir).upstream.is_some())
+                .and_then(|p| self.branch_pr(dir, p, now, asks))
+                .filter(|found| found.number == n)
+                .and_then(|found| found.repo);
+            Some(BranchPr { number: n, repo })
         } else {
-            place.filter(|p| p.on_branch()).and_then(|p| {
-                // Keyed on the repository rather than the worktree, so a
-                // ticket's worktree and a wtpr one on the same branch share
-                // one answer.
-                let key = (p.common_dir.clone(), p.branch.clone());
-                let known = self.prs.entry(key).or_insert(Known {
-                    value: None,
-                    next: now,
-                    asked: None,
-                });
-                if known.due(now) {
-                    asks.push(Ask::Pr {
-                        dir: dir.to_path_buf(),
-                        repo: p.common_dir.clone(),
-                        branch: p.branch.clone(),
-                    });
-                }
-                known.value.clone()
-            })
+            place.and_then(|p| self.branch_pr(dir, p, now, asks))
         };
         let (pr, pr_repo) = match pr {
             Some(found) => (Some(found.number), found.repo),
@@ -367,6 +354,36 @@ impl Names {
             pr,
             pr_repo,
         }
+    }
+
+    /// The PR of the branch `place` is on, as last found, asking for it in
+    /// the background when it is due. Keyed on the repository rather than
+    /// the worktree, so a ticket's worktree and a wtpr one on the same
+    /// branch share one answer.
+    fn branch_pr(
+        &mut self,
+        dir: &Path,
+        place: &GitPlace,
+        now: Instant,
+        asks: &mut Vec<Ask>,
+    ) -> Option<BranchPr> {
+        if !place.on_branch() {
+            return None;
+        }
+        let key = (place.common_dir.clone(), place.branch.clone());
+        let known = self.prs.entry(key).or_insert(Known {
+            value: None,
+            next: now,
+            asked: None,
+        });
+        if known.due(now) {
+            asks.push(Ask::Pr {
+                dir: dir.to_path_buf(),
+                repo: place.common_dir.clone(),
+                branch: place.branch.clone(),
+            });
+        }
+        known.value.clone()
     }
 
     /// Takes a lookup's answer in. Gives whether it changed what is known,
@@ -684,6 +701,52 @@ mod tests {
         };
         assert!(!names.answer(failed, now));
         assert_eq!(names.facts(&dir, now).0.pr, Some(12));
+    }
+
+    #[test]
+    fn a_wtpr_directory_shows_its_number_at_once_and_asks_its_repository_only_in_a_fork_s_clone() {
+        let scratch = Scratch::new("wtpr");
+        let dir = scratch.0.join("pr-41-feature");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "feature"]));
+        let remote = |name: &str, url: &str| git(&dir, &["remote", "add", name, url]);
+        assert!(remote("origin", "https://github.com/me/app.git"));
+
+        // A clone with no upstream: its origin's number, nothing asked.
+        let (mut plain, now) = names(Switches::default());
+        let (facts, asks) = plain.facts(&dir, now);
+        assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
+        assert!(asks.is_empty());
+
+        // A fork's clone: the number at once, its repository asked.
+        assert!(remote("upstream", "https://github.com/acme/app.git"));
+        let (mut names, now) = names(Switches::default());
+        let (facts, asks) = names.facts(&dir, now);
+        assert_eq!((facts.pr, facts.pr_repo), (Some(41), None));
+        let repo_dir = dir.join(".git");
+        assert_eq!(
+            asks,
+            vec![Ask::Pr {
+                dir: dir.clone(),
+                repo: repo_dir.clone(),
+                branch: "feature".into()
+            }]
+        );
+        let pr = Answer::Pr {
+            repo: repo_dir,
+            branch: "feature".into(),
+            found: found(41, "acme/app"),
+        };
+        assert!(names.answer(pr, now));
+        let facts = names.facts(&dir, now).0;
+        assert_eq!(facts.pr, Some(41));
+        assert_eq!(
+            facts.pr_repo.map(|r| r.to_string()).as_deref(),
+            Some("acme/app")
+        );
     }
 
     #[test]

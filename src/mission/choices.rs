@@ -389,7 +389,9 @@ fn text<'a>(v: &'a Value, pointer: &str) -> &'a str {
 
 /// The tab a PR is open in, and the directory of a tab in its repository
 /// (else your home), where work on it starts. A fork's clone is in the
-/// project its upstream names too, where its PRs are opened.
+/// project its upstream names too, where its PRs are opened. The tab is the
+/// one whose PR is that number in that repository: where its lookup found
+/// it, else its origin, so a fork's own #41 is never upstream's #41.
 fn pr_places(ctx: &Ctx<'_>, number: u64, repo: &str) -> (Option<TabModel>, PathBuf) {
     let in_repo = |t: &&TabModel| {
         t.path.as_deref().is_some_and(|p| {
@@ -398,12 +400,19 @@ fn pr_places(ctx: &Ctx<'_>, number: u64, repo: &str) -> (Option<TabModel>, PathB
                 .any(|r| r.eq_ignore_ascii_case(repo))
         })
     };
-    let tab = ctx
-        .tabs
-        .iter()
-        .filter(in_repo)
-        .find(|t| t.pr == Some(number))
-        .cloned();
+    let pr_in_repo = |t: &&TabModel| {
+        let origin = || {
+            t.path
+                .as_deref()
+                .and_then(|p| (ctx.repos_of)(p).into_iter().next())
+        };
+        t.pr == Some(number)
+            && t.pr_repo
+                .clone()
+                .or_else(origin)
+                .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+    };
+    let tab = ctx.tabs.iter().find(pr_in_repo).cloned();
     let dir = ctx
         .tabs
         .iter()
@@ -1106,7 +1115,8 @@ mod tests {
         // upstream names, acme/app, where its PR #41 is.
         let mut open = tab(2, "#41 the feature");
         open.pr = Some(41);
-        let tabs = vec![open];
+        open.pr_repo = Some("acme/app".to_string());
+        let tabs = vec![open.clone()];
         let repos = |_: &Path| vec!["me/app".to_string(), "acme/app".to_string()];
         let url = "https://github.com/acme/app/pull/41";
         let item = Item::new("u", "#41 the feature")
@@ -1114,10 +1124,15 @@ mod tests {
             .data(json!({ "pr": { "number": 41, "repo": "acme/app" }, "url": url }));
         let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &repos));
         assert_eq!(choices[0].act, Do::GoTo(TabId(2)));
-        // Without the upstream, the tab is no tab of that repository's.
-        let origin = |_: &Path| vec!["me/app".to_string()];
-        let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &origin));
-        assert!(!choices.iter().any(|c| c.act == Do::GoTo(TabId(2))));
+        // A tab on the fork's own #41 (its origin's, by its lookup or by
+        // default) is no tab of upstream's #41, though its clone is in both.
+        for own in [Some("me/app".to_string()), None] {
+            let mut fork_s = open.clone();
+            fork_s.pr_repo = own;
+            let tabs = vec![fork_s];
+            let choices = item_choices(&ViewId::Prs, &item, &[], &ctx(&tabs, &repos));
+            assert!(!choices.iter().any(|c| c.act == Do::GoTo(TabId(2))));
+        }
     }
 
     #[test]
