@@ -108,7 +108,7 @@ impl Server {
     }
 
     /// Whether a pane is parked, out of every layout.
-    fn parked(&self, pane: PaneId) -> bool {
+    pub(crate) fn parked(&self, pane: PaneId) -> bool {
         self.panes.get(&pane).is_some_and(|s| {
             s.opts.contains_key(PANE_PARKED)
                 && !self
@@ -176,15 +176,38 @@ impl Server {
             return Vec::new();
         };
         let mut out = t.layout.panes();
-        let tools: Vec<PaneId> = out.clone();
-        for tool in tools {
-            if let Some(parked) = self.parked_of(tool)
+        // A tool can stand in for a tool (the diff opened over lazygit or a
+        // view), so each parked pane is asked for its own in turn.
+        let mut next = 0;
+        while next < out.len() {
+            if let Some(parked) = self.parked_of(out[next])
                 && !out.contains(&parked)
             {
                 out.push(parked);
             }
+            next += 1;
         }
         out
+    }
+
+    /// The pane drawn where a parked pane was: the tool standing in for
+    /// it, or, when that tool is parked behind another, the one in front.
+    pub(crate) fn in_front_of(&self, parked: PaneId) -> Option<PaneId> {
+        let tab_id = self.panes.get(&parked)?.tab;
+        let tab = self.tabs.get(&tab_id)?;
+        let mut behind = parked;
+        for _ in 0..self.panes.len() {
+            let tool = self
+                .panes
+                .iter()
+                .find(|(id, slot)| slot.tab == tab_id && self.parked_of(**id) == Some(behind))
+                .map(|(id, _)| *id)?;
+            if tab.layout.contains(tool) {
+                return Some(tool);
+            }
+            behind = tool;
+        }
+        None
     }
 
     /// A tab's layout as it is saved for a restart: each tool's place given

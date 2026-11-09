@@ -353,17 +353,21 @@ impl Server {
         // wraps to its three lines, while its name is that item cut short.
         let name = self.tab_full_title(id).unwrap_or(name);
         let panes = tab.layout.panes();
+        // Its Claude is looked for behind a tool in its pane's place too
+        // (the diff, lazygit, a view), so the tab keeps the stage its
+        // Claude is in rather than falling to Other.
+        let with_parked = self.tab_panes(id);
         // The pane whose state the tab shows, and since when: the longest
         // there of those in that state; else the first running Claude.
-        let leader = self.agents.leader(&panes);
+        let leader = self.agents.leader(&with_parked);
         let read_of = |p: PaneId| self.sidebar.panes.get(&p);
         let claude_pane = leader.map(|(p, _, _)| p).or_else(|| {
-            panes
+            with_parked
                 .iter()
                 .copied()
                 .find(|p| read_of(*p).is_some_and(|r| r.session.is_some()))
                 .or_else(|| {
-                    panes
+                    with_parked
                         .iter()
                         .copied()
                         .find(|p| read_of(*p).is_some_and(|r| r.claude))

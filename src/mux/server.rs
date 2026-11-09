@@ -1745,6 +1745,16 @@ impl Server {
     /// Focuses a pane, its tab made current in its session, the focus taken
     /// out of the session's sidebar.
     pub fn focus_pane(&mut self, pane: PaneId) {
+        // A pane parked behind a tool in its place isn't drawn: the focus
+        // goes to the tool, as it was left.
+        let pane = if self.parked(pane) {
+            match self.in_front_of(pane) {
+                Some(tool) => tool,
+                None => return,
+            }
+        } else {
+            pane
+        };
         let Some(tab_id) = self.panes.get(&pane).map(|s| s.tab) else {
             return;
         };

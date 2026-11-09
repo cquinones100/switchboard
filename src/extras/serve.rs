@@ -370,8 +370,8 @@ impl Server {
 
     /// "Send Claude's last reply to another tab" (reply-send.sh): the reply
     /// read from the tab's transcript, a tab picked, and the reply pasted
-    /// into that tab's Claude (its active pane when it runs none) without
-    /// Enter, as a bracketed paste so its line breaks stay in the text, and
+    /// into that tab's Claude (its active pane when it runs none; brought
+    /// beside a tool standing in its place) without Enter, as a bracketed paste so its line breaks stay in the text, and
     /// that tab brought to the front, to add to it before sending.
     fn send_reply(&mut self, client: ClientId) {
         let Some(here) = self.client_tab(client) else {
@@ -441,6 +441,19 @@ impl Server {
         let Some(pane) = model.claude_pane.or(model.active) else {
             return;
         };
+        // A Claude behind a tool in its pane's place (the diff, lazygit, a
+        // view) comes back beside it first, as the history view brings it,
+        // so the reply is pasted where you can see it and add to it.
+        if self.parked(pane) {
+            self.unpark_beside(pane);
+        }
+        if self.parked(pane) {
+            self.say(
+                Some(client),
+                "That tab's Claude is behind a tool that couldn't make room for it, so the reply wasn't pasted there.",
+            );
+            return;
+        }
         let paste = vec![crate::mission::answer::Press::Paste(reply.to_string())];
         if model.claude_pane.is_some() {
             // Into Claude's prompt, `i` first in vim's Normal mode.

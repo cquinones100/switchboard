@@ -611,6 +611,37 @@ fn changes(client: &mut TestClient, span: Duration) -> usize {
 }
 
 #[test]
+fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
+    let (server, mut client) = two_tabs(json!({}));
+    common::stand_in::lazygit(&server.home.join("bin"));
+    // The first tab's shell stands in for a Claude, lazygit in its place.
+    let tab = tabs(&server.list())[0].clone();
+    let id = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    session_file(
+        &server.home,
+        tab["panes"][0]["pid"].as_u64().unwrap(),
+        "s-parked",
+    );
+    server.ok(&["select-tab", "-t", tab["id"].as_str().unwrap()]);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    server.ok(&["press", "lazygit"]);
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    hook(&server, &id, "UserPromptSubmit", json!({"prompt": "go on"}));
+    open(&mut client);
+    // Its card under Working, the other tab alone under Other.
+    let screen = client.wait_text("WORKING 1");
+    assert!(
+        screen.iter().any(|l| l.contains("OTHER 1")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
 fn behind_a_box_the_cards_spinners_turn_at_most_every_half_second() {
     let (server, mut client) = two_tabs(json!({}));
     // The sidebar under mission control, whose spinner draws the screen

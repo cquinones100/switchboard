@@ -400,6 +400,184 @@ fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
     assert!(!focused(&list), "the focus in the tool");
 }
 
+#[test]
+fn a_tab_whose_claude_is_behind_a_tool_in_its_pane_s_place_keeps_its_stage() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    // The first tab's shell stands in for a Claude, lazygit in its place.
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-parked"}));
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("stand-in lazygit");
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    // At work behind it: under Working, not Other.
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    let screen = client.wait_for("Working", |s| {
+        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+    });
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("OTHER")),
+        "{}",
+        screen.join("\n")
+    );
+    // Finished, and seen there: under Idle.
+    hook(&server, &pane, "Stop", json!({}));
+    let screen = client.wait_for("Idle", |s| s.iter().any(|l| left(l, 34).contains("IDLE 1")));
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("OTHER")),
+        "{}",
+        screen.join("\n")
+    );
+
+    // From another tab, Enter on it in the sidebar goes to it with the
+    // focus in lazygit's pane, the Claude still parked behind it.
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("1");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text("\r");
+    let list = wait_list(&server, "the focus in the pane", |l| {
+        !focused(l) && tabs(l)[0]["current"] == true
+    });
+    let shown = &tabs(&list)[0]["panes"];
+    assert_eq!(shown.as_array().unwrap().len(), 1, "{shown}");
+    assert_eq!(shown[0]["options"]["@in_place"], "lazygit");
+    assert_eq!(shown[0]["options"]["@parked_pane"], pane.as_str());
+    assert_eq!(shown[0]["active"], true, "the focus in lazygit: {shown}");
+}
+
+#[test]
+fn a_claude_behind_a_tool_opened_over_another_tool_keeps_its_tab_in_its_stage() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    // The diff opens only in a repository.
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init"]);
+    git(&repo, &["commit", "--allow-empty", "-m", "first"]);
+    cd(&server, &mut client, &repo);
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-stacked"}));
+    // lazygit in the Claude's place, then the diff in lazygit's.
+    server.ok(&["press", "lazygit"]);
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    server.ok(&["press", "diff-working-tree"]);
+    let list = wait_list(&server, "the diff in lazygit's place", |l| {
+        let shown = &tabs(l)[0]["panes"][0]["options"]["@in_place"];
+        shown.is_string() && shown != "lazygit"
+    });
+    let diff = tabs(&list)[0]["panes"][0]["id"].clone();
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    let screen = client.wait_for("Working", |s| {
+        s.iter().any(|l| left(l, 34).contains("WORKING 1"))
+    });
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("OTHER")),
+        "{}",
+        screen.join("\n")
+    );
+
+    // Gone to from the sidebar, the focus is in the diff, the one drawn.
+    server.ok(&["new-tab", "-n", "second"]);
+    client.wait_text("2:second");
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("1");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text("\r");
+    let list = wait_list(&server, "the focus in the pane", |l| {
+        !focused(l) && tabs(l)[0]["current"] == true
+    });
+    let shown = &tabs(&list)[0]["panes"];
+    assert_eq!(shown.as_array().unwrap().len(), 1, "{shown}");
+    assert_eq!(shown[0]["id"], diff);
+    assert_eq!(shown[0]["active"], true, "the focus in the diff: {shown}");
+}
+
+#[test]
+fn a_reply_sent_to_a_tab_whose_claude_is_behind_a_tool_brings_the_claude_beside_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(140, 30);
+    client.wait_text("$");
+    // The first tab's Claude, lazygit in its place.
+    let (dest, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-dest"}));
+    server.ok(&["press", "lazygit"]);
+    wait_list(&server, "lazygit in the pane's place", |l| {
+        tabs(l)[0]["panes"][0]["options"]["@in_place"] == "lazygit"
+    });
+    // A second tab's Claude, with a reply in its transcript.
+    server.ok(&["new-tab", "-n", "from"]);
+    client.wait_text("2:from");
+    let from = wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+    let from_pid = tabs(&from)[1]["panes"][0]["pid"].as_u64().unwrap();
+    session_file(&server.home, from_pid, json!({"sessionId": "s-from"}));
+    let project = server.home.join(".claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let at = jiff::Timestamp::now().to_string();
+    let lines = [
+        json!({"type": "user", "timestamp": at, "message": {"content": "go"}}),
+        json!({"type": "assistant", "timestamp": at, "message": {"content": [
+            {"type": "text", "text": "reply-to-pass-on"}
+        ]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join("s-from.jsonl"), text).unwrap();
+    // Both tabs' Claudes read: neither is under Other.
+    client.wait_for("both tabs under Idle", |s| {
+        s.iter().any(|l| left(l, 34).contains("IDLE 2"))
+    });
+
+    server.ok(&["press", "send-reply"]);
+    client.wait_text("send to>");
+    client.type_text("\r");
+    // The first tab in front, its Claude beside lazygit with the focus and
+    // the reply at its prompt, unsent.
+    let list = wait_list(&server, "the Claude beside lazygit, focused", |l| {
+        let panes = tabs(l)[0]["panes"].as_array().cloned().unwrap_or_default();
+        tabs(l)[0]["current"] == true
+            && panes.len() == 2
+            && panes
+                .iter()
+                .any(|p| p["id"] == dest.as_str() && p["active"] == true)
+    });
+    assert!(
+        tabs(&list)[0]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["options"]["@in_place"] == "lazygit"),
+        "lazygit still there: {list}"
+    );
+    client.wait_text("reply-to-pass-on");
+}
+
 /// The Notifications window's tab, by its place in the list, if made.
 fn notices_tab(list: &Value) -> Option<usize> {
     tabs(list)
