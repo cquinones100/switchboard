@@ -695,7 +695,7 @@ Mission control's Resources view is how much CPU and memory each tab uses, count
 
 The Sessions view lists each Claude tab's session with how full its context is, its model, how long it has run and how long since it last did anything, the fullest first, one at 80% or more marked as needing you: the ones to compact or close. Enter offers to go to the tab. Settings' "Sessions" (`view_sessions`).
 
-The Usage view is what Claude has cost today, at API prices as Claude Code estimates it, across the interactive sessions that ran today (a headless `claude -p` isn't counted), and how much of each rate limit is used (the 5-hour and weekly limits, or a spend limit) with when it resets, one at 80% or more marked as needing you. Settings' "Usage" (`usage`).
+The Usage view is what Claude has cost today, at API prices as Claude Code estimates it, across the interactive sessions that ran today (a headless `claude -p` isn't counted; a session resumed in a new Claude process, by the handoff, a restart or `claude --resume`, adds only what it costs from then on), and how much of each rate limit is used (the 5-hour and weekly limits, or a spend limit) with when it resets, one at 80% or more marked as needing you. Settings' "Usage" (`usage`).
 
 Claude Code gives the context, the model, the cost and the limits only to its statusline, which `switchboard setup` makes `switchboard statusline`. It writes them to `~/.local/state/switchboard/context/` and `~/.local/state/switchboard/usage/` as each session draws, so a session shows in these views once its statusline has drawn, and the limits are as the last session to draw saw them.
 

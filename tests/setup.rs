@@ -1794,7 +1794,7 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
     let today = stdout(&today).trim().to_string();
     assert_eq!(
         read(&state.join("usage/spend-sess-1")),
-        format!("{today}\t1.2500\t1.25\t4242")
+        format!("{today}\t1.2500\t1.25\t4242\t2")
     );
     assert_eq!(
         read(&state.join("usage/limits")),
@@ -1813,7 +1813,7 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
     statusline(&h, &later, true);
     assert_eq!(
         read(&state.join("usage/spend-sess-1")),
-        format!("{today}\t2.0000\t2\t4242")
+        format!("{today}\t2.0000\t2\t4242\t2")
     );
     let mut odd = payload.clone();
     odd["session_id"] = json!("../x");

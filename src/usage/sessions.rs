@@ -12,7 +12,7 @@
 //! Usage: what Claude has cost today and how much of the subscription's rate
 //! limits is used, which the statusline alone is told too: `usage/spend-
 //! <session>` holds each session's share of a day (`<day>\t<spent>\t<cost
-//! so far>\t<pid>`), and `usage/limits` the account's `rate_limits` as Claude
+//! so far>\t<pid>\t2`), and `usage/limits` the account's `rate_limits` as Claude
 //! Code gives them. The cost is Claude Code's estimate at API prices, for
 //! interactive sessions only (`claude -p` has no statusline), and the limits
 //! are as the last session to draw saw them. Below them, with the
@@ -339,7 +339,11 @@ pub fn resets(at: i64, now: i64) -> String {
 }
 
 /// Each session's share of `today`'s spend: its day, what it spent and its
-/// cost so far.
+/// cost so far. A record of four fields, from before `next_spend` counted
+/// only a resumed session's growth, is cut to the session's cost so far,
+/// since it may hold that cost counted twice; the statusline cuts it the
+/// same way on its next draw. A record of five may rightly be more: a
+/// process whose cost started over adds its earlier spend to the new cost.
 pub fn shares_today(state: &Path, today: &str) -> Vec<(String, f64)> {
     let Ok(entries) = fs::read_dir(usage_dir(state)) else {
         return Vec::new();
@@ -350,9 +354,14 @@ pub fn shares_today(state: &Path, today: &str) -> Vec<(String, f64)> {
             let name = e.file_name().to_string_lossy().into_owned();
             let session = name.strip_prefix("spend-")?.to_string();
             let text = fs::read_to_string(e.path()).ok()?;
-            let mut fields = text.split('\t');
-            let day = fields.next()?;
-            let spent: f64 = fields.next()?.trim().parse().ok()?;
+            let fields: Vec<&str> = text.trim_end_matches('\n').split('\t').collect();
+            let day = *fields.first()?;
+            let mut spent: f64 = fields.get(1)?.trim().parse().ok()?;
+            if fields.len() < 5
+                && let Some(Ok(cost)) = fields.get(2).map(|c| c.parse::<f64>())
+            {
+                spent = spent.min(cost);
+            }
             (day == today && spent > 0.0).then_some((session, spent))
         })
         .collect();
@@ -582,10 +591,13 @@ mod tests {
         let now_ms = util::now_ms();
         let today = util::ymd(&util::local_at_ms(now_ms));
         // Each as the statusline leaves it: the day, what it spent today, its
-        // cost so far and its pid.
-        fs::write(dir.join("spend-a"), format!("{today}\t4.7500\t3\t300")).unwrap();
-        fs::write(dir.join("spend-b"), format!("{today}\t1.0000\t1\t400")).unwrap();
-        fs::write(dir.join("spend-c"), format!("{today}\t2.5000\t2.5\t500")).unwrap();
+        // cost so far, its pid if found and the record's version. One of four
+        // fields whose day is more than its whole cost (a resumed session
+        // counted twice before the version) counts its cost; one of five keeps
+        // a day past its cost, a process that started its count over.
+        fs::write(dir.join("spend-a"), format!("{today}\t6.0000\t3\t300")).unwrap();
+        fs::write(dir.join("spend-b"), format!("{today}\t1.0000\t1\t400\t2")).unwrap();
+        fs::write(dir.join("spend-c"), format!("{today}\t4.5000\t2.5\t500\t2")).unwrap();
         fs::write(dir.join("spend-d"), format!("{today}\t21.5000\t1.5\t")).unwrap();
         // A session last used on another day counts for nothing today.
         fs::write(dir.join("spend-old"), "2020-01-01\t9\t3").unwrap();
@@ -608,7 +620,7 @@ mod tests {
             rows,
             vec![
                 (
-                    "Spent today $29.75".to_string(),
+                    "Spent today $10.00".to_string(),
                     "4 sessions, at API prices".to_string(),
                     State::Idle
                 ),
@@ -625,7 +637,7 @@ mod tests {
             ],
             "a window that has reset is left out"
         );
-        assert!((spent_today(&state, now_ms) - 29.75).abs() < 1e-9);
+        assert!((spent_today(&state, now_ms) - 10.0).abs() < 1e-9);
         let _ = fs::remove_dir_all(&state);
 
         // Nothing spent yet is $0.00, not the -0 an empty sum gives.

@@ -14,17 +14,23 @@
 //! control's Sessions and Usage views (src/usage/sessions.rs), under
 //! `paths::state_dir()`: `context/<session>` (`<percent>\t<model>`), and
 //! `usage/spend-<session>` (`<day>\t<spent that day>\t<the session's cost so
-//! far>\t<the Claude process's pid>`) with `usage/limits` (the account's
-//! `rate_limits`, the same for every session). Each is written only when it
+//! far>\t<the Claude process's pid>\t2`, the last field marking a record
+//! written since a resume counts only its growth) with `usage/limits` (the
+//! account's `rate_limits`, the same for every session). Each is written only when it
 //! changes, and only its owner can read it, as the script's `umask 077` had
 //! it.
 //!
 //! The day's share is kept across days and restarts. Within one process the
 //! cost the statusline is given dips and recovers, so a lower cost from the
-//! same pid adds nothing and keeps the higher one; only a new pid, from the
-//! session file naming this session, counts from nothing. A record from
-//! before the pid was kept may hold a share counted many times over, so
-//! today's is cut to the session's cost so far, and since it can't tell
+//! same pid adds nothing and keeps the higher one. A session resumed in a
+//! new process (the handoff, a restart, `claude --resume`) reports the cost
+//! it had reached and goes on from there, so a new pid, from the session file
+//! naming this session, adds only what its cost has grown past the one kept;
+//! only a lower cost, a count that really started over, counts from nothing.
+//! A record of four fields, from before that, may hold a resumed session's
+//! cost counted twice, so today's is cut to the session's cost so far. A
+//! record from before the pid was kept may hold a share counted many times
+//! over, so today's is cut the same way, and since it can't tell
 //! whether this draw comes from the process that wrote it, a lower cost adds
 //! nothing and becomes the cost to count on from. That is the script's awk,
 //! step for step (`next_spend`).
@@ -237,13 +243,14 @@ pub fn next_spend(old: &str, today: &str, cost: &str, pid: &str) -> String {
     let (mut spent, last) = (num(field(1)), num(last_text));
     if day != today {
         spent = 0.0;
-    } else if fields.len() == 3 && spent > last {
+    } else if fields.len() < 5 && spent > last {
         spent = last;
     }
     let pid = if pid.is_empty() { was } else { pid };
     let mut cost_text = cost;
     let mut delta = num(cost) - last;
-    if !was.is_empty() && pid != was {
+    let started_over = !was.is_empty() && pid != was && delta < 0.0;
+    if started_over {
         delta = num(cost);
     } else if delta < 0.0 {
         delta = 0.0;
@@ -251,7 +258,7 @@ pub fn next_spend(old: &str, today: &str, cost: &str, pid: &str) -> String {
             cost_text = last_text;
         }
     }
-    format!("{today}\t{:.4}\t{cost_text}\t{pid}", spent + delta)
+    format!("{today}\t{:.4}\t{cost_text}\t{pid}\t2", spent + delta)
 }
 
 /// Writes a file only its owner can read, in a folder only its owner can,
@@ -292,42 +299,55 @@ mod tests {
         // Nothing yet: the whole cost so far.
         assert_eq!(
             next_spend("", day, "1.5", "100"),
-            "2026-11-06\t1.5000\t1.5\t100"
+            "2026-11-06\t1.5000\t1.5\t100\t2"
         );
         // The same process, a higher cost: the difference added.
         assert_eq!(
-            next_spend("2026-11-06\t1.5000\t1.5\t100", day, "2.25", "100"),
-            "2026-11-06\t2.2500\t2.25\t100"
+            next_spend("2026-11-06\t1.5000\t1.5\t100\t2", day, "2.25", "100"),
+            "2026-11-06\t2.2500\t2.25\t100\t2"
         );
         // A dip from the same process adds nothing and keeps the higher one.
         assert_eq!(
-            next_spend("2026-11-06\t2.2500\t2.25\t100", day, "2.0", "100"),
-            "2026-11-06\t2.2500\t2.25\t100"
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "2.0", "100"),
+            "2026-11-06\t2.2500\t2.25\t100\t2"
         );
-        // A new process counts from nothing.
+        // A new process resuming the session goes on from the cost it had
+        // reached, so only the growth is added.
         assert_eq!(
-            next_spend("2026-11-06\t2.2500\t2.25\t100", day, "0.5", "200"),
-            "2026-11-06\t2.7500\t0.5\t200"
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "3.0", "200"),
+            "2026-11-06\t3.0000\t3.0\t200\t2"
+        );
+        // A new process with a lower cost started over: it counts whole, and
+        // the day keeps what was spent before.
+        assert_eq!(
+            next_spend("2026-11-06\t2.2500\t2.25\t100\t2", day, "0.5", "200"),
+            "2026-11-06\t2.7500\t0.5\t200\t2"
         );
         // A new day starts the share again.
         assert_eq!(
-            next_spend("2026-11-05\t9.0000\t3\t100", day, "3.5", "100"),
-            "2026-11-06\t0.5000\t3.5\t100"
+            next_spend("2026-11-05\t9.0000\t3\t100\t2", day, "3.5", "100"),
+            "2026-11-06\t0.5000\t3.5\t100\t2"
+        );
+        // A record of four fields, from before a resume counted only its
+        // growth, may hold the cost counted twice: today's cut to the cost.
+        assert_eq!(
+            next_spend("2026-11-06\t6.0000\t3\t100", day, "3.5", "200"),
+            "2026-11-06\t3.5000\t3.5\t200\t2"
         );
         // A record from before the pid was kept: today's cut to the cost so
         // far, and a lower cost becomes the one to count on from.
         assert_eq!(
             next_spend("2026-11-06\t40\t3", day, "4", ""),
-            "2026-11-06\t4.0000\t4\t"
+            "2026-11-06\t4.0000\t4\t\t2"
         );
         assert_eq!(
             next_spend("2026-11-06\t2\t3", day, "1", "300"),
-            "2026-11-06\t2.0000\t1\t300"
+            "2026-11-06\t2.0000\t1\t300\t2"
         );
         // No pid found keeps the one written.
         assert_eq!(
-            next_spend("2026-11-06\t1.0000\t1\t100", day, "1.25", ""),
-            "2026-11-06\t1.2500\t1.25\t100"
+            next_spend("2026-11-06\t1.0000\t1\t100\t2", day, "1.25", ""),
+            "2026-11-06\t1.2500\t1.25\t100\t2"
         );
     }
 
