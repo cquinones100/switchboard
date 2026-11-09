@@ -475,3 +475,83 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
         "{screen:#?}"
     );
 }
+
+/// Its menu opened with `m` on the board, the option starting with
+/// `label` chosen by moving down to it.
+fn choose(client: &mut TestClient, label: &str) {
+    client.type_text("m");
+    client.wait_text("Pause: open no more tabs");
+    for _ in 0..20 {
+        let screen = client.screen();
+        if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
+            client.type_text("\r");
+            return;
+        }
+        client.type_text("j");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("no {label} in its menu: {:#?}", client.screen());
+}
+
+/// What autopilot.json holds now.
+fn mode(server: &TestServer) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(server.state.join("autopilot.json")).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn its_menu_sets_each_count_alone_and_changing_its_note_keeps_them() {
+    let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    client.wait_text("☰ Menu");
+    let before = mode(&server);
+
+    choose(&mut client, "Tabs working at once: 3…");
+    client.wait_text("How many of its tabs work at once");
+    client.type_text("\x7f4\r");
+    client.wait_text("Tabs working at once: 4");
+    let now = mode(&server);
+    assert_eq!(now["slots"], 4);
+    for kept in ["note", "noteId", "target", "cap", "spendLimit", "repo"] {
+        assert_eq!(now[kept], before[kept], "{kept} kept");
+    }
+
+    // A cap below the slots comes back as the slots.
+    choose(&mut client, "Most tabs open: 5…");
+    client.wait_text("The most of its tabs open at once");
+    client.type_text("\x7f2\r");
+    client.wait_text("Most tabs open: 4, as many as work at once");
+    assert_eq!(mode(&server)["cap"], 4);
+
+    // What it said of a limit passed goes with a change of the limit.
+    let mut said = mode(&server);
+    said["said"] = json!("Stopped opening tabs: today's Claude spend passed $5");
+    std::fs::write(server.state.join("autopilot.json"), said.to_string()).unwrap();
+    choose(&mut client, "Spend limit: none…");
+    client.wait_text("Open no more tabs once today's Claude spend passes");
+    client.type_text("20\r");
+    client.wait_text("Spend limit: $20 a day");
+    let now = mode(&server);
+    assert_eq!(now["spendLimit"], 20);
+    assert_eq!(now["said"], "", "what it said of the limit passed goes");
+
+    // "Change its note…" asks the note and the branch, the counts kept.
+    choose(&mut client, "Change its note…");
+    client.wait_text("Work which note continuously?");
+    client.type_text("\r");
+    client.wait_text("Another branch…");
+    client.type_text("\r");
+    let screen = client.wait_text("Working Work: 4 at a time, up to 4 tabs");
+    assert!(
+        !screen.iter().any(|l| l.contains("Tabs working at once")),
+        "{screen:#?}"
+    );
+    let now = mode(&server);
+    assert_eq!(
+        (
+            now["slots"].clone(),
+            now["cap"].clone(),
+            now["spendLimit"].clone()
+        ),
+        (json!(4), json!(4), json!(20))
+    );
+}

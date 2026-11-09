@@ -153,8 +153,14 @@ pub enum Act {
     Unskip(Option<String>),
     /// Only items with a settled plan, or those with none too.
     PlannedOnly(bool),
-    /// The note, slots, cap and spend limit asked for again.
+    /// The note and the branch to land on asked for again, the counts kept.
     Change,
+    /// How many of its tabs work at once, asked for alone.
+    Slots,
+    /// The most of its tabs open at once, asked for alone.
+    Cap,
+    /// Its spend limit, asked for alone.
+    SpendLimit,
     /// "Land on:" asked again.
     ChangeTarget,
     Stop,
@@ -276,13 +282,28 @@ pub fn choices(
         "Change the target branch…".to_string(),
         Act::ChangeTarget,
     ));
-    out.push((
-        'n',
-        "Change its note, slots, cap or spend limit…".to_string(),
-        Act::Change,
-    ));
+    out.extend(count_choices(mode.slots, mode.cap, mode.spend_limit));
+    out.push(('n', "Change its note…".to_string(), Act::Change));
     out.push(('x', "Stop working the note".to_string(), Act::Stop));
     out
+}
+
+/// The menu's options for its counts, each naming what it is now: the tabs
+/// working at once, the most open, and the spend limit (0 for none).
+pub fn count_choices(slots: u32, cap: u32, limit: f64) -> Vec<(char, String, Act)> {
+    vec![
+        ('o', format!("Tabs working at once: {slots}…"), Act::Slots),
+        ('m', format!("Most tabs open: {cap}…"), Act::Cap),
+        (
+            '$',
+            if limit > 0.0 {
+                format!("Spend limit: ${limit} a day…")
+            } else {
+                "Spend limit: none…".to_string()
+            },
+            Act::SpendLimit,
+        ),
+    ]
 }
 
 /// What one of the menu's options changes in the mode, and what it says it
@@ -352,7 +373,14 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
             mode.hands_free = false;
             "Its tabs ask you again; those open now too".to_string()
         }
-        Act::Change | Act::ChangeTarget | Act::ToTabs | Act::Dismiss | Act::CycleClose => {
+        Act::Change
+        | Act::Slots
+        | Act::Cap
+        | Act::SpendLimit
+        | Act::ChangeTarget
+        | Act::ToTabs
+        | Act::Dismiss
+        | Act::CycleClose => {
             return None;
         }
     })
@@ -473,10 +501,18 @@ mod tests {
                 "Land without asking",
                 "Hands-free: decide for me",
                 "Change the target branch…",
-                "Change its note, slots, cap or spend limit…",
+                "Tabs working at once: 3…",
+                "Most tabs open: 5…",
+                "Spend limit: none…",
+                "Change its note…",
                 "Stop working the note"
             ]
         );
+        let limited = Mode {
+            spend_limit: 20.0,
+            ..mode.clone()
+        };
+        assert!(labels(&limited, "").contains(&"Spend limit: $20 a day…".to_string()));
         let (_, _, pause) = choices(&mode, "", "when seen", true).remove(0);
         assert_eq!(apply(&pause, &mut mode).as_deref(), Some("Paused"));
         assert!(mode.paused);

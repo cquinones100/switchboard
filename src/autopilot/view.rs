@@ -285,7 +285,14 @@ pub fn items(
         facts.push("nothing more to start".into());
     }
     facts.extend(why_paused(s, said));
-    let pilot = json!({ "paused": s.paused, "lands": s.lands_alone, "handsFree": s.hands_free });
+    let pilot = json!({
+        "paused": s.paused,
+        "lands": s.lands_alone,
+        "handsFree": s.hands_free,
+        "slots": s.slots,
+        "cap": s.cap,
+        "spendLimit": s.spend_limit,
+    });
     let spend = (s.spend_limit > 0.0).then(|| json!([s.spent, s.spend_limit]));
     let mut out = vec![
         Item::new(HEADING, s.note.clone())

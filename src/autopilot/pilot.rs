@@ -324,6 +324,10 @@ pub struct Opened {
     pub failed: Option<String>,
 }
 
+/// What it says once today's spend has passed the limit, the limit after
+/// it; a change of the limit takes it back.
+pub const SPENT: &str = "Stopped opening tabs: today's Claude spend passed";
+
 /// What the mode keeps between checks.
 #[derive(Clone, Debug)]
 pub struct Pilot {
@@ -704,10 +708,7 @@ impl Pilot {
         match found {
             Found::Spent => {
                 self.spent = Some((day_of(now_ms), mode.spend_limit));
-                out.said = Some(format!(
-                    "Stopped opening tabs: today's Claude spend passed ${}",
-                    mode.spend_limit
-                ));
+                out.said = Some(format!("{SPENT} ${}", mode.spend_limit));
             }
             Found::Failed(e) => out.failed = Some(e),
             Found::Item(None) => {

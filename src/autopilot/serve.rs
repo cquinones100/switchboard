@@ -385,7 +385,9 @@ impl Server {
         );
     }
 
-    /// The setup's slots and cap, each typed in starting from what it was.
+    /// The setup's slots and cap, each typed in starting from what it was,
+    /// then its spend limit; while the mode is on (its menu's "Change its
+    /// note…"), the three kept as they are, since the menu sets each alone.
     fn autopilot_ask_counts(
         &mut self,
         client: ClientId,
@@ -395,6 +397,15 @@ impl Server {
         was: Mode,
     ) {
         let (slots_were, cap_was, limit_was) = (was.slots, was.cap, was.spend_limit);
+        if was.on {
+            self.autopilot_begin(
+                client,
+                repo,
+                (note, target),
+                (slots_were, cap_was, limit_was),
+            );
+            return;
+        }
         self.autopilot_number(
             client,
             "Tabs working at once",
@@ -416,10 +427,15 @@ impl Server {
                         }
                         server.autopilot_ask_limit(
                             client,
-                            repo,
-                            (note, target),
-                            (slots, cap),
                             limit_was,
+                            move |server, client, limit| {
+                                server.autopilot_begin(
+                                    client,
+                                    repo,
+                                    (note, target),
+                                    (slots, cap, limit),
+                                )
+                            },
                         );
                     },
                 );
@@ -454,14 +470,13 @@ impl Server {
         );
     }
 
-    /// The setup's spend limit, then the mode on.
+    /// The spend limit asked for in a box, `was` typed in already (empty
+    /// for none); `then` given it, 0 for none.
     fn autopilot_ask_limit(
         &mut self,
         client: ClientId,
-        repo: PathBuf,
-        (note, target): (String, String),
-        (slots, cap): (u32, u32),
         was: f64,
+        then: impl FnOnce(&mut Server, ClientId, f64) + Send + 'static,
     ) {
         let ask = Ask::new(
             "Spend limit",
@@ -476,30 +491,116 @@ impl Server {
                 let Outcome::Picked(p) = outcome else {
                     return;
                 };
-                let Some(limit) = dollars(&p.value) else {
-                    server.mission_note(client, "Spend limit: dollars, or empty for none");
-                    return;
-                };
-                // The note by its ID too, which the mode follows it by,
-                // given one when it has none; off the task, since that
-                // writes the note.
-                let notes = worktree_from_note::notes_dir();
-                let file = notes.join(&note);
-                server.off_task(
-                    client,
-                    move || crate::notes::id::ensure_id(&file, &notes).ok(),
-                    move |server, client, note_id| {
-                        server.autopilot_start(
-                            client,
-                            repo,
-                            (note, target),
-                            (slots, cap, limit),
-                            note_id,
-                        )
-                    },
-                );
+                match dollars(&p.value) {
+                    Some(limit) => then(server, client, limit),
+                    None => server.mission_note(client, "Spend limit: dollars, or empty for none"),
+                }
             })),
         );
+    }
+
+    /// The note by its ID too, which the mode follows it by, given one when
+    /// it has none, then the mode on; off the task, since that writes the
+    /// note.
+    fn autopilot_begin(
+        &mut self,
+        client: ClientId,
+        repo: PathBuf,
+        (note, target): (String, String),
+        counts: (u32, u32, f64),
+    ) {
+        let notes = worktree_from_note::notes_dir();
+        let file = notes.join(&note);
+        self.off_task(
+            client,
+            move || crate::notes::id::ensure_id(&file, &notes).ok(),
+            move |server, client, note_id| {
+                server.autopilot_start(client, repo, (note, target), counts, note_id)
+            },
+        );
+    }
+
+    /// Its menu's "Tabs working at once", "Most tabs open" and "Spend
+    /// limit": that one box, what it was typed in, and only that count
+    /// written. The cap is never below the slots: slots past it raise it,
+    /// and a cap typed below them is taken as the slots, each said.
+    fn autopilot_set_count(&mut self, client: ClientId, act: Act) {
+        let was = Mode::read(&paths::state_dir());
+        let set = |server: &mut Server, client, change: Box<dyn FnOnce(&mut Mode) -> String>| {
+            let mut said = String::new();
+            match Mode::update(&paths::state_dir(), |m| said = change(m)) {
+                Ok(_) => {
+                    server.autopilot.pilot.reset();
+                    server.autopilot_tick();
+                    server.mission_note(client, said);
+                }
+                Err(e) => server.mission_note(client, format!("Couldn't save it: {e}")),
+            }
+        };
+        match act {
+            Act::Slots => self.autopilot_number(
+                client,
+                "Tabs working at once",
+                "How many of its tabs work at once; one waiting on you doesn't count.",
+                was.slots,
+                move |server, client, slots| {
+                    set(
+                        server,
+                        client,
+                        Box::new(move |m| {
+                            m.slots = slots;
+                            if m.cap < slots {
+                                m.cap = slots;
+                                format!(
+                                    "Tabs working at once: {slots}, and most tabs open: {slots}"
+                                )
+                            } else {
+                                format!("Tabs working at once: {slots}")
+                            }
+                        }),
+                    )
+                },
+            ),
+            Act::Cap => self.autopilot_number(
+                client,
+                "Tabs open at most",
+                "The most of its tabs open at once, those waiting on you included.",
+                was.cap,
+                move |server, client, cap| {
+                    set(
+                        server,
+                        client,
+                        Box::new(move |m| {
+                            m.cap = cap.max(m.slots);
+                            if cap < m.slots {
+                                format!("Most tabs open: {}, as many as work at once", m.cap)
+                            } else {
+                                format!("Most tabs open: {cap}")
+                            }
+                        }),
+                    )
+                },
+            ),
+            _ => self.autopilot_ask_limit(client, was.spend_limit, move |server, client, limit| {
+                set(
+                    server,
+                    client,
+                    Box::new(move |m| {
+                        // What it said of the limit before no longer
+                        // holds once the limit is another.
+                        if m.spend_limit != limit && m.said.starts_with(super::pilot::SPENT) {
+                            m.said.clear();
+                        }
+                        m.spend_limit = limit;
+                        if limit > 0.0 {
+                            format!("Spend limit: ${limit} a day")
+                        } else {
+                            "Spend limit: none".to_string()
+                        }
+                    }),
+                )
+            }),
+        }
     }
 
     /// The mode on, as set up.
@@ -616,6 +717,7 @@ impl Server {
                 self.autopilot_setup(client, &dir);
             }
             Act::ChangeTarget => self.autopilot_change_target(client),
+            Act::Slots | Act::Cap | Act::SpendLimit => self.autopilot_set_count(client, act),
             Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
                 self.autopilot_say("");

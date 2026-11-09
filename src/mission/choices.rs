@@ -278,6 +278,17 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             Do::Autopilot(Act::HandsFree),
         ));
     }
+    let count = |k: &str| item.data.pointer(k).and_then(Value::as_u64).unwrap_or(0) as u32;
+    let limit = item
+        .data
+        .pointer("/mode/spendLimit")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    for (key, label, act) in
+        crate::autopilot::line::count_choices(count("/mode/slots"), count("/mode/cap"), limit)
+    {
+        out.push(choice(key, label, Do::Autopilot(act)));
+    }
     out.push(choice(
         'x',
         "Stop working the note",
@@ -1057,6 +1068,28 @@ mod tests {
             home: "/home/me".into(),
             habit: &|_| Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_autopilot_cards_menu_sets_its_counts_each_naming_its_value() {
+        let repo = |_: &Path| Vec::new();
+        let item = Item::new("autopilot:next:0", "One").data(json!({
+            "next": "One",
+            "mode": { "slots": 3, "cap": 5, "spendLimit": 12.5 },
+        }));
+        let labels: Vec<String> = item_choices(&ViewId::Autopilot, &item, &[], &ctx(&[], &repo))
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert_eq!(
+            labels[labels.len() - 4..],
+            [
+                "Tabs working at once: 3…",
+                "Most tabs open: 5…",
+                "Spend limit: $12.5 a day…",
+                "Stop working the note"
+            ]
+        );
     }
 
     #[test]
