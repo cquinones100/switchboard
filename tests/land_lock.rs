@@ -461,13 +461,10 @@ fn the_landing_s_phase_marks_the_pane_with_its_step_and_queue_and_clean_s_loop()
 #[test]
 fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_acted_on() {
     let server = TestServer::start();
-    let config = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(
-        config.join("settings.json"),
-        json!({ "tips": false, "notifications": false, "notice_list": false }).to_string(),
-    )
-    .unwrap();
+    common::write_settings(
+        &server.home,
+        json!({ "tips": false, "notifications": false, "notice_list": false }),
+    );
     let mut client = server.attach(140, 36);
     client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
     let list = server.list();

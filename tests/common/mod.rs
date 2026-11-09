@@ -28,6 +28,41 @@ pub const BIN: &str = env!("CARGO_BIN_EXE_switchboard");
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
+/// The settings every test server starts with, under any a test gives: the
+/// day's notes and the Slack lookups off, since a server making the day's
+/// standup note on a Monday shows its "New note" in the sidebar, which a
+/// test reading the screen or counting notifications then trips on. A test
+/// of one of them turns it on.
+pub const QUIET: &[(&str, bool)] = &[
+    ("meeting_notes", false),
+    ("standup_note", false),
+    ("standup_summary", false),
+    ("todo_note", false),
+    ("slack_background", false),
+];
+
+/// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON
+/// object) over it, so a test's settings never turn the day's notes back on.
+pub fn write_settings(home: &Path, settings: serde_json::Value) {
+    write_settings_to(&home.join(".config/switchboard/settings.json"), settings);
+}
+
+/// As `write_settings`, to `file`: one a server is given in
+/// `SWITCHBOARD_SETTINGS` in place of its home's.
+pub fn write_settings_to(file: &Path, settings: serde_json::Value) {
+    let mut all: serde_json::Map<String, serde_json::Value> = QUIET
+        .iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::Bool(*v)))
+        .collect();
+    all.extend(
+        settings
+            .as_object()
+            .expect("settings are an object")
+            .clone(),
+    );
+    switchboard::util::write_atomic(file, serde_json::Value::Object(all).to_string()).unwrap();
+}
+
 /// A temporary directory, removed when dropped.
 pub struct TempDir(pub PathBuf);
 
@@ -95,9 +130,10 @@ impl TestServer {
         // the computer over PS1, long enough to wrap what a test types.
         std::fs::write(home.join(".profile"), "PS1='$ '\n").unwrap();
         if let Some(settings) = settings {
-            let config = home.join(".config/switchboard");
-            std::fs::create_dir_all(&config).unwrap();
-            std::fs::write(config.join("settings.json"), settings).unwrap();
+            write_settings(
+                &home,
+                serde_json::from_str(settings).expect("settings in JSON"),
+            );
         }
         let mut server = TestServer {
             dir,
@@ -214,6 +250,17 @@ impl TestServer {
     /// for it to listen.
     fn launch(&mut self) {
         self.stand_ins();
+        let settings = match self
+            .extra_env
+            .iter()
+            .find(|(k, _)| k == "SWITCHBOARD_SETTINGS")
+        {
+            Some((_, file)) if !file.is_empty() => PathBuf::from(file),
+            _ => self.home.join(".config/switchboard/settings.json"),
+        };
+        if !settings.exists() {
+            write_settings_to(&settings, serde_json::json!({}));
+        }
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

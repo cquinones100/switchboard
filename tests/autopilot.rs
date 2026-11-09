@@ -94,7 +94,7 @@ fn set_up(
         .as_object_mut()
         .unwrap()
         .extend(more.as_object().unwrap().clone());
-    std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
+    common::write_settings(&server.home, settings);
     Claude::new()
         .answer("echo \"$PWD\" >> \"$HOME/claude-ran\"")
         .install(&server.home.join("bin"));

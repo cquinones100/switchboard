@@ -49,7 +49,7 @@ impl Rig {
         for (k, v) in extra.as_object().unwrap() {
             all[k] = v.clone();
         }
-        std::fs::write(&settings, all.to_string()).unwrap();
+        common::write_settings_to(&settings, all);
         // The app's socket: each request kept, and answered as the app
         // answers.
         let socket = dir.path().join("n.sock");

@@ -24,13 +24,11 @@ const ALT: &str = "\x1b";
 
 /// Settings for the tests: no desktop notifications from them, and these.
 fn settings(server: &TestServer, extra: Value) {
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let mut all = json!({"notifications": false, "tips": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
 }
 
 /// A Claude session file for `pid`, as Claude Code writes one.
@@ -495,8 +493,12 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
 fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     let notes = common::TempDir::new("sbnu");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
-    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
-    settings(&server, json!({"ux2": true}));
+    // UX 2.0 from the start: the notification drawn before the server read
+    // a later setting would be the classic sidebar's, below the tab.
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        r#"{"notifications": false, "tips": false, "ux2": true}"#,
+    );
     std::fs::create_dir_all(&server.state).unwrap();
     std::fs::write(
         server.state.join("new-notes.json"),

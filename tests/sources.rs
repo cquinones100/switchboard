@@ -117,14 +117,10 @@ fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
     ]);
     // poll_fast off, so the PR is asked about again within its minute only
     // when something asks for it.
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("settings.json"),
-        json!({"notifications": false, "linear": false, "pause_when_away": false, "poll_fast": false})
-            .to_string(),
-    )
-    .unwrap();
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "linear": false, "pause_when_away": false, "poll_fast": false}),
+    );
     let work = server.dir.path().join("widgets");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q"]);
@@ -266,13 +262,10 @@ fn a_fork_s_tab_gets_its_pr_from_the_project_upstream_names() {
         ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
         ("SWITCHBOARD_GITHUB_API", &fake.url),
     ]);
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("settings.json"),
-        json!({"notifications": false, "linear": false, "pause_when_away": false}).to_string(),
-    )
-    .unwrap();
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "linear": false, "pause_when_away": false}),
+    );
     let work = server.dir.path().join("widgets");
     std::fs::create_dir_all(&work).unwrap();
     git(&work, &["init", "-q"]);

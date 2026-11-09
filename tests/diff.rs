@@ -31,10 +31,8 @@ use serde_json::{Value, json};
 /// Settings for the tests: no desktop notifications or tips, GitHub off
 /// (so the base is origin's default branch, and nothing is told ahead).
 fn settings(server: &TestServer) {
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let all = json!({"notifications": false, "tips": false, "github": false, "linear": false});
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
 }
 
 /// Runs git in `dir` with an identity of its own.
@@ -285,7 +283,10 @@ fn m_d_lists_whats_not_committed_marked_in_a_last_chapter_and_r_reads_it_again()
     // A clean branch: its commits' story, nothing marked.
     client.send(b"\x1bd");
     let screen = client.wait_text("2/2 Follow it");
-    assert!(!screen.iter().any(|l| l.contains('●')), "{screen:?}");
+    assert!(
+        !marked(&screen, "a.js") && !marked(&screen, "b.js"),
+        "{screen:?}"
+    );
     // Edits made while the diff is open come in on R: b.js changed again
     // and a file git doesn't know yet, in a last chapter, each marked.
     std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
@@ -374,9 +375,8 @@ fn m_d_says_when_there_is_nothing_to_show_and_shows_uncommitted_changes_alone() 
     back(&server);
 
     // With the setting off, the commits alone, which have nothing to show.
-    let dir = server.home.join(".config/switchboard");
     let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_uncommitted": false});
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
     client.send(b"\x1bd");
     let screen = client.wait_text("Nothing to show: no commits past origin/main");
     assert!(
@@ -516,10 +516,8 @@ fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() 
 #[test]
 fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
     let server = TestServer::start();
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_order": false});
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
     let work = repository(server.dir.path());
     std::fs::write(work.join("src/a.js"), "export const a = 3;\n").unwrap();
     git(&work, &["add", "src/a.js"]);
@@ -563,10 +561,8 @@ fn the_working_trees_changes_show_staged_and_not_in_their_own_lists() {
 #[test]
 fn c_in_the_diff_goes_through_the_branchs_commits_one_at_a_time() {
     let server = TestServer::start();
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let all = json!({"notifications": false, "tips": false, "github": false, "linear": false, "diff_order": false});
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
     let work = repository(server.dir.path());
     std::fs::write(work.join("src/b.js"), "export const b = 3;\n").unwrap();
     git(&work, &["commit", "-q", "-am", "Bump b again"]);

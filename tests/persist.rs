@@ -145,9 +145,7 @@ fn nothing_is_restored_with_the_setting_off() {
     client.wait_text("$");
     server.ok(&["new-tab", "-n", "second"]);
     server.ok(&["save"]);
-    let config = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("settings.json"), r#"{ "auto_restore": false }"#).unwrap();
+    common::write_settings(&server.home, serde_json::json!({ "auto_restore": false }));
     drop(client);
     server.restart();
     assert_eq!(tabs(&server.list()).len(), 0);

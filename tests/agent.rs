@@ -79,13 +79,11 @@ fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
 
 /// Settings for the tests: no desktop notifications from them.
 fn settings(server: &TestServer, extra: Value) {
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let mut all = json!({"notifications": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
 }
 
 /// Writes a Claude session file for `pid`, as Claude Code does for each of
@@ -668,7 +666,10 @@ fn a_pane_s_claude_loads_switchboard_s_plugin_while_the_setting_is_on() {
     // plugin.
     let dir = TempDir::new("sbt-plugin-off");
     let file = dir.path().join("settings.json");
-    std::fs::write(&file, r#"{"claude_plugin": false, "notifications": false}"#).unwrap();
+    common::write_settings_to(
+        &file,
+        serde_json::json!({"claude_plugin": false, "notifications": false}),
+    );
     let off = TestServer::start_with_env(&[("SWITCHBOARD_SETTINGS", file.to_str().unwrap())]);
     assert_eq!(plugin_dirs_in_a_pane(&off), "dirs=[]");
 }

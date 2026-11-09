@@ -418,13 +418,7 @@ fn a_build_that_cant_take_over_is_refused_and_nothing_changes() {
 #[test]
 fn a_picture_given_before_an_upgrade_is_drawn_as_sixel_after_it() {
     let (server, bin) = TestServer::start_from_copy();
-    let config = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(
-        config.join("settings.json"),
-        r#"{"image_protocol": "sixel"}"#,
-    )
-    .unwrap();
+    common::write_settings(&server.home, serde_json::json!({"image_protocol": "sixel"}));
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     // A cell of 13 by 25 pixels, as the terminal answered once asked.

@@ -24,13 +24,10 @@ use serde_json::{Value, json};
 use switchboard::relay::mux::{Mux, Server};
 
 fn settings(server: &TestServer) {
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("settings.json"),
-        json!({ "notifications": false, "tips": false }).to_string(),
-    )
-    .unwrap();
+    common::write_settings(
+        &server.home,
+        json!({ "notifications": false, "tips": false }),
+    );
 }
 
 /// Waits until `pred` holds of the relay's view of the tabs.

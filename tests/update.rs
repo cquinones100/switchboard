@@ -455,7 +455,7 @@ fn the_server_doesnt_look_with_the_check_off() {
     // tick would look.
     let settings = TempDir::new("sbs");
     let file = settings.path().join("settings.json");
-    std::fs::write(&file, r#"{"update_check": "off"}"#).unwrap();
+    common::write_settings_to(&file, serde_json::json!({"update_check": "off"}));
     let server = TestServer::start_with_env(&[
         ("SWITCHBOARD_GITHUB_API", &fake.url),
         ("SWITCHBOARD_UPDATES", "on"),

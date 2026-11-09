@@ -207,9 +207,7 @@ fn m_o_lists_a_worktree_no_tab_has_open_and_reopens_it_in_a_tab() {
 #[test]
 fn a_key_of_a_service_turned_off_shows_its_tip_once_and_does_nothing() {
     let (server, _repo, mut client) = world();
-    let config = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&config).unwrap();
-    std::fs::write(config.join("settings.json"), r#"{"linear": false}"#).unwrap();
+    common::write_settings(&server.home, serde_json::json!({"linear": false}));
     // The server reads the file again on its next tick.
     std::thread::sleep(Duration::from_millis(2500));
     client.send(b"\x1bW");

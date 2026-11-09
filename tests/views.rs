@@ -22,13 +22,11 @@ use {common::TestServer, serde_json::Value, std::path::Path};
 
 /// Settings for the tests: no desktop notifications or tips, and these.
 fn settings(server: &TestServer, extra: Value) {
-    let dir = server.home.join(".config/switchboard");
-    std::fs::create_dir_all(&dir).unwrap();
     let mut all = json!({"notifications": false, "tips": false});
     for (k, v) in extra.as_object().unwrap() {
         all[k] = v.clone();
     }
-    std::fs::write(dir.join("settings.json"), all.to_string()).unwrap();
+    common::write_settings(&server.home, all);
 }
 
 /// Runs git in `dir` with an identity of its own.
