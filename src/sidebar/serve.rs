@@ -475,6 +475,12 @@ impl Server {
             .and_then(|f| f.pr.as_ref())
             .filter(|_| settings::is_on("github"))
         {
+            // The repository GitHub answered from, with its number, when the
+            // tab's name didn't say (a gone worktree's branch found in a
+            // fork's upstream).
+            if t.pr_repo.is_none() && t.pr.is_none_or(|n| n == p.number) {
+                t.pr_repo = Some(p.repo.clone());
+            }
             t.pr = t.pr.or(Some(p.number));
             t.pr_state = Some(p.state);
             t.merge = match p.merge {
