@@ -238,8 +238,8 @@ impl Server {
         }
     }
 
-    /// A turn you interrupted on a permission request runs no hook, so its
-    /// pane is left waiting: each pane whose transcript says so is handed
+    /// A turn you interrupted, waiting on a request or working, runs no
+    /// hook, so its pane is left as it was: each pane whose transcript says so is handed
     /// back as idle (`agent_interrupted`, the daemon's `handBack`), once for
     /// each interruption (`at`, ms), a parked one included, as every pane is
     /// read.
@@ -249,8 +249,7 @@ impl Server {
             .handed_back
             .retain(|p, _| panes.contains_key(p));
         for &(pane, at) in interrupted {
-            if self.sidebar.handed_back.get(&pane) != Some(&at)
-                && self.agent_interrupted(pane, at.div_euclid(1000))
+            if self.sidebar.handed_back.get(&pane) != Some(&at) && self.agent_interrupted(pane, at)
             {
                 self.sidebar.handed_back.insert(pane, at);
                 self.dirty_sidebars();

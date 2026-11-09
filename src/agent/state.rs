@@ -571,18 +571,27 @@ impl Agents {
         changed
     }
 
-    /// A turn you interrupted at `at` (seconds) while the pane waited: a
-    /// permission request denied, or Esc pressed on it, which runs no hook,
-    /// so the pane would wait on the request until the next prompt
-    /// (agent-state.sh's `interrupted`, run by the sidebar daemon from the
-    /// transcript). It goes idle, waiting on nothing, unless it has moved on
-    /// since: it isn't waiting, or began waiting after (a new request). What
-    /// it was doing and its loop are kept. Gives whether it changed.
-    pub fn interrupted(&mut self, pane: PaneId, at: i64) -> bool {
+    /// A turn you interrupted at `at_ms` (ms), which runs no hook, so the
+    /// pane would stay as it was until the next prompt (agent-state.sh's
+    /// `interrupted`, run by the sidebar daemon from the transcript): a
+    /// permission request denied, or Esc pressed on it, leaves it waiting,
+    /// and Esc pressed while it works (a command auto mode let run) leaves
+    /// it working. It goes idle unless it has moved on since: it isn't
+    /// waiting or working, its state began after (a new request or prompt),
+    /// or, working, the conversation has run a hook since (a prompt typed
+    /// after it, which keeps the state's old `since`). What it was doing and
+    /// its loop are kept. Gives whether it changed.
+    pub fn interrupted(&mut self, pane: PaneId, at_ms: i64) -> bool {
         let Some(agent) = self.panes.get_mut(&pane) else {
             return false;
         };
-        if agent.state != Some(State::Waiting) || agent.since > at {
+        let began_by_then = agent.since <= at_ms.div_euclid(1000);
+        let left_as_it_was = match agent.state {
+            Some(State::Waiting) => began_by_then,
+            Some(State::Working) => began_by_then && agent.heard <= at_ms,
+            _ => false,
+        };
+        if !left_as_it_was {
             return false;
         }
         agent.state = None;
@@ -1218,21 +1227,59 @@ mod tests {
             json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
             100,
         );
-        assert!(!a.interrupted(P, 99), "a request made after it waits on");
+        assert!(
+            !a.interrupted(P, 99_999),
+            "a request made after it waits on"
+        );
         assert_eq!(a.state(P), Some(State::Waiting));
-        assert!(a.interrupted(P, 100));
+        assert!(a.interrupted(P, 100_000));
         let agent = a.get(P).unwrap();
         assert_eq!(
             (agent.state, agent.since, agent.wait.as_ref()),
             (None, 0, None)
         );
         assert_eq!(agent.loop_name.as_deref(), Some("ci"), "the loop goes on");
-        assert!(!a.interrupted(P, 100), "once");
+        assert!(!a.interrupted(P, 100_000), "once");
         // Working again since, it has moved on.
         on(&mut a, "UserPromptSubmit", json!({}), 110);
-        assert!(!a.interrupted(P, 120));
+        assert!(!a.interrupted(P, 109_999));
         assert_eq!(a.state(P), Some(State::Working));
-        assert!(!a.interrupted(PaneId(9), 120));
+        assert!(!a.interrupted(PaneId(9), 120_000));
+    }
+
+    #[test]
+    fn work_you_interrupted_is_handed_back_unless_a_prompt_came_after() {
+        let mut a = Agents::default();
+        on(
+            &mut a,
+            "UserPromptSubmit",
+            json!({"prompt": "/ci-loop"}),
+            100,
+        );
+        on(
+            &mut a,
+            "PreToolUse",
+            json!({"tool_name": "Bash", "tool_input": {"command": "sleep 120"}}),
+            100,
+        );
+        a.heard(P, 100_500);
+        assert!(a.interrupted(P, 130_000));
+        let agent = a.get(P).unwrap();
+        assert_eq!((agent.state, agent.since), (None, 0));
+        assert_eq!(agent.loop_name.as_deref(), Some("ci"), "the loop goes on");
+
+        // A prompt sent after the interruption works on.
+        on(&mut a, "UserPromptSubmit", json!({}), 140);
+        a.heard(P, 140_000);
+        assert!(!a.interrupted(P, 139_000));
+        assert_eq!(a.state(P), Some(State::Working));
+
+        // Never handed back, the pane still works from before; a prompt
+        // typed after the interruption keeps that `since`, but its hook was
+        // heard after it.
+        a.heard(P, 150_000);
+        assert!(!a.interrupted(P, 145_000));
+        assert_eq!(a.state(P), Some(State::Working));
     }
 
     #[test]

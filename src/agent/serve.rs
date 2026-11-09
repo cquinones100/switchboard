@@ -553,15 +553,16 @@ impl Server {
         }
     }
 
-    /// A turn you interrupted on a permission request (denied, or Esc on
-    /// it), at `at` seconds, read from the pane's transcript by the sidebar
-    /// (`claude::Work::interrupted_at`), since no hook runs for it: the pane
-    /// waiting since then or before goes idle, for the tab bar, the sidebar,
-    /// M-a and the Slack relay, and one that has moved on since is left
-    /// alone. A Claude parked behind the diff or lazygit too, since its
-    /// request can be denied from the Slack relay. Gives whether it changed.
-    pub fn agent_interrupted(&mut self, pane: PaneId, at: i64) -> bool {
-        if !self.agents.interrupted(pane, at) {
+    /// A turn you interrupted, waiting on a request (denied, or Esc on it)
+    /// or working, at `at_ms` (ms), read from the pane's transcript by the
+    /// sidebar (`claude::Work::interrupted_at`), since no hook runs for it:
+    /// the pane waiting or working since then or before goes idle, for the
+    /// tab bar, the sidebar, M-a and the Slack relay, and one that has moved
+    /// on since is left alone (`Agents::interrupted`). A Claude parked
+    /// behind the diff or lazygit too, since its request can be denied from
+    /// the Slack relay. Gives whether it changed.
+    pub fn agent_interrupted(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.interrupted(pane, at_ms) {
             return false;
         }
         if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {

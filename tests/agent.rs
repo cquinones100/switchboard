@@ -342,6 +342,57 @@ fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
 }
 
 #[test]
+fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "escaped", "cwd": "/work"}),
+    );
+    let dir = server.home.join(".claude/projects/-work");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("escaped.jsonl");
+
+    say(
+        &file,
+        json!({"type": "user", "message": {"content": "wait a while"}}),
+    );
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "wait a while"}),
+    );
+    hook(
+        &server,
+        &pane,
+        "PreToolUse",
+        json!({"tool_name": "Bash", "tool_input": {"command": "sleep 120"}}),
+    );
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // Esc mid-command: no hook runs, but the transcript says so.
+    say(
+        &file,
+        json!({"type": "user", "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}),
+    );
+    wait_list(&server, "the pane handed back", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
+    });
+
+    // A prompt after it works on, the interruption still the transcript's
+    // last entry, past the sidebar's next read.
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+    std::thread::sleep(Duration::from_millis(2_500));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+}
+
+#[test]
 fn a_pane_not_running_claude_keeps_no_state() {
     let server = TestServer::start();
     settings(&server, json!({}));
