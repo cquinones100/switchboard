@@ -17,6 +17,19 @@
 //!   the clone's history (the commit before the one that removed it). Removed
 //!   instead, the guard hooks, the OTel headers and the commands would stop
 //!   without a word. One that can't be found there is left alone, and said.
+//! - Links leading nowhere into any other path in a clone, where setup.sh
+//!   linked the configs the clone kept until the rewrite removed them
+//!   (`~/.config/ghostty/config`, `~/.config/karabiner/karabiner.json`,
+//!   `~/.pgclirc`, lazygit's `config.yml`, the `~/.config/nvim` folder) and
+//!   anywhere else one might have been: directly in `~`, `~/.config` and the
+//!   folders in it, `~/Library/Application Support` and the folders in it,
+//!   and directly in `~/.claude`. Each is replaced with what it last held in
+//!   the clone's history, a folder as it was in the commit before the last
+//!   one that removed anything in it, and the part names it. A Ghostty
+//!   config's `command` that started tmux starts the binary instead. A link into
+//!   the clone's older name, `editor-configs`, gone since the rename, is
+//!   looked up in the `switchboard` clone beside it, and removed when that
+//!   history doesn't have it either.
 //! - The lines setup.sh added to `~/.zshrc`, `eval "$(worktree-from-ticket
 //!   init zsh)"` and the rest, with the comments it wrote above them: each
 //!   is taken out, since every tab, menu and skill that runs a worktree
@@ -287,6 +300,179 @@ fn is_clone(dir: &Path) -> bool {
     })
 }
 
+/// Every link leading nowhere where setup.sh linked a program's config, and
+/// where anyone following it would have: directly in `~` (`~/.pgclirc`), in
+/// `~/.config` and one folder below it (`~/.config/ghostty/config`, the
+/// folder link `~/.config/nvim`), in `~/Library/Application Support` and one
+/// folder below it (lazygit's on a Mac; there is none on Linux), and directly
+/// in `~/.claude` (`.mcp.json`), each folder looked through even when it is
+/// a link to one (a dotfiles repository's `~/.config`). What another part
+/// or `dead_links` handles is left out: `~/.config/tmux`, `~/.claude/skills`, Claude's settings and
+/// CLAUDE.md, and setup.sh's single links in `~/.claude`.
+fn config_links() -> Vec<PathBuf> {
+    let claude = paths::claude_dir();
+    let skipped: Vec<PathBuf> = [
+        paths::home_join(".config/tmux"),
+        claude.join("skills"),
+        claude.join("settings.json"),
+        claude.join("CLAUDE.md"),
+    ]
+    .into_iter()
+    .chain(link_files())
+    .collect();
+    let entries = |dir: &Path| -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .map(|e| e.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
+    };
+    let mut found = Vec::new();
+    let dead = |p: &Path| is_link(p) && !p.exists();
+    let mut look = |dir: &Path, below: bool| {
+        for path in entries(dir) {
+            if skipped.contains(&path) {
+                continue;
+            }
+            if dead(&path) {
+                found.push(path);
+            } else if below && path.is_dir() {
+                found.extend(
+                    entries(&path)
+                        .into_iter()
+                        .filter(|p| dead(p) && !skipped.contains(p)),
+                );
+            }
+        }
+    };
+    look(&paths::home(), false);
+    look(&paths::home_join(".config"), true);
+    look(&paths::home_join("Library/Application Support"), true);
+    look(&claude, false);
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// For a link leading nowhere into a clone, at any path in it: the clone,
+/// the path it led to inside it (`karabiner/karabiner.json`), and the clone
+/// whose history holds it, if any. That is the clone itself; for one gone
+/// that was named `editor-configs`, the `switchboard` clone beside it, the
+/// same repository renamed. A gone folder named `switchboard` isn't taken,
+/// since `~/.config/switchboard` and the like share the name; a link
+/// leading outside any clone is yours.
+fn clone_of(link: &Path) -> Option<(PathBuf, PathBuf, Option<PathBuf>)> {
+    if !is_link(link) || link.exists() {
+        return None;
+    }
+    let target = fs::read_link(link).ok()?;
+    // A relative link leads from the folder it is in.
+    let target = match link.parent() {
+        Some(dir) => dir.join(&target),
+        None => target,
+    };
+    target.ancestors().skip(1).find_map(|dir| {
+        let rel = target.strip_prefix(dir).ok()?.to_path_buf();
+        if dir.exists() {
+            return is_clone(dir).then(|| (dir.to_path_buf(), rel, Some(dir.to_path_buf())));
+        }
+        if dir.file_name()? != "editor-configs" {
+            return None;
+        }
+        let renamed = dir.with_file_name("switchboard");
+        let history = (renamed.exists() && is_clone(&renamed)).then_some(renamed);
+        Some((dir.to_path_buf(), rel, history))
+    })
+}
+
+/// What `rel` (a file or a folder) last held in `clone`: the tree under it
+/// in the commit before the last one that removed anything under it, so a
+/// folder comes back as it last was, without files removed long before.
+/// `None` when the history never removed it. As `held_in_history`, a move
+/// counts as a removal, only plain paths below `rel` are taken, links in
+/// the history are passed over, and whether each file runs is kept.
+fn held_last(clone: &Path, rel: &Path) -> Option<Vec<Held>> {
+    let rel_str = rel.to_str()?;
+    let commit = worktree::git_at(
+        clone,
+        &[
+            "log",
+            "-1",
+            "--no-renames",
+            "--diff-filter=D",
+            "--format=%H",
+            "--",
+            rel_str,
+        ],
+    )
+    .ok()
+    .filter(|h| !h.is_empty())?;
+    let tree = worktree::git_at(
+        clone,
+        &["ls-tree", "-r", "-z", &format!("{commit}^"), "--", rel_str],
+    )
+    .ok()?;
+    let mut held = Vec::new();
+    for entry in tree.split('\0').filter(|e| !e.is_empty()) {
+        let (meta, file) = entry.split_once('\t')?;
+        let mut meta = meta.split(' ');
+        let (mode, kind, object) = (meta.next()?, meta.next()?, meta.next()?);
+        if kind != "blob" || mode == "120000" {
+            continue;
+        }
+        let Ok(below) = Path::new(file).strip_prefix(rel) else {
+            continue;
+        };
+        if !below
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(clone)
+            .args(["cat-file", "blob", object])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        held.push((below.to_path_buf(), mode == "100755", out.stdout));
+    }
+    (!held.is_empty()).then_some(held)
+}
+
+/// The command the tmux version's Ghostty config started in every window,
+/// `tmux new-session -A -s main` in a login shell, made to start the binary
+/// in its place, `bin` (named in full, since a login shell that isn't
+/// interactive skips `~/.zshrc`, where `~/.local/bin` is often put on the
+/// PATH), or `None` when the config has no such line. Put back as it was,
+/// every new window would open the retired tmux workspace, or fail without
+/// tmux.
+pub fn ghostty_unwrapped(text: &str, bin: &Path) -> Option<String> {
+    let quoted = format!("'{}'", bin.to_string_lossy().replace('\'', "'\\''"));
+    let line = Regex::new(r"^\s*command\s*=.*\btmux\b.*\bnew-session\b").expect("a valid pattern");
+    let mut changed = false;
+    let out: String = text
+        .split_inclusive('\n')
+        .map(|l| {
+            if line.is_match(l) {
+                changed = true;
+                let end = if l.ends_with('\n') { "\n" } else { "" };
+                format!("command = /bin/zsh -l -c {quoted}{end}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect();
+    changed.then_some(out)
+}
+
+/// Whether `path` is a Ghostty config: a file in `~/.config/ghostty` or a
+/// Mac's `com.mitchellh.ghostty`.
+fn is_ghostty_config(path: &Path) -> bool {
+    path.parent()
+        .and_then(|d| d.file_name())
+        .is_some_and(|n| n == "ghostty" || n == "com.mitchellh.ghostty")
+}
+
 /// Every link of setup.sh's that leads nowhere now.
 pub fn dead_links() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = link_files()
@@ -448,6 +634,67 @@ pub fn run(r: &mut Report) -> Result<()> {
             home_tilde(&link)
         ));
     }
+    for link in config_links() {
+        let Some((clone, rel, history)) = clone_of(&link) else {
+            continue;
+        };
+        let shown = home_tilde(&link);
+        let found = history
+            .as_ref()
+            .and_then(|h| held_last(h, &rel).map(|held| (h, held)));
+        let Some((history, held)) = found else {
+            // In a clone still there, a path its history never removed (a
+            // build's output) may come back, so only the older name's go,
+            // and of those only one whose path the renamed clone doesn't
+            // still have.
+            let still_there = history.as_ref().is_some_and(|h| h.join(&rel).exists());
+            if clone.exists() || still_there {
+                continue;
+            }
+            if !r.check {
+                fs::remove_file(&link).with_context(|| format!("can't remove {shown}"))?;
+            }
+            r.change(format!(
+                "remove {shown}, which led to {}, which no history has",
+                home_tilde(&clone.join(&rel))
+            ));
+            continue;
+        };
+        let mut held = held;
+        let bin = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("switchboard"));
+        let mut unwrapped = false;
+        for (below, _, bytes) in &mut held {
+            let path = if below.as_os_str().is_empty() {
+                link.clone()
+            } else {
+                link.join(&*below)
+            };
+            let fixed = is_ghostty_config(&path)
+                .then(|| {
+                    std::str::from_utf8(bytes)
+                        .ok()
+                        .and_then(|t| ghostty_unwrapped(t, &bin))
+                })
+                .flatten();
+            if let Some(fixed) = fixed {
+                *bytes = fixed.into_bytes();
+                unwrapped = true;
+            }
+        }
+        if !r.check {
+            put_back(&link, &held)?;
+        }
+        r.change(format!(
+            "replace {shown}, which led into {}, with its copy from {}'s history{}",
+            home_tilde(&clone),
+            home_tilde(history),
+            if unwrapped {
+                ", its command starting switchboard in place of tmux"
+            } else {
+                ""
+            }
+        ));
+    }
     for rc in rc_files() {
         let Some(text) = util::read_text(&rc) else {
             continue;
@@ -520,6 +767,27 @@ mod tests {
             None
         );
         assert_eq!(rc_cleared("# nothing here\n"), None);
+    }
+
+    #[test]
+    fn ghostty_starts_switchboard_in_place_of_tmux() {
+        let text = "font-size = 14\n\
+                    command = /bin/zsh -l -c '/opt/homebrew/bin/tmux new-session -A -s main'\n\
+                    keybind = cmd+t=new_tab\n";
+        assert_eq!(
+            ghostty_unwrapped(text, Path::new("/Users/me/.local/bin/switchboard")).unwrap(),
+            "font-size = 14\n\
+             command = /bin/zsh -l -c '/Users/me/.local/bin/switchboard'\n\
+             keybind = cmd+t=new_tab\n"
+        );
+        assert_eq!(
+            ghostty_unwrapped("command = /bin/zsh -l\n", Path::new("x")),
+            None
+        );
+        assert_eq!(
+            ghostty_unwrapped("# tmux new-session\n", Path::new("x")),
+            None
+        );
     }
 
     #[test]

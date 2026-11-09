@@ -1705,6 +1705,151 @@ fn a_hooks_folder_the_old_settings_run_comes_back_whole() {
 }
 
 #[test]
+fn the_configs_the_clone_held_come_back_from_its_history() {
+    use std::os::unix::fs::symlink;
+    let h = Home::new("setup-leftovers-configs");
+    // A clone whose rewrite removed the configs setup.sh linked, Neovim's
+    // folder after one of its files went in an earlier commit.
+    let clone = h.path("switchboard");
+    let c = clone.to_str().unwrap();
+    h.init(&clone, "main");
+    fs::create_dir_all(clone.join("assets/skills")).unwrap();
+    fs::write(clone.join("Cargo.toml"), "").unwrap();
+    for (path, text) in [
+        (
+            "ghostty/config",
+            "font-size = 14\ncommand = /bin/zsh -l -c '/opt/homebrew/bin/tmux new-session -A -s main'\n",
+        ),
+        ("karabiner/karabiner.json", "{}\n"),
+        ("nvim/init.lua", "vim.o.number = true\n"),
+        ("nvim/lua/old.lua", "old\n"),
+        ("lazygit/config.yml", "gui: {}\n"),
+        ("pgcli/config", "[main]\n"),
+        ("foo/config", "renamed\n"),
+        ("kitty/kitty.conf", "font_size 14\n"),
+    ] {
+        fs::create_dir_all(clone.join(path).parent().unwrap()).unwrap();
+        fs::write(clone.join(path), text).unwrap();
+    }
+    h.git(&["-C", c, "add", "-A"]);
+    h.git(&["-C", c, "commit", "-q", "-m", "tmux"]);
+    h.git(&["-C", c, "rm", "-q", "nvim/lua/old.lua"]);
+    h.git(&["-C", c, "commit", "-q", "-m", "earlier"]);
+    for dir in [
+        "ghostty",
+        "karabiner",
+        "nvim",
+        "lazygit",
+        "pgcli",
+        "foo",
+        "kitty",
+    ] {
+        h.git(&["-C", c, "rm", "-q", "-r", dir]);
+    }
+    h.git(&["-C", c, "commit", "-q", "-m", "rewrite"]);
+    let link = |target: PathBuf, at: &str| {
+        let at = h.path(at);
+        fs::create_dir_all(at.parent().unwrap()).unwrap();
+        symlink(target, at).unwrap();
+    };
+    link(clone.join("ghostty/config"), ".config/ghostty/config");
+    link(
+        clone.join("karabiner/karabiner.json"),
+        ".config/karabiner/karabiner.json",
+    );
+    link(clone.join("nvim"), ".config/nvim");
+    link(
+        clone.join("lazygit/config.yml"),
+        "Library/Application Support/lazygit/config.yml",
+    );
+    link(clone.join("pgcli/config"), ".pgclirc");
+    // A config folder that is a link into your dotfiles is looked through.
+    link(clone.join("kitty/kitty.conf"), "dotfiles/kitty/kitty.conf");
+    link(h.path("dotfiles/kitty"), ".config/kitty");
+    // Into the clone's older name, gone: one its renamed history has, one
+    // it never had.
+    link(h.path("editor-configs/foo/config"), ".config/foo/config");
+    link(h.path("editor-configs/bar/config"), ".config/bar/config");
+    // One the renamed clone still has is left alone.
+    link(
+        h.path("editor-configs/Cargo.toml"),
+        ".config/kept/Cargo.toml",
+    );
+    // A dead link of your own, a live one into the clone, and a dead one to
+    // a path the clone's history never removed are left alone.
+    link(h.path("elsewhere/config"), ".config/mine/config");
+    link(clone.join("Cargo.toml"), ".config/live/config");
+    link(clone.join("target/out"), ".config/built/out");
+
+    let check = ok(&h.run(&["setup", "--check", "leftovers"]));
+    assert!(
+        check.contains("would: replace ~/.config/ghostty/config, which led into ~/switchboard, with its copy from ~/switchboard's history, its command starting switchboard in place of tmux"),
+        "{check}"
+    );
+    assert!(
+        check.contains("would: replace ~/.config/foo/config, which led into ~/editor-configs, with its copy from ~/switchboard's history"),
+        "{check}"
+    );
+    assert!(
+        check.contains("would: remove ~/.config/bar/config, which led to ~/editor-configs/bar/config, which no history has"),
+        "{check}"
+    );
+    assert_eq!(check.matches("would: ").count(), 8, "{check}");
+    assert!(
+        h.path(".config/nvim")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+
+    let done = ok(&h.run(&["setup", "leftovers"]));
+    for (path, held) in [
+        (
+            ".config/ghostty/config",
+            format!("font-size = 14\ncommand = /bin/zsh -l -c '{BIN}'\n").as_str(),
+        ),
+        (".config/karabiner/karabiner.json", "{}\n"),
+        (".config/nvim/init.lua", "vim.o.number = true\n"),
+        (
+            "Library/Application Support/lazygit/config.yml",
+            "gui: {}\n",
+        ),
+        (".pgclirc", "[main]\n"),
+        (".config/kitty/kitty.conf", "font_size 14\n"),
+        (".config/foo/config", "renamed\n"),
+    ] {
+        assert!(
+            !h.path(path).symlink_metadata().unwrap().is_symlink(),
+            "{path}"
+        );
+        assert_eq!(read(&h.path(path)), held, "{path}");
+    }
+    assert!(
+        !h.path(".config/nvim")
+            .symlink_metadata()
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(!h.path(".config/nvim/lua").exists(), "{done}");
+    assert!(h.path(".config/bar/config").symlink_metadata().is_err());
+    for kept in [
+        ".config/mine/config",
+        ".config/live/config",
+        ".config/built/out",
+        ".config/kept/Cargo.toml",
+    ] {
+        assert!(
+            h.path(kept).symlink_metadata().unwrap().is_symlink(),
+            "{kept}"
+        );
+    }
+    assert_eq!(
+        ok(&h.run(&["setup", "leftovers"])),
+        "leftovers: up to date\n"
+    );
+}
+
+#[test]
 fn parts_are_listed_and_an_unknown_one_refused() {
     let h = Home::new("setup-parts");
     let parts = ok(&h.run(&["setup", "--parts"]));

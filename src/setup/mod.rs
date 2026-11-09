@@ -142,7 +142,7 @@ pub const PARTS: &[Part] = &[
     },
     Part {
         name: "leftovers",
-        about: "remove the tmux version's links that lead nowhere and its worktree lines in ~/.zshrc, and take out a switchboard function or alias that starts tmux",
+        about: "remove the tmux version's links that lead nowhere, putting back from its clone's history the files Claude Code still uses and the configs it linked into ~/.config and elsewhere, take out its worktree lines in ~/.zshrc, and a switchboard function or alias that starts tmux",
         run: leftovers::run,
     },
 ];
@@ -385,7 +385,7 @@ fn leftovers_offered(check: bool, list: &mut List) {
                 ));
             } else if ask(
                 check,
-                "Remove the tmux version's links that lead nowhere now (putting back from its clone's history the files Claude Code still uses) and its worktree lines in ~/.zshrc or ~/.bashrc, which nothing needs, and take out a switchboard function or alias there that starts tmux? A copy of each file changed is left beside it.",
+                "Remove the tmux version's links that lead nowhere now (putting back from its clone's history the files Claude Code still uses and the configs it linked into ~/.config and elsewhere) and its worktree lines in ~/.zshrc or ~/.bashrc, which nothing needs, and take out a switchboard function or alias there that starts tmux? A copy of each file changed is left beside it.",
             ) {
                 if apply(part) {
                     list.ok("tidied what the tmux version left");
