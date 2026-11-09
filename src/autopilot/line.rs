@@ -149,8 +149,8 @@ pub enum Act {
     Resume,
     /// The next item skipped, by its first line, in the mode's note alone.
     Skip(String),
-    /// The note's skipped items taken again.
-    Unskip,
+    /// The note's skipped items taken again: the one named, or all of them.
+    Unskip(Option<String>),
     /// Only items with a settled plan, or those with none too.
     PlannedOnly(bool),
     /// The note, slots, cap and spend limit asked for again.
@@ -240,7 +240,7 @@ pub fn choices(
                 "Take the {n} skipped item{} again",
                 if n == 1 { "" } else { "s" }
             ),
-            Act::Unskip,
+            Act::Unskip(None),
         ));
     }
     out.push(if mode.ready_only {
@@ -308,10 +308,15 @@ pub fn apply(act: &Act, mode: &mut Mode) -> Option<String> {
             }
             format!("Skipped: {text}")
         }
-        Act::Unskip => {
+        Act::Unskip(None) => {
             let here = mode.note_id.clone();
             mode.skipped.retain(|x| x.note != here);
             "The skipped items are back in line".to_string()
+        }
+        Act::Unskip(Some(text)) => {
+            let here = mode.note_id.clone();
+            mode.skipped.retain(|x| x.note != here || x.text != *text);
+            format!("Back in line: {text}")
         }
         Act::PlannedOnly(true) => {
             mode.ready_only = true;
@@ -557,8 +562,31 @@ mod tests {
         );
         apply(&Act::Skip("One".into()), &mut mode);
         assert_eq!(mode.skipped_here().collect::<Vec<_>>(), ["One"]);
-        apply(&Act::Unskip, &mut mode);
+        apply(&Act::Unskip(None), &mut mode);
         assert_eq!(mode.skipped.len(), 1, "the other note's kept");
         assert_eq!(mode.skipped[0].text, "Elsewhere");
+    }
+
+    #[test]
+    fn one_skipped_item_comes_back_alone() {
+        let mut mode = Mode {
+            on: true,
+            note: "Work.md".into(),
+            note_id: "n-0123456789ab".into(),
+            skipped: vec![Skipped {
+                note: "n-ffffffffffff".into(),
+                text: "One".into(),
+            }],
+            ..Mode::default()
+        };
+        apply(&Act::Skip("One".into()), &mut mode);
+        apply(&Act::Skip("Two".into()), &mut mode);
+        apply(&Act::Unskip(Some("One".into())), &mut mode);
+        assert_eq!(mode.skipped_here().collect::<Vec<_>>(), ["Two"]);
+        assert_eq!(
+            mode.skipped.len(),
+            2,
+            "another note's item by the same words kept"
+        );
     }
 }

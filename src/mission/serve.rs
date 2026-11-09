@@ -3079,7 +3079,7 @@ fn side_step(m: &Mission, by: isize) -> isize {
 
 /// h and l on the Autopilot board: the next column with cards in it, at
 /// the same row as far as it reaches. Its items aren't in their columns'
-/// order alone (a heading leads them, the skipped follow), so each column
+/// order alone (headings lead them and the skipped), so each column
 /// is found by its items' group.
 fn pilot_side_step(m: &Mission, items: &[crate::items::Item], by: isize) -> isize {
     let columns: Vec<Vec<usize>> = crate::autopilot::view::COLUMNS
@@ -3517,7 +3517,7 @@ mod tests {
     }
 
     #[test]
-    fn h_and_l_on_the_autopilot_board_go_by_column_past_its_heading_and_skipped() {
+    fn h_and_l_on_the_autopilot_board_go_by_column_past_its_headings() {
         let item = |id: &str, column: Option<&str>| {
             let i = Item::new(id, id);
             match column {
@@ -3535,7 +3535,8 @@ mod tests {
                     item("next 2", Some("Next up")),
                     item("tab 4", Some("Waiting on you")),
                     item("tab 3", Some("Landed")),
-                    item("skipped", None),
+                    item("skipped heading", None),
+                    item("skipped", Some("Skipped")),
                 ],
                 ..ViewData::default()
             },
@@ -3550,8 +3551,11 @@ mod tests {
         m.cursor = 3;
         assert_eq!(side_step(&m, 1), 4);
         assert_eq!(side_step(&m, -1), 1, "the same row, as far as it reaches");
-        m.cursor = 5;
-        assert_eq!(side_step(&m, 1), 5, "the skipped stay put");
+        m.cursor = 4;
+        assert_eq!(side_step(&m, 1), 6, "Skipped, past its heading");
+        m.cursor = 6;
+        assert_eq!(side_step(&m, 1), 6, "the last column stays");
+        assert_eq!(side_step(&m, -1), 4);
     }
 
     #[test]

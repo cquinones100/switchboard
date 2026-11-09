@@ -5,9 +5,9 @@
 //! paused and why; then every item it works in the column of the board
 //! where it stands (`COLUMNS`: the items it will open next, in the order
 //! it opens them, then its tabs working, waiting on you, landing and
-//! landed, today's landings whose tabs are closed with them), the least far
-//! along first, so landed ones come last; then the
-//! ones skipped, listed under the board. Each tab keeps a cell per stage,
+//! landed, today's landings whose tabs are closed with them, then the ones
+//! skipped), the least far along first, so landed ones come last of the
+//! tabs. Each tab keeps a cell per stage,
 //! which the board's meter counts and its side panel lists
 //! (src/mission/render.rs).
 //!
@@ -50,7 +50,14 @@ pub const STAGES: [&str; 8] = [
 ];
 
 /// The board's columns, left to right: where an item stands.
-pub const COLUMNS: [&str; 5] = ["Next up", "Working", "Waiting on you", "Landing", "Landed"];
+pub const COLUMNS: [&str; 6] = [
+    "Next up",
+    "Working",
+    "Waiting on you",
+    "Landing",
+    "Landed",
+    "Skipped",
+];
 
 /// One of the mode's tabs as the view needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -242,7 +249,9 @@ fn why_paused(s: &Summary, said: &str) -> Vec<String> {
 /// The view's items: the heading, the next items under a heading the
 /// cursor passes over, a row per tab under one too, in its column's order
 /// and, within a column, the least far along first, then the skipped ones
-/// under a heading. Every item on the board has its column as its `group`.
+/// under a heading, the board's last column. Every item on the board has
+/// its column as its `group`; the headings, in none, lead the plain list a
+/// narrow screen shows.
 pub fn items(
     s: &Summary,
     said: &str,
@@ -360,7 +369,8 @@ pub fn items(
         for text in skipped {
             out.push(
                 Item::new(format!("skipped:{text}"), text.clone())
-                    .detail("skipped by you from its menu")
+                    .detail("skipped by you from autopilot's menu")
+                    .group(COLUMNS[5])
                     .data(json!({ "skipped": text, "mode": pilot })),
             );
         }
@@ -461,6 +471,16 @@ mod tests {
                 "header:autopilot:skipped",
                 "skipped:Old"
             ]
+        );
+        let skipped = items.last().unwrap();
+        assert_eq!(
+            skipped.group.as_deref(),
+            Some("Skipped"),
+            "the board's last column"
+        );
+        assert_eq!(
+            items[5].group, None,
+            "its heading leads only the plain list"
         );
     }
 

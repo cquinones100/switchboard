@@ -585,7 +585,7 @@
     "key": "view_autopilot",
     "category": "Mission control",
     "label": "Autopilot view",
-    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed), with the skipped ones listed under it. Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
+    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed, Skipped). Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
     "default": true
   },
   {

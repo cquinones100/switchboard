@@ -193,7 +193,8 @@ fn choice(key: char, label: impl Into<String>, act: Do) -> Choice {
 }
 
 /// A row's menu in Autopilot's view (src/autopilot/view.rs): its tab, its
-/// item skipped (an item to open next too), the skipped ones taken again,
+/// item skipped (an item to open next too), a skipped one taken again or
+/// all of them,
 /// then what changes the whole mode, as its line's menu does: pause or
 /// resume, land without asking or not, stop.
 fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
@@ -229,11 +230,16 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             Do::Autopilot(Act::Skip(text.to_string())),
         ));
     }
-    if item.data.get("skipped").is_some() {
+    if let Some(text) = item.data.get("skipped").and_then(Value::as_str) {
+        out.push(choice(
+            't',
+            "Take this item again",
+            Do::Autopilot(Act::Unskip(Some(text.to_string()))),
+        ));
         out.push(choice(
             'c',
             "Take the skipped items again",
-            Do::Autopilot(Act::Unskip),
+            Do::Autopilot(Act::Unskip(None)),
         ));
     }
     let flag = |k: &str| item.data.pointer(k).and_then(Value::as_bool) == Some(true);

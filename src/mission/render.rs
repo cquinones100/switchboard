@@ -2115,11 +2115,11 @@ fn stage_rows(
     }
 }
 
-/// How wide the main area must be for UX 2.0's Autopilot board (its five
+/// How wide the main area must be for UX 2.0's Autopilot board (its six
 /// columns 18 wide), narrower showing the plain list; and how wide for the
 /// chosen card's side panel, and how many columns that takes.
-pub const PILOT_BOARD_AT: usize = 90;
-const PILOT_SIDE_AT: usize = 150;
+pub const PILOT_BOARD_AT: usize = 108;
+const PILOT_SIDE_AT: usize = 152;
 const PILOT_SIDE_W: usize = 44;
 
 /// A meter the board places as an image atom (src/ui/images.rs) once its
@@ -2158,8 +2158,9 @@ fn pilot_tone(item: &Item) -> Tone {
 /// and today's spend against its limit as a meter at the right), a column per place an item stands, each
 /// item a rounded card of its tab's number (or its place in line), a red ✕
 /// once a stage failed, its first line, where it is dim, and a meter of
-/// its stages done; the chosen card's edge in the accent color. The
-/// skipped items are listed under the board, and on a screen
+/// its stages done; the chosen card's edge in the accent color. A skipped
+/// item's card, in the last column, is its first line dim over two lines
+/// and "skipped by you", with no meter. On a screen
 /// `PILOT_SIDE_AT` wide the chosen item sits beside it in full, with its
 /// stages.
 #[allow(clippy::too_many_arguments)]
@@ -2243,16 +2244,7 @@ fn pilot_board(
         lines.push(Line { spans, fill });
         lines.push(Row::default().line(cols, None));
     }
-    let skipped: Vec<usize> = (0..items.len())
-        .filter(|&i| items[i].data.get("skipped").is_some())
-        .collect();
-    let room = rows.saturating_sub(1 + lines.len());
-    let skipped_h = if skipped.is_empty() {
-        0
-    } else {
-        (2 + skipped.len()).min(room / 3)
-    };
-    let body = room.saturating_sub(skipped_h);
+    let body = rows.saturating_sub(1 + lines.len());
     let side_w = if cols >= PILOT_SIDE_AT {
         PILOT_SIDE_W
     } else {
@@ -2296,7 +2288,10 @@ fn pilot_board(
             let item = &items[index];
             let edge = kit::card_edge(chosen(index), lit(index).then_some(theme.text), theme);
             let pilot = item.data.get("pilot");
+            let skipped = item.data.get("skipped").is_some();
             let (label, where_, frac) = match pilot {
+                // A skipped item has no place in line and no stages.
+                None if skipped => (String::new(), "skipped by you".to_string(), 0.0),
                 Some(p) if p["closed"] == true => (
                     "closed".to_string(),
                     item.detail.clone(),
@@ -2328,6 +2323,32 @@ fn pilot_board(
                 .or_else(|| item.data["next"].as_str())
                 .unwrap_or(&item.title);
             let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
+            let name_style = if chosen(index) {
+                bold(theme.bright)
+            } else if skipped {
+                fg(theme.dim)
+            } else {
+                fg(theme.text)
+            };
+            // A skipped card has no meter, so its item takes two lines, and
+            // where it is the one the meter has.
+            let inside = if skipped {
+                let wrapped = text::wrap(name, inner);
+                let rest = wrapped.get(1..).unwrap_or_default().join(" ");
+                vec![
+                    vec![Span::styled(
+                        wrapped.first().cloned().unwrap_or_default(),
+                        name_style,
+                    )],
+                    vec![Span::styled(text::cut(&rest, inner), name_style)],
+                    vec![Span::styled(text::cut(&where_, inner), fg(theme.faint))],
+                ]
+            } else {
+                vec![
+                    vec![Span::styled(text::cut(name, inner), name_style)],
+                    vec![Span::styled(text::cut(&where_, inner), fg(theme.dim))],
+                ]
+            };
             let card = kit::card(
                 w,
                 TALL - 1,
@@ -2337,17 +2358,7 @@ fn pilot_board(
                 } else {
                     Vec::new()
                 },
-                &[
-                    vec![Span::styled(
-                        text::cut(name, inner),
-                        if chosen(index) {
-                            bold(theme.bright)
-                        } else {
-                            fg(theme.text)
-                        },
-                    )],
-                    vec![Span::styled(text::cut(&where_, inner), fg(theme.dim))],
-                ],
+                &inside,
                 edge,
             );
             out.extend(card.into_iter().map(|mut line| {
@@ -2356,7 +2367,7 @@ fn pilot_board(
             }));
             out.push(vec![Span::raw(" ".repeat(col_w))]);
             let y = top + 2 + (shown - first) * TALL;
-            if y + 3 < top + body {
+            if !skipped && y + 3 < top + body {
                 meters.push(Meter {
                     name: format!("autopilot/{}", item.id),
                     x: (ci * col_w + 2) as u16,
@@ -2403,46 +2414,6 @@ fn pilot_board(
             ));
         }
         lines.push(Line { spans, fill: None });
-    }
-    if skipped_h == 0 {
-        return;
-    }
-    lines.push(Row::default().line(cols, None));
-    lines.push(
-        Row::default()
-            .put(" Skipped", bold(theme.text))
-            .put(format!(" {}", skipped.len()), fg(theme.dim))
-            .take()
-            .line(cols, None),
-    );
-    let fits = skipped_h - 2;
-    let chosen_at = skipped.iter().position(|&i| chosen(i));
-    let first = match chosen_at {
-        Some(c) if c >= fits => c + 1 - fits,
-        _ => 0,
-    };
-    for &index in skipped.iter().skip(first).take(fits) {
-        hits.push(HitBox {
-            y: lines.len() as u16,
-            x0: 0,
-            x1: cols.saturating_sub(1) as u16,
-            spot: Spot::Index(index as isize),
-        });
-        let fill = if chosen(index) {
-            Some(theme.highlight)
-        } else {
-            lit(index).then_some(theme.panel)
-        };
-        let item = &items[index];
-        lines.push(
-            Row::default()
-                .put(if chosen(index) { "▌" } else { " " }, fg(ACCENT))
-                .put(" ", Style::new())
-                .put(item.title.clone(), fg(theme.text))
-                .put(format!("  {}", item.detail), fg(theme.dim))
-                .take()
-                .line(cols, fill),
-        );
     }
 }
 
@@ -3961,7 +3932,7 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_autopilot_is_a_board_of_its_items_with_the_skipped_under_it() {
+    fn with_ux2_autopilot_is_a_board_of_its_items_with_the_skipped_last() {
         let mut landing = pilot_row(3, "Give notes stable IDs", TabState::Working);
         landing.loop_skill = Some("queue".into());
         landing.phase = Some("pushing".into());
@@ -4022,11 +3993,23 @@ mod tests {
             board.contains("✓ held") && board.contains("pushing…"),
             "{board}"
         );
-        let skipped = text.iter().position(|l| l.contains("Skipped 1")).unwrap();
+        // The skipped item a card in the last column, with no band under
+        // the board.
+        assert!(heads.contains("Skipped 1"), "{heads}");
+        let col = |l: &str, s: &str| l[..l.find(s).unwrap()].chars().count();
+        let skipped_at = col(heads, "Skipped 1");
+        let card = text.iter().position(|l| l.contains("Old idea")).unwrap();
+        assert!(col(&text[card], "Old idea") >= skipped_at, "{}", text[card]);
         assert!(
-            text[skipped + 1].contains("Old idea") && text[skipped + 1].contains("skipped by you"),
-            "{}",
-            text[skipped + 1]
+            text[card..card + 3]
+                .iter()
+                .any(|l| l.contains("skipped by you")),
+            "{board}"
+        );
+        assert_eq!(
+            text.iter().filter(|l| l.contains("Skipped")).count(),
+            1,
+            "{board}"
         );
         // A meter for each card, the landing one 6 of 8 stages done, and
         // one for the spend: a quarter of the limit.
