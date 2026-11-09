@@ -123,6 +123,11 @@ pub struct Frame {
     pub cursor_style: Option<cursor::SetCursorStyle>,
     /// The cells that are part of a hyperlink.
     pub links: Links,
+    /// The cell's size in pixels when the client's terminal draws the
+    /// server's images (src/ui/images.rs), `None` where they are text.
+    pub graphics: Option<(u16, u16)>,
+    /// The images the frame places.
+    pub images: Vec<crate::ui::images::Placed>,
     /// The pictures drawn over its cells as sixel.
     pub pictures: Vec<Placed>,
 }
@@ -134,6 +139,8 @@ impl Frame {
             cursor: None,
             cursor_style: None,
             links: Links::default(),
+            graphics: None,
+            images: Vec::new(),
             pictures: Vec::new(),
         }
     }
@@ -179,12 +186,15 @@ pub struct Screen {
     /// The pictures last sent: where, and which.
     prev_pictures: Vec<(Rect, u64)>,
     style: Option<cursor::SetCursorStyle>,
+    /// The images the terminal holds.
+    images: crate::ui::images::ImageCache,
 }
 
 impl Screen {
     /// The next frame draws everything again (after an attach, a resize, or
     /// anything that may have left the terminal showing something else).
     pub fn invalidate(&mut self) {
+        // The images go with the screen: `render` sends them all again.
         self.prev = None;
         self.prev_links = Links::default();
         self.prev_pictures.clear();
@@ -206,6 +216,13 @@ impl Screen {
                 Buffer::empty(frame.buf.area)
             }
         };
+        // Drawn again whole, the terminal may have lost the images: all
+        // sent again, after the screen is cleared, so a placement under the
+        // text isn't cleared with it.
+        if full {
+            out.extend(self.images.forget());
+        }
+        out.extend(self.images.commands(&frame.images));
         // A picture shown before and not now, the same in the same place:
         // its cells erased, with whatever of it the terminal shows, and
         // sent again.
@@ -906,6 +923,39 @@ mod tests {
         assert_eq!(hits.tabs, vec![(21, 28, 1)]);
         assert_eq!(frame.buf[(21, 0)].bg, Palette::LIGHT.current_bg);
         assert_eq!(frame.buf[(30, 0)].bg, Palette::LIGHT.status_bg);
+    }
+
+    #[test]
+    fn a_meter_reaches_a_ghostty_client_as_placeholders_and_one_image_and_others_as_text() {
+        use crate::ui::images;
+        let draw = |graphics: Option<(u16, u16)>| {
+            let mut frame = Frame::new(20, 2);
+            frame.graphics = graphics;
+            images::meter(
+                &mut frame,
+                "m",
+                Rect::new(0, 0, 10, 1),
+                0.5,
+                Color::Indexed(41),
+                None,
+            );
+            frame
+        };
+        let mut screen = Screen::default();
+        let out = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        assert_eq!(out.matches("\x1b_Ga=T").count(), 1);
+        assert!(out.contains(images::PLACEHOLDER));
+        let again = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        assert!(!again.contains("\x1b_G"), "{again:?}");
+        // Drawn whole again, the image is sent again.
+        screen.invalidate();
+        let whole = String::from_utf8_lossy(&screen.render(&draw(Some((8, 16))))).into_owned();
+        assert_eq!(whole.matches("\x1b_Ga=T").count(), 1);
+
+        let mut plain = Screen::default();
+        let out = String::from_utf8_lossy(&plain.render(&draw(None))).into_owned();
+        assert!(!out.contains("\x1b_G") && !out.contains(images::PLACEHOLDER));
+        assert!(out.contains('━'));
     }
 
     #[test]

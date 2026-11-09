@@ -213,6 +213,43 @@ impl Server {
         );
     }
 
+    /// Notes' M-p, the repository picked (`Server::work_note`): mission
+    /// control's tabs, then the mode set up for `note` as M-p's command
+    /// sets it up once a note is picked: "Land on:", then the counts.
+    pub fn autopilot_work_note(&mut self, client: ClientId, repo: &Path, note: String) {
+        self.open_mission(client, super::opening());
+        let Some(repo) = main_clone(repo) else {
+            self.mission_note(client, "That isn't a repository");
+            return;
+        };
+        let was = Mode::read(&paths::state_dir());
+        let at = repo.clone();
+        self.off_task(
+            client,
+            move || crate::repos::landing_for(&at, false).map(|l| l.landing),
+            move |server, client, landing| {
+                match landing.as_deref() {
+                    Ok("direct") => {}
+                    Ok(_) => {
+                        server.mission_note(
+                            client,
+                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        server.mission_note(client, format!("Couldn't tell how it lands: {e}"));
+                        return;
+                    }
+                }
+                let at = repo.clone();
+                server.autopilot_pick_target(client, at, move |server, client, target| {
+                    server.autopilot_ask_counts(client, repo, note, target, was)
+                });
+            },
+        );
+    }
+
     /// Which note: those holding an unticked item, the rest behind "More
     /// notes…", so the list stays short; with none of them, the rest at
     /// once.
@@ -762,9 +799,13 @@ impl Server {
         );
         let changed = self.autopilot.mode != mode || self.autopilot.pilot.counts != counts;
         let lost_said = mode.said.starts_with("Can't find the note");
+        // Nothing left is said only with none of its tabs open; one said
+        // while some were (an older build's) goes.
+        let empty_said_early =
+            mode.said.starts_with("Nothing left") && self.autopilot.pilot.counts.1 > 0;
         self.autopilot.mode = mode;
         self.autopilot_marks(&check.marks, &mine);
-        if check.found_again && lost_said {
+        if (check.found_again && lost_said) || empty_said_early {
             self.autopilot_say("");
         }
         if let Some(said) = check.said {
@@ -1169,10 +1210,16 @@ impl Server {
                 .map(|i| i.text)
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
+            let spent = if job.spend_limit > 0.0 {
+                crate::usage::sessions::spent_today(&state, util::now_ms())
+            } else {
+                0.0
+            };
             let _ = tx.send(Event::Autopilot(AutopilotEvent::Next {
                 key: job.key,
                 text,
                 queue,
+                spent,
             }));
         });
     }
@@ -1197,11 +1244,18 @@ impl Server {
     /// What the looks off the task found.
     pub fn autopilot_event(&mut self, event: AutopilotEvent) {
         match event {
-            AutopilotEvent::Next { key, text, queue } => {
+            AutopilotEvent::Next {
+                key,
+                text,
+                queue,
+                spent,
+            } => {
                 let changed = self.autopilot.pilot.next.text != text
-                    || self.autopilot.pilot.next.queue != queue;
+                    || self.autopilot.pilot.next.queue != queue
+                    || self.autopilot.pilot.next.spent != spent;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
                 self.autopilot.pilot.next.queue = queue;
+                self.autopilot.pilot.next.spent = spent;
                 if changed {
                     self.autopilot_redraw();
                 }

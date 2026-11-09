@@ -105,6 +105,7 @@ impl Server {
         if hook.agent.is_empty() {
             self.agents.heard(pane, util::now_ms());
         }
+        self.history_hook(pane, &hook, &payload);
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
             // session that died without SessionEnd leaves no mark behind.

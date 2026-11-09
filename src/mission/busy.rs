@@ -11,6 +11,7 @@
 use std::time::Instant;
 
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
@@ -22,6 +23,7 @@ use crate::ui::{Look, Overlay, Step};
 pub struct Busy {
     text: String,
     since: Instant,
+    drawn: Option<Rect>,
 }
 
 impl Busy {
@@ -29,6 +31,7 @@ impl Busy {
         Busy {
             text: text.into(),
             since: Instant::now(),
+            drawn: None,
         }
     }
 
@@ -43,6 +46,10 @@ impl Overlay for Busy {
         "busy"
     }
 
+    fn stands_out(&self) -> Option<Rect> {
+        self.drawn
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let lines = [BoxLine::spans(vec![
             Span::styled(format!(" {} ", self.frame()), Style::new().fg(draw::YELLOW)),
@@ -51,7 +58,7 @@ impl Overlay for Busy {
         let mut spec = BoxSpec::new("One moment", &lines);
         spec.keys = Some("it closes itself when done");
         spec.closes = false;
-        draw::draw_box(buf, &spec, look);
+        self.drawn = Some(draw::draw_box(buf, &spec, look).outer);
     }
 
     fn key(&mut self, _key: Key, _look: &Look) -> Step {

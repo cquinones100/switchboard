@@ -46,6 +46,10 @@
 //!                                        installed now, keeping every pane
 //!                                        (src/mux/upgrade.rs)
 //! say [-t seconds] text...               a message in a box (src/ui)
+//! picture [-t pane] <file>               the picture shown full size over
+//!                                        the pane, Esc going back; fails
+//!                                        where the terminal draws no images
+//!                                        (src/ui/picture.rs)
 //! tip <name> | tip seen <name> | tip reset
 //!                                        a tip, once; marked shown; all again
 //! hook <event> [--parked pids]           from `switchboard hook`, its JSON on
@@ -90,6 +94,7 @@ pub const NAMES: &[&str] = &[
     "save",
     "upgrade",
     "say",
+    "picture",
     "tip",
     "press",
 ];
@@ -160,6 +165,10 @@ pub const USAGE: &[(&str, &str)] = &[
         "upgrade: restarts the server on the build installed now, keeping every pane and its program running",
     ),
     ("say", "say [-t seconds] text...: a message in a box"),
+    (
+        "picture",
+        "picture [-t pane] <file>: the picture shown full size over the pane, Esc going back; fails where the terminal does not draw the server's images",
+    ),
     (
         "tip",
         "tip <name> | tip seen <name> | tip reset: a tip, once; marked shown; all again",
@@ -362,6 +371,7 @@ impl Server {
                 Ok(Reply::ok(""))
             }
             "say" => Ok(self.cmd_say(rest, caller)),
+            "picture" => Ok(self.cmd_picture(rest, caller)),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
             "save" => super::persist::save_now(self)

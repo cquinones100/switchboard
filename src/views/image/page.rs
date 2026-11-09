@@ -135,6 +135,51 @@ fn script(pin: Pin, local: &Local) -> String {
     }
 }
 
+/// The page a Mermaid diagram alone is drawn on, for the Markdown views
+/// (`super::render::Renderer::diagram`): its source escaped in a hidden
+/// element, read back as text and given to Mermaid, which draws it in the
+/// page's one box, or leaves the box empty when it can't. Nothing else is on
+/// the page and nothing is painted behind it. The page loads nothing but
+/// Mermaid (its copy, or the pinned file on the CDN): its policy refuses
+/// every other request, so a diagram naming a picture (a node's `img`)
+/// reaches nowhere, which keeps a note's diagram on the computer.
+pub fn diagram_html(source: &str, light: bool, local: &Local) -> String {
+    let theme = if light { "default" } else { "dark" };
+    format!(
+        r#"<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' file: {cdn}; style-src 'unsafe-inline'; img-src data:; font-src data:">
+<style>
+html, body {{ margin: 0; background: transparent; overflow: hidden; }}
+#drawn {{ display: inline-block; padding: 8px; }}
+</style>
+</head><body>
+<pre id="source" hidden>{source}</pre>
+<div id="drawn"></div>
+{mermaid}
+<script>
+const drawn = document.getElementById("drawn");
+async function draw() {{
+  mermaid.initialize({{ startOnLoad: false, theme: "{theme}", securityLevel: "strict", suppressErrorRendering: true }});
+  try {{
+    const {{ svg }} = await mermaid.render("diagram", document.getElementById("source").textContent);
+    drawn.innerHTML = svg;
+  }} catch {{
+    drawn.innerHTML = "";
+    document.querySelectorAll("body > :not(#drawn):not(#source):not(script)").forEach((e) => e.remove());
+  }}
+}}
+if (typeof mermaid !== "undefined") {{
+  draw();
+}}
+</script>
+</body></html>
+"#,
+        source = escape(source),
+        mermaid = script(MERMAID, local),
+        cdn = MERMAID.url,
+    )
+}
+
 /// The stylesheet's tag, its copy here or the CDN's, as `script`.
 fn stylesheet(local: &Local) -> String {
     match local.get(STYLESHEET.url) {
@@ -663,5 +708,14 @@ mod tests {
         let page = html(&Parts::default(), 600, 400, 30, &bands, &Local::new());
         assert!(page.contains(r#"<div class="band" style="top:500px"><span>Page 1 of 2"#));
         assert!(page.contains(r#"<div class="band" style="top:530px"><span>Page 2 of 2</span>"#));
+    }
+
+    #[test]
+    fn a_diagrams_page_loads_nothing_but_mermaid_and_holds_its_source_as_text() {
+        let page = diagram_html("graph TD; A-->B</pre><img src=x>", false, &Local::new());
+        assert!(page.contains("default-src 'none'; script-src 'unsafe-inline' file: https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js;"));
+        assert!(page.contains("img-src data:;"));
+        assert!(page.contains("A--&gt;B&lt;/pre&gt;&lt;img src=x&gt;"));
+        assert!(page.contains("theme: \"dark\""));
     }
 }

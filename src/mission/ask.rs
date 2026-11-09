@@ -60,6 +60,10 @@ impl Overlay for Ask {
         "ask"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let inner = (buf.area.width as usize).saturating_sub(4).min(90);
         let mut lines: Vec<BoxLine> = draw::wrap(&self.hint, inner.saturating_sub(2))

@@ -50,7 +50,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 
 | Key | What it does |
 |---|---|
-| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line opens it too |
+| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line (with UX 2.0, the tab header) opens it too; with UX 2.0, in Notes it has autopilot work the note instead |
 | `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter presses a workspace key |
 | `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
 | `M-A` | Go to the next idle tab, in the sidebar's Idle order |
@@ -61,6 +61,7 @@ As a plugin, a Claude session outside Switchboard runs none of its hooks, so the
 | `M-s` | Into the sidebar and back out |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
+| `M-h` | This tab's history: its Claude session on a timeline, the screen as it was at the moment you move to |
 | `M-f` | Pin the tab to the top of Needs you |
 | `M-T` | This tab's whole title, which the sidebar and status line cut, in a box (`y` copies it) |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |

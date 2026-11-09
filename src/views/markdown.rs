@@ -23,11 +23,20 @@
 //! sequence diagrams can) keeps its source, with a line saying where it is
 //! shown properly.
 //!
+//! Where the view can draw images (`super::pictures`), a picture on a line
+//! of its own and a Mermaid diagram are drawn as pictures once they have
+//! been fetched or drawn: `Markdown::wanted` says what the text holds, and
+//! `Markdown::layout_with` lays each one that is ready out as rows of the
+//! kitty graphics protocol's placeholder cells (`Line::picture`), sized to
+//! fit the width and the pane's height. Until then, and anywhere else, each
+//! is drawn as text, as above.
+//!
 //! HTML in the Markdown, as PR templates leave it, is read for what it
 //! says: comments dropped, `<br>` a line break, `<img>` an image's line,
 //! `<a>` a link, `<b>`, `<i>`, `<code>` and `<summary>` styled, any other
 //! tag left out and its text kept.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use pulldown_cmark::{
@@ -40,7 +49,7 @@ use unicode_width::UnicodeWidthStr;
 use super::mermaid;
 
 // glow-style.json's colours, as 256-colour indices.
-const TEXT: u8 = 252;
+pub const TEXT: u8 = 252;
 const HEADING: u8 = 39;
 const H1_FG: u8 = 228;
 const H1_BG: u8 = 63;
@@ -90,6 +99,32 @@ impl Style {
         self
     }
 
+    /// As a cell's style, for what draws it with ratatui (the diff's answer,
+    /// the pane beside mission control's boards).
+    pub fn ratatui(&self) -> ratatui::style::Style {
+        use ratatui::style::{Color, Modifier};
+        let mut style = ratatui::style::Style::new();
+        if let Some(fg) = self.fg {
+            style = style.fg(Color::Indexed(fg));
+        }
+        if let Some(bg) = self.bg {
+            style = style.bg(Color::Indexed(bg));
+        }
+        for (on, m) in [
+            (self.bold, Modifier::BOLD),
+            (self.dim, Modifier::DIM),
+            (self.italic, Modifier::ITALIC),
+            (self.underline, Modifier::UNDERLINED),
+            (self.crossed, Modifier::CROSSED_OUT),
+            (self.reverse, Modifier::REVERSED),
+        ] {
+            if on {
+                style = style.add_modifier(m);
+            }
+        }
+        style
+    }
+
     /// The escape that sets it, from nothing.
     pub fn sgr(&self) -> String {
         let mut codes = vec!["0".to_string()];
@@ -122,6 +157,10 @@ pub struct Span {
     pub text: String,
     pub style: Style,
     pub link: Option<usize>,
+    /// A row of a picture drawn in the span's place, its text not drawn: a
+    /// person's photo on a line of the PR's or the ticket's board
+    /// (`super::board`).
+    pub picture: Option<PictureRow>,
 }
 
 impl Span {
@@ -130,6 +169,15 @@ impl Span {
             text: text.into(),
             style,
             link: None,
+            picture: None,
+        }
+    }
+
+    /// The columns it takes: a picture's, else its text's.
+    pub fn width(&self) -> usize {
+        match self.picture {
+            Some(p) => p.cols as usize,
+            None => width(&self.text),
         }
     }
 }
@@ -140,11 +188,48 @@ impl Span {
 /// for the block's own lines.
 pub type Anchor = (usize, usize, usize);
 
+/// One row of a picture, after a line's spans: the image's id, which row
+/// of it, how many columns it takes, and the link a click on it opens (a
+/// picture's own, as its text line had).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PictureRow {
+    pub id: u32,
+    pub row: u16,
+    pub cols: u16,
+    pub link: Option<usize>,
+}
+
 /// One line on the screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Line {
     pub spans: Vec<Span>,
     pub anchor: Anchor,
+    pub picture: Option<PictureRow>,
+    /// What a picture's first row is found by in a search, its text not
+    /// drawn: the picture's own line (`Image: alt →`), or a diagram's source.
+    pub searched: String,
+}
+
+/// A line with each tab made spaces to the next stop, every eight columns,
+/// as a terminal moves to it: the lines a view writes leave control
+/// characters out (`Line::ansi`), a tab among them.
+pub fn expand_tabs(line: &str) -> String {
+    if !line.contains('\t') {
+        return line.to_string();
+    }
+    let mut out = String::new();
+    let mut col = 0;
+    for g in line.graphemes(true) {
+        if g == "\t" {
+            let n = 8 - col % 8;
+            out.push_str(&" ".repeat(n));
+            col += n;
+        } else {
+            out.push_str(g);
+            col += width(g);
+        }
+    }
+    out
 }
 
 /// The columns a terminal draws `text` in.
@@ -157,6 +242,8 @@ impl Line {
         let mut line = Line {
             spans: Vec::new(),
             anchor,
+            picture: None,
+            searched: String::new(),
         };
         for s in spans {
             line.push(s);
@@ -165,43 +252,76 @@ impl Line {
     }
 
     fn push(&mut self, span: Span) {
-        if span.text.is_empty() {
+        if span.text.is_empty() && span.picture.is_none() {
             return;
         }
         match self.spans.last_mut() {
-            Some(last) if last.style == span.style && last.link == span.link => {
+            Some(last)
+                if last.style == span.style
+                    && last.link == span.link
+                    && last.picture.is_none()
+                    && span.picture.is_none() =>
+            {
                 last.text.push_str(&span.text)
             }
             _ => self.spans.push(span),
         }
     }
 
-    /// Its text without styles.
+    /// A line of `spans`, as a board builds its lines (`super::board`).
+    pub fn of(spans: Vec<Span>, anchor: Anchor) -> Line {
+        Line::new(spans, anchor)
+    }
+
+    /// Its text without styles, a picture in a span's place as spaces.
     pub fn plain(&self) -> String {
-        self.spans.iter().map(|s| s.text.as_str()).collect()
+        self.spans
+            .iter()
+            .map(|s| match s.picture {
+                Some(p) => " ".repeat(p.cols as usize),
+                None => s.text.clone(),
+            })
+            .collect()
+    }
+
+    /// What a search looks in: its text, and what a picture's row is found by.
+    pub fn searchable(&self) -> String {
+        let mut text = self.plain();
+        if !self.searched.is_empty() {
+            text.push(' ');
+            text.push_str(&self.searched);
+        }
+        text
     }
 
     pub fn width(&self) -> usize {
-        self.spans.iter().map(|s| width(&s.text)).sum()
+        let picture = self.picture.map_or(0, |p| p.cols as usize);
+        self.spans.iter().map(Span::width).sum::<usize>() + picture
     }
 
     /// The link under a column, if any.
     pub fn link_at(&self, col: usize) -> Option<usize> {
         let mut at = 0;
         for s in &self.spans {
-            let w = width(&s.text);
+            let w = s.width();
             if col < at + w {
                 return s.link;
             }
             at += w;
         }
-        None
+        self.picture
+            .filter(|p| col < at + p.cols as usize)
+            .and_then(|p| p.link)
     }
 
     /// The line as a terminal draws it: `cols` columns from column `left`,
     /// each style set from nothing, each link an OSC 8 hyperlink opened and
     /// closed within the line, and the columns in `marks` (a search's
-    /// matches) in reverse video. Ends with the style reset.
+    /// matches) in reverse video, then the picture's row of placeholder
+    /// cells, in the image's id as their color. Control characters in the
+    /// text are left out, so nothing a PR or ticket says can reach the
+    /// terminal as an escape (a graphics command among them, which the
+    /// views' pane may pass on). Ends with the style reset.
     pub fn ansi(
         &self,
         links: &[String],
@@ -214,7 +334,26 @@ impl Line {
         let mut style: Option<Style> = None;
         let mut link: Option<usize> = None;
         'spans: for span in &self.spans {
+            if let Some(p) = span.picture {
+                // A picture in the span's place: the cells of it that show,
+                // with no style or link of the text around it.
+                if link.take().is_some() {
+                    out.push_str("\x1b]8;;\x07");
+                }
+                if style.take().is_some() {
+                    out.push_str("\x1b[0m");
+                }
+                out.push_str(&placeholder_cells(p, col, left, left + cols));
+                col += p.cols as usize;
+                if col >= left + cols {
+                    break 'spans;
+                }
+                continue;
+            }
             for g in span.text.graphemes(true) {
+                if g.chars().any(char::is_control) {
+                    continue;
+                }
                 let w = width(g);
                 if col < left {
                     col += w;
@@ -233,7 +372,8 @@ impl Line {
                         out.push_str("\x1b]8;;\x07");
                     }
                     if let Some(i) = target {
-                        out.push_str(&format!("\x1b]8;;{}\x07", links[i]));
+                        let url: String = links[i].chars().filter(|c| !c.is_control()).collect();
+                        out.push_str(&format!("\x1b]8;;{url}\x07"));
                     }
                     link = target;
                 }
@@ -251,8 +391,121 @@ impl Line {
         if style.is_some() {
             out.push_str("\x1b[0m");
         }
+        if let Some(p) = self.picture {
+            let at = self.spans.iter().map(Span::width).sum::<usize>();
+            let cells = placeholder_cells(p, at, left, left + cols);
+            if !cells.is_empty() {
+                let link = p
+                    .link
+                    .and_then(|i| links.get(i))
+                    .map(|url| url.chars().filter(|c| !c.is_control()).collect::<String>());
+                if let Some(url) = &link {
+                    out.push_str(&format!("\x1b]8;;{url}\x07"));
+                }
+                out.push_str(&cells);
+                if link.is_some() {
+                    out.push_str("\x1b]8;;\x07");
+                }
+            }
+        }
         out
     }
+}
+
+/// A picture's row of placeholder cells, in the image's id as their color:
+/// the picture starting at column `at`, the cells between columns `from`
+/// and `to` drawn; nothing when none of it shows.
+fn placeholder_cells(p: PictureRow, at: usize, from: usize, to: usize) -> String {
+    let first = from.saturating_sub(at);
+    let last = (p.cols as usize).min(to.saturating_sub(at));
+    if first >= last {
+        return String::new();
+    }
+    let mut out = format!(
+        "\x1b[38;2;{};{};{}m",
+        (p.id >> 16) & 0xff,
+        (p.id >> 8) & 0xff,
+        p.id & 0xff
+    );
+    for c in first..last {
+        out.push_str(&crate::ui::images::placeholder(p.row, c as u16));
+    }
+    out.push_str("\x1b[0m");
+    out
+}
+
+/// What a text has that a view can draw as a picture.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Wanted {
+    /// A picture on a line of its own, by its link.
+    Picture(String),
+    /// A Mermaid diagram, by its source.
+    Diagram(String),
+    /// Someone's photo, for an avatar on a board (`super::board`).
+    Photo(crate::photos::Who),
+}
+
+impl Wanted {
+    /// What the layout knows it by.
+    pub fn key(&self) -> String {
+        match self {
+            Wanted::Picture(url) => url.clone(),
+            Wanted::Diagram(source) => format!("mermaid:{source}"),
+            Wanted::Photo(who) => photo_key(who),
+        }
+    }
+}
+
+/// What an avatar's photo is known by among a view's pictures.
+pub fn photo_key(who: &crate::photos::Who) -> String {
+    format!("photo:{:?}:{}", who.service, who.id)
+}
+
+/// The pictures ready to be drawn, for `Markdown::layout_with`: each by its
+/// key (`Wanted::key`), with its image's id and its size in pixels; the
+/// terminal's cell in pixels; and the most rows one may take, the pane's
+/// height, so a picture shows whole.
+#[derive(Clone, Debug, Default)]
+pub struct Images {
+    pub cell: (u32, u32),
+    pub rows: usize,
+    pub ready: HashMap<String, (u32, (u32, u32))>,
+}
+
+/// An image placed by a layout: its key, its id and its size in cells.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placement {
+    pub key: String,
+    pub id: u32,
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// The cells a picture `px` pixels in size takes, in cells `cell` pixels
+/// in size: its own size, made smaller to fit `width` columns and
+/// `max_rows` rows (and the placeholders' marks), its shape kept. Counts
+/// the frame `ui::images::raster_picture` draws around it.
+pub fn picture_cells(
+    px: (u32, u32),
+    cell: (u32, u32),
+    width: usize,
+    max_rows: usize,
+) -> (u16, u16) {
+    let most = crate::ui::images::MARKS.len();
+    let (cw, ch) = (cell.0.max(1) as f64, cell.1.max(1) as f64);
+    let (w, h) = (px.0.max(1) as f64, px.1.max(1) as f64);
+    let (max_cols, max_rows) = (width.clamp(1, most) as f64, max_rows.clamp(1, most) as f64);
+    // The border and the padding inside it, either side.
+    let frame = 10.0;
+    let mut cols = ((w + frame) / cw).ceil().min(max_cols);
+    let mut rows = (((cols * cw - frame).max(1.0) * h / w + frame) / ch).ceil();
+    if rows > max_rows {
+        rows = max_rows;
+        cols = (((rows * ch - frame).max(1.0) * w / h + frame) / cw)
+            .ceil()
+            .min(max_cols);
+    }
+    (cols.max(1.0) as u16, rows.max(1.0) as u16)
 }
 
 /// A document laid out for a width.
@@ -261,6 +514,8 @@ pub struct Doc {
     pub lines: Vec<Line>,
     /// Every link, by the number its spans give.
     pub links: Vec<String>,
+    /// The pictures its lines place.
+    pub placed: Vec<Placement>,
 }
 
 impl Doc {
@@ -273,6 +528,7 @@ impl Doc {
                 .map(|(i, spans)| Line::new(spans, (i, 0, 1)))
                 .collect(),
             links: Vec::new(),
+            placed: Vec::new(),
         }
     }
 
@@ -292,6 +548,8 @@ impl Doc {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Run {
     Text(Span),
+    /// A picture as its text (`Image: alt →`), and its link.
+    Picture(Span, String),
     /// A line break where it is written (`<br>`, two spaces at a line's end).
     Break,
 }
@@ -489,7 +747,7 @@ impl Builder {
         };
         if runs
             .iter()
-            .any(|r| matches!(r, Run::Text(s) if !s.text.trim().is_empty()))
+            .any(|r| matches!(r, Run::Text(s) | Run::Picture(s, _) if !s.text.trim().is_empty()))
         {
             self.push_block(Block::Para(runs));
         }
@@ -502,6 +760,7 @@ impl Builder {
                 text: text.to_string(),
                 style,
                 link,
+                picture: None,
             }));
         }
     }
@@ -560,7 +819,18 @@ impl Builder {
         } else {
             format!("Image: {alt} →")
         };
-        self.run(&text, Style::fg(IMAGE_TEXT), Some(link));
+        self.ensure_inline();
+        if let Some((_, runs)) = &mut self.inline {
+            runs.push(Run::Picture(
+                Span {
+                    text,
+                    style: Style::fg(IMAGE_TEXT),
+                    link: Some(link),
+                    picture: None,
+                },
+                url.to_string(),
+            ));
+        }
     }
 
     /// HTML, read for what it says (the module's comment says how).
@@ -951,13 +1221,54 @@ impl Markdown {
         }
     }
 
+    /// What it has that a view can draw as a picture: each picture on a
+    /// line of its own, by an https link, and each Mermaid diagram, once.
+    pub fn wanted(&self) -> Vec<Wanted> {
+        fn walk(blocks: &[Block], out: &mut Vec<Wanted>) {
+            for b in blocks {
+                match b {
+                    Block::Para(runs) if pictures_alone(runs) => {
+                        for r in runs {
+                            if let Run::Picture(_, url) = r
+                                && url.starts_with("https://")
+                            {
+                                out.push(Wanted::Picture(url.clone()));
+                            }
+                        }
+                    }
+                    Block::Mermaid(source) => out.push(Wanted::Diagram(source.clone())),
+                    Block::Quote(inner) => walk(inner, out),
+                    Block::List { items, .. } => {
+                        for item in items {
+                            walk(&item.blocks, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        walk(&self.blocks, &mut found);
+        let mut seen = std::collections::HashSet::new();
+        found.retain(|w| seen.insert(w.clone()));
+        found
+    }
+
     /// Laid out for a pane `cols` wide: two columns of margin each side.
     pub fn layout(&self, cols: usize) -> Doc {
+        self.layout_with(cols, None)
+    }
+
+    /// Laid out for a pane `cols` wide, each picture or diagram `images`
+    /// has ready drawn as one.
+    pub fn layout_with(&self, cols: usize, images: Option<&Images>) -> Doc {
         let mut out = Out {
             lines: Vec::new(),
             links: self.links.clone(),
             block: 0,
             place: &self.place,
+            images,
+            placed: Vec::new(),
         };
         let width = cols.saturating_sub(4).max(MIN_WIDTH);
         let margin = vec![Span::new("  ", Style::fg(TEXT))];
@@ -972,8 +1283,34 @@ impl Markdown {
         Doc {
             lines: out.lines,
             links: out.links,
+            placed: out.placed,
         }
     }
+}
+
+/// An image's id for one size of it, so the same picture shown at two
+/// sizes (at the top level and in a quote) is two images, each drawn at its
+/// own size: the id mixed with the size, in the id's half of the range,
+/// never 0.
+pub fn sized_id(id: u32, cols: u16, rows: u16) -> u32 {
+    let mut h = id;
+    for b in cols.to_le_bytes().iter().chain(&rows.to_le_bytes()) {
+        h = (h ^ *b as u32).wrapping_mul(16_777_619);
+    }
+    ((id & 0x80_0000) | (h & 0x7f_ffff)).max(1)
+}
+
+/// How far apart the anchors of a paragraph's pictures are: more rows than
+/// a picture can take (`ui::images::MARKS`).
+const PICTURE_STRIDE: usize = 1 << 16;
+
+/// Whether a paragraph is pictures alone, a line each or side by side.
+fn pictures_alone(runs: &[Run]) -> bool {
+    runs.iter().any(|r| matches!(r, Run::Picture(..)))
+        && runs.iter().all(|r| match r {
+            Run::Picture(..) | Run::Break => true,
+            Run::Text(s) => s.text.trim().is_empty(),
+        })
 }
 
 // ── Laying it out ───────────────────────────────────────────────────────────
@@ -984,6 +1321,8 @@ struct Out<'a> {
     /// The blocks laid out so far, for the anchors.
     block: usize,
     place: &'a str,
+    images: Option<&'a Images>,
+    placed: Vec<Placement>,
 }
 
 fn spaces(n: usize) -> Span {
@@ -1022,7 +1361,7 @@ fn tokens(runs: &[Run]) -> Vec<Token> {
                 offset += 1;
                 continue;
             }
-            Run::Text(span) => span,
+            Run::Text(span) | Run::Picture(span, _) => span,
         };
         for piece in span.text.split_word_bounds() {
             let chars = piece.chars().count();
@@ -1134,7 +1473,7 @@ fn wrap(runs: &[Run], cols: usize) -> Vec<(Vec<Span>, usize)> {
 }
 
 fn width_of(span: &Span) -> usize {
-    width(&span.text)
+    span.width()
 }
 
 impl Out<'_> {
@@ -1176,8 +1515,98 @@ impl Out<'_> {
         }
     }
 
+    /// The image ready for `key`, if any, and the cells it takes in
+    /// `width` columns.
+    fn ready(&self, key: &str, width: usize) -> Option<(u32, u16, u16)> {
+        let images = self.images?;
+        let (id, px) = *images.ready.get(key)?;
+        let (cols, rows) = picture_cells(px, images.cell, width, images.rows);
+        Some((sized_id(id, cols, rows), cols, rows))
+    }
+
+    /// A picture's rows of placeholder cells, after the prefix.
+    fn picture(
+        &mut self,
+        key: &str,
+        (id, cols, rows): (u32, u16, u16),
+        link: Option<usize>,
+        first: &[Span],
+        rest: &[Span],
+        at: &mut usize,
+    ) {
+        for row in 0..rows {
+            let prefix = if *at == 0 { first } else { rest };
+            let mut line = Line::new(prefix.to_vec(), (self.block, *at, 1));
+            line.picture = Some(PictureRow {
+                id,
+                row,
+                cols,
+                link,
+            });
+            self.lines.push(line);
+            *at += 1;
+        }
+        if !self.placed.iter().any(|p| p.id == id) {
+            self.placed.push(Placement {
+                key: key.to_string(),
+                id,
+                cols,
+                rows,
+            });
+        }
+    }
+
+    /// A paragraph of pictures alone, each ready one drawn as a picture and
+    /// the rest as their text, a line each. Each picture's rows are anchored
+    /// by its place among the paragraph's pictures (`PICTURE_STRIDE` apart)
+    /// and its own row, never by the rows of the pictures before it, so a
+    /// place in one stays put as another arrives. Only where the view draws
+    /// pictures (`Images` given), where it is laid out this way from the
+    /// start, a picture still to come on a line of its own; elsewhere the
+    /// paragraph is text, as any other.
+    fn pictures(&mut self, runs: &[Run], first: &[Span], rest: &[Span], width: usize) -> bool {
+        let ready: Vec<Option<(u32, u16, u16)>> = runs
+            .iter()
+            .map(|r| match r {
+                Run::Picture(_, url) => self.ready(url, width),
+                _ => None,
+            })
+            .collect();
+        if self.images.is_none() {
+            return false;
+        }
+        self.block += 1;
+        let mut at = 0;
+        let pictures = runs.iter().zip(ready).filter_map(|(run, ready)| match run {
+            Run::Picture(span, url) => Some((span, url, ready)),
+            _ => None,
+        });
+        for (k, (span, url, ready)) in pictures.enumerate() {
+            let row = self.lines.len();
+            match ready {
+                Some(image) => {
+                    self.picture(url, image, span.link, first, rest, &mut at);
+                    self.lines[row].searched = span.text.clone();
+                }
+                None => {
+                    for (spans, _) in wrap(&[Run::Text(span.clone())], width) {
+                        let prefix = if at == 0 { first } else { rest };
+                        self.push(prefix, spans, (self.block, 0, 1));
+                        at += 1;
+                    }
+                }
+            }
+            for (i, line) in self.lines[row..].iter_mut().enumerate() {
+                line.anchor = (self.block, k * PICTURE_STRIDE + i, 1);
+            }
+        }
+        true
+    }
+
     fn block(&mut self, block: &Block, first: &[Span], rest: &[Span], width: usize) {
         match block {
+            Block::Para(runs)
+                if pictures_alone(runs) && self.pictures(runs, first, rest, width) => {}
             Block::Para(runs) => self.text(runs, first, rest, width, None),
             Block::Heading(level, runs) => {
                 let h1 = (*level == 1).then(|| Style {
@@ -1252,6 +1681,29 @@ impl Out<'_> {
                     let mut spans = vec![spaces(2)];
                     spans.push(Span::new(line.replace('\t', "    "), style));
                     self.push(prefix, spans, (self.block, i, 1));
+                }
+            }
+            Block::Mermaid(source)
+                if let Some(image) = self.ready(&Wanted::Diagram(source.clone()).key(), width) =>
+            {
+                self.block += 1;
+                let key = Wanted::Diagram(source.clone()).key();
+                let row = self.lines.len();
+                self.picture(&key, image, None, first, rest, &mut 0);
+                self.lines[row].searched = source.replace('\n', " ");
+                // As many blocks as its text takes (a line saying where it
+                // is drawn, then its source, when it can't be drawn as
+                // text), so the blocks after it keep their anchors and the
+                // line at the top stays as the picture arrives.
+                if mermaid::draw(source, width).is_none() {
+                    self.block += 1;
+                }
+                // A place in its text (the drawing, or the line and the
+                // source) comes back as the picture's first row: the rows
+                // after it sit past every place in the text.
+                let rows = self.lines.len() - row;
+                for (i, line) in self.lines[row + 1..].iter_mut().enumerate() {
+                    line.anchor = (self.block, usize::MAX - rows + 1 + i, 1);
                 }
             }
             Block::Mermaid(source) => match mermaid::draw(source, width) {
@@ -1564,5 +2016,275 @@ mod tests {
             narrow.lines[at].plain()
         );
         assert_eq!(narrow.line_at(narrow.lines[0].anchor), 0);
+    }
+
+    fn ready(keys: &[(&str, u32, (u32, u32))]) -> Images {
+        Images {
+            cell: (10, 20),
+            rows: 30,
+            ready: keys
+                .iter()
+                .map(|(k, id, px)| (k.to_string(), (*id, *px)))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn pictures_alone_on_a_line_and_diagrams_are_wanted_once() {
+        let text = "![a](https://x/a.png)\n\nSee ![b](https://x/b.png) here.\n\n- ![c](https://x/c.png)\n\n![a again](https://x/a.png)\n\n![local](a.png)\n\n```mermaid\npie\n  \"a\": 1\n```";
+        let md = Markdown::parse(text, "");
+        assert_eq!(
+            md.wanted(),
+            vec![
+                Wanted::Picture("https://x/a.png".into()),
+                Wanted::Picture("https://x/c.png".into()),
+                Wanted::Diagram("pie\n  \"a\": 1".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_picture_ready_is_rows_of_placeholders_and_one_not_ready_its_text() {
+        let text = "Before\n\n![shot](https://x/a.png)\n![other](https://x/b.png)\n\nAfter";
+        let md = Markdown::parse(text, "");
+        // Where the view draws no pictures: the lines it always had.
+        let plain = md.layout_with(80, None);
+        assert!(
+            lines(&plain)
+                .iter()
+                .any(|l| l.trim() == "Image: shot → Image: other →")
+        );
+        assert!(plain.placed.is_empty());
+        // Where it does, nothing ready yet: a line each, anchored as their
+        // pictures will be.
+        let waiting = md.layout_with(80, Some(&ready(&[])));
+        let other = waiting
+            .lines
+            .iter()
+            .find(|l| l.plain().trim() == "Image: other →")
+            .unwrap();
+        assert_eq!(other.anchor.1, PICTURE_STRIDE);
+        // 200 by 100 pixels in cells of 10 by 20, with its frame: 21 by 6.
+        let doc = md.layout_with(80, Some(&ready(&[("https://x/a.png", 7, (200, 100))])));
+        let rows: Vec<&Line> = doc.lines.iter().filter(|l| l.picture.is_some()).collect();
+        assert_eq!(rows.len(), 6);
+        let id = sized_id(7, 21, 6);
+        assert_eq!(
+            rows[0].picture,
+            Some(PictureRow {
+                id,
+                row: 0,
+                cols: 21,
+                link: Some(0)
+            })
+        );
+        // A click on the picture opens it, as one on its text line did.
+        assert_eq!(rows[0].link_at(5), Some(0));
+        assert_eq!(rows[0].link_at(30), None);
+        assert_eq!(doc.links[0], "https://x/a.png");
+        assert_eq!(rows[5].picture.unwrap().row, 5);
+        assert_eq!(
+            doc.placed,
+            vec![Placement {
+                key: "https://x/a.png".into(),
+                id,
+                cols: 21,
+                rows: 6
+            }]
+        );
+        assert!(lines(&doc).iter().any(|l| l.trim() == "Image: other →"));
+        assert!(lines(&doc).iter().any(|l| l.trim() == "After"));
+        // Drawn as cells in the id's color, each with its row and column.
+        let ansi = rows[1].ansi(&doc.links, 0, 80, &[]);
+        let color = format!("\x1b[38;2;{};{};{}m", id >> 16, (id >> 8) & 0xff, id & 0xff);
+        assert!(
+            ansi.contains(&format!("  \x1b[0m\x1b]8;;https://x/a.png\x07{color}")),
+            "{ansi:?}"
+        );
+        assert!(ansi.contains(&crate::ui::images::placeholder(1, 20)));
+        assert!(!ansi.contains(&crate::ui::images::placeholder(1, 21)));
+        // Scrolled across, the cells start where the screen does.
+        let across = rows[1].ansi(&doc.links, 12, 80, &[]);
+        assert!(across.contains(&crate::ui::images::placeholder(1, 10)));
+        assert!(!across.contains(&crate::ui::images::placeholder(1, 9)));
+    }
+
+    #[test]
+    fn a_diagram_ready_is_a_picture_and_otherwise_its_text_drawing() {
+        let source = "flowchart TD\n  A[Start] --> B[End]";
+        let md = Markdown::parse(&format!("```mermaid\n{source}\n```"), "");
+        let text = md.layout_with(80, Some(&ready(&[])));
+        assert!(lines(&text).iter().any(|l| l.contains("Start")));
+        let key = Wanted::Diagram(source.into()).key();
+        let doc = md.layout_with(80, Some(&ready(&[(&key, 9, (400, 200))])));
+        assert!(!lines(&doc).iter().any(|l| l.contains("Start")));
+        assert_eq!(doc.placed.len(), 1);
+        assert!(
+            doc.lines
+                .iter()
+                .any(|l| l.picture.is_some_and(|p| p.id == doc.placed[0].id))
+        );
+    }
+
+    #[test]
+    fn the_same_picture_at_two_sizes_is_two_images() {
+        let md = Markdown::parse("![a](https://x/a.png)\n\n> ![a](https://x/a.png)", "");
+        let doc = md.layout_with(30, Some(&ready(&[("https://x/a.png", 7, (2000, 200))])));
+        assert_eq!(doc.placed.len(), 2, "{:?}", doc.placed);
+        assert_ne!(doc.placed[0].id, doc.placed[1].id);
+        assert_ne!(doc.placed[0].cols, doc.placed[1].cols);
+    }
+
+    #[test]
+    fn a_picture_fits_the_width_and_the_height_its_shape_kept() {
+        // Its own size where it fits.
+        assert_eq!(picture_cells((90, 30), (10, 20), 80, 30), (10, 2));
+        // Made narrower to fit the width.
+        assert_eq!(picture_cells((2000, 500), (10, 20), 50, 30), (50, 7));
+        // And lower to fit the height, narrower with it.
+        assert_eq!(picture_cells((500, 2000), (10, 20), 80, 10), (6, 10));
+    }
+
+    #[test]
+    fn control_characters_never_reach_the_terminal() {
+        let md = Markdown::parse("Hi \u{1b}_Ga=T,t=f;L2V0Yw==\u{1b}\\ there", "");
+        let doc = md.layout(80);
+        let all: String = doc
+            .lines
+            .iter()
+            .map(|l| l.ansi(&doc.links, 0, 80, &[]))
+            .collect();
+        assert!(!all.contains("\x1b_G"), "{all:?}");
+        let link = Markdown::parse("[x](https://e.com/\u{7}\u{1b}]8;;evil)", "").layout(80);
+        let all: String = link
+            .lines
+            .iter()
+            .map(|l| l.ansi(&link.links, 0, 80, &[]))
+            .collect();
+        assert!(!all.contains("\x07\x1b]8;;evil"), "{all:?}");
+    }
+
+    #[test]
+    fn a_diagram_arriving_keeps_the_anchors_after_it() {
+        let source = "pie\n  \"a\": 1";
+        let md = Markdown::parse(&format!("```mermaid\n{source}\n```\n\nAfter it"), "");
+        let anchor_of = |doc: &Doc| {
+            doc.lines
+                .iter()
+                .find(|l| l.plain().contains("After it"))
+                .map(|l| l.anchor)
+        };
+        let text = md.layout_with(80, Some(&ready(&[])));
+        let key = Wanted::Diagram(source.into()).key();
+        let drawn = md.layout_with(80, Some(&ready(&[(&key, 9, (400, 200))])));
+        assert_eq!(anchor_of(&text), anchor_of(&drawn));
+    }
+
+    #[test]
+    fn a_picture_and_a_diagram_are_found_by_their_words() {
+        let source = "flowchart TD\n  A[Start] --> B[End]";
+        let text = format!("![a shot](https://x/a.png)\n\n```mermaid\n{source}\n```");
+        let md = Markdown::parse(&text, "");
+        let key = Wanted::Diagram(source.into()).key();
+        let doc = md.layout_with(
+            80,
+            Some(&ready(&[
+                ("https://x/a.png", 7, (200, 100)),
+                (&key, 9, (400, 200)),
+            ])),
+        );
+        let found = |word: &str| {
+            doc.lines
+                .iter()
+                .filter(|l| l.searchable().contains(word))
+                .count()
+        };
+        assert_eq!(found("a shot"), 1);
+        assert_eq!(found("Start"), 1);
+    }
+
+    #[test]
+    fn a_place_in_a_diagrams_source_comes_back_as_its_pictures_first_row() {
+        let source = "pie\n  \"a\": 1\n  \"b\": 2";
+        let md = Markdown::parse(&format!("```mermaid\n{source}\n```\n\nAfter it"), "");
+        let text = md.layout_with(80, Some(&ready(&[])));
+        let in_source = text
+            .lines
+            .iter()
+            .find(|l| l.plain().contains("\"b\": 2"))
+            .unwrap()
+            .anchor;
+        let key = Wanted::Diagram(source.into()).key();
+        let drawn = md.layout_with(80, Some(&ready(&[(&key, 9, (400, 200))])));
+        let at = drawn.line_at(in_source);
+        assert!(drawn.lines[at].picture.is_some_and(|p| p.row == 0), "{at}");
+        let after = text
+            .lines
+            .iter()
+            .find(|l| l.plain().contains("After it"))
+            .unwrap()
+            .anchor;
+        assert!(
+            drawn.lines[drawn.line_at(after)]
+                .plain()
+                .contains("After it")
+        );
+    }
+
+    #[test]
+    fn a_place_in_a_picture_stays_as_one_before_it_arrives() {
+        let md = Markdown::parse("![a](https://x/a.png)\n![b](https://x/b.png)\n\nAfter", "");
+        let b_only = md.layout_with(80, Some(&ready(&[("https://x/b.png", 8, (200, 100))])));
+        let b_top = b_only
+            .lines
+            .iter()
+            .find(|l| l.picture.is_some())
+            .unwrap()
+            .anchor;
+        let both = md.layout_with(
+            80,
+            Some(&ready(&[
+                ("https://x/a.png", 7, (200, 100)),
+                ("https://x/b.png", 8, (200, 100)),
+            ])),
+        );
+        let at = both.line_at(b_top);
+        let b_id = sized_id(8, 21, 6);
+        assert_eq!(
+            both.lines[at].picture.map(|p| (p.id, p.row)),
+            Some((b_id, 0))
+        );
+    }
+
+    #[test]
+    fn a_place_deep_in_a_text_drawing_comes_back_as_the_pictures_first_row() {
+        let source = "flowchart TD\n  A --> B\n  B --> C\n  C --> D\n  D --> E";
+        let md = Markdown::parse(&format!("```mermaid\n{source}\n```\n\nAfter it"), "");
+        let text = md.layout_with(80, Some(&ready(&[])));
+        let deep = text
+            .lines
+            .iter()
+            .rfind(|l| l.plain().contains('E'))
+            .unwrap()
+            .anchor;
+        let key = Wanted::Diagram(source.into()).key();
+        let mut images = ready(&[(&key, 9, (400, 200))]);
+        images.rows = 3;
+        let drawn = md.layout_with(80, Some(&images));
+        let at = drawn.line_at(deep);
+        assert!(drawn.lines[at].picture.is_some_and(|p| p.row == 0), "{at}");
+    }
+
+    #[test]
+    fn a_picture_waiting_wraps_its_text_line() {
+        let alt = "a very long description of the screenshot that goes on";
+        let md = Markdown::parse(&format!("![{alt}](https://x/a.png)"), "");
+        let doc = md.layout_with(30, Some(&ready(&[])));
+        assert!(
+            doc.lines.iter().all(|l| l.width() <= 30),
+            "{:?}",
+            lines(&doc)
+        );
+        assert!(lines(&doc).iter().filter(|l| !l.trim().is_empty()).count() > 1);
     }
 }

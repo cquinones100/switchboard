@@ -46,6 +46,10 @@ impl Overlay for KeyList {
         "keys"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         self.room = (buf.area.height as usize).saturating_sub(6).max(1);
         self.scroll = self.scroll.min(self.rows.len().saturating_sub(self.room));

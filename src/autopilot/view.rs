@@ -1,10 +1,14 @@
 //! Autopilot's own view in mission control, with UX 2.0 on (the
 //! view_autopilot setting): a heading saying which note it works, its tabs
 //! working and open against its slots and cap, whether its tabs land
-//! without asking, and whether it is paused and why; then a row per tab it
-//! opened, its item's first line and a cell per stage, as the Landing
-//! view's rows are drawn (src/mission/render.rs); then the items it will
-//! open next, in the order it opens them, and the ones skipped.
+//! without asking, today's spend against its limit, and whether it is
+//! paused and why; then every item it works in the column of the board
+//! where it stands (`COLUMNS`: the items it will open next, in the order
+//! it opens them, then its tabs working, waiting on you, landing and
+//! landed), the least far along first, so landed ones come last; then the
+//! ones skipped, listed under the board. Each tab keeps a cell per stage,
+//! which the board's meter counts and its side panel lists
+//! (src/mission/render.rs).
 //!
 //! Each tab's stages come from what the server already holds, so building
 //! the view reads no file and starts no process: its `@autopilot*` options,
@@ -40,6 +44,9 @@ pub const STAGES: [&str; 8] = [
     "landed",
     "closed",
 ];
+
+/// The board's columns, left to right: where an item stands.
+pub const COLUMNS: [&str; 5] = ["Next up", "Working", "Waiting on you", "Landing", "Landed"];
 
 /// One of the mode's tabs as the view needs it.
 #[derive(Clone, Debug, PartialEq)]
@@ -151,6 +158,33 @@ fn failed(rest: &str, or: &str) -> Cell {
     )
 }
 
+/// The column a tab stands in (an index into `COLUMNS`, never Next up):
+/// landed once back in the main clone; waiting on you while its Claude
+/// waits on you, a landing asking before its push included; landing once
+/// its worktree is in the landing queue or its Claude runs queue-and-clean;
+/// waiting on you too when its working stage asks you (idle, or its turn
+/// ended); else working (opening its worktree too).
+pub fn column(r: &Row, stages: &[Cell; 8]) -> usize {
+    if r.left {
+        4
+    } else if r.state == TabState::Waiting {
+        2
+    } else if r.landing.as_ref().is_some_and(Value::is_object)
+        || r.loop_skill.as_deref() == Some("queue")
+    {
+        3
+    } else if stages[1].0 == "asks" {
+        2
+    } else {
+        1
+    }
+}
+
+/// How many of a tab's stages are done.
+pub fn progress(stages: &[Cell; 8]) -> usize {
+    stages.iter().filter(|c| c.0 == "done").count()
+}
+
 /// The dim note under a tab's item: its tab, and where it is in words.
 fn note_of(r: &Row) -> String {
     let what = if r.left {
@@ -189,8 +223,10 @@ fn why_paused(s: &Summary, said: &str) -> Vec<String> {
     out
 }
 
-/// The view's items: the heading, a row per tab, the next items and the
-/// skipped ones, each section under a heading the cursor passes over.
+/// The view's items: the heading, the next items under a heading the
+/// cursor passes over, a row per tab under one too, in its column's order
+/// and, within a column, the least far along first, then the skipped ones
+/// under a heading. Every item on the board has its column as its `group`.
 pub fn items(
     s: &Summary,
     said: &str,
@@ -218,23 +254,59 @@ pub fn items(
         facts.push("planned items only".into());
     }
     if s.spend_limit > 0.0 {
-        facts.push(format!("stops at ${} today", s.spend_limit));
+        facts.push(format!("${:.2} of ${} today", s.spent, s.spend_limit));
+    }
+    if s.drained {
+        facts.push("nothing more to start".into());
     }
     facts.extend(why_paused(s, said));
     let pilot = json!({ "paused": s.paused, "lands": s.lands_alone, "handsFree": s.hands_free });
+    let spend = (s.spend_limit > 0.0).then(|| json!([s.spent, s.spend_limit]));
     let mut out = vec![
         Item::new(HEADING, s.note.clone())
             .detail(facts.join(" · "))
-            .data(json!({ "header": true, "count": rows.len(), "summary": true })),
+            .data(json!({ "header": true, "count": rows.len(), "summary": true, "spend": spend })),
     ];
-    for r in rows {
-        let cells: Vec<Value> = stages(r)
+    if !next.is_empty() {
+        out.push(
+            Item::new("header:autopilot:next", "Next, in the order it opens them")
+                .data(json!({ "header": true, "count": next.len() })),
+        );
+        for (at, text) in next.iter().enumerate() {
+            out.push(
+                Item::new(format!("next:{text}"), format!("{}. {text}", at + 1))
+                    .group(COLUMNS[0])
+                    .data(json!({ "next": text, "place": at + 1, "mode": pilot })),
+            );
+        }
+    }
+    let mut placed: Vec<(usize, usize, &Row, [Cell; 8])> = rows
+        .iter()
+        .map(|r| {
+            let cells = stages(r);
+            (column(r, &cells), progress(&cells), r, cells)
+        })
+        .collect();
+    placed.sort_by_key(|(column, progress, _, _)| (*column, *progress));
+    if !placed.is_empty() {
+        out.push(
+            Item::new(
+                "header:autopilot:tabs",
+                "Its tabs, the least far along first",
+            )
+            .data(json!({ "header": true, "count": placed.len() })),
+        );
+    }
+    for (column, progress, r, cells) in placed {
+        let failed = cells.iter().any(|c| c.0 == "failed");
+        let cells: Vec<Value> = cells
             .into_iter()
             .map(|(look, words)| json!([look, words]))
             .collect();
         out.push(
             Item::new(format!("pilot:{}", r.tab), r.item.clone())
                 .detail(note_of(r))
+                .group(COLUMNS[column])
                 .state(if r.state == TabState::Waiting {
                     State::Attention
                 } else if r.state.busy() {
@@ -244,22 +316,17 @@ pub fn items(
                 })
                 .target(Target::Tab(r.tab))
                 .data(json!({
-                    "pilot": { "tab": r.tab.to_string(), "item": r.item, "stages": cells },
+                    "pilot": {
+                        "tab": r.tab.to_string(),
+                        "index": r.index,
+                        "item": r.item,
+                        "stages": cells,
+                        "done": progress,
+                        "failed": failed,
+                    },
                     "mode": pilot,
                 })),
         );
-    }
-    if !next.is_empty() {
-        out.push(
-            Item::new("header:autopilot:next", "Next, in the order it opens them")
-                .data(json!({ "header": true, "count": next.len() })),
-        );
-        for (at, text) in next.iter().enumerate() {
-            out.push(
-                Item::new(format!("next:{text}"), format!("{}. {text}", at + 1))
-                    .data(json!({ "next": text, "mode": pilot })),
-            );
-        }
     }
     if !skipped.is_empty() {
         out.push(
@@ -338,9 +405,11 @@ mod tests {
             ready_only: false,
             skipped: 1,
             spend_limit: 0.0,
+            spent: 0.0,
             lands_alone: true,
             hands_free: false,
             target: "team/next".into(),
+            drained: false,
         };
         let items = items(
             &s,
@@ -360,13 +429,94 @@ mod tests {
             ids,
             [
                 "header:autopilot",
-                "pilot:@4",
                 "header:autopilot:next",
                 "next:Next",
+                "header:autopilot:tabs",
+                "pilot:@4",
                 "header:autopilot:skipped",
                 "skipped:Old"
             ]
         );
+    }
+
+    #[test]
+    fn each_tab_stands_in_its_column_the_least_far_along_first_and_landed_last() {
+        let tab = |n: u32, state: TabState| Row {
+            tab: TabId(n),
+            index: n as usize,
+            item: format!("item {n}"),
+            ..row(state)
+        };
+        let landed = Row {
+            left: true,
+            ..tab(1, TabState::Idle)
+        };
+        let mut holding = tab(2, TabState::Working);
+        holding.loop_skill = Some("queue".into());
+        holding.landing = Some(json!({ "holding": true, "phase": "pushing" }));
+        let mut queued = tab(3, TabState::Working);
+        queued.landing = Some(json!({ "holding": false, "place": 2 }));
+        let asks = tab(4, TabState::Waiting);
+        let mut asks_to_push = tab(7, TabState::Waiting);
+        asks_to_push.loop_skill = Some("queue".into());
+        let working = tab(5, TabState::Working);
+        let opening = Row {
+            was_in: false,
+            ..tab(6, TabState::Working)
+        };
+        let s = Summary {
+            note: "Work".into(),
+            busy: 0,
+            open: 0,
+            slots: 2,
+            cap: 5,
+            next: String::new(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 0,
+            spend_limit: 0.0,
+            spent: 0.0,
+            lands_alone: false,
+            target: String::new(),
+            drained: false,
+            hands_free: false,
+        };
+        let items = items(
+            &s,
+            "",
+            &[
+                landed,
+                holding,
+                queued,
+                asks,
+                working,
+                opening,
+                asks_to_push,
+            ],
+            &["Later".into()],
+            &[],
+        );
+        let placed: Vec<(&str, &str)> = items
+            .iter()
+            .filter_map(|i| Some((i.group.as_deref()?, i.title.as_str())))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                ("Next up", "1. Later"),
+                ("Working", "item 6"),
+                ("Working", "item 5"),
+                ("Waiting on you", "item 4"),
+                ("Waiting on you", "item 7"),
+                ("Landing", "item 3"),
+                ("Landing", "item 2"),
+                ("Landed", "item 1"),
+            ]
+        );
+        let landed = items.iter().find(|i| i.title == "item 1").unwrap();
+        assert_eq!(landed.data["pilot"]["done"], 7);
+        assert_eq!(items[0].data["spend"], Value::Null, "no limit, no spend");
     }
 
     #[test]
@@ -383,14 +533,16 @@ mod tests {
             ready_only: true,
             skipped: 0,
             spend_limit: 20.0,
+            spent: 4.2,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
+            drained: true,
         };
         let items = items(&s, "Nothing left in the note", &[], &[], &[]);
         assert_eq!(
             items[0].detail,
-            "1 of 2 working · 1 of 4 open · asks before landing · planned items only · stops at $20 today · paused while you're away · Nothing left in the note"
+            "1 of 2 working · 1 of 4 open · asks before landing · planned items only · $4.20 of $20 today · nothing more to start · paused while you're away · Nothing left in the note"
         );
     }
 }

@@ -1,10 +1,11 @@
 //! UX 2.0 as someone sees it, against a server of the test's own: with its
 //! setting on, no status line, and a header over the tab's panes naming it
 //! with the keys of what it can show in Claude's place; with it off again,
-//! the status line back and the panes the whole height. With pictures
-//! drawn as sixel (src/mux/sixel), never over the header or on the last
-//! row a pane now reaches, never from mission control's copy of a tab's
-//! screen, and drawn by the image view in Claude's place.
+//! the status line back and the panes the whole height. Its keys are the
+//! kit's keycaps, ending in half circles on a terminal that draws them.
+//! With pictures drawn as sixel (src/mux/sixel), never over the header or
+//! on the last row a pane now reaches, never from mission control's copy of
+//! a tab's screen, and drawn by the image view in Claude's place.
 
 mod common;
 
@@ -30,7 +31,7 @@ fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
     let mut client = server.attach(90, 24);
     client.wait_text("$");
     let screen = client.wait_for("the header and no status line", |s| {
-        s[2].contains("M-c  Claude") && !s[23].contains("main")
+        s[2].contains("M-c Claude") && !s[23].contains("main")
     });
     assert!(
         screen[2].contains("M-d  Diff") && screen[2].contains("M-v  PR"),
@@ -49,7 +50,7 @@ fn with_ux2_a_header_names_the_tab_in_place_of_the_status_line() {
     // Off again: the status line back, the pane the whole height but it.
     settings(&server, json!({}));
     client.wait_for("the status line back", |s| {
-        s[23].contains("main") && !s[2].contains("M-c  Claude")
+        s[23].contains("main") && !s[2].contains("M-c Claude")
     });
     client.wait_for("the pane the whole height", |_| {
         server.list()["sessions"][0]["tabs"][0]["panes"][0]["rows"] == 23
@@ -61,7 +62,7 @@ fn with_ux2_and_message_boxes_off_a_message_is_said_in_a_box() {
     let server = TestServer::start();
     settings(&server, json!({"ux2": true, "message_boxes": false}));
     let mut client = server.attach(90, 24);
-    client.wait_for("the header", |s| s[2].contains("M-c  Claude"));
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     let pid = server.pid();
     // With no status line to put it on, the message goes in a box, and the
     // server goes on.
@@ -69,6 +70,26 @@ fn with_ux2_and_message_boxes_off_a_message_is_said_in_a_box() {
     client.wait_text("Nothing needs you.");
     assert_eq!(server.pid(), pid);
     server.list();
+}
+
+#[test]
+fn with_ux2_a_ghostty_terminal_gets_half_circles_and_another_gets_spaces() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut ghostty = server.attach_as("xterm-ghostty", 90, 24);
+    let screen = ghostty.wait_for("the header's keycaps", |s| s[2].contains("M-d"));
+    assert!(
+        screen[2].contains("\u{E0B6}M-d\u{E0B4} Diff"),
+        "half circles at the key's ends: {:?}",
+        screen[2]
+    );
+    let mut other = server.attach_as("xterm-256color", 90, 24);
+    let screen = other.wait_for("the header's keycaps", |s| s[2].contains("M-d"));
+    assert!(
+        screen[2].contains(" M-d  Diff") && !screen[2].contains('\u{E0B6}'),
+        "spaces in their place: {:?}",
+        screen[2]
+    );
 }
 
 // ── Pictures drawn as sixel ─────────────────────────────────────────────────
@@ -81,7 +102,7 @@ fn sixel_server(cols: u16, rows: u16) -> (TestServer, common::TestClient, String
         r#"{"ux2": true, "image_protocol": "sixel", "notifications": false, "tips": false, "sidebar": false}"#,
     );
     let mut client = server.attach(cols, rows);
-    client.wait_for("the header", |s| s[2].contains("M-c  Claude"));
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     client.wait_sent("the terminal asked for its cell", b"\x1b[16t");
     client.send(b"\x1b[6;25;13t");
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
@@ -245,7 +266,7 @@ fn with_ux2_the_ticket_image_view_in_claude_s_place_draws_its_page_as_sixel() {
     switchboard::views::image::cache::Cache::at(cache).save_pages(&parts, &view, &[shot]);
 
     let mut client = server.attach(100, 30);
-    client.wait_for("the header", |s| s[2].contains("M-c  Claude"));
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
     client.wait_text("$");
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
         .as_str()
@@ -270,4 +291,138 @@ fn with_ux2_the_ticket_image_view_in_claude_s_place_draws_its_page_as_sixel() {
     // its 100 by 4 cells of the sixel's 10 by 20 pixels, made whole bands.
     client.wait_sent("the page drawn", b"\x1b[5;1H\x1bP0;1;0q\"1;1;1000;78");
     assert!(!common::sent(&client.raw, "\u{10EEEE}".as_bytes()));
+}
+
+/// `switchboard hook <event>` in `pane`, as Claude Code runs it.
+fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(common::BIN)
+        .args(["hook", event])
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", pane)
+        .env_remove("SLACK_RELAY_HELPER")
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("switchboard runs");
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.to_string().as_bytes());
+    assert!(child.wait().expect("the hook ends").success());
+}
+
+#[test]
+fn with_ux2_m_h_shows_the_tabs_history_under_its_screen_and_moves_through_time() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 40);
+    client.wait_for("the header", |s| s[2].contains("M-h  History"));
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // A transcript of twenty minutes: a turn, then a commit.
+    let now = jiff::Timestamp::now().as_second();
+    let at = |ago: i64| jiff::Timestamp::from_second(now - ago).unwrap().to_string();
+    let transcript = server.home.join("t.jsonl");
+    let lines = [
+        json!({"type": "user", "timestamp": at(1200), "message": {"content": "fix it"}}),
+        json!({"type": "assistant", "timestamp": at(600), "message": {
+            "usage": {"input_tokens": 40_000},
+            "content": [{"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "git commit -m x"}}]}}),
+        json!({"type": "user", "timestamp": at(590), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "c1", "content": "[main a1c3e52] x"}]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(&transcript, text).unwrap();
+    let payload = json!({"session_id": "s1", "transcript_path": transcript, "cwd": server.home});
+    hook(&server, &pane, "SessionStart", payload.clone());
+    hook(&server, &pane, "UserPromptSubmit", payload);
+    client.send(b"\x1bh");
+    let screen = client.wait_for("the timeline", |s| {
+        s.iter().any(|l| l.contains("• a1c3e52"))
+    });
+    assert!(screen.iter().any(|l| l.contains("h/l move in time")));
+    assert!(screen.iter().any(|l| l.trim_start().starts_with("state")));
+    assert!(screen.iter().any(|l| l.contains("20% now")), "{screen:#?}");
+    // The turn before now, which the header says is the moment shown.
+    client.send(b"[");
+    client.wait_for("the moment shown in the header", |s| {
+        s[0].contains("viewing ")
+    });
+    client.send(b"\x1b");
+    client.wait_for("back to now", |s| !s[0].contains("viewing "));
+    client.send(b"\x1b");
+    client.wait_for("closed", |s| {
+        !s.iter().any(|l| l.contains("h/l move in time"))
+    });
+}
+
+#[test]
+fn with_ux2_m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    common::stand_in::lazygit(&server.home.join("bin"));
+    let mut client = server.attach(120, 40);
+    client.wait_for("the header", |s| s[2].contains("M-h  History"));
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let transcript = server.home.join("t.jsonl");
+    let line = json!({"type": "user", "timestamp": jiff::Timestamp::now().to_string(), "message": {"content": "fix it"}});
+    std::fs::write(&transcript, format!("{line}\n")).unwrap();
+    let payload = json!({"session_id": "s1", "transcript_path": transcript, "cwd": server.home});
+    hook(&server, &pane, "SessionStart", payload.clone());
+    hook(&server, &pane, "UserPromptSubmit", payload);
+    server.ok(&["press", "lazygit"]);
+    let in_layout = |list: &Value| -> Vec<String> {
+        list["sessions"][0]["tabs"][0]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p["id"].as_str().map(str::to_string))
+            .collect()
+    };
+    let start = std::time::Instant::now();
+    while in_layout(&server.list()).contains(&pane) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "lazygit never took Claude's place"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // A shell split beside lazygit has the focus.
+    server.ok(&["split"]);
+    let start = std::time::Instant::now();
+    while in_layout(&server.list()).len() < 2 {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "no split"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    client.send(b"\x1bh");
+    client.wait_for("the history", |s| {
+        s.iter().any(|l| l.contains("h/l move in time"))
+    });
+    // Claude is beside lazygit again, with the focus, so typing reaches it.
+    let list = server.list();
+    assert!(in_layout(&list).contains(&pane), "{list:#}");
+    let tab = &list["sessions"][0]["tabs"][0];
+    let active = tab["panes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["active"] == true)
+        .and_then(|p| p["id"].as_str());
+    assert_eq!(active, Some(pane.as_str()), "{tab:#}");
 }

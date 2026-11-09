@@ -38,6 +38,14 @@ pub enum Act {
     NoteTab,
     /// Start work on the checklist item under the cursor in a new tab.
     WorkOnItem,
+    /// UX 2.0: the item's plan note (Enter).
+    OpenPlan,
+    /// UX 2.0: the tab working on the item (o).
+    ItemTab,
+    /// UX 2.0: the "Add an item" input (ga).
+    AddItem,
+    /// UX 2.0: autopilot working the note (M-p).
+    WorkNote,
     /// A Switchboard command for Notes, by its name in keys.json, which the
     /// workspace runs (`switchboard press <name>`).
     Press(&'static str),
@@ -73,8 +81,9 @@ fn command(
     }
 }
 
-/// The commands for where the palette was opened: the list, or a note.
-pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
+/// The commands for where the palette was opened: the list, or a note;
+/// with UX 2.0 on (`ux2`), its item keys too.
+pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
     let mut list = vec![
         command(
             "Show or put away the list",
@@ -180,6 +189,27 @@ pub fn commands(from_list: bool, in_note: bool) -> Vec<Command> {
             "tabs",
             Act::WorkOnItem,
         ));
+        if ux2 {
+            list.push(command(
+                "Open this item's plan",
+                "Enter",
+                "note",
+                Act::OpenPlan,
+            ));
+            list.push(command(
+                "Go to the tab working on this item",
+                "o",
+                "tabs",
+                Act::ItemTab,
+            ));
+            list.push(command("Add an item", "ga", "note", Act::AddItem));
+            list.push(command(
+                "Have autopilot work this note",
+                "M-p",
+                "tabs",
+                Act::WorkNote,
+            ));
+        }
         list.push(command("Fold every heading", "zM", "fold", Act::FoldAll));
         list.push(command(
             "Unfold every heading",
@@ -257,7 +287,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("notes-palette-{}", std::process::id()));
         let file = dir.join("recent");
         let _ = std::fs::remove_dir_all(&dir);
-        let from_note = commands(false, true);
+        let from_note = commands(false, true, false);
         assert!(
             from_note
                 .iter()
@@ -269,7 +299,14 @@ mod tests {
                 .any(|c| c.name.starts_with("Move Notes beside your work") && c.key == "M-e"),
             "Switchboard's commands for Notes"
         );
-        let from_list = commands(true, false);
+        assert!(!from_note.iter().any(|c| c.act == Act::AddItem));
+        assert!(
+            commands(false, true, true)
+                .iter()
+                .any(|c| c.act == Act::AddItem && c.key == "ga"),
+            "UX 2.0's item keys"
+        );
+        let from_list = commands(true, false, false);
         assert!(
             !from_list
                 .iter()

@@ -89,6 +89,10 @@ impl Overlay for Confirm {
         "confirm"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let question = Style::new().fg(draw::YELLOW).add_modifier(Modifier::BOLD);
         let mut lines = vec![BoxLine::text(format!(" {} [Y/n]", self.text), question)];

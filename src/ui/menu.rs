@@ -12,7 +12,6 @@
 //! short with … when the options need the room.
 
 use ratatui::buffer::Buffer;
-use ratatui::text::Span;
 
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
 use super::{Look, Outcome, Overlay, Step};
@@ -107,6 +106,10 @@ impl Overlay for Menu {
         "menu"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let area = buf.area;
         let inner = (area.width.saturating_sub(6)).min(72) as usize;
@@ -153,24 +156,7 @@ impl Overlay for Menu {
             + 5;
         for (i, option) in self.options.iter().enumerate().skip(first).take(fits) {
             let chosen = i == self.cursor;
-            let mut spans: Vec<Span<'static>> = if chosen {
-                vec![
-                    Span::raw(" "),
-                    look.pointer(),
-                    Span::raw(" "),
-                    Span::styled(option.label.clone(), look.bold_bright()),
-                ]
-            } else {
-                vec![
-                    Span::raw("   "),
-                    Span::styled(option.label.clone(), look.text()),
-                ]
-            };
-            if let Some(k) = option.key {
-                let pad = key_col.saturating_sub(3 + draw::width(&option.label));
-                spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(Span::styled(k.to_string(), look.dim()));
-            }
+            let spans = super::kit::option(&option.label, option.key, key_col, chosen, &look.theme);
             lines.push(
                 BoxLine::spans(spans)
                     .fill(chosen.then_some(look.theme.highlight))

@@ -106,16 +106,16 @@ fn set_up(
     git(&repo, &["branch", "team/next"]);
     let repo = repo.canonicalize().unwrap();
 
-    // Wide enough for the Autopilot view's stage cells beside the sidebar.
+    // Wide enough for the Autopilot view's board beside the sidebar.
     let cols = if more.get("ux2").is_some() { 170 } else { 120 };
     let mut client = server.attach(cols, 40);
     client.wait_text("$");
     if more.get("ux2").is_some() {
-        client.wait_text("M-c  Claude");
+        client.wait_text("M-c Claude");
     }
     server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
     client.type_text("\x1bp");
-    client.wait_text("action>");
+    client.wait_text("Actions");
     client.type_text("autopilot");
     client.wait_text("Autopilot: work a note");
     client.type_text("\r");
@@ -129,7 +129,7 @@ fn set_up(
     .unwrap();
     client.type_text("\x1b\x1b");
     client.type_text("\x1bp");
-    client.wait_text("action>");
+    client.wait_text("Actions");
     client.type_text("autopilot");
     client.wait_text("Autopilot: work a note");
     client.type_text("\r");
@@ -168,9 +168,9 @@ fn set_up(
 #[test]
 fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
-    // M-p's command opened mission control on the Autopilot view, its
+    // M-p's command opened mission control on the Autopilot board, its
     // heading saying what the line said.
-    let screen = client.wait_text("leak check");
+    let screen = client.wait_text("Waiting on you");
     assert!(
         screen
             .iter()
@@ -179,7 +179,7 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
     );
     client.type_text("\x1b");
     client.wait_for("mission control closed", |s| {
-        !s.iter().any(|l| l.contains("leak check"))
+        !s.iter().any(|l| l.contains("Waiting on you"))
     });
     // The Tabs view leads with the cards alone, the Autopilot view among
     // the views while the mode is on.
@@ -192,7 +192,7 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
-fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when_none_is_left() {
+fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is_left() {
     let (notes, note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("AUTO Work");
 
@@ -243,13 +243,16 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
             .iter()
             .any(|t| t["options"]["@autopilot_item"] == "Second thing")
     });
-    wait("it to say the note has nothing left", &server, || {
-        std::fs::read_to_string(server.state.join("autopilot.json"))
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .is_some_and(|m| m["said"] == "Nothing left to take in Work")
-    });
+    client.wait_text("nothing left to take");
     assert_eq!(opened(&server).len(), 2, "one tab an item, each once");
+    let mode: Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autopilot.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        mode["said"], "",
+        "with its tabs still open, no notification says it has stopped"
+    );
 
     // Its menu's "Land without asking", after a yes naming what it skips
     // and keeps: its tabs not landed yet are marked, and its line says so.

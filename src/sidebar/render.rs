@@ -24,6 +24,7 @@ use super::text::{self, Badge, SPINNER, width};
 use crate::items::{Item, State};
 use crate::mux::TabId;
 use crate::ui::Theme;
+use crate::ui::kit::{self, Mark, Tone};
 
 /// The most lines a tab's name wraps to.
 pub const NAME_LINES: usize = 3;
@@ -255,16 +256,6 @@ fn fg(c: Color) -> Style {
     Style::new().fg(c)
 }
 
-/// A group's heading color with UX 2.0: the color of the badge its stage
-/// wears in mission control, so what needs you reads yellow and what works
-/// blue; the quiet groups dim.
-fn ux2_group_color(stage: Stage, theme: &Theme) -> Color {
-    match stage {
-        Stage::Idle | Stage::Other => theme.dim,
-        _ => stage.color().color().unwrap_or(theme.dim),
-    }
-}
-
 /// An item's mark by its state, as mission control's lists draw it.
 fn item_mark(item: &Item, theme: &Theme) -> Span<'static> {
     match item.state {
@@ -415,16 +406,16 @@ pub fn sidebar_lines(
         let mut heading = Row::default();
         heading.put(" ", Style::new());
         if r.ux2 {
-            // UX 2.0: the heading in its group's color, bold, its count at
-            // the right edge.
-            let title = group.stage.title().to_uppercase();
-            let n = group.tabs.len().to_string();
-            let color = ux2_group_color(group.stage, theme);
-            heading.put(title.clone(), bold(color));
-            let gap = cols.saturating_sub(width(&title) + width(&n) + 2);
-            heading
-                .put(" ".repeat(gap.max(1)), Style::new())
-                .put(n, fg(color));
+            // UX 2.0: the kit's label in its stage's tone, so what needs you
+            // reads yellow and what works blue, its count at the right edge.
+            let tone = Mark::of_badge(group.stage.color()).look().1;
+            heading.spans = kit::label(
+                group.stage.title(),
+                tone,
+                Some(group.tabs.len()),
+                cols,
+                theme,
+            );
         } else if group.stage == Stage::Failing {
             heading.put(
                 format!("✗ {}", group.stage.title().to_uppercase()),
@@ -445,12 +436,12 @@ pub fn sidebar_lines(
                 cursor_at = lines.len();
             }
             if r.ux2 {
-                // UX 2.0: two lines a tab. Its state's mark in its color
-                // (no pill), its number in its project's color, its name on
-                // one line; under it, what it is doing. The cursor's row
-                // shaded, with an accent bar at its left.
+                // UX 2.0: two lines a tab, each the kit's row (the cursor's
+                // shaded, with an accent bar at its left). Its state's mark,
+                // its number in its project's color, its name on one line;
+                // under it, what it is doing.
                 let state = model::badge_state(tab, r);
-                spins |= state.spins();
+                spins |= kit::spins(state, true);
                 let fill = if chosen {
                     Some(theme.highlight)
                 } else if view.hover == Some(&Owner::Tab(tab.id)) {
@@ -458,14 +449,6 @@ pub fn sidebar_lines(
                 } else {
                     None
                 };
-                let mark = if state.spins() {
-                    SPINNER[view.frame % SPINNER.len()]
-                } else {
-                    state.look().mark
-                };
-                let mark_style = state.color().map(bold).unwrap_or(fg(theme.faint));
-                let edge = if chosen { "▌" } else { " " };
-                let accent = fg(Color::Indexed(81));
                 let number = tab.index.to_string();
                 let name_style = if chosen || tab.id == view.here {
                     bold(theme.bright)
@@ -475,8 +458,9 @@ pub fn sidebar_lines(
                 let room = cols.saturating_sub(4 + width(&number));
                 let mut first = Row::default();
                 first
-                    .put(edge, accent)
-                    .put(mark, mark_style)
+                    .spans
+                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
+                first
                     .put(" ", Style::new())
                     .put(
                         number,
@@ -484,7 +468,16 @@ pub fn sidebar_lines(
                     )
                     .put(" ", Style::new())
                     .put(text::cut(&tab.name, room), name_style);
-                lines.push(first.fit(cols, fill));
+                let kit_row = |row: Row| Line {
+                    spans: kit::row(
+                        row.fit(cols.saturating_sub(1), None).spans,
+                        cols,
+                        chosen,
+                        theme,
+                    ),
+                    fill,
+                };
+                lines.push(kit_row(first));
                 owners.push(Some(tab.id));
                 let mut doing: Vec<String> = model::state_words(tab, r)
                     .split(" · ")
@@ -499,11 +492,11 @@ pub fn sidebar_lines(
                 }
                 if !doing.is_empty() {
                     let mut second = Row::default();
-                    second.put(edge, accent).put("    ", Style::new()).put(
+                    second.put("    ", Style::new()).put(
                         text::cut(&doing.join(" · "), cols.saturating_sub(6)),
                         fg(theme.dim),
                     );
-                    lines.push(second.fit(cols, fill));
+                    lines.push(kit_row(second));
                     owners.push(Some(tab.id));
                 }
                 if chosen {
@@ -689,12 +682,17 @@ pub fn sidebar_lines(
     // either.
     let mut top_owners: Vec<Option<Owner>> = Vec::new();
     if r.ux2 && !notices.is_empty() {
-        let mut heading = Row::default();
-        heading
-            .put(" ", Style::new())
-            .put("NOTIFICATIONS", bold(YELLOW))
-            .put(format!(" {}", notices.len()), fg(theme.faint));
-        head.push(heading.fit(cols, None));
+        let heading = Line {
+            spans: kit::label(
+                "Notifications",
+                Tone::Accent,
+                Some(notices.len()),
+                cols,
+                theme,
+            ),
+            fill: None,
+        };
+        head.push(heading);
         top_owners.push(None);
         for n in notices {
             let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
@@ -710,16 +708,23 @@ pub fn sidebar_lines(
             let room = cols.saturating_sub(4 + if when.is_empty() { 0 } else { width(&when) + 1 });
             let title = text::cut(&n.title, room);
             let gap = cols.saturating_sub(4 + width(&title) + width(&when));
+            let chosen = view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner));
             let mut row = Row::default();
-            row.put(if fill.is_some() { "▌" } else { " " }, fg(YELLOW))
-                .put("●", fg(YELLOW))
-                .put(" ", Style::new())
-                .put(title, fg(theme.text));
+            row.spans.push(kit::mark(Mark::Needs, 0, theme));
+            row.put(" ", Style::new()).put(title, fg(theme.text));
             if !when.is_empty() {
                 row.put(" ".repeat(gap), Style::new())
                     .put(when, fg(theme.dim));
             }
-            head.push(row.fit(cols, fill));
+            head.push(Line {
+                spans: kit::row(
+                    row.fit(cols.saturating_sub(1), None).spans,
+                    cols,
+                    chosen,
+                    theme,
+                ),
+                fill,
+            });
             top_owners.push(Some(n.owner.clone()));
         }
         head.push(Line::blank(cols));
@@ -766,8 +771,11 @@ pub fn sidebar_lines(
     // UX 2.0's last row: the keys that start, find and walk tabs.
     if r.ux2 {
         let mut hint = Row::default();
-        hint.put(" ", Style::new())
-            .put("M-t new · M-j jump · M-a next", fg(theme.faint));
+        hint.put(" ", Style::new());
+        hint.spans.extend(kit::hints(
+            &[("M-t", "new"), ("M-j", "jump"), ("M-a", "next")],
+            theme,
+        ));
         notice_lines.push(hint.fit(cols, None));
         notice_owners.push(None);
     }
@@ -1171,7 +1179,11 @@ mod tests {
         let text = texts(&out);
         assert!(text[0].starts_with(" 1 tab"), "{:?}", text[0]);
         assert!(!text[0].contains(" s "), "no session's name: {:?}", text[0]);
-        assert_eq!(text[2], " NOTIFICATIONS 1");
+        assert_eq!(text[2], format!(" NOTIFICATIONS{}1", " ".repeat(24)));
+        assert_eq!(
+            out.lines[2].spans[1].style.fg,
+            Some(crate::mux::compose::colors::ACCENT)
+        );
         // How long ago it came, dim at the right edge.
         assert_eq!(text[3], format!(" ● 3 new on Slack{}12m", " ".repeat(19)));
         assert_eq!(out.lines[3].spans.last().unwrap().content, " ");
@@ -1212,7 +1224,11 @@ mod tests {
         assert!(text[5].ends_with(" 1"), "{:?}", text[5]);
         assert_eq!(text[6], "▌○ 1 work");
         assert_eq!(out.owners[6], Some(Owner::Tab(TabId(1))));
-        assert_eq!(text[19], " M-t new · M-j jump · M-a next");
+        assert_eq!(text[19], " M-t new  M-j jump  M-a next");
+        assert_eq!(
+            out.lines[19].spans[1].style.fg,
+            Some(crate::mux::compose::colors::ACCENT)
+        );
         assert!(
             !text.iter().any(|l| l.contains("═")),
             "none pinned at the bottom"

@@ -851,6 +851,10 @@ pub enum Chip {
 /// the server's `list`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemTab {
+    /// The tab's id (`@<n>`), which `o` on the item goes to.
+    pub id: String,
+    /// The note the tab is linked to (`@tab_note`), empty when none.
+    pub note: String,
     /// The tab's number in its session.
     pub index: usize,
     /// Its Claude waits on you, else it works.
@@ -1004,6 +1008,123 @@ pub fn chips<S: AsRef<str>>(
         }
     }
     out
+}
+
+/// The end (exclusive) of the item on `row` at `indent`: the lines
+/// indented under it, blank lines between included, trailing blank lines
+/// left off, as wtn reads an item whole (`worktree_from_note::item_block`).
+fn item_end<S: AsRef<str>>(lines: &[S], row: usize, indent: usize) -> usize {
+    let mut end = row + 1;
+    let mut last = row + 1;
+    while end < lines.len() {
+        let line = lines[end].as_ref();
+        if line.bytes().all(is_space) {
+            end += 1;
+            continue;
+        }
+        if indent_of(line) <= indent {
+            break;
+        }
+        end += 1;
+        last = end;
+    }
+    last
+}
+
+/// The note an unticked item's plan names: the `[[...]]` on an indented
+/// `Plan:` line under it, blank lines between included, past its
+/// sub-items; `None` for any other line, or an item with none.
+pub fn plan_of<S: AsRef<str>>(lines: &[S], kinds: &[Kind], row: usize) -> Option<String> {
+    let Some(Kind::Check {
+        indent,
+        done: false,
+        ..
+    }) = kinds.get(row).copied()
+    else {
+        return None;
+    };
+    let end = item_end(lines, row, indent);
+    // A sub-item and what is under it are passed over: a plan there is
+    // the sub-item's.
+    let mut sub: Option<usize> = None;
+    for (line, k) in lines.iter().zip(kinds).take(end).skip(row + 1) {
+        let line = line.as_ref();
+        if line.bytes().all(is_space) {
+            continue;
+        }
+        if sub.is_some_and(|s| indent_of(line) > s) {
+            continue;
+        }
+        sub = None;
+        if let Kind::Check { indent, .. } = k {
+            sub = Some(*indent);
+            continue;
+        }
+        let text = line.trim_start();
+        let text = text.strip_prefix("- ").unwrap_or(text);
+        if let Some(rest) = text.strip_prefix("Plan:")
+            && let Some((_, after)) = rest.split_once("[[")
+            && let Some((title, _)) = after.split_once("]]")
+            && !title.trim().is_empty()
+        {
+            return Some(title.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Whether a heading under the title names parked work, which UX 2.0
+/// shows folded to one line with its count of items: the sections wtn and
+/// autopilot leave out (`worktree_from_note::parked_heading`: Defered,
+/// Later, Backlog...).
+pub fn parked(line: &str, kind: Kind) -> bool {
+    matches!(kind, Kind::Heading { .. } | Kind::Subheading { .. })
+        && crate::cmd::worktree_from_note::parked_heading(line)
+}
+
+/// The checklist items at the top level of the rows `start..=end`.
+pub fn items_in(kinds: &[Kind], start: usize, end: usize) -> usize {
+    kinds
+        .iter()
+        .take(end + 1)
+        .skip(start)
+        .filter(|k| matches!(k, Kind::Check { indent: 0, .. }))
+        .count()
+}
+
+/// Where "Add an item" puts a new one: in the note's top list (the rows
+/// before its first `## ` or `### ` section), after its last unticked top-level item
+/// and what is indented under it; with none, after the title (and a blank
+/// line under it).
+pub fn new_item_row<S: AsRef<str>>(lines: &[S], kinds: &[Kind]) -> usize {
+    let top_end = kinds
+        .iter()
+        .position(|k| matches!(k, Kind::Heading { .. } | Kind::Subheading { .. }))
+        .unwrap_or(kinds.len());
+    let last = (0..top_end).rev().find(|&r| {
+        matches!(
+            kinds[r],
+            Kind::Check {
+                indent: 0,
+                done: false,
+                ..
+            }
+        )
+    });
+    match last {
+        Some(r) => item_end(&lines[..top_end], r, 0),
+        None => {
+            let title = kinds
+                .iter()
+                .position(|k| matches!(k, Kind::Title { .. }))
+                .map_or(0, |t| t + 1);
+            let mut at = title.min(top_end);
+            if at < top_end && lines[at].as_ref().bytes().all(is_space) {
+                at += 1;
+            }
+            at
+        }
+    }
 }
 
 /// Pushes a conceal for table.rs.
@@ -1355,6 +1476,8 @@ mod tests {
             (
                 "show uncommitted changes in M-d".to_string(),
                 ItemTab {
+                    id: "@3".into(),
+                    note: String::new(),
                     index: 3,
                     waits: false,
                     detail: "review round 1".into(),
@@ -1363,6 +1486,8 @@ mod tests {
             (
                 "give each note a stable ID".to_string(),
                 ItemTab {
+                    id: "@2".into(),
+                    note: String::new(),
                     index: 2,
                     waits: true,
                     detail: "git push".into(),
@@ -1385,6 +1510,64 @@ mod tests {
         assert_eq!(landed[5].as_deref(), Some("2505ca4"));
         assert_eq!(landed[7], None, "words of hex letters or digits alone");
         assert_eq!(landed[1], None, "an unticked item lands nothing");
+    }
+
+    #[test]
+    fn an_items_plan_parked_sections_and_where_a_new_item_goes() {
+        let lines = [
+            "# Work",
+            "",
+            "- [ ] with a plan",
+            "  After: Kit",
+            "  Plan: [[Plan - Kit]], needs a choice",
+            "- [ ] no plan",
+            "  - [ ] Plan: [[Not this one]]",
+            "",
+            "- [x] done",
+            "## Defered",
+            "- [ ] parked one",
+            "- [ ] parked two",
+            "  - [ ] under it",
+            "## Shipped",
+        ];
+        let ks = kinds(&lines);
+        assert_eq!(plan_of(&lines, &ks, 2).as_deref(), Some("Plan - Kit"));
+        assert_eq!(plan_of(&lines, &ks, 5), None, "a sub-item is no plan");
+        assert_eq!(plan_of(&lines, &ks, 8), None, "a ticked item");
+        assert_eq!(plan_of(&lines, &ks, 3), None, "not an item");
+        assert!(parked(lines[9], ks[9]));
+        assert!(!parked(lines[13], ks[13]));
+        assert!(!parked("Defered", Kind::Body));
+        assert_eq!(items_in(&ks, 9, 13), 2);
+        assert_eq!(new_item_row(&lines, &ks), 7);
+        let bare = ["# Fresh", "", "Some words"];
+        assert_eq!(new_item_row(&bare, &kinds(&bare)), 2);
+        let sections = ["# Fresh", "## Defered", "- [ ] parked"];
+        assert_eq!(new_item_row(&sections, &kinds(&sections)), 1);
+        let sub = ["# Work", "- [ ] Active", "### Later", "- [ ] Deferred"];
+        assert_eq!(new_item_row(&sub, &kinds(&sub)), 2);
+        // An item's lines past a blank line under it are still its own.
+        let gap = [
+            "# T",
+            "- [ ] First",
+            "  - detail",
+            "",
+            "  Plan: [[Plan - First]]",
+            "",
+            "- [x] done",
+        ];
+        let gk = kinds(&gap);
+        assert_eq!(plan_of(&gap, &gk, 1).as_deref(), Some("Plan - First"));
+        let nested = [
+            "- [ ] Parent",
+            "  - [ ] Child",
+            "    Plan: [[Plan - Child]]",
+            "  Plan: [[Plan - Parent]]",
+        ];
+        let nk = kinds(&nested);
+        assert_eq!(plan_of(&nested, &nk, 0).as_deref(), Some("Plan - Parent"));
+        assert_eq!(plan_of(&nested, &nk, 1).as_deref(), Some("Plan - Child"));
+        assert_eq!(new_item_row(&gap, &gk), 5);
     }
 
     fn looks_of(lines: &[&str]) -> Vec<Look> {

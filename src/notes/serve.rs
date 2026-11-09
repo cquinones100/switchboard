@@ -113,6 +113,24 @@ impl Command {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::Open => {
+                "There is only one Notes, since two would save the same notes over each other, so it is found wherever it has moved. A new one opens at the end of the tabs, named Notes."
+            }
+            Command::Beside => {
+                "The one Notes moves there, showing this tab's own note, and its own tab says which tab has it. Its list is put away beside another tab (Settings' \"Hide the sidebar beside a tab\")."
+            }
+            Command::NoteTab => {
+                "With no tab linked, it asks which open tab is the note's, or opens a new one in a directory you pick. Notes then moves beside that tab's Claude (Settings' \"Notes beside a note's tab\")."
+            }
+            Command::ChooseNote => {
+                "The notes are ranked on the computer, those naming the tab's ticket or PR first, then those sharing words with its name. \"Keep whatever is open\" stops the question for this tab."
+            }
+        }
+    }
+
     /// tmux.conf's tags.
     pub fn tags(self) -> &'static [&'static str] {
         match self {
@@ -136,6 +154,13 @@ impl Command {
 /// What Notes presses to start work on a checklist item (`gw`), with the
 /// note and the item's line.
 pub const WORK_ON_ITEM: &str = "work-on-item";
+
+/// What Notes presses for M-p with UX 2.0 on: autopilot working the note.
+pub const WORK_NOTE: &str = "work-note";
+
+/// What Notes presses for M-Enter in "Add an item": a tab whose Claude adds
+/// the item to the note and writes its plan, with `/plan-item`.
+pub const PLAN_ITEM: &str = "plan-item";
 
 /// The rest of what a key does, back on the server's task once what it read
 /// off the task (the notes, for ranking them) is in.
@@ -751,7 +776,10 @@ impl Server {
     /// client used last on the caller's session (the app's palette asks
     /// this); `note-tab` takes the note as `arg`. `work-on-item <note>
     /// <line>`, Notes' `gw`, is no key's: it starts work on the item on
-    /// that line of the note (src/cmd/work.rs).
+    /// that line of the note (src/cmd/work.rs). Nor are UX 2.0's
+    /// `work-note <note>` (Notes' M-p: autopilot working the note) and
+    /// `plan-item <note> <text>` (M-Enter in "Add an item": a tab whose
+    /// Claude runs `/plan-item`).
     pub fn cmd_press(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
         let Some((name, rest)) = args.split_first() else {
             return Reply::fail("press: which action?");
@@ -768,6 +796,24 @@ impl Server {
                 return Reply::fail("press: no client is attached to press it in");
             };
             self.work_on_item(client, note, line);
+            return Reply::ok("");
+        }
+        if name == WORK_NOTE || name == PLAN_ITEM {
+            let Some(note) = arg.filter(|n| in_notes(n)) else {
+                return Reply::fail(format!("press: {name} takes a note"));
+            };
+            let text = rest.get(1).map(|t| t.trim()).unwrap_or("").to_string();
+            if name == PLAN_ITEM && text.is_empty() {
+                return Reply::fail("press: plan-item takes a note and the item");
+            }
+            let Some(client) = self.press_client(caller) else {
+                return Reply::fail("press: no client is attached to press it in");
+            };
+            if name == WORK_NOTE {
+                self.work_note(client, note);
+            } else {
+                self.plan_new_item(client, note, text);
+            }
             return Reply::ok("");
         }
         let Some(action) = Action::parse(name) else {

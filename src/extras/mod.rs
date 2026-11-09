@@ -119,6 +119,47 @@ impl MissionView {
         }
     }
 
+    fn detail(self) -> &'static str {
+        match self {
+            MissionView::WorkMap => {
+                "A row for each worktree and tab in your tabs' repositories, with its ticket, its tab and where its PR stands, what needs you first. Enter goes to it or reopens it. Settings' \"Work map\" (view_work_map)."
+            }
+            MissionView::Calendar => {
+                "Today laid out as Google Calendar's Day view, read from its iCal feed every five minutes, else from what /today last saved. Enter joins a call or answers an invitation. Settings' \"Calendar\" (view_calendar)."
+            }
+            MissionView::Slack => {
+                "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json. Enter opens one in Slack or a tab for its thread. Settings' \"Slack\" (view_slack)."
+            }
+            MissionView::Closed => {
+                "Newest first, one per Claude conversation. Enter reopens it where it was, with its name and its Claude resumed, or a shell when it had none. The newest 200 outlive a restart. Settings' \"Closed tabs\" (view_closed)."
+            }
+            MissionView::Prs => {
+                "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
+            }
+            MissionView::Tickets => {
+                "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
+            }
+            MissionView::Inbox => {
+                "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
+            }
+            MissionView::Ci => {
+                "Each with the checks that failed and the log line that says why. Enter starts a CI loop on it or reads the failing job's log beside you. Needs GitHub; Settings' \"CI\" (view_ci)."
+            }
+            MissionView::Landing => {
+                "There only while something lands. A landing queue's row moves up, down or out from its menu; merge queues are asked of GitHub and hold everyone's PRs. Settings' \"Landing view\" (view_landing)."
+            }
+            MissionView::Sessions => {
+                "The fullest context first, with its model, how long it has run and since it last did anything; one at 80% or more is marked as needing you. Settings' \"Sessions\" (view_sessions)."
+            }
+            MissionView::Usage => {
+                "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer. Settings' \"Usage\" (usage)."
+            }
+            MissionView::Resources => {
+                "Every process under a tab's panes counted, the heaviest tab first, read every three seconds only while the view is in front. Enter goes to the tab. Settings' \"Resources\" (view_resources)."
+            }
+        }
+    }
+
     fn tags(self) -> &'static [&'static str] {
         match self {
             MissionView::WorkMap => &["mission", "worktree"],
@@ -270,6 +311,58 @@ impl Command {
             Command::OpenTicketId => "Open a Linear ticket in the browser by ID, number or URL",
             Command::AwsLogin => "Log in to AWS (aws sso login) in your Chrome profile",
             Command::Keys => "Every key, by what it is about, with / to filter",
+        }
+    }
+
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::RenameTab => {
+                "Typed in a box that starts from the name it has, its PR number kept in front. An empty name gives the tab its own name back."
+            }
+            Command::GoToTab => {
+                "Its number typed in a box. A number past the last tab, or 0, is said to have no tab."
+            }
+            Command::PaneNav => {
+                "C-w twice sends one C-w to the pane. In Vim, the diff and Notes, C-w is theirs; Settings' \"C-w then h, j, k or l moves between panes\" (ctrl_w_panes) off leaves it to every pane."
+            }
+            Command::Mission(view) => view.detail(),
+            Command::Notifications => {
+                "The Notifications window, each one whole, Enter opening its actions. With Settings' \"Notifications window\" (notice_list) off, the sidebar's cursor goes to the first one instead."
+            }
+            Command::Habits => {
+                "Counted on this computer alone, never sent, while Settings' \"Suggestions from how you work\" (habits) is on. Shown in a box that j and k scroll and any other key closes."
+            }
+            Command::SendReply => {
+                "Read from this tab's transcript and pasted, without Enter, into the Claude of a tab you pick, which comes to the front to add to it. Said when this tab runs no Claude or it hasn't replied."
+            }
+            Command::UpdateMain => {
+                "Runs switchboard update-main in the pane's repository, which only fast-forwards and leaves a checkout with uncommitted changes as it is. What it did shows in a box."
+            }
+            Command::CheckSetup => {
+                "Runs switchboard setup --check, asking nothing, and shows what each part would change in a box."
+            }
+            Command::SetupPart => {
+                "Lists the parts switchboard setup --parts names and every part at once, Tab marking several, then asks whether to run them or only check them. What it printed shows in a box."
+            }
+            Command::CalendarTab => {
+                "The tab the Calendar view opens in the background when its day is out of date, here in front: Claude in your home directory, reading the calendar through its Google Calendar connector."
+            }
+            Command::SlackTab => {
+                "The tab the Slack view opens in the background when it is out of date, here in front, in your home directory. With Settings' \"Slack without a tab\" (slack_background) on, mission control looks without it."
+            }
+            Command::OpenPrNumber => {
+                "Typed in a box that starts with the clipboard's PR; empty is this tab's PR, and a bare number is one of the pane's repository. Then the browser, or a new tab working on it (wtpr). Needs GitHub."
+            }
+            Command::OpenTicketId => {
+                "Typed in a box that starts with the clipboard's ticket; empty is this tab's, and a bare number takes the team key of the branch's ticket. Then the browser, or a new tab running wt. Needs Linear."
+            }
+            Command::AwsLogin => {
+                "Runs switchboard aws-login in a pane beside yours, logging in to the one [sso-session] in ~/.aws/config; the pane stays until a key, so its code can be read. Needs the AWS CLI."
+            }
+            Command::Keys => {
+                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes'. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
+            }
         }
     }
 

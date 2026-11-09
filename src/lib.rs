@@ -23,6 +23,8 @@
 //! - `mux`: the multiplexer (in place of tmux).
 //! - `agent`: what each Claude session is doing, from its hooks.
 //! - `tabs`: what each tab is called and the color it wears.
+//! - `history`: a tab's history (M-h), its Claude session on a timeline
+//!   under the screen as it was.
 //! - `sources`: what the sidebar and mission control know from GitHub and
 //!   Linear, looked up in the background.
 //! - `day`: your day: the calendar, Slack, the notes written for you.
@@ -36,6 +38,8 @@
 //!   their suggestions, each tab's CPU and memory, the Claude sessions and
 //!   the day's spend, closed tabs, your own files' settings, plugins.
 //! - `links`: opening a link in the browser, in its site's Chrome profile.
+//! - `photos`: people's photos from Slack, Linear and GitHub for their
+//!   avatars, fetched once and kept.
 //! - `views`: reading things beside your work: the PR description, the
 //!   ticket, any link, a pane's links and images, search everything, and
 //!   whether the PR can merge.
@@ -73,6 +77,7 @@ pub mod day;
 pub mod diff;
 pub mod extras;
 pub mod facts;
+pub mod history;
 pub mod integrations;
 pub mod items;
 pub mod links;
@@ -81,6 +86,7 @@ pub mod mux;
 pub mod net;
 pub mod notes;
 pub mod paths;
+pub mod photos;
 pub mod platform;
 pub mod presence;
 pub mod relay;

@@ -16,7 +16,11 @@
 //!
 //! - `markdown`: Markdown laid out for a terminal, glow-style.json's look.
 //! - `mermaid`: flowcharts and sequence diagrams drawn as text.
+//! - `pictures`: the pictures and Mermaid diagrams a view draws as
+//!   images, where the terminal can show them.
 //! - `pager`: less's part: keys, search, resize, links.
+//! - `board`: the PR and the ticket as UX 2.0's boards draw them, a column
+//!   and a panel beside it.
 //! - `pr`: the branch's PR (pr-view.sh, pr-view.js's `prepare`).
 //! - `ticket`: a Linear ticket (ticket-view.sh, pr-view.js's `ticket`).
 //! - `image`: the PR or ticket as GitHub draws it, as pictures in a pane's
@@ -31,11 +35,13 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+pub mod board;
 pub mod image;
 pub mod markdown;
 pub mod mermaid;
 pub mod page;
 pub mod pager;
+pub mod pictures;
 pub mod pr;
 pub mod ready;
 pub mod search;
@@ -184,6 +190,69 @@ impl Command {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::PrView => {
+                "The PR is found from the pane's branch, in a fork's upstream too, the copy last read showing while GitHub is asked again. With UX 2.0 on, it opens in this pane's place. With no PR, the view says why."
+            }
+            Command::TicketView => {
+                "The ticket ID comes from the branch's name, else the tab's. The copy last read shows while Linear is asked again; with UX 2.0 on, it opens in this pane's place. With no ID found, a box says so."
+            }
+            Command::OpenPr => {
+                "A branch with no PR yet opens its repository instead, and a box says why. The link opens in the Chrome profile browser.json gives GitHub, and what went wrong is said in a box."
+            }
+            Command::OpenRepo => {
+                "The repository is the one origin names, whatever the branch, opened in the Chrome profile browser.json gives GitHub. When it can't open, a box says why: no git repository, no remote on GitHub or no token."
+            }
+            Command::OpenTicket => {
+                "The ticket ID comes from the branch's name, else the tab's. With a workspace written in linear.json the link is made at once; without, Linear is asked where the ticket is."
+            }
+            Command::PrReady => {
+                "The verdict is GitHub's own, so it agrees with the merge button, with the required checks, review, conflicts and auto-merge under it. The box offers to show the failing checks or have the tab's Claude resolve conflicts."
+            }
+            Command::Search => {
+                "Each source's results show as it answers, Slack's through Claude's connector about 15 seconds after the rest; notes are read on this computer and sent nowhere. Ctrl-O opens a result in the browser instead."
+            }
+            Command::ReadLink => {
+                "A PR or ticket reads as its view lays it out, a Notion page or Google Doc through Claude's connectors, any other page as its main text. It replaces a link read beside before; Ctrl-O opens it in the browser."
+            }
+            Command::OpenLinkRead => {
+                "The link view anywhere in the tab counts, so it works from any pane there, opening in the Chrome profile browser.json gives the link's site. With no link being read in the tab, a box says so."
+            }
+            Command::OpenLink => {
+                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane. Ctrl-O reads the chosen one beside the pane instead. With no links, a box says so."
+            }
+            Command::CopyLink => {
+                "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane. It goes to your terminal's clipboard and the computer's; Ctrl-O opens it instead."
+            }
+            Command::OpenMedia => {
+                "The list is the picture and video files the pane names that exist, then its links ending in one, newest first. A link opens in the browser, and Ctrl-O shows a file in its folder. With none, a box says so."
+            }
+            Command::OpenMergeQueue => {
+                "The queue is the one for the branch's PR's base branch, else for the repository's default branch when the branch has no PR. When it can't be found, a box says why."
+            }
+            Command::OpenProject => {
+                "Linear is asked which project the branch's ticket is in, the ID taken from the branch's name, else the tab's. A ticket in no project, or no ticket at all, is said in a box."
+            }
+            Command::CopyTicketId => {
+                "The ID is the first ticket-shaped part of the branch's name, else of the tab's name. A box says what was copied, or that there is no ticket."
+            }
+            Command::CopyTicketUrl => {
+                "The link is made from the workspace written in linear.json, else asked of Linear. A box says what was copied, or that there is no ticket in the branch or tab name."
+            }
+            Command::CopyPrNumber => {
+                "The PR is asked of GitHub by the pane's branch, a fork's upstream included. A box says what was copied, or that the branch has no pull request."
+            }
+            Command::CopyPrUrl => {
+                "The PR is asked of GitHub by the pane's branch, a fork's upstream included, and its GitHub link taken. A box says what was copied, or that the branch has no pull request."
+            }
+            Command::ClearImageCache => {
+                "After a yes, everything under the image views' caches goes, the text last read included, so the next image view fetches and draws again. With Settings' \"Cache PR and ticket images\" off, nothing is kept anyway."
+            }
+        }
+    }
+
     /// tmux.conf's tags: `#github` and `#linear` take a command out of the
     /// palette while that service is off.
     pub fn tags(self) -> &'static [&'static str] {
@@ -306,7 +375,7 @@ pub fn view_main(args: Vec<String>) -> ExitCode {
         },
         Err(e) => pager::Content::Failed(format!("Couldn't read {file}: {e}")),
     };
-    pager::run(content, None, None)
+    pager::run_local(content)
 }
 
 /// `switchboard pr-view [dir]`, and `pr-view --checks [dir]` for the PR's

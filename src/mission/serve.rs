@@ -81,10 +81,11 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("↵ on Merged", "Work map: show or hide the merged worktrees"),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
-    ("] [", "next, last view"),
+    ("] [", "next, last view (with UX 2.0, in its group)"),
+    ("} {", "with UX 2.0, the next, last group of views"),
     (
         "tab ⇧tab",
-        "move focus through the views' names, the filter, the items and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
+        "move focus through the groups' and views' names, the filter, the items and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
     ),
     ("v", "go to a view by typing its name (↵ go, esc cancel)"),
     ("r", "refresh a plugin's view"),
@@ -401,6 +402,13 @@ impl Server {
         // going, as Landing does) leaves it in front, where it now is, and
         // Tab's focus on a view's name on that view.
         let was = m.current().map(|v| v.id.clone());
+        // The Autopilot view orders its items by how far along they are, so
+        // a stage changing moves them: the cursor follows the chosen one.
+        let pilot_chosen = m
+            .current()
+            .filter(|v| v.id == ViewId::Autopilot)
+            .and_then(|_| m.chosen_item())
+            .map(|i| i.id.clone());
         if let Some(id) = was
             && views.get(m.view.wrapping_sub(1)).map(|v| &v.id) != Some(&id)
         {
@@ -445,6 +453,10 @@ impl Server {
                 .is_none()
                 .then(|| self.autopilot_summary())
                 .flatten(),
+            caps: self
+                .clients
+                .get(&client)
+                .is_some_and(|c| crate::ui::kit::caps(&c.term)),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -453,6 +465,14 @@ impl Server {
         }
         m.keep_landing = m.current().is_some_and(|v| v.id == ViewId::Landing);
         m.keep_autopilot = m.current().is_some_and(|v| v.id == ViewId::Autopilot);
+        if let Some(id) = pilot_chosen
+            && let Some(at) = m
+                .current()
+                .filter(|v| v.id == ViewId::Autopilot)
+                .and_then(|v| v.data.items.iter().position(|i| i.id == id))
+        {
+            m.cursor = at as isize;
+        }
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
@@ -465,12 +485,10 @@ impl Server {
             .as_ref()
             .map_or("Tabs".to_string(), |(_, t)| t.clone());
         let came = m.came.replace(title.clone());
-        let spins = m
-            .snap
-            .tabs
-            .iter()
-            .any(|t| model::badge_state(t, &m.snap.rules).spins())
-            && m.view == 0;
+        let spins =
+            m.snap.tabs.iter().any(|t| {
+                crate::ui::kit::spins(model::badge_state(t, &m.snap.rules), m.snap.rules.ux2)
+            }) && m.view == 0;
         let picker = m.picker;
         self.put_mission(client, m);
         if came.as_deref() != Some(&title) {
@@ -810,10 +828,12 @@ impl Server {
                     let cards = c.overlays.top() == Some("mission")
                         && c.overlays.find::<Mission>().is_some_and(|m| {
                             m.view == 0
-                                && m.snap
-                                    .tabs
-                                    .iter()
-                                    .any(|t| model::badge_state(t, &m.snap.rules).spins())
+                                && m.snap.tabs.iter().any(|t| {
+                                    crate::ui::kit::spins(
+                                        model::badge_state(t, &m.snap.rules),
+                                        m.snap.rules.ux2,
+                                    )
+                                })
                         });
                     if busy || cards {
                         c.dirty = true;
@@ -1045,6 +1065,10 @@ impl Server {
         let mut k = k;
         let press = matches!(k.code, KeyCode::Enter) || (k.code == KeyCode::Char(' ') && plain(&k));
         match m.focus {
+            Some(Focus::Group(g)) if press => {
+                open_group(m, g);
+                return;
+            }
             Some(Focus::View(v)) if press => {
                 m.view = v;
                 m.cursor = 0;
@@ -1104,10 +1128,12 @@ impl Server {
             KeyCode::Char('G') | KeyCode::End => move_to(m, count - 1, count),
             KeyCode::Tab if tab_focus => move_focus(m, 1),
             KeyCode::BackTab if tab_focus => move_focus(m, -1),
-            KeyCode::Tab => switch_view(m, 1),
-            KeyCode::BackTab => switch_view(m, -1),
-            KeyCode::Char(']') if none => switch_view(m, 1),
-            KeyCode::Char('[') if none => switch_view(m, -1),
+            KeyCode::Tab => switch_view(m, 1, false),
+            KeyCode::BackTab => switch_view(m, -1, false),
+            KeyCode::Char(']') if none => switch_view(m, 1, true),
+            KeyCode::Char('[') if none => switch_view(m, -1, true),
+            KeyCode::Char('}') if m.snap.rules.ux2 => switch_group(m, 1),
+            KeyCode::Char('{') if m.snap.rules.ux2 => switch_group(m, -1),
             KeyCode::Esc if m.filter.is_some() => {
                 // Esc clears a filter before it closes mission control.
                 m.filter = None;
@@ -2804,6 +2830,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             }
             let edge = mouse.col == 0 || mouse.col + 1 >= cols || mouse.row + 1 >= rows;
             let lit = hit.filter(|_| !edge).filter(|s| match s {
+                Spot::Group(g) => first_of(m, *g) != Some(m.view),
                 Spot::View(v) => *v != m.view,
                 Spot::Index(i) => *i != m.cursor,
                 _ => true,
@@ -2842,6 +2869,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     m.filter = Some(Filter { text, typing: true });
                     Then::Prepare
                 }
+                Spot::Group(g) if first_of(m, g) != Some(m.view) => {
+                    open_group(m, g);
+                    Then::Prepare
+                }
+                Spot::Group(_) => Then::Redraw,
                 Spot::View(v) if v != m.view => {
                     m.view = v;
                     m.cursor = 0;
@@ -2965,6 +2997,12 @@ fn side_step(m: &Mission, by: isize) -> isize {
         let at = m.cursor.max(0) as usize;
         return super::calendar::beside(&view.data.items, at, by, &m.snap.tz) as isize;
     }
+    let pilot_board = view.id == ViewId::Autopilot
+        && m.snap.rules.ux2
+        && m.size.0 as usize >= super::render::PILOT_BOARD_AT;
+    if pilot_board {
+        return pilot_side_step(m, &view.data.items, by);
+    }
     let Some(columns) = view.columns() else {
         return m.cursor;
     };
@@ -2994,6 +3032,21 @@ fn side_step(m: &Mission, by: isize) -> isize {
         return m.cursor;
     };
     let row = cursor - starts[at];
+    // With UX 2.0 the PR and ticket boards draw their last group as a row
+    // under the columns, where h and l go from card to card, h from its
+    // first card to the columns.
+    let in_week_row = m.snap.rules.ux2
+        && matches!(view.id, ViewId::Prs | ViewId::Tickets)
+        && at == columns.len() - 1;
+    if in_week_row {
+        let next = row as isize + by;
+        if next >= 0 && (next as usize) < counts[at] {
+            return m.cursor + by;
+        }
+        if by > 0 {
+            return m.cursor;
+        }
+    }
     let mut i = at as isize + by;
     while i >= 0 && (i as usize) < columns.len() {
         let c = i as usize;
@@ -3005,11 +3058,97 @@ fn side_step(m: &Mission, by: isize) -> isize {
     m.cursor
 }
 
-/// `]` and `[`: the next or last view, round; focus on a view's name
-/// follows, and on the filter goes to the items of a board, which has none.
-fn switch_view(m: &mut Mission, by: isize) {
-    let count = m.snap.views.len() as isize + 1;
-    m.view = (m.view as isize + by).rem_euclid(count) as usize;
+/// h and l on the Autopilot board: the next column with cards in it, at
+/// the same row as far as it reaches. Its items aren't in their columns'
+/// order alone (a heading leads them, the skipped follow), so each column
+/// is found by its items' group.
+fn pilot_side_step(m: &Mission, items: &[crate::items::Item], by: isize) -> isize {
+    let columns: Vec<Vec<usize>> = crate::autopilot::view::COLUMNS
+        .iter()
+        .map(|c| {
+            (0..items.len())
+                .filter(|&i| items[i].group.as_deref() == Some(*c))
+                .collect()
+        })
+        .collect();
+    let cursor = m.cursor.max(0) as usize;
+    let Some((at, row)) = columns
+        .iter()
+        .enumerate()
+        .find_map(|(c, held)| Some((c, held.iter().position(|&i| i == cursor)?)))
+    else {
+        return m.cursor;
+    };
+    let mut c = at as isize + by;
+    while c >= 0 && (c as usize) < columns.len() {
+        let held = &columns[c as usize];
+        if let Some(&last) = held.last() {
+            return held.get(row).copied().unwrap_or(last) as isize;
+        }
+        c += by;
+    }
+    m.cursor
+}
+
+/// `]` and `[` (`in_group`), Tab and Shift-Tab: the next or last view,
+/// round; with UX 2.0 in the bar's order, and `]` and `[` round the views
+/// of the group in front.
+fn switch_view(m: &mut Mission, by: isize, in_group: bool) {
+    let order: Vec<usize> = match m.groups() {
+        Some(groups) if in_group => groups
+            .into_iter()
+            .find(|(_, held)| held.contains(&m.view))
+            .map(|(_, held)| held)
+            .unwrap_or_default(),
+        Some(groups) => groups.into_iter().flat_map(|(_, held)| held).collect(),
+        None => (0..=m.snap.views.len()).collect(),
+    };
+    let Some(at) = order.iter().position(|v| *v == m.view) else {
+        return;
+    };
+    let to = order[(at as isize + by).rem_euclid(order.len() as isize) as usize];
+    show_view(m, to);
+}
+
+/// `}` and `{` with UX 2.0: the first view of the next or last group,
+/// round; Tab's focus on a group's name follows.
+fn switch_group(m: &mut Mission, by: isize) {
+    let Some(groups) = m.groups() else {
+        return;
+    };
+    let at = groups
+        .iter()
+        .position(|(_, held)| held.contains(&m.view))
+        .unwrap_or(0);
+    let (g, held) = &groups[(at as isize + by).rem_euclid(groups.len() as isize) as usize];
+    show_view(m, held[0]);
+    if let Some(Focus::Group(_)) = m.focus {
+        m.focus = Some(Focus::Group(*g));
+    }
+}
+
+/// A group's first view, with UX 2.0.
+fn first_of(m: &Mission, g: views::Group) -> Option<usize> {
+    m.groups()?
+        .into_iter()
+        .find(|(x, _)| *x == g)
+        .map(|(_, held)| held[0])
+}
+
+/// A group's name pressed or clicked: its first view, the group in front's
+/// too.
+fn open_group(m: &mut Mission, g: views::Group) {
+    if let Some(first) = first_of(m, g)
+        && first != m.view
+    {
+        show_view(m, first);
+    }
+}
+
+/// A view brought to the front: focus on a view's name follows, and on
+/// the filter goes to the items of a board, which has none.
+fn show_view(m: &mut Mission, to: usize) {
+    m.view = to;
     if let Some(Focus::View(_)) = m.focus {
         m.focus = Some(Focus::View(m.view));
     }
@@ -3021,11 +3160,13 @@ fn switch_view(m: &mut Mission, by: isize) {
 }
 
 /// Tab and Shift-Tab with tab_focus: focus through what can be clicked, in
-/// reading order, round: each view's name, the filter (not on a board),
-/// each item, and easy mode's ×.
+/// reading order, round: with UX 2.0 each group's name and the names of
+/// the views in front's group, else each view's name; the filter (not on a
+/// board), each item, and easy mode's ×.
 fn move_focus(m: &mut Mission, by: isize) {
     #[derive(Clone, Copy, PartialEq)]
     enum Stop {
+        Group(views::Group),
         View(usize),
         Filter,
         Item(isize),
@@ -3036,7 +3177,16 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(v) => v.data.items.len(),
         None => m.snap.tabs.len(),
     };
-    let mut stops: Vec<Stop> = (0..=m.snap.views.len()).map(Stop::View).collect();
+    let mut stops: Vec<Stop> = match m.groups() {
+        Some(groups) => {
+            let mut stops: Vec<Stop> = groups.iter().map(|(g, _)| Stop::Group(*g)).collect();
+            if let Some((_, held)) = groups.iter().find(|(_, held)| held.contains(&m.view)) {
+                stops.extend(held.iter().map(|v| Stop::View(*v)));
+            }
+            stops
+        }
+        None => (0..=m.snap.views.len()).map(Stop::View).collect(),
+    };
     if !board {
         stops.push(Stop::Filter);
     }
@@ -3046,6 +3196,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     }
     let at = match m.focus {
         None => None,
+        Some(Focus::Group(g)) => stops.iter().position(|s| *s == Stop::Group(g)),
         Some(Focus::View(v)) => stops.iter().position(|s| *s == Stop::View(v)),
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
         Some(Focus::Item) => stops.iter().position(|s| *s == Stop::Item(m.cursor)),
@@ -3058,6 +3209,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(i) => (i as isize + by).rem_euclid(n),
     };
     match stops[to as usize] {
+        Stop::Group(g) => m.focus = Some(Focus::Group(g)),
         Stop::View(v) => m.focus = Some(Focus::View(v)),
         Stop::Filter => m.focus = Some(Focus::Filter),
         Stop::Item(i) => {
@@ -3149,10 +3301,10 @@ mod tests {
     #[test]
     fn brackets_go_round_the_views_and_tab_moves_focus_through_names_filter_and_items() {
         let mut m = mission(2, vec![list("Closed", 3), list("Other", 1)]);
-        switch_view(&mut m, 1);
+        switch_view(&mut m, 1, true);
         assert_eq!(m.view, 1);
-        switch_view(&mut m, -1);
-        switch_view(&mut m, -1);
+        switch_view(&mut m, -1, true);
+        switch_view(&mut m, -1, true);
         assert_eq!(m.view, 2, "round to the last");
         m.view = 0;
         move_focus(&mut m, 1);
@@ -3167,6 +3319,62 @@ mod tests {
         assert_eq!(m.cursor, 1);
         move_focus(&mut m, 1);
         assert_eq!(m.focus, Some(Focus::View(0)), "round to the first");
+    }
+
+    fn view(id: ViewId, title: &str) -> View {
+        View {
+            id,
+            ..list(title, 1)
+        }
+    }
+
+    #[test]
+    fn with_ux2_braces_go_round_the_groups_and_brackets_round_the_group_in_front() {
+        // In the order the server builds them, not the bar's.
+        let mut m = mission(
+            1,
+            vec![
+                view(ViewId::Notifications, "Notifications"),
+                view(ViewId::WorkMap, "Work map"),
+                view(ViewId::Calendar, "Calendar"),
+                view(ViewId::Prs, "PRs"),
+                view(ViewId::Ci, "CI"),
+                view(ViewId::Settings, "Settings"),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        switch_view(&mut m, 1, true);
+        assert_eq!(m.view, 2, "the Map, after the tabs in Work");
+        switch_view(&mut m, 1, true);
+        assert_eq!(m.view, 0, "round Work to the tabs");
+        switch_group(&mut m, 1);
+        assert_eq!(m.view, 4, "Code's first, PRs");
+        switch_view(&mut m, -1, true);
+        assert_eq!(m.view, 5, "round Code to CI");
+        switch_group(&mut m, 1);
+        assert_eq!(m.view, 3, "Day's first, the Calendar");
+        switch_group(&mut m, -2);
+        assert_eq!(m.view, 0);
+        switch_group(&mut m, -1);
+        assert_eq!(m.view, 6, "round to System's Settings");
+        switch_view(&mut m, 1, false);
+        assert_eq!(m.view, 0, "Tab goes on past the group, round");
+        m.focus = None;
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::Group(views::Group::Work)));
+        for _ in 0..4 {
+            move_focus(&mut m, 1);
+        }
+        assert_eq!(
+            m.focus,
+            Some(Focus::View(0)),
+            "the groups, then the views of the one in front"
+        );
+        open_group(&mut m, views::Group::Day);
+        assert_eq!(m.view, 3, "a group's name pressed: its first view");
+        m.view = 1;
+        open_group(&mut m, views::Group::Day);
+        assert_eq!(m.view, 3, "the group in front's too");
     }
 
     #[test]
@@ -3219,9 +3427,11 @@ mod tests {
             ready_only: false,
             skipped: 0,
             spend_limit: 0.0,
+            spent: 0.0,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
+            drained: false,
         });
         m.cursor = 1;
         let to = row_step(&m, -1);
@@ -3259,6 +3469,70 @@ mod tests {
         m.cursor = 2;
         assert_eq!(side_step(&m, 1), 3, "past the empty columns");
         assert_eq!(side_step(&m, -1), 0);
+    }
+
+    #[test]
+    fn with_ux2_h_and_l_go_along_the_row_of_the_week_s_cards() {
+        let item = |n: u32, column: &str| Item::new(n.to_string(), format!("#{n}")).group(column);
+        let columns = crate::sources::prboard::columns(true);
+        let week = columns[columns.len() - 1];
+        let board = View {
+            id: ViewId::Prs,
+            title: "PRs".into(),
+            data: ViewData {
+                items: vec![item(1, "In review"), item(2, week), item(3, week)],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![board]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        assert_eq!(side_step(&m, 1), 2, "along the row");
+        m.cursor = 2;
+        assert_eq!(side_step(&m, 1), 2, "its last card stays");
+        assert_eq!(side_step(&m, -1), 1);
+        m.cursor = 1;
+        assert_eq!(side_step(&m, -1), 0, "from its first card to the columns");
+    }
+
+    #[test]
+    fn h_and_l_on_the_autopilot_board_go_by_column_past_its_heading_and_skipped() {
+        let item = |id: &str, column: Option<&str>| {
+            let i = Item::new(id, id);
+            match column {
+                Some(c) => i.group(c),
+                None => i,
+            }
+        };
+        let board = View {
+            id: ViewId::Autopilot,
+            title: "Autopilot".into(),
+            data: ViewData {
+                items: vec![
+                    item("heading", None),
+                    item("next 1", Some("Next up")),
+                    item("next 2", Some("Next up")),
+                    item("tab 4", Some("Waiting on you")),
+                    item("tab 3", Some("Landed")),
+                    item("skipped", None),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![board]);
+        m.snap.rules.ux2 = true;
+        m.size = (120, 40);
+        m.view = 1;
+        m.cursor = 2;
+        assert_eq!(side_step(&m, 1), 3, "past the empty Working column");
+        m.cursor = 3;
+        assert_eq!(side_step(&m, 1), 4);
+        assert_eq!(side_step(&m, -1), 1, "the same row, as far as it reaches");
+        m.cursor = 5;
+        assert_eq!(side_step(&m, 1), 5, "the skipped stay put");
     }
 
     #[test]

@@ -136,6 +136,15 @@ impl Command {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::WorkNote => {
+                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With the mode on, it opens its menu, to pause, skip or stop it."
+            }
+        }
+    }
+
     /// tmux.conf's tags.
     pub fn tags(self) -> &'static [&'static str] {
         match self {
@@ -161,6 +170,8 @@ pub enum AutopilotEvent {
         text: String,
         /// The items it will open, in order, for its view.
         queue: Vec<String>,
+        /// Today's spend, while there is a spend limit.
+        spent: f64,
     },
     /// What looking for the next item to open found, for a note last
     /// changed at `mtime` (ms).

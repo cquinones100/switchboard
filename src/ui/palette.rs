@@ -55,6 +55,25 @@ impl Entry {
             value: self.action.name(),
         }
     }
+
+    /// What UX 2.0's palette shows under its list while this command is
+    /// chosen (board 15): what it does, more on it (`Action::detail`), and
+    /// its key, or where to bind one.
+    pub fn preview(&self) -> String {
+        let keys = self.item().key;
+        let key = if keys.is_empty() {
+            "No key: bind one in keys.json".to_string()
+        } else {
+            format!("Key: {keys}")
+        };
+        format!(
+            "{}
+{}
+{key}",
+            self.words,
+            self.action.detail()
+        )
+    }
 }
 
 /// A key as the palette shows it: tmux spells Shift with a letter as the
@@ -374,6 +393,26 @@ mod tests {
         let mut sorted = words.clone();
         sorted.sort();
         assert_eq!(words, sorted, "by description");
+    }
+
+    #[test]
+    fn every_command_previews_more_than_its_words_and_its_key() {
+        let all = entries(&Bindings::default(), true, true);
+        for e in &all {
+            let detail = e.action.detail();
+            assert!(!detail.is_empty(), "{} has no detail", e.action.name());
+            assert_ne!(detail, e.words, "{} repeats its words", e.action.name());
+        }
+        let split = all
+            .iter()
+            .find(|e| e.action == Action::Split(Direction::Right))
+            .unwrap();
+        let preview = split.preview();
+        let lines: Vec<&str> = preview.lines().collect();
+        assert_eq!(lines[0], "Split pane to the right");
+        assert_eq!(lines[2], "Key: M-S-L");
+        let tips = all.iter().find(|e| e.action == Action::ResetTips).unwrap();
+        assert!(tips.preview().ends_with("No key: bind one in keys.json"));
     }
 
     #[test]

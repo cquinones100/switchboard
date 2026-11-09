@@ -5,7 +5,10 @@
 //! It prints the model in the project's accent color (src/tabs, so the
 //! Claude statusline and the tab agree on a project's color), then, outside
 //! the workspace, the directory and branch, which inside it the tab already
-//! shows, and the context used, colored by how full it is.
+//! shows, and the context used, colored by how full it is. With UX 2.0 on
+//! (`ux2`) and mission control's Sessions view on (`view_sessions`) it
+//! leaves the context out inside the workspace, where that view shows it; a
+//! plain terminal has no Sessions view, so there it stays.
 //!
 //! It also keeps what Claude Code tells the statusline alone, for mission
 //! control's Sessions and Usage views (src/usage/sessions.rs), under
@@ -52,7 +55,9 @@ pub fn main(_args: Vec<String>) -> ExitCode {
         &paths::state_dir(),
         &util::ymd(&util::local_now()),
     );
-    let line = line(&payload, in_workspace);
+    let sessions_show_the_context =
+        crate::settings::is_on("ux2") && crate::settings::is_on("view_sessions");
+    let line = line(&payload, in_workspace, sessions_show_the_context);
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
@@ -74,7 +79,7 @@ fn or_empty(v: &Value) -> Option<String> {
 }
 
 /// What the statusline prints.
-pub fn line(payload: &Value, in_workspace: bool) -> String {
+pub fn line(payload: &Value, in_workspace: bool, sessions_show_the_context: bool) -> String {
     let model = raw(&payload["model"]["display_name"]);
     let raw_cwd = match &payload["workspace"]["current_dir"] {
         Value::String(s) => s.clone(),
@@ -90,13 +95,17 @@ pub fn line(payload: &Value, in_workspace: bool) -> String {
 
     let mut output = format!("{accent}{model}{RESET}");
     // Inside the workspace the tab already names the directory and branch,
-    // so only the model and context are shown there; in a plain terminal
-    // this is the only place they appear.
+    // so only the model and context are shown there (the model alone with
+    // UX 2.0, whose Sessions view shows the context); in a plain terminal this
+    // is the only place they appear.
     if !in_workspace {
         output.push_str(&format!(" | {accent}{}{RESET}", tilde_start(&raw_cwd)));
         if let Some(p) = &place {
             output.push_str(&format!(" | {accent}{}{RESET}", p.branch));
         }
+    }
+    if in_workspace && sessions_show_the_context {
+        return output;
     }
     match used(payload) {
         Some(used) => format!(
@@ -331,19 +340,25 @@ mod tests {
         });
         let color = tabs::statusline_color("at-all");
         let accent = format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b);
+        assert_eq!(line(&payload, true, true), format!("{accent}Opus{RESET}"));
         assert_eq!(
-            line(&payload, true),
+            line(&payload, true, false),
             format!("{accent}Opus{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}")
         );
-        assert_eq!(
-            line(&payload, false),
-            format!(
-                "{accent}Opus{RESET} | {accent}/nowhere/at-all{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}"
-            )
-        );
+        for sessions in [true, false] {
+            assert_eq!(
+                line(&payload, false, sessions),
+                format!(
+                    "{accent}Opus{RESET} | {accent}/nowhere/at-all{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}"
+                )
+            );
+        }
         let bare =
             json!({ "model": { "display_name": "Haiku" }, "workspace": { "current_dir": "/x" } });
-        assert!(!line(&bare, true).contains("Context"));
+        for (in_workspace, sessions) in [(true, true), (true, false), (false, true), (false, false)]
+        {
+            assert!(!line(&bare, in_workspace, sessions).contains("Context"));
+        }
     }
 
     #[test]

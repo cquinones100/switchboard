@@ -117,6 +117,36 @@ impl Command {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::Diff => {
+                "The base is the PR's base branch, else origin's default, fetched first. With Settings' \"Uncommitted changes in M-d\" on, it runs to the working tree. With nothing to show, a box says so and the pane stays."
+            }
+            Command::Side => {
+                "The parked pane comes back on the tool's left at half the width, so a Claude session and its diff sit side by side. Listed only where a tool stands in for a pane; M-d in either pane closes the diff."
+            }
+            Command::Full => {
+                "The pane brought beside the tool is parked again, its program still running, and takes its whole place back when the tool closes. Listed only where a tool stands in for a pane."
+            }
+            Command::CopyStory => {
+                "It presses yS in the diff: each chapter's number, title and why, its files, and each change's note as path:line. Listed only while the diff is open; with no story told yet, it says so."
+            }
+            Command::Ask => {
+                "It presses ga in the diff. Haiku runs in the repository with tools to read and search only, keeps no session, and streams its answer beside the diff. Sends the diff and your question to Claude; diff_ask turns it off."
+            }
+            Command::Lazygit => {
+                "It runs in the pane's directory, the pane parked behind it, and quits with its own Ctrl-c rather than q, which would land in a commit message. lazygit isn't shipped with Switchboard; without it, a box says so."
+            }
+            Command::WorkingTree => {
+                "Unstaged changes are listed under Changes and staged ones under Staged changes, with the diff's own keys. Its story reads the staged changes first, with no commit messages; M-d closes it too."
+            }
+            Command::ClearCache => {
+                "It works from any pane of the tab, the diff open or not, so the next M-d asks Haiku again. A story being told right now is kept, and a box says how many files went or why the change couldn't be read."
+            }
+        }
+    }
+
     /// tmux.conf's tags. `#diffview` lists a command in the palette only
     /// while the pane has the diff in it.
     pub fn tags(self) -> &'static [&'static str] {

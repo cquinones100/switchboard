@@ -239,7 +239,12 @@ mod tests {
                 .any(|i| i.title.starts_with("Ask Claude about the diff"))
         );
         assert!(!titles(&without).contains(&"M-d: an answer (ga)"));
-        assert!(!without.iter().any(|i| key_of(i) == Some("ga")));
+        // Notes' own ga, Add an item, stays.
+        assert!(
+            !without
+                .iter()
+                .any(|i| key_of(i) == Some("ga") && !i.title.contains("Add an item"))
+        );
     }
 
     #[test]

@@ -75,6 +75,12 @@ color_quant = "1.1"
 # it (cargo's own TOML parser), so a git, path or other registry's
 # dependency is refused before cargo fetches anything for it.
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
+# The image atoms the server draws (src/ui/images.rs): anti-aliased circles
+# and rounded rectangles, rastered in pure Rust.
+tiny-skia = { version = "0.11", default-features = false, features = ["std"] }
+# A link's host read as a browser reads it, before a photo's download is
+# sent Linear's key (src/photos).
+url = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The desktop's services on Linux, where macOS has a command for each: the

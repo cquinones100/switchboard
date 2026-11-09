@@ -105,6 +105,18 @@ impl Command {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the chosen command.
+    pub fn detail(self) -> &'static str {
+        match self {
+            Command::UpdateNow => {
+                "It asks GitHub whatever Settings' \"Update check\" says, offering the newer releases in a box, or saying why there is nothing to take. A build from source is told how to take one instead."
+            }
+            Command::Setup => {
+                "The guided switchboard setup runs in a tab of its own, asking about each part: Claude Code's hooks, statusline and permissions, Switchboard's instructions and the skills. The tab stays until you press Enter."
+            }
+        }
+    }
+
     /// tmux.conf's tags.
     pub fn tags(self) -> &'static [&'static str] {
         match self {
@@ -125,6 +137,10 @@ impl Overlay for UpdateBox {
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         self.0.draw(buf, look);
+    }
+
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.0.stands_out()
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {

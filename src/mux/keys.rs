@@ -2,7 +2,8 @@
 //! tmux.conf bound (moving between panes and tabs, splitting, closing,
 //! zooming, resizing), its Claude keys (M-a to what needs you, M-A to the
 //! next idle tab, M-c to the tab's Claude, M-y to copy its latest reply,
-//! M-f to pin a tab), M-s into the sidebar and the views'
+//! M-f to pin a tab), M-h for the tab's history (new with UX 2.0,
+//! src/history), M-s into the sidebar and the views'
 //! (M-v, M-i, M-r, M-l, M-m, M-S-f, src/views), M-d (src/diff) and Notes'
 //! M-N and M-e (src/notes/serve.rs), M-0 and C-w (src/extras), under the
 //! same keys, with the prefix `M-b` for the rest;
@@ -73,6 +74,9 @@ pub enum Action {
     FocusClaude,
     /// The latest reply of this tab's Claude, copied (M-y).
     CopyReply,
+    /// The tab's history: a timeline of its Claude session under its
+    /// screen as it was at the moment chosen (M-h, src/history).
+    History,
     /// Pin the tab, keeping it at the top of what needs you, or unpin it.
     TogglePin,
     /// The palette: every command, to find and run one (M-p).
@@ -222,6 +226,7 @@ impl Action {
             "next-idle" => Action::NextIdle,
             "focus-claude" => Action::FocusClaude,
             "copy-reply" => Action::CopyReply,
+            "history" => Action::History,
             "toggle-pin" => Action::TogglePin,
             "palette" => Action::Palette,
             "reset-tips" => Action::ResetTips,
@@ -294,6 +299,7 @@ impl Action {
             Action::NextIdle => "next-idle".into(),
             Action::FocusClaude => "focus-claude".into(),
             Action::CopyReply => "copy-reply".into(),
+            Action::History => "history".into(),
             Action::TogglePin => "toggle-pin".into(),
             Action::Palette => "palette".into(),
             Action::ResetTips => "reset-tips".into(),
@@ -372,6 +378,10 @@ impl Action {
             Action::NextIdle => "Go to the next idle tab".into(),
             Action::FocusClaude => "Jump to the pane running Claude in this tab".into(),
             Action::CopyReply => "Copy the latest reply of this tab's Claude".into(),
+            Action::History => {
+                "Show this tab's history: its Claude session on a timeline, and the screen as it was"
+                    .into()
+            }
             Action::TogglePin => "Pin or unpin this tab, keeping it at the top of Needs you".into(),
             Action::Palette => "Find a command and run it (the palette)".into(),
             Action::ResetTips => "Show the tips again, each once more".into(),
@@ -419,6 +429,160 @@ impl Action {
         }
     }
 
+    /// More on what it does than `about`, for the palette's preview of the
+    /// chosen command.
+    pub fn detail(&self) -> String {
+        match self {
+            Action::SelectPane(_) => {
+                "Past the edge it comes round to the far side; from the leftmost pane it goes into the sidebar. In the diff and Notes it moves between the app's own windows first.".into()
+            }
+            Action::PrevTab | Action::NextTab => {
+                "Tabs go in the order the tab bar shows them, coming round past either end.".into()
+            }
+            Action::LastTab => {
+                "Pressed again, it goes back the other way, so two tabs can be swapped between with one key.".into()
+            }
+            Action::SelectTab(_) => {
+                "M-1 goes to the first tab and M-9 to the ninth, by the numbers the sidebar shows; M-0 asks for a number, for the tabs past 9.".into()
+            }
+            Action::NewTab => {
+                "The tab runs your shell in the current pane's directory and goes right after the current one.".into()
+            }
+            Action::Split(_) => {
+                "The new pane runs your shell in the current pane's directory and takes the focus.".into()
+            }
+            Action::ClosePane => {
+                "It asks first when a program other than a shell at its prompt runs in it (Settings' confirm_close). The last pane closes its tab.".into()
+            }
+            Action::CloseTab => {
+                "The question names the programs running in its panes. Closing it ends them.".into()
+            }
+            Action::NextPane => {
+                "Past the last pane it comes round to the first.".into()
+            }
+            Action::LastPane => {
+                "Pressed again, it goes back, so two panes can be swapped between with one key.".into()
+            }
+            Action::Zoom => {
+                "The pane covers the tab, the sidebar too, until zoomed out again; the others keep running behind it.".into()
+            }
+            Action::Resize(..) => {
+                "The pane's edge moves that way, the panes beside giving up the room. Resizing the terminal keeps each pane's share.".into()
+            }
+            Action::Detach => {
+                "This terminal leaves the workspace, and every pane's program goes on running. Run switchboard again to attach.".into()
+            }
+            Action::CopyMode => {
+                "Vim's keys move through the 10,000 lines each pane keeps, v selects and y copies to the clipboard; q leaves it.".into()
+            }
+            Action::SendPrefix => {
+                "The program in the pane gets M-b itself, for one that has a use for it.".into()
+            }
+            Action::ListKeys => {
+                "Every key bound now, yours from keys.json included, in a box j and k scroll. M-/ shows them with every part's keys in mission control.".into()
+            }
+            Action::NextNeedsYou => {
+                "Pinned tabs and reminders come due go first, then those waiting on you, then the finished, then the notifications. Pressed again, it walks on, coming round.".into()
+            }
+            Action::NextIdle => {
+                "Pressed again, it walks on through the idle tabs of every session, coming round. A tab with no Claude isn't on the list.".into()
+            }
+            Action::FocusClaude => {
+                "From any pane of the tab, or the sidebar. It says so when the tab has no Claude.".into()
+            }
+            Action::CopyReply => {
+                "The last message Claude wrote text in, from its session's transcript, onto the clipboard; a box says how many lines, or that there is no reply yet.".into()
+            }
+            Action::History => {
+                "A timeline under the screen of the session's state, your turns, commits, review rounds and context; h/l move through time and the screen shows the pane as it was, [ ] go by turns, c to a commit, w to a wait, Esc back to now.".into()
+            }
+            Action::TogglePin => {
+                "A pinned tab stays at the top of Needs you whatever its Claude is doing, until unpinned; going to it doesn't clear it.".into()
+            }
+            Action::Palette => {
+                "Type to narrow by what a command does or its tags; Enter runs it in the pane you were in.".into()
+            }
+            Action::ResetTips => {
+                "Each tip comes back once more, in the top-right corner, the next time what it teaches would help.".into()
+            }
+            Action::ToggleTheme => {
+                "Sets the theme setting to the other one. The programs in your panes keep your terminal's own colors.".into()
+            }
+            Action::FocusSidebar => {
+                "In the sidebar, the arrows or j and k move between tabs and Enter goes to one; pressed again, the focus goes back to the pane.".into()
+            }
+            Action::ToggleSidebar => {
+                "Flips Settings' sidebar setting, for every tab. A window narrower than 90 columns has none either way.".into()
+            }
+            Action::NewClaudeTab => {
+                "The directories picked before come first, then the one you're in. Claude starts from your shell, which stays in the tab when it exits; then you may name the tab.".into()
+            }
+            Action::WorkOnTickets => {
+                "Asks for the tickets, IDs or Linear links, then the repository; each gets a worktree on its branch and a tab running Claude on it. Every ticket is checked before any tab opens.".into()
+            }
+            Action::WorkOnBranch => {
+                "Lists the repository's branches, the most recently committed first; a name no branch matches makes a new one. The tab runs Claude in a worktree on it.".into()
+            }
+            Action::WorkOnPr => {
+                "Asks for the PR's number or link. Claude reads the PR and says where it stands, changing nothing until you say; a fork's PR opens untrusted, running none of its code.".into()
+            }
+            Action::ReviewPr => {
+                "Lists the repository's open PRs from forks; the tab runs Claude in the main clone, reviewing without running the PR's code outside the sealed try.".into()
+            }
+            Action::WorkOnNote => {
+                "Asks for the repository, the note and its unticked items, then where to land; parked sections and items already under way are left out.".into()
+            }
+            Action::ContinueShaping => {
+                "Asks for the tickets, then a directory in a repository, and runs shape --continue in a tab for each.".into()
+            }
+            Action::ShapeNote => {
+                "Picks a note, its items and a repository, then opens a background tab running /shape for each item. The items go to Claude only once you choose them.".into()
+            }
+            Action::ShapeNewTicket => {
+                "The idea typed goes to a background tab running /shape in the repository you pick.".into()
+            }
+            Action::PrImage => {
+                "Chrome draws its HTML with GitHub's stylesheet and Mermaid diagrams, shown a page at a time; j, k and Space page, q closes it.".into()
+            }
+            Action::TicketImage => {
+                "Drawn as the PR image draws a PR, a page at a time; j, k and Space page, q closes it.".into()
+            }
+            Action::MissionControl => {
+                "Every tab of every session as a card, then the views (Work map, PRs, CI, tickets, your day, Settings) named in the bar across the top.".into()
+            }
+            Action::FindTab => {
+                "The Work map with the open tabs alone, a filter already typing; Enter opens the chosen tab's menu, so Enter twice goes to it.".into()
+            }
+            Action::ReviveWorktree => {
+                "The Work map with the worktrees no tab has open; Enter twice opens a tab in the chosen one and resumes its Claude. Untrusted worktrees are left out.".into()
+            }
+            Action::Settings => {
+                "Mission control's Settings view: every option by category, then your own files' settings. What you change is kept in ~/.config/switchboard/settings.json.".into()
+            }
+            Action::RemindTab => {
+                "Asks when (20 minutes to next Monday, or a time typed like 45m or 3pm) and what for. Until then the tab waits under Reminders.".into()
+            }
+            Action::TabTitle => {
+                "The title wrapped, its PR number in front, then its branch, directory, PR and ticket as far as the workspace knows them; y copies the title.".into()
+            }
+            Action::View(command) => command.detail().into(),
+            Action::Diff(command) => command.detail().into(),
+            Action::SlackRelay => {
+                "Each Claude tab gets a thread in the Slack app's DM: what you reply there is typed into the tab, and the relay posts back when it finishes or waits on you.".into()
+            }
+            Action::StopSlackRelay => {
+                "Runs switchboard slack-relay stop, which says when it has stopped; Slack hears nothing more from the tabs until it starts again.".into()
+            }
+            Action::Update(command) => command.detail().into(),
+            Action::Upgrade => {
+                "Builds the checkout the running binary came from, then the server runs the new build in its own process, handing it every pane, so nothing in a pane ends.".into()
+            }
+            Action::Notes(command) => command.detail().into(),
+            Action::Extra(command) => command.detail().into(),
+            Action::Autopilot(command) => command.detail().into(),
+        }
+    }
+
     /// What it is about, as tmux.conf's `#tags`: matched in the palette as
     /// any other word, and shown dimmed.
     pub fn tags(&self) -> &'static [&'static str] {
@@ -442,6 +606,7 @@ impl Action {
                 &["claude", "tabs", "navigate"]
             }
             Action::CopyReply => &["claude", "copy"],
+            Action::History => &["claude", "tabs", "history"],
             Action::TogglePin => &["tabs", "pin"],
             Action::Palette => &["palette"],
             Action::ResetTips => &["help", "tips"],
@@ -603,6 +768,7 @@ impl Default for Bindings {
         bind("M-A", NextIdle);
         bind("M-c", FocusClaude);
         bind("M-y", CopyReply);
+        bind("M-h", History);
         bind("M-f", TogglePin);
         bind("M-p", Palette);
         bind("M-s", FocusSidebar);
@@ -773,6 +939,7 @@ mod tests {
             Action::NextIdle,
             Action::FocusClaude,
             Action::CopyReply,
+            Action::History,
             Action::TogglePin,
             Action::Palette,
             Action::ResetTips,

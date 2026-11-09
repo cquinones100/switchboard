@@ -556,6 +556,10 @@ impl Overlay for ReadyBox {
         "ready"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let mut lines: Vec<BoxLine> = Vec::new();
         match &self.answer {

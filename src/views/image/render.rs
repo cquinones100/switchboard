@@ -31,6 +31,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use image::{GenericImageView, ImageFormat, Rgba, RgbaImage, imageops};
@@ -51,6 +52,100 @@ const TALLEST: f64 = 32_000.0;
 const CHROME_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long Chrome lets the page's scripts run before it reads the page.
 const SCRIPT_BUDGET_MS: u32 = 15_000;
+
+/// The window a diagram is drawn in, in CSS pixels: as wide as a diagram
+/// is drawn at its own size, which the view makes smaller to fit the pane.
+const DIAGRAM_WIDTH: u32 = 1200;
+const DIAGRAM_HEIGHT: u32 = 3000;
+/// The diagrams drawn so far, each in files of its own.
+static DIAGRAMS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A picture cut to what is drawn in it, a few pixels around; `None` when
+/// nothing is.
+pub fn trimmed(img: &RgbaImage) -> Option<RgbaImage> {
+    let (w, h) = img.dimensions();
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+    for (x, y, px) in img.enumerate_pixels() {
+        if px.0[3] > 0 {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + 1);
+            y1 = y1.max(y + 1);
+        }
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return None;
+    }
+    let pad = 4;
+    let (x0, y0) = (x0.saturating_sub(pad), y0.saturating_sub(pad));
+    let (x1, y1) = ((x1 + pad).min(w), (y1 + pad).min(h));
+    Some(img.view(x0, y0, x1 - x0, y1 - y0).to_image())
+}
+
+/// Whether anything is drawn on a picture's last row: a diagram taller than
+/// the window it was drawn in, cut off there.
+pub fn reaches_bottom(img: &RgbaImage) -> bool {
+    let h = img.height();
+    h > 0 && (0..img.width()).any(|x| img.get_pixel(x, h - 1).0[3] > 0)
+}
+
+/// The process groups of the Chromes this process has running, each led
+/// by its Chrome, so a view closing can stop them (`stop_all`): slots of
+/// atomics rather than a locked set, since a signal handler reads them as
+/// the workspace hangs a view's pane up (`stop_on_hangup`). A Chrome past
+/// the slots, which no view starts, isn't tracked.
+static RUNNING: [AtomicI32; 8] = [const { AtomicI32::new(0) }; 8];
+
+fn track(pid: i32) {
+    let _ = RUNNING.iter().find(|slot| {
+        slot.compare_exchange(0, pid, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    });
+}
+
+fn untrack(pid: i32) {
+    for slot in &RUNNING {
+        let _ = slot.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+/// Every Chrome this process still has running stopped, with what it
+/// started, as a view closes, so none goes on drawing for a view that is
+/// gone. Safe in a signal handler: atomics and `kill` alone.
+pub fn stop_all() {
+    for slot in &RUNNING {
+        let pid = slot.swap(0, Ordering::SeqCst);
+        if pid > 0 {
+            // SAFETY: a signal to a group a Chrome this process started leads.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+extern "C" fn on_hangup(signal: libc::c_int) {
+    stop_all();
+    // SAFETY: the signal's own action put back and the signal sent again,
+    // so the process ends as it would have; both are async-signal-safe.
+    unsafe {
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
+}
+
+/// Stops this process's Chromes when the workspace hangs its pane up or
+/// ends it (SIGHUP, SIGTERM), as closing a view with its key does, before
+/// the process ends as the signal says; Chrome runs in a group of its own,
+/// which the hangup doesn't reach.
+pub fn stop_on_hangup() {
+    for signal in [libc::SIGHUP, libc::SIGTERM] {
+        // SAFETY: a handler that only reads atomics and sends signals.
+        unsafe {
+            libc::signal(signal, on_hangup as *const () as libc::sighandler_t);
+        }
+    }
+}
 
 /// What the view says when there is no Chrome to draw with.
 pub const NEEDS_CHROME: &str = "The image view needs Google Chrome or Chromium to draw the page, and neither is installed. M-v shows the description as text.";
@@ -291,7 +386,8 @@ pub struct Renderer {
 
 impl Renderer {
     /// Runs Chrome on the page in `file`, the window `width` by `height`
-    /// CSS pixels, with `what` (`--dump-dom`, or `--screenshot=<file>`);
+    /// CSS pixels, with `what` (`--dump-dom`, or `--screenshot=<file>`,
+    /// and any other flags);
     /// gives what it printed. Its own profile in the working directory, so
     /// it never touches yours, nor waits on a Chrome you have open. `cdn`
     /// is how many of the pinned files it loads from the CDN, for the
@@ -302,7 +398,7 @@ impl Renderer {
         width: u32,
         height: u32,
         scale: f64,
-        what: &str,
+        what: &[String],
         cdn: usize,
     ) -> Result<String, String> {
         let program = self.chrome.as_ref().ok_or(NEEDS_CHROME)?;
@@ -326,7 +422,7 @@ impl Renderer {
         .arg(format!("--force-device-scale-factor={scale}"))
         .arg(format!("--window-size={width},{height}"))
         .arg(format!("--virtual-time-budget={SCRIPT_BUDGET_MS}"))
-        .arg(what)
+        .args(what)
         .arg(format!("file://{}", file.display()))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -339,6 +435,8 @@ impl Renderer {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("couldn't start Chrome ({}): {e}", program.display()))?;
+        let pid = child.id() as i32;
+        track(pid);
         let mut stdout = child.stdout.take();
         let reader = std::thread::spawn(move || {
             let mut text = String::new();
@@ -356,17 +454,18 @@ impl Renderer {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 _ => {
-                    let pid = child.id() as i32;
                     // SAFETY: a signal to the group Chrome leads, which this
                     // started.
                     unsafe {
                         libc::kill(-pid, libc::SIGKILL);
                     }
                     let _ = child.wait();
+                    untrack(pid);
                     return Err("Chrome took too long to draw the page.".into());
                 }
             }
         }
+        untrack(pid);
         Ok(reader.join().unwrap_or_default())
     }
 
@@ -395,7 +494,14 @@ impl Renderer {
             .map_err(|e| format!("couldn't write the page: {e}"))
         };
         write(&Bands::default())?;
-        let dom = self.chrome(&file, view.width, 800, DPR as f64, "--dump-dom", cdn)?;
+        let dom = self.chrome(
+            &file,
+            view.width,
+            800,
+            DPR as f64,
+            &["--dump-dom".into()],
+            cdn,
+        )?;
         let m = measured(&dom).ok_or("Chrome couldn't draw the page.")?;
         let cuts = cuts_for(m.height, &m.blocks, view.page_height as f64);
         let total = cuts.len() - 1;
@@ -421,7 +527,7 @@ impl Renderer {
             view.width,
             tall,
             scale,
-            &format!("--screenshot={}", picture.display()),
+            &[format!("--screenshot={}", picture.display())],
             cdn,
         )?;
         let pages = compose(&picture, scale, m.top, &cuts, bands.top, &self.work, n);
@@ -455,6 +561,54 @@ impl Renderer {
         Ok(drawing)
     }
 
+    /// A Mermaid diagram drawn by Mermaid itself, as GitHub draws it, in
+    /// the dark theme or the light one, at twice the CSS pixels: Chrome
+    /// draws it on nothing (`--default-background-color` clear), in a window
+    /// `DIAGRAM_WIDTH` wide, and the picture is cut to what it drew, so a
+    /// diagram that can't be drawn (Mermaid not loaded, or a source it
+    /// refuses) is an error rather than a picture of nothing. Mermaid comes
+    /// from the cache, where the image cache keeps it, else the CDN.
+    pub fn diagram(&self, source: &str, light: bool) -> Result<RgbaImage, String> {
+        if self.chrome.is_none() {
+            return Err(NEEDS_CHROME.into());
+        }
+        let _ = std::fs::create_dir_all(&self.work);
+        let local = match &self.cache {
+            Some(cache) => cache.local_copies(&[page::MERMAID], &[]),
+            None => Local::new(),
+        };
+        let cdn = usize::from(!local.contains_key(page::MERMAID.url));
+        let n = DIAGRAMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file = self.work.join(format!("diagram-{n}.html"));
+        let picture = self.work.join(format!("diagram-{n}.png"));
+        crate::util::write_atomic(&file, page::diagram_html(source, light, &local))
+            .map_err(|e| format!("couldn't write the diagram's page: {e}"))?;
+        let ran = self.chrome(
+            &file,
+            DIAGRAM_WIDTH,
+            DIAGRAM_HEIGHT,
+            DPR as f64,
+            &[
+                "--default-background-color=00000000".into(),
+                format!("--screenshot={}", picture.display()),
+            ],
+            cdn,
+        );
+        let drawn = ran.and_then(|_| {
+            image::open(&picture)
+                .map(|i| i.to_rgba8())
+                .map_err(|e| format!("Chrome's picture of the diagram: {e}"))
+        });
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(&picture);
+        let drawn = drawn?;
+        // One taller than the window is cut off: its text stays instead.
+        if reaches_bottom(&drawn) {
+            return Err("The diagram is too tall to draw whole.".into());
+        }
+        trimmed(&drawn).ok_or_else(|| "Mermaid couldn't draw the diagram.".into())
+    }
+
     /// Every page file but layout `n`'s, which the terminal has read
     /// already or never will.
     pub fn forget_others(&self, n: u64) {
@@ -473,6 +627,15 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_diagram_drawn_to_the_last_row_is_cut_off() {
+        let mut img = RgbaImage::new(4, 4);
+        img.put_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
+        assert!(!reaches_bottom(&img), "drawn above the last row");
+        img.put_pixel(2, 3, image::Rgba([0, 0, 0, 255]));
+        assert!(reaches_bottom(&img), "drawn on the last row");
+    }
 
     #[test]
     fn pages_break_between_blocks_and_a_tall_block_is_cut_where_it_must() {
@@ -613,5 +776,21 @@ mod tests {
         assert_eq!(chrome_in(Some(dir.as_os_str()), &[]), Some(fake));
         assert!(NEEDS_CHROME.contains("needs Google Chrome or Chromium"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_chrome_tracked_is_stopped_with_its_group() {
+        use std::os::unix::process::CommandExt;
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id() as i32;
+        track(pid);
+        stop_all();
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "killed");
+        assert!(RUNNING.iter().all(|s| s.load(Ordering::SeqCst) != pid));
     }
 }

@@ -356,7 +356,7 @@ pub fn main(url: &str) -> ExitCode {
             text: "A Slack message can't be read here, only in Slack.".into(),
             url: url.clone(),
         }),
-        Kind::Note(file) => read(match std::fs::read_to_string(&file) {
+        Kind::Note(file) => pager::run_local(match std::fs::read_to_string(&file) {
             Ok(text) => Content::Markdown { text, place },
             Err(e) => Content::Failed(format!("Couldn't read the note: {e}")),
         }),

@@ -111,6 +111,10 @@ impl Overlay for Finder {
         "finder"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let mut lines = vec![BoxLine::spans(vec![
             Span::styled(" Find a note: ", Style::new().fg(draw::EDGE)),

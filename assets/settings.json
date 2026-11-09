@@ -48,7 +48,7 @@
     "key": "ux2",
     "category": "Appearance",
     "label": "UX 2.0",
-    "description": "No status line: each tab has a header naming it, with the keys of what it can show in Claude's place (M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note); the sidebar starts with its notifications; and M-v and M-i show the PR and the ticket in Claude's place rather than beside it. Off, the status line, the sidebar and those keys are as before",
+    "description": "No status line: each tab has a header naming it, with the keys of what it can show in Claude's place (M-c Claude, M-d Diff, M-v PR, M-i Ticket, M-e Note); the sidebar starts with its notifications; M-v and M-i show the PR and the ticket in Claude's place rather than beside it, laid out as their pages are with a panel of their facts beside the description; and M-d's diff reads as one scroll of files under its story's chapters, the chapter's why over the diff and each hunk's note in a card under it. Off, the status line, the sidebar and those keys are as before",
     "default": false
   },
   {
@@ -400,6 +400,13 @@
     "default": true
   },
   {
+    "key": "tab_history",
+    "category": "Tabs and status bar",
+    "label": "Tab history",
+    "description": "M-h shows a tab's history: its Claude session on a timeline (its state, your turns, commits, review rounds and context) under its screen as it was at the moment you move to, the screens kept in the server's memory only, never on disk, and the rest read from the session's transcript; off, nothing is kept, M-h says it is off and the header has no History key",
+    "default": true
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and status bar",
     "label": "One Claude to a tab",
@@ -452,7 +459,14 @@
     "key": "notes_images",
     "category": "Notes",
     "label": "Images drawn in a note",
-    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do), or one that draws sixel with Image protocol on sixel (Windows Terminal); off, it is its name, which Enter opens in Quick Look or the desktop's image viewer",
+    "description": "An image pasted into a note (Format menu, Paste image) drawn under the line that names it, in a terminal that speaks the kitty graphics protocol (Ghostty and kitty do), or one that draws sixel with Image protocol on sixel (Windows Terminal); off, it is its name, which Enter opens as \"Enter shows a picture full size\" says",
+    "default": true
+  },
+  {
+    "key": "picture_full_size",
+    "category": "Notes",
+    "label": "Enter shows a picture full size",
+    "description": "Enter or a click on a note's picture shows it full size over the notes pane, as it does a picture or diagram under the cursor in the PR, ticket, link and file views, drawn by the workspace in a terminal that speaks the kitty graphics protocol (Ghostty, kitty) with \"Images in the workspace\" on, Esc going back; off, or where the terminal can't, it opens in Quick Look or the desktop's image viewer",
     "default": true
   },
   {
@@ -571,7 +585,7 @@
     "key": "view_autopilot",
     "category": "Mission control",
     "label": "Autopilot view",
-    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, a row of stage cells for each tab it opened from opened to closed, and the items it opens next and those skipped. Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
+    "description": "With UX 2.0 on, while autopilot works a note, mission control shows a view of it: the note, its tabs working and open against its slots and cap, today's spend against its limit, and a board of every item it works, a card in the column where it stands (Next up, Working, Waiting on you, Landing, Landed), with the skipped ones listed under it. Off, its line above the tabs stays and the view goes; on, the view takes the line's place",
     "default": true
   },
   {
@@ -600,6 +614,34 @@
     "category": "Tabs and status bar",
     "label": "Health light",
     "description": "A red mark in the status bar when saves, the sidebar or the Slack relay quietly stop",
+    "default": true
+  },
+  {
+    "key": "server_images",
+    "category": "Appearance",
+    "label": "Images in the workspace",
+    "description": "Draws avatars, pictures, meters, charts and the shadow under boxes as images where the terminal can show them (Ghostty, kitty). Off, they are drawn with characters",
+    "default": true
+  },
+  {
+    "key": "photos",
+    "category": "Appearance",
+    "label": "People's photos",
+    "description": "Avatars show people's photos from Slack (through the Slack relay's app, with the users:read scope), Linear and GitHub, each fetched once and kept in ~/.cache/switchboard/photos for 30 days. Off, nothing is fetched and an avatar is the person's initial",
+    "default": true
+  },
+  {
+    "key": "view_images",
+    "category": "Appearance",
+    "label": "Pictures and diagrams in the views",
+    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome. Off, a picture is its name and a diagram is drawn with characters",
+    "default": true
+  },
+  {
+    "key": "view_cursor",
+    "category": "Appearance",
+    "label": "A cursor in the views",
+    "description": "Gives the PR, ticket, link and file views a cursor, a yellow › that j and k move from line to line, a picture or diagram one step, the screen scrolling to keep it in sight; Enter or a click on a picture or diagram shows it full size over the view, as a note's does, Esc going back. Off, the views scroll as less does, and a click on a picture opens its link",
     "default": true
   },
   {
@@ -707,7 +749,7 @@
     "key": "palette_button",
     "category": "Palette",
     "label": "Commands button",
-    "description": "A ⌘ Commands button in the status bar, after the session name, that opens M-p when clicked",
+    "description": "A ⌘ Commands button that opens M-p when clicked: in the status bar after the session name, or with UX 2.0 at the right end of the tab header's keys, where a click while the palette is open closes it",
     "default": true
   },
   {

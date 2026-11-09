@@ -62,6 +62,8 @@ pub enum Event {
         session: Option<String>,
         cols: u16,
         rows: u16,
+        /// What the terminal says it is (its `TERM` and `TERM_PROGRAM`).
+        term: String,
         /// Where the terminal's `switchboard` ran: a session made for it
         /// starts there.
         cwd: Option<PathBuf>,
@@ -121,6 +123,10 @@ pub enum Event {
     Autopilot(crate::autopilot::AutopilotEvent),
     /// The check of a new build to restart on answered (src/mux/upgrade.rs).
     Upgrade(super::upgrade::UpgradeEvent),
+    /// A person's photo loaded, or failed to (src/photos).
+    Photos(crate::photos::PhotosEvent),
+    /// A transcript read for a tab's history (src/history).
+    History(crate::history::serve::HistoryEvent),
     /// A picture's file looked at, or a piece of it drawn as sixel, off
     /// the task (src/mux/sixel).
     Sixel(super::sixel::SixelEvent),
@@ -286,6 +292,9 @@ pub struct Client {
     pub session: String,
     pub cols: u16,
     pub rows: u16,
+    /// What its terminal says it is, as it attached (`TERM` and
+    /// `TERM_PROGRAM`).
+    pub term: String,
     parser: Parser,
     prefix: bool,
     pub(super) screen: Screen,
@@ -297,7 +306,7 @@ pub struct Client {
     /// Where UX 2.0's header drew its keys, for clicks, and the one under
     /// the mouse (src/mux/header.rs).
     pub header_keys: super::header::Keys,
-    pub header_hover: Option<super::header::Shown>,
+    pub header_hover: Option<super::header::Button>,
     /// What is shown over the tab, the top one taking the input (src/ui).
     pub overlays: crate::ui::Stack,
     pub activity: Instant,
@@ -305,6 +314,15 @@ pub struct Client {
     /// with the one that took an option are dropped rather than reaching
     /// what is in front next (the daemon's `optionsTaken`).
     pub options_taken: u32,
+}
+
+impl Client {
+    /// Whether the server draws its images in this client's terminal
+    /// (src/ui/images.rs): one that speaks kitty's graphics protocol, with
+    /// the `server_images` setting on.
+    pub fn graphics(&self) -> bool {
+        crate::ui::images::speaks_kitty(&self.term) && crate::settings::is_on("server_images")
+    }
 }
 
 pub struct Server {
@@ -351,6 +369,8 @@ pub struct Server {
     pub usage: crate::usage::Usage,
     /// Your day: the calendar, Slack, the notes written for you (src/day).
     pub day: crate::day::Day,
+    /// People's photos for their avatars, as they load (src/photos).
+    pub photos: crate::photos::Photos,
     /// The sidebar's state: what was read of each pane's Claude, each
     /// session's focus and cursor, where each client's was drawn
     /// (src/sidebar).
@@ -376,6 +396,8 @@ pub struct Server {
     /// The pictures panes' programs gave the terminal, and those drawn as
     /// sixel (src/mux/sixel).
     pub sixel: super::sixel::Sixel,
+    /// What each pane's Claude session did, for its tab's history (src/history).
+    pub history: crate::history::Histories,
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -660,7 +682,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
             session,
             cols,
             rows,
-            term: _,
+            term,
             xpixel,
             ypixel,
             cwd,
@@ -674,6 +696,7 @@ async fn connection(stream: tokio::net::UnixStream, tx: mpsc::UnboundedSender<Ev
                     session,
                     cols,
                     rows,
+                    term,
                     cwd: cwd.map(PathBuf::from),
                     tx: otx,
                     hold: htx,
@@ -975,6 +998,7 @@ impl Server {
             ui: Default::default(),
             usage: Default::default(),
             day: Default::default(),
+            photos: Default::default(),
             sidebar: Default::default(),
             mission: Default::default(),
             views: Default::default(),
@@ -983,6 +1007,7 @@ impl Server {
             extras: Default::default(),
             terminal: Default::default(),
             autopilot: Default::default(),
+            history: Default::default(),
             upgrade: Default::default(),
             sixel: super::sixel::Sixel::new(),
         }
@@ -995,10 +1020,11 @@ impl Server {
                 session,
                 cols,
                 rows,
+                term,
                 cwd,
                 tx,
                 hold,
-            } => self.attach(id, session, cols, rows, cwd, tx, hold),
+            } => self.attach(id, session, cols, rows, term, cwd, tx, hold),
             Event::Input(id, bytes) => self.input(id, &bytes),
             Event::Resize(id, cols, rows) => self.resize_client(id, cols, rows),
             Event::Cell(w, h) => self.terminal_cell((w, h)),
@@ -1052,6 +1078,8 @@ impl Server {
             Event::Notes(event) => self.notes_event(event),
             Event::Autopilot(event) => self.autopilot_event(event),
             Event::Upgrade(event) => self.upgrade_event(event),
+            Event::Photos(event) => self.photos_event(event),
+            Event::History(event) => self.history_event(event),
             Event::Sixel(event) => self.sixel_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
@@ -1069,6 +1097,7 @@ impl Server {
                 self.diff_tick();
                 self.update_tick();
                 self.autopilot_tick();
+                self.history_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -1090,6 +1119,7 @@ impl Server {
                 let notices = slot.pane.process(&bytes);
                 let tab = slot.tab;
                 self.sidebar.output(id);
+                self.history_output(id);
                 if !allowed {
                     self.forget_images(id);
                 }
@@ -1592,6 +1622,7 @@ impl Server {
         let Some(slot) = self.panes.remove(&pane) else {
             return;
         };
+        self.history.forget(pane);
         let tab_id = slot.tab;
         let Some(tab) = self.tabs.get_mut(&tab_id) else {
             return;
@@ -1798,6 +1829,7 @@ impl Server {
         session: Option<String>,
         cols: u16,
         rows: u16,
+        term: String,
         cwd: Option<PathBuf>,
         tx: mpsc::UnboundedSender<ServerMsg>,
         hold: mpsc::UnboundedSender<Hold>,
@@ -1821,6 +1853,7 @@ impl Server {
             session: name.clone(),
             cols,
             rows,
+            term,
             parser: Parser::new(),
             prefix: false,
             screen: Screen::default(),
@@ -1858,6 +1891,7 @@ impl Server {
         session: &str,
         cols: u16,
         rows: u16,
+        term: String,
         idle: Duration,
         input: Vec<u8>,
         output: Vec<u8>,
@@ -1895,6 +1929,7 @@ impl Server {
             session: name,
             cols,
             rows,
+            term,
             parser: Parser::new(),
             prefix: false,
             screen: Screen::default(),
@@ -2205,6 +2240,10 @@ impl Server {
         if fate == crate::extras::KeyFate::Taken {
             return;
         }
+        // M-p reaches Notes with UX 2.0 on, to work its note.
+        if super::passthrough::is_work_key(&key) && self.work_key(id, &key, raw) {
+            return;
+        }
         if fate == crate::extras::KeyFate::Bindings
             && let Some(action) = self.bindings.root.get(&key).cloned()
         {
@@ -2399,6 +2438,7 @@ impl Server {
             Action::NextIdle => self.next_idle(id),
             Action::FocusClaude => self.focus_claude(current_tab),
             Action::CopyReply => self.copy_reply(id, current_tab),
+            Action::History => self.open_history(id),
             Action::TogglePin => self.toggle_pin(current_tab),
             Action::Palette => self.open_palette(id),
             Action::ToggleTheme => self.toggle_theme(id),
@@ -2568,7 +2608,7 @@ impl Server {
         );
     }
 
-    fn leave_copy(&mut self, pane: PaneId) {
+    pub(crate) fn leave_copy(&mut self, pane: PaneId) {
         if let Some(slot) = self.panes.get_mut(&pane)
             && (slot.copy.take().is_some() || slot.pane.scrolled() > 0)
         {
@@ -2598,6 +2638,24 @@ impl Server {
             .map(|(p, r)| (p, col - r.x, row - r.y))
     }
 
+    /// Where a pane is on a client's screen, when its tab is the one shown
+    /// there.
+    pub(crate) fn pane_rect(&self, id: ClientId, pane: PaneId) -> Option<Rect> {
+        let c = self.clients.get(&id)?;
+        let s = self.session(&c.session)?;
+        let tab = self.tabs.get(&s.current)?;
+        let area = s.area_for(tab.zoomed);
+        let rects = if tab.zoomed {
+            vec![(tab.active, area)]
+        } else {
+            tab.layout.place(area).panes
+        };
+        rects
+            .into_iter()
+            .find(|(p, _)| *p == pane)
+            .map(|(_, r)| r.intersection(area))
+    }
+
     fn mouse(&mut self, id: ClientId, m: Mouse) {
         if self.sidebar_mouse(id, m) {
             return;
@@ -2606,13 +2664,13 @@ impl Server {
             return;
         };
         let status_row = c.rows.saturating_sub(crate::status::lines());
-        // UX 2.0's header: a click on a key does what the key does, and
-        // the one under the mouse is lit (hover_highlight).
+        // UX 2.0's header: a click on a key or the ⌘ Commands button does
+        // what it does, and the one under the mouse is lit (hover_highlight).
         let header_hit = c
             .header_keys
             .iter()
             .find(|(r, _)| m.row == r.y && m.col >= r.x && m.col < r.right())
-            .map(|(_, shown)| *shown);
+            .map(|(_, button)| *button);
         if m.kind == MouseKind::Move {
             let lit = header_hit.filter(|_| crate::settings::is_on("hover_highlight"));
             if c.header_hover != lit
@@ -2622,9 +2680,9 @@ impl Server {
                 c.dirty = true;
             }
         }
-        if let Some(shown) = header_hit {
+        if let Some(button) = header_hit {
             if m.kind == MouseKind::Press && m.button == MouseButton::Left {
-                self.act(id, shown.action());
+                self.act(id, button.action());
             }
             return;
         }
@@ -2919,10 +2977,15 @@ impl Server {
 
     fn draw(&mut self, id: ClientId) {
         self.mission_before_draw(id);
+        self.history_before_draw(id);
+        self.pictures_before_draw(id);
         let Some(c) = self.clients.get(&id) else {
             return;
         };
         let mut frame = Frame::new(c.cols.max(1), c.rows.max(1));
+        if c.graphics() {
+            frame.graphics = Some(self.terminal.cell.unwrap_or(super::pane::CELL));
+        }
         let session = c.session.clone();
         let (hits, side, header_keys, panes) = match self.session(&c.session) {
             Some(s) => self.compose(&mut frame, s, c),
@@ -3067,9 +3130,20 @@ impl Server {
             });
         let mut header_keys = super::header::Keys::new();
         if let Some(area) = header_at {
-            let header = self.tab_header(s.current);
-            header_keys =
-                super::header::draw(&mut frame.buf, area, &header, c.header_hover, palette);
+            let mut header = self.tab_header(s.current);
+            (header.history_open, header.viewing) = self.history_shown(c.id, s.current);
+            header_keys = super::header::draw(
+                &mut frame.buf,
+                area,
+                &header,
+                c.header_hover,
+                palette,
+                crate::ui::kit::caps(&c.term),
+                c.overlays
+                    .layers
+                    .iter()
+                    .any(|l| l.overlay.kind() == "palette"),
+            );
         }
         let side = self.sidebar_draw(&mut frame.buf, s, c.id);
         let hits = self.draw_status_rows(frame, s);
@@ -3127,6 +3201,10 @@ impl Server {
             color: self.tab_color(tab).map(Into::into),
             shown,
             next: self.sidebar_needs_next(tab),
+            commands: crate::settings::is_on("palette_button"),
+            history: crate::settings::is_on("tab_history"),
+            history_open: false,
+            viewing: None,
         }
     }
 }

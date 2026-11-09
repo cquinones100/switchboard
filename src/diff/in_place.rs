@@ -222,6 +222,27 @@ impl Server {
             );
             return;
         };
+        self.place_beside(tool, parked, beside);
+    }
+
+    /// The parked pane `parked` brought beside the tool standing in for it,
+    /// whichever pane has the focus. False when no tool stands in for it.
+    pub fn unpark_beside(&mut self, parked: PaneId) -> bool {
+        let tool = self
+            .panes
+            .keys()
+            .copied()
+            .find(|t| self.parked_of(*t) == Some(parked));
+        match tool {
+            Some(tool) => {
+                self.place_beside(tool, parked, true);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn place_beside(&mut self, tool: PaneId, parked: PaneId, beside: bool) {
         let Some(tab_id) = self.panes.get(&tool).map(|s| s.tab) else {
             return;
         };

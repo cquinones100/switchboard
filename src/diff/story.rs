@@ -795,8 +795,8 @@ pub fn parse(
     }
     if !made.is_empty() {
         chapters.push(Chapter {
-            title: "Generated files".into(),
-            why: "Written by tools: skim or skip.".into(),
+            title: GENERATED.into(),
+            why: GENERATED_WHY.into(),
             files: made.clone(),
             touches: made,
         });
@@ -1109,6 +1109,11 @@ pub fn note_lines(story: &Story, hunk: &HunkNote, home: usize, cols: usize) -> O
 /// The last chapter's title in a diff running to the working tree, and the
 /// first's when the commits have no story of their own.
 pub const NOT_COMMITTED: &str = "Not committed yet";
+
+/// The chapter the story makes of generated files, last of those told, and
+/// its why.
+pub const GENERATED: &str = "Generated files";
+pub const GENERATED_WHY: &str = "Written by tools: skim or skip.";
 pub const COMMITTED: &str = "Committed";
 
 /// The story of a diff running to the working tree (M-d with uncommitted

@@ -53,6 +53,8 @@ pub enum Effect {
     /// `gw`: start work on the checklist item on the cursor's line in a
     /// new tab.
     WorkOnItem,
+    /// `ga`: UX 2.0's "Add an item" input at the bottom, typed into.
+    AddItem,
 }
 
 /// A register's text, and whether it holds whole lines.
@@ -1693,6 +1695,7 @@ impl Editor {
             }
             ('g', 'i') => self.mode = Mode::Insert,
             ('g', 'w') => self.out.push(Effect::WorkOnItem),
+            ('g', 'a') => self.out.push(Effect::AddItem),
             _ => {}
         }
         if a == 'z' {

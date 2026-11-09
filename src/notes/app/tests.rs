@@ -1131,9 +1131,9 @@ fn renaming_a_new_empty_note_titles_its_first_line_and_a_pasted_id_is_never_styl
 #[test]
 fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
     let list = serde_json::json!({ "sessions": [{ "tabs": [
-        { "index": 3, "agent": "working", "options": { "@tab_title": "show uncommitted changes" },
+        { "id": "@13", "index": 3, "agent": "working", "options": { "@tab_title": "show uncommitted changes" },
           "panes": [{ "agent": { "state": "working", "phase": "review round 1" } }] },
-        { "index": 2, "agent": "waiting", "options": { "@autopilot_item": "stable IDs" },
+        { "id": "@12", "index": 2, "agent": "waiting", "options": { "@autopilot_item": "stable IDs" },
           "panes": [{ "agent": { "state": "waiting", "wait": "git push" } }] },
         { "index": 4, "agent": "working", "options": {}, "path": "/repo/wt", "panes": [] },
         { "index": 5, "agent": "done", "options": { "@tab_title": "finished" }, "panes": [] },
@@ -1145,6 +1145,8 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
     assert_eq!(
         got["show uncommitted changes"],
         render::ItemTab {
+            id: "@13".into(),
+            note: String::new(),
             index: 3,
             waits: false,
             detail: "review round 1".into()
@@ -1153,6 +1155,8 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
     assert_eq!(
         got["stable IDs"],
         render::ItemTab {
+            id: "@12".into(),
+            note: String::new(),
             index: 2,
             waits: true,
             detail: "git push".into()
@@ -1160,6 +1164,27 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
     );
     assert_eq!(got["from git"].index, 4);
     assert_eq!(got.len(), 3, "a finished or idle tab is no chip");
+}
+
+#[test]
+fn the_format_menu_stands_out_over_the_note_with_a_shadow_of_half_blocks() {
+    let (_dir, mut app) = started("standout");
+    app.new_note();
+    keys(&mut app, "<Esc>");
+    let mut before = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut before);
+    keys(&mut app, "<C-p>");
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    let outer = app.layers.last().unwrap().overlay.stands_out().unwrap();
+    let theme = app.look.theme;
+    assert_eq!(
+        buf[(outer.x + 1, outer.y + 1)].bg,
+        crate::ui::kit::Surface::Sunken.color(&theme)
+    );
+    // Behind it, dimmed.
+    assert_ne!(buf[(0, 0)].style(), before[(0, 0)].style());
+    assert_eq!(buf[(outer.right(), outer.y + 1)].symbol(), "▌");
 }
 
 // UX 2.0's chips and a note's pictures, as the workspace reads the screen
@@ -1178,13 +1203,15 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
             .unwrap();
     }
     let path = store.create("", Some("Plan"));
+    // Lines enough that the second picture is cut by the bottom of the
+    // note, over UX 2.0's "Add an item" row.
     let mut text = String::from("# Plan\n\n");
-    for n in 0..16 {
+    for n in 0..15 {
         text.push_str(&format!("line {n}\n"));
     }
     text.push_str("- [ ] Pick a name, needs a choice ![name](a.png)\n");
     text.push_str("- [ ] Draw the logo, needs a choice\n  ![logo](b.png)\n");
-    for n in 16..50 {
+    for n in 15..50 {
         text.push_str(&format!("line {n}\n"));
     }
     write(&path, &text);
@@ -1253,4 +1280,258 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
         whole += pieces.iter().filter(|p| p.area.height == 3).count();
     }
     assert!(whole > 0, "the pictures seen whole as the note scrolled");
+}
+
+// UX 2.0's item keys and footer (board 7).
+fn started_ux2(name: &str) -> (Dir, App) {
+    let (dir, store) = temp(name);
+    let (mut app, _) = app_in(
+        store,
+        Options {
+            ux2: true,
+            ..options()
+        },
+    );
+    app.start();
+    (dir, app)
+}
+
+#[test]
+fn a_parked_section_opens_folded_to_its_count_and_the_footer_shows_the_item_keys() {
+    let (_dir, mut app) = started_ux2("parked");
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] one\n\n## Defered\n- [ ] later one\n### Backlog\n- [ ] later two\n  why\n",
+    );
+    app.open_note(&path, false, false);
+    let shown = screen(&mut app);
+    assert!(
+        shown
+            .iter()
+            .any(|l| l.contains("▸ Defered   2 items, parked")),
+        "{shown:#?}"
+    );
+    assert!(!shown.iter().any(|l| l.contains("later one")));
+    assert!(shown.iter().any(|l| l.contains("Add an item")));
+    let footer = shown.last().unwrap();
+    assert!(footer.contains("Enter its plan or tick"), "{footer}");
+    assert!(footer.contains("M-p work this note"), "{footer}");
+}
+
+#[test]
+fn ga_adds_an_item_to_the_end_of_the_top_list() {
+    let (_dir, mut app) = started_ux2("add item");
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] one\n  After: Kit\n\n- [x] done\n## Later\n- [ ] parked\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "gaa new one");
+    assert!(screen(&mut app).iter().any(|l| l.contains("a new one")));
+    keys(&mut app, "<CR>");
+    assert_eq!(app.adding, None);
+    assert_eq!(
+        lines(&app)[..6],
+        [
+            "# Design",
+            "",
+            "- [ ] one",
+            "  After: Kit",
+            "- [ ] a new one",
+            ""
+        ]
+    );
+    assert_eq!(app.editor.doc.row, 4);
+    // Esc leaves it, adding nothing; u takes the item back.
+    keys(&mut app, "gaskipped<Esc>u");
+    assert!(
+        !lines(&app)
+            .iter()
+            .any(|l| l.contains("skipped") || l.contains("new one"))
+    );
+}
+
+#[test]
+fn enter_on_an_item_opens_its_plan_and_ticks_one_with_none() {
+    let (_dir, mut app) = started_ux2("plan");
+    let plan = app.store.create("", Some("Plan - Kit"));
+    write(&plan, "# Plan - Kit\n\nThe steps\n");
+    let path = app.store.create("", Some("Design"));
+    write(
+        &path,
+        "# Design\n\n- [ ] planned\n  Plan: [[Plan - Kit]]\n- [ ] bare\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR>");
+    assert_eq!(name(&app), "Plan - Kit.md");
+    app.open_note(&path, false, false);
+    keys(&mut app, "5G<CR>");
+    assert_eq!(name(&app), "Design.md");
+    assert!(
+        lines(&app).iter().any(|l| l == "- [x] bare"),
+        "{:?}",
+        lines(&app)
+    );
+    // o with no tab on the item is Vim's.
+    keys(&mut app, "3Go");
+    assert_eq!(app.editor.mode, Mode::Insert);
+}
+
+#[test]
+fn a_paste_while_adding_an_item_goes_into_the_input_not_the_note() {
+    let (_dir, mut app) = started_ux2("paste item");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    keys(&mut app, "ga");
+    app.input(Input::Paste("pasted words\nsecond line".into()));
+    assert_eq!(app.adding.as_deref(), Some("pasted words"));
+    assert_eq!(lines(&app), ["# Design", "", "- [ ] one"]);
+}
+
+#[test]
+fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
+    let (_dir, mut app) = started_ux2("item tab");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] Fix tests\n");
+    app.open_note(&path, false, false);
+    let tab = |note: &str| render::ItemTab {
+        id: "@7".into(),
+        note: note.into(),
+        index: 7,
+        waits: false,
+        detail: String::new(),
+    };
+    app.item_tabs = HashMap::from([("Fix tests".to_string(), tab("Other.md"))]);
+    keys(&mut app, "3Go");
+    assert_eq!(app.editor.mode, Mode::Insert, "another note's tab: Vim's o");
+    keys(&mut app, "<Esc>u");
+    app.item_tabs = HashMap::from([
+        ("Fix tests".to_string(), tab("Other.md")),
+        (note_item_key("Design.md", "Fix tests"), tab("Design.md")),
+    ]);
+    keys(&mut app, "3Go");
+    assert_eq!(
+        app.editor.mode,
+        Mode::Normal,
+        "this note's tab: o goes there"
+    );
+    assert_eq!(lines(&app), ["# Design", "", "- [ ] Fix tests"]);
+}
+
+#[test]
+fn a_long_draft_in_add_an_item_shows_its_end() {
+    let (_dir, mut app) = started_ux2("long item");
+    app.cols = 80;
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    keys(&mut app, "ga");
+    keys(&mut app, &"word ".repeat(20));
+    keys(&mut app, "THE END");
+    let shown = screen(&mut app);
+    let input = shown.iter().find(|l| l.contains("adds it")).unwrap();
+    assert!(input.contains("…") && input.contains("THE END▏"), "{input}");
+}
+
+#[test]
+fn m_enter_outside_the_workspace_keeps_the_draft() {
+    let (_dir, mut app) = started_ux2("plan draft");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    keys(&mut app, "gakept");
+    app.key(Key::new(KeyCode::Enter, Mods::ALT));
+    assert_eq!(app.adding.as_deref(), Some("kept"));
+    assert_eq!(lines(&app), ["# Design", "", "- [ ] one"]);
+}
+
+#[test]
+fn an_item_handed_to_plan_item_comes_back_until_it_reaches_the_note() {
+    let (_dir, mut app) = started_ux2("plan handed");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    // M-Enter handed it on, and the repository's picker was closed: ga
+    // brings it back, even after a change elsewhere that names its words.
+    let other = app.store.create("", Some("Other"));
+    let handed = || {
+        vec![Planning {
+            note: path.clone(),
+            text: "kept".into(),
+            items: 0,
+        }]
+    };
+    app.planning = handed();
+    write(&path, "# Design\n\nkept in mind\n\n- [ ] one\n");
+    app.check();
+    // One handed on in another note too, which leaves this one's.
+    app.planning.push(Planning {
+        note: other.clone(),
+        text: "elsewhere".into(),
+        items: 0,
+    });
+    // Not in another note, where it waits for its own.
+    write(&other, "# Other\n");
+    app.open_note(&other, false, false);
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some("elsewhere"));
+    app.key(Key::new(KeyCode::Esc, Mods::NONE));
+    app.open_note(&path, false, false);
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some("kept"));
+    app.key(Key::new(KeyCode::Esc, Mods::NONE));
+    // Handed on again, and /plan-item put it in the note: ga starts empty.
+    app.planning = handed();
+    write(&path, "# Design\n\n- [ ] kept\n- [ ] one\n");
+    app.check();
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some(""));
+    app.key(Key::new(KeyCode::Esc, Mods::NONE));
+    // Handed on, and added while another note was open: done there too.
+    app.planning = handed();
+    app.open_note(&other, false, false);
+    write(&path, "# Design\n\n- [ ] kept\n- [ ] kept\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some(""));
+}
+
+#[test]
+fn an_item_added_after_typing_is_its_own_step_to_undo() {
+    let (_dir, mut app) = started_ux2("undo item");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    keys(&mut app, "3GA typed");
+    let input = screen(&mut app)
+        .iter()
+        .position(|l| l.contains("Add an item"))
+        .unwrap() as u16;
+    click(&mut app, 5, input);
+    keys(&mut app, "two<CR>");
+    assert_eq!(
+        lines(&app),
+        ["# Design", "", "- [ ] one typed", "- [ ] two"]
+    );
+    keys(&mut app, "u");
+    assert_eq!(lines(&app), ["# Design", "", "- [ ] one typed"]);
+}
+
+#[test]
+fn enter_in_a_folded_section_opens_the_fold_not_a_hidden_items_plan() {
+    let (_dir, mut app) = started_ux2("folded plan");
+    let plan = app.store.create("", Some("Plan - Task"));
+    write(&plan, "# Plan - Task\n");
+    let path = app.store.create("", Some("Work"));
+    write(
+        &path,
+        "# Work\n## Later\n- [ ] Task\n  Plan: [[Plan - Task]]\n",
+    );
+    app.open_note(&path, false, false);
+    keys(&mut app, "3G<CR>");
+    assert_eq!(name(&app), "Work.md");
+    assert!(screen(&mut app).iter().any(|l| l.contains("Task")));
 }

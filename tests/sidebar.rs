@@ -490,3 +490,40 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     assert_eq!(code, 0);
     assert!(!out.contains("Notifications"), "no tab for `tabs`: {out}");
 }
+
+#[test]
+fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
+    let notes = common::TempDir::new("sbnu");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({"ux2": true}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("New note: Plan");
+
+    // j from the only tab stays on it: the notifications are above.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    std::thread::sleep(Duration::from_millis(300));
+    let list = wait_list(&server, "the tab still in front", focused);
+    assert_eq!(notices_tab(&list), None, "no window opened");
+
+    // k: up onto the notification, its window in front.
+    client.type_text("k");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+
+    // k again stays; j goes back down to the tab.
+    client.type_text("k");
+    client.type_text("j");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+}

@@ -163,7 +163,15 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
     let (signals, signal_pipe) =
         Signals::install().context("couldn't set up the signal handlers")?;
     let size = measure(libc::STDOUT_FILENO);
-    let term = std::env::var("TERM").unwrap_or_default();
+    // What the terminal is, by `TERM` and `TERM_PROGRAM` both, since Ghostty
+    // run with `TERM=xterm-256color` names itself only in the second.
+    let term = format!(
+        "{} {}",
+        std::env::var("TERM").unwrap_or_default(),
+        std::env::var("TERM_PROGRAM").unwrap_or_default()
+    )
+    .trim()
+    .to_string();
     let keys = crate::settings::is_on("extended_keys");
     let terminal = Terminal::enter(libc::STDIN_FILENO, libc::STDOUT_FILENO, keys)
         .context("couldn't set up the terminal")?;

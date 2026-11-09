@@ -1,7 +1,9 @@
 //! The status line as someone sees it, against a server of the test's own:
 //! the second status line under the tabs with its setting on, and gone
 //! again with it off; the ⌘ Commands button opening the palette when
-//! clicked, a click on a tab still going to it; the health light naming
+//! clicked, a click on a tab still going to it, and with UX 2.0 at the end
+//! of the tab header's keys, a click there opening and closing the
+//! palette; the health light naming
 //! what stopped; and the palette's theme toggle setting the theme.
 
 mod common;
@@ -90,6 +92,31 @@ fn the_commands_button_opens_the_palette_and_a_tab_is_still_gone_to() {
     // With the button off, nothing is there to click.
     settings(&server, json!({"palette_button": false}));
     client.wait_for("no button", |s| !s[23].contains("Commands"));
+}
+
+#[test]
+fn with_ux2_the_headers_commands_button_opens_the_palette_and_closes_it() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 30);
+    let screen = client.wait_for("the button after the keys", |s| {
+        s[2].contains("M-e") && s[2].contains("Commands")
+    });
+    let line = screen[2].clone();
+    assert!(
+        column(&line, "Commands") > column(&line, "M-e"),
+        "at the end of the keys: {line:?}"
+    );
+    click(&mut client, column(&line, "Commands"), 2);
+    client.wait_text("Actions");
+    click(&mut client, column(&line, "Commands"), 2);
+    client.wait_for("the palette closed", |s| {
+        !s.iter().any(|l| l.contains("Actions"))
+    });
+    settings(&server, json!({"ux2": true, "palette_button": false}));
+    client.wait_for("no button", |s| {
+        s[2].contains("M-e") && !s[2].contains("Commands")
+    });
 }
 
 #[test]

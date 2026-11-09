@@ -11,9 +11,12 @@
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
+use ratatui::layout::Rect;
+
 use super::draw;
 use super::palette::{self, Entry};
 use super::picker::Order;
+use super::picture::{self, Picture};
 use super::{
     Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked, Picker, Step, Then,
     Tip, Ui, UiEvent, keylist, message, tip,
@@ -267,6 +270,116 @@ impl Server {
                     self.show_tip(&name, key.as_deref(), Some(client));
                 }
             }
+            UiEvent::Picture {
+                client,
+                pane,
+                title,
+                read,
+            } => {
+                if !self.clients.contains_key(&client) || !self.panes.contains_key(&pane) {
+                    return;
+                }
+                match read {
+                    Ok(img) => {
+                        self.close_overlays(client, "picture");
+                        let shown = Picture::new(pane, &title, img);
+                        self.open(client, Box::new(shown), None);
+                    }
+                    Err(why) => self.say(Some(client), &why),
+                }
+            }
+        }
+    }
+
+    /// `picture [-t pane] <file>`: the picture shown full size over the
+    /// pane (the one it is asked from), read off the server's task. Fails
+    /// at once, saying so, where the terminal doesn't draw the server's
+    /// images, so the asker can open it another way (the notes app in
+    /// Quick Look). A file that turns out to be no picture it can draw
+    /// opens in Quick Look (or the desktop's viewer) from here instead.
+    pub fn cmd_picture(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
+        let (target, rest) = match args {
+            [flag, t, rest @ ..] if flag == "-t" => (Some(t.as_str()), rest),
+            rest => (None, rest),
+        };
+        let [file] = rest else {
+            return Reply::fail("usage: switchboard picture [-t pane] <file>");
+        };
+        let pane = match target {
+            Some(t) => match t.strip_prefix('%').and_then(|p| p.parse::<PaneId>().ok()) {
+                Some(p) if self.panes.contains_key(&p) => Some(p),
+                _ => return Reply::fail(format!("no pane {t}")),
+            },
+            None => caller,
+        };
+        let client = self.client_for(pane);
+        let Some(pane) = pane.or_else(|| client.and_then(|c| self.current_pane(c))) else {
+            return Reply::fail("picture: no pane to show it over");
+        };
+        let Some(client) = client.filter(|c| self.clients.get(c).is_some_and(|c| c.graphics()))
+        else {
+            return Reply::fail("picture: this terminal doesn't draw the server's images");
+        };
+        if self.pane_rect(client, pane).is_none() {
+            return Reply::fail(format!("picture: pane {pane} isn't on the screen"));
+        }
+        let file = std::path::PathBuf::from(file);
+        if !file.is_absolute() || !file.is_file() {
+            return Reply::fail(format!("picture: no file {}", file.display()));
+        }
+        let title = file
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let read = picture::decode(&file);
+            // A file this can't draw (a kind the decoder doesn't read)
+            // opens in Quick Look or the desktop's viewer, as it did
+            // before, since the asker was already told it would show.
+            if read.is_err() && crate::platform::preview(&file).is_ok() {
+                return;
+            }
+            let _ = tx.send(Event::Ui(UiEvent::Picture {
+                client,
+                pane,
+                title,
+                read,
+            }));
+        });
+        Reply::ok("")
+    }
+
+    /// Keeps each picture shown full size on its pane's place before a
+    /// client is drawn, and closes one whose pane has gone or isn't on the
+    /// screen any more.
+    pub fn pictures_before_draw(&mut self, id: ClientId) {
+        let Some(c) = self.clients.get(&id) else {
+            return;
+        };
+        let panes: Vec<PaneId> = c
+            .overlays
+            .layers
+            .iter()
+            .filter_map(|l| l.overlay.as_ref().as_any().downcast_ref::<Picture>())
+            .map(|p| p.pane)
+            .collect();
+        if panes.is_empty() {
+            return;
+        }
+        let places: Vec<Option<Rect>> = panes.iter().map(|p| self.pane_rect(id, *p)).collect();
+        if places.iter().any(Option::is_none) {
+            self.close_overlays(id, "picture");
+            return;
+        }
+        let c = self.clients.get_mut(&id).expect("checked above");
+        let shown = c
+            .overlays
+            .layers
+            .iter_mut()
+            .filter_map(|l| l.overlay.as_mut().as_any_mut().downcast_mut::<Picture>());
+        for (p, place) in shown.zip(places) {
+            p.area = place;
         }
     }
 
@@ -477,11 +590,22 @@ impl Server {
                 .map(|j| matched[j])
                 .collect()
         });
-        let picker = Picker::new("Actions", items)
+        let mut picker = Picker::new("Actions", items)
             .named("palette")
             .prompt("action> ")
             .exact()
             .order(order);
+        // UX 2.0 draws it as board 15: the input atom, and the chosen
+        // command's preview under the list.
+        if settings::is_on("ux2") {
+            let caps = self
+                .clients
+                .get(&client)
+                .is_some_and(|c| crate::ui::kit::caps(&c.term));
+            picker = picker
+                .previews(entries.iter().map(Entry::preview).collect())
+                .kit(caps);
+        }
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;

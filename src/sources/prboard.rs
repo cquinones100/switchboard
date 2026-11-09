@@ -39,7 +39,7 @@ pub fn columns(ux2: bool) -> &'static [&'static str] {
 pub const MERGED_DAYS: i64 = 7;
 pub const MERGED_EVERY: Duration = Duration::from_secs(10 * 60);
 
-const FIELDS: &str = "... on PullRequest { number title url isDraft state reviewDecision mergedAt body additions deletions author { login } repository { nameWithOwner } mergeQueueEntry { position } commitCount: commits { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } latestReviews(first: 10) { nodes { author { login } } } }";
+const FIELDS: &str = "... on PullRequest { number title url isDraft state reviewDecision mergedAt mergedBy { login } body additions deletions author { login } repository { nameWithOwner } mergeQueueEntry { position } commitCount: commits { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } latestReviews(first: 10) { nodes { author { login } } } }";
 
 fn column_of(pr: &Value, ux2: bool) -> &'static str {
     if text(pr, "/state") == "MERGED" {
@@ -139,6 +139,7 @@ pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
             "meta": meta,
             "reviewers": reviewers.join(", "),
             "author": text(pr, "/author/login"),
+            "mergedBy": text(pr, "/mergedBy/login"),
             "commits": pr.pointer("/commitCount/totalCount").and_then(Value::as_u64),
             "additions": pr.get("additions").and_then(Value::as_u64),
             "deletions": pr.get("deletions").and_then(Value::as_u64),

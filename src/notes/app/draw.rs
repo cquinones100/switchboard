@@ -67,7 +67,7 @@ impl App {
             self.draw_locked(buf, pid);
             return None;
         }
-        let bottom = 1 + u16::from(self.opts.easy && self.opts.key_help);
+        let bottom = 1 + u16::from(self.opts.easy && self.opts.key_help) + u16::from(self.adds());
         let body_h = area.height.saturating_sub(bottom);
         let list_w = if self.list_shown {
             list_width(area.width).min(area.width.saturating_sub(10))
@@ -95,6 +95,10 @@ impl App {
         }
         for layer in &mut self.layers {
             layer.overlay.draw(buf, &self.look);
+            if let Some(outer) = layer.overlay.stands_out() {
+                crate::ui::dim_behind(buf, outer, &self.look.theme);
+                crate::ui::images::shadow_cells(buf, outer);
+            }
         }
         if let Some(layer) = self.layers.last() {
             cursor = layer.overlay.cursor();
@@ -187,6 +191,16 @@ impl App {
         let line = &ctx.lines[row];
         if let Some(Some(hidden)) = ctx.folded.get(&row) {
             let text = line.trim_start_matches('#').trim().to_string();
+            if self.opts.ux2 && render::parked(line, ctx.kinds[row]) {
+                let n = render::items_in(&ctx.kinds, row, row + hidden);
+                return vec![Shown::Fold {
+                    row,
+                    text: format!(
+                        "▸ {text}   {n} item{}, parked",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                }];
+            }
             return vec![Shown::Fold {
                 row,
                 text: format!(
@@ -607,6 +621,41 @@ impl App {
         let w = buf.area.width;
         let faint = Style::new().fg(Color::Indexed(if self.opts.light { 243 } else { 245 }));
         let mut y = y0;
+        self.geo.input = None;
+        if self.adds() {
+            let typed = self.adding.as_deref();
+            let keys: &[(&str, &str)] = if typed.is_some() {
+                &[
+                    ("Enter", "adds it"),
+                    ("M-Enter", "adds it and writes its plan"),
+                    ("Esc", ""),
+                ]
+            } else {
+                &[("ga", "add")]
+            };
+            let theme = &self.look.theme;
+            // The end of a draft too long for the room beside the keys, so
+            // what is typed stays in sight: the field's ends, "› ", the
+            // cursor and a space before the keys take 6 columns.
+            let keys_w: usize = keys
+                .iter()
+                .map(|(k, what)| width(k) + if what.is_empty() { 0 } else { 1 + width(what) })
+                .sum::<usize>()
+                + 2 * keys.len().saturating_sub(1);
+            let room = (w as usize).saturating_sub(keys_w + 6);
+            let shown = tail_within(typed.unwrap_or(""), room);
+            let spans = crate::ui::kit::input(
+                &shown,
+                "Add an item",
+                w as usize,
+                keys,
+                theme,
+                self.opts.caps,
+            );
+            put_line(buf, 0, y, w, &Line::from(spans));
+            self.geo.input = Some(y);
+            y += 1;
+        }
         if self.opts.easy && self.opts.key_help {
             let mode = match self.editor.mode {
                 Mode::Insert => easy::HelpMode::Insert,
@@ -647,6 +696,23 @@ impl App {
             Mode::Visual { .. } => "-- VISUAL --",
             _ => "",
         };
+        if mode.is_empty() && self.adds() && self.focus == Focus::Note {
+            let spans = crate::ui::kit::hints(
+                &[
+                    ("Enter", "its plan or tick"),
+                    ("o", "its tab"),
+                    ("gw", "work on it"),
+                    ("ga", "add"),
+                    ("za", "fold"),
+                    ("M-p", "work this note"),
+                ],
+                &self.look.theme,
+            );
+            let mut line = vec![Span::raw(" ")];
+            line.extend(spans);
+            put_line(buf, 0, y, w, &Line::from(line));
+            return None;
+        }
         buf.set_stringn(
             0,
             y,
@@ -656,6 +722,31 @@ impl App {
         );
         None
     }
+
+    /// Whether the bottom has UX 2.0's "Add an item" input, and the
+    /// footer its item keys: with a note open.
+    fn adds(&self) -> bool {
+        self.opts.ux2 && self.open.is_some()
+    }
+}
+
+/// `text` whole when it is `cols` wide or less, else "…" and as much of
+/// its end as fits after it.
+fn tail_within(text: &str, cols: usize) -> String {
+    if width(text) <= cols {
+        return text.to_string();
+    }
+    let mut tail: Vec<char> = Vec::new();
+    let mut used = 1;
+    for c in text.chars().rev() {
+        let w = width(&c.to_string());
+        if used + w > cols {
+            break;
+        }
+        used += w;
+        tail.push(c);
+    }
+    std::iter::once('…').chain(tail.into_iter().rev()).collect()
 }
 
 /// What drawing a note's lines works from.

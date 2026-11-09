@@ -38,12 +38,18 @@ pub struct Summary {
     /// How many of the note's items are skipped.
     pub skipped: usize,
     pub spend_limit: f64,
+    /// Today's Claude spend, as the Usage view sums it, read with the next
+    /// items while there is a limit; 0 otherwise.
+    pub spent: f64,
     /// Its tabs land without asking.
     pub lands_alone: bool,
     /// Its tabs take the recommended option of what they would ask.
     pub hands_free: bool,
     /// The branch its tabs land on; empty for the default branch.
     pub target: String,
+    /// The note had nothing more to start at the last look, while its tabs
+    /// still work.
+    pub drained: bool,
 }
 
 impl Summary {
@@ -380,9 +386,11 @@ mod tests {
             ready_only: false,
             skipped: 1,
             spend_limit: 0.0,
+            spent: 0.0,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
+            drained: false,
         }
     }
 

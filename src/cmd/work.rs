@@ -1128,6 +1128,110 @@ impl Server {
         );
     }
 
+    /// Which repository a note's work goes in, asked as `gw` asks it: the
+    /// one this note's items were last started in first, then the
+    /// directories of the panes and of recent work; `then` given the one
+    /// picked, which is kept as the note's.
+    fn ask_note_repo(
+        &mut self,
+        client: ClientId,
+        note: String,
+        ask: String,
+        then: impl FnOnce(&mut Server, ClientId, PathBuf) + Send + 'static,
+    ) {
+        let here = self
+            .current_pane(client)
+            .and_then(|p| self.panes.get(&p))
+            .and_then(|s| s.pane.cwd())
+            .unwrap_or_else(paths::home);
+        let panes = self.pane_dirs();
+        let file = worktree_from_note::notes_dir().join(&note);
+        self.off_task(
+            client,
+            move || {
+                let text = std::fs::read_to_string(&file).ok()?;
+                let key = note_key(&text, &note);
+                let mut recent = work_recent::dirs();
+                let last = work_recent::note_repo(&key).or_else(|| work_recent::note_repo(&note));
+                recent.splice(0..0, last);
+                let found = Found {
+                    dirs: offered(&here, &panes, &recent, &recent_session_dirs(), Wanted::Repo),
+                    here,
+                    clipboard: String::new(),
+                };
+                Some((key, found))
+            },
+            move |server, client, read| {
+                let Some((key, found)) = read else {
+                    server.say(Some(client), "No such note.");
+                    return;
+                };
+                server.ask_dir(
+                    client,
+                    &ask,
+                    found,
+                    Wanted::Repo,
+                    move |server, client, repo, _| {
+                        keep_note_repo(key, &repo);
+                        then(server, client, repo);
+                    },
+                );
+            },
+        );
+    }
+
+    /// Notes' M-Enter in "Add an item" (`press plan-item <note> <text>`):
+    /// a tab in the note's repository, linked to the note and titled with
+    /// the item's words, whose Claude
+    /// runs `/plan-item <text>`, which adds the item to the note and writes
+    /// its plan; the text its argument, never typed.
+    pub fn plan_new_item(&mut self, client: ClientId, note: String, text: String) {
+        let short = crate::tabs::title::short_name(&text);
+        let ask = format!("Plan “{short}”: the repository");
+        let name = note.clone();
+        self.ask_note_repo(client, note, ask, move |server, client, repo| {
+            if crate::trust::in_review_dir(&repo) {
+                let refusal = crate::trust::refusal(&repo);
+                server.say(Some(client), &refusal);
+                return;
+            }
+            let command =
+                worktree::tab_command("claude \"$@\"", "claude", &[format!("/plan-item {text}")]);
+            let Some(tab) = server.work_tab(client, &repo, command, true) else {
+                return;
+            };
+            if let Some(t) = server.tabs.get_mut(&tab) {
+                t.opts.insert("@tab_name".into(), format!("Plan: {short}"));
+                // Its full title the item's words, by which Notes' o and
+                // chips find the tab on the item once /plan-item adds it.
+                t.opts.insert("@tab_title".into(), text.clone());
+                t.opts.insert("@tab_note".into(), name);
+            }
+            server.dirty_tab(tab);
+            server.front(client, &[tab]);
+        });
+    }
+
+    /// Notes' M-p with UX 2.0 on (`press work-note <note>`): autopilot
+    /// working that note, in the repository its items are worked in; its
+    /// menu while it is on.
+    pub fn work_note(&mut self, client: ClientId, note: String) {
+        if !settings::is_on("autopilot") {
+            self.say(Some(client), "Autopilot is off in Settings (Autopilot)");
+            return;
+        }
+        if crate::autopilot::Mode::read(&paths::state_dir()).on {
+            self.autopilot_command(client, crate::autopilot::Command::WorkNote, None);
+            return;
+        }
+        let title = note.strip_suffix(".md").unwrap_or(&note).to_string();
+        let ask = format!("Work “{title}”: the repository");
+        let name = note.clone();
+        self.ask_note_repo(client, note, ask, move |server, client, repo| {
+            server.autopilot_work_note(client, &repo, name);
+        });
+    }
+
     /// A tab for one of a note's items, in the background, in the note's
     /// repository: named after the item, cut short, its whole first line
     /// its full title, and linked to its note (`@tab_name`, `@tab_title`,

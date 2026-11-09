@@ -156,6 +156,11 @@ pub struct HandedClient {
     pub session: String,
     pub cols: u16,
     pub rows: u16,
+    /// What its terminal says it is, for whether it draws images; none
+    /// from a build before it was kept (text, then, until it attaches
+    /// again).
+    #[serde(default)]
+    pub term: String,
     /// How long since it was last used, so the one used last still sizes
     /// its session.
     #[serde(default)]
@@ -584,6 +589,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
                     session: c.session.clone(),
                     cols: c.cols,
                     rows: c.rows,
+                    term: c.term.clone(),
                     idle_ms: c.activity.elapsed().as_millis() as u64,
                     // What its parser held came before the frame half read.
                     input: [server.held_keys(*id), held.input.clone()].concat(),
@@ -754,6 +760,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             &c.session,
             c.cols,
             c.rows,
+            c.term,
             Duration::from_millis(c.idle_ms),
             c.input,
             c.output,
@@ -897,6 +904,7 @@ mod tests {
                 session: "main".into(),
                 cols: 100,
                 rows: 30,
+                term: "xterm-ghostty".into(),
                 idle_ms: 1500,
                 input: vec![1, 0, 0],
                 output: b"\x1b[H".to_vec(),

@@ -6,7 +6,9 @@
 //!
 //! At the top a bar naming the views (the tabs, then each view, with how
 //! many items each has), the counts of tabs waiting, finished and working,
-//! and the filter; at the bottom the keys, or what the last action did. In
+//! and the filter; with UX 2.0 two rows and a rule (`grouped_bar`), the
+//! groups of views by feature over the views of the one in front; at the
+//! bottom the keys, or what the last action did. In
 //! between, the view in front:
 //!
 //! - the tabs as cards in stages (`grid`): each row of the screen a shelf
@@ -16,6 +18,8 @@
 //!   the end of what Claude said or the tool call it is stopped on;
 //! - a board (the PR and ticket boards): a column for each place, side by
 //!   side, each item two lines;
+//! - with UX 2.0, the Autopilot view as a board of cards (`pilot_board`),
+//!   each with a meter placed as an image over the lines (`Meter`);
 //! - a table (Resources): its columns' names, its rows, and a totals row;
 //! - any other view, one row per item, a heading over each group, Settings'
 //!   rows as name, value and what the option does.
@@ -33,6 +37,7 @@ use crate::sidebar::model::{self, Rules, TabModel, TabState};
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, SPINNER, width};
 use crate::ui::Theme;
+use crate::ui::kit::{self, Mark, Tone};
 
 /// A box's border takes a column each side.
 const BORDER: usize = 2;
@@ -535,75 +540,48 @@ fn card_ux2(
 ) -> Vec<Vec<Span<'static>>> {
     let inner = w.saturating_sub(4);
     let state = model::badge_state(tab, r);
-    let color = state.color().unwrap_or(theme.dim);
-    let edge = if chosen {
-        fg(ACCENT)
-    } else if hovered {
-        fg(tab.color.map(Color::from).unwrap_or(theme.bright))
-    } else {
-        fg(theme.faint)
-    };
+    let mark = Mark::of_badge(state);
+    let edge = kit::card_edge(
+        chosen,
+        hovered.then(|| tab.color.map(Color::from).unwrap_or(theme.bright)),
+        theme,
+    );
     let words = text::cut(&model::state_words(tab, r), inner / 3);
-    let right = vec![
-        Span::styled(format!(" {words} "), fg(color)),
-        Span::styled("─╮", edge),
-    ];
-    let index = tab.index.to_string();
-    let room = w.saturating_sub(spans_width(&right) + 2 + 4 + width(&index) + 2);
-    let mut top = vec![
-        Span::styled("╭─", edge),
-        Span::raw(" "),
-        badge(state, frame, theme),
-        Span::raw(" "),
-        Span::styled(index, bold(theme.bright)),
-        Span::raw(" "),
-        Span::styled(text::cut(&tab.name, room), bold(theme.bright)),
-        Span::raw(" "),
-    ];
-    let used = spans_width(&top) + spans_width(&right);
-    top.push(Span::styled("─".repeat(w.saturating_sub(used)), edge));
-    top.extend(right);
-    let mut out = vec![fit(top, w, Style::new())];
-    let side = |line: Vec<Span<'static>>| {
-        let mut row = vec![Span::styled("│", edge), Span::raw(" ")];
-        row.extend(fit(line, inner, Style::new()));
-        row.push(Span::raw(" "));
-        row.push(Span::styled("│", edge));
-        row
+    let right = if words.is_empty() {
+        Vec::new()
+    } else {
+        vec![Span::styled(words, mark.look().1.style(theme))]
     };
+    let title = vec![
+        kit::mark(mark, frame, theme),
+        Span::raw(" "),
+        Span::styled(tab.index.to_string(), bold(theme.bright)),
+        Span::raw(" "),
+        Span::styled(tab.name.clone(), bold(theme.bright)),
+    ];
     // The screen's last lines, down to the footer.
     let room = h.saturating_sub(3);
     let lines: &[Vec<Span<'static>>] = screen.map_or(&[], |s| &s.lines);
     let shown = &lines[lines.len().saturating_sub(room)..];
-    for _ in shown.len()..room {
-        out.push(side(Vec::new()));
-    }
-    for line in shown {
-        out.push(side(line.clone()));
-    }
+    let mut inside: Vec<Vec<Span<'static>>> = vec![Vec::new(); room - shown.len()];
+    inside.extend(shown.iter().cloned());
     let branch = screen.and_then(|s| s.branch.clone()).unwrap_or_default();
     let mut footer = vec![Span::styled(branch, fg(theme.dim))];
-    // The PR's checks as marks after the branch, failing first.
+    // The PR's checks as the kit's marks after the branch, failing first.
     if let Some(c) = tab.checks {
-        for (mark, n, color) in [
-            ("✗", c.fail, Some(RED)),
-            ("✓", c.pass, Badge::Done.color()),
-            ("◌", c.pending, Badge::Working.color()),
+        for (mark, n) in [
+            (Mark::Failed, c.fail),
+            (Mark::Passed, c.pass),
+            (Mark::Pending, c.pending),
         ] {
             if n > 0 {
-                footer.push(Span::styled(
-                    format!("  {mark}{n}"),
-                    fg(color.unwrap_or(theme.dim)),
-                ));
+                let (glyph, tone) = mark.look();
+                footer.push(Span::styled(format!("  {glyph}{n}"), tone.style(theme)));
             }
         }
     }
-    out.push(side(footer));
-    out.push(vec![Span::styled(
-        format!("╰{}╯", "─".repeat(w.saturating_sub(2))),
-        edge,
-    )]);
-    out
+    inside.push(footer);
+    kit::card(w, h, title, right, &inside, edge)
 }
 
 /// The tabs' cards in their stages' boxes, scrolled to keep the chosen card
@@ -718,7 +696,13 @@ fn cards(
                 }
                 row_top += h;
             }
-            let color = fg(block.stage.color().color().unwrap_or(theme.dim));
+            // With UX 2.0, the stage's tone in the kit, as the sidebar's
+            // heading for it wears.
+            let color = if r.ux2 {
+                Mark::of_badge(block.stage.color()).look().1.style(theme)
+            } else {
+                fg(block.stage.color().color().unwrap_or(theme.dim))
+            };
             let title = format!(" {} {} ", block.stage.title().to_uppercase(), block.count);
             let shown = text::cut(&title, inner.saturating_sub(2));
             let mut lines_of = vec![vec![
@@ -917,14 +901,17 @@ fn board(
     }
 }
 
-/// UX 2.0's PR board: a column per place a PR stands, its name bold with a
-/// dim count, each PR a rounded card of its number in the accent color and
-/// its checks' mark on the top edge, its title, then its repository, review
-/// and place in the queue dimmed; the chosen card's edge in the accent color.
-/// Its last line names the tab working on the PR, else its reviewers. On a
-/// screen `PR_SIDE_AT` wide, the chosen PR's description sits beside them.
+/// UX 2.0's PR and ticket boards, one family as boards 10 and 19 draw them:
+/// a column per place an item stands, its name a label in the state's tone
+/// with its count, each item a rounded card (its number or ID in the accent
+/// on the top edge, its checks' mark or its priority at the edge's right
+/// end, its title on two lines, then a dim line about it); the chosen
+/// card's edge in the accent. The views' last group (the PRs merged and the
+/// tickets canceled in the last week) is a row of the same cards, faint,
+/// under the columns, each saying when. On a screen `SIDE_AT` wide, the
+/// chosen item's description sits beside them, through Markdown.
 #[allow(clippy::too_many_arguments)]
-fn pr_cards(
+fn board_cards(
     view: &View,
     columns: &[&str],
     cols: usize,
@@ -935,27 +922,53 @@ fn pr_cards(
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
 ) {
-    const TALL: usize = 5;
-    let side_w = if cols >= PR_SIDE_AT { PR_SIDE_W } else { 0 };
-    let about = usize::try_from(m.cursor)
+    // A card's five lines and the blank one under it.
+    const TALL: usize = 6;
+    // The row's rule, label and blank line, and a card.
+    const WEEK_ROWS: usize = 3 + TALL - 1;
+    let tickets = view.id == ViewId::Tickets;
+    let (columns, week) = columns.split_at(columns.len().saturating_sub(1));
+    let in_group = |group: &str| -> Vec<(usize, &Item)> {
+        view.data
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.group.as_deref() == Some(group))
+            .collect()
+    };
+    let week_items = week.first().map(|w| in_group(w)).unwrap_or_default();
+    let side_w = if cols >= SIDE_AT { SIDE_W } else { 0 };
+    let chosen_item = usize::try_from(m.cursor)
         .ok()
-        .and_then(|c| view.data.items.get(c))
+        .and_then(|c| view.data.items.get(c));
+    let about = chosen_item
         .filter(|_| side_w > 0)
-        .map(|item| pr_about(item, side_w, body, theme))
+        .map(|item| {
+            if tickets {
+                ticket_about(item, side_w, body, theme)
+            } else {
+                pr_about(item, side_w, body, theme)
+            }
+        })
         .unwrap_or_default();
     let cols = cols - side_w;
+    // The week's row when it has anything and the columns keep room for a
+    // card.
+    let week_h = if !week_items.is_empty() && body >= 2 + TALL + WEEK_ROWS {
+        WEEK_ROWS
+    } else {
+        0
+    };
+    let board_h = body - week_h;
     // As many columns as fit 12 wide; with more, the ones around the chosen
-    // PR's, so h and l bring the rest into sight, an arrow on the first and
-    // last heading saying more are off to that side.
+    // item's, so h and l bring the rest into sight, an arrow on the first
+    // and last heading saying more are off to that side.
     let fit_n = (cols / 12).clamp(1, columns.len().max(1));
-    let chosen_col = usize::try_from(m.cursor)
-        .ok()
-        .and_then(|c| view.data.items.get(c))
-        .and_then(|item| {
-            columns
-                .iter()
-                .position(|c| item.group.as_deref() == Some(*c))
-        });
+    let chosen_col = chosen_item.and_then(|item| {
+        columns
+            .iter()
+            .position(|c| item.group.as_deref() == Some(*c))
+    });
     let start = chosen_col
         .map_or(0, |c| c.saturating_sub(fit_n - 1))
         .min(columns.len().saturating_sub(fit_n));
@@ -964,35 +977,39 @@ fn pr_cards(
     let columns = &columns[start..(start + fit_n).min(columns.len())];
     let col_w = (cols / columns.len().max(1)).max(12);
     let w = col_w - 1;
+    let face = |item: &Item| {
+        if tickets {
+            ticket_face(item, m, theme)
+        } else {
+            pr_face(item, m, theme)
+        }
+    };
     let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
     for (ci, column) in columns.iter().enumerate() {
-        let arrow_left = if ci == 0 && more_left { " ‹" } else { "" };
-        let arrow_right = if ci + 1 == columns.len() && more_right {
-            " ›"
+        let items = in_group(column);
+        let right = if ci + 1 == columns.len() && more_right {
+            2
         } else {
-            ""
+            0
         };
-        let items: Vec<(usize, &Item)> = view
-            .data
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, i)| i.group.as_deref() == Some(column))
-            .collect();
+        let mut heading = kit::label(
+            column,
+            column_tone(column),
+            Some(items.len()),
+            w.saturating_sub(right),
+            theme,
+        );
+        if ci == 0 && more_left {
+            heading[0] = Span::styled("‹", fg(theme.dim));
+        }
+        if right > 0 {
+            heading.push(Span::styled(" ›", fg(theme.dim)));
+        }
         let mut out = vec![
-            fit(
-                vec![
-                    Span::styled(arrow_left, fg(theme.dim)),
-                    Span::styled(format!(" {column}"), bold(theme.text)),
-                    Span::styled(format!(" {}", items.len()), fg(theme.dim)),
-                    Span::styled(arrow_right, fg(theme.dim)),
-                ],
-                col_w,
-                Style::new(),
-            ),
+            fit(heading, col_w, Style::new()),
             vec![Span::raw(" ".repeat(col_w))],
         ];
-        let room = body.saturating_sub(2) / TALL;
+        let room = board_h.saturating_sub(2) / TALL;
         let chosen_at = items.iter().position(|(i, _)| *i as isize == m.cursor);
         let first = match chosen_at {
             Some(c) if c >= room => c + 1 - room,
@@ -1001,77 +1018,11 @@ fn pr_cards(
         for (shown, (index, item)) in items.iter().enumerate().skip(first).take(room) {
             let chosen = *index as isize == m.cursor;
             let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
-            let edge = fg(if chosen {
-                ACCENT
-            } else if lit {
-                theme.text
-            } else {
-                theme.faint
-            });
-            let number = format!(" #{} ", item.data["pr"]["number"]);
-            let (mark, mark_color) = match item.data["checks"].as_str() {
-                Some("success") => ("✓", Badge::Done.color()),
-                Some("failure") => ("✕", Some(RED)),
-                Some("pending") => ("◌", Badge::Working.color()),
-                _ => ("", None),
-            };
-            let mark = if mark.is_empty() {
-                String::new()
-            } else {
-                format!(" {mark} ")
-            };
-            let rule = w.saturating_sub(3 + width(&number) + width(&mark));
-            let title = item
-                .title
-                .split_once(' ')
-                .filter(|(n, _)| n.starts_with('#'))
-                .map_or(item.title.as_str(), |(_, t)| t);
-            let inner = w.saturating_sub(4);
-            let side = |text: String, style: Style| {
-                fit(
-                    vec![
-                        Span::styled("│ ", edge),
-                        Span::styled(text::cut(&text, inner), style),
-                    ],
-                    w - 1,
-                    Style::new(),
-                )
-                .into_iter()
-                .chain([Span::styled("│", edge), Span::raw(" ")])
-                .collect::<Vec<_>>()
-            };
-            out.push(vec![
-                Span::styled("╭", edge),
-                Span::styled(number, bold(ACCENT)),
-                Span::styled("─".repeat(rule), edge),
-                Span::styled(mark, fg(mark_color.unwrap_or(theme.dim))),
-                Span::styled("─╮ ", edge),
-            ]);
-            out.push(side(
-                title.to_string(),
-                if chosen {
-                    bold(theme.bright)
-                } else {
-                    fg(theme.text)
-                },
-            ));
-            let number = item.data["pr"]["number"].as_u64();
-            let tab = m
-                .snap
-                .tabs
-                .iter()
-                .find(|t| number.is_some() && t.pr == number);
-            let queued = item.group.as_deref() == Some("In merge queue");
-            let third = match (tab, item.data["reviewers"].as_str()) {
-                (Some(t), _) => format!("tab {}", t.index),
-                (None, Some(r)) if !queued && !r.is_empty() => r.to_string(),
-                _ => item.data["meta"].as_str().unwrap_or("").to_string(),
-            };
-            out.push(side(third, fg(theme.dim)));
-            out.push(vec![
-                Span::styled(format!("╰{}╯", "─".repeat(w.saturating_sub(2))), edge),
-                Span::raw(" "),
-            ]);
+            let card = board_card(&face(item), w, chosen, lit, false, theme);
+            out.extend(card.into_iter().map(|mut line| {
+                line.push(Span::raw(" "));
+                line
+            }));
             out.push(vec![Span::raw(" ".repeat(col_w))]);
             let y = top_row + 2 + (shown - first) * TALL;
             for dy in 0..TALL - 1 {
@@ -1092,16 +1043,74 @@ fn pr_cards(
         }
         drawn.push(out);
     }
-    for i in 0..body {
-        let mut spans = Vec::new();
-        for c in &drawn {
-            spans.extend(
-                c.get(i)
-                    .cloned()
-                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
-            );
+    let mut rows: Vec<Vec<Span<'static>>> = (0..board_h)
+        .map(|i| {
+            let mut spans = Vec::new();
+            for c in &drawn {
+                spans.extend(
+                    c.get(i)
+                        .cloned()
+                        .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
+                );
+            }
+            fit(spans, cols, Style::new())
+        })
+        .collect();
+    if week_h > 0 {
+        let title = if tickets {
+            "Closed this week"
+        } else {
+            "Merged this week"
+        };
+        rows.push(vec![kit::head_rule(cols, theme)]);
+        rows.push(kit::label(
+            title,
+            Tone::Dim,
+            Some(week_items.len()),
+            cols.saturating_sub(1),
+            theme,
+        ));
+        rows.push(Vec::new());
+        // As many cards as fit, from the one that keeps the chosen in sight.
+        let across = (cols / col_w).max(1);
+        let chosen_at = week_items.iter().position(|(i, _)| *i as isize == m.cursor);
+        let first = chosen_at.map_or(0, |c| (c + 1).saturating_sub(across));
+        let shown: Vec<&(usize, &Item)> = week_items.iter().skip(first).take(across).collect();
+        let cards: Vec<Vec<Vec<Span<'static>>>> = shown
+            .iter()
+            .map(|(index, item)| {
+                let chosen = *index as isize == m.cursor;
+                let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
+                let mut face = face(item);
+                face.meta = vec![Span::styled(
+                    week_words(item, tickets, m.snap.now_secs),
+                    fg(theme.faint),
+                )];
+                board_card(&face, w, chosen, lit, true, theme)
+            })
+            .collect();
+        let y = top_row + board_h + 3;
+        for (c, (index, _)) in shown.iter().enumerate() {
+            for dy in 0..TALL - 1 {
+                hits.push(HitBox {
+                    y: (y + dy) as u16,
+                    x0: (c * col_w) as u16,
+                    x1: (c * col_w + w).saturating_sub(1) as u16,
+                    spot: Spot::Index(*index as isize),
+                });
+            }
         }
-        let mut spans = fit(spans, cols, Style::new());
+        for line in 0..TALL - 1 {
+            let mut spans = Vec::new();
+            for card in &cards {
+                spans.extend(card.get(line).cloned().unwrap_or_default());
+                spans.push(Span::raw(" "));
+            }
+            rows.push(fit(spans, cols, Style::new()));
+        }
+    }
+    for (i, row) in rows.into_iter().enumerate() {
+        let mut spans = fit(row, cols, Style::new());
         if side_w > 0 {
             spans.push(Span::styled("│ ", fg(theme.faint)));
             spans.extend(fit(
@@ -1114,14 +1123,299 @@ fn pr_cards(
     }
 }
 
-/// How wide a screen shows the chosen PR's description beside the board,
+/// A board column's tone: where a PR or ticket stands, as the kit marks it.
+fn column_tone(column: &str) -> Tone {
+    match column {
+        "In progress" => Tone::Needs,
+        "In review" => Tone::Working,
+        "Changes asked" => Tone::Failed,
+        "Approved" | "Done" => Tone::Done,
+        "In merge queue" => Tone::Landing,
+        _ => Tone::Dim,
+    }
+}
+
+/// What a board's card says of an item: its number or ID on the top edge,
+/// what sits at the edge's right end, its title, and the line under it.
+struct Face {
+    label: String,
+    right: Vec<Span<'static>>,
+    title: String,
+    meta: Vec<Span<'static>>,
+    /// A ticket done: its ID and title faint, the title struck through.
+    done: bool,
+}
+
+/// A card of a board, `w` wide: the face's label in the accent (faint for
+/// a done ticket or the week's row), its title on two lines, its meta.
+fn board_card(
+    face: &Face,
+    w: usize,
+    chosen: bool,
+    lit: bool,
+    faint: bool,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let inner = w.saturating_sub(4);
+    let edge = kit::card_edge(chosen, lit.then_some(theme.text), theme);
+    let label = if faint || face.done {
+        fg(theme.faint)
+    } else {
+        bold(ACCENT)
+    };
+    let title = if faint {
+        fg(theme.dim)
+    } else if face.done {
+        fg(theme.faint).add_modifier(Modifier::CROSSED_OUT)
+    } else if chosen {
+        bold(theme.bright)
+    } else {
+        fg(theme.text)
+    };
+    let [a, b] = two_lines(&face.title, inner);
+    kit::card(
+        w,
+        TALL_CARD,
+        vec![Span::styled(face.label.clone(), label)],
+        face.right.clone(),
+        &[
+            vec![Span::styled(a, title)],
+            vec![Span::styled(b, title)],
+            face.meta.clone(),
+        ],
+        edge,
+    )
+}
+
+/// A card's five lines: its edges, two of title and one about it.
+const TALL_CARD: usize = 5;
+
+/// A title on two lines of `cols`, by words, the second ending in … when
+/// the rest doesn't fit.
+fn two_lines(title: &str, cols: usize) -> [String; 2] {
+    let wrapped = text::wrap(title, cols);
+    let first = wrapped.first().cloned().unwrap_or_default();
+    let rest = wrapped.get(1..).map(|r| r.join(" ")).unwrap_or_default();
+    [text::cut(&first, cols), text::cut(&rest, cols)]
+}
+
+/// The tab working on an item, as a card says it: `tab 3` and its mark.
+fn tab_words(tab: &TabModel, m: &Mission, theme: &Theme) -> Vec<Span<'static>> {
+    let mark = Mark::of_badge(model::badge_state(tab, &m.snap.rules));
+    vec![
+        Span::styled(format!("tab {} · ", tab.index), fg(theme.dim)),
+        kit::mark(mark, m.snap.frame, theme),
+    ]
+}
+
+/// A PR's card: its number, its checks' mark, its title without the
+/// number, and the tab working on it, else its reviewers, else its
+/// repository, review and place in the queue.
+fn pr_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
+    let number = item.data["pr"]["number"].as_u64();
+    let title = item
+        .title
+        .split_once(' ')
+        .filter(|(n, _)| n.starts_with('#'))
+        .map_or(item.title.as_str(), |(_, t)| t);
+    let tab = m
+        .snap
+        .tabs
+        .iter()
+        .find(|t| number.is_some() && t.pr == number);
+    let queued = item.group.as_deref() == Some("In merge queue");
+    let meta = match (tab, item.data["reviewers"].as_str()) {
+        (Some(t), _) => tab_words(t, m, theme),
+        (None, Some(r)) if !queued && !r.is_empty() => {
+            vec![Span::styled(r.to_string(), fg(theme.dim))]
+        }
+        _ => vec![Span::styled(
+            item.data["meta"].as_str().unwrap_or("").to_string(),
+            fg(theme.dim),
+        )],
+    };
+    Face {
+        label: format!("#{}", item.data["pr"]["number"]),
+        right: checks_mark(item)
+            .map(|c| vec![kit::mark(c, 0, theme)])
+            .unwrap_or_default(),
+        title: title.to_string(),
+        meta,
+        done: false,
+    }
+}
+
+/// A PR's checks as the kit's mark.
+fn checks_mark(item: &Item) -> Option<Mark> {
+    match item.data["checks"].as_str() {
+        Some("success") => Some(Mark::Passed),
+        Some("failure") => Some(Mark::Failed),
+        Some("pending") => Some(Mark::Pending),
+        _ => None,
+    }
+}
+
+/// A ticket's priority as marks in their tone: `!!!` urgent, `!!` high,
+/// `!` medium, nothing for low or none.
+fn priority_marks(item: &Item, theme: &Theme) -> Option<Span<'static>> {
+    let (marks, tone) = match item.data["priority"].as_u64() {
+        Some(1) => ("!!!", Tone::Failed),
+        Some(2) => ("!!", Tone::Needs),
+        Some(3) => ("!", Tone::Dim),
+        _ => return None,
+    };
+    Some(Span::styled(marks, tone.bold(theme)))
+}
+
+/// A ticket's card: its ID, its priority, its title, and when it was done
+/// (then the tab still open on it), else the tab working on it, else its
+/// project and estimate.
+fn ticket_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
+    let d = &item.data;
+    let done = item.group.as_deref() == Some("Done");
+    let tab = d["tab"]
+        .as_u64()
+        .and_then(|n| m.snap.tabs.iter().find(|t| t.index as u64 == n));
+    let meta = match tab {
+        _ if done => {
+            let mut words = vec![Span::styled(
+                week_words(item, true, m.snap.now_secs),
+                fg(theme.faint),
+            )];
+            if let Some(t) = tab {
+                words.push(Span::styled(" · ", fg(theme.faint)));
+                words.extend(tab_words(t, m, theme));
+            }
+            words
+        }
+        Some(t) => tab_words(t, m, theme),
+        None => vec![Span::styled(
+            [
+                d["project"].as_str().unwrap_or("").to_string(),
+                estimate(d).unwrap_or_default(),
+            ]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · "),
+            fg(theme.dim),
+        )],
+    };
+    let label = d["ticket"].as_str().unwrap_or("").to_string();
+    let title = d["title"].as_str().map(str::to_string).unwrap_or_else(|| {
+        item.title
+            .strip_prefix(&label)
+            .unwrap_or(&item.title)
+            .trim()
+            .to_string()
+    });
+    Face {
+        label,
+        right: priority_marks(item, theme).into_iter().collect(),
+        title,
+        meta,
+        done,
+    }
+}
+
+/// A ticket's estimate, `2 pts`.
+fn estimate(d: &serde_json::Value) -> Option<String> {
+    let n = d["estimate"].as_f64()?;
+    let n = if n.fract() == 0.0 {
+        format!("{}", n as i64)
+    } else {
+        n.to_string()
+    };
+    Some(format!("{n} {}", if n == "1" { "pt" } else { "pts" }))
+}
+
+/// What a card in the week's row says: when, and who merged the PR or how
+/// the ticket was closed; a done ticket's card says when alone.
+fn week_words(item: &Item, tickets: bool, now_secs: i64) -> String {
+    let when = item
+        .time
+        .map(|ms| format!("{} ago", text::ago(Some(ms.div_euclid(1000)), now_secs)))
+        .unwrap_or_default();
+    let who = if !tickets {
+        item.data["mergedBy"].as_str().unwrap_or("").to_string()
+    } else if item.group.as_deref() == Some("Closed") {
+        item.data["state"].as_str().unwrap_or("").to_lowercase()
+    } else {
+        String::new()
+    };
+    [when, who]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// How wide a screen shows the chosen item's description beside the board,
 /// and how many columns it takes there.
-const PR_SIDE_AT: usize = 140;
-const PR_SIDE_W: usize = 50;
+const SIDE_AT: usize = 140;
+const SIDE_W: usize = 50;
+
+/// Markdown laid out `cols` wide for the pane beside a board, as the PR
+/// and ticket views lay it out but without their margin or the blank lines
+/// at its ends.
+fn markdown_lines(text: &str, place: &str, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let doc = crate::views::markdown::Markdown::parse(text, place).layout(cols + 4);
+    let mut out: Vec<Vec<Span<'static>>> = doc
+        .lines
+        .iter()
+        .map(|l| {
+            let mut margin = 2;
+            let mut spans = Vec::new();
+            for s in &l.spans {
+                let mut t = s.text.as_str();
+                while margin > 0 && t.starts_with(' ') {
+                    t = &t[1..];
+                    margin -= 1;
+                }
+                if !t.is_empty() {
+                    let mut style = s.style.ratatui();
+                    // Its plain text in the theme's, so a light terminal reads it.
+                    if style.fg == Some(Color::Indexed(crate::views::markdown::TEXT)) {
+                        style.fg = Some(theme.text);
+                    }
+                    spans.push(Span::styled(t.to_string(), style));
+                }
+            }
+            spans
+        })
+        .skip_while(|l| l.iter().all(|s| s.content.trim().is_empty()))
+        .collect();
+    while out
+        .last()
+        .is_some_and(|l| l.iter().all(|s| s.content.trim().is_empty()))
+    {
+        out.pop();
+    }
+    out
+}
+
+/// A description under the pane's head, or a faint line saying it has
+/// none, cut to the board's height.
+fn with_description(
+    mut out: Vec<Vec<Span<'static>>>,
+    description: &str,
+    place: &str,
+    inner: usize,
+    body: usize,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    if description.trim().is_empty() {
+        out.push(vec![Span::styled("No description.", fg(theme.faint))]);
+    } else {
+        out.extend(markdown_lines(description, place, inner, theme));
+    }
+    out.truncate(body);
+    out
+}
 
 /// The chosen PR's description, as the board draws it beside the columns:
 /// its number and title bold, a dim line of its author, commits, lines
-/// changed and checks, a rule, then its body as plain text wrapped to fit.
+/// changed and checks, a rule, then its body through Markdown.
 fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
     let inner = side_w.saturating_sub(3);
     let d = &item.data;
@@ -1135,58 +1429,61 @@ fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<S
     if let (Some(a), Some(r)) = (d["additions"].as_u64(), d["deletions"].as_u64()) {
         facts.push(format!("+{a} −{r}"));
     }
-    let (mark, color) = match d["checks"].as_str() {
-        Some("success") => ("✓", Badge::Done.color()),
-        Some("failure") => ("✕", Some(RED)),
-        Some("pending") => ("◌", Badge::Working.color()),
-        _ => ("", None),
-    };
     let mut fact_line = vec![Span::styled(facts.join(" · "), fg(theme.dim))];
-    if !mark.is_empty() {
+    if let Some(mark) = checks_mark(item) {
         if !facts.is_empty() {
             fact_line.push(Span::styled(" · ", fg(theme.dim)));
         }
-        fact_line.push(Span::styled(mark, fg(color.unwrap_or(theme.dim))));
+        fact_line.push(kit::mark(mark, 0, theme));
         fact_line.push(Span::styled(" checks", fg(theme.dim)));
     }
-    let mut out = vec![
-        vec![Span::styled(
-            text::cut(&item.title, inner),
-            bold(theme.text),
-        )],
-        fact_line,
-        vec![Span::styled("─".repeat(inner), fg(theme.faint))],
-    ];
-    let mut blank = true;
-    for raw in d["body"].as_str().unwrap_or("").lines() {
-        let line = raw.trim_end();
-        let heading = line.trim_start_matches('#');
-        let is_heading = heading.len() < line.len() && heading.starts_with(' ');
-        if line.trim().is_empty() {
-            if !blank {
-                out.push(Vec::new());
-            }
-            blank = true;
-            continue;
-        }
-        if is_heading && !blank {
-            out.push(Vec::new());
-        }
-        blank = false;
-        let style = if is_heading {
-            bold(theme.text)
-        } else {
-            fg(theme.text)
-        };
-        for w in text::wrap(if is_heading { heading.trim() } else { line }, inner) {
-            out.push(vec![Span::styled(w, style)]);
-        }
-        if out.len() >= body {
-            break;
-        }
+    let head = kit::pane(&item.title, fact_line, inner, theme);
+    with_description(
+        head,
+        d["body"].as_str().unwrap_or(""),
+        crate::views::pr::PLACE,
+        inner,
+        body,
+        theme,
+    )
+}
+
+/// The chosen ticket's description beside the board: its ID and title
+/// bold, a dim line of its state, priority, project, estimate and
+/// assignee, a rule, then its description through Markdown.
+fn ticket_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let inner = side_w.saturating_sub(3);
+    let d = &item.data;
+    let dim = |s: String| Span::styled(s, fg(theme.dim));
+    let mut facts = vec![dim(d["state"].as_str().unwrap_or("").to_string())];
+    if let Some(marks) = priority_marks(item, theme) {
+        let label = d["priorityLabel"].as_str().unwrap_or("");
+        facts.push(dim(" · ".into()));
+        facts.push(Span::styled(
+            format!("{} {label}", marks.content),
+            marks.style,
+        ));
+    } else if d["priority"].as_u64() == Some(4) {
+        facts.push(dim(" · Low".into()));
     }
-    out.truncate(body);
-    out
+    let rest: Vec<String> = [
+        d["project"].as_str().unwrap_or("").to_string(),
+        estimate(d).unwrap_or_default(),
+        "you".to_string(),
+    ]
+    .into_iter()
+    .filter(|s| !s.is_empty())
+    .collect();
+    facts.push(dim(format!(" · {}", rest.join(" · "))));
+    let head = kit::pane(&item.title, facts, inner, theme);
+    with_description(
+        head,
+        d["description"].as_str().unwrap_or(""),
+        crate::views::ticket::PLACE,
+        inner,
+        body,
+        theme,
+    )
 }
 
 /// When an item happened, shortly, for the column at a row's end; nothing
@@ -1264,10 +1561,6 @@ fn list(
     }
     if snap.rules.ux2 && view.id == ViewId::Landing && cols >= STAGES_AT + 6 * STAGE_STEP {
         stage_rows(view, cols, rows, m, top_row, lines, hits);
-        return;
-    }
-    if snap.rules.ux2 && view.id == ViewId::Autopilot && cols >= PILOT_AT + 8 * PILOT_STEP {
-        pilot_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
     let table = view.table();
@@ -1496,10 +1789,11 @@ fn list(
 }
 
 /// UX 2.0's Landing view: where the stage cells start, how wide each is and
-/// how far apart they start.
+/// how far apart they start. A cell's two ends (the kit's half circles)
+/// are in its width, leaving 13 columns for its words ("3rd in queue").
 const STAGES_AT: usize = 40;
-const STAGE_WIDTH: usize = 13;
-const STAGE_STEP: usize = 14;
+const STAGE_WIDTH: usize = 15;
+const STAGE_STEP: usize = 16;
 const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
 /// A merge queue's stages, as its rows are drawn.
 const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
@@ -1518,14 +1812,14 @@ enum Stage {
 
 impl Stage {
     /// Its text's color, its run's background and whether the text is bold.
-    fn look(self, theme: &Theme) -> (Color, Color, bool) {
+    fn tone(self) -> Tone {
         match self {
-            Stage::Done => (Color::Indexed(114), Color::Indexed(22), false),
-            Stage::Running => (Color::Indexed(75), Color::Indexed(17), true),
-            Stage::Waiting => (theme.dim, theme.panel, false),
-            Stage::Queued => (Color::Indexed(176), Color::Indexed(53), false),
-            Stage::Failed => (Color::Indexed(210), Color::Indexed(52), true),
-            Stage::Asks => (Color::Indexed(221), Color::Indexed(58), true),
+            Stage::Done => Tone::Done,
+            Stage::Running => Tone::Working,
+            Stage::Waiting => Tone::Dim,
+            Stage::Queued => Tone::Landing,
+            Stage::Failed => Tone::Failed,
+            Stage::Asks => Tone::Needs,
         }
     }
 
@@ -1675,9 +1969,44 @@ fn stage_rows(
 ) {
     let theme = &m.snap.theme;
     let items = &view.data.items;
-    let room = (rows.saturating_sub(1 + lines.len()) / 2).max(1);
+    // The rows each item takes: a heading its line, then its stage names
+    // and the dashed rule under them; a landing or a queued PR its row of
+    // cells and its note; anything else a line.
+    let height = |item: &Item| {
+        if views::is_header(item) {
+            if item.id.ends_with(":direct") || item.id.ends_with(":queue") {
+                3
+            } else {
+                1
+            }
+        } else if item.data.get("landing").is_some_and(|l| l.is_object())
+            || item.data.get("queue").is_some_and(|q| q.is_object())
+        {
+            2
+        } else {
+            1
+        }
+    };
+    // As many as fit, from as far back of the chosen one as they can, so
+    // it is always in sight.
+    let budget = rows.saturating_sub(1 + lines.len());
+    let cursor = (m.cursor.max(0) as usize).min(items.len().saturating_sub(1));
+    let mut first = cursor;
+    let mut used = items.get(cursor).map_or(0, height);
+    while first > 0 && used + height(&items[first - 1]) <= budget {
+        first -= 1;
+        used += height(&items[first]);
+    }
+    let mut shown = 0;
+    let room = items[first.min(items.len())..]
+        .iter()
+        .take_while(|i| {
+            shown += height(i);
+            shown <= budget
+        })
+        .count()
+        .max(1);
     let cursor = m.cursor.max(0) as usize;
-    let first = (cursor + 1).saturating_sub(room);
     let name_w = STAGES_AT.saturating_sub(4);
     for (index, item) in items.iter().enumerate().skip(first).take(room) {
         let chosen = index == cursor && m.cursor >= 0;
@@ -1728,6 +2057,10 @@ fn stage_rows(
                         .put(" ", Style::new());
                 }
                 lines.push(heads.line(cols, None));
+                lines.push(Line {
+                    spans: vec![kit::head_rule(cols, theme)],
+                    fill: None,
+                });
             }
             continue;
         }
@@ -1762,10 +2095,14 @@ fn stage_rows(
             bold(theme.bright),
         );
         for (stage, label) in stages {
-            let (color, bg, strong) = stage.look(theme);
-            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
-            top.put(centered(&label, STAGE_WIDTH), style)
-                .put(" ", Style::new());
+            top.spans.extend(kit::cell(
+                &label,
+                STAGE_WIDTH,
+                stage.tone(),
+                m.snap.caps,
+                theme,
+            ));
+            top.put(" ", Style::new());
         }
         lines.push(top.line(cols, fill));
         hit(lines);
@@ -1778,135 +2115,364 @@ fn stage_rows(
     }
 }
 
-/// UX 2.0's Autopilot view: where its eight stage cells start, how wide
-/// each is and how far apart they start, narrower than Landing's so the
-/// eight fit the main area beside the sidebar.
-const PILOT_AT: usize = 34;
-const PILOT_WIDTH: usize = 10;
-const PILOT_STEP: usize = 11;
+/// How wide the main area must be for UX 2.0's Autopilot board (its five
+/// columns 18 wide), narrower showing the plain list; and how wide for the
+/// chosen card's side panel, and how many columns that takes.
+pub const PILOT_BOARD_AT: usize = 90;
+const PILOT_SIDE_AT: usize = 150;
+const PILOT_SIDE_W: usize = 44;
 
-/// UX 2.0's Autopilot view (src/autopilot/view.rs): the note bold with its
-/// slots, cap, landing and pause dim beside it, the stages' names, each tab
-/// it opened two lines (its item bold with a cell per stage, then a dim
-/// note of where it is), then the next items and the skipped ones under
-/// headings of their own, a line each.
-fn pilot_rows(
+/// A meter the board places as an image atom (src/ui/images.rs) once its
+/// lines are drawn: where it starts and how wide, how full, in what color.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Meter {
+    pub name: String,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub frac: f32,
+    pub color: Color,
+}
+
+/// A card's meter's color: its column's tone, red once a stage failed.
+fn pilot_tone(item: &Item) -> Tone {
+    if item
+        .data
+        .pointer("/pilot/failed")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        return Tone::Failed;
+    }
+    match item.group.as_deref() {
+        Some("Working") => Tone::Working,
+        Some("Waiting on you") => Tone::Needs,
+        Some("Landing") => Tone::Landing,
+        Some("Landed") => Tone::Done,
+        _ => Tone::Faint,
+    }
+}
+
+/// UX 2.0's Autopilot view as a board (src/autopilot/view.rs): its heading
+/// (`AUTO`, the note bold, its facts dim, and today's spend against its
+/// limit as a meter at the right), a column per place an item stands, each
+/// item a rounded card of its tab's number (or its place in line), a red ✕
+/// once a stage failed, its first line, where it is dim, and a meter of
+/// its stages done; the chosen card's edge in the accent color. The
+/// skipped items are listed under the board, and on a screen
+/// `PILOT_SIDE_AT` wide the chosen item sits beside it in full, with its
+/// stages.
+#[allow(clippy::too_many_arguments)]
+fn pilot_board(
     view: &View,
     cols: usize,
     rows: usize,
     m: &Mission,
-    top_row: usize,
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
+    meters: &mut Vec<Meter>,
 ) {
+    const TALL: usize = 6;
+    const SPEND_W: usize = 12;
     let theme = &m.snap.theme;
     let items = &view.data.items;
-    let room = (rows.saturating_sub(3 + lines.len()) / 2).max(1);
-    let cursor = m.cursor.max(0) as usize;
-    let first = (cursor + 1).saturating_sub(room);
-    let name_w = PILOT_AT.saturating_sub(4);
-    for (index, item) in items.iter().enumerate() {
-        let summary = item
-            .data
-            .get("summary")
-            .and_then(serde_json::Value::as_bool)
-            == Some(true);
-        if index < first && !summary {
-            continue;
-        }
-        let chosen = index == cursor && m.cursor >= 0;
-        let fill = if chosen {
+    let chosen = |i: usize| m.cursor >= 0 && i == m.cursor as usize;
+    let lit = |i: usize| !chosen(i) && m.hover == Some(Spot::Index(i as isize));
+    if let Some((at, head)) = items.iter().enumerate().find(|(_, i)| views::is_summary(i)) {
+        let spend = head.data.get("spend").and_then(serde_json::Value::as_array);
+        let spend_w = if spend.is_some() { SPEND_W + 2 } else { 0 };
+        hits.push(HitBox {
+            y: lines.len() as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(at as isize),
+        });
+        let mut row = Row::default();
+        row.put(" AUTO ", bold(ACCENT))
+            .put(head.title.clone(), bold(theme.bright))
+            .put(format!("   {}", head.detail), fg(theme.dim));
+        let fill = if chosen(at) {
             Some(theme.highlight)
-        } else if m.hover == Some(Spot::Index(index as isize)) {
-            Some(theme.panel)
         } else {
-            None
+            lit(at).then_some(theme.panel)
         };
-        let mut hit = |lines: &Vec<Line>| {
-            hits.push(HitBox {
-                y: (top_row + lines.len()) as u16,
-                x0: 0,
-                x1: cols.saturating_sub(1) as u16,
-                spot: Spot::Index(index as isize),
+        let mut spans = row.fitted(cols.saturating_sub(spend_w), Style::new());
+        if let Some(spend) = spend {
+            let n = |i: usize| {
+                spend
+                    .get(i)
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0)
+            };
+            let frac = if n(1) > 0.0 {
+                (n(0) / n(1)) as f32
+            } else {
+                0.0
+            };
+            let tone = if frac >= 1.0 {
+                Tone::Failed
+            } else if frac >= 0.8 {
+                Tone::Needs
+            } else {
+                Tone::Done
+            };
+            meters.push(Meter {
+                name: "autopilot/spend".into(),
+                x: cols.saturating_sub(SPEND_W + 1) as u16,
+                y: lines.len() as u16,
+                width: SPEND_W as u16,
+                frac,
+                color: tone.fg(theme),
             });
+            spans.push(Span::raw(" ".repeat(spend_w)));
+        }
+        lines.push(Line { spans, fill });
+        lines.push(Row::default().line(cols, None));
+    }
+    let skipped: Vec<usize> = (0..items.len())
+        .filter(|&i| items[i].data.get("skipped").is_some())
+        .collect();
+    let room = rows.saturating_sub(1 + lines.len());
+    let skipped_h = if skipped.is_empty() {
+        0
+    } else {
+        (2 + skipped.len()).min(room / 3)
+    };
+    let body = room.saturating_sub(skipped_h);
+    let side_w = if cols >= PILOT_SIDE_AT {
+        PILOT_SIDE_W
+    } else {
+        0
+    };
+    let about = usize::try_from(m.cursor)
+        .ok()
+        .and_then(|c| items.get(c))
+        .filter(|_| side_w > 0)
+        .map(|item| pilot_about(item, side_w, theme))
+        .unwrap_or_default();
+    let board_w = cols - side_w;
+    let columns = crate::autopilot::view::COLUMNS;
+    let col_w = board_w / columns.len();
+    let w = col_w - 1;
+    let inner = w.saturating_sub(4);
+    let top = lines.len();
+    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+    for (ci, column) in columns.iter().enumerate() {
+        let in_column: Vec<usize> = (0..items.len())
+            .filter(|&i| items[i].group.as_deref() == Some(*column))
+            .collect();
+        let mut out = vec![
+            fit(
+                vec![
+                    Span::styled(format!(" {column}"), bold(theme.text)),
+                    Span::styled(format!(" {}", in_column.len()), fg(theme.dim)),
+                ],
+                col_w,
+                Style::new(),
+            ),
+            vec![Span::raw(" ".repeat(col_w))],
+        ];
+        let fits = body.saturating_sub(2) / TALL;
+        let chosen_at = in_column.iter().position(|&i| chosen(i));
+        let first = match chosen_at {
+            Some(c) if c >= fits => c + 1 - fits,
+            _ => 0,
         };
-        if summary {
-            let mut row = Row::default();
-            row.put(" AUTO ", bold(ACCENT))
-                .put(item.title.clone(), bold(theme.bright))
-                .put(format!("   {}", item.detail), fg(theme.dim));
-            hit(lines);
-            lines.push(row.line(cols, fill));
-            let mut heads = Row::default();
-            heads.put(text::pad(" item", PILOT_AT), fg(theme.dim));
-            for name in crate::autopilot::view::STAGES {
-                heads
-                    .put(centered(name, PILOT_WIDTH), fg(theme.dim))
-                    .put(" ", Style::new());
+        for (shown, &index) in in_column.iter().enumerate().skip(first).take(fits) {
+            let item = &items[index];
+            let edge = kit::card_edge(chosen(index), lit(index).then_some(theme.text), theme);
+            let pilot = item.data.get("pilot");
+            let (label, where_, frac) = match pilot {
+                Some(p) => (
+                    format!("tab {}", p["index"]),
+                    item.detail
+                        .split_once(" · ")
+                        .map_or(item.detail.as_str(), |(_, w)| w)
+                        .to_string(),
+                    p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0,
+                ),
+                None => {
+                    let place = item.data["place"].as_u64().unwrap_or(1);
+                    (
+                        format!("{place}."),
+                        if place == 1 {
+                            "opens next".to_string()
+                        } else {
+                            format!("{} in line", ordinal(place))
+                        },
+                        0.0,
+                    )
+                }
+            };
+            let name = pilot
+                .and_then(|p| p["item"].as_str())
+                .or_else(|| item.data["next"].as_str())
+                .unwrap_or(&item.title);
+            let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
+            let card = kit::card(
+                w,
+                TALL - 1,
+                vec![Span::styled(label, bold(ACCENT))],
+                if failed {
+                    vec![kit::mark(Mark::Failed, 0, theme)]
+                } else {
+                    Vec::new()
+                },
+                &[
+                    vec![Span::styled(
+                        text::cut(name, inner),
+                        if chosen(index) {
+                            bold(theme.bright)
+                        } else {
+                            fg(theme.text)
+                        },
+                    )],
+                    vec![Span::styled(text::cut(&where_, inner), fg(theme.dim))],
+                ],
+                edge,
+            );
+            out.extend(card.into_iter().map(|mut line| {
+                line.push(Span::raw(" "));
+                line
+            }));
+            out.push(vec![Span::raw(" ".repeat(col_w))]);
+            let y = top + 2 + (shown - first) * TALL;
+            if y + 3 < top + body {
+                meters.push(Meter {
+                    name: format!("autopilot/{}", item.id),
+                    x: (ci * col_w + 2) as u16,
+                    y: (y + 3) as u16,
+                    width: inner as u16,
+                    frac,
+                    color: pilot_tone(item).fg(theme),
+                });
             }
-            lines.push(heads.line(cols, None));
-            continue;
+            for dy in 0..TALL - 1 {
+                hits.push(HitBox {
+                    y: (y + dy) as u16,
+                    x0: (ci * col_w) as u16,
+                    x1: (ci * col_w + w).saturating_sub(1) as u16,
+                    spot: Spot::Index(index as isize),
+                });
+            }
         }
-        if views::is_header(item) {
-            let count = item
-                .data
-                .get("count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let mut row = Row::default();
-            row.put(format!(" {}", item.title), bold(theme.bright))
-                .put(format!("   {count}"), fg(theme.dim));
-            lines.push(row.line(cols, None));
-            continue;
+        if in_column.is_empty() {
+            out.push(fit(
+                vec![Span::styled(" none", fg(theme.faint))],
+                col_w,
+                Style::new(),
+            ));
         }
-        let pointer = if chosen { "▌" } else { " " };
-        let stages = item
-            .data
-            .pointer("/pilot/stages")
-            .and_then(serde_json::Value::as_array);
-        let Some(stages) = stages else {
-            hit(lines);
-            let mut row = Row::default();
-            row.put(pointer, fg(ACCENT))
+        drawn.push(out);
+    }
+    for i in 0..body {
+        let mut spans = Vec::new();
+        for c in &drawn {
+            spans.extend(
+                c.get(i)
+                    .cloned()
+                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
+            );
+        }
+        let mut spans = fit(spans, board_w, Style::new());
+        if side_w > 0 {
+            spans.push(Span::styled("│ ", fg(theme.faint)));
+            spans.extend(fit(
+                about.get(i).cloned().unwrap_or_default(),
+                side_w - 2,
+                Style::new(),
+            ));
+        }
+        lines.push(Line { spans, fill: None });
+    }
+    if skipped_h == 0 {
+        return;
+    }
+    lines.push(Row::default().line(cols, None));
+    lines.push(
+        Row::default()
+            .put(" Skipped", bold(theme.text))
+            .put(format!(" {}", skipped.len()), fg(theme.dim))
+            .take()
+            .line(cols, None),
+    );
+    let fits = skipped_h - 2;
+    let chosen_at = skipped.iter().position(|&i| chosen(i));
+    let first = match chosen_at {
+        Some(c) if c >= fits => c + 1 - fits,
+        _ => 0,
+    };
+    for &index in skipped.iter().skip(first).take(fits) {
+        hits.push(HitBox {
+            y: lines.len() as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(index as isize),
+        });
+        let fill = if chosen(index) {
+            Some(theme.highlight)
+        } else {
+            lit(index).then_some(theme.panel)
+        };
+        let item = &items[index];
+        lines.push(
+            Row::default()
+                .put(if chosen(index) { "▌" } else { " " }, fg(ACCENT))
                 .put(" ", Style::new())
                 .put(item.title.clone(), fg(theme.text))
-                .put("  ", Style::new())
-                .put(item.detail.clone(), fg(theme.dim));
-            lines.push(row.line(cols, fill));
-            continue;
-        };
-        hit(lines);
-        let mut top = Row::default();
-        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
-            text::pad(&text::cut(&item.title, name_w), PILOT_AT - 2),
-            bold(theme.bright),
+                .put(format!("  {}", item.detail), fg(theme.dim))
+                .take()
+                .line(cols, fill),
         );
-        for cell in stages {
-            let look = cell
-                .get(0)
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let words = cell
-                .get(1)
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            let (color, bg, strong) = Stage::named(look).look(theme);
-            let style = if strong { bold(color) } else { fg(color) }.bg(bg);
-            top.put(centered(words, PILOT_WIDTH), style)
-                .put(" ", Style::new());
-        }
-        lines.push(top.line(cols, fill));
-        hit(lines);
-        let mut under = Row::default();
-        under
-            .put(pointer, fg(ACCENT))
-            .put(" ", Style::new())
-            .put(text::cut(&item.detail, name_w), fg(theme.dim));
-        lines.push(under.line(cols, fill));
-        if lines.len() + 2 > rows {
-            break;
-        }
     }
+}
+
+/// The chosen item beside the board: its first line in full, bold and
+/// wrapped, where it stands dim, a rule, then a tab's eight stages, each
+/// its name and its words in its stage's color.
+fn pilot_about(item: &Item, side_w: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let inner = side_w.saturating_sub(3);
+    let name = item
+        .data
+        .pointer("/pilot/item")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| item.data["next"].as_str())
+        .unwrap_or(&item.title);
+    let mut out: Vec<Vec<Span<'static>>> = text::wrap(name, inner)
+        .into_iter()
+        .map(|l| vec![Span::styled(l, bold(theme.bright))])
+        .collect();
+    let detail = match item.data["place"].as_u64() {
+        Some(1) => "Opens next".to_string(),
+        Some(n) => format!("Opens {} in line", ordinal(n)),
+        None => item.detail.clone(),
+    };
+    for l in text::wrap(&detail, inner) {
+        out.push(vec![Span::styled(l, fg(theme.dim))]);
+    }
+    let Some(stages) = item
+        .data
+        .pointer("/pilot/stages")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return out;
+    };
+    out.push(vec![kit::rule(inner, theme)]);
+    for (name, cell) in crate::autopilot::view::STAGES.iter().zip(stages) {
+        let look = cell
+            .get(0)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let words = cell
+            .get(1)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        out.push(vec![
+            Span::styled(text::pad(name, 12), fg(theme.dim)),
+            Span::styled(words.to_string(), Stage::named(look).tone().style(theme)),
+        ]);
+    }
+    out
 }
 
 impl Row {
@@ -1928,74 +2494,250 @@ fn label(title: &str, count: Option<usize>) -> String {
     }
 }
 
-/// The keys the footer names for the view in front.
-fn hints(m: &Mission, view: Option<&View>) -> String {
+/// The keys the footer names for the view in front, each a key and what it
+/// does (a pair with no key is words of its own).
+fn hints(m: &Mission, view: Option<&View>) -> Vec<(String, String)> {
+    let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
+        p.iter()
+            .map(|(k, w)| (k.to_string(), w.to_string()))
+            .collect()
+    };
     if m.jump.is_some() {
-        return "type a view's name  ↵ go there  esc cancel".into();
+        return pairs(&[
+            ("", "type a view's name"),
+            ("↵", "go there"),
+            ("esc", "cancel"),
+        ]);
     }
     // While a filter types, letters are the filter's, not keys, and what
     // is typed leads the line: the bar it ends may be too wide to show it.
     if let Some(f) = m.filter.as_ref().filter(|f| f.typing) {
-        let enter = if m.picker {
-            "↵ actions  esc close"
+        let mut out = vec![(format!("/{}▏", f.text), String::new())];
+        out.extend(pairs(&[("↑↓", "move")]));
+        out.extend(if m.picker {
+            pairs(&[("↵", "actions"), ("esc", "close")])
         } else {
-            "↵ keep it  esc clear"
-        };
-        return format!("/{}▏  ↑↓ move  {enter}", f.text);
+            pairs(&[("↵", "keep it"), ("esc", "clear")])
+        });
+        return out;
     }
-    let next = if m.snap.tab_focus {
-        "[ ] views  tab focus"
+    // With UX 2.0 the bar names the keys through its groups and views.
+    let next: &[(&str, &str)] = if m.snap.tab_focus && m.snap.rules.ux2 {
+        &[("tab", "focus")]
+    } else if m.snap.tab_focus {
+        &[("[ ]", "views"), ("tab", "focus")]
     } else {
-        "tab next view"
+        &[("tab", "next view")]
+    };
+    let close: &[(&str, &str)] = &[("?", "keys"), ("esc", "close")];
+    let with = |first: &[(&str, &str)]| {
+        let mut out = pairs(first);
+        out.extend(pairs(next));
+        out.extend(pairs(close));
+        out
     };
     let Some(view) = view else {
-        return format!("hjkl move  ↵ actions (↵↵ go to tab)  / filter  {next}  ? keys  esc close");
+        return with(&[
+            ("hjkl", "move"),
+            ("↵", "actions (↵↵ go to tab)"),
+            ("/", "filter"),
+        ]);
     };
     match view.id {
-        ViewId::Settings => format!("jk move  ↵ change  / search  {next}  ? keys  esc close"),
-        ViewId::Keys => format!("jk move  ↵ press it  / filter  {next}  ? keys  esc close"),
-        ViewId::Calendar => format!("jk event  hl beside  ↵ actions  {next}  ? keys  esc close"),
-        ViewId::Prs | ViewId::Tickets => {
-            format!("hl column  jk move  ↵ what to do with it  {next}  ? keys  esc close")
+        ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
+        ViewId::Keys => with(&[("jk", "move"), ("↵", "press it"), ("/", "filter")]),
+        ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
+        ViewId::Autopilot if m.snap.rules.ux2 && m.size.0 as usize >= PILOT_BOARD_AT => {
+            with(&[("hl", "column"), ("jk", "move"), ("↵", "actions")])
         }
-        ViewId::Plugin(_) => format!("jk move  ↵ open  r refresh  {next}  ? keys  esc close"),
+        ViewId::Prs | ViewId::Tickets => with(&[
+            ("hl", "column"),
+            ("jk", "move"),
+            ("↵", "what to do with it"),
+        ]),
+        ViewId::Plugin(_) => with(&[("jk", "move"), ("↵", "open"), ("r", "refresh")]),
         _ if view.data.items.iter().any(|i| i.id == views::MERGED_HEADER) => {
-            format!("jk move  ↵ actions, or show merged  {next}  ? keys  esc close")
+            with(&[("jk", "move"), ("↵", "actions, or show merged")])
         }
-        _ => format!("jk move  ↵ actions  / filter  {next}  ? keys  esc close"),
+        _ => with(&[("jk", "move"), ("↵", "actions"), ("/", "filter")]),
     }
+}
+
+/// The footer's keys: with UX 2.0 the kit's hints, each key in the accent;
+/// else one dim line, as before.
+fn footer(pairs: &[(String, String)], ux2: bool, theme: &Theme) -> Vec<Span<'static>> {
+    if ux2 {
+        let p: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(k, w)| (k.as_str(), w.as_str()))
+            .collect();
+        return kit::hints(&p, theme);
+    }
+    let said: Vec<String> = pairs
+        .iter()
+        .map(|(k, w)| match (k.is_empty(), w.is_empty()) {
+            (true, _) => w.clone(),
+            (_, true) => k.clone(),
+            _ => format!("{k} {w}"),
+        })
+        .collect();
+    vec![Span::styled(said.join("  "), fg(theme.dim))]
+}
+
+/// The bar's first row, with easy mode's × at its right end when it has
+/// one.
+fn with_close(head: Row, m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Line {
+    if !(m.snap.close && cols > 8) {
+        return head.line(cols, None);
+    }
+    let mut spans = head.fitted(cols - width(CLOSE) - 1, Style::new());
+    let lit = m.focus == Some(Focus::Close) || m.hover == Some(Spot::Close);
+    let mut style = bold(m.snap.theme.bright);
+    if lit {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    spans.push(Span::styled(CLOSE, style));
+    spans.push(Span::raw(" "));
+    hits.insert(
+        0,
+        HitBox {
+            y: 0,
+            x0: (cols - width(CLOSE) - 1) as u16,
+            x1: (cols - 2) as u16,
+            spot: Spot::Close,
+        },
+    );
+    Line { spans, fill: None }
+}
+
+/// What the bar shows besides the views' names: the view a name being
+/// typed matches, the tabs' counts, the filter, and whether the filter
+/// takes a click.
+struct Bar {
+    jumped: Option<usize>,
+    counts: Vec<Span<'static>>,
+    filter: Vec<Span<'static>>,
+    filter_hit: bool,
+}
+
+/// With UX 2.0, the bar as two rows and a rule (board 3 of the canvas):
+/// the groups that have a view, the one in front lit, then the tabs'
+/// counts; that group's views, the one in front lit and underlined, then
+/// the filter, and the keys that move through them at the right. While a
+/// view's name is typed, the group it is in shows, the view lit as it is
+/// matched.
+fn grouped_bar(
+    m: &Mission,
+    groups: &[(views::Group, Vec<usize>)],
+    bar: Bar,
+    cols: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let snap = &m.snap;
+    let theme = &snap.theme;
+    let caps = snap.caps;
+    let shown_view = bar.jumped.unwrap_or(match m.focus {
+        Some(Focus::View(v)) => v,
+        _ => m.view,
+    });
+    let shown = groups
+        .iter()
+        .find(|(_, held)| held.contains(&shown_view))
+        .or(groups.first());
+    let mut head = Row::default();
+    head.put(" ", Style::new())
+        .put("MISSION CONTROL", bold(ACCENT))
+        .put("  ", Style::new());
+    for (g, held) in groups {
+        let lit = shown.is_some_and(|(s, _)| s == g);
+        // Under the mouse, lit while a click would change the view: the
+        // group in front's too, away from its first view.
+        let ring = m.focus == Some(Focus::Group(*g))
+            || (m.hover == Some(Spot::Group(*g)) && held[0] != m.view);
+        let x = head.width();
+        let name = kit::bar_name(g.name(), kit::BarRow::Groups, lit, ring, caps, theme);
+        hits.push(HitBox {
+            y: 0,
+            x0: x as u16,
+            x1: (x + spans_width(&name)).saturating_sub(1) as u16,
+            spot: Spot::Group(*g),
+        });
+        head.spans.extend(name);
+        head.put(" ", Style::new());
+    }
+    head.put(" ", Style::new());
+    head.spans.extend(bar.counts);
+    lines.push(with_close(head, m, cols, hits));
+    let mut row = Row::default();
+    row.put(" ", Style::new());
+    for &i in shown.map(|(_, held)| held.as_slice()).unwrap_or(&[]) {
+        let title = match i.checked_sub(1).and_then(|v| snap.views.get(v)) {
+            Some(v) => views::bar_title(v),
+            None => "Tabs",
+        };
+        let x = row.width();
+        let name = if bar.jumped == Some(i) {
+            vec![Span::styled(
+                format!(" {title} "),
+                Style::new()
+                    .bg(YELLOW)
+                    .fg(Color::Indexed(232))
+                    .add_modifier(Modifier::BOLD),
+            )]
+        } else {
+            let ring =
+                m.focus == Some(Focus::View(i)) || (m.hover == Some(Spot::View(i)) && i != m.view);
+            kit::bar_name(title, kit::BarRow::Views, i == m.view, ring, caps, theme)
+        };
+        hits.push(HitBox {
+            y: 1,
+            x0: x as u16,
+            x1: (x + spans_width(&name)).saturating_sub(1) as u16,
+            spot: Spot::View(i),
+        });
+        row.spans.extend(name);
+        row.put(" ", Style::new());
+    }
+    if !bar.filter.is_empty() && bar.filter_hit {
+        let x = row.width() + 2;
+        hits.push(HitBox {
+            y: 1,
+            x0: x as u16,
+            x1: (row.width() + spans_width(&bar.filter)).saturating_sub(1) as u16,
+            spot: Spot::Filter,
+        });
+    }
+    row.spans.extend(bar.filter);
+    let keys = kit::hints(&[("{ }", "groups"), ("[ ]", "views")], theme);
+    // At the right, a column in from the edge, two clear of what is before.
+    let gap = cols.saturating_sub(row.width() + spans_width(&keys) + 1);
+    if gap >= 2 {
+        row.put(" ".repeat(gap), Style::new());
+        row.spans.extend(keys);
+    }
+    lines.push(row.line(cols, None));
+    lines.push(Line {
+        spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    });
 }
 
 /// Mission control's lines for a screen `cols` by `rows`, and where a click
 /// on each part lands.
 pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>) {
+    let (lines, hits, _) = drawn(m, cols, rows);
+    (lines, hits)
+}
+
+/// The screen as `screen` draws it, with the meters to place over it as
+/// images (the Autopilot board's).
+pub fn drawn(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>, Vec<Meter>) {
     let snap = &m.snap;
     let theme = &snap.theme;
     let mut hits = Vec::new();
-    let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
-    names.extend(
-        snap.views
-            .iter()
-            .map(|v| (v.title.clone(), v.data.items.len())),
-    );
+    let mut meters = Vec::new();
     let jumped = m.jump.as_ref().and_then(|j| j.matched);
-    // A bar too wide for the screen with every count in it keeps only the
-    // chosen view's count.
-    let prefix = " MISSION CONTROL  ";
-    let all_labels: String = names
-        .iter()
-        .map(|(t, n)| label(t, Some(*n)))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let roomy = width(prefix) + width(&all_labels) + 30 <= cols;
-    let labels: Vec<String> = names
-        .iter()
-        .enumerate()
-        .map(|(i, (t, n))| {
-            let count = (roomy || i == m.view || jumped == Some(i)).then_some(*n);
-            label(t, count)
-        })
-        .collect();
     // The filter, a view's name being typed, or, with Tab moving focus, a
     // stop of its own even while empty on a view that filters.
     let view = m.view.checked_sub(1).and_then(|i| snap.views.get(i));
@@ -2031,101 +2773,117 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
         ));
     }
     let counts = tally(&snap.tabs, &snap.rules, theme);
-    // With Tab's focus on a view's name or the filter past the screen's
-    // edge, the bar scrolls: the names before it give way to a ‹.
-    let target = match m.focus {
-        Some(Focus::Filter) => Some(labels.len() - 1),
-        Some(Focus::View(v)) => Some(v.min(labels.len() - 1)),
-        _ => None,
-    };
-    let end_of = |skip: usize| -> usize {
-        let t = target.unwrap_or(0);
-        let names: usize = labels[skip..=t.max(skip)]
-            .iter()
-            .map(|l| width(l) + 1)
-            .sum::<usize>();
-        width(prefix)
-            + if skip > 0 { 2 } else { 0 }
-            + names.saturating_sub(1)
-            + if m.focus == Some(Focus::Filter) {
-                2 + spans_width(&counts) + spans_width(&filter)
-            } else {
-                0
-            }
-    };
-    let mut skip = 0;
-    if let Some(t) = target {
-        while skip < t && end_of(skip) > cols {
-            skip += 1;
-        }
-    }
-    let mut head = Row::default();
-    head.put(" ", Style::new())
-        .put("MISSION CONTROL", bold(ACCENT))
-        .put("  ", Style::new());
-    if skip > 0 {
-        head.put("‹ ", fg(theme.dim));
-    }
-    for (i, l) in labels.iter().enumerate().skip(skip) {
-        if i > skip {
-            head.put(" ", Style::new());
-        }
-        let x = head.width();
-        hits.push(HitBox {
-            y: 0,
-            x0: x as u16,
-            x1: (x + width(l)).saturating_sub(1) as u16,
-            spot: Spot::View(i),
-        });
-        let ring =
-            m.focus == Some(Focus::View(i)) || (m.hover == Some(Spot::View(i)) && i != m.view);
-        let style = if ring {
-            bold(theme.bright).add_modifier(Modifier::REVERSED)
-        } else if jumped == Some(i) {
-            Style::new()
-                .bg(YELLOW)
-                .fg(Color::Indexed(232))
-                .add_modifier(Modifier::BOLD)
-        } else if i == m.view {
-            Style::new()
-                .bg(theme.highlight)
-                .fg(theme.bright)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            fg(theme.dim)
-        };
-        head.put(l.clone(), style);
-    }
-    head.put("  ", Style::new());
-    head.spans.extend(counts);
-    if !filter.is_empty() && (filter_stop || (m.filter.is_some() && snap.tab_focus)) {
-        let x = head.width() + 2;
-        hits.push(HitBox {
-            y: 0,
-            x0: x as u16,
-            x1: (head.width() + spans_width(&filter)).saturating_sub(1) as u16,
-            spot: Spot::Filter,
-        });
-    }
-    head.spans.extend(filter);
     let mut lines = Vec::new();
-    if snap.close && cols > 8 {
-        let mut spans = head.fitted(cols - width(CLOSE) - 1, Style::new());
-        let lit = m.focus == Some(Focus::Close) || m.hover == Some(Spot::Close);
-        spans.push(Span::styled(CLOSE, reverse(bold(theme.bright), lit)));
-        spans.push(Span::raw(" "));
-        hits.insert(
-            0,
-            HitBox {
-                y: 0,
-                x0: (cols - width(CLOSE) - 1) as u16,
-                x1: (cols - 2) as u16,
-                spot: Spot::Close,
-            },
-        );
-        lines.push(Line { spans, fill: None });
+    if let Some(groups) = m.groups() {
+        let bar = Bar {
+            jumped,
+            counts,
+            filter,
+            filter_hit: filter_stop || (m.filter.is_some() && snap.tab_focus),
+        };
+        grouped_bar(m, &groups, bar, cols, &mut lines, &mut hits);
     } else {
-        lines.push(head.line(cols, None));
+        let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
+        names.extend(
+            snap.views
+                .iter()
+                .map(|v| (v.title.clone(), v.data.items.len())),
+        );
+        // A bar too wide for the screen with every count in it keeps only the
+        // chosen view's count.
+        let prefix = " MISSION CONTROL  ";
+        let all_labels: String = names
+            .iter()
+            .map(|(t, n)| label(t, Some(*n)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let roomy = width(prefix) + width(&all_labels) + 30 <= cols;
+        let labels: Vec<String> = names
+            .iter()
+            .enumerate()
+            .map(|(i, (t, n))| {
+                let count = (roomy || i == m.view || jumped == Some(i)).then_some(*n);
+                label(t, count)
+            })
+            .collect();
+        // With Tab's focus on a view's name or the filter past the screen's
+        // edge, the bar scrolls: the names before it give way to a ‹.
+        let target = match m.focus {
+            Some(Focus::Filter) => Some(labels.len() - 1),
+            Some(Focus::View(v)) => Some(v.min(labels.len() - 1)),
+            _ => None,
+        };
+        let end_of = |skip: usize| -> usize {
+            let t = target.unwrap_or(0);
+            let names: usize = labels[skip..=t.max(skip)]
+                .iter()
+                .map(|l| width(l) + 1)
+                .sum::<usize>();
+            width(prefix)
+                + if skip > 0 { 2 } else { 0 }
+                + names.saturating_sub(1)
+                + if m.focus == Some(Focus::Filter) {
+                    2 + spans_width(&counts) + spans_width(&filter)
+                } else {
+                    0
+                }
+        };
+        let mut skip = 0;
+        if let Some(t) = target {
+            while skip < t && end_of(skip) > cols {
+                skip += 1;
+            }
+        }
+        let mut head = Row::default();
+        head.put(" ", Style::new())
+            .put("MISSION CONTROL", bold(ACCENT))
+            .put("  ", Style::new());
+        if skip > 0 {
+            head.put("‹ ", fg(theme.dim));
+        }
+        for (i, l) in labels.iter().enumerate().skip(skip) {
+            if i > skip {
+                head.put(" ", Style::new());
+            }
+            let x = head.width();
+            hits.push(HitBox {
+                y: 0,
+                x0: x as u16,
+                x1: (x + width(l)).saturating_sub(1) as u16,
+                spot: Spot::View(i),
+            });
+            let ring =
+                m.focus == Some(Focus::View(i)) || (m.hover == Some(Spot::View(i)) && i != m.view);
+            let style = if ring {
+                bold(theme.bright).add_modifier(Modifier::REVERSED)
+            } else if jumped == Some(i) {
+                Style::new()
+                    .bg(YELLOW)
+                    .fg(Color::Indexed(232))
+                    .add_modifier(Modifier::BOLD)
+            } else if i == m.view {
+                Style::new()
+                    .bg(theme.highlight)
+                    .fg(theme.bright)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                fg(theme.dim)
+            };
+            head.put(l.clone(), style);
+        }
+        head.put("  ", Style::new());
+        head.spans.extend(counts);
+        if !filter.is_empty() && (filter_stop || (m.filter.is_some() && snap.tab_focus)) {
+            let x = head.width() + 2;
+            hits.push(HitBox {
+                y: 0,
+                x0: x as u16,
+                x1: (head.width() + spans_width(&filter)).saturating_sub(1) as u16,
+                spot: Spot::Filter,
+            });
+        }
+        head.spans.extend(filter);
+        lines.push(with_close(head, m, cols, &mut hits));
     }
     // While a note is worked continuously, its line leads the tabs, where
     // the cursor's -1 is (src/autopilot).
@@ -2152,7 +2910,15 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
             cards(m, cols, body, top, &mut lines, &mut hits);
         }
         Some(v) => {
-            if let Some(columns) = v.columns() {
+            let pilot_board_shown = snap.rules.ux2
+                && v.id == ViewId::Autopilot
+                && cols >= PILOT_BOARD_AT
+                && v.loaded
+                && v.data.setup.is_none()
+                && !v.data.items.is_empty();
+            if pilot_board_shown {
+                pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+            } else if let Some(columns) = v.columns() {
                 if v.data.setup.is_some() || !v.loaded {
                     list(v, cols, rows, m, 0, &mut lines, &mut hits);
                 } else {
@@ -2168,8 +2934,8 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
                     }
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
-                    if snap.rules.ux2 && v.id == ViewId::Prs {
-                        pr_cards(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                    if snap.rules.ux2 && matches!(v.id, ViewId::Prs | ViewId::Tickets) {
+                        board_cards(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
                     } else {
                         board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
                     }
@@ -2201,13 +2967,18 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
         Some(note) => Row::default()
             .put(format!(" {note}"), fg(theme.bright))
             .take(),
-        None => Row::default()
-            .put(format!(" {}", hints(m, view)), fg(theme.dim))
-            .take(),
+        None => {
+            let mut row = Row::default();
+            row.put(" ", Style::new());
+            row.spans
+                .extend(footer(&hints(m, view), snap.rules.ux2, theme));
+            row
+        }
     };
     lines.push(foot.line(cols, None));
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
-    (lines, hits)
+    meters.retain(|meter| (meter.y as usize) < rows.saturating_sub(1));
+    (lines, hits, meters)
 }
 
 #[cfg(test)]
@@ -2245,6 +3016,7 @@ mod tests {
             frame: 0,
             screens: Default::default(),
             pilot: None,
+            caps: false,
         };
         m
     }
@@ -2458,6 +3230,13 @@ mod tests {
         assert!(text[bottom - 1].contains("md-uncommitted"), "{text:#?}");
         assert!(text[bottom - 2].contains("line 40"), "{text:#?}");
         assert!(!text.iter().any(|l| l.contains("line 1 ")));
+        // The stage's box wears the kit's tone for it, as the sidebar does.
+        let heading = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.contains("WORKING"))
+            .unwrap();
+        assert_eq!(heading.style.fg, Some(Tone::Working.fg(&Theme::DARK)));
     }
 
     #[test]
@@ -2487,7 +3266,7 @@ mod tests {
             .iter()
             .position(|l| l.contains("colors-branch"))
             .unwrap();
-        assert!(text[footer].contains("colors-branch  ✗1  ✓12"), "{text:#?}");
+        assert!(text[footer].contains("colors-branch  ✕1  ✓12"), "{text:#?}");
         assert!(!text[footer].contains('◌'), "{text:#?}");
         let screen_line = &lines[footer - 1];
         let passed = screen_line
@@ -2497,8 +3276,8 @@ mod tests {
             .unwrap();
         assert_eq!(passed.style.fg, Some(Color::Indexed(2)));
         assert!(passed.style.add_modifier.contains(Modifier::BOLD));
-        let fail = screen_line_span(&lines[footer], "✗1");
-        assert_eq!(fail.style.fg, Some(RED));
+        let fail = screen_line_span(&lines[footer], "✕1");
+        assert_eq!(fail.style.fg, Some(Tone::Failed.fg(&Theme::DARK)));
     }
 
     fn screen_line_span<'a>(line: &'a Line, has: &str) -> &'a Span<'static> {
@@ -2523,9 +3302,11 @@ mod tests {
             ready_only: false,
             skipped: 1,
             spend_limit: 0.0,
+            spent: 0.0,
             lands_alone: false,
             hands_free: false,
             target: String::new(),
+            drained: false,
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);
@@ -2622,6 +3403,52 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_the_bar_is_the_groups_over_the_views_of_the_one_in_front() {
+        let mut m = mission(
+            vec![tab(1, "api")],
+            vec![
+                list_view(ViewId::WorkMap, "Work map", vec![]),
+                list_view(ViewId::Prs, "PRs", vec![]),
+                list_view(ViewId::Settings, "Settings", vec![]),
+            ],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 2;
+        let (lines, hits) = screen(&m, 100, 12);
+        let t = texts(&lines);
+        assert!(
+            t[0].starts_with(" MISSION CONTROL   Work   Code   System"),
+            "{:?}",
+            t[0]
+        );
+        assert!(t[1].starts_with("  PRs  "), "{:?}", t[1]);
+        assert!(
+            t[1].trim_end().ends_with("{ } groups  [ ] views"),
+            "{:?}",
+            t[1]
+        );
+        assert_eq!(t[2], "─".repeat(100));
+        let lit = lines[1].spans.iter().find(|s| s.content == "PRs").unwrap();
+        assert!(lit.style.add_modifier.contains(Modifier::UNDERLINED));
+        let code = hits
+            .iter()
+            .find(|h| h.spot == Spot::Group(views::Group::Code))
+            .unwrap();
+        assert_eq!(
+            (code.y, &t[0][code.x0 as usize..=code.x1 as usize]),
+            (0, " Code ")
+        );
+        let prs = hits.iter().find(|h| h.spot == Spot::View(2)).unwrap();
+        assert_eq!(
+            (prs.y, &t[1][prs.x0 as usize..=prs.x1 as usize]),
+            (1, " PRs ")
+        );
+        m.view = 1;
+        let t = texts(&screen(&m, 100, 12).0);
+        assert!(t[1].starts_with("  Tabs   Map  "), "{:?}", t[1]);
+    }
+
+    #[test]
     fn settings_rows_line_up_as_name_value_and_what_it_does() {
         let items = views::settings_items(&[]);
         let mut m = mission(
@@ -2671,12 +3498,15 @@ mod tests {
     #[test]
     fn with_ux2_the_pr_board_draws_each_pr_as_a_card() {
         let item = |n: u32, column: &str, checks: &str| {
-            Item::new(n.to_string(), format!("#{n} PR {n}"))
-                .detail("w")
-                .group(column)
-                .data(serde_json::json!({
-                    "pr": { "number": n }, "checks": checks, "meta": "w · queue 1",
-                }))
+            Item::new(
+                n.to_string(),
+                format!("#{n} PR {n} lays the settings view out"),
+            )
+            .detail("w")
+            .group(column)
+            .data(serde_json::json!({
+                "pr": { "number": n }, "checks": checks, "meta": "w · queue 1",
+            }))
         };
         let items = vec![
             item(1, "In review", "success"),
@@ -2687,33 +3517,38 @@ mod tests {
         m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = 1;
-        let (lines, hits) = screen(&m, 150, 24);
+        let (lines, hits) = screen(&m, 150, 30);
         let text = texts(&lines);
         assert!(
-            text[1].contains("In review 2") && text[1].contains("Approved 1"),
-            "{}",
-            text[1]
-        );
-        assert!(
-            text[3].contains("╭ #1 ─") && text[3].contains(" ✓ ─╮") && text[3].contains(" ◌ ─╮"),
+            text[3].contains("IN REVIEW") && text[3].contains("APPROVED"),
             "{}",
             text[3]
         );
         assert!(
-            text[4].contains("│ PR 1") && !text[4].contains("#1"),
+            text[5].contains("╭ #1 ─") && text[5].contains(" ✓ ─╮") && text[5].contains(" ◌ ─╮"),
             "{}",
-            text[4]
+            text[5]
         );
-        assert!(text[5].contains("│ w · queue 1"), "{}", text[5]);
-        assert!(text[6].contains("╰─"), "{}", text[6]);
         assert!(
-            text[8].contains("#2") && text[8].contains(" ✕ "),
-            "{}",
-            text[8]
+            text[6].contains("│ PR 1 lays the") && !text[6].contains("#1"),
+            "the title's first line: {}",
+            text[6]
         );
-        let edge = lines[8].spans.iter().find(|s| s.content == "╭").unwrap();
+        assert!(
+            text[7].contains("│ settings view"),
+            "its second: {}",
+            text[7]
+        );
+        assert!(text[8].contains("│ w · queue 1"), "{}", text[8]);
+        assert!(text[9].contains("╰─"), "{}", text[9]);
+        assert!(
+            text[11].contains("#2") && text[11].contains(" ✕ "),
+            "{}",
+            text[11]
+        );
+        let edge = lines[11].spans.iter().find(|s| s.content == "╭").unwrap();
         assert_eq!(edge.style.fg, Some(ACCENT), "the chosen card's edge");
-        assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 9));
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 12));
     }
 
     #[test]
@@ -2725,7 +3560,7 @@ mod tests {
                     "pr": { "number": n }, "checks": "success", "meta": "w",
                     "reviewers": reviewers, "author": "ana", "commits": 3,
                     "additions": 214, "deletions": 88,
-                    "body": "## Summary\nLay the Settings view out in two columns.",
+                    "body": "## Summary\nLay the **Settings** view out in two columns.",
                 }))
         };
         let items = vec![
@@ -2742,7 +3577,7 @@ mod tests {
         let mut lines = Vec::new();
         let mut hits = Vec::new();
         let view = &m.snap.views[0];
-        pr_cards(
+        board_cards(
             view,
             columns,
             160,
@@ -2754,23 +3589,202 @@ mod tests {
             &mut hits,
         );
         let text = texts(&lines);
-        assert!(text[0].contains("Changes asked 1"), "{}", text[0]);
-        assert!(text[4].contains("│ tab 3"), "{}", text[4]);
-        assert!(text[4].contains("│ ben"), "the reviewers: {}", text[4]);
+        assert!(text[0].contains("CHANGES ASKED"), "{}", text[0]);
+        assert!(text[5].contains("│ tab 3 · "), "{}", text[5]);
+        assert!(text[5].contains("│ ben"), "the reviewers: {}", text[5]);
         assert!(text[0].contains("│ #2 PR 2"), "{}", text[0]);
         assert!(
             text[1].contains("ana · 3 commits · +214 −88 · ✓ checks"),
             "{}",
             text[1]
         );
-        assert!(text[3].contains("│ Summary") && text[4].contains("Lay the Settings"));
+        assert!(
+            text[3].contains("│ Summary") && text[5].contains("Lay the Settings"),
+            "the body through Markdown: {text:?}"
+        );
+        let bold_word = lines[5]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Settings"))
+            .unwrap();
+        assert!(bold_word.style.add_modifier.contains(Modifier::BOLD));
+        let light = pr_about(&m.snap.views[0].data.items[1], 50, 20, &Theme::LIGHT);
+        let plain = light
+            .iter()
+            .flatten()
+            .find(|s| s.content.contains("Lay the"))
+            .unwrap();
+        assert_eq!(plain.style.fg, Some(Theme::LIGHT.text), "the theme's text");
         let (narrow, _) = {
             let mut l = Vec::new();
             let mut h = Vec::new();
-            pr_cards(view, columns, 120, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
+            board_cards(view, columns, 120, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
             (texts(&l), h)
         };
         assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+    }
+
+    #[test]
+    fn with_ux2_the_ticket_board_draws_each_ticket_as_a_card_and_the_chosen_one_beside_it() {
+        let ticket = |id: &str, column: &str, priority: u64, extra: serde_json::Value| {
+            let mut data = serde_json::json!({
+                "ticket": id, "priority": priority, "priorityLabel": "Urgent",
+                "title": format!("Fix the RSVP menu of {id}"), "state": column,
+                "project": "Web app", "estimate": 2.0,
+                "description": "The menu closes on a refresh.\n\n## Steps\n1. Open the menu",
+            });
+            for (k, v) in extra.as_object().unwrap() {
+                data[k] = v.clone();
+            }
+            let mut i = Item::new(id, format!("{id} Fix the RSVP menu of {id}"))
+                .group(column)
+                .data(data);
+            i.time = Some((rules().now_secs() - 3 * 86_400) * 1000);
+            i
+        };
+        let items = vec![
+            ticket("AB-1", "Todo", 1, serde_json::json!({})),
+            ticket("AB-2", "In progress", 2, serde_json::json!({ "tab": 4 })),
+            ticket("AB-3", "Done", 5, serde_json::json!({ "tab": 4 })),
+            ticket(
+                "AB-4",
+                "Closed",
+                5,
+                serde_json::json!({ "state": "Duplicate" }),
+            ),
+        ];
+        let mut m = mission(
+            vec![tab(4, "AB-2")],
+            vec![list_view(ViewId::Tickets, "Tickets", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 0;
+        let columns = crate::sources::tickets::columns(true);
+        let (mut lines, mut hits) = (Vec::new(), Vec::new());
+        board_cards(
+            &m.snap.views[0],
+            columns,
+            160,
+            24,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut lines,
+            &mut hits,
+        );
+        let text = texts(&lines);
+        assert!(
+            text[0].contains("TODO") && text[0].contains("DONE") && !text[0].contains("CLOSED"),
+            "{}",
+            text[0]
+        );
+        assert!(
+            text[2].contains("╭ AB-1 ─") && text[2].contains(" !!! ─╮"),
+            "{}",
+            text[2]
+        );
+        assert!(text[2].contains(" !! ─╮"), "high: {}", text[2]);
+        assert!(text[3].contains("│ Fix the RSVP menu"), "{}", text[3]);
+        assert!(text[5].contains("│ Web app · 2 pts"), "{}", text[5]);
+        assert!(text[5].contains("│ tab 4 · "), "{}", text[5]);
+        assert!(
+            text[5].contains("│ 3d ago"),
+            "a done one says when: {}",
+            text[5]
+        );
+        assert!(
+            lines[3].spans.iter().any(|s| s.content.contains("Fix")
+                && s.style.add_modifier.contains(Modifier::CROSSED_OUT)),
+            "a done one struck through"
+        );
+        // The chosen ticket beside the board, its description through
+        // Markdown.
+        assert!(text[0].contains("│ AB-1 Fix the RSVP menu"), "{}", text[0]);
+        assert!(
+            text[1].contains("Todo · !!! Urgent · Web app · 2 pts · you"),
+            "{}",
+            text[1]
+        );
+        assert!(
+            text[3].contains("│ The menu closes on a refresh."),
+            "{text:?}"
+        );
+        assert!(text.iter().any(|l| l.contains("│ Steps")), "{text:?}");
+        let low = ticket("AB-5", "Todo", 4, serde_json::json!({}));
+        let pane: Vec<String> = ticket_about(&low, 50, 10, &Theme::DARK)
+            .iter()
+            .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert!(pane[1].contains("Todo · Low · Web app"), "{}", pane[1]);
+        // The ticket canceled this week, faint in the row under the columns.
+        let label = text
+            .iter()
+            .position(|l| l.contains("CLOSED THIS WEEK"))
+            .unwrap();
+        assert!(text[label - 1].contains("┄"), "{}", text[label - 1]);
+        assert!(text[label + 2].contains("╭ AB-4"), "{}", text[label + 2]);
+        assert!(
+            text[label + 5].contains("│ 3d ago · duplicate"),
+            "{}",
+            text[label + 5]
+        );
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Index(3) && usize::from(h.y) == label + 2)
+        );
+    }
+
+    #[test]
+    fn with_ux2_the_prs_merged_this_week_are_a_row_under_the_columns() {
+        let item = |n: u32, column: &str| {
+            let mut i = Item::new(n.to_string(), format!("#{n} PR {n}"))
+                .group(column)
+                .data(serde_json::json!({ "pr": { "number": n }, "mergedBy": "ana" }));
+            i.time = Some((rules().now_secs() - 86_400) * 1000);
+            i
+        };
+        let items = vec![item(1, "In review"), item(2, "Merged"), item(3, "Merged")];
+        let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
+        m.snap.rules.ux2 = true;
+        m.cursor = 2;
+        let columns = crate::sources::prboard::columns(true);
+        let (mut lines, mut hits) = (Vec::new(), Vec::new());
+        board_cards(
+            &m.snap.views[0],
+            columns,
+            100,
+            24,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut lines,
+            &mut hits,
+        );
+        let text = texts(&lines);
+        assert!(!text[0].contains("MERGED"), "not a column: {}", text[0]);
+        let label = text
+            .iter()
+            .position(|l| l.contains("MERGED THIS WEEK"))
+            .unwrap();
+        assert!(text[label].trim_end().ends_with('2'), "{}", text[label]);
+        assert!(
+            text[label + 2].contains("╭ #2") && text[label + 2].contains("╭ #3"),
+            "{}",
+            text[label + 2]
+        );
+        assert!(
+            text[label + 5].contains("│ 1d ago · ana"),
+            "{}",
+            text[label + 5]
+        );
+        let edge = lines[label + 2]
+            .spans
+            .iter()
+            .filter(|s| s.content == "╭")
+            .nth(1)
+            .unwrap();
+        assert_eq!(edge.style.fg, Some(ACCENT), "the chosen one in the row");
     }
 
     #[test]
@@ -2781,13 +3795,13 @@ mod tests {
                 .data(serde_json::json!({ "pr": { "number": n } }))
         };
         let columns = crate::sources::prboard::columns(true);
-        let last = *columns.last().unwrap();
+        let last = columns[columns.len() - 2];
         let items = vec![item(1, columns[0]), item(2, last)];
         let mut m = mission(Vec::new(), vec![list_view(ViewId::Prs, "PRs", items)]);
         m.snap.rules.ux2 = true;
         let draw = |m: &Mission| {
             let (mut l, mut h) = (Vec::new(), Vec::new());
-            pr_cards(
+            board_cards(
                 &m.snap.views[0],
                 columns,
                 55,
@@ -2804,17 +3818,17 @@ mod tests {
         m.cursor = 0;
         let (text, _) = draw(&m);
         assert!(
-            text[0].contains(columns[0]) && text[0].ends_with("›"),
+            text[0].contains(&columns[0].to_uppercase()) && text[0].ends_with("›"),
             "{}",
             text[0]
         );
-        assert!(!text[0].contains(last), "{}", text[0]);
+        assert!(!text[0].contains("MERGE"), "{}", text[0]);
         // The last column's PR chosen: its column in sight, its card drawn
         // and clickable inside the board, more to the left.
         m.cursor = 1;
         let (text, hits) = draw(&m);
         assert!(
-            text[0].contains(last) && text[0].contains("‹"),
+            text[0].contains("MERGE") && text[0].contains("‹"),
             "{}",
             text[0]
         );
@@ -2846,11 +3860,10 @@ mod tests {
         assert!(text[10].contains("All tabs"), "{text:#?}");
     }
 
-    #[test]
-    fn with_ux2_autopilot_has_a_view_of_its_tabs_stages_then_what_it_opens_next() {
-        use crate::autopilot::view::{Row, items};
-        let summary = crate::autopilot::Summary {
+    fn pilot_summary() -> crate::autopilot::Summary {
+        crate::autopilot::Summary {
             target: String::new(),
+            drained: false,
             note: "Switchboard".into(),
             busy: 1,
             open: 2,
@@ -2861,11 +3874,15 @@ mod tests {
             away: false,
             ready_only: false,
             skipped: 1,
-            spend_limit: 0.0,
+            spend_limit: 20.0,
+            spent: 5.0,
             lands_alone: true,
             hands_free: false,
-        };
-        let row = |tab: u32, item: &str, state: TabState| Row {
+        }
+    }
+
+    fn pilot_row(tab: u32, item: &str, state: TabState) -> crate::autopilot::view::Row {
+        crate::autopilot::view::Row {
             tab: TabId(tab),
             index: tab as usize,
             item: item.into(),
@@ -2876,70 +3893,176 @@ mod tests {
             landing: None,
             left: false,
             autoland: false,
-        };
-        let mut landing = row(3, "Give notes stable IDs", TabState::Working);
-        landing.loop_skill = Some("queue".into());
-        landing.phase = Some("pushing".into());
-        landing.landing = Some(serde_json::json!({ "holding": true, "phase": "pushing" }));
-        let rows = vec![landing, row(4, "Port the PR board", TabState::Waiting)];
-        let list = items(
-            &summary,
-            "",
-            &rows,
-            &["Third".into(), "Fourth".into()],
-            &["Old idea".into()],
-        );
+        }
+    }
+
+    #[test]
+    fn with_ux2_autopilot_keeps_the_chosen_card_in_sight() {
+        let rows: Vec<_> = (1..=10)
+            .map(|n| pilot_row(n, &format!("item-{n}"), TabState::Working))
+            .collect();
+        let list = crate::autopilot::view::items(&pilot_summary(), "", &rows, &[], &[]);
+        let last = list
+            .iter()
+            .position(|i| i.title.contains("item-10"))
+            .unwrap();
         let mut m = mission(
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
         m.snap.rules.ux2 = true;
         m.view = 1;
-        m.cursor = 1;
-        let (lines, _) = screen(&m, 125, 30);
+        m.cursor = last as isize;
+        let (lines, hits, meters) = drawn(&m, 125, 24);
+        let text = texts(&lines);
+        assert!(
+            text[..23].iter().any(|l| l.contains("item-10")),
+            "the chosen card in sight: {text:#?}"
+        );
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(last as isize)));
+        assert!(meters.iter().all(|meter| (meter.y as usize) < 23));
+    }
+
+    #[test]
+    fn with_ux2_autopilot_is_a_board_of_its_items_with_the_skipped_under_it() {
+        let mut landing = pilot_row(3, "Give notes stable IDs", TabState::Working);
+        landing.loop_skill = Some("queue".into());
+        landing.phase = Some("pushing".into());
+        landing.landing = Some(serde_json::json!({ "holding": true, "phase": "pushing" }));
+        let rows = vec![
+            landing,
+            pilot_row(4, "Port the PR board", TabState::Waiting),
+        ];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &["Third".into(), "Fourth".into()],
+            &["Old idea".into()],
+        );
+        let chosen = list
+            .iter()
+            .position(|i| i.title == "Give notes stable IDs")
+            .unwrap();
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = chosen as isize;
+        let (lines, _, meters) = drawn(&m, 160, 30);
         let text = texts(&lines);
         let at = text
             .iter()
             .position(|l| l.contains("AUTO Switchboard"))
             .unwrap();
         assert!(
-            text[at].contains("1 of 2 working · 2 of 5 open · lands without asking"),
+            text[at].contains("1 of 2 working · 2 of 5 open · lands without asking")
+                && text[at].contains("$5.00 of $20 today"),
             "{}",
             text[at]
         );
-        let heads = &text[at + 1];
+        let heads = &text[at + 2];
+        for column in crate::autopilot::view::COLUMNS {
+            assert!(heads.contains(column), "{heads}");
+        }
         assert!(
-            heads.contains("opened") && heads.contains("leak check") && heads.contains("closed"),
+            heads.contains("Next up 2") && heads.contains("Landed 0"),
             "{heads}"
         );
-        let first = &text[at + 2];
+        let board = text.join("\n");
         assert!(
-            first.contains("Give notes stable IDs")
-                && first.contains("✓ tab 3")
-                && first.contains("✓ held")
-                && first.contains("pushing…"),
-            "{first}"
+            board.contains("tab 3") && board.contains("tab 4"),
+            "{board}"
         );
-        assert!(text[at + 3].contains("tab 3 · pushing"), "{}", text[at + 3]);
-        // Waiting on you is a yellow cell.
-        let asks = lines[at + 4]
-            .spans
-            .iter()
-            .find(|s| s.content.contains("asks you"))
-            .unwrap();
-        assert_eq!(asks.style.bg, Some(Color::Indexed(58)));
-        let next = text
-            .iter()
-            .position(|l| l.contains("Next, in the order"))
-            .unwrap();
-        assert!(text[next + 1].contains("1. Third"), "{}", text[next + 1]);
-        assert!(text[next + 2].contains("2. Fourth"), "{}", text[next + 2]);
-        assert!(text[next + 3].contains("Skipped"), "{}", text[next + 3]);
         assert!(
-            text[next + 4].contains("Old idea") && text[next + 4].contains("skipped by you"),
+            board.contains("opens next") && board.contains("2nd in line"),
+            "{board}"
+        );
+        // The chosen card's stages beside the board.
+        assert!(
+            board.contains("✓ held") && board.contains("pushing…"),
+            "{board}"
+        );
+        let skipped = text.iter().position(|l| l.contains("Skipped 1")).unwrap();
+        assert!(
+            text[skipped + 1].contains("Old idea") && text[skipped + 1].contains("skipped by you"),
             "{}",
-            text[next + 4]
+            text[skipped + 1]
         );
+        // A meter for each card, the landing one 6 of 8 stages done, and
+        // one for the spend: a quarter of the limit.
+        let held = meters
+            .iter()
+            .find(|meter| meter.name == "autopilot/pilot:@3")
+            .unwrap();
+        assert_eq!(held.frac, 6.0 / 8.0);
+        let spend = meters
+            .iter()
+            .find(|meter| meter.name == "autopilot/spend")
+            .unwrap();
+        assert_eq!((spend.frac, spend.y as usize), (0.25, at));
+        assert_eq!(meters.len(), 5);
+    }
+
+    #[test]
+    fn with_ux2_the_chosen_landing_stays_in_sight_under_two_headings() {
+        let landing = |n: usize| {
+            Item::new(format!("land:/w/{n}"), format!("1. landing-{n}"))
+                .detail("waiting")
+                .data(serde_json::json!({ "landing": { "holding": false, "place": n } }))
+        };
+        let mut items = vec![views::header("/a:direct", "app · straight to main", 4)];
+        items.extend((1..=4).map(landing));
+        items.push(views::header("/b:direct", "api · straight to main", 5));
+        items.extend((5..=9).map(landing));
+        let last = items.len() - 1;
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = last as isize;
+        let (lines, _) = screen(&m, 140, 24);
+        let text = texts(&lines);
+        assert!(
+            text[..23].iter().any(|l| l.contains("landing-9")),
+            "{text:#?}"
+        );
+    }
+
+    #[test]
+    fn with_ux2_landing_fills_the_screen_whatever_the_headings_out_of_sight() {
+        let landing = |n: usize| {
+            Item::new(format!("land:/w/{n}"), format!("1. landing-{n}"))
+                .detail("waiting")
+                .data(serde_json::json!({ "landing": { "holding": false, "place": 1 } }))
+        };
+        let mut items = Vec::new();
+        for n in 1..=12 {
+            items.push(views::header(
+                &format!("/r{n}:direct"),
+                &format!("repo-{n}"),
+                1,
+            ));
+            items.push(landing(n));
+        }
+        let last = items.len() - 1;
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = last as isize;
+        let (lines, _) = screen(&m, 140, 26);
+        let text = texts(&lines);
+        let shown = text.iter().filter(|l| l.contains("landing-")).count();
+        // 22 rows under the bar: four repositories of five, and the landing before them.
+        assert_eq!(shown, 5, "{text:#?}");
+        assert!(text[..25].iter().any(|l| l.contains("landing-12")));
     }
 
     #[test]
@@ -2974,10 +4097,14 @@ mod tests {
             .unwrap();
         let heads = &text[at + 1];
         assert!(
+            text[at + 2].starts_with("┄┄┄"),
+            "the dashed rule under the heads"
+        );
+        assert!(
             heads.contains("worktree") && heads.contains("leak check") && heads.contains("applied"),
             "{heads}"
         );
-        let holder = &text[at + 2];
+        let holder = &text[at + 3];
         assert!(
             holder.contains("note-stable-ids") && !holder.contains("1. "),
             "{holder}"
@@ -2987,18 +4114,18 @@ mod tests {
             "{holder}"
         );
         assert!(
-            text[at + 3].contains("landing · pushing · tab 3"),
+            text[at + 4].contains("landing · pushing · tab 3"),
             "{}",
-            text[at + 3]
+            text[at + 4]
         );
-        assert!(text[at + 4].contains("2nd"), "{}", text[at + 4]);
+        assert!(text[at + 5].contains("2nd"), "{}", text[at + 5]);
         // Each cell is a run of its stage's background: pushing is blue.
-        let pushing = lines[at + 2]
+        let pushing = lines[at + 3]
             .spans
             .iter()
             .find(|s| s.content.contains("pushing…"))
             .unwrap();
-        assert_eq!(pushing.style.bg, Some(Color::Indexed(17)));
+        assert_eq!(pushing.style.bg, Some(Tone::Working.tint(&Theme::DARK)));
         // A failed stage is a red cell with ✕ and the phase's words.
         let failing = Item::new("land:/w/x", "1. note-full-titles").data(serde_json::json!({
             "landing": { "holding": true, "phase": "tests failed 2 of 401" },

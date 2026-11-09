@@ -175,6 +175,10 @@ impl Overlay for FormatMenu {
         "format-menu"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let mut lines = Vec::new();
         self.rows.clear();
@@ -350,6 +354,10 @@ impl Overlay for Ask {
         "ask"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         let lines = vec![
             BoxLine::blank(),
@@ -455,6 +463,10 @@ const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 impl Overlay for Progress {
     fn kind(&self) -> &'static str {
         "squash-progress"
+    }
+
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
     }
 
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {

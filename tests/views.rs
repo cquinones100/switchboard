@@ -89,6 +89,8 @@ mod with_github {
                 "title": "Fix the login", "state": "OPEN", "isDraft": false,
                 "baseRefName": "main", "headRefName": "feature-x",
                 "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "commits": {"totalCount": 2}, "changedFiles": 1,
+                "files": {"nodes": [{"path": "src/login.rs", "additions": 3, "deletions": 1}]},
                 "body": "## Why\n\nThe token went **stale**.\n\n```mermaid\nflowchart LR\n  A[Login] --> B[Token]\n```\n"
             });
             let answer = if asked.contains("pullRequests") {
@@ -172,6 +174,70 @@ mod with_github {
         client.wait_for("the view gone", |s| {
             !s.iter().any(|l| l.contains("Fix the login"))
         });
+    }
+
+    #[test]
+    fn with_ux2_m_v_shows_the_pr_s_board_in_claude_s_place() {
+        let fake = fake_github();
+        // Set from the start, so M-v never finds the server still without it.
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+        );
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(&work, &["symbolic-ref", "HEAD", "refs/heads/feature-x"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+        client.wait_text("$");
+        client.type_text(&format!("cd {}\r", work.display()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !panes(&server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("widgets"))
+        {
+            assert!(Instant::now() < deadline, "the shell didn't cd");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        client.send(b"\x1bv");
+        // The board: its head, the description, and the panel beside it
+        // with the PR's files, the footer's keys under them.
+        let screen = client.wait_text("FILES");
+        let head = screen
+            .iter()
+            .find(|l| l.contains("#12 Fix the login"))
+            .unwrap();
+        assert!(head.contains("Open"), "{head:?}");
+        client.wait_text("jo wants to merge 2 commits into main from feature-x");
+        let file = client.wait_text("src/login.rs");
+        let row = file.iter().find(|l| l.contains("src/login.rs")).unwrap();
+        assert!(
+            row.contains('│') && row.trim_end().ends_with("+3 −1"),
+            "{row:?}"
+        );
+        client.wait_text("M-r on GitHub");
+        // In Claude's place: the only pane, the header's PR key lit.
+        let shown = wait_panes(&server, 1);
+        assert_eq!(shown[0]["options"]["@pr_view"], "1", "{shown:?}");
+
+        client.send(b"\x1bv");
+        client.wait_for("the board gone", |s| !s.iter().any(|l| l.contains("FILES")));
     }
 
     #[test]

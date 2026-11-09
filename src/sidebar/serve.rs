@@ -977,6 +977,52 @@ impl Server {
         }
     }
 
+    /// j and k with UX 2.0, whose notifications sit above the tabs: up
+    /// from the first tab onto the last notification, down from the last
+    /// notification onto the first tab, and no further either way (one by
+    /// one with the Notifications window, else a kind's row at a time).
+    fn sidebar_step_ux2(
+        &mut self,
+        session: &str,
+        tabs: usize,
+        cursor: &Owner,
+        on_notice: Option<usize>,
+        at: isize,
+        by: isize,
+    ) {
+        let notices = self.sidebar_notices().len();
+        let by_item = settings::is_on("notice_list");
+        match on_notice {
+            None if by < 0 && at == 0 && notices > 0 => {
+                self.sidebar_move(session, (tabs + notices) as isize - 1);
+                if by_item && let Some((owner, _)) = self.notice_entries().last() {
+                    self.sidebar_notice_to(session, owner);
+                }
+            }
+            None => self.sidebar_move(session, (at + by).clamp(0, tabs.max(1) as isize - 1)),
+            Some(i) => {
+                let entries = self.notice_entries();
+                let (now, count) = if by_item {
+                    let now = entries
+                        .iter()
+                        .position(|(o, _)| o == cursor)
+                        .unwrap_or_else(|| self.notice_cursor(session, &entries));
+                    (now as isize, entries.len() as isize)
+                } else {
+                    (i as isize, notices as isize)
+                };
+                let to = now + by;
+                if to >= count {
+                    self.sidebar_move(session, 0);
+                } else if to >= 0 && by_item {
+                    self.sidebar_notice_to(session, &entries[to as usize].0);
+                } else if to >= 0 {
+                    self.sidebar_move(session, tabs as isize + to);
+                }
+            }
+        }
+    }
+
     /// The sidebar's cursor and the Notifications window's onto one
     /// notification.
     fn sidebar_notice_to(&mut self, session: &str, owner: &Owner) {
@@ -1080,6 +1126,18 @@ impl Server {
             return;
         }
 
+        let ux2 = settings::is_on("ux2");
+        let up_down = match k.code {
+            KeyCode::Char('j') | KeyCode::Down if none => Some(1),
+            KeyCode::Char('n') if ctrl => Some(1),
+            KeyCode::Char('k') | KeyCode::Up if none => Some(-1),
+            KeyCode::Char('p') if ctrl => Some(-1),
+            _ => None,
+        };
+        if ux2 && let Some(by) = up_down {
+            self.sidebar_step_ux2(session, order.len(), &cursor, on_notice, at, by);
+            return;
+        }
         match k.code {
             // On the notifications with the Notifications window, j and k go
             // through them one by one, the window following.

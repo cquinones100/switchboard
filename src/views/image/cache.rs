@@ -151,7 +151,7 @@ fn pin_kind(pin: Pin) -> &'static str {
 
 /// The extension a picture of this type is kept with, or `None` for an
 /// answer that isn't a picture (a sign-in page).
-fn picture_kind(content_type: &str) -> Option<&'static str> {
+pub fn picture_kind(content_type: &str) -> Option<&'static str> {
     let kind = content_type
         .split(';')
         .next()

@@ -80,6 +80,12 @@ impl TestServer {
         TestServer::start_with(&[], Some(settings))
     }
 
+    /// A server with these variables in its environment and `settings` as
+    /// its home's `settings.json` from the start.
+    pub fn start_with_env_and_settings(env: &[(&str, &str)], settings: &str) -> TestServer {
+        TestServer::start_with(env, Some(settings))
+    }
+
     fn start_with(env: &[(&str, &str)], settings: Option<&str>) -> TestServer {
         let dir = TempDir::new("sbt");
         let home = dir.path().join("home");
@@ -324,6 +330,11 @@ impl TestServer {
         TestClient::attach(&self.socket(), None, cols, rows)
     }
 
+    /// A terminal attaching that names itself `term` (its `TERM`).
+    pub fn attach_as(&self, term: &str, cols: u16, rows: u16) -> TestClient {
+        TestClient::attach_with(&self.socket(), None, cols, rows, None, term)
+    }
+
     /// The server's process's pid.
     pub fn pid(&self) -> Option<u32> {
         self.child.as_ref().map(Child::id)
@@ -399,13 +410,25 @@ impl TestClient {
         rows: u16,
         cwd: Option<&Path>,
     ) -> TestClient {
+        TestClient::attach_with(socket, session, cols, rows, cwd, "xterm-256color")
+    }
+
+    /// A terminal attaching from a directory, naming itself `term`.
+    pub fn attach_with(
+        socket: &Path,
+        session: Option<&str>,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+        term: &str,
+    ) -> TestClient {
         let mut stream = UnixStream::connect(socket).expect("the server answers");
         stream
             .write_all(&proto::encode_client(&ClientMsg::Attach {
                 session: session.map(str::to_string),
                 cols,
                 rows,
-                term: "xterm-256color".into(),
+                term: term.into(),
                 xpixel: 0,
                 ypixel: 0,
                 cwd: cwd.map(|d| d.to_string_lossy().into_owned()),

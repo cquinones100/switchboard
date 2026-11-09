@@ -20,6 +20,14 @@
 //!   Space k            link                   [[       link to a note
 //! ```
 //!
+//! With UX 2.0 on, a note's unticked checklist items have keys of their
+//! own, each falling back to Vim's where it has nothing to do: Enter opens
+//! the item's plan (its `Plan: [[...]]` line), o goes to the tab working
+//! on it, `ga` types into the "Add an item" input at the bottom, and M-p,
+//! which the workspace hands Notes then (`@notes_work_key`), has autopilot
+//! work the note. A section for parked work opens folded to one line with
+//! its count of items, and the footer shows these keys.
+//!
 //! In Insert mode, Enter carries a list on, and Tab and Shift-Tab indent an
 //! item or move between a table's cells.
 //!
@@ -139,6 +147,8 @@ pub struct Options {
     /// UX 2.0 (ux2): chips under a checklist item saying what is happening
     /// with it.
     pub ux2: bool,
+    /// The terminal draws the kit's half-circle ends itself (Ghostty).
+    pub caps: bool,
 }
 
 impl Default for Options {
@@ -162,6 +172,7 @@ impl Default for Options {
             clipboard: false,
             server: false,
             ux2: false,
+            caps: false,
         }
     }
 }
@@ -194,6 +205,11 @@ impl Options {
             ux2: all
                 .iter()
                 .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
+            caps: crate::ui::kit::caps(&format!(
+                "{} {}",
+                std::env::var("TERM").unwrap_or_default(),
+                std::env::var("TERM_PROGRAM").unwrap_or_default()
+            )),
             ..Options::default()
         }
     }
@@ -303,6 +319,8 @@ struct Geo {
     text: Rect,
     toolbar: Vec<(usize, Rect)>,
     shown: Vec<Shown>,
+    /// UX 2.0's "Add an item" input's row, when it is drawn.
+    input: Option<u16>,
 }
 
 /// A note shown when there are none: what a note can do.
@@ -353,6 +371,19 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
         "gw",
         "start work on the checklist item in a new tab: pick the repository and the branch to land on",
     ),
+    (
+        "Enter",
+        "with UX 2.0, on an unticked item with a plan: open its plan note",
+    ),
+    (
+        "o",
+        "with UX 2.0, on an item a tab works on: go to that tab",
+    ),
+    (
+        "ga",
+        "with UX 2.0: Add an item, Enter adding it to the top list, M-Enter having a new tab plan it",
+    ),
+    ("M-p", "with UX 2.0: autopilot working the note"),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the list of notes"),
     ("Ctrl-V", "paste the clipboard's image, while typing"),
@@ -390,6 +421,26 @@ pub fn key_groups(easy: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
         ("Notes: a note", note),
         ("Notes: the list", owned(sidebar::KEYS)),
     ]
+}
+
+/// An item M-Enter handed to a new tab's `/plan-item`: the note it is for,
+/// its words, and how many checklist lines named it then.
+#[derive(Debug)]
+struct Planning {
+    note: PathBuf,
+    text: String,
+    items: usize,
+}
+
+/// How many checklist lines in `lines` name `text`.
+fn items_naming(lines: &[String], text: &str) -> usize {
+    lines
+        .iter()
+        .filter(|l| {
+            let l = l.trim_start();
+            (l.starts_with("- [ ]") || l.starts_with("- [x]")) && l.contains(text)
+        })
+        .count()
 }
 
 /// How long after the last change a note is saved.
@@ -449,6 +500,14 @@ pub struct App {
     kept: HashMap<PathBuf, super::editor::Kept>,
     titles: HashSet<String>,
     pub quit: bool,
+    /// UX 2.0's "Add an item" input while it is typed into (`ga`, or a
+    /// click on it): what is typed so far.
+    pub adding: Option<String>,
+    /// The items handed to a new tab's `/plan-item` (M-Enter), each kept
+    /// until it shows in its note: the repository's picker closed, or the
+    /// tab not opened, the last of a note's is back in the input the next
+    /// time it opens there.
+    planning: Vec<Planning>,
     pub locked_by: Option<i64>,
     recent_file: PathBuf,
     /// Saves the clipboard's image to a file (the platform's; a test's).
@@ -529,6 +588,8 @@ impl App {
             kept: HashMap::new(),
             titles: HashSet::new(),
             quit: false,
+            adding: None,
+            planning: Vec::new(),
             locked_by: None,
             grab: grab_clipboard,
             claude: crate::diff::tell::claude_command(),
@@ -623,8 +684,14 @@ impl App {
         let shown = Text::from_file(&id::body_of(&text));
         match self.kept.remove(path) {
             Some(kept) => self.editor.take_back(shown, kept),
-            None => self.editor.load(shown),
+            None => {
+                self.editor.load(shown);
+                if self.opts.ux2 {
+                    self.fold_parked();
+                }
+            }
         }
+        self.adding = None;
         self.open = Some(Open {
             path: path.to_path_buf(),
             base: Some(text.clone()),
@@ -725,6 +792,13 @@ impl App {
             }
             return false;
         };
+        // The item M-Enter handed on is in its note, a checklist line naming
+        // it that wasn't there before: nothing to give back.
+        if self.planning.iter().any(|p| p.note == path) {
+            let lines: Vec<String> = disk.lines().map(str::to_string).collect();
+            self.planning
+                .retain(|p| p.note != path || items_naming(&lines, &p.text) <= p.items);
+        }
         let modified = self.modified();
         let Some(o) = &mut self.open else {
             return false;
@@ -1272,16 +1346,20 @@ impl App {
     }
 
     /// A Switchboard command for Notes, asked of the workspace's server.
-    fn press(&mut self, words: &[&str]) {
+    /// Whether the server took it.
+    fn press(&mut self, words: &[&str]) -> bool {
         if !self.opts.server {
             self.say("notes: that needs Switchboard's workspace");
-            return;
+            return false;
         }
         let mut args = vec!["press"];
         args.extend(words);
         match crate::mux::socket::ask_ok(&args) {
-            Ok(_) => {}
-            Err(e) => self.say(format!("notes: {e}")),
+            Ok(_) => true,
+            Err(e) => {
+                self.say(format!("notes: {e}"));
+                false
+            }
         }
     }
 
@@ -1337,6 +1415,203 @@ impl App {
             rel,
             line.to_string(),
         ])
+    }
+
+    // ── UX 2.0's item keys ────────────────────────────────────────────────
+
+    /// A parked section (`## Defered`, `## Later`) folded, as a note opens
+    /// with UX 2.0 on, to one line with its count of items.
+    fn fold_parked(&mut self) {
+        let lines = self.editor.doc.text.lines();
+        let kinds = render::kinds(&lines);
+        for (row, line) in lines.iter().enumerate() {
+            // One inside a parked section folded already stays in it.
+            if render::parked(line, kinds[row])
+                && self.editor.folds.closed_at(&kinds, row).is_none()
+            {
+                self.editor.folds.toggle(&kinds, row);
+            }
+        }
+    }
+
+    /// Enter on an unticked item with a plan: its plan note. Whether it
+    /// had one.
+    fn open_plan(&mut self) -> bool {
+        let lines = self.editor.doc.text.lines();
+        let kinds = render::kinds(&lines);
+        // In a closed fold, Enter opens the fold, as `act` does.
+        if self
+            .editor
+            .folds
+            .closed_at(&kinds, self.editor.doc.row)
+            .is_some()
+        {
+            return false;
+        }
+        let Some(title) = render::plan_of(&lines, &kinds, self.editor.doc.row) else {
+            return false;
+        };
+        match self.store.find_by_title(&title) {
+            Some(n) => self.open_note(&n.path, false, false),
+            None => self.say(format!("notes: no note {title}")),
+        }
+        true
+    }
+
+    /// `o` on an unticked item a tab works on or waits in: that tab, in the
+    /// workspace, unless the tab is linked to another note. Whether there
+    /// was one.
+    fn go_to_item_tab(&mut self) -> bool {
+        let row = self.editor.doc.row;
+        let line = self.editor.doc.line(row);
+        let kinds = render::kinds(&self.editor.doc.text.lines());
+        let kind = kinds[row];
+        if !matches!(kind, Kind::Check { done: false, .. })
+            || self.editor.folds.closed_at(&kinds, row).is_some()
+        {
+            return false;
+        }
+        let note = self
+            .current_path()
+            .map(|p| self.store.relative(p))
+            .unwrap_or_default();
+        let item = render::item_text(&line, kind);
+        let Some(id) = self
+            .item_tabs
+            .get(&note_item_key(&note, item))
+            .or_else(|| self.item_tabs.get(item).filter(|t| t.note.is_empty()))
+            .map(|t| t.id.clone())
+            .filter(|id| !id.is_empty())
+        else {
+            return false;
+        };
+        if !self.opts.server {
+            self.say("notes: that needs Switchboard's workspace");
+        } else if let Err(e) = crate::mux::socket::ask_ok(&["switch-client", "-t", &id]) {
+            self.say(format!("notes: {e}"));
+        }
+        true
+    }
+
+    /// M-p, which the workspace hands Notes with UX 2.0 on: autopilot
+    /// working the open note, asked of the workspace.
+    fn work_note(&mut self) {
+        let Some(path) = self.current_path().map(Path::to_path_buf) else {
+            return;
+        };
+        if self.store.in_trash(&path) {
+            self.say("notes: restore the note to work it");
+            return;
+        }
+        // A draft in Add an item stays, to finish once the workspace's
+        // questions are answered or put away.
+        self.finish_editing();
+        self.save();
+        let Some(path) = self.current_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let rel = self.store.relative(&path);
+        self.press(&[crate::notes::serve::WORK_NOTE, &rel]);
+    }
+
+    /// Out of Insert or Visual mode with what was typed one step to undo,
+    /// for a key or click that leaves the note's editing.
+    fn finish_editing(&mut self) {
+        self.leave_modes();
+        if let Some(before) = self.editor.end() {
+            self.editor
+                .folds
+                .follow(&before.lines(), &self.editor.doc.text.lines());
+            self.changed();
+        }
+    }
+
+    /// `ga`, or a click on it: the "Add an item" input, typed into.
+    fn start_adding(&mut self) {
+        if self.open.is_none() || !self.opts.ux2 {
+            return;
+        }
+        self.finish_editing();
+        // A click on the input while it is typed into keeps what is typed;
+        // an item M-Enter handed on that never reached the note comes back.
+        if self.adding.is_none() {
+            let here = self.current_path().map(Path::to_path_buf);
+            // One whose item reached the note while another was open is done.
+            let lines = self.editor.doc.text.lines();
+            self.planning.retain(|p| {
+                Some(&p.note) != here.as_ref() || items_naming(&lines, &p.text) <= p.items
+            });
+            let given_back = self
+                .planning
+                .iter()
+                .rposition(|p| Some(&p.note) == here.as_ref())
+                .map(|i| self.planning.remove(i));
+            self.adding = Some(given_back.map(|p| p.text).unwrap_or_default());
+        }
+    }
+
+    /// A key while "Add an item" is typed into: Enter adds it to the top
+    /// list, M-Enter has a new tab's Claude add it and write its plan
+    /// (`/plan-item`, which puts the item in the note itself), Esc leaves
+    /// it.
+    fn adding_key(&mut self, key: Key) {
+        let Some(text) = self.adding.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.adding = None,
+            KeyCode::Enter if key.mods == Mods::ALT => self.add_item(true),
+            KeyCode::Enter if key.mods.is_empty() => self.add_item(false),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Char(c) if !key.mods.ctrl && !key.mods.alt => text.push(c),
+            _ => {}
+        }
+    }
+
+    fn add_item(&mut self, with_plan: bool) {
+        let text = self.adding.take().unwrap_or_default().trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        if with_plan {
+            // Saving can rename the note after its title, so its path is
+            // read after.
+            self.save();
+            let Some(path) = self.current_path().map(Path::to_path_buf) else {
+                return;
+            };
+            let rel = self.store.relative(&path);
+            // Kept to try again when the workspace didn't take it.
+            if self.press(&[crate::notes::serve::PLAN_ITEM, &rel, &text]) {
+                let lines = self.editor.doc.text.lines();
+                self.planning.push(Planning {
+                    items: items_naming(&lines, &text),
+                    note: path,
+                    text,
+                });
+            } else {
+                self.adding = Some(text);
+            }
+            return;
+        }
+        let before = self.editor.doc.text.lines();
+        let kinds = render::kinds(&before);
+        let row = render::new_item_row(&before, &kinds);
+        let line = format!("- [ ] {text}");
+        let added = self.editor.change(|doc| {
+            doc.text.set_lines(row, row, &[line]);
+            doc.row = row;
+            doc.col = 0;
+        });
+        if added {
+            self.editor
+                .folds
+                .follow(&before, &self.editor.doc.text.lines());
+            self.editor.clamp();
+            self.changed();
+        }
     }
 
     // ── Boxes ─────────────────────────────────────────────────────────────
@@ -1644,7 +1919,7 @@ impl App {
     }
 
     /// Follows what is at a byte of a row: a web address in the browser, an
-    /// image in Quick Look, a [[Note title]] to that note (made when there is
+    /// image full size over the pane (else in Quick Look), a [[Note title]] to that note (made when there is
     /// none), a #tag to the notes that have it. Whether there was something.
     pub fn follow(&mut self, row: usize, col: usize) -> bool {
         let line = self.editor.doc.line(row);
@@ -1655,7 +1930,7 @@ impl App {
             let Some(note) = self.current_path().map(Path::to_path_buf) else {
                 return false;
             };
-            if images::open(&self.store, &note, &image) {
+            if images::open(&self.store, &note, &image, self.opts.server) {
                 return true;
             }
             if image.starts_with("http://") || image.starts_with("https://") {
@@ -1833,6 +2108,14 @@ impl App {
         if self.prompt.is_some() {
             return self.prompt_key(key);
         }
+        // M-p, which the workspace hands Notes with UX 2.0 on, in any mode,
+        // from the list and from Add an item too.
+        if self.opts.ux2 && key.mods == Mods::ALT && key.code == KeyCode::Char('p') {
+            return self.work_note();
+        }
+        if self.adding.is_some() {
+            return self.adding_key(key);
+        }
         if self.message.is_some() && self.focus == Focus::Note && self.editor.mode == Mode::Normal {
             self.message = None;
         }
@@ -1999,7 +2282,8 @@ impl App {
         let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
         let format = self.format_from(typing);
         self.leave_modes();
-        let commands = palette::commands(from_list, !from_list && self.open.is_some());
+        let commands =
+            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
         let items = palette::items(&commands, &palette::recent(&self.recent_file));
         let picker = Picker::new("Notes", items)
             .prompt("command> ")
@@ -2064,9 +2348,23 @@ impl App {
             PaletteAct::NewFolder => self.new_folder(),
             PaletteAct::Squash => self.squash(),
             PaletteAct::Quit => self.quit = true,
-            PaletteAct::Press(name) => self.press(&[name]),
+            PaletteAct::Press(name) => {
+                self.press(&[name]);
+            }
             PaletteAct::NoteTab => self.note_tab(),
             PaletteAct::WorkOnItem => self.work_on_item(),
+            PaletteAct::OpenPlan => {
+                if !self.open_plan() {
+                    self.say("notes: that line is no unticked item with a plan");
+                }
+            }
+            PaletteAct::ItemTab => {
+                if !self.go_to_item_tab() {
+                    self.say("notes: no tab of this note works on that line's item");
+                }
+            }
+            PaletteAct::AddItem => self.start_adding(),
+            PaletteAct::WorkNote => self.work_note(),
             PaletteAct::Rename
             | PaletteAct::Move
             | PaletteAct::Pin
@@ -2208,6 +2506,15 @@ impl App {
         let idle = !self.editor.pending();
         match mode {
             Mode::Normal if idle => match key.code {
+                // UX 2.0: an item's plan, its tab, and the note worked.
+                KeyCode::Enter if key.mods.is_empty() && self.opts.ux2 && self.open_plan() => {
+                    return;
+                }
+                KeyCode::Char('o')
+                    if key.mods.is_empty() && self.opts.ux2 && self.go_to_item_tab() =>
+                {
+                    return;
+                }
                 KeyCode::Enter if key.mods.is_empty() => {
                     let (row, col) = (self.editor.doc.row, self.editor.doc.col);
                     if !self.act(row, Some(col), false) {
@@ -2438,6 +2745,10 @@ impl App {
             t.push_str(text.lines().next().unwrap_or(""));
             return;
         }
+        if let Some(t) = &mut self.adding {
+            t.push_str(text.lines().next().unwrap_or(""));
+            return;
+        }
         if self.open.is_none() || self.focus != Focus::Note {
             return;
         }
@@ -2488,6 +2799,7 @@ impl App {
                 Effect::Prompt(c) => self.prompt = Some((c, String::new())),
                 Effect::Window(dir) => self.window_move(dir),
                 Effect::WorkOnItem => self.work_on_item(),
+                Effect::AddItem => self.start_adding(),
             }
         }
     }
@@ -2548,6 +2860,13 @@ impl App {
             (MouseKind::Press, MouseButton::Left) => {
                 if let Some(b) = button {
                     return self.button(b);
+                }
+                if self.geo.input == Some(y) {
+                    self.focus = Focus::Note;
+                    return self.start_adding();
+                }
+                if self.adding.is_some() {
+                    self.adding = None;
                 }
                 if inside(self.geo.list) {
                     // Leaving the note saves it, as leaving its buffer did.
@@ -2789,21 +3108,35 @@ fn item_tabs_of(
             .unwrap_or("")
             .to_string();
         let index = tab["index"].as_u64().unwrap_or(0) as usize;
-        out.entry(item.trim().to_string())
-            .or_insert(render::ItemTab {
-                index,
-                waits,
-                detail,
-            });
+        let id = tab["id"].as_str().unwrap_or("").to_string();
+        let found = render::ItemTab {
+            id,
+            note: opt("@tab_note").unwrap_or_default(),
+            index,
+            waits,
+            detail,
+        };
+        // Also under its note, so `o` finds this note's tab when another
+        // note's item of the same words came first.
+        if !found.note.is_empty() {
+            out.entry(note_item_key(&found.note, item.trim()))
+                .or_insert(found.clone());
+        }
+        out.entry(item.trim().to_string()).or_insert(found);
     }
     out
+}
+
+/// `item_tabs_of`'s key for an item's tab linked to a note.
+fn note_item_key(note: &str, item: &str) -> String {
+    format!("{note}\0{item}")
 }
 
 /// Marks the pane Notes runs in, or lets the mark go: `@notes_cmd_keys`
 /// for the workspace to pass it easy mode's Cmd keys, `@allow_passthrough`
 /// to pass its pictures' graphics commands on to the terminal, as bin/notes
 /// set its pane's allow-passthrough (src/mux/passthrough.rs).
-fn mark_pane(option: &str, on: bool) {
+pub(crate) fn mark_pane(option: &str, on: bool) {
     let Ok(pane) = std::env::var("SWITCHBOARD_PANE") else {
         return;
     };
@@ -2868,6 +3201,9 @@ pub fn run(store: Store) -> ExitCode {
         mark_pane("@allow_passthrough", true);
         if opts.easy {
             mark_pane("@notes_cmd_keys", true);
+        }
+        if opts.ux2 {
+            mark_pane("@notes_work_key", true);
         }
     }
     {
@@ -2945,6 +3281,9 @@ pub fn run(store: Store) -> ExitCode {
         mark_pane("@allow_passthrough", false);
         if opts.easy {
             mark_pane("@notes_cmd_keys", false);
+        }
+        if opts.ux2 {
+            mark_pane("@notes_work_key", false);
         }
     }
     drop(term);

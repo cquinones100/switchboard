@@ -16,6 +16,12 @@
 //! under it, or to the tab, as if the box hadn't been there.
 //!
 //! - `draw`: text measured in columns, and the box everything is drawn in.
+//! - `images`: the image atoms (avatar, picture, meter, series, shadow)
+//!   drawn with kitty graphics, or as text where the terminal can't.
+//! - `kit`: UX 2.0's atoms (tones, marks, chips, cards, keys), which every
+//!   part draws with.
+//! - `picture`: a picture shown full size over its pane, in place of
+//!   Quick Look.
 //! - `message`: say.sh's box in the middle, which any key closes.
 //! - `tip`: tip.sh's box in the top-right corner, once each.
 //! - `confirm`: a yes/no question, Enter yes ([Y/n]).
@@ -45,11 +51,14 @@ use crate::settings;
 
 pub mod confirm;
 pub mod draw;
+pub mod images;
 pub mod keylist;
+pub mod kit;
 pub mod menu;
 pub mod message;
 pub mod palette;
 pub mod picker;
+pub mod picture;
 mod serve;
 pub mod tip;
 
@@ -241,6 +250,19 @@ pub trait Overlay: AsAny + Send {
     /// went for the mouse.
     fn draw(&mut self, buf: &mut ratatui::buffer::Buffer, look: &Look);
 
+    /// Draws itself into the whole frame, for one that places images
+    /// (src/ui/images.rs); the rest draw into its buffer alone.
+    fn draw_frame(&mut self, frame: &mut Frame, look: &Look) {
+        self.draw(&mut frame.buf, look);
+    }
+
+    /// Where it last drew its box, for one that stands out over the
+    /// workspace as a box waiting on you does (`dim_behind`); `None` for a
+    /// tip, a hover's peek or a view that fills the screen.
+    fn stands_out(&self) -> Option<Rect> {
+        None
+    }
+
     fn key(&mut self, key: Key, look: &Look) -> Step;
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step;
@@ -370,10 +392,87 @@ impl Stack {
             return;
         }
         let look = self.look;
+        // Where the shadow of the topmost box so far is in the frame's images.
+        let mut shadow: Option<usize> = None;
         for layer in &mut self.layers {
-            layer.overlay.draw(&mut frame.buf, &look);
+            layer.overlay.draw_frame(frame, &look);
+            if let Some(outer) = layer.overlay.stands_out() {
+                dim_behind(&mut frame.buf, outer, &look.theme);
+                // Only the topmost box casts a shadow: one under a box over
+                // it would show through that box's surface, since a shadow
+                // is placed over the backgrounds.
+                if let Some(at) = shadow.take() {
+                    frame.images.remove(at);
+                }
+                let before = frame.images.len();
+                images::shadow(frame, "box/shadow", outer);
+                shadow = (frame.images.len() > before).then_some(before);
+            }
         }
         frame.cursor = self.layers.last().and_then(|l| l.overlay.cursor());
+    }
+}
+
+/// How much of a color is kept behind a box that stands out, the rest
+/// taken from the terminal's background.
+const KEPT_BEHIND: f32 = 0.45;
+
+/// Makes the box at `outer` stand out over what is behind it: everything
+/// else in the buffer dimmed, the sidebar and the status line too, and the
+/// box's own cells on the surface one step from the base (`Surface::Sunken`,
+/// which stays apart from the shades of a row under the mouse and the
+/// chosen one, so both still show on it) where it drew no background of
+/// its own. Its shadow is drawn after (`images::shadow`, a soft image under
+/// the text where the terminal draws them and half blocks where it doesn't;
+/// `images::shadow_cells` in the notes app, which draws into a buffer of
+/// its own).
+///
+/// A color is dimmed by mixing it toward the background. The terminal's
+/// own colors (its default and the 16 its theme names) can't be mixed by
+/// their pixels, so a default or named text color is drawn faint instead,
+/// and a default background stays. An image's placeholder cells keep their
+/// color, which is the image's id.
+pub fn dim_behind(buf: &mut ratatui::buffer::Buffer, outer: Rect, theme: &Theme) {
+    let back: [u8; 3] = if *theme == Theme::LIGHT {
+        [255, 255, 255]
+    } else {
+        [0, 0, 0]
+    };
+    let themed = |color: Color| match color {
+        Color::Indexed(n) => n < 16,
+        Color::Rgb(..) => false,
+        _ => true,
+    };
+    let mix = |color: Color| -> Color {
+        let [r, g, b] = images::rgb(color);
+        let m = |c: u8, to: u8| (c as f32 * KEPT_BEHIND + to as f32 * (1.0 - KEPT_BEHIND)) as u8;
+        Color::Rgb(m(r, back[0]), m(g, back[1]), m(b, back[2]))
+    };
+    let area = buf.area;
+    let surface = kit::Surface::Sunken.color(theme);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let inside =
+                x >= outer.left() && x < outer.right() && y >= outer.top() && y < outer.bottom();
+            let cell = &mut buf[(x, y)];
+            if inside {
+                if cell.bg == Color::Reset {
+                    cell.bg = surface;
+                }
+                continue;
+            }
+            if cell.symbol().starts_with(images::PLACEHOLDER) {
+                continue;
+            }
+            if themed(cell.fg) {
+                cell.modifier.insert(Modifier::DIM);
+            } else {
+                cell.fg = mix(cell.fg);
+            }
+            if cell.bg != Color::Reset {
+                cell.bg = mix(cell.bg);
+            }
+        }
     }
 }
 
@@ -390,6 +489,14 @@ pub enum UiEvent {
         key: Option<String>,
         client: ClientId,
     },
+    /// A picture read off the server's task for `switchboard picture`, to
+    /// show full size over the pane, or why it couldn't be.
+    Picture {
+        client: ClientId,
+        pane: crate::mux::PaneId,
+        title: String,
+        read: Result<image::RgbaImage, String>,
+    },
 }
 
 /// What the server keeps for the overlays across clients: the tips already
@@ -397,4 +504,82 @@ pub enum UiEvent {
 #[derive(Default)]
 pub struct Ui {
     pub(crate) tips_seen: Option<BTreeSet<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame_behind(cols: u16, rows: u16) -> Frame {
+        let mut f = Frame::new(cols, rows);
+        for y in 0..rows {
+            for x in 0..cols {
+                f.buf[(x, y)]
+                    .set_symbol("x")
+                    .set_fg(Color::Indexed(81))
+                    .set_bg(Color::Indexed(236));
+            }
+        }
+        f.buf[(0, 0)].set_fg(Color::Reset).set_bg(Color::Reset);
+        f
+    }
+
+    #[test]
+    fn a_box_that_stands_out_dims_what_is_behind_it_and_sits_on_a_surface() {
+        let mut f = frame_behind(20, 8);
+        let outer = Rect::new(5, 2, 8, 3);
+        for y in outer.top()..outer.bottom() {
+            for x in outer.left()..outer.right() {
+                f.buf[(x, y)].reset();
+            }
+        }
+        f.buf[(6, 3)].set_bg(Theme::DARK.highlight);
+        dim_behind(&mut f.buf, outer, &Theme::DARK);
+        images::shadow(&mut f, "box/shadow", outer);
+        // Behind it: a color mixed toward the background, the terminal's
+        // default faint and its default background kept.
+        let behind = &f.buf[(2, 6)];
+        let [r, ..] = images::rgb(Color::Indexed(81));
+        assert!(matches!(behind.fg, Color::Rgb(v, ..) if v < r));
+        assert!(matches!(behind.bg, Color::Rgb(..)));
+        assert!(f.buf[(0, 0)].modifier.contains(Modifier::DIM));
+        assert_eq!(f.buf[(0, 0)].bg, Color::Reset);
+        // The box on the surface next to the base, a background of its own
+        // (the chosen row's) kept.
+        assert_eq!(f.buf[(5, 2)].bg, kit::Surface::Sunken.color(&Theme::DARK));
+        assert_eq!(f.buf[(6, 3)].bg, Theme::DARK.highlight);
+        // With no graphics, half blocks down its right and along its bottom.
+        assert_eq!(f.buf[(13, 3)].symbol(), "▌");
+        assert_eq!(f.buf[(7, 5)].symbol(), "▀");
+        assert!(f.images.is_empty());
+    }
+
+    #[test]
+    fn with_graphics_a_box_s_shadow_is_an_image_and_placeholders_keep_their_id() {
+        let mut f = frame_behind(20, 8);
+        f.graphics = Some((8, 16));
+        f.buf[(1, 6)].set_symbol(&images::PLACEHOLDER.to_string());
+        let id = f.buf[(1, 6)].fg;
+        let outer = Rect::new(5, 2, 8, 3);
+        dim_behind(&mut f.buf, outer, &Theme::DARK);
+        images::shadow(&mut f, "box/shadow", outer);
+        assert_eq!(f.images.len(), 1);
+        assert_eq!(f.buf[(13, 3)].symbol(), "x");
+        assert_eq!(f.buf[(1, 6)].fg, id);
+    }
+
+    #[test]
+    fn only_the_topmost_of_stacked_boxes_casts_an_image_shadow() {
+        let mut stack = Stack::default();
+        for text in ["under", "a longer message over it"] {
+            stack.layers.push(Layer {
+                overlay: Box::new(Message::new(text, 5)),
+                then: None,
+            });
+        }
+        let mut f = frame_behind(60, 12);
+        f.graphics = Some((8, 16));
+        stack.draw(&mut f);
+        assert_eq!(f.images.len(), 1);
+    }
 }

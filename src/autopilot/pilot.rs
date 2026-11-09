@@ -107,6 +107,8 @@ pub struct Next {
     /// The items it will open, in that order, for its view (the first is
     /// `text`), at most `QUEUE_SHOWN`.
     pub queue: Vec<String>,
+    /// Today's spend, read with them while there is a spend limit.
+    pub spent: f64,
 }
 
 /// The most items of the queue its view lists.
@@ -332,6 +334,8 @@ pub struct Pilot {
     recent: HashMap<Key, i64>,
     /// When the note was last found empty: its time then, and when (ms).
     empty: Option<(i64, i64)>,
+    /// "Nothing left to take" said since the note last had an item to take.
+    empty_said: bool,
     pub next: Next,
     /// A read for mission control is under way.
     reading: bool,
@@ -373,6 +377,7 @@ impl Default for Pilot {
             last_open: None,
             recent: HashMap::new(),
             empty: None,
+            empty_said: false,
             next: Next::default(),
             reading: false,
             spent: None,
@@ -705,8 +710,10 @@ impl Pilot {
             }
             Found::Failed(e) => out.failed = Some(e),
             Found::Item(None) => {
-                // Said once, when it first finds the note empty.
-                if self.empty.is_none() {
+                // Said once, and only with none of its tabs open: while some
+                // still work, the view's heading says nothing more starts.
+                if !self.empty_said && self.counts.1 == 0 {
+                    self.empty_said = true;
                     out.said = Some(format!(
                         "Nothing left to take in {}",
                         note_title(&mode.note)
@@ -716,6 +723,7 @@ impl Pilot {
             }
             Found::Item(Some(item)) => {
                 self.empty = None;
+                self.empty_said = false;
                 out.take = Some(item);
             }
         }
@@ -748,14 +756,19 @@ impl Pilot {
         }
     }
 
-    /// The next item, read again for mission control.
+    /// The next item, read again for mission control: one found means the
+    /// note is no longer empty, though its tabs may fill every slot.
     pub fn next_read(&mut self, key: String, text: String, now_ms: i64) {
         self.reading = false;
+        if !text.is_empty() {
+            self.empty = None;
+        }
         self.next = Next {
             text,
             at: now_ms,
             key,
             queue: Vec::new(),
+            spent: 0.0,
         };
     }
 
@@ -776,6 +789,7 @@ impl Pilot {
     pub fn reset(&mut self) {
         self.next.at = 0;
         self.empty = None;
+        self.empty_said = false;
         self.missing_said.clear();
         self.lost = false;
         self.kept_at = None;
@@ -783,6 +797,9 @@ impl Pilot {
 
     /// What mission control's line shows while the mode is on.
     pub fn summary(&self, mode: &Mode, away: bool) -> Summary {
+        // The queue read finds nothing even while its tabs fill every slot,
+        // when no look to open one runs.
+        let read_empty = !self.next.key.is_empty() && self.next.text.is_empty();
         Summary {
             note: note_title(&mode.note),
             busy: self.counts.0,
@@ -795,9 +812,11 @@ impl Pilot {
             ready_only: mode.ready_only,
             skipped: mode.skipped_here().count(),
             spend_limit: mode.spend_limit,
+            spent: self.next.spent,
             lands_alone: mode.land_without_asking,
             hands_free: mode.hands_free,
             target: mode.target.clone(),
+            drained: (self.empty.is_some() || read_empty) && self.counts.1 > 0,
         }
     }
 }
@@ -885,7 +904,12 @@ mod tests {
                 self.said = said;
             }
             if let Some(job) = check.read_next {
-                self.pilot.next_read(job.key, "next thing".into(), self.now);
+                let next = if self.taken < self.max {
+                    "next thing"
+                } else {
+                    ""
+                };
+                self.pilot.next_read(job.key, next.into(), self.now);
             }
             let Some(job) = check.open else {
                 return;
@@ -997,18 +1021,64 @@ mod tests {
         w.mode.paused = false;
         w.max = 0;
         assert_eq!(w.settle(), 4, "nothing left in the note: nothing opens");
-        assert_eq!(w.said, "Nothing left to take in Work", "and it says so");
+        assert_eq!(w.said, "", "its tabs still work: it says nothing");
         let summary = w.pilot.summary(&w.mode, false);
         assert_eq!(
             (
                 summary.note.as_str(),
                 summary.open,
                 summary.cap,
-                summary.slots
+                summary.slots,
+                summary.drained
             ),
-            ("Work", 4, 5, 3)
+            ("Work", 4, 5, 3, true),
+            "the heading says nothing more starts"
         );
-        assert_eq!(summary.next, "next thing");
+        assert_eq!(summary.next, "");
+        w.pilot
+            .next_read("new".into(), "added meanwhile".into(), w.now);
+        assert!(
+            !w.pilot.summary(&w.mode, false).drained,
+            "an item read for the queue takes it back"
+        );
+        w.settle();
+        assert!(w.pilot.summary(&w.mode, false).drained);
+        assert_eq!(w.said, "");
+
+        w.tabs.clear();
+        w.now += RECENT_MS;
+        w.settle();
+        assert_eq!(
+            w.said, "Nothing left to take in Work",
+            "with none of its tabs open, it says so"
+        );
+        assert!(!w.pilot.summary(&w.mode, false).drained);
+        w.said.clear();
+        w.now += RECENT_MS;
+        w.settle();
+        assert_eq!(w.said, "", "once");
+    }
+
+    #[test]
+    fn with_every_slot_full_the_queue_read_says_nothing_more_starts() {
+        let mode = World::new().mode;
+        let mut pilot = Pilot {
+            counts: (3, 3),
+            ..Pilot::default()
+        };
+        assert!(
+            !pilot.summary(&mode, false).drained,
+            "nothing read yet: nothing said"
+        );
+        pilot.next_read("k".into(), "item".into(), 1);
+        assert!(!pilot.summary(&mode, false).drained);
+        pilot.next_read("k".into(), String::new(), 2);
+        assert!(pilot.summary(&mode, false).drained);
+        pilot.counts = (0, 0);
+        assert!(
+            !pilot.summary(&mode, false).drained,
+            "with no tab open it is said in the notifications instead"
+        );
     }
 
     #[test]

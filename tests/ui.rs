@@ -300,3 +300,72 @@ fn the_palette_renames_the_tab_and_reports_how_it_is_used() {
         !s.iter().any(|l| l.contains("How you use Switchboard"))
     });
 }
+
+/// Whether `needle` is anywhere in what the client was sent.
+fn sent(raw: &[u8], needle: &[u8]) -> bool {
+    raw.windows(needle.len()).any(|w| w == needle)
+}
+
+#[test]
+fn a_picture_shows_full_size_over_its_pane_and_esc_goes_back() {
+    let server = TestServer::start();
+    let file = server.home.join("shot.png");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([200, 40, 40, 255]))
+        .save(&file)
+        .unwrap();
+    let file = file.to_str().unwrap();
+    // A terminal that doesn't draw the server's images: refused, for the
+    // asker to open it another way.
+    let mut plain = server.attach(100, 30);
+    plain.wait_text("$");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, _, err) = server.run(&["picture", "-t", &pane, file]);
+    assert_ne!(code, 0);
+    assert!(err.contains("doesn't draw"), "{err}");
+    plain.detach();
+    // Gone before the next attaches, so the picture goes to that one.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while server.list()["clients"]
+        .as_array()
+        .is_some_and(|c| !c.is_empty())
+    {
+        assert!(std::time::Instant::now() < deadline, "the client stayed");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let mut client = server.attach_as("xterm-ghostty", 100, 30);
+    client.wait_text("$");
+    let (code, _, err) = server.run(&["picture", "-t", &pane, "/nowhere/shot.png"]);
+    assert_ne!(code, 0, "a file that isn't there is refused");
+    assert!(err.contains("no file"), "{err}");
+    // A pane in a tab behind the one shown: refused, since it couldn't show.
+    let made = server.ok(&["new-tab", "-d"]);
+    let hidden = made
+        .split_whitespace()
+        .find(|w| w.starts_with('%'))
+        .expect("the new pane's id");
+    let (code, _, err) = server.run(&["picture", "-t", hidden, file]);
+    assert_ne!(code, 0);
+    assert!(err.contains("isn't on the screen"), "{err}");
+
+    server.ok(&["picture", "-t", &pane, file]);
+    client.wait_text("shot.png  Esc back");
+    assert!(sent(&client.raw, b"\x1b_G"), "drawn with kitty graphics");
+    assert!(sent(&client.raw, b"t=d"), "its data inline");
+
+    // A key other than Esc stays with it, kept from the pane.
+    client.type_text("x");
+    client.wait_text("Esc back");
+    client.type_text("\x1b");
+    client.wait_for("the picture gone", |s| {
+        !s.iter().any(|l| l.contains("Esc back"))
+    });
+    let screen = server.ok(&["capture-pane", "-t", &pane]);
+    assert!(
+        !screen.contains('x'),
+        "the x never reached the shell: {screen}"
+    );
+}

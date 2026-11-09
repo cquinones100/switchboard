@@ -59,12 +59,14 @@ use crate::sidebar::render::Filter;
 use crate::ui::{Look, Overlay, Step, Theme};
 
 pub use serve::{Opening, open_link};
-pub use views::{Revived, Scope, View, ViewId, Worktree};
+pub use views::{Group, Revived, Scope, View, ViewId, Worktree};
 
-/// Where Tab has put the focus: a view's name in the bar, the filter, the
-/// chosen item, or easy mode's × (render.js's `FOCUS`).
+/// Where Tab has put the focus: a group's name (with UX 2.0) or a view's
+/// in the bar, the filter, the chosen item, or easy mode's × (render.js's
+/// `FOCUS`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Focus {
+    Group(Group),
     View(usize),
     Filter,
     Item,
@@ -72,10 +74,11 @@ pub enum Focus {
 }
 
 /// What a click on a part of the screen means, and what the mouse is over:
-/// a view's name, the filter, a card or a row (by its place in the view;
+/// a group's name, a view's name, the filter, a card or a row (by its place in the view;
 /// -1 is a line above the cards), or easy mode's ×.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spot {
+    Group(Group),
     View(usize),
     Filter,
     Index(isize),
@@ -124,6 +127,8 @@ pub struct Snapshot {
     /// The line of the note worked continuously, leading the tabs while
     /// the mode is on (src/autopilot); the cursor's -1 is on it.
     pub pilot: Option<crate::autopilot::Summary>,
+    /// The client's terminal draws the kit's half circles (src/ui/kit.rs).
+    pub caps: bool,
 }
 
 impl Default for Snapshot {
@@ -146,6 +151,7 @@ impl Default for Snapshot {
             frame: 0,
             screens: HashMap::new(),
             pilot: None,
+            caps: false,
         }
     }
 }
@@ -179,6 +185,9 @@ pub struct Mission {
     pub snap: Snapshot,
     /// Where each part was last drawn, for clicks and the mouse.
     pub hits: Vec<HitBox>,
+    /// The meters it last drew, placed as images over its text (`images`),
+    /// where they sit on the whole screen.
+    pub meters: Vec<render::Meter>,
     /// The screen it was last drawn on: with UX 2.0, the area right of
     /// the sidebar.
     pub size: (u16, u16),
@@ -213,6 +222,7 @@ impl Mission {
             note: None,
             snap: Snapshot::default(),
             hits: Vec::new(),
+            meters: Vec::new(),
             size: (0, 0),
             left: 0,
             came: None,
@@ -227,6 +237,12 @@ impl Mission {
         self.view
             .checked_sub(1)
             .and_then(|i| self.snap.views.get(i))
+    }
+
+    /// With UX 2.0, the bar's groups and the views in each
+    /// (`views::groups`); `None` without it, whose bar is one row.
+    pub fn groups(&self) -> Option<Vec<(Group, Vec<usize>)>> {
+        self.snap.rules.ux2.then(|| views::groups(&self.snap.views))
     }
 
     /// The tabs in the order the cards show them.
@@ -260,9 +276,31 @@ impl Overlay for Mission {
         let area =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
-        let (lines, hits) = render::screen(self, area.width as usize, area.height as usize);
+        let (lines, hits, meters) = render::drawn(self, area.width as usize, area.height as usize);
         self.hits = hits;
+        self.meters = meters
+            .into_iter()
+            .map(|meter| render::Meter {
+                x: meter.x + area.x,
+                y: meter.y + area.y,
+                ..meter
+            })
+            .collect();
         crate::sidebar::render::draw(buf, area, &lines);
+    }
+
+    fn draw_frame(&mut self, frame: &mut crate::mux::compose::Frame, look: &Look) {
+        self.draw(&mut frame.buf, look);
+        for meter in &self.meters {
+            crate::ui::images::meter(
+                frame,
+                &meter.name,
+                ratatui::layout::Rect::new(meter.x, meter.y, meter.width, 1),
+                meter.frac,
+                meter.color,
+                None,
+            );
+        }
     }
 
     // The server takes mission control's keys and mouse itself

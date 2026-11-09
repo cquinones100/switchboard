@@ -198,7 +198,8 @@ impl Server {
                 let view = self.sources.views.entry(TICKETS).or_default();
                 match result {
                     Ok(issues) => {
-                        view.items = tickets::board_from(&issues, &tabs);
+                        view.items =
+                            tickets::board_from(&issues, &tabs, crate::settings::is_on("ux2"));
                         self.sources.kept.ticket_issues = Some(issues);
                         setup::answered(view);
                     }
@@ -249,7 +250,7 @@ impl Server {
     /// Gives today's todo note what a view last read, as the daemon handed
     /// todo.js its views: each item as a line (`todo_line`), the PR board's
     /// open ones under their column ("In review: ..."), the merged left out,
-    /// and the ticket board's not done; and whether the look failed.
+    /// and the ticket board's not done or closed; and whether the look failed.
     fn hand_to_todo(&mut self, name: &str) {
         let Some(view) = self.sources.views.get(name) else {
             return;
@@ -262,7 +263,7 @@ impl Server {
                 match name {
                     PRS if column == "Merged" => None,
                     PRS if !column.is_empty() => Some(format!("{column}: {}", todo_line(i))),
-                    TICKETS if column == "Done" => None,
+                    TICKETS if column == "Done" || column == "Closed" => None,
                     _ => Some(todo_line(i)),
                 }
             })
@@ -608,7 +609,7 @@ impl Server {
             self.sources.views.get_mut(TICKETS),
             &self.sources.kept.ticket_issues,
         ) {
-            view.items = tickets::board_from(issues, tabs);
+            view.items = tickets::board_from(issues, tabs, crate::settings::is_on("ux2"));
         }
         self.redraw_everywhere();
     }

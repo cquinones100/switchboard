@@ -70,7 +70,8 @@ use crossterm::event::{
 };
 use crossterm::terminal;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 
 use super::ask::{self, Asking, Said};
 use super::git::{self, Change, Entry, Section};
@@ -81,6 +82,7 @@ use super::story::{self, Look as StoryLook, Progress, Reading, Story};
 use super::tell::{self, Asked, Heard, Teller};
 use crate::mux::compose::{Frame, Screen};
 use crate::ui::draw::width;
+use crate::ui::kit::{self, Tone};
 use crate::{settings, util};
 
 mod draw;
@@ -128,6 +130,10 @@ pub struct Options {
     /// named after them (key_help_line).
     pub easy: bool,
     pub key_help: bool,
+    /// UX 2.0 (ux2): the list under the kit's labels, the chapter's why over
+    /// the diff, one bar over both sides, a hunk's note as a card under it,
+    /// and the files read as one scroll.
+    pub ux2: bool,
     /// The button under the mouse lit (hover_highlight).
     pub hover: bool,
     /// The light theme's colours (theme).
@@ -166,6 +172,9 @@ impl Options {
             ask: on("diff_ask"),
             easy: on("easy_keys"),
             key_help: on("key_help_line"),
+            ux2: all
+                .iter()
+                .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             hover: on("hover_highlight"),
             light: all
                 .iter()
@@ -274,7 +283,17 @@ enum Line {
         new_side: bool,
         text: String,
     },
+    /// With UX 2.0, a row of the card a hunk's note is drawn in under the
+    /// hunk, across both sides.
+    Card(Vec<Span<'static>>),
 }
+
+/// A hunk's note card with the last lines of its hunk, a side and a
+/// line each, still to be passed before it goes in.
+type WaitingCard = (Vec<(bool, usize)>, Vec<Line>);
+
+/// The label over generated files in UX 2.0's list, last.
+const GENERATED_LAST: &str = "Generated, last";
 
 /// One row of the list.
 #[derive(Clone, Debug, PartialEq)]
@@ -283,6 +302,11 @@ enum ListRow {
     Loading,
     Heading(String, StoryLook),
     File(usize),
+    /// With UX 2.0: a chapter's number and title, a section's label in its
+    /// tone with its count, and the blank row between chapters.
+    Chapter(usize),
+    Label(String, Tone, Option<usize>),
+    Blank,
 }
 
 /// The story's state.
@@ -523,14 +547,18 @@ pub struct App {
     /// Each file's two sides once read, and each text read, by commit and path.
     files: HashMap<String, Sides>,
     texts: HashMap<(String, String), Option<String>>,
-    /// The shown file's screen lines, for the sides' widths they were laid
-    /// out for.
-    lines: Option<(String, u16, u16, Vec<Line>)>,
-    /// The diff's cursor (a screen line and a column) and its first line
-    /// on the screen.
+    /// Each file's screen lines by its key, for the sides' widths they
+    /// were laid out for.
+    lines: HashMap<String, (u16, u16, Vec<Line>)>,
+    /// The diff's cursor (a screen line of the shown file and a column),
+    /// and the view's first line: line `top` of the list's file `view`.
+    /// That is the shown file, but while UX 2.0 reads the files as one
+    /// scroll, where it may be a file before it, and `top` past its lines
+    /// (on the rule and the bar before the next).
     cur: usize,
     col: usize,
     top: usize,
+    view: usize,
     /// Haiku's order of the code by its paths, when no story is told.
     smart: HashMap<String, usize>,
     /// The story shown, and the one told of the change (of its commits
@@ -589,6 +617,8 @@ pub struct App {
     /// The colours the terminal said it draws in, as the diff started
     /// (src/mux/terminal.rs): its background, for the tints, and its text.
     term: crate::mux::terminal::Colors,
+    /// Set while the screen is drawn, when no file is read.
+    drawing: bool,
 }
 
 /// `fg` mixed over `bg`, `amount` of it.
@@ -623,10 +653,11 @@ impl App {
             moved: false,
             files: HashMap::new(),
             texts: HashMap::new(),
-            lines: None,
+            lines: HashMap::new(),
             cur: 0,
             col: 0,
             top: 0,
+            view: 0,
             smart: HashMap::new(),
             story: None,
             told: None,
@@ -660,6 +691,7 @@ impl App {
             wants: None,
             title: None,
             term: Default::default(),
+            drawing: false,
         }
     }
 
@@ -691,9 +723,14 @@ impl App {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        self.resize_now(cols, rows);
+        self.read_view();
+    }
+
+    fn resize_now(&mut self, cols: u16, rows: u16) {
         self.cols = cols.max(20);
         self.rows = rows.max(5);
-        self.lines = None;
+        self.lines.clear();
         if let Some(h) = &mut self.history {
             h.app.resize(cols, rows);
         }
@@ -740,6 +777,11 @@ impl App {
     // ── The change ──────────────────────────────────────────────────────────
 
     pub fn event(&mut self, msg: Msg) {
+        self.event_now(msg);
+        self.read_view();
+    }
+
+    fn event_now(&mut self, msg: Msg) {
         match msg {
             Msg::Loading(text) => self.loading = Some(text),
             Msg::Loaded(Err(why)) => {
@@ -799,6 +841,11 @@ impl App {
     /// The change is read: its files listed, the first one someone wrote
     /// shown, and its story asked for.
     pub fn loaded(&mut self, change: Change) {
+        self.loaded_now(change);
+        self.read_view();
+    }
+
+    fn loaded_now(&mut self, change: Change) {
         self.loading = None;
         self.read_input(&change);
         self.change = Some(change);
@@ -867,6 +914,7 @@ impl App {
         {
             self.page = None;
             self.whole_at = None;
+            self.lines.clear();
         }
     }
 
@@ -910,12 +958,18 @@ impl App {
     fn refreshed(&mut self, change: Change) {
         let keep = self.current().map(Entry::key);
         let was = self.at;
+        // The view's file by key, read before the change is replaced.
+        let view = self
+            .order
+            .get(self.view)
+            .and_then(|&i| self.entry(i))
+            .map(Entry::key);
         // Each file's sides read again, the index and the files on disk
         // anew; a commit's text doesn't change.
         self.files.clear();
         self.texts
             .retain(|(commit, _), _| commit != git::INDEX && commit != git::WORK_TREE);
-        self.lines = None;
+        self.lines.clear();
         self.visual = None;
         self.read_input(&change);
         let (key, _) = story::key_of(change.told_part());
@@ -950,6 +1004,24 @@ impl App {
             }
             None => self.show_at(was),
         }
+        let entries = self.entries();
+        self.view = view
+            .and_then(|v| self.order.iter().position(|&i| entries[i].key() == v))
+            .unwrap_or(self.at);
+        self.fit_view();
+    }
+
+    /// The view's first line and the cursor kept within their files as
+    /// they are laid out now, which reading the change again may shorten.
+    fn fit_view(&mut self) {
+        if !self.one_scroll() || self.order.is_empty() {
+            return;
+        }
+        self.fix_view();
+        let n = self.stream_len(self.view);
+        self.top = self.top.min(n.saturating_sub(1));
+        let n = self.screen_lines().len();
+        self.cur = self.cur.min(n.saturating_sub(1));
     }
 
     fn entries(&self) -> &[Entry] {
@@ -968,6 +1040,11 @@ impl App {
     /// The files in the order known now, the cursor kept on its file.
     fn sort(&mut self) {
         let keep = self.current().map(Entry::key);
+        let view = self
+            .order
+            .get(self.view)
+            .and_then(|&i| self.entry(i))
+            .map(Entry::key);
         let entries = self.entries().to_vec();
         let story = self.story.as_ref();
         let smart = &self.smart;
@@ -1000,6 +1077,11 @@ impl App {
             self.at = at;
         }
         self.at = self.at.min(self.order.len().saturating_sub(1));
+        // The view stays on its file where that file still is, else on
+        // the shown one; fix_view puts one now after it back on it.
+        self.view = view
+            .and_then(|v| self.order.iter().position(|&i| entries[i].key() == v))
+            .unwrap_or(self.at);
     }
 
     /// The first file someone wrote, else the first.
@@ -1132,6 +1214,11 @@ impl App {
 
     /// The story is told: the list in its order, headed by its chapters.
     pub fn told(&mut self, story: Story) {
+        self.told_now(story);
+        self.read_view();
+    }
+
+    fn told_now(&mut self, story: Story) {
         if let Some(missed) = story::missed_text(&story) {
             self.say(format!("{missed}."));
         }
@@ -1142,7 +1229,7 @@ impl App {
         if !self.moved {
             self.pick_first();
         }
-        self.lines = None;
+        self.lines.clear();
     }
 
     // ── The file shown ──────────────────────────────────────────────────────
@@ -1154,14 +1241,67 @@ impl App {
             return;
         }
         self.at = at.min(self.order.len() - 1);
+        self.view = self.at;
         self.load_shown();
-        self.lines = None;
         self.first_change();
+    }
+
+    /// The shown file now the list's file at `at`, the cursor on its line
+    /// `cur`, the view where it was: the cursor moving on from one file into
+    /// the next while UX 2.0 reads them as one scroll.
+    fn cross_to(&mut self, at: usize, cur: usize) {
+        self.visual = None;
+        self.at = at;
+        self.load_shown();
+        self.cur = cur;
+        self.col = 0;
+        self.moved = true;
+        // The side with the focus kept where the file has it, else its
+        // other: an added file has no old side, a deleted one no new.
+        let (ow, nw) = self.side_widths();
+        self.focus = match self.focus {
+            Focus::New if nw == 0 => Focus::Old,
+            Focus::Old if ow == 0 => Focus::New,
+            focus => focus,
+        };
+    }
+
+    /// The files the view reaches read, before it is drawn: the scroll is
+    /// drawn only as far as the files already read, so drawing never runs
+    /// git, which a key or the wheel moving the view does here, as moving
+    /// to a file always read the shown one.
+    fn read_view(&mut self) {
+        if !self.one_scroll() || self.order.is_empty() {
+            return;
+        }
+        // The cursor in the view first, reading the files between them,
+        // then the files the view reaches.
+        self.fit_view();
+        self.keep_cursor();
+        let h = self.body_height();
+        self.rows_left(self.view, self.top, h);
+    }
+
+    /// Whether the list's file `k` has its sides read.
+    fn is_read(&self, k: usize) -> bool {
+        self.order
+            .get(k)
+            .and_then(|&i| self.entry(i))
+            .is_some_and(|e| self.files.contains_key(&e.key()))
     }
 
     /// Reads the shown file's two sides, once, and asks for their colours.
     fn load_shown(&mut self) {
-        let Some(entry) = self.current().cloned() else {
+        self.load(self.at);
+    }
+
+    /// Reads the two sides of the list's file at `k`, once, and asks for
+    /// their colours.
+    fn load(&mut self, k: usize) {
+        if self.drawing {
+            return;
+        }
+        let Some(entry) = self.order.get(k).and_then(|&i| self.entry(i)).cloned() else {
             return;
         };
         if self.files.contains_key(&entry.key()) {
@@ -1246,12 +1386,20 @@ impl App {
     /// The columns of the old side and the new; one of them 0 for a file
     /// shown alone.
     fn side_widths(&self) -> (u16, u16) {
+        match self.current() {
+            Some(entry) => self.widths_of(entry),
+            None => self.widths_of_alone(None),
+        }
+    }
+
+    /// The columns of a file's old side and its new.
+    fn widths_of(&self, entry: &Entry) -> (u16, u16) {
+        self.widths_of_alone(self.files.get(&entry.key()).and_then(|s| s.alone))
+    }
+
+    fn widths_of_alone(&self, alone: Option<bool>) -> (u16, u16) {
         let w = self.diff_area().width;
-        match self
-            .current()
-            .and_then(|e| self.files.get(&e.key()))
-            .and_then(|s| s.alone)
-        {
+        match alone {
             Some(true) => (0, w),
             Some(false) => (w, 0),
             None => {
@@ -1261,9 +1409,83 @@ impl App {
         }
     }
 
-    /// The rows the diff's text takes, below each side's bar.
+    /// The rows over the diff's text: the chapter's heading with UX 2.0,
+    /// then the bar.
+    fn head_height(&self) -> usize {
+        self.chapter_head(self.diff_area().width as usize).len() + 1
+    }
+
+    /// The rows the diff's text takes, below the chapter's heading and the
+    /// bar.
     fn body_height(&self) -> usize {
-        self.diff_area().height.saturating_sub(1) as usize
+        (self.diff_area().height as usize).saturating_sub(self.head_height())
+    }
+
+    /// Whether the files read as one scroll, each following the last (UX
+    /// 2.0).
+    fn one_scroll(&self) -> bool {
+        self.opts.ux2
+    }
+
+    /// The rows of the list's file `k` in the scroll: its lines, and while
+    /// the files read as one, a rule and the next file's bar after them.
+    fn stream_len(&mut self, k: usize) -> usize {
+        let n = self.lines_of(k).len();
+        if self.one_scroll() && k + 1 < self.order.len() {
+            n + 2
+        } else {
+            n
+        }
+    }
+
+    /// The place `by` rows on from row `top` of file `k` in the scroll,
+    /// stopping at the last file's last row.
+    fn stream_ahead(&mut self, mut k: usize, mut top: usize, mut by: usize) -> (usize, usize) {
+        loop {
+            let n = self.stream_len(k);
+            if top + by < n {
+                return (k, top + by);
+            }
+            if k + 1 >= self.order.len() {
+                return (k, n.saturating_sub(1));
+            }
+            by -= n.saturating_sub(top);
+            k += 1;
+            top = 0;
+        }
+    }
+
+    /// The place `by` rows back from row `top` of file `k` in the scroll,
+    /// stopping at the first file's first row.
+    fn stream_back(&mut self, mut k: usize, mut top: usize, mut by: usize) -> (usize, usize) {
+        loop {
+            if top >= by {
+                return (k, top - by);
+            }
+            if k == 0 {
+                return (0, 0);
+            }
+            by -= top + 1;
+            k -= 1;
+            top = self.stream_len(k).saturating_sub(1);
+        }
+    }
+
+    /// How many rows the scroll's place (`k`, `top`) is after the view's
+    /// first; `None` when it is before it.
+    fn rows_from_view(&mut self, k: usize, top: usize) -> Option<usize> {
+        if (k, top) < (self.view, self.top) {
+            return None;
+        }
+        let mut rows = 0;
+        let mut at = self.view;
+        let mut from = self.top;
+        while at < k {
+            rows += self.stream_len(at).saturating_sub(from);
+            at += 1;
+            from = 0;
+        }
+        Some(rows + top - from)
     }
 
     /// Which of the story's runs a file's changes are in: a working tree's
@@ -1294,30 +1516,60 @@ impl App {
 
     /// The shown file's screen lines, laid out for the sides' widths.
     fn screen_lines(&mut self) -> &[Line] {
-        let Some(entry) = self.current().cloned() else {
+        self.lines_of(self.at)
+    }
+
+    /// The screen lines of the list's file `k`, read first if it hasn't
+    /// been, laid out for its sides' widths.
+    fn lines_of(&mut self, k: usize) -> &[Line] {
+        self.load(k);
+        let Some(entry) = self.order.get(k).and_then(|&i| self.entry(i)).cloned() else {
             return &[];
         };
-        let (ow, nw) = self.side_widths();
+        let key = entry.key();
+        // Not laid out until read, so nothing empty is kept for it.
+        if !self.files.contains_key(&key) {
+            return &[];
+        }
+        let (ow, nw) = self.widths_of(&entry);
         let fresh = self
             .lines
-            .as_ref()
-            .is_some_and(|(p, o, n, _)| *p == entry.key() && *o == ow && *n == nw);
+            .get(&key)
+            .is_some_and(|(o, n, _)| *o == ow && *n == nw);
         if !fresh {
             let lines = self.build_lines(&entry, ow as usize, nw as usize);
-            self.lines = Some((entry.key(), ow, nw, lines));
+            self.lines.insert(key.clone(), (ow, nw, lines));
         }
-        &self.lines.as_ref().expect("built above").3
+        &self.lines[&key].2
     }
 
     fn build_lines(&self, entry: &Entry, ow: usize, nw: usize) -> Vec<Line> {
         let Some(s) = self.files.get(&entry.key()) else {
             return Vec::new();
         };
+        // In the one scroll a binary file says so in its place.
+        if self.opts.ux2 && s.binary {
+            let faint = Tone::Faint.style(&self.theme());
+            return vec![Line::Card(vec![Span::styled(
+                " A binary file: no text to compare.",
+                faint,
+            )])];
+        }
+        // An empty file, added or deleted, gets a line saying so, for the
+        // cursor and ]c to stop on.
+        if self.opts.ux2 && s.rows.is_empty() {
+            let faint = Tone::Faint.style(&self.theme());
+            return vec![Line::Card(vec![Span::styled(" An empty file.", faint)])];
+        }
         // Each note goes over the line its hunk starts at, on the side it
         // changes: the new, or the old for lines only taken out. A file
         // changed since its commits has none: its story's hunks are at the
-        // committed lines, which the working tree may have moved.
+        // committed lines, which the working tree may have moved. With UX
+        // 2.0 each is a card under the hunk's last line instead.
         let mut notes: HashMap<(bool, usize), Vec<String>> = HashMap::new();
+        // Each card with the last line of each side its hunk has, both
+        // to be passed before the card goes in.
+        let mut cards: Vec<WaitingCard> = Vec::new();
         if self.opts.notes
             && !self.changed_since(entry)
             && let Some(story) = &self.story
@@ -1341,6 +1593,30 @@ impl App {
                 } else {
                     (hunk.old_start, hunk.old_count)
                 };
+                if self.opts.ux2 {
+                    // A card under the hunk, after the last line of each side
+                    // it has, which a replacement can leave on different rows.
+                    let mut ends = Vec::new();
+                    for (side, start, span) in [
+                        (false, hunk.old_start, hunk.old_count),
+                        (true, hunk.new_start, hunk.new_count),
+                    ] {
+                        let shown = match s.alone {
+                            Some(alone) => alone == side,
+                            None => true,
+                        };
+                        if shown && span > 0 {
+                            ends.push((side, (start + span - 1).max(1) - 1));
+                        }
+                    }
+                    if ends.is_empty() {
+                        ends.push((new_side, (first.max(1)) - 1));
+                    }
+                    if let Some(card) = self.note_card(story, hunk, home, ow, nw) {
+                        cards.push((ends, card));
+                    }
+                    continue;
+                }
                 let line = (if count == 0 { first + 1 } else { first }).max(1);
                 let cols = if new_side { nw } else { ow }.max(10);
                 if let Some(text) = story::note_lines(story, hunk, home, cols) {
@@ -1361,6 +1637,19 @@ impl App {
                 }
             }
         };
+        let put_cards = |out: &mut Vec<Line>, row: &sides::Row, cards: &mut Vec<WaitingCard>| {
+            let passed = [row.old.map(|o| (false, o)), row.new.map(|n| (true, n))];
+            for (ends, _) in cards.iter_mut() {
+                ends.retain(|e| !passed.contains(&Some(*e)));
+            }
+            let (done, waiting): (Vec<_>, Vec<_>) = std::mem::take(cards)
+                .into_iter()
+                .partition(|(ends, _)| ends.is_empty());
+            *cards = waiting;
+            for (_, lines) in done {
+                out.extend(lines);
+            }
+        };
         for item in sides::items(&s.rows, &s.opened, s.all_open || s.alone.is_some()) {
             match item {
                 Item::Fold { first, count } => {
@@ -1373,6 +1662,9 @@ impl App {
                         }
                     }
                     out.push(Line::Fold { first, count });
+                    for row in &s.rows[first..first + count] {
+                        put_cards(&mut out, row, &mut cards);
+                    }
                 }
                 Item::Row(r) => {
                     let row = &s.rows[r];
@@ -1413,10 +1705,75 @@ impl App {
                             new: cell(row.new, &new_pieces),
                         });
                     }
+                    put_cards(&mut out, row, &mut cards);
                 }
             }
         }
+        // A card whose line the file doesn't reach goes at its end.
+        for (_, lines) in cards {
+            out.extend(lines);
+        }
         out
+    }
+
+    /// The kit's colors for the theme the diff is drawn in.
+    fn theme(&self) -> crate::ui::Theme {
+        if self.opts.light {
+            crate::ui::Theme::LIGHT
+        } else {
+            crate::ui::Theme::DARK
+        }
+    }
+
+    /// A hunk's note as UX 2.0 draws it: a card across both sides, titled
+    /// "✎ Note", or with the chapter's number and title for a hunk of
+    /// another chapter than `home`; `None` for a hunk of its home chapter
+    /// with no note.
+    fn note_card(
+        &self,
+        story: &Story,
+        hunk: &story::HunkNote,
+        home: usize,
+        ow: usize,
+        nw: usize,
+    ) -> Option<Vec<Line>> {
+        let other = (hunk.chapter != home)
+            .then(|| story.chapters.get(hunk.chapter.wrapping_sub(1)))
+            .flatten();
+        if hunk.note.is_empty() && other.is_none() {
+            return None;
+        }
+        let theme = self.theme();
+        let title = match other {
+            // Numbered among the chapters told, as the headings count them;
+            // the generated files' and what isn't committed by name alone.
+            Some(chapter) if hunk.chapter <= self.told_chapters() => vec![
+                Span::styled(
+                    format!("{}/{}", hunk.chapter, self.told_chapters()),
+                    Tone::Accent.bold(&theme),
+                ),
+                Span::styled(format!(" {}", chapter.title), Tone::Text.bold(&theme)),
+            ],
+            Some(chapter) => vec![Span::styled(chapter.title.clone(), Tone::Text.bold(&theme))],
+            None => vec![
+                kit::mark(kit::Mark::Note, 0, &theme),
+                Span::styled(" Note", Tone::Text.bold(&theme)),
+            ],
+        };
+        let cols = if ow > 0 && nw > 0 {
+            ow + nw + 1
+        } else {
+            ow + nw
+        };
+        let inside: Vec<Vec<Span<'static>>> =
+            crate::ui::draw::wrap(&hunk.note, cols.saturating_sub(4).max(10))
+                .into_iter()
+                .filter(|l| !l.is_empty())
+                .map(|l| vec![Span::styled(l, Tone::Text.style(&theme))])
+                .collect();
+        let edge = kit::card_edge(false, None, &theme);
+        let rows = kit::card(cols, inside.len() + 2, title, Vec::new(), &inside, edge);
+        Some(rows.into_iter().map(Line::Card).collect())
     }
 
     /// Opens the shown file at its first change, the cursor on the first
@@ -1489,7 +1846,15 @@ impl App {
 
     // ── Keys ────────────────────────────────────────────────────────────────
 
+    /// A key pressed, the files the view then reaches read (`read_view`),
+    /// as are those after the mouse, an event or a resize.
     pub fn key(&mut self, key: KeyEvent) -> Act {
+        let act = self.key_now(key);
+        self.read_view();
+        act
+    }
+
+    fn key_now(&mut self, key: KeyEvent) -> Act {
         if key.kind == KeyEventKind::Release {
             return Act::Same;
         }
@@ -1774,6 +2139,20 @@ impl App {
     }
 
     fn move_cursor(&mut self, by: isize) {
+        // G and gg (and Home and End) go to the file's own ends, so they
+        // never read every file of the scroll.
+        let to_an_end = by.unsigned_abs() >= (isize::MAX / 4) as usize;
+        if self.one_scroll() && !to_an_end && !self.order.is_empty() {
+            let (k, c) = self.lines_on(by);
+            if k != self.at {
+                self.cross_to(k, c);
+            }
+            self.cur = c;
+            self.col = 0;
+            self.moved = true;
+            self.keep_cursor();
+            return;
+        }
         let n = self.screen_lines().len();
         if n == 0 {
             return;
@@ -1784,9 +2163,60 @@ impl App {
         self.keep_cursor();
     }
 
+    /// The file and line `by` lines on from the cursor in the files read
+    /// as one scroll, passing from a file's last line to the next's first.
+    fn lines_on(&mut self, by: isize) -> (usize, usize) {
+        let (mut k, mut c) = (self.at, self.cur);
+        let mut left = by.unsigned_abs();
+        if by >= 0 {
+            loop {
+                let n = self.lines_of(k).len();
+                if left == 0 || c + left < n {
+                    return (k, (c + left).min(n.saturating_sub(1)));
+                }
+                if k + 1 >= self.order.len() {
+                    return (k, n.saturating_sub(1));
+                }
+                left -= n.saturating_sub(c).max(1).min(left);
+                k += 1;
+                c = 0;
+            }
+        }
+        loop {
+            if c >= left {
+                return (k, c - left);
+            }
+            if k == 0 {
+                return (0, 0);
+            }
+            left -= c + 1;
+            k -= 1;
+            c = self.lines_of(k).len().saturating_sub(1);
+        }
+    }
+
+    /// The view's file the shown one, but while the files read as one
+    /// scroll and it is still a file before it.
+    fn fix_view(&mut self) {
+        if !self.one_scroll() || self.view > self.at || self.view >= self.order.len() {
+            self.view = self.at;
+        }
+    }
+
     /// The view scrolled so the cursor is in it.
     fn keep_cursor(&mut self) {
         let h = self.body_height().max(1);
+        self.fix_view();
+        if self.one_scroll() {
+            match self.rows_from_view(self.at, self.cur) {
+                None => (self.view, self.top) = (self.at, self.cur),
+                Some(d) if d >= h => {
+                    (self.view, self.top) = self.stream_ahead(self.view, self.top, d + 1 - h);
+                }
+                Some(_) => {}
+            }
+            return;
+        }
         if self.cur < self.top {
             self.top = self.cur;
         } else if self.cur >= self.top + h {
@@ -1794,10 +2224,56 @@ impl App {
         }
     }
 
+    /// How many rows the scroll has from row `top` of file `k` to its end,
+    /// counted no further than `upto`.
+    fn rows_left(&mut self, mut k: usize, top: usize, upto: usize) -> usize {
+        let mut rows = self.stream_len(k).saturating_sub(top);
+        while rows < upto && k + 1 < self.order.len() {
+            k += 1;
+            rows += self.stream_len(k);
+        }
+        rows
+    }
+
     /// The diff scrolled `by` lines, the cursor kept in view.
     fn scroll_diff(&mut self, by: usize, down: bool) {
-        let n = self.screen_lines().len();
         let h = self.body_height().max(1);
+        if self.one_scroll() && !self.order.is_empty() {
+            self.fix_view();
+            (self.view, self.top) = if down {
+                let left = self.rows_left(self.view, self.top, by + h);
+                let by = by.min(left.saturating_sub(h));
+                self.stream_ahead(self.view, self.top, by)
+            } else {
+                self.stream_back(self.view, self.top, by)
+            };
+            // The cursor brought into the view: to its first line, or its
+            // last, past a rule and a bar to a file's line.
+            let into = match self.rows_from_view(self.at, self.cur) {
+                None => {
+                    let (k, t) = (self.view, self.top);
+                    if t < self.lines_of(k).len() {
+                        Some((k, t))
+                    } else {
+                        Some(((k + 1).min(self.order.len() - 1), 0))
+                    }
+                }
+                Some(d) if d >= h => {
+                    let (k, t) = self.stream_ahead(self.view, self.top, h - 1);
+                    Some((k, t.min(self.lines_of(k).len().saturating_sub(1))))
+                }
+                Some(_) => None,
+            };
+            if let Some((k, c)) = into {
+                if k != self.at {
+                    self.cross_to(k, c);
+                }
+                self.cur = c;
+            }
+            self.moved = true;
+            return;
+        }
+        let n = self.screen_lines().len();
         let last = n.saturating_sub(h);
         self.top = if down {
             (self.top + by).min(last)
@@ -1810,25 +2286,12 @@ impl App {
     }
 
     /// ]c and [c in the diff: the start of the next change or the one before.
+    /// While the files read as one scroll, one past the last change goes on
+    /// to the next file's first, and one before the first to the last of
+    /// the file before.
     fn change_jump(&mut self, count: usize, forward: bool) {
-        let lines = self.screen_lines().to_vec();
-        let changed: Vec<bool> = {
-            let rows = self
-                .current()
-                .and_then(|e| self.files.get(&e.key()))
-                .map(|s| &s.rows);
-            lines
-                .iter()
-                .map(|l| match (l, rows) {
-                    (Line::Pair { row, .. }, Some(rows)) => rows[*row].changes(),
-                    _ => false,
-                })
-                .collect()
-        };
-        let starts: Vec<usize> = (0..lines.len())
-            .filter(|&i| changed[i] && (i == 0 || !changed[i - 1]))
-            .collect();
         for _ in 0..count {
+            let starts = self.change_starts(self.at);
             let next = if forward {
                 starts.iter().find(|&&i| i > self.cur).copied()
             } else {
@@ -1836,11 +2299,61 @@ impl App {
             };
             match next {
                 Some(i) => self.cur = i,
+                None if self.one_scroll() => {
+                    let mut found = None;
+                    let mut k = self.at;
+                    while found.is_none() {
+                        k = match forward {
+                            true if k + 1 < self.order.len() => k + 1,
+                            false if k > 0 => k - 1,
+                            _ => break,
+                        };
+                        let starts = self.change_starts(k);
+                        found = if forward {
+                            starts.first()
+                        } else {
+                            starts.last()
+                        }
+                        .map(|&i| (k, i));
+                    }
+                    match found {
+                        Some((k, i)) => self.cross_to(k, i),
+                        None => break,
+                    }
+                }
                 None => break,
             }
         }
         self.col = 0;
         self.keep_cursor();
+    }
+
+    /// The screen lines a change starts at in the list's file `k`.
+    fn change_starts(&mut self, k: usize) -> Vec<usize> {
+        let lines = self.lines_of(k).to_vec();
+        let sides = self
+            .order
+            .get(k)
+            .and_then(|&i| self.entry(i))
+            .and_then(|e| self.files.get(&e.key()));
+        let rows = sides.map(|s| &s.rows);
+        let changed: Vec<bool> = lines
+            .iter()
+            .map(|l| match (l, rows) {
+                (Line::Pair { row, .. }, Some(rows)) => rows[*row].changes(),
+                _ => false,
+            })
+            .collect();
+        let starts: Vec<usize> = (0..lines.len())
+            .filter(|&i| changed[i] && (i == 0 || !changed[i - 1]))
+            .collect();
+        // In the one scroll every file is a stop: one with no line marked
+        // changed (added or deleted, shown on one side; binary; renamed
+        // alone; empty) starts at its first line.
+        if self.one_scroll() && starts.is_empty() && !lines.is_empty() {
+            return vec![0];
+        }
+        starts
     }
 
     fn open_fold(&mut self) {
@@ -1853,7 +2366,7 @@ impl App {
         {
             s.opened.insert(first);
         }
-        self.lines = None;
+        self.lines.clear();
     }
 
     fn all_folds(&mut self, open: bool) {
@@ -1865,7 +2378,7 @@ impl App {
                 s.opened.clear();
             }
         }
-        self.lines = None;
+        self.lines.clear();
         let n = self.screen_lines().len();
         self.cur = self.cur.min(n.saturating_sub(1));
         self.keep_cursor();
@@ -1878,7 +2391,7 @@ impl App {
         } else {
             self.fit_width()
         };
-        self.lines = None;
+        self.lines.clear();
     }
 
     // ── The story's chapters and pages ──────────────────────────────────────
@@ -1945,13 +2458,92 @@ impl App {
                 && starts[k]
                 && let Some(&n) = story.chapter.get(path)
             {
-                for (text, look) in story::heading(story, n, cols, short) {
-                    rows.push(ListRow::Heading(text, look));
+                if self.opts.ux2 {
+                    // A chapter's number and title, the why going over the
+                    // diff; what isn't committed yet under a label of its
+                    // own in the needs tone.
+                    if k > 0 {
+                        rows.push(ListRow::Blank);
+                    }
+                    if self.uncommitted_chapter() == Some(n) {
+                        let files = self
+                            .order
+                            .iter()
+                            .filter(|&&j| {
+                                self.entry(j)
+                                    .is_some_and(|e| story.chapter.get(&e.path) == Some(&n))
+                            })
+                            .count();
+                        rows.push(ListRow::Label(
+                            story::NOT_COMMITTED.into(),
+                            Tone::Needs,
+                            Some(files),
+                        ));
+                    } else if self.generated_chapter() == Some(n) {
+                        rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
+                    } else {
+                        rows.push(ListRow::Chapter(n));
+                    }
+                } else {
+                    for (text, look) in story::heading(story, n, cols, short) {
+                        rows.push(ListRow::Heading(text, look));
+                    }
                 }
+            }
+            // With UX 2.0, the generated files the order puts last under a
+            // label saying so.
+            if self.opts.ux2
+                && let Some(e) = self.entry(i)
+                && order::generated(&e.path)
+                && self
+                    .story
+                    .as_ref()
+                    .is_none_or(|s| !s.chapter.contains_key(&e.path))
+                && !(k > 0
+                    && self
+                        .order
+                        .get(k - 1)
+                        .and_then(|&j| self.entry(j))
+                        .is_some_and(|p| order::generated(&p.path)))
+            {
+                if k > 0 {
+                    rows.push(ListRow::Blank);
+                }
+                rows.push(ListRow::Label(GENERATED_LAST.into(), Tone::Dim, None));
             }
             rows.push(ListRow::File(k));
         }
         rows
+    }
+
+    /// The story's last chapter when it holds what isn't committed yet,
+    /// which UX 2.0 sets apart from the chapters Haiku told.
+    fn uncommitted_chapter(&self) -> Option<usize> {
+        let story = self.story.as_ref()?;
+        let last = story.chapters.last()?;
+        (self.change.as_ref().is_some_and(Change::to_work_tree)
+            && last.title == story::NOT_COMMITTED
+            && last.why.is_empty())
+        .then_some(story.chapters.len())
+    }
+
+    /// The chapter the story made of generated files, which UX 2.0 draws
+    /// as their label rather than as a chapter told.
+    fn generated_chapter(&self) -> Option<usize> {
+        let story = self.story.as_ref()?;
+        story
+            .chapters
+            .iter()
+            .position(|c| c.title == story::GENERATED && c.why == story::GENERATED_WHY)
+            .map(|i| i + 1)
+    }
+
+    /// The story's chapters but the ones of what isn't committed yet and of
+    /// generated files.
+    fn told_chapters(&self) -> usize {
+        let all = self.story.as_ref().map_or(0, |s| s.chapters.len());
+        all - usize::from(self.uncommitted_chapter().is_some())
+            - usize::from(self.generated_chapter().is_some())
     }
 
     /// Which of the list's files start a chapter.
@@ -2001,6 +2593,8 @@ impl App {
         }
         if index < 1 {
             if self.page.take().is_some() {
+                // Laid out for the page's chapter: again for the whole.
+                self.lines.clear();
                 self.sort();
                 let back = self.whole_at.take();
                 let at = back
@@ -2018,6 +2612,8 @@ impl App {
             self.whole_at = self.current().map(Entry::key);
         }
         self.page = Some(index as usize);
+        // Each file's notes name chapters by the page's: laid out again.
+        self.lines.clear();
         self.at = 0;
         self.sort();
         self.at = 0;
@@ -2618,7 +3214,7 @@ impl App {
                 let spans = l
                     .spans
                     .iter()
-                    .map(|s| (s.text.clone(), md_style(&s.style)))
+                    .map(|s| (s.text.clone(), s.style.ratatui()))
                     .collect();
                 (l.plain(), spans)
             })
@@ -2628,6 +3224,12 @@ impl App {
     // ── The mouse ───────────────────────────────────────────────────────────
 
     pub fn mouse(&mut self, m: MouseEvent) -> Act {
+        let act = self.mouse_now(m);
+        self.read_view();
+        act
+    }
+
+    fn mouse_now(&mut self, m: MouseEvent) -> Act {
         if let Some(h) = &mut self.history {
             let act = h.app.mouse(m);
             return self.after_history(act);
@@ -2738,15 +3340,32 @@ impl App {
             return Act::Redraw;
         }
         let area = self.diff_area();
-        if y > area.y && y < area.bottom() {
+        let body = area.y + self.head_height() as u16;
+        if y >= body && y < area.bottom() {
+            // While the files read as one scroll, the file clicked in is
+            // shown; a click on a rule or a bar between them does nothing.
+            if self.one_scroll() && !self.order.is_empty() {
+                self.fix_view();
+                let row = (y - body) as usize;
+                let (k, t) = self.stream_ahead(self.view, self.top, row);
+                if self.rows_from_view(k, t) != Some(row) || t >= self.lines_of(k).len() {
+                    return Act::Redraw;
+                }
+                if k != self.at {
+                    self.cross_to(k, t);
+                }
+                self.cur = t;
+            }
             let (ow, _) = self.side_widths();
             self.focus = if ow > 0 && x < area.x + ow {
                 Focus::Old
             } else {
                 self.main_side()
             };
-            let n = self.screen_lines().len();
-            self.cur = (self.top + (y - area.y - 1) as usize).min(n.saturating_sub(1));
+            if !self.one_scroll() {
+                let n = self.screen_lines().len();
+                self.cur = (self.top + (y - body) as usize).min(n.saturating_sub(1));
+            }
             let side_x = if self.focus == Focus::Old {
                 area.x
             } else {
@@ -2862,30 +3481,6 @@ fn span(first: usize, last: usize, mark: &str) -> String {
     } else {
         first.to_string()
     }
-}
-
-/// A style of the PR view's Markdown, as a cell's.
-fn md_style(s: &crate::views::markdown::Style) -> Style {
-    let mut style = Style::new();
-    if let Some(fg) = s.fg {
-        style = style.fg(Color::Indexed(fg));
-    }
-    if let Some(bg) = s.bg {
-        style = style.bg(Color::Indexed(bg));
-    }
-    for (on, m) in [
-        (s.bold, Modifier::BOLD),
-        (s.dim, Modifier::DIM),
-        (s.italic, Modifier::ITALIC),
-        (s.underline, Modifier::UNDERLINED),
-        (s.crossed, Modifier::CROSSED_OUT),
-        (s.reverse, Modifier::REVERSED),
-    ] {
-        if on {
-            style = style.add_modifier(m);
-        }
-    }
-    style
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────
@@ -3092,6 +3687,7 @@ mod tests {
             ask: true,
             easy: false,
             key_help: true,
+            ux2: false,
             hover: true,
             light: false,
             pane_arrows: true,
@@ -3321,6 +3917,188 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_the_list_sets_whats_not_committed_apart_the_why_heads_the_diff_and_the_files_read_as_one_scroll()
+     {
+        let (tx, _rx) = channel();
+        let mut app = App::new(
+            Options {
+                ux2: true,
+                ..opts()
+            },
+            160,
+            30,
+            tx,
+        );
+        app.give_text("L", "src/a.js", Some("a = 1\n".into()));
+        app.give_text(git::WORK_TREE, "src/a.js", Some("a = 2\n".into()));
+        app.give_text("L", "src/b.js", Some("b = 1\n".into()));
+        app.give_text(git::WORK_TREE, "src/b.js", Some("b = 3\n".into()));
+        app.give_text(git::WORK_TREE, "src/new.js", Some("fresh\n".into()));
+        app.give_text(git::WORK_TREE, "Cargo.lock", Some("more\n".into()));
+        app.loaded(to_work_tree(
+            "b = 3",
+            &["src/b.js", "src/new.js"],
+            &["Cargo.lock"],
+        ));
+        app.told(commits_story());
+        let shown = screen(&mut app);
+        let names = list(&shown);
+        let at = |names: &[String], text: &str| {
+            names
+                .iter()
+                .position(|l| l.contains(text))
+                .unwrap_or_else(|| panic!("{text} in {names:?}"))
+        };
+        // The list: the story's two chapters counted, what isn't committed
+        // under a label of its own, the generated file last under its own.
+        assert!(names[0].contains("STORY") && names[0].trim_end().ends_with('2'));
+        assert!(
+            at(&names, "1 Bump a") < at(&names, "a.js")
+                && at(&names, "2 Bump b") < at(&names, "b.js")
+                && at(&names, "b.js") < at(&names, "NOT COMMITTED YET")
+                && at(&names, "NOT COMMITTED YET") < at(&names, "new.js")
+                && at(&names, "new.js") < at(&names, "GENERATED, LAST")
+                && at(&names, "GENERATED, LAST") < at(&names, "Cargo.lock"),
+            "{names:?}"
+        );
+        assert!(
+            names[at(&names, "NOT COMMITTED YET")]
+                .trim_end()
+                .ends_with('1')
+        );
+        assert!(names[at(&names, "b.js")].contains('●'));
+        assert!(names[at(&names, "new.js")].contains('●'));
+        assert!(!names[at(&names, "a.js")].contains('●'));
+        assert!(!shown.iter().any(|l| l.contains("1/2")), "{shown:?}");
+        // Over the diff, the chapter, its why and a rule; one bar.
+        assert!(
+            shown[0].contains("Chapter 1 of 2  Bump a"),
+            "{:?}",
+            shown[0]
+        );
+        assert!(shown[0].contains("vs origin/main"), "{:?}", shown[0]);
+        assert!(shown[1].contains("a moves."), "{:?}", shown[1]);
+        assert!(shown[2].contains("────"), "{:?}", shown[2]);
+        assert!(shown[3].contains("src/a.js   +1 −1"), "{:?}", shown[3]);
+        assert!(shown[3].contains("origin/main  ⟷  HEAD"), "{:?}", shown[3]);
+        // The hunk's note a card under it.
+        let changed = at(&shown, "a = 2");
+        let card = at(&shown, "╭ ✎ Note");
+        assert!(changed < card, "{shown:?}");
+        assert!(shown[card + 1].contains("│ Check a."), "{shown:?}");
+        // The next file follows, its bar under a rule.
+        let next = at(&shown, "src/b.js   +1 −1");
+        assert!(card < next && shown[next - 1].contains("────"), "{shown:?}");
+        assert!(shown[next].contains("origin/main  ⟷  working tree"));
+        // A bar too narrow for a long path cuts the path, never its counts
+        // or what happened to the file.
+        let long = entry("src/components/settings/placeholder.png", 'A', 0, 0);
+        let bar: String = app
+            .bar_ux2(&long, 40)
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(bar.contains("placeholder.png   +0 −0  added"), "{bar:?}");
+        // An added file says so on its bar.
+        assert!(
+            shown
+                .iter()
+                .any(|l| l.contains("src/new.js   +1 −0  added")),
+            "{shown:?}"
+        );
+        // Moving on past a.js's last line goes into b.js, its chapter now
+        // over the diff.
+        press(&mut app, "l");
+        for _ in 0..8 {
+            if app.current().unwrap().path == "src/b.js" {
+                break;
+            }
+            press(&mut app, "j");
+        }
+        assert_eq!(app.current().unwrap().path, "src/b.js");
+        let shown = screen(&mut app);
+        assert!(
+            shown[0].contains("Chapter 2 of 2  Bump b"),
+            "{:?}",
+            shown[0]
+        );
+        // And back up into a.js.
+        press(&mut app, "k");
+        assert_eq!(app.current().unwrap().path, "src/a.js");
+        // The wheel scrolls through the files as one, as far as the last
+        // file's end at the bottom, the cursor brought along.
+        app.resize(160, 12);
+        press(&mut app, "gg");
+        for _ in 0..10 {
+            app.scroll_diff(3, true);
+        }
+        assert_ne!(app.current().unwrap().path, "src/a.js");
+        let shown = screen(&mut app);
+        assert!(shown[11].contains("more"), "{shown:?}");
+        // The uncommitted chapter over its file, in the needs tone's words.
+        let fresh = app
+            .order
+            .iter()
+            .position(|&i| app.entries()[i].path == "src/new.js")
+            .unwrap();
+        app.show_at(fresh);
+        let shown = screen(&mut app);
+        assert!(
+            shown[0].contains("Not committed yet") && !shown[0].contains("Chapter"),
+            "{:?}",
+            shown[0]
+        );
+        // Read again with a file more, the view past the end of what its
+        // file now holds: kept within it, the shown file still shown.
+        app.view = 0;
+        app.top = 500;
+        app.give_text(git::WORK_TREE, "src/c.js", Some("more\n".into()));
+        app.refreshed(to_work_tree(
+            "b = 3",
+            &["src/b.js", "src/new.js"],
+            &["Cargo.lock", "src/c.js"],
+        ));
+        assert_eq!(app.current().unwrap().path, "src/new.js");
+        let _ = screen(&mut app);
+        press(&mut app, "j");
+        // A story that places a generated file makes a chapter of it, which
+        // is drawn as the generated files' label and not counted as told.
+        let change = to_work_tree("b = 3", &[], &[]);
+        let committed = change.told_part();
+        let (_, hunks) = story::split(&committed.runs());
+        let (_, mut paths) = story::key_of(committed);
+        paths.push("Cargo.lock".into());
+        let answer = r#"{"chapters": [
+            {"title": "Bump a", "why": "a moves.", "hunks": [{"id": "src/a.js#1", "note": "Check a."}]},
+            {"title": "Bump b", "why": "b follows.", "hunks": [{"id": "src/b.js#1", "note": "Check b."}]}
+        ]}"#;
+        app.told(story::parse(answer, &paths, order::generated, &hunks).unwrap());
+        app.resize(160, 30);
+        let names = list(&screen(&mut app));
+        assert!(names[0].contains("STORY") && names[0].trim_end().ends_with('2'));
+        assert!(
+            at(&names, "GENERATED, LAST") < at(&names, "Cargo.lock"),
+            "{names:?}"
+        );
+        assert!(
+            !names.iter().any(|l| l.contains("Generated files")),
+            "{names:?}"
+        );
+        let lock = app
+            .order
+            .iter()
+            .position(|&i| app.entries()[i].path == "Cargo.lock")
+            .unwrap();
+        app.show_at(lock);
+        let shown = screen(&mut app);
+        assert!(
+            shown[0].contains("Generated, last") && !shown[0].contains("Chapter"),
+            "{:?}",
+            shown[0]
+        );
+    }
+
+    #[test]
     fn whats_not_committed_is_marked_and_listed_in_a_last_chapter_after_the_commits_story() {
         let mut app = working_app();
         // Wide enough for a side's bar to say it whole.
@@ -3503,7 +4281,9 @@ mod tests {
         let (ow, _) = app.side_widths();
         let x = app.diff_area().x + ow + 2;
         assert!(
-            shown[(x, 1)].modifier.contains(Modifier::REVERSED),
+            shown[(x, 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
             "the lines selected lit"
         );
         press(&mut app, "yp");

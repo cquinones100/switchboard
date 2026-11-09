@@ -299,6 +299,12 @@ static PARKED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(^|[^a-z])(later|defer+ed|parked|someday|backlog)([^a-z]|$)").unwrap()
 });
 
+/// Whether a heading names a section of parked work (`## Defered`,
+/// `## Later`), which `items` leaves out and Notes shows folded.
+pub fn parked_heading(line: &str) -> bool {
+    PARKED.is_match(&line.to_lowercase())
+}
+
 /// A note's unticked top-level items, in its order, leaving out any under a
 /// section named for parked work (`## Defered`, `## Later`), a heading
 /// under such a section still in it.
@@ -314,11 +320,7 @@ pub fn items(text: &str) -> Vec<Item> {
             out.extend(current.take());
             let level = m[1].len();
             if parked == 0 || level <= parked {
-                parked = if PARKED.is_match(&line.to_lowercase()) {
-                    level
-                } else {
-                    0
-                };
+                parked = if parked_heading(line) { level } else { 0 };
             }
             continue;
         }

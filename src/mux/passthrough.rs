@@ -26,6 +26,9 @@
 //! they reach the pane only while it is marked `@notes_cmd_keys`, as they
 //! came, and are dropped anywhere else, so no other program reads them as
 //! Ctrl keys.
+//!
+//! Notes with UX 2.0 on marks its pane `@notes_work_key`, and M-p, the
+//! palette everywhere else, reaches it there to work the open note.
 
 use std::collections::BTreeMap;
 
@@ -54,6 +57,16 @@ pub fn graphics_allowed(opts: &BTreeMap<String, String>) -> bool {
 /// Whether a pane takes easy mode's Cmd keys.
 pub fn takes_cmd_keys(opts: &BTreeMap<String, String>) -> bool {
     opts.get("@notes_cmd_keys").is_some_and(|v| is_on(v))
+}
+
+/// Whether a pane takes M-p: Notes with UX 2.0 on.
+pub fn takes_work_key(opts: &BTreeMap<String, String>) -> bool {
+    opts.get("@notes_work_key").is_some_and(|v| is_on(v))
+}
+
+/// Whether a key is M-p.
+pub fn is_work_key(key: &Key) -> bool {
+    Key::parse("M-p").is_some_and(|k| k == *key)
 }
 
 fn is_on(value: &str) -> bool {
@@ -200,6 +213,29 @@ impl Server {
             let _ = slot.pane.write(raw);
         }
     }
+
+    /// M-p in a pane that takes it (`takes_work_key`), the sidebar not in
+    /// front: sent to the pane. Whether it was.
+    pub(super) fn work_key(&mut self, client: ClientId, key: &Key, raw: &[u8]) -> bool {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return false;
+        };
+        if self.sidebar.focused(&session) {
+            return false;
+        }
+        let Some(pane) = self.current_pane(client) else {
+            return false;
+        };
+        let Some(slot) = self.panes.get_mut(&pane) else {
+            return false;
+        };
+        if slot.copy.is_some() || !takes_work_key(&slot.opts) {
+            return false;
+        }
+        let bytes = super::input::encode_key(key, &slot.pane.modes());
+        let _ = slot.pane.write(if bytes.is_empty() { raw } else { &bytes });
+        true
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +294,10 @@ mod tests {
         assert!(!graphics_allowed(&opts(&[("@notes_cmd_keys", "1")])));
         assert!(!graphics_allowed(&BTreeMap::new()));
         assert!(takes_cmd_keys(&opts(&[("@notes_cmd_keys", "1")])));
+        assert!(takes_work_key(&opts(&[("@notes_work_key", "1")])));
+        assert!(!takes_work_key(&opts(&[("@notes_cmd_keys", "1")])));
+        assert!(is_work_key(&Key::parse("M-p").unwrap()));
+        assert!(!is_work_key(&Key::parse("M-P").unwrap()));
         assert!(!takes_cmd_keys(&opts(&[("@notes_pane", "1")])));
     }
 

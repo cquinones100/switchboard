@@ -274,7 +274,7 @@ fn project_skills() -> Vec<(String, String)> {
 #[test]
 fn every_project_skill_is_named_after_its_folder_has_a_description_and_never_ships() {
     let all = project_skills();
-    assert!(all.iter().any(|(name, _)| name == "plan-item"));
+    assert!(all.iter().any(|(name, _)| name == "review-pr"));
     let shipped = switchboard::setup::skills::shipped();
     let named = regex::Regex::new(r"`((?:src|assets|tests|docs|\.claude)/[^`\s]+)`").unwrap();
     for (name, text) in all {
@@ -310,7 +310,7 @@ fn every_project_skill_is_named_after_its_folder_has_a_description_and_never_shi
 
 #[test]
 fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bottom() {
-    let all = project_skills();
+    let all = skills();
     let (_, text) = all.iter().find(|(name, _)| name == "plan-item").unwrap();
     assert!(
         text.lines().any(|l| l == "disable-model-invocation: true"),

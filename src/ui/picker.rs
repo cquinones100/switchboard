@@ -47,6 +47,7 @@ use ratatui::text::Span;
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
+use super::kit::{self, Tone};
 use super::{Look, Outcome, Overlay, Step};
 use crate::mux::input::{Key, KeyCode, Mods, Mouse};
 
@@ -136,6 +137,9 @@ pub struct Picker {
     /// by their place in `items`.
     multi: bool,
     marked: Vec<usize>,
+    /// Drawn with UX 2.0's atoms, and whether the terminal draws the
+    /// kit's half circles (`kit::caps`); none for fzf's look.
+    kit: Option<bool>,
 }
 
 impl Picker {
@@ -163,6 +167,7 @@ impl Picker {
             text_only: false,
             multi: false,
             marked: Vec::new(),
+            kit: None,
         };
         picker.refilter();
         picker
@@ -249,6 +254,16 @@ impl Picker {
     /// the lower part of the box for the row chosen.
     pub fn previews(mut self, previews: Vec<String>) -> Picker {
         self.previews = previews;
+        self
+    }
+
+    /// Drawn with UX 2.0's atoms (src/ui/kit.rs), as board 15 draws the
+    /// palette: what is typed in the input atom, the count matched at its
+    /// right and a rule under it, and the chosen row's preview after a
+    /// blank line, its first line bold and the rest dim, as tall as the
+    /// longest preview needs. `caps`: the terminal draws the half circles.
+    pub fn kit(mut self, caps: bool) -> Picker {
+        self.kit = Some(caps);
         self
     }
 
@@ -536,6 +551,22 @@ impl Picker {
     }
 }
 
+/// A preview wrapped to the box, each line indented as written and a
+/// column in, with whether it comes from the preview's first line.
+fn preview_lines(whole: &str, inner: usize) -> Vec<(String, bool)> {
+    whole
+        .lines()
+        .enumerate()
+        .flat_map(|(n, l)| {
+            let indent = l.len() - l.trim_start().len();
+            let pad = " ".repeat(indent + 1);
+            draw::wrap(l.trim_start(), inner.saturating_sub(indent + 2))
+                .into_iter()
+                .map(move |w| (format!("{pad}{w}"), n == 0))
+        })
+        .collect()
+}
+
 /// A part of a row cut and padded to its column, the graphemes matched (by
 /// their place in the haystack, the part starting at `at`) in `hit`'s style
 /// and the rest in `style`.
@@ -573,6 +604,10 @@ impl Overlay for Picker {
         self.kind
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         // The box's size first, for the room its rows have: the share of the
         // screen palette.sh's popup took, less the prompt, the count, and the
@@ -586,9 +621,19 @@ impl Overlay for Picker {
             .min(area.height as usize);
         let inner = outer_w.saturating_sub(2);
         let rows = outer_h.saturating_sub(2 + self.first_row() + 2).max(1);
-        // With previews, the lower half shows the chosen one, under a rule.
+        // With previews, the lower half shows the chosen one, under a rule;
+        // drawn with the kit, as many rows as the longest needs, at most
+        // that half.
         let preview_rows = if self.previews.is_empty() {
             0
+        } else if self.kit.is_some() {
+            let longest = self
+                .previews
+                .iter()
+                .map(|p| preview_lines(p, inner).len())
+                .max()
+                .unwrap_or(0);
+            (longest + 1).min(rows / 2)
         } else {
             rows / 2
         };
@@ -597,26 +642,37 @@ impl Overlay for Picker {
             self.top = self.cursor + 1 - self.room;
         }
         let widths = self.columns(inner);
-        let mut lines = vec![
-            BoxLine::spans(vec![
-                Span::styled(format!(" {}", self.prompt), Style::new().fg(draw::EDGE)),
-                Span::styled(self.query.clone(), look.bright()),
-                Span::styled("▏", look.dim()),
-            ]),
-            BoxLine::text(
-                if self.marked.is_empty() {
-                    format!("   {}/{}", self.shown.len(), self.items.len())
-                } else {
-                    format!(
-                        "   {}/{} ({} marked)",
-                        self.shown.len(),
-                        self.items.len(),
-                        self.marked.len()
-                    )
-                },
-                look.dim(),
-            ),
-        ];
+        let count = if self.marked.is_empty() {
+            format!("{}/{}", self.shown.len(), self.items.len())
+        } else {
+            format!(
+                "{}/{} ({} marked)",
+                self.shown.len(),
+                self.items.len(),
+                self.marked.len()
+            )
+        };
+        let mut lines = match self.kit {
+            Some(caps) => vec![
+                BoxLine::spans(kit::input_beside(
+                    &self.query,
+                    "",
+                    inner,
+                    vec![Span::styled(count, Tone::Dim.style(&look.theme))],
+                    &look.theme,
+                    caps,
+                )),
+                BoxLine::spans(vec![kit::rule(inner, &look.theme)]),
+            ],
+            None => vec![
+                BoxLine::spans(vec![
+                    Span::styled(format!(" {}", self.prompt), Style::new().fg(draw::EDGE)),
+                    Span::styled(self.query.clone(), look.bright()),
+                    Span::styled("▏", look.dim()),
+                ]),
+                BoxLine::text(format!("   {count}"), look.dim()),
+            ],
+        };
         for line in &self.header {
             lines.push(BoxLine::text(format!("   {line}"), look.dim()));
         }
@@ -627,26 +683,40 @@ impl Overlay for Picker {
             while lines.len() < self.first_row() + self.room {
                 lines.push(BoxLine::blank());
             }
-            lines.push(BoxLine::text("─".repeat(inner), look.faint()));
+            lines.push(match self.kit {
+                Some(_) => BoxLine::blank(),
+                None => BoxLine::text("─".repeat(inner), look.faint()),
+            });
             let whole = self
                 .shown
                 .get(self.cursor)
                 .and_then(|(i, _)| self.previews.get(*i))
                 .map(String::as_str)
                 .unwrap_or("");
-            let wrapped: Vec<String> = whole
-                .lines()
-                .flat_map(|l| {
-                    let indent = l.len() - l.trim_start().len();
-                    let pad = " ".repeat(indent + 1);
-                    draw::wrap(l.trim_start(), inner.saturating_sub(indent + 2))
-                        .into_iter()
-                        .map(move |w| format!("{pad}{w}"))
-                })
-                .take(preview_rows - 1)
-                .collect();
-            for line in wrapped {
-                lines.push(BoxLine::text(line, look.text()));
+            let mut shown = preview_lines(whole, inner);
+            let room = preview_rows - 1;
+            // Drawn with the kit, a preview too long for its room keeps its
+            // last line whole, however it wraps (the palette's key), and
+            // ends what it cuts with `…`.
+            let last_rows = match whole.lines().count() {
+                0 | 1 => 0,
+                _ => preview_lines(whole.lines().last().unwrap_or(""), inner).len(),
+            };
+            if self.kit.is_some() && shown.len() > room && room > last_rows && last_rows > 0 {
+                let last = shown.split_off(shown.len() - last_rows);
+                shown.truncate(room - last_rows);
+                if let Some((cut, _)) = shown.last_mut() {
+                    *cut = draw::fit(&format!("{cut}…"), inner).trim_end().to_string();
+                }
+                shown.extend(last.into_iter().map(|(l, _)| (l, false)));
+            }
+            for (line, first) in shown.into_iter().take(room) {
+                let style = match self.kit {
+                    Some(_) if first => Tone::Text.bold(&look.theme),
+                    Some(_) => Tone::Dim.style(&look.theme),
+                    None => look.text(),
+                };
+                lines.push(BoxLine::text(line, style));
             }
         }
         let keys = match &self.also {
@@ -1033,6 +1103,59 @@ mod tests {
             !s.iter()
                 .any(|l| l.contains("Split pane to the left in full"))
         );
+    }
+
+    #[test]
+    fn with_the_kit_the_query_is_the_input_atom_and_the_preview_leads_bold() {
+        let look = Look::default();
+        let wholes = items()
+            .iter()
+            .map(|i| format!("{}\nMore on it", i.text))
+            .collect();
+        let mut p = Picker::new("Items", items())
+            .previews(wholes)
+            .kit(false)
+            .query("pane");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 30));
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let input = s.iter().position(|l| l.contains("› pane▏")).unwrap();
+        assert!(s[input].contains("3/4"), "the count at the input's right");
+        assert!(s[input + 1].contains("──────"), "a rule under it");
+        assert!(!s.iter().any(|l| l.contains("> pane")), "no fzf prompt");
+        let chosen = p.chosen().unwrap().text.clone();
+        let more = s.iter().position(|l| l.contains("More on it")).unwrap();
+        assert!(s[more - 1].contains(&chosen));
+        let at = |row: usize, text: &str| {
+            let col = s[row].find(text).unwrap();
+            let col = s[row][..col].chars().count() as u16;
+            buf[(col, row as u16)].style()
+        };
+        assert!(
+            at(more - 1, &chosen).add_modifier.contains(Modifier::BOLD),
+            "the first line bold"
+        );
+        assert!(!at(more, "More").add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn with_the_kit_a_preview_too_long_for_its_room_keeps_its_last_line() {
+        let look = Look::default();
+        let long = "More on it, ".repeat(30);
+        let wholes = items()
+            .iter()
+            .map(|i| format!("{}\n{long}\nKey: M-x {}", i.text, "M-b y ".repeat(12)))
+            .collect();
+        let mut p = Picker::new("Items", items()).previews(wholes).kit(false);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        p.draw(&mut buf, &look);
+        let s = screen(&buf);
+        let key = s.iter().position(|l| l.contains("Key: M-x")).unwrap();
+        assert!(
+            s[key - 1].contains("Split pane to the left…"),
+            "the detail cut: {s:#?}"
+        );
+        assert!(s[key + 1].contains("M-b y"), "the key line whole: {s:#?}");
     }
 
     #[test]

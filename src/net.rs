@@ -284,7 +284,58 @@ pub async fn get_file(
     timeout: Duration,
     audit: Audit<'_>,
 ) -> Result<Download> {
-    let mut request = client()?.get(url).timeout(timeout);
+    get_file_with(client()?, url, headers, timeout, audit, None).await
+}
+
+/// `get_file`, a redirect followed only to a host `follow` takes (an
+/// integration turned off refusing its own), and stopped at, as the answer,
+/// one it doesn't, each one followed counted in the request audit; and an
+/// answer longer than `largest` bytes refused as it
+/// arrives, before more of it is read.
+#[cfg(feature = "net")]
+pub async fn get_file_following(
+    url: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+    audit: Audit<'_>,
+    follow: fn(&str) -> bool,
+    largest: usize,
+) -> Result<Download> {
+    let (protocol, source) = (audit.protocol.to_string(), audit.source.to_string());
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        let taken = attempt.previous().len() < 10
+            && attempt.url().scheme() == "https"
+            && attempt.url().host_str().is_some_and(follow);
+        if taken {
+            // Each redirect followed is a request of its own, counted
+            // under the host it reaches.
+            let host = attempt.url().host_str().unwrap_or_default();
+            requests::count(host, &protocol, &source);
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    });
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .redirect(policy)
+        .build()
+        .map_err(|e| anyhow::anyhow!("couldn't set up HTTPS: {e}"))?;
+    get_file_with(client, url, headers, timeout, audit, Some(largest)).await
+}
+
+#[cfg(feature = "net")]
+async fn get_file_with(
+    client: reqwest::Client,
+    url: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+    audit: Audit<'_>,
+    largest: Option<usize>,
+) -> Result<Download> {
+    let mut request = client.get(url).timeout(timeout);
     for (name, value) in headers {
         request = request.header(*name, *value);
     }
@@ -313,11 +364,39 @@ pub async fn get_file(
         .headers()
         .get("content-type")
         .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
-    let bytes = response.bytes().await.map_err(unreachable)?;
+    let Some(largest) = largest else {
+        let bytes = response.bytes().await.map_err(unreachable)?;
+        return Ok(Download {
+            status,
+            content_type,
+            bytes: bytes.to_vec(),
+        });
+    };
+    let too_large = || {
+        ServiceError::new(
+            ErrorKind::Unreachable,
+            audit.service,
+            format!("The file from {} is over {largest} bytes.", audit.service),
+        )
+    };
+    if response
+        .content_length()
+        .is_some_and(|n| n > largest as u64)
+    {
+        return Err(too_large().into());
+    }
+    let mut response = response;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(unreachable)? {
+        if bytes.len() + chunk.len() > largest {
+            return Err(too_large().into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     Ok(Download {
         status,
         content_type,
-        bytes: bytes.to_vec(),
+        bytes,
     })
 }
 
@@ -338,6 +417,19 @@ pub async fn get_file(
         ),
     )
     .into())
+}
+
+/// Without the `net` feature: the same function, which never reaches out.
+#[cfg(not(feature = "net"))]
+pub async fn get_file_following(
+    url: &str,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+    audit: Audit<'_>,
+    _follow: fn(&str) -> bool,
+    _largest: usize,
+) -> Result<Download> {
+    get_file(url, headers, timeout, audit).await
 }
 
 /// `get_file`'s status and bytes alone.

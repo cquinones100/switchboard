@@ -7,7 +7,8 @@
 //! Closed, the PR board, CI, Landing (while something lands), Autopilot
 //! (with UX 2.0, while it is on, src/autopilot/view.rs), the ticket
 //! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
-//! then each plugin's.
+//! then each plugin's. With UX 2.0 the bar shows them by feature in groups
+//! (`groups`): Work, Code, Day and System.
 //!
 //! Two are put together here. The Work map is every piece of work in the
 //! repositories the tabs are in, one row each: each worktree, and a main
@@ -77,7 +78,9 @@ impl View {
             ViewId::Prs => Some(crate::sources::prboard::columns(crate::settings::is_on(
                 "ux2",
             ))),
-            ViewId::Tickets => Some(&crate::sources::tickets::COLUMNS),
+            ViewId::Tickets => Some(crate::sources::tickets::columns(crate::settings::is_on(
+                "ux2",
+            ))),
             _ => None,
         }
     }
@@ -94,6 +97,79 @@ impl View {
     }
 }
 
+/// With UX 2.0, the bar's groups of views by feature, in its order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Group {
+    Work,
+    Code,
+    Day,
+    System,
+}
+
+impl Group {
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Work => "Work",
+            Group::Code => "Code",
+            Group::Day => "Day",
+            Group::System => "System",
+        }
+    }
+}
+
+/// A view's group and its place in it, after the tabs, which lead Work.
+/// Closed and Sessions stand where the canvas's Reopen will, and each
+/// plugin's view comes after Keys.
+fn place(id: &ViewId) -> (Group, u8) {
+    match id {
+        ViewId::Landing => (Group::Work, 1),
+        ViewId::Autopilot => (Group::Work, 2),
+        ViewId::WorkMap => (Group::Work, 3),
+        ViewId::Closed => (Group::Work, 4),
+        ViewId::Sessions => (Group::Work, 5),
+        ViewId::Prs => (Group::Code, 0),
+        ViewId::Tickets => (Group::Code, 1),
+        ViewId::Ci => (Group::Code, 2),
+        ViewId::Calendar => (Group::Day, 0),
+        ViewId::Slack => (Group::Day, 1),
+        ViewId::Inbox => (Group::Day, 2),
+        ViewId::Notifications => (Group::Day, 3),
+        ViewId::Usage => (Group::System, 0),
+        ViewId::Resources => (Group::System, 1),
+        ViewId::Settings => (Group::System, 2),
+        ViewId::Keys => (Group::System, 3),
+        ViewId::Plugin(_) => (Group::System, 4),
+    }
+}
+
+/// The bar's groups that have a view, each with its views in their order,
+/// as places in mission control (0 the tabs, `i` the `i`th view after).
+pub fn groups(views: &[View]) -> Vec<(Group, Vec<usize>)> {
+    let mut placed: Vec<(Group, u8, usize)> = std::iter::once((Group::Work, 0, 0))
+        .chain(views.iter().enumerate().map(|(i, v)| {
+            let (g, at) = place(&v.id);
+            (g, at, i + 1)
+        }))
+        .collect();
+    placed.sort_by_key(|(g, at, _)| (*g as u8, *at));
+    let mut out: Vec<(Group, Vec<usize>)> = Vec::new();
+    for (g, _, i) in placed {
+        match out.last_mut() {
+            Some((last, held)) if *last == g => held.push(i),
+            _ => out.push((g, vec![i])),
+        }
+    }
+    out
+}
+
+/// A view's name in the grouped bar, where the Work map is the Map.
+pub fn bar_title(view: &View) -> &str {
+    match view.id {
+        ViewId::WorkMap => "Map",
+        _ => &view.title,
+    }
+}
+
 /// Which of the Work map's rows M-j and M-o show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -107,6 +183,11 @@ pub enum Scope {
 /// category, the Work map's merged work) rather than one to act on.
 pub fn is_header(item: &Item) -> bool {
     item.data.get("header").and_then(Value::as_bool) == Some(true)
+}
+
+/// Whether an item is a view's summary (the Autopilot view's heading).
+pub fn is_summary(item: &Item) -> bool {
+    item.data.get("summary").and_then(Value::as_bool) == Some(true)
 }
 
 pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
@@ -169,11 +250,14 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, show_merged: bool)
         })
         .collect();
     // A filtered Settings or Keys view leaves out the headings with no
-    // match.
+    // match, but never the Autopilot view's summary, which heads it
+    // whatever matches.
     let items = if grouped(&view.id) {
         kept.iter()
             .enumerate()
-            .filter(|(at, i)| !is_header(i) || kept.get(at + 1).is_some_and(|n| !is_header(n)))
+            .filter(|(at, i)| {
+                !is_header(i) || is_summary(i) || kept.get(at + 1).is_some_and(|n| !is_header(n))
+            })
             .map(|(_, i)| i.clone())
             .collect()
     } else {
@@ -586,6 +670,34 @@ mod tests {
     use crate::mux::TabId;
     use crate::sidebar::claude::SessionRef;
 
+    #[test]
+    fn the_bar_groups_the_views_by_feature_leaving_out_a_group_with_none() {
+        let v = |id: ViewId, title: &str| View {
+            id,
+            title: title.into(),
+            data: ViewData::default(),
+            loaded: true,
+        };
+        let views = vec![
+            v(ViewId::Notifications, "Notifications"),
+            v(ViewId::WorkMap, "Work map"),
+            v(ViewId::Calendar, "Calendar"),
+            v(ViewId::Closed, "Closed"),
+            v(ViewId::Landing, "Landing"),
+            v(ViewId::Settings, "Settings"),
+            v(ViewId::Plugin("p".into()), "Plugin"),
+        ];
+        assert_eq!(
+            groups(&views),
+            vec![
+                (Group::Work, vec![0, 5, 2, 4]),
+                (Group::Day, vec![3, 1]),
+                (Group::System, vec![6, 7]),
+            ]
+        );
+        assert_eq!(bar_title(&views[1]), "Map");
+    }
+
     fn tab(n: u32, name: &str, path: &str) -> TabModel {
         let mut t = TabModel::new(TabId(n), n as usize, name);
         t.path = Some(PathBuf::from(path));
@@ -762,5 +874,63 @@ mod tests {
             .map(|i| i.title.as_str())
             .collect();
         assert_eq!(titles, ["Notifications", "Push notifications"]);
+    }
+
+    #[test]
+    fn a_filtered_autopilot_view_keeps_its_summary_over_a_heading_with_no_match() {
+        let summary = crate::autopilot::Summary {
+            note: "Work".into(),
+            busy: 1,
+            open: 1,
+            slots: 2,
+            cap: 5,
+            next: "Later".into(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 0,
+            spend_limit: 0.0,
+            spent: 0.0,
+            lands_alone: false,
+            target: String::new(),
+            drained: false,
+            hands_free: false,
+        };
+        let row = crate::autopilot::view::Row {
+            tab: crate::mux::TabId(4),
+            index: 3,
+            item: "Port the board".into(),
+            state: crate::sidebar::model::TabState::Working,
+            was_in: true,
+            loop_skill: None,
+            phase: None,
+            landing: None,
+            left: false,
+            autoland: false,
+        };
+        let view = View {
+            id: ViewId::Autopilot,
+            title: "Autopilot".into(),
+            data: ViewData {
+                items: crate::autopilot::view::items(&summary, "", &[row], &["Later".into()], &[]),
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let narrowed = shown(&view, "board", None, false);
+        let titles: Vec<&str> = narrowed
+            .data
+            .items
+            .iter()
+            .map(|i| i.title.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            [
+                "Work",
+                "Its tabs, the least far along first",
+                "Port the board"
+            ]
+        );
     }
 }

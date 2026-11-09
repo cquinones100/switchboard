@@ -45,6 +45,10 @@ impl Overlay for Message {
         "message"
     }
 
+    fn stands_out(&self) -> Option<ratatui::layout::Rect> {
+        self.drawn.as_ref().map(|d| d.outer)
+    }
+
     fn draw(&mut self, buf: &mut Buffer, look: &Look) {
         // A blank row above the text, which is indented two columns, as
         // say.sh printed it; at least 30 columns wide.

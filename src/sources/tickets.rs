@@ -4,7 +4,10 @@
 //! in the last `DONE_DAYS`), from one GraphQL query with the key the ticket
 //! scripts use (`integrations::linear`). Todo is by priority, urgent first,
 //! the rest most recently changed first, and each card names the tab working
-//! on its ticket, when a tab's name has it.
+//! on its ticket, when a tab's name has it. With UX 2.0 a fifth group,
+//! Closed, holds the tickets canceled in the same days, which the board
+//! draws in a row under its columns; the query brings each ticket's
+//! description and estimate for the card and the pane beside the board.
 //!
 //! Closing a ticket from its menu is here too: the state it would move to,
 //! its team's first completed state by the team's own order (Done, or what
@@ -20,18 +23,31 @@ use crate::integrations::linear;
 use crate::items::{Item, State, Target};
 
 pub const COLUMNS: [&str; 4] = ["Todo", "In progress", "In review", "Done"];
+/// UX 2.0's groups: the tickets canceled this week after the columns.
+pub const COLUMNS_UX2: [&str; 5] = ["Todo", "In progress", "In review", "Done", "Closed"];
+
+/// The board's groups, with UX 2.0 on or off.
+pub fn columns(ux2: bool) -> &'static [&'static str] {
+    if ux2 { &COLUMNS_UX2 } else { &COLUMNS }
+}
 pub const DONE_DAYS: i64 = 7;
 
 const QUERY: &str = "query($since: DateTimeOrDuration!) {
-  viewer { assignedIssues(first: 100, orderBy: updatedAt, filter: { or: [{ state: { type: { in: [\"unstarted\", \"started\"] } } }, { completedAt: { gte: $since } }] }) {
-    nodes { identifier title url priority priorityLabel updatedAt completedAt state { name type } project { name } }
-  } }
+  viewer {
+    assignedIssues(first: 100, orderBy: updatedAt, filter: { or: [{ state: { type: { in: [\"unstarted\", \"started\"] } } }, { completedAt: { gte: $since } }] }) {
+      nodes { identifier title description url priority priorityLabel estimate updatedAt completedAt canceledAt state { name type } project { name } }
+    }
+    canceled: assignedIssues(first: 50, orderBy: updatedAt, filter: { canceledAt: { gte: $since } }) {
+      nodes { identifier title description url priority priorityLabel estimate updatedAt completedAt canceledAt state { name type } project { name } }
+    }
+  }
 }";
 
 fn column_of(issue: &Value) -> &'static str {
     static REVIEW: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)review").unwrap());
     match text(issue, "/state/type") {
         "completed" => "Done",
+        "canceled" => "Closed",
         "started" if REVIEW.is_match(text(issue, "/state/name")) => "In review",
         "started" => "In progress",
         _ => "Todo",
@@ -65,39 +81,55 @@ pub fn item_of(issue: &Value, tabs: &[TabInfo]) -> Option<Item> {
     .into_iter()
     .filter(|m| !m.is_empty())
     .collect();
-    let done = text(issue, "/state/type") == "completed";
+    let kind = text(issue, "/state/type");
+    let done = kind == "completed" || kind == "canceled";
     let url = text(issue, "/url");
-    let mut item = Item::new(identifier, format!("{identifier} {}", text(issue, "/title")))
-        .detail(marks.join(" · "))
-        .state(if done {
-            State::Idle
-        } else if priority == 1 {
-            State::Attention
-        } else {
-            State::Active
-        })
-        .target(Target::Url(url.to_string()))
-        .group(column_of(issue))
-        .data(json!({ "ticket": identifier, "url": url, "priority": if priority == 0 { 5 } else { priority } }));
+    let mut item = Item::new(
+        identifier,
+        format!("{identifier} {}", text(issue, "/title")),
+    )
+    .detail(marks.join(" · "))
+    .state(if done {
+        State::Idle
+    } else if priority == 1 {
+        State::Attention
+    } else {
+        State::Active
+    })
+    .target(Target::Url(url.to_string()))
+    .group(column_of(issue))
+    .data(json!({
+        "ticket": identifier,
+        "url": url,
+        "priority": if priority == 0 { 5 } else { priority },
+        "priorityLabel": text(issue, "/priorityLabel"),
+        "title": text(issue, "/title"),
+        "state": text(issue, "/state/name"),
+        "project": text(issue, "/project/name"),
+        "estimate": issue.get("estimate").and_then(Value::as_f64),
+        "description": text(issue, "/description"),
+        "tab": tab.map(|t| t.index),
+    }));
     item.time = ms_of(
         issue
             .get("completedAt")
             .and_then(Value::as_str)
+            .or_else(|| issue.get("canceledAt").and_then(Value::as_str))
             .or_else(|| issue.get("updatedAt").and_then(Value::as_str)),
     );
     Some(item)
 }
 
-/// Lays out the issues as the board.
-pub fn board_from(issues: &[Value], tabs: &[TabInfo]) -> Vec<Item> {
+/// Lays out the issues as the board, with UX 2.0's groups or without.
+pub fn board_from(issues: &[Value], tabs: &[TabInfo], ux2: bool) -> Vec<Item> {
     let mut items: Vec<Item> = issues.iter().filter_map(|i| item_of(i, tabs)).collect();
     // Column by column, so the order is a total one; in Todo by priority
     // first.
     items.sort_by_key(|i| {
-        let column = COLUMNS
+        let column = COLUMNS_UX2
             .iter()
             .position(|c| i.group.as_deref() == Some(c))
-            .unwrap_or(COLUMNS.len());
+            .unwrap_or(COLUMNS_UX2.len());
         let rank = if column == 0 {
             i.data["priority"].as_u64().unwrap_or(5)
         } else {
@@ -105,7 +137,7 @@ pub fn board_from(issues: &[Value], tabs: &[TabInfo]) -> Vec<Item> {
         };
         (column, rank, -i.time.unwrap_or(0))
     });
-    in_columns(&COLUMNS, items)
+    in_columns(columns(ux2), items)
 }
 
 /// Your assigned issues, as Linear has them.
@@ -114,11 +146,19 @@ pub async fn fetch(now_ms: i64) -> anyhow::Result<Vec<Value>> {
         .map(|t| t.to_string())
         .unwrap_or_default();
     let data = linear::graphql(QUERY, json!({ "since": since }), "sidebar: tickets").await?;
-    Ok(data
-        .pointer("/viewer/assignedIssues/nodes")
-        .and_then(Value::as_array)
+    Ok(issues_of(&data))
+}
+
+/// The issues of the query's answer: the open and done ones, then the
+/// canceled ones, asked for apart so they never take an open one's place
+/// in the first hundred.
+fn issues_of(data: &Value) -> Vec<Value> {
+    ["/viewer/assignedIssues/nodes", "/viewer/canceled/nodes"]
+        .iter()
+        .filter_map(|at| data.pointer(at).and_then(Value::as_array))
+        .flatten()
         .cloned()
-        .unwrap_or_default())
+        .collect()
 }
 
 /// The state closing a ticket moves it to: `(issue id, already done, state
@@ -173,6 +213,21 @@ pub async fn close_ticket(issue: &str, state: &str) -> anyhow::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canceled_tickets_come_apart_from_the_open_ones() {
+        let data = json!({ "viewer": {
+            "assignedIssues": { "nodes": [{ "identifier": "AB-1" }] },
+            "canceled": { "nodes": [{ "identifier": "AB-2" }] },
+        } });
+        let issues = issues_of(&data);
+        let ids: Vec<&str> = issues
+            .iter()
+            .filter_map(|i| i["identifier"].as_str())
+            .collect();
+        assert_eq!(ids, ["AB-1", "AB-2"]);
+        assert!(issues_of(&json!({})).is_empty());
+    }
     use crate::mux::TabId;
 
     fn issue(id: &str, priority: u64, name: &str, kind: &str, updated: &str) -> Value {
@@ -219,6 +274,7 @@ mod tests {
                 issue("AB-5", 0, "Done", "completed", "2026-10-04T00:00:00Z"),
             ],
             &tabs,
+            false,
         );
         let laid: Vec<(&str, &str)> = items
             .iter()
@@ -243,5 +299,26 @@ mod tests {
         assert_eq!(items[2].detail, "In Progress · tab 4");
         assert_eq!(items[1].detail, "Todo · Medium");
         assert_eq!(items[4].state, State::Idle);
+    }
+
+    #[test]
+    fn with_ux2_the_tickets_canceled_this_week_are_closed_after_the_columns_with_their_description()
+    {
+        let mut canceled = issue("AB-6", 0, "Duplicate", "canceled", "2026-10-05T00:00:00Z");
+        canceled["canceledAt"] = json!("2026-10-05T00:00:00Z");
+        let mut todo = issue("AB-1", 2, "Todo", "unstarted", "2026-10-01T00:00:00Z");
+        todo["description"] = json!("## Steps\nOpen the menu.");
+        todo["estimate"] = json!(2);
+        let issues = [canceled, todo];
+        let items = board_from(&issues, &[], true);
+        let groups: Vec<_> = items.iter().map(|i| i.group.clone().unwrap()).collect();
+        assert_eq!(groups, ["Todo", "Closed"]);
+        assert_eq!(items[0].data["description"], "## Steps\nOpen the menu.");
+        assert_eq!(items[0].data["estimate"], 2.0);
+        assert_eq!(items[0].data["title"], "Work on AB-1");
+        assert_eq!(items[1].state, State::Idle);
+        assert_eq!(items[1].time, ms_of(Some("2026-10-05T00:00:00Z")));
+        let without = board_from(&issues, &[], false);
+        assert_eq!(without.len(), 1, "UX 2.0 off leaves the canceled out");
     }
 }
