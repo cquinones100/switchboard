@@ -535,11 +535,10 @@ fn a_stranger_s_pr_from_the_same_branch_name_is_not_the_branch_s() {
     );
 }
 
-#[test]
-fn a_fork_s_clone_looks_in_the_project_upstream_names() {
-    let env = Env::new("upstream");
-    set("GH_TOKEN", "tok-10");
-    let dir = env.repo("widgets", "git@github.com:me/widgets.git", "feature");
+/// A fork's clone: origin `me/widgets`, upstream `acme/widgets`, on
+/// `feature`, pushed to origin.
+fn fork_clone(env: &Env, name: &str) -> PathBuf {
+    let dir = env.repo(name, "git@github.com:me/widgets.git", "feature");
     env.git(
         &dir,
         &[
@@ -554,15 +553,183 @@ fn a_fork_s_clone_looks_in_the_project_upstream_names() {
         &dir,
         &["config", "branch.feature.merge", "refs/heads/feature"],
     );
-    let mut mine = pr_node(41, "OPEN", "me", "feature");
-    mine["isCrossRepository"] = json!(true);
+    dir
+}
+
+/// A PR into `base` from `owner`'s `feature`, as GitHub lists it there.
+fn fork_pr(number: u64, base: &str, owner: &str) -> Value {
+    let mut pr = pr_node(number, "OPEN", owner, "feature");
+    pr["url"] = json!(format!("https://github.com/{base}/pull/{number}"));
+    pr["isCrossRepository"] = json!(!base.starts_with(&format!("{owner}/")));
+    pr
+}
+
+#[test]
+fn a_fork_s_clone_takes_the_project_upstream_names_as_gh_does() {
+    let env = Env::new("upstream");
+    set("GH_TOKEN", "tok-10");
+    let dir = fork_clone(&env, "widgets");
     let fake = Fake::github(
         "tok-10",
+        vec![answer(
+            200,
+            json!({ "data": { "repository": { "isFork": true } } }),
+        )],
+    );
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    assert_eq!(
+        util::block_on(github::repo_of(&dir)).unwrap().to_string(),
+        "acme/widgets"
+    );
+    assert_eq!(
+        fake.seen()[0].body["variables"],
+        json!({ "owner": "me", "name": "widgets" })
+    );
+    // `gh repo set-default` wins over both, with no question asked.
+    env.git(&dir, &["config", "remote.origin.gh-resolved", "base"]);
+    assert_eq!(
+        util::block_on(github::repo_of(&dir)).unwrap().to_string(),
+        "me/widgets"
+    );
+}
+
+#[test]
+fn a_fork_s_branch_s_pr_is_found_in_the_project_upstream_names_and_no_other_fork_s() {
+    let env = Env::new("upstream-pr");
+    set("GH_TOKEN", "tok-11");
+    let dir = fork_clone(&env, "widgets");
+    // Upstream has two PRs from a `feature`: another fork's, newer, and
+    // this fork's; origin has none.
+    let fake = Fake::github(
+        "tok-11",
+        vec![answer(
+            200,
+            json!({ "data": {
+                "repository": { "pullRequests": { "nodes": [] } },
+                "upstream": { "pullRequests": { "nodes": [
+                    fork_pr(52, "acme/widgets", "someone"),
+                    fork_pr(41, "acme/widgets", "me"),
+                ] } }
+            } }),
+        )],
+    );
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let (repo, pr) = util::block_on(github::branch_pr(&dir, "test"))
+        .unwrap()
+        .unwrap();
+    assert_eq!((repo.to_string().as_str(), pr.number), ("acme/widgets", 41));
+    // One question for both, and none of whether origin is a fork.
+    let seen = fake.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(
+        seen[0].body["variables"],
+        json!({
+            "owner": "me", "name": "widgets", "head": "feature",
+            "upstreamOwner": "acme", "upstreamName": "widgets",
+        })
+    );
+    let query = seen[0].body["query"].as_str().unwrap();
+    assert!(
+        query.contains("upstream: repository(owner: $upstreamOwner, name: $upstreamName)"),
+        "{query}"
+    );
+    assert_eq!(counted("GitHub", "GraphQL"), 1, "and counted");
+}
+
+#[test]
+fn another_fork_s_branch_of_the_same_name_is_never_the_branch_s() {
+    let env = Env::new("other-fork");
+    set("GH_TOKEN", "tok-12");
+    let dir = fork_clone(&env, "widgets");
+    let fake = Fake::github(
+        "tok-12",
+        vec![answer(
+            200,
+            json!({ "data": {
+                "repository": { "pullRequests": { "nodes": [] } },
+                "upstream": { "pullRequests": { "nodes": [
+                    fork_pr(52, "acme/widgets", "someone"),
+                    fork_pr(50, "acme/widgets", "acme"),
+                ] } }
+            } }),
+        )],
+    );
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    assert_eq!(
+        util::block_on(github::branch_pr(&dir, "test")).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn origin_s_pr_wins_over_upstream_s() {
+    let env = Env::new("origin-wins");
+    set("GH_TOKEN", "tok-13");
+    let dir = fork_clone(&env, "widgets");
+    let fake = Fake::github(
+        "tok-13",
+        vec![answer(
+            200,
+            json!({ "data": {
+                "repository": { "pullRequests": { "nodes": [fork_pr(3, "me/widgets", "me")] } },
+                "upstream": { "pullRequests": { "nodes": [fork_pr(41, "acme/widgets", "me")] } }
+            } }),
+        )],
+    );
+    set(
+        "SWITCHBOARD_GITHUB_GRAPHQL",
+        format!("{}/graphql", fake.url),
+    );
+    let (repo, pr) = util::block_on(github::branch_pr(&dir, "test"))
+        .unwrap()
+        .unwrap();
+    assert_eq!((repo.to_string().as_str(), pr.number), ("me/widgets", 3));
+}
+
+#[test]
+fn an_upstream_github_cannot_answer_for_leaves_origin_s_answer() {
+    let env = Env::new("upstream-gone");
+    set("GH_TOKEN", "tok-14");
+    let dir = fork_clone(&env, "widgets");
+    let fake = Fake::github(
+        "tok-14",
         vec![
-            answer(200, json!({ "data": { "repository": { "isFork": true } } })),
+            // Upstream is a repository the token can't see: origin's
+            // answer stands, and it has no PR.
             answer(
                 200,
-                json!({ "data": { "repository": { "pullRequests": { "nodes": [mine] } } } }),
+                json!({
+                    "data": { "repository": { "pullRequests": { "nodes": [] } }, "upstream": null },
+                    "errors": [{ "type": "NOT_FOUND", "path": ["upstream"],
+                        "message": "Could not resolve to a Repository with the name 'acme/widgets'." }]
+                }),
+            ),
+            // Origin GitHub can't find fails the lookup, as it always did.
+            answer(
+                200,
+                json!({
+                    "data": { "repository": null, "upstream": { "pullRequests": { "nodes": [] } } },
+                    "errors": [{ "type": "NOT_FOUND", "path": ["repository"],
+                        "message": "Could not resolve to a Repository with the name 'me/widgets'." }]
+                }),
+            ),
+            // Upstream failing for another reason, origin having no PR:
+            // the lookup fails, so a PR already known isn't taken as gone.
+            answer(
+                200,
+                json!({
+                    "data": { "repository": { "pullRequests": { "nodes": [] } }, "upstream": null },
+                    "errors": [{ "path": ["upstream"], "message": "Something went wrong." }]
+                }),
             ),
         ],
     );
@@ -570,22 +737,15 @@ fn a_fork_s_clone_looks_in_the_project_upstream_names() {
         "SWITCHBOARD_GITHUB_GRAPHQL",
         format!("{}/graphql", fake.url),
     );
-    let pr = util::block_on(github::pr_for_branch(&dir, "test"))
-        .unwrap()
-        .unwrap();
-    assert_eq!(pr.number, 41);
-    let seen = fake.seen();
     assert_eq!(
-        seen[0].body["variables"],
-        json!({ "owner": "me", "name": "widgets" })
+        util::block_on(github::branch_pr(&dir, "test")).unwrap(),
+        None
     );
-    assert_eq!(seen[1].body["variables"]["owner"], "acme");
-    // `gh repo set-default` wins over both, with no question asked.
-    env.git(&dir, &["config", "remote.origin.gh-resolved", "base"]);
-    assert_eq!(
-        util::block_on(github::repo_of(&dir)).unwrap().to_string(),
-        "me/widgets"
-    );
+    let err = util::block_on(github::branch_pr(&dir, "test")).unwrap_err();
+    assert_eq!(kind(&err), ErrorKind::NotFound);
+    // A service's failure, which a lookup keeps what was known through.
+    let err = util::block_on(github::branch_pr(&dir, "test")).unwrap_err();
+    kind(&err);
 }
 
 #[test]

@@ -16,6 +16,7 @@ use super::color::{self, Rgb};
 use super::label::{self, PaneKind};
 use super::names::{Answer, Ask};
 use super::{git, title};
+use crate::integrations::github::Repo;
 use crate::mux::TabId;
 use crate::mux::server::{ClientId, Event, Server};
 use crate::ui::{Menu, MenuOption};
@@ -34,6 +35,10 @@ pub struct Shown {
     /// Its label with no name of its own and no PR.
     pub label: String,
     pub pr: Option<u64>,
+    /// The repository its PR is in, where the lookup found it (in a fork's
+    /// clone, possibly the project upstream names); `None` when only its
+    /// number is known, its directory's origin's then.
+    pub pr_repo: Option<Repo>,
     /// The color it wears: its project's, or gray with the `accent_colors`
     /// setting off.
     pub color: Option<Rgb>,
@@ -91,6 +96,7 @@ impl Server {
             path: Some(dir),
             label: facts.label,
             pr: facts.pr,
+            pr_repo: facts.pr_repo,
             color: Some(if self.tab_names.names.last_switches().colors {
                 facts.color
             } else {
@@ -181,6 +187,12 @@ impl Server {
     /// The tab's PR number, when its branch has one.
     pub fn tab_pr(&self, tab: TabId) -> Option<u64> {
         self.tab_names.shown.get(&tab)?.pr
+    }
+
+    /// The repository the tab's PR is in, when its lookup said: origin's,
+    /// or in a fork's clone the project upstream names.
+    pub fn tab_pr_repo(&self, tab: TabId) -> Option<&Repo> {
+        self.tab_names.shown.get(&tab)?.pr_repo.as_ref()
     }
 
     /// A tab's full title where its name is a note item cut short: its

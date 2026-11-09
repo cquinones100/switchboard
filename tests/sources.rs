@@ -200,3 +200,136 @@ fn a_tab_s_pr_facts_and_the_views_arrive_from_the_background() {
     assert_eq!(facts["pr"]["merge"], "merged");
     assert_eq!(facts["pr"]["checks"], Value::Null);
 }
+
+/// A PR from `owner`'s `feature` into `base`, as GitHub's GraphQL gives it.
+fn fork_pr(number: u64, base: &str, owner: &str) -> Value {
+    json!({
+        "number": number, "url": format!("https://github.com/{base}/pull/{number}"),
+        "title": format!("Feature {number}"), "state": "OPEN",
+        "isDraft": false, "baseRefName": "main", "headRefName": "feature",
+        "isCrossRepository": !base.starts_with(&format!("{owner}/")),
+        "headRepositoryOwner": {"login": owner}, "reviewDecision": "REVIEW_REQUIRED",
+        "additions": 5, "deletions": 1, "mergedAt": null,
+        "repository": {"nameWithOwner": base}, "mergeQueueEntry": null,
+        "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "SUCCESS",
+            "contexts": {
+                "checkRunCountsByState": [{"state": "SUCCESS", "count": 2}],
+                "statusContextCountsByState": [],
+                "nodes": []
+            }
+        }}}]}
+    })
+}
+
+#[test]
+fn a_fork_s_tab_gets_its_pr_from_the_project_upstream_names() {
+    // GitHub as a fork's clone sees it: origin me/widgets has no PR from
+    // `feature`, the project acme/widgets has this fork's (#41) and another
+    // fork's of the same name (#52, newer).
+    let fake = Fake::github("test-token", move |request| {
+        if request.path() != "/graphql" {
+            return None;
+        }
+        let asked = request.text();
+        let answer = if asked.contains("pullRequests(headRefName") {
+            json!({"data": {
+                "repository": {"pullRequests": {"nodes": []}},
+                "upstream": {"pullRequests": {"nodes": [
+                    fork_pr(52, "acme/widgets", "someone"),
+                    fork_pr(41, "acme/widgets", "me"),
+                ]}}
+            }})
+        } else if asked.contains("pullRequest(number: 41)")
+            && asked.contains(r#"repository(owner: \"acme\", name: \"widgets\")"#)
+        {
+            json!({"data": {"r0": {"a0": fork_pr(41, "acme/widgets", "me")}}})
+        } else if asked.contains("search(") {
+            // Your PRs are searched for in origin and upstream alike.
+            let open = request.json()["variables"]["open"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            let nodes = if open.contains("repo:me/widgets") && open.contains("repo:acme/widgets") {
+                vec![fork_pr(41, "acme/widgets", "me")]
+            } else {
+                Vec::new()
+            };
+            json!({"data": {"open": {"nodes": nodes}, "merged": {"nodes": []}}})
+        } else {
+            json!({"data": {}})
+        };
+        Some(Reply::json(200, answer))
+    });
+    let server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &fake.url),
+    ]);
+    let dir = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("settings.json"),
+        json!({"notifications": false, "linear": false, "pause_when_away": false}).to_string(),
+    )
+    .unwrap();
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["symbolic-ref", "HEAD", "refs/heads/feature"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:me/widgets.git"],
+    );
+    git(
+        &work,
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "https://github.com/acme/widgets.git",
+        ],
+    );
+    git(&work, &["config", "branch.feature.remote", "origin"]);
+    git(
+        &work,
+        &["config", "branch.feature.merge", "refs/heads/feature"],
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+
+    let tab = || server.list()["sessions"][0]["tabs"][0].clone();
+    let facts = wait(
+        "the tab's PR facts, from upstream",
+        || tab()["facts"].clone(),
+        |f| f["pr"]["number"] == 41,
+    );
+    assert_eq!(facts["pr"]["repo"], "acme/widgets");
+    assert_eq!(
+        facts["pr"]["url"],
+        "https://github.com/acme/widgets/pull/41"
+    );
+    assert_eq!(
+        facts["pr"]["checks"],
+        json!({"pass": 2, "fail": 0, "pending": 0})
+    );
+    assert_eq!(tab()["pr"], 41);
+    assert!(
+        tab()["label"].as_str().unwrap().starts_with("#41 "),
+        "{}",
+        tab()["label"]
+    );
+
+    // The PR board has it, from the search over both repositories.
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    let views = wait("the PR board", sources, |s| {
+        s["views"]["prs"]["items"][0]["title"] == "#41 Feature 41"
+    });
+    assert_eq!(
+        views["views"]["prs"]["items"][0]["data"]["pr"]["repo"],
+        "acme/widgets"
+    );
+}

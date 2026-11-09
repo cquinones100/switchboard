@@ -7,7 +7,8 @@
 //! `~/.cache/switchboard/pr-view/` (one file per repository and branch, as
 //! pr-view.sh named it), and the PR is read again in the background; when it
 //! has changed, the pager lays it out again where it was. The PR is found as
-//! the tab names find one (`github::pr_for_branch`), and its description
+//! the tab names find one (`github::branch_pr`: in origin, or in a fork's
+//! clone the project its `upstream` remote names), and its description
 //! read with one more GraphQL query, through GitHub's API rather than `gh`.
 //! When there is none to show, it says plainly why, as gh-open.sh's box
 //! did: not a repository, no remote on GitHub, no token, no PR yet.
@@ -81,10 +82,10 @@ pub async fn by_number(repo: &github::Repo, number: u64, source: &str) -> anyhow
 /// The PR for the branch checked out in `dir`, or why there is none, in
 /// words for the person.
 pub async fn for_dir(dir: &Path) -> Result<Value, String> {
-    let found = github::pr_for_branch(dir, SOURCE)
+    let found = github::branch_pr(dir, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
-    let Some(pr) = found else {
+    let Some((repo, pr)) = found else {
         let branch = crate::tabs::git::locate(dir)
             .map(|p| p.branch)
             .unwrap_or_else(|| "no branch".into());
@@ -92,7 +93,6 @@ pub async fn for_dir(dir: &Path) -> Result<Value, String> {
             "No PR for this branch ({branch}). Push it and open one, then M-v again."
         ));
     };
-    let repo = github::repo_of(dir).await.map_err(|e| e.to_string())?;
     by_number(&repo, pr.number, SOURCE)
         .await
         .map_err(|e| e.to_string())

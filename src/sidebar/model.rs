@@ -106,6 +106,10 @@ pub struct TabModel {
     /// The name it was given, by hand or by a skill.
     pub own_name: Option<String>,
     pub pr: Option<u64>,
+    /// The repository that PR is in, where its lookup found it (in a fork's
+    /// clone, possibly the project upstream names); `None` when only its
+    /// number is known, its directory's origin's then.
+    pub pr_repo: Option<String>,
     pub color: Option<Rgb>,
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
@@ -178,6 +182,7 @@ impl TabModel {
             name: name.to_string(),
             own_name: None,
             pr: None,
+            pr_repo: None,
             color: None,
             state: TabState::Idle,
             pinned: false,

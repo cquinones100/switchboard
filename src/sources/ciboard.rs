@@ -1,11 +1,12 @@
 //! Mission control's CI view, ported from lib/sidebar/ciboard.js: your open
 //! pull requests whose checks are failing, in the repositories your tabs are
-//! in, each with the checks that failed and the line of its log that says
-//! why. One search for the pull requests and their checks, then the log of
-//! each one's first failing GitHub Actions job, read once (a finished job's
-//! log doesn't change) and kept in `ci-logs/<job>.log` in the state
-//! directory for "Read the failing log"; at most `MAX_LOGS` are read a look,
-//! and the logs of jobs no longer failing go.
+//! in (and a fork's upstream, as the PR board searches them), each with the
+//! checks that failed and the line of its log that says why. One search for
+//! the pull requests and their checks, then the log of each one's first
+//! failing GitHub Actions job, read once (a finished job's log doesn't
+//! change) and kept in `ci-logs/<job>.log` in the state directory for "Read
+//! the failing log"; at most `MAX_LOGS` are read a look, and the logs of
+//! jobs no longer failing go.
 
 use std::path::PathBuf;
 use std::sync::LazyLock;

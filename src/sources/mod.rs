@@ -8,8 +8,9 @@
 //!   paused while you're away and all asked again on your return, and asked
 //!   again soon when something appends to the `github` file in the state
 //!   directory.
-//! - `repo`: the GitHub repository a tab's directory belongs to, read from
-//!   git's config file rather than by running git.
+//! - `repo`: the GitHub repository a tab's directory belongs to, and in a
+//!   fork's clone the project its `upstream` remote names, read from git's
+//!   config file rather than by running git.
 //! - `prs`: every tab's pull request, in one GraphQL query, into
 //!   `Server.facts` (lib/sidebar/prs.js).
 //! - `landing`: what lands in each repository a tab is in, and each tab's
@@ -76,13 +77,28 @@ pub struct TabInfo {
     pub path: Option<PathBuf>,
     /// Its branch's PR, from the tab names' lookup.
     pub pr: Option<u64>,
-    /// The GitHub repository its directory belongs to.
+    /// The repository that PR is in, where the lookup found it; `None` when
+    /// only its number is known (a `wtpr` directory's), its origin's then.
+    pub pr_in: Option<Repo>,
+    /// The GitHub repository its directory belongs to: its origin's.
     pub repo: Option<Repo>,
-    /// What its PR is asked for by, when it leads to one.
-    pub key: Option<PrKey>,
+    /// In a fork's clone, the project its `upstream` remote names, where
+    /// its PRs may be.
+    pub upstream: Option<Repo>,
+    /// What its PR is asked for by, when it leads to one: the first GitHub
+    /// has an answer for is its PR (origin's before upstream's).
+    pub keys: Vec<PrKey>,
     /// Where it works, for the landing queue: its directory, then its panes'
     /// (Notes, which M-e may have put beside it and focused, left out).
     pub dirs: Vec<PathBuf>,
+}
+
+impl TabInfo {
+    /// The repository its PR is in: where the lookup found it, else its
+    /// origin.
+    pub fn pr_repo(&self) -> Option<&Repo> {
+        self.pr_in.as_ref().or(self.repo.as_ref())
+    }
 }
 
 impl Default for TabInfo {
@@ -93,8 +109,10 @@ impl Default for TabInfo {
             name: String::new(),
             path: None,
             pr: None,
+            pr_in: None,
             repo: None,
-            key: None,
+            upstream: None,
+            keys: Vec::new(),
             dirs: Vec::new(),
         }
     }
@@ -110,9 +128,10 @@ pub struct Sources {
     /// at once rather than on the next round.
     asked: HashSet<PrKey>,
     /// The worktrees no tab is in, by their path, with what their PR is
-    /// asked for by (their branch), so the Work map knows which merged
-    /// (the daemon's `untabbed` stand-ins for tabs).
-    untabbed: HashMap<PathBuf, PrKey>,
+    /// asked for by (their branch, in origin and a fork's upstream), so the
+    /// Work map knows which merged (the daemon's `untabbed` stand-ins for
+    /// tabs).
+    untabbed: HashMap<PathBuf, Vec<PrKey>>,
     /// Each tab's place in the landing queue, and where its worktree is
     /// when it waits, for moving it; each repository the tabs are in, with
     /// what lands there straight on its default branch.
@@ -161,7 +180,10 @@ impl Sources {
         if !settings::is_on("github") {
             return None;
         }
-        self.known.get(self.untabbed.get(path)?)
+        self.untabbed
+            .get(path)?
+            .iter()
+            .find_map(|key| self.known.get(key))
     }
 
     /// Takes a notification off the Inbox at once, once its menu has marked
@@ -199,7 +221,22 @@ pub fn build_failing(pr: Option<&PrFacts>) -> bool {
     }) && settings::is_on("build_failing")
 }
 
-/// The repositories the tabs are in, each once, in the order first met.
+/// The repositories your PRs from the tabs may be in, each once, in the
+/// order first met: each tab's origin, and in a fork's clone the project its
+/// upstream names. What the PR board and the CI view search.
+pub(crate) fn pr_repos_of(tabs: &[TabInfo]) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for repo in tabs.iter().flat_map(|t| t.repo.iter().chain(&t.upstream)) {
+        let name = repo.to_string();
+        if !seen.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
+            seen.push(name);
+        }
+    }
+    seen
+}
+
+/// The repositories the tabs are in (their origins), each once, in the
+/// order first met: whose merge queues the Landing view shows.
 pub(crate) fn repos_of(tabs: &[TabInfo]) -> Vec<String> {
     let mut seen = Vec::new();
     for tab in tabs {
@@ -240,4 +277,30 @@ pub(crate) fn in_columns(columns: &[&str], items: Vec<Item>) -> Vec<Item> {
         );
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::integrations::github::parse_name_with_owner;
+
+    #[test]
+    fn the_pr_views_search_each_origin_and_a_fork_s_upstream_once() {
+        let tab = |origin: &str, upstream: Option<&str>| TabInfo {
+            repo: parse_name_with_owner(origin),
+            upstream: upstream.and_then(parse_name_with_owner),
+            ..TabInfo::default()
+        };
+        let tabs = vec![
+            tab("me/widgets", Some("acme/widgets")),
+            tab("acme/api", None),
+            tab("Me/Widgets", Some("acme/widgets")),
+        ];
+        assert_eq!(
+            pr_repos_of(&tabs),
+            ["me/widgets", "acme/widgets", "acme/api"]
+        );
+        // The merge queues stay each tab's origin's.
+        assert!(!repos_of(&tabs).contains(&"acme/widgets".to_string()));
+    }
 }

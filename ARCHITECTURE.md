@@ -49,7 +49,7 @@ Shared by every part:
 | `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, opening a file or link, and the sandbox a sealed try runs in (`sandbox`: its rules, as macOS's `sandbox-exec` reads them; Linux has none) |
 | `presence` | Whether you're at the computer |
 | `connector` | One call to a Claude connector through a headless Haiku |
-| `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for where gh looked (`gh repo set-default`, else upstream when origin is a fork) |
+| `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for in the repository `gh repo set-default` names, else in origin and, in a fork's clone, the project its `upstream` remote names, in one query, origin's winning |
 | `worktree` | What the worktree commands share |
 | `trust` | Whose code a directory holds, the one place that decides: the directories listed in `trusted-dirs`, a worktree whose code is your own (what `switchboard try` builds), and someone else's PR checked out untrusted, which nothing starts Claude in, lists to reopen or builds |
 | `facts`, `items` | What GitHub and the landing queue say of each tab; the one shape every view's items take |
@@ -66,7 +66,7 @@ The workspace:
 | `ui` | The boxes over the workspace: messages, tips, questions, menus, pickers, the palette |
 | `sidebar` | Every tab on the left, most in need of you first, the Notifications window, and the model mission control shares |
 | `mission` | Mission control: every tab as a card and every view beside them |
-| `sources` | What GitHub and Linear say, looked up in the background on a schedule |
+| `sources` | What GitHub and Linear say, looked up in the background on a schedule, about the repositories the tabs are in: each one's origin, and in a fork's clone the project its `upstream` remote names, where its PRs are |
 | `day` | Your day: the calendar, Slack, the notes written for you |
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |

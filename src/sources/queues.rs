@@ -73,7 +73,9 @@ pub fn queue_items(by_repo: &BTreeMap<String, Queue>, tabs: &[TabInfo]) -> Vec<I
             let author = text(entry, "/pullRequest/author/login");
             let url = text(entry, "/pullRequest/url");
             let tab = tabs.iter().find(|t| {
-                t.pr == Some(number) && t.repo.as_ref().is_some_and(|r| r.to_string() == *repo)
+                t.pr == Some(number)
+                    && t.pr_repo()
+                        .is_some_and(|r| r.to_string().eq_ignore_ascii_case(repo))
             });
             let detail: Vec<String> = [
                 repo.split('/').nth(1).unwrap_or("").to_string(),

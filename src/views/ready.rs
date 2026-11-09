@@ -374,13 +374,12 @@ pub fn answer_from(pr: &Value) -> Answer {
 /// The PR for `dir`'s branch as M-m's query gives it, asked again while
 /// GitHub hasn't worked out whether it can merge.
 async fn pr_state(dir: &Path) -> Result<(github::Repo, Value), String> {
-    let found = github::pr_for_branch(dir, SOURCE)
+    let found = github::branch_pr(dir, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
-    let Some(pr) = found else {
+    let Some((repo, pr)) = found else {
         return Err("No pull request for this branch.".into());
     };
-    let repo = github::repo_of(dir).await.map_err(|e| e.to_string())?;
     let mut answer = Value::Null;
     for attempt in 0..3 {
         if attempt > 0 {

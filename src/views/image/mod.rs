@@ -121,13 +121,12 @@ fn cache_file(asked: &Asked) -> Option<PathBuf> {
 async fn fetch(asked: &Asked) -> Result<Parts, String> {
     match asked {
         Asked::Pr(dir) => {
-            let found = github::pr_for_branch(dir, SOURCE)
+            let found = github::branch_pr(dir, SOURCE)
                 .await
                 .map_err(|e| e.to_string())?;
-            let Some(pr) = found else {
+            let Some((repo, pr)) = found else {
                 return Err("No PR for this branch.".into());
             };
-            let repo = github::repo_of(dir).await.map_err(|e| e.to_string())?;
             let full = github::rest_rendered(
                 &format!("repos/{}/{}/pulls/{}", repo.owner, repo.name, pr.number),
                 SOURCE,

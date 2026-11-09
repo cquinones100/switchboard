@@ -9,6 +9,11 @@
 //! what can be one is let in (`PrKey::safe`). One PR or repository GitHub
 //! can't find fails only its own part of the answer, which keeps what was
 //! known of it; the rest are read all the same.
+//!
+//! A branch asked of the project a fork's clone's `upstream` names (a key
+//! with `from`) takes only a PR from that fork, its newest: the head
+//! repository's owner is asked for with each PR and matched here, so another
+//! fork's branch of the same name never counts.
 
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -61,8 +66,17 @@ pub fn query_for(keys: &[PrKey]) -> (Option<String>, Vec<Alias>) {
                         PrKey::Number { number, .. } => {
                             format!("a{j}: pullRequest(number: {number}) {{ {PR_FIELDS} }}")
                         }
-                        PrKey::Branch { branch, .. } => format!(
+                        PrKey::Branch {
+                            branch, from: None, ..
+                        } => format!(
                             "a{j}: pullRequests(headRefName: \"{branch}\", first: 1, orderBy: {{ field: CREATED_AT, direction: DESC }}) {{ nodes {{ {PR_FIELDS} }} }}"
+                        ),
+                        PrKey::Branch {
+                            branch,
+                            from: Some(_),
+                            ..
+                        } => format!(
+                            "a{j}: pullRequests(headRefName: \"{branch}\", first: 20, orderBy: {{ field: CREATED_AT, direction: DESC }}) {{ nodes {{ {PR_FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }}"
                         ),
                     }
                 })
@@ -188,13 +202,38 @@ pub fn answers(aliases: &[Alias], data: &Value, errors: &[Value]) -> Vec<(PrKey,
         })
         .filter_map(|a| {
             let answer = data.get(&a.repo)?.get(&a.alias)?;
-            let pr = match a.key {
-                PrKey::Branch { .. } => answer.pointer("/nodes/0")?,
+            let pr = match &a.key {
+                PrKey::Branch { from: None, .. } => answer.pointer("/nodes/0")?,
+                // The fork's PR, an open one before the rest, as
+                // `github::branch_pr` chooses.
+                PrKey::Branch {
+                    from: Some(from), ..
+                } => {
+                    let fork_s: Vec<&Value> = answer
+                        .get("nodes")?
+                        .as_array()?
+                        .iter()
+                        .filter(|pr| from_fork(pr, from))
+                        .collect();
+                    let open = fork_s
+                        .iter()
+                        .find(|pr| pr.get("state").and_then(Value::as_str) == Some("OPEN"));
+                    *open.or_else(|| fork_s.first())?
+                }
                 PrKey::Number { .. } => answer,
             };
             Some((a.key.clone(), facts_from(pr, &a.key)?))
         })
         .collect()
+}
+
+// Whether a PR's head is in `owner`'s fork: from that owner, and from
+// another repository than the one it is opened in.
+fn from_fork(pr: &Value, owner: &str) -> bool {
+    pr.pointer("/headRepositoryOwner/login")
+        .and_then(Value::as_str)
+        .is_some_and(|login| login.eq_ignore_ascii_case(owner))
+        && pr.get("isCrossRepository").and_then(Value::as_bool) != Some(false)
 }
 
 /// Asks GitHub about every key, in one query.
@@ -297,6 +336,47 @@ mod tests {
             )
         );
         assert_eq!(query_for(&[]).0, None);
+    }
+
+    #[test]
+    fn a_fork_s_branch_in_upstream_is_only_the_fork_s() {
+        let keys = vec![key("me/widgets@feature"), key("acme/widgets@me:feature")];
+        let (query, aliases) = query_for(&keys);
+        let query = query.unwrap();
+        assert!(
+            query.contains(r#"r1: repository(owner: "acme", name: "widgets") { a0: pullRequests(headRefName: "feature", first: 20"#)
+                && query.contains("isCrossRepository headRepositoryOwner { login }"),
+            "{query}"
+        );
+        let pr = |number: u64, owner: &str, cross: bool| {
+            json!({ "number": number, "state": "OPEN", "isCrossRepository": cross,
+                    "headRepositoryOwner": { "login": owner },
+                    "url": format!("https://github.com/acme/widgets/pull/{number}") })
+        };
+        // Another fork's, newer, and one from the project's own branch of
+        // the name come before the fork's own.
+        let answer = json!({
+            "r0": { "a0": { "nodes": [] } },
+            "r1": { "a0": { "nodes": [pr(52, "someone", true), pr(50, "me", false), pr(41, "Me", true)] } }
+        });
+        let got = answers(&aliases, &answer, &[]);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].0.to_string(), "acme/widgets@me:feature");
+        assert_eq!(
+            (got[0].1.number, got[0].1.repo.as_str()),
+            (41, "acme/widgets")
+        );
+        // With only another fork's, none.
+        let answer = json!({ "r1": { "a0": { "nodes": [pr(52, "someone", true)] } } });
+        assert!(answers(&aliases, &answer, &[]).is_empty());
+        // The fork's open PR before a newer merged one of its own.
+        let mut merged = pr(60, "me", true);
+        merged["state"] = json!("MERGED");
+        let answer = json!({ "r1": { "a0": { "nodes": [merged.clone(), pr(41, "me", true)] } } });
+        assert_eq!(answers(&aliases, &answer, &[])[0].1.number, 41);
+        // With none open, the newest.
+        let answer = json!({ "r1": { "a0": { "nodes": [merged] } } });
+        assert_eq!(answers(&aliases, &answer, &[])[0].1.number, 60);
     }
 
     #[test]

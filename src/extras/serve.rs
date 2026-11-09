@@ -586,7 +586,10 @@ impl Server {
 
     /// "Open a PR in the browser by number or URL" (pr-open.zsh): typed,
     /// the clipboard's when it holds one; empty is this tab's PR, as M-r
-    /// opens it. A number is a PR of the pane's repository. Then the browser,
+    /// opens it. A number is a PR of the pane's repository as `wtpr` takes
+    /// a bare number (`worktree_from_pr::numbered_repo`, worked out off the
+    /// server's task): `gh repo set-default`'s, else in a fork's clone the
+    /// project its `upstream` remote names, else origin's. Then the browser,
     /// or a new tab working on it (`wtpr`).
     fn open_pr_number(&mut self, client: ClientId, pane: Option<PaneId>) {
         let dir = self.pane_dir(pane);
@@ -622,29 +625,36 @@ impl Server {
             self.view_command(client, crate::views::Command::OpenPr);
             return;
         }
-        let (url, number) = match super::pr_typed(typed) {
-            Some(PrTyped::Url { url, number }) => (url, number),
+        match super::pr_typed(typed) {
+            Some(PrTyped::Url { url, number }) => self.pr_menu(client, url, number, dir),
             Some(PrTyped::Number(number)) => {
-                let Some(repo) = crate::sources::repo::origin_of(&dir) else {
-                    self.say(
-                        Some(client),
-                        &format!(
-                            "PR {number} needs a repository on GitHub, and {} isn't in one. Paste the PR's URL instead.",
-                            paths::tilde(&dir)
+                let root = dir.clone();
+                self.off_task(
+                    client,
+                    move || crate::cmd::worktree_from_pr::numbered_repo(&root),
+                    move |server, client, repo| match repo {
+                        Ok(repo) => {
+                            let url = format!("https://github.com/{repo}/pull/{number}");
+                            server.pr_menu(client, url, number, dir);
+                        }
+                        Err(why) => server.say(
+                            Some(client),
+                            &format!(
+                                "PR {number} in {}: {why}. Paste the PR's URL instead.",
+                                paths::tilde(&dir)
+                            ),
                         ),
-                    );
-                    return;
-                };
-                (format!("https://github.com/{repo}/pull/{number}"), number)
-            }
-            None => {
-                self.say(
-                    Some(client),
-                    &format!("Not a PR number or GitHub PR URL: {}", typed.trim()),
+                    },
                 );
-                return;
             }
-        };
+            None => self.say(
+                Some(client),
+                &format!("Not a PR number or GitHub PR URL: {}", typed.trim()),
+            ),
+        }
+    }
+
+    fn pr_menu(&mut self, client: ClientId, url: String, number: u64, dir: PathBuf) {
         let menu = Menu::new(
             format!("PR #{number}"),
             vec![

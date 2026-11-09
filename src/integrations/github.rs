@@ -1,7 +1,9 @@
 //! GitHub, over its own API rather than the `gh` command, so nothing has to
 //! be installed: GraphQL and REST calls with a token, the repository a
 //! directory belongs to, and the pull request for its branch, as
-//! `tmux/window-pr.sh` found it with `gh pr list` and `gh pr view`.
+//! `tmux/window-pr.sh` found it with `gh pr list` and `gh pr view`, looked
+//! for in origin and, in a fork's clone, the project its `upstream` remote
+//! names (`branch_pr`).
 //!
 //! The token is the one the person already has, first that answers:
 //! `GH_TOKEN`, `GITHUB_TOKEN` (the variables `gh` itself reads), `gh auth
@@ -190,6 +192,18 @@ pub async fn graphql_partial(
     variables: Value,
     source: &str,
 ) -> Result<(Value, Vec<Value>)> {
+    graphql_answer(query, variables, source)
+        .await
+        .map(|(data, errors, _)| (data, errors))
+}
+
+// `graphql_partial`'s answer, with the response its errors came in, for a
+// caller that takes some of them as failing the whole (`graphql_error`).
+async fn graphql_answer(
+    query: &str,
+    variables: Value,
+    source: &str,
+) -> Result<(Value, Vec<Value>, Response)> {
     let body = json!({ "query": query, "variables": variables });
     let (response, credential) =
         send("POST", &graphql_url(), Some(&body), "GraphQL", source).await?;
@@ -201,7 +215,7 @@ pub async fn graphql_partial(
         .cloned()
         .unwrap_or_default();
     match response.body.get("data") {
-        Some(data) if !data.is_null() => Ok((data.clone(), errors)),
+        Some(data) if !data.is_null() => Ok((data.clone(), errors, response)),
         _ if !errors.is_empty() => Err(graphql_error(&errors, &response).into()),
         _ => Err(ServiceError::new(
             ErrorKind::Failed,
@@ -389,6 +403,13 @@ impl fmt::Display for Repo {
     }
 }
 
+impl Repo {
+    /// Whether it is `other`, as GitHub reads names: whatever their case.
+    pub fn same(&self, other: &Repo) -> bool {
+        self.owner.eq_ignore_ascii_case(&other.owner) && self.name.eq_ignore_ascii_case(&other.name)
+    }
+}
+
 // An owner or repository name as GitHub allows them, which also keeps
 // anything else out of the REST paths they go into.
 static PART: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._-]+$").unwrap());
@@ -466,8 +487,33 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String> {
 /// `remote.<name>.gh-resolved`), else an `upstream` remote when there is one
 /// and `origin` is a fork, else `origin`. In a fork's clone, where origin is
 /// your fork and upstream the project, that is the project, where PRs from
-/// your fork are opened.
+/// your fork are opened. A branch's PR is looked for in both
+/// (`branch_pr`), since it may be in either.
 pub async fn repo_of(dir: &Path) -> Result<Repo> {
+    match remotes(dir).await? {
+        Remotes::Default(repo) => Ok(repo),
+        Remotes::Clone {
+            origin,
+            upstream: Some(upstream),
+        } if is_fork(&origin).await? => Ok(upstream),
+        Remotes::Clone { origin, .. } => Ok(origin),
+    }
+}
+
+// The repositories a clone's PRs may be in, as its git config names them,
+// before GitHub is asked anything.
+enum Remotes {
+    // The one `gh repo set-default` named, which gh asks alone.
+    Default(Repo),
+    // Origin, and the `upstream` remote's when it names another repository
+    // on GitHub (in a fork's clone, the project).
+    Clone {
+        origin: Repo,
+        upstream: Option<Repo>,
+    },
+}
+
+async fn remotes(dir: &Path) -> Result<Remotes> {
     if git(dir, &["rev-parse", "--git-dir"]).await.is_err() {
         return Err(anyhow!(
             "{} isn't in a git repository.",
@@ -484,10 +530,10 @@ pub async fn repo_of(dir: &Path) -> Result<Repo> {
         if value != "base"
             && let Some(repo) = parse_name_with_owner(&value)
         {
-            return Ok(repo);
+            return Ok(Remotes::Default(repo));
         }
         if let Some(repo) = remote_repo(dir, &remote).await {
-            return Ok(repo);
+            return Ok(Remotes::Default(repo));
         }
     }
     let url = git(dir, &["remote", "get-url", "origin"])
@@ -495,10 +541,10 @@ pub async fn repo_of(dir: &Path) -> Result<Repo> {
         .map_err(|_| anyhow!("This repository has no origin remote."))?;
     let origin = parse_remote(&url)
         .ok_or_else(|| anyhow!("This repository's origin isn't on GitHub: {url}"))?;
-    match remote_repo(dir, "upstream").await {
-        Some(upstream) if upstream != origin && is_fork(&origin).await? => Ok(upstream),
-        _ => Ok(origin),
-    }
+    let upstream = remote_repo(dir, "upstream")
+        .await
+        .filter(|upstream| !upstream.same(&origin));
+    Ok(Remotes::Clone { origin, upstream })
 }
 
 // The remote `gh repo set-default` marked, and what it wrote there: `base`,
@@ -512,7 +558,8 @@ fn set_default(config: &str) -> Option<(String, String)> {
     })
 }
 
-fn parse_name_with_owner(text: &str) -> Option<Repo> {
+/// A repository from its `owner/name`, as GitHub writes `nameWithOwner`.
+pub fn parse_name_with_owner(text: &str) -> Option<Repo> {
     let (owner, name) = text.split_once('/')?;
     (PART.is_match(owner) && PART.is_match(name) && !name.contains('/')).then(|| Repo {
         owner: owner.to_string(),
@@ -527,7 +574,7 @@ async fn remote_repo(dir: &Path, remote: &str) -> Option<Repo> {
 }
 
 // Whether GitHub has the repository as a fork, kept an hour, since a fork
-// stays one and the tab names ask on every look.
+// stays one and `repo_of` asks on every look.
 static FORKS: LazyLock<std::sync::Mutex<std::collections::HashMap<Repo, (bool, i64)>>> =
     LazyLock::new(Default::default);
 
@@ -628,20 +675,48 @@ pub fn pr_number_from_dir(dir: &Path) -> Option<u64> {
 }
 
 /// The pull request for the branch checked out in `dir`, or `None` when the
-/// branch has none (or `dir` is on no branch). As `tmux/window-pr.sh`: a
-/// merged or closed PR still counts, since the work in the tab is the same
-/// work it was before it merged, though an open one is taken first; and a
-/// `wtpr` directory's number is looked up by that number. Otherwise only a
-/// PR from where the branch is pushed counts, as `gh pr view` matched one:
-/// the repository its remote names (your fork, in a fork's clone; a fork's
-/// PR checked out as `<owner>-<branch>`, looked up by the branch it tracks),
-/// else the PR's own repository. A stranger's PR that happens to have the
-/// same head branch (`main`, `patch-1`) is never the branch's.
+/// branch has none (or `dir` is on no branch): `branch_pr`'s, for a caller
+/// that needs nothing of the repository it is in.
 pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullRequest>> {
-    let repo = repo_of(dir).await?;
+    Ok(branch_pr(dir, source).await?.map(|(_, pr)| pr))
+}
+
+/// The pull request for the branch checked out in `dir`, with the
+/// repository it is in, or `None` when the branch has none (or `dir` is on
+/// no branch). As `tmux/window-pr.sh`: a merged or closed PR still counts,
+/// since the work in the tab is the same work it was before it merged,
+/// though an open one is taken first; and a `wtpr` directory's number is
+/// looked up by that number, in `repo_of`'s repository, as `wtpr` took it.
+///
+/// It is looked for in the repository `gh repo set-default` named, as gh
+/// asked that alone; else in origin and, in a fork's clone, the project its
+/// `upstream` remote names, both in one query, origin's PR winning when
+/// both have one, so it is found whichever the branch's PR was opened
+/// against. Only a PR from where the branch is pushed counts, as `gh pr
+/// view` matched one: the repository its remote names (your fork, in a
+/// fork's clone; a fork's PR checked out as `<owner>-<branch>`, looked up by
+/// the branch it tracks), else origin's. A stranger's PR that happens to have
+/// the same head branch (`main`, `patch-1`), or another fork's into
+/// upstream, is never the branch's. Upstream being a repository your token
+/// can't see only leaves it out; any other failure of its part fails the
+/// lookup when origin has no PR, so a PR already known isn't taken as gone.
+pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullRequest)>> {
     if let Some(number) = pr_number_from_dir(dir) {
-        return pr_by_number(&repo, number, source).await;
+        let repo = repo_of(dir).await?;
+        let pr = pr_by_number(&repo, number, source).await?;
+        return Ok(pr.map(|pr| (repo, pr)));
     }
+    branch_pr_by_branch(dir, source).await
+}
+
+/// `branch_pr` by the branch alone, a `wtpr` directory's too: its PR is the
+/// one from the branch it tracks, in whichever repository that was opened
+/// in, though a bare number would be read as another's.
+pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Repo, PullRequest)>> {
+    let (repo, upstream) = match remotes(dir).await? {
+        Remotes::Default(repo) => (repo, None),
+        Remotes::Clone { origin, upstream } => (origin, upstream),
+    };
     let branch = git(dir, &["branch", "--show-current"])
         .await
         .unwrap_or_default();
@@ -660,27 +735,79 @@ pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullReques
     let owner = pushed_to(dir, &branch)
         .await
         .unwrap_or_else(|| repo.owner.clone());
-    let data = graphql(
-        &format!(
-            "query($owner: String!, $name: String!, $head: String!) {{ repository(owner: $owner, name: $name) {{ \
-             pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
-             nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }} }} }}"
-        ),
-        json!({ "owner": repo.owner, "name": repo.name, "head": head }),
-        source,
-    )
-    .await?;
-    let nodes: Vec<Node> = data
-        .pointer("/repository/pullRequests/nodes")
-        .and_then(Value::as_array)
-        .map(|nodes| {
-            nodes
-                .iter()
-                .filter_map(|n| serde_json::from_value(n.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default();
-    Ok(choose(nodes, &owner, &repo.owner))
+    let prs = format!(
+        "pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
+         nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }}"
+    );
+    // Upstream's part failing for another reason than being out of the
+    // token's sight, kept until origin's answer is known.
+    let mut upstream_failed: Option<ServiceError> = None;
+    let data = match &upstream {
+        None => {
+            graphql(
+                &format!(
+                    "query($owner: String!, $name: String!, $head: String!) {{ \
+                     repository(owner: $owner, name: $name) {{ {prs} }} }}"
+                ),
+                json!({ "owner": repo.owner, "name": repo.name, "head": head }),
+                source,
+            )
+            .await?
+        }
+        Some(up) => {
+            let (data, errors, response) = graphql_answer(
+                &format!(
+                    "query($owner: String!, $name: String!, $head: String!, \
+                     $upstreamOwner: String!, $upstreamName: String!) {{ \
+                     repository(owner: $owner, name: $name) {{ {prs} }} \
+                     upstream: repository(owner: $upstreamOwner, name: $upstreamName) {{ {prs} }} }}"
+                ),
+                json!({
+                    "owner": repo.owner, "name": repo.name, "head": head,
+                    "upstreamOwner": up.owner, "upstreamName": up.name,
+                }),
+                source,
+            )
+            .await?;
+            let (upstream_errors, failing): (Vec<Value>, Vec<Value>) = errors
+                .into_iter()
+                .partition(|e| e.pointer("/path/0").and_then(Value::as_str) == Some("upstream"));
+            if !failing.is_empty() {
+                return Err(graphql_error(&failing, &response).into());
+            }
+            let out_of_sight = |e: &Value| {
+                matches!(
+                    e.get("type").and_then(Value::as_str),
+                    Some("NOT_FOUND" | "FORBIDDEN")
+                )
+            };
+            if !upstream_errors.iter().all(out_of_sight) {
+                upstream_failed = Some(graphql_error(&upstream_errors, &response));
+            }
+            data
+        }
+    };
+    let nodes = |at: &str| -> Vec<Node> {
+        data.pointer(&format!("/{at}/pullRequests/nodes"))
+            .and_then(Value::as_array)
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|n| serde_json::from_value(n.clone()).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if let Some(pr) = choose(nodes("repository"), &owner, &repo.owner) {
+        return Ok(Some((repo, pr)));
+    }
+    if let Some(failed) = upstream_failed {
+        return Err(failed.into());
+    }
+    Ok(upstream.and_then(|up| {
+        let pr = choose(nodes("upstream"), &owner, &up.owner)?;
+        Some((up, pr))
+    }))
 }
 
 // The owner of the repository a branch is pushed to: its remote's URL (the

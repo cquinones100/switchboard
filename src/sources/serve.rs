@@ -25,8 +25,8 @@ use super::landing::{self, Read};
 use super::repo::{self, PrKey};
 use super::schedule::GITHUB_LOOKUPS;
 use super::{
-    CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, prboard, prs,
-    queues, repos_of, setup, tickets,
+    CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, pr_repos_of,
+    prboard, prs, queues, repos_of, setup, tickets,
 };
 use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
 use crate::integrations::github::Repo;
@@ -73,15 +73,31 @@ fn lookup_of(view: &str) -> Option<&'static str> {
 type TabsSeen = Vec<(TabId, usize, String, Option<u64>, Option<Repo>)>;
 
 /// What `Sources` keeps for the server beyond the views: each directory's
-/// GitHub repository, read again after `REPO_KEPT` (prs.js read it once per
-/// directory), the ticket board's issues for building it again as the tabs
-/// change, and whether a read of the landing queue is under way.
+/// GitHub repositories (origin, and a fork's upstream), read again after
+/// `REPO_KEPT` (prs.js read origin once per directory), the ticket board's
+/// issues for building it again as the tabs change, and whether a read of
+/// the landing queue is under way.
 #[derive(Default)]
 pub(super) struct Kept {
-    repos: HashMap<PathBuf, (Option<Repo>, Instant)>,
+    repos: HashMap<PathBuf, (repo::Remotes, Instant)>,
     ticket_issues: Option<Vec<Value>>,
     tabs_seen: TabsSeen,
     landing_busy: bool,
+}
+
+impl Kept {
+    // A directory's repositories, as last read unless that was `REPO_KEPT`
+    // ago.
+    fn remotes(&mut self, dir: &Path) -> repo::Remotes {
+        match self.repos.get(dir) {
+            Some((remotes, at)) if at.elapsed() < REPO_KEPT => return remotes.clone(),
+            _ => {}
+        }
+        let remotes = repo::remotes_of(dir);
+        self.repos
+            .insert(dir.to_path_buf(), (remotes.clone(), Instant::now()));
+        remotes
+    }
 }
 
 impl Server {
@@ -108,8 +124,8 @@ impl Server {
             && settings::is_on("github")
             && tabs
                 .iter()
-                .filter_map(|t| t.key.as_ref())
-                .chain(self.sources.untabbed.values())
+                .flat_map(|t| &t.keys)
+                .chain(self.sources.untabbed.values().flatten())
                 .any(|k| !self.sources.asked.contains(k))
             && self.sources.schedule.ask("merges", now)
         {
@@ -390,31 +406,26 @@ impl Server {
                     name: self.tab_label(*id),
                     path,
                     pr: self.tab_pr(*id),
+                    pr_in: self.tab_pr_repo(*id).cloned(),
                     repo: None,
-                    key: None,
+                    upstream: None,
+                    keys: Vec::new(),
                     dirs,
                 });
             }
         }
         let kept = &mut self.sources.kept;
-        let mut origin = |dir: &Path| {
-            match kept.repos.get(dir) {
-                Some((repo, at)) if at.elapsed() < REPO_KEPT => return repo.clone(),
-                _ => {}
-            }
-            let repo = repo::origin_of(dir);
-            kept.repos
-                .insert(dir.to_path_buf(), (repo.clone(), Instant::now()));
-            repo
-        };
+        let mut remotes = |dir: &Path| kept.remotes(dir);
         for tab in &mut tabs {
-            tab.repo = tab.path.as_deref().and_then(&mut origin);
-            tab.key = repo::key_of(
+            let here = tab.path.as_deref().map(&mut remotes).unwrap_or_default();
+            tab.repo = here.origin;
+            tab.upstream = here.upstream;
+            tab.keys = repo::keys_of(
                 &tab.name,
                 tab.path.as_deref(),
                 tab.pr,
-                tab.repo.as_ref(),
-                &mut origin,
+                tab.pr_repo(),
+                &mut remotes,
             );
         }
         let live: HashSet<&Path> = tabs.iter().filter_map(|t| t.path.as_deref()).collect();
@@ -451,17 +462,9 @@ impl Server {
         let kept = &mut self.sources.kept;
         let mut found = HashMap::new();
         for (path, branch) in trees.into_iter().filter(|(p, _)| !tabs.contains(p)) {
-            let repo = match kept.repos.get(&path) {
-                Some((repo, at)) if at.elapsed() < REPO_KEPT => repo.clone(),
-                _ => {
-                    let repo = repo::origin_of(&path);
-                    kept.repos
-                        .insert(path.clone(), (repo.clone(), Instant::now()));
-                    repo
-                }
-            };
-            if let Some(repo) = repo {
-                found.insert(path, PrKey::Branch { repo, branch });
+            let keys = repo::branch_keys(&kept.remotes(&path), &branch);
+            if !keys.is_empty() {
+                found.insert(path, keys);
             }
         }
         self.sources.untabbed = found;
@@ -490,8 +493,12 @@ impl Server {
                     return false;
                 }
                 // The tabs' PRs, and those of the worktrees no tab is in.
-                let mut keys: Vec<PrKey> = tabs.iter().filter_map(|t| t.key.clone()).collect();
-                for key in self.sources.untabbed.values() {
+                let mut keys: Vec<PrKey> = Vec::new();
+                for key in tabs
+                    .iter()
+                    .flat_map(|t| &t.keys)
+                    .chain(self.sources.untabbed.values().flatten())
+                {
                     if !keys.contains(key) {
                         keys.push(key.clone());
                     }
@@ -506,6 +513,7 @@ impl Server {
                 if !enabled(PRS) {
                     return false;
                 }
+                let repos = pr_repos_of(tabs);
                 if repos.is_empty() {
                     setup::no_repos(self.sources.views.entry(PRS).or_default());
                     return false;
@@ -522,6 +530,7 @@ impl Server {
                 if !enabled(CI) {
                     return false;
                 }
+                let repos = pr_repos_of(tabs);
                 if repos.is_empty() {
                     setup::no_repos(self.sources.views.entry(CI).or_default());
                     return false;
@@ -614,10 +623,10 @@ impl Server {
         let mut facts = Facts::new();
         for tab in tabs {
             let pr = tab
-                .key
-                .as_ref()
+                .keys
+                .iter()
                 .filter(|_| github)
-                .and_then(|k| self.sources.known.get(k))
+                .find_map(|k| self.sources.known.get(k))
                 .cloned();
             let landing = self
                 .sources
@@ -637,8 +646,8 @@ impl Server {
         }
         let keys: HashSet<&PrKey> = tabs
             .iter()
-            .filter_map(|t| t.key.as_ref())
-            .chain(self.sources.untabbed.values())
+            .flat_map(|t| &t.keys)
+            .chain(self.sources.untabbed.values().flatten())
             .collect();
         if self.sources.known.len() > 4 * keys.len() + 64 {
             self.sources.known.retain(|k, _| keys.contains(k));

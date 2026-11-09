@@ -2,7 +2,9 @@
 //! requests in the repositories your tabs are in, as columns by where they
 //! stand (Draft, In review, Approved, In merge queue, and Merged in the last
 //! `MERGED_DAYS`), from two GitHub searches. Only those repositories, so old
-//! pull requests elsewhere stay off the board.
+//! pull requests elsewhere stay off the board: each tab's origin, and in a
+//! fork's clone the project its `upstream` remote names, where the PRs from
+//! your fork are (`super::pr_repos_of`).
 //!
 //! The merged column changes far less than the rest, so it is searched for
 //! only every `MERGED_EVERY`, or when the repositories change; in between,
