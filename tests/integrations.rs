@@ -722,6 +722,15 @@ fn an_upstream_github_cannot_answer_for_leaves_origin_s_answer() {
                         "message": "Could not resolve to a Repository with the name 'me/widgets'." }]
                 }),
             ),
+            // Upstream failing for another reason, origin having no PR:
+            // the lookup fails, so a PR already known isn't taken as gone.
+            answer(
+                200,
+                json!({
+                    "data": { "repository": { "pullRequests": { "nodes": [] } }, "upstream": null },
+                    "errors": [{ "path": ["upstream"], "message": "Something went wrong." }]
+                }),
+            ),
         ],
     );
     set(
@@ -734,6 +743,9 @@ fn an_upstream_github_cannot_answer_for_leaves_origin_s_answer() {
     );
     let err = util::block_on(github::branch_pr(&dir, "test")).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::NotFound);
+    // A service's failure, which a lookup keeps what was known through.
+    let err = util::block_on(github::branch_pr(&dir, "test")).unwrap_err();
+    kind(&err);
 }
 
 #[test]

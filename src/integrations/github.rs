@@ -697,14 +697,22 @@ pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullReques
 /// fork's clone; a fork's PR checked out as `<owner>-<branch>`, looked up by
 /// the branch it tracks), else origin's. A stranger's PR that happens to have
 /// the same head branch (`main`, `patch-1`), or another fork's into
-/// upstream, is never the branch's. Upstream's part failing (a repository
-/// your token can't see) only leaves it out.
+/// upstream, is never the branch's. Upstream being a repository your token
+/// can't see only leaves it out; any other failure of its part fails the
+/// lookup when origin has no PR, so a PR already known isn't taken as gone.
 pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullRequest)>> {
     if let Some(number) = pr_number_from_dir(dir) {
         let repo = repo_of(dir).await?;
         let pr = pr_by_number(&repo, number, source).await?;
         return Ok(pr.map(|pr| (repo, pr)));
     }
+    branch_pr_by_branch(dir, source).await
+}
+
+/// `branch_pr` by the branch alone, a `wtpr` directory's too: its PR is the
+/// one from the branch it tracks, in whichever repository that was opened
+/// in, though a bare number would be read as another's.
+pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Repo, PullRequest)>> {
     let (repo, upstream) = match remotes(dir).await? {
         Remotes::Default(repo) => (repo, None),
         Remotes::Clone { origin, upstream } => (origin, upstream),
@@ -731,6 +739,9 @@ pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullReq
         "pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
          nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }}"
     );
+    // Upstream's part failing for another reason than being out of the
+    // token's sight, kept until origin's answer is known.
+    let mut upstream_failed: Option<ServiceError> = None;
     let data = match &upstream {
         None => {
             graphql(
@@ -758,12 +769,20 @@ pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullReq
                 source,
             )
             .await?;
-            let failing: Vec<Value> = errors
+            let (upstream_errors, failing): (Vec<Value>, Vec<Value>) = errors
                 .into_iter()
-                .filter(|e| e.pointer("/path/0").and_then(Value::as_str) != Some("upstream"))
-                .collect();
+                .partition(|e| e.pointer("/path/0").and_then(Value::as_str) == Some("upstream"));
             if !failing.is_empty() {
                 return Err(graphql_error(&failing, &response).into());
+            }
+            let out_of_sight = |e: &Value| {
+                matches!(
+                    e.get("type").and_then(Value::as_str),
+                    Some("NOT_FOUND" | "FORBIDDEN")
+                )
+            };
+            if !upstream_errors.iter().all(out_of_sight) {
+                upstream_failed = Some(graphql_error(&upstream_errors, &response));
             }
             data
         }
@@ -781,6 +800,9 @@ pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullReq
     };
     if let Some(pr) = choose(nodes("repository"), &owner, &repo.owner) {
         return Ok(Some((repo, pr)));
+    }
+    if let Some(failed) = upstream_failed {
+        return Err(failed.into());
     }
     Ok(upstream.and_then(|up| {
         let pr = choose(nodes("upstream"), &owner, &up.owner)?;

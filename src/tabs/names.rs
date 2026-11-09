@@ -194,7 +194,9 @@ impl Ask {
     pub async fn run(self) -> Answer {
         match self {
             Ask::Pr { dir, repo, branch } => {
-                let found = match github::branch_pr(&dir, "tab name: PR").await {
+                // By the branch, a `wtpr` directory's too: its number alone
+                // can't say which repository's it is in a fork's clone.
+                let found = match github::branch_pr_by_branch(&dir, "tab name: PR").await {
                     Ok(pr) => Ok(pr.map(|(repo, p)| BranchPr {
                         number: p.number,
                         repo: Some(repo),
@@ -328,10 +330,10 @@ impl Names {
         let label = label::facts_label(&window, ticket.as_deref().zip(title.as_deref()));
 
         // A `wtpr` worktree carries its number in its directory's name, which
-        // needs no lookup, its repository its origin. In a fork's clone,
-        // `wtpr` took a bare number as gh does (`github::repo_of`), possibly
-        // upstream's, so which one it is is asked, as `branch_pr` does for
-        // such a directory, the number shown meanwhile.
+        // needs no lookup, its repository its origin. In a fork's clone it
+        // may be upstream's or origin's, which the number can't say, so its
+        // branch's PR is asked for, the number shown meanwhile, and its
+        // repository taken when that PR is the one numbered.
         let pr = if !switches.prs() {
             None
         } else if let Some(n) = github::pr_number_from_dir(dir) {
