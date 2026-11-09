@@ -3220,6 +3220,7 @@ mod tests {
             skipped: 0,
             spend_limit: 0.0,
             lands_alone: false,
+            hands_free: false,
             target: String::new(),
         });
         m.cursor = 1;

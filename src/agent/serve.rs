@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::sessions;
 use super::state::{QUESTION_KINDS, State};
+use super::{hands_free, sessions};
 use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
 use crate::{settings, util};
@@ -44,8 +44,10 @@ impl Server {
     /// `hook <event> [--parked <pid>,...]`, the hook's JSON on stdin, from
     /// `switchboard hook`: marks the caller's pane, or with `--parked` the
     /// pane in front of the first of those Claude processes (a backgrounded
-    /// conversation's tab). Always answers success: a hook has nothing to
-    /// say back.
+    /// conversation's tab). Always answers success, saying nothing but in a
+    /// tab of autopilot's hands-free mode, where a question box or a turn
+    /// ending on a question is answered for Claude Code to read
+    /// (`hands_free_answer`).
     pub fn agent_hook(
         &mut self,
         args: &[String],
@@ -72,7 +74,21 @@ impl Server {
         let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
             return Reply::ok("");
         };
-        let hook = super::Hook::read(event, &payload);
+        let mut hook = super::Hook::read(event, &payload);
+        let answer = if caller.is_some() && hook.agent.is_empty() {
+            self.hands_free_answer(tab, &hook, &payload)
+        } else {
+            None
+        };
+        if answer.is_some() {
+            // Answered for Claude, so it goes on working: a question denied
+            // marks no wait, a stop blocked no finish.
+            if hook.event == "Stop" {
+                return Reply::ok(answer.unwrap_or_default());
+            }
+            hook.tool.clear();
+            hook.wait.clear();
+        }
         let front = self.tab_in_front(tab);
         let now = util::now_secs();
         let changed = if hook.event == "Notification" {
@@ -126,7 +142,51 @@ impl Server {
                 self.one_claude(pane);
             }
         }
-        Reply::ok("")
+        Reply::ok(answer.unwrap_or_default())
+    }
+
+    /// What a hook in a tab of autopilot's hands-free mode is answered
+    /// with (src/agent/hands_free.rs): a question box denied unless marked
+    /// always asked, a turn ending on a question blocked at most `NUDGES`
+    /// times; nothing once the tab has pushed or landed, nor for anything
+    /// else.
+    fn hands_free_answer(
+        &mut self,
+        tab: TabId,
+        hook: &super::Hook,
+        payload: &Value,
+    ) -> Option<String> {
+        use crate::autopilot::{AUTOLAND, HANDS_FREE, LEFT, NUDGED, PUSHED};
+        let t = self.tabs.get_mut(&tab)?;
+        // The setting read at the hook too, so turning it off counts at once.
+        if t.opts.get(HANDS_FREE).is_none_or(|v| v != "1") || !setting_on("autopilot_handsfree") {
+            return None;
+        }
+        // Never once landed: pushed (`@autopilot_pushed`, or
+        // `@autopilot_autoland`, set as the landing pushes) or back in the
+        // main clone (`@autopilot_left`); what comes after, such as applying
+        // the change, is asked as usual.
+        if [LEFT, AUTOLAND, PUSHED]
+            .iter()
+            .any(|m| t.opts.contains_key(*m))
+        {
+            return None;
+        }
+        match hook.event.as_str() {
+            "PreToolUse" if hook.tool == "AskUserQuestion" => {
+                (!hands_free::always_asked(payload)).then(hands_free::deny_question)
+            }
+            "Stop" if hands_free::sends_back(payload) => {
+                let nudged: u32 = t.opts.get(NUDGED).and_then(|n| n.parse().ok()).unwrap_or(0);
+                if nudged >= hands_free::NUDGES {
+                    return None;
+                }
+                t.opts.insert(NUDGED.into(), (nudged + 1).to_string());
+                self.dirty_tab(tab);
+                Some(hands_free::block_stop())
+            }
+            _ => None,
+        }
     }
 
     /// The pane in front of the first of these processes: the tab's parked

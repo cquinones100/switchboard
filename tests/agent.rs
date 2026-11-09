@@ -815,3 +815,134 @@ fn a_session_starting_in_a_tab_with_a_note_is_pointed_at_it() {
     settings(&server, json!({}));
     assert!(!context_in(&server, &pane).contains("This tab's note"));
 }
+
+/// A hook in `pane`, which must succeed, giving what it printed.
+fn hook_says(server: &TestServer, pane: &str, event: &str, input: Value) -> String {
+    let (code, out, err) = run_hook(
+        &server.home,
+        &server.state,
+        Some((&server.socket(), pane)),
+        event,
+        &input.to_string(),
+    );
+    assert_eq!((code, err.as_str()), (0, ""), "hook {event}");
+    out
+}
+
+#[test]
+fn a_hands_free_tab_has_its_questions_answered_for_claude() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let tab = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    let ask = |header: &str| {
+        json!({"session_id": "s-1", "tool_name": "AskUserQuestion", "tool_input": {"questions": [
+            {"header": header, "question": "Which way?", "options": [{"label": "A (Recommended)"}, {"label": "B"}]}
+        ]}})
+    };
+    let asking_stop =
+        json!({"session_id": "s-1", "last_assistant_message": "Built A.\n\nShould I do B too?"});
+
+    // Unmarked, nothing is answered and the question waits on you.
+    assert_eq!(hook_says(&server, &pane, "PreToolUse", ask("Way")), "");
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "waiting");
+    assert_eq!(hook_says(&server, &pane, "Stop", asking_stop.clone()), "");
+
+    server.ok(&["set", "-t", &tab, "@autopilot_handsfree", "1"]);
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go"}),
+    );
+    let denied: Value =
+        serde_json::from_str(&hook_says(&server, &pane, "PreToolUse", ask("Way"))).unwrap();
+    assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(
+        pane_of(&server.list(), &pane)["agent"]["state"],
+        "working",
+        "a question answered for Claude waits on no one"
+    );
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", ask("[always ask]")),
+        "",
+        "a question a skill marks always asked goes through"
+    );
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", json!({"tool_name": "Bash"})),
+        "",
+        "other tools are left alone"
+    );
+
+    // A turn ending on a question carries on, three times an item.
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go"}),
+    );
+    assert_eq!(
+        hook_says(
+            &server,
+            &pane,
+            "Stop",
+            json!({"session_id": "s-1", "last_assistant_message": "Waiting on the tests."})
+        ),
+        "",
+        "a turn that asks nothing stops"
+    );
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"session_id": "s-1", "prompt": "go"}),
+    );
+    for n in 1..=3 {
+        let blocked: Value =
+            serde_json::from_str(&hook_says(&server, &pane, "Stop", asking_stop.clone())).unwrap();
+        assert_eq!(blocked["decision"], "block", "block {n}");
+        assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+    }
+    assert_eq!(
+        server.ok(&["show", "-t", &tab, "@autopilot_nudged"]).trim(),
+        "3"
+    );
+    assert_eq!(
+        hook_says(&server, &pane, "Stop", asking_stop.clone()),
+        "",
+        "the fourth stands"
+    );
+    // Finished in the tab in front, so seen at once: no longer working.
+    assert_ne!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // Once landed, a stop stands whatever it asks.
+    server.ok(&["set", "-t", &tab, "@autopilot_nudged", "0"]);
+    server.ok(&["set", "-t", &tab, "@autopilot_autoland", "abc1234"]);
+    assert_eq!(
+        hook_says(&server, &pane, "Stop", asking_stop.clone()),
+        "",
+        "pushed"
+    );
+    server.ok(&["set", "-t", &tab, "-u", "@autopilot_autoland"]);
+    server.ok(&["set", "-t", &tab, "@autopilot_pushed", "abc1234"]);
+    assert_eq!(
+        hook_says(&server, &pane, "PreToolUse", ask("Way")),
+        "",
+        "after the push, questions are asked as usual"
+    );
+    assert_eq!(
+        hook_says(&server, &pane, "Stop", asking_stop.clone()),
+        "",
+        "pushed after asking"
+    );
+    server.ok(&["set", "-t", &tab, "-u", "@autopilot_pushed"]);
+    server.ok(&["set", "-t", &tab, "@autopilot_left", "1"]);
+    assert_eq!(
+        hook_says(&server, &pane, "Stop", asking_stop),
+        "",
+        "back in the main clone"
+    );
+}

@@ -10,6 +10,8 @@
 //! - `sessions`: Claude Code's session files, which say which process is
 //!   Claude, which session is headless and where a background job came from.
 //! - `hook`: `switchboard hook`, the side Claude Code runs.
+//! - `hands_free`: what the server answers a hook with in a tab of
+//!   autopilot's hands-free mode, which `hook` prints.
 //! - `serve`: the server's side: hooks, focus, the keys, one Claude per tab.
 //!
 //! What it says goes in a message box (src/ui): nowhere for M-a to go, no
@@ -21,6 +23,7 @@
 //! the sidebar's Needs you (src/sidebar), which alone can tell a tab that
 //! looks done is still working in the background, and M-A its Idle.
 
+pub mod hands_free;
 pub mod hook;
 mod serve;
 pub mod sessions;

@@ -122,6 +122,9 @@ pub enum Mark {
     In(TabId),
     /// To land without asking, or no longer: `@autopilot_land`.
     Land(TabId, bool),
+    /// To take the recommended option of what it would ask, or no longer:
+    /// `@autopilot_handsfree`.
+    HandsFree(TabId, bool),
     /// Its marks taken off, so it leaves the mode: landed, with the
     /// autopilot_close setting at never, or made yours by a prompt.
     Left(TabId),
@@ -140,6 +143,8 @@ pub struct Job {
     pub note: String,
     pub repo: PathBuf,
     pub ready_only: bool,
+    /// Items whose plan needs a choice taken too (hands-free).
+    pub with_choices: bool,
     pub skip: HashSet<String>,
     /// Today's Claude spend past which nothing opens; 0 for none.
     pub spend_limit: f64,
@@ -165,6 +170,7 @@ impl Job {
             &self.note,
             &self.skip,
             self.ready_only,
+            self.with_choices,
             &crate::cmd::worktree_from_note::claims_in(state),
         )
     }
@@ -496,7 +502,14 @@ impl Pilot {
         };
         // Its tabs not landed yet land without asking while the switch is on.
         let land = on && mode.land_without_asking;
+        // And decide for you while hands-free is on (the server leaves it off
+        // while the autopilot_handsfree setting is).
+        let hands_free = on && mode.hands_free;
         for (m, kind) in &placed {
+            // Hands-free turned off reaches a tab finishing its landing too.
+            if *kind == Kind::Left && m.hands_free && !hands_free {
+                marks.push(Mark::HandsFree(m.tab, false));
+            }
             match (kind, close) {
                 (Kind::Left, Some(after)) => marks.extend(self.after_landing(m, now_ms, after)),
                 (Kind::Left, None) => marks.push(Mark::Left(m.tab)),
@@ -506,6 +519,9 @@ impl Pilot {
                     }
                     if m.land != land {
                         marks.push(Mark::Land(m.tab, land));
+                    }
+                    if m.hands_free != hands_free {
+                        marks.push(Mark::HandsFree(m.tab, hands_free));
                     }
                 }
             }
@@ -601,6 +617,7 @@ impl Pilot {
             note: mode.note.clone(),
             repo: mode.repo.clone(),
             ready_only: mode.ready_only,
+            with_choices: mode.hands_free,
             skip: skip.clone(),
             spend_limit: mode.spend_limit,
             key,
@@ -610,7 +627,7 @@ impl Pilot {
         let mut skipped: Vec<&String> = skip.iter().collect();
         skipped.sort();
         let key = format!(
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}",
             mode.note,
             mtime.unwrap_or(0),
             skipped
@@ -618,7 +635,8 @@ impl Pilot {
                 .map(|s| s.as_str())
                 .collect::<Vec<_>>()
                 .join("\n"),
-            mode.ready_only
+            mode.ready_only,
+            mode.hands_free
         );
         if mtime.is_some()
             && !self.reading
@@ -778,6 +796,7 @@ impl Pilot {
             skipped: mode.skipped_here().count(),
             spend_limit: mode.spend_limit,
             lands_alone: mode.land_without_asking,
+            hands_free: mode.hands_free,
             target: mode.target.clone(),
         }
     }
@@ -855,6 +874,7 @@ mod tests {
                 match mark {
                     Mark::Note(t, id) => self.tab(t).note = Some(id),
                     Mark::Land(t, on) => self.tab(t).land = on,
+                    Mark::HandsFree(t, on) => self.tab(t).hands_free = on,
                     Mark::In(t) => self.tab(t).was_in = true,
                     Mark::Left(t) | Mark::Close(t) => self.tabs.retain(|m| m.tab != t),
                     Mark::Landed(t, at) => self.tab(t).landed = Some(at as f64),
@@ -1150,6 +1170,51 @@ mod tests {
             marks(&mut w, std::slice::from_ref(&marked), true),
             [Mark::Land(TabId(1), false)],
             "unmarked on the open tabs"
+        );
+    }
+
+    #[test]
+    fn hands_free_marks_its_tabs_and_turned_off_unmarks_one_finishing_its_landing_too() {
+        let mut w = World::new();
+        let now = w.now;
+        let working = mine(1, (now / 1000) as f64 - 600.0, TabState::Working, true);
+        let mut landed = mine(3, (now / 1000) as f64 - 600.0, TabState::Working, false);
+        landed.was_in = true;
+        let marks = |w: &mut World, tabs: &[Mine]| {
+            w.pilot
+                .check(
+                    &w.mode,
+                    true,
+                    super::close_after("seen"),
+                    tabs,
+                    false,
+                    now,
+                    Some(w.mtime),
+                    Some(ID),
+                    Path::new("/nowhere"),
+                )
+                .marks
+                .into_iter()
+                .filter(|m| matches!(m, Mark::HandsFree(..)))
+                .collect::<Vec<_>>()
+        };
+        w.mode.hands_free = true;
+        assert_eq!(
+            marks(&mut w, &[working.clone(), landed.clone()]),
+            [Mark::HandsFree(TabId(1), true)],
+            "only the tab still in its worktree is marked"
+        );
+        w.mode.hands_free = false;
+        let mut was = working.clone();
+        was.hands_free = true;
+        landed.hands_free = true;
+        assert_eq!(
+            marks(&mut w, &[was, landed]),
+            [
+                Mark::HandsFree(TabId(1), false),
+                Mark::HandsFree(TabId(3), false)
+            ],
+            "unmarked in the worktree and while finishing its landing"
         );
     }
 

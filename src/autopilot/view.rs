@@ -206,7 +206,9 @@ pub fn items(
     facts.extend([
         format!("{} of {} working", s.busy, s.slots),
         format!("{} of {} open", s.open, s.cap),
-        if s.lands_alone {
+        if s.hands_free {
+            "hands-free".to_string()
+        } else if s.lands_alone {
             "lands without asking".to_string()
         } else {
             "asks before landing".to_string()
@@ -219,7 +221,7 @@ pub fn items(
         facts.push(format!("stops at ${} today", s.spend_limit));
     }
     facts.extend(why_paused(s, said));
-    let pilot = json!({ "paused": s.paused, "lands": s.lands_alone });
+    let pilot = json!({ "paused": s.paused, "lands": s.lands_alone, "handsFree": s.hands_free });
     let mut out = vec![
         Item::new(HEADING, s.note.clone())
             .detail(facts.join(" · "))
@@ -337,6 +339,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: true,
+            hands_free: false,
             target: "team/next".into(),
         };
         let items = items(
@@ -381,6 +384,7 @@ mod tests {
             skipped: 0,
             spend_limit: 20.0,
             lands_alone: false,
+            hands_free: false,
             target: String::new(),
         };
         let items = items(&s, "Nothing left in the note", &[], &[], &[]);

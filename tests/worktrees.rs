@@ -1545,7 +1545,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     let taken = |skip: &[&str], ready| {
         let skip: HashSet<String> = skip.iter().map(|s| s.to_string()).collect();
         let claims = w.path("state/wtn-claims.tsv");
-        rows(queue(&notes, &repo, "Work.md", &skip, ready, &claims).unwrap())
+        rows(queue(&notes, &repo, "Work.md", &skip, ready, false, &claims).unwrap())
     };
     assert_eq!(
         taken(&[], false),

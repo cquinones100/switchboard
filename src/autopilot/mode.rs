@@ -1,7 +1,7 @@
 //! The mode's state, what you chose, kept in `autopilot.json` in the state
 //! directory as lib/sidebar/autopilot.js kept it: `{ on, note, noteId, repo,
 //! slots, cap, paused, readyOnly, skipped, spendLimit, landWithoutAsking,
-//! said, closed }`.
+//! handsFree, said, closed }`.
 //! `note` is the note's path within the notes directory and `noteId` its
 //! stable ID (src/notes/id.rs), which the mode follows the note by when it
 //! has been renamed or moved, outside Notes too, writing its path back;
@@ -10,7 +10,8 @@
 //! skipped item hides only in its own note (a first line alone, from before
 //! notes had IDs, was the mode's note's); `landWithoutAsking` whether its
 //! tabs land on the default branch without asking to push (its menu's
-//! "Land without asking"); `said` what the notifications show
+//! "Land without asking"); `handsFree` whether its tabs take the
+//! recommended option of what they would ask (its menu's "Hands-free"); `said` what the notifications show
 //! for it, and `closed` the landed tabs it closed without your having seen
 //! them, `[{ id, item, hash, at }]`, each `id` the tab's and its `@autopilot`
 //! time, for the notifications.
@@ -56,6 +57,8 @@ pub struct Mode {
     pub spend_limit: f64,
     /// Its tabs land on the default branch without asking to push.
     pub land_without_asking: bool,
+    /// Its tabs take the recommended option of what they would ask.
+    pub hands_free: bool,
     /// The branch its tabs are cut from and land on; empty for the
     /// repository's default branch.
     pub target: String,
@@ -115,6 +118,7 @@ impl Default for Mode {
             skipped: Vec::new(),
             spend_limit: 0.0,
             land_without_asking: false,
+            hands_free: false,
             target: String::new(),
             said: String::new(),
             closed: Vec::new(),
@@ -173,6 +177,7 @@ impl Mode {
                 .filter(|n| n.is_finite() && *n >= 0.0)
                 .unwrap_or(0.0),
             land_without_asking: flag("landWithoutAsking", d.land_without_asking),
+            hands_free: flag("handsFree", d.hands_free),
             target: text("target").unwrap_or_default(),
             said: text("said").unwrap_or_default(),
             closed: match map.get("closed") {
@@ -224,6 +229,7 @@ impl Mode {
         );
         map.insert("spendLimit".into(), util::js_number(self.spend_limit));
         map.insert("landWithoutAsking".into(), self.land_without_asking.into());
+        map.insert("handsFree".into(), self.hands_free.into());
         map.insert("target".into(), self.target.into());
         map.insert("said".into(), self.said.into());
         map.insert(
@@ -443,6 +449,7 @@ mod tests {
         assert_eq!(written["note"], "Work.md");
         assert_eq!(written["noteId"], "n-0123456789ab");
         assert_eq!(written["landWithoutAsking"], false);
+        assert_eq!(written["handsFree"], false);
         assert_eq!(written["target"], "team/next");
         assert_eq!(Mode::read(&dir).target, "team/next");
         let _ = fs::remove_dir_all(&dir);

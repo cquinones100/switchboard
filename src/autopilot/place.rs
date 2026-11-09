@@ -79,6 +79,8 @@ pub struct Mine {
     pub prompted_since: bool,
     /// Whether it is marked to land without asking (`@autopilot_land`).
     pub land: bool,
+    /// Whether it is marked hands-free (`@autopilot_handsfree`).
+    pub hands_free: bool,
 }
 
 /// Whether the first of a tab's directories that is in a git repository is
@@ -152,6 +154,7 @@ pub(crate) mod tests {
             home: false,
             prompted_since: false,
             land: false,
+            hands_free: false,
         }
     }
 

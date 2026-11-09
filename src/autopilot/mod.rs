@@ -50,6 +50,17 @@
 //! (`landed`, the "autolanded" source), whose menu goes to its tab. Both are
 //! tab options too, kept across a restart.
 //!
+//! Its menu's "Hands-free", after a yes naming what it decides and what
+//! still stops (and with the autopilot_handsfree setting on), turns "Land
+//! without asking" on with it and marks its tabs not landed yet
+//! `@autopilot_handsfree`, a new one as it opens: the server then answers
+//! their Claude's question boxes and turns that end on a question for it
+//! (src/agent/hands_free.rs), counting the turns sent back in
+//! `@autopilot_nudged`, the queue takes items whose plan needs a choice
+//! too, and wtn tells such a tab to take the recommended option, each
+//! decision written into the item's plan as a `Decided hands-free` line,
+//! which the landing's notification counts. "Ask me again" unmarks them.
+//!
 //! - `mode`: what you chose, kept in `autopilot.json` in the state directory,
 //!   the note by its path and its ID, which a renamed or moved note is
 //!   followed by.
@@ -73,6 +84,7 @@ pub mod view;
 pub use line::{Act, Summary};
 pub use mode::Mode;
 pub use pilot::Pilot;
+pub use serve::{AUTOLAND, HANDS_FREE, LEFT, NUDGED, PUSHED};
 
 /// Whether the mode has its own view in mission control (UX 2.0 and the
 /// view_autopilot setting on), which then takes the place of its line

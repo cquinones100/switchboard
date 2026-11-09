@@ -119,6 +119,13 @@
     "default": "seen"
   },
   {
+    "key": "autopilot_handsfree",
+    "category": "Sessions",
+    "label": "Autopilot's hands-free mode",
+    "description": "Lets autopilot's menu offer 'Hands-free', which has its tabs take the recommended option of what they would ask you (a question box, a question that ends the turn, an item whose plan needs a choice), write each decision into the item's plan as a 'Decided hands-free' line, and land without asking; what your rules or a skill say must be asked still asks. The mode itself starts off. Off, the menu doesn't offer it and every tab asks as usual",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",

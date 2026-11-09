@@ -2524,6 +2524,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: false,
+            hands_free: false,
             target: String::new(),
         });
         m.cursor = -1;
@@ -2862,6 +2863,7 @@ mod tests {
             skipped: 1,
             spend_limit: 0.0,
             lands_alone: true,
+            hands_free: false,
         };
         let row = |tab: u32, item: &str, state: TabState| Row {
             tab: TabId(tab),

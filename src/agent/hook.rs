@@ -9,6 +9,12 @@
 //! nothing, waits at most a second on a server that doesn't answer, and
 //! always exits 0: no server, a pane the server doesn't know, JSON that
 //! can't be read, even a panic, and Claude goes on as if nothing had run.
+//! The one exception is autopilot's hands-free mode (src/agent/hands_free.rs):
+//! for PreToolUse and Stop in a pane, the server may answer with a JSON
+//! object for Claude Code to read (a question denied, a stop blocked), which
+//! is printed as it came; any other answer prints nothing. A Stop in a pane
+//! is told to the Slack relay only after the server's answer, and not at
+//! all when the server blocked it.
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -63,11 +69,17 @@ fn run(args: &[String]) {
     if sessions::is_headless(&files, &session) {
         return;
     }
-    tell_relay(&event, &payload);
     let pane = std::env::var("SWITCHBOARD_PANE")
         .ok()
         .filter(|p| !p.is_empty());
-    let mut command = vec!["hook".to_string(), event];
+    let answers = pane.is_some() && matches!(event.as_str(), "PreToolUse" | "Stop");
+    // A Stop the server may block is told to the relay only once it stands,
+    // so a hands-free turn sent back to carry on isn't reported done.
+    let stop_waits = answers && event == "Stop";
+    if !stop_waits {
+        tell_relay(&event, &payload);
+    }
+    let mut command = vec!["hook".to_string(), event.clone()];
     if pane.is_none() {
         // A conversation moved into the background runs in a job with no
         // pane of its own, while the tab it came from keeps a parked Claude
@@ -81,7 +93,27 @@ fn run(args: &[String]) {
         command.push("--parked".into());
         command.push(list.join(","));
     }
-    let _ = socket::send_quiet(command, pane, Some(input));
+    let answer = socket::ask_quiet(command, pane, Some(input))
+        .filter(|_| answers)
+        .and_then(|(code, out, _)| (code == 0).then(|| answer_json(&out)).flatten());
+    if stop_waits && answer.is_none() {
+        tell_relay(&event, &payload);
+    }
+    if let Some(json) = answer {
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(json.as_bytes());
+        let _ = stdout.flush();
+    }
+}
+
+/// The server's answer to a hook, when it is a JSON object, the only kind
+/// Claude Code reads from a hook; anything else is no answer.
+fn answer_json(out: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(out).ok()?.trim();
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .filter(Value::is_object)
+        .map(|_| text.to_string())
 }
 
 /// The hook's JSON: stdin when it is a pipe or a file. One run by hand at a
@@ -176,6 +208,17 @@ fn tell_relay(event: &str, payload: &Value) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn only_a_json_object_is_passed_on_to_claude_code() {
+        assert_eq!(
+            answer_json(b"{\"decision\":\"block\"}\n").as_deref(),
+            Some("{\"decision\":\"block\"}")
+        );
+        assert_eq!(answer_json(b""), None);
+        assert_eq!(answer_json(b"[1]"), None);
+        assert_eq!(answer_json(b"not json"), None);
+    }
 
     #[test]
     fn the_relay_hears_of_prompts_turns_and_waits() {

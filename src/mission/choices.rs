@@ -254,6 +254,19 @@ fn pilot_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             Do::Autopilot(Act::LandWithoutAsking),
         )
     });
+    if flag("/mode/handsFree") {
+        out.push(choice(
+            'h',
+            "Ask me again: hands-free off",
+            Do::Autopilot(Act::AskMe),
+        ));
+    } else if crate::settings::is_on("autopilot_handsfree") {
+        out.push(choice(
+            'h',
+            "Hands-free: decide for me",
+            Do::Autopilot(Act::HandsFree),
+        ));
+    }
     out.push(choice(
         'x',
         "Stop working the note",
@@ -938,6 +951,16 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             .filter(|t| ctx.tabs.iter().any(|m| m.id == *t))
             .map(|t| vec![choice('o', "Go to its tab", Do::GoTo(t))])
             .unwrap_or_default()
+            .into_iter()
+            // Its plan, where a hands-free tab wrote what it decided.
+            .chain(
+                item.data
+                    .get("plan")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| choice('p', "Open its plan in Notes", Do::OpenNote(p.to_string()))),
+            )
+            .collect()
     } else if let Some(open) = notice_opens(&source, item) {
         vec![choice(
             'o',

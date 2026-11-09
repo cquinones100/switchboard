@@ -488,11 +488,13 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
 /// The items autopilot would take, in its order: those
 /// whose plan is settled first, then those with no plan (or a plan note
 /// that isn't there), each in the note's order. An item whose plan needs a
-/// choice is never taken, nor one under a parked section, nor one a
+/// choice is taken only `with_choices` (autopilot hands-free, whose tab
+/// takes the recommended option), after the settled ones and before those
+/// with no plan; never taken is nor one under a parked section, nor one a
 /// worktree has or wtn started in the last half hour (its claims file),
 /// nor an empty one, nor one whose first line is in `skip` (the items
 /// skipped, and those opened a moment ago, before wtn has made their
-/// branch). `ready_only` takes only the first kind. `note` is the
+/// branch). `ready_only` takes only the planned kinds. `note` is the
 /// note's path within the notes directory; `repo` the note's repository;
 /// `claims` wtn's claims file (`claims_file`).
 pub fn queue(
@@ -501,11 +503,13 @@ pub fn queue(
     note: &str,
     skip: &HashSet<String>,
     ready_only: bool,
+    with_choices: bool,
     claims: &Path,
 ) -> Result<Vec<Item>, String> {
     let file = notes.join(note);
     let text = fs::read_to_string(&file).map_err(|_| format!("No note at {}", file.display()))?;
     let mut settled = Vec::new();
+    let mut choices = Vec::new();
     let mut unplanned = Vec::new();
     let lately = claimed_lately(
         &fs::read_to_string(claims).unwrap_or_default(),
@@ -514,7 +518,7 @@ pub fn queue(
         crate::util::now_secs(),
     );
     for item in unclaimed(repo, note, &text) {
-        if item.needs_choice
+        if (item.needs_choice && !with_choices)
             || skip.contains(&item.text)
             || lately.contains(&item.text)
             || item.text.trim().is_empty()
@@ -522,12 +526,15 @@ pub fn queue(
             continue;
         }
         match plan_of(notes, &item_text(&text, item.line)) {
-            Plan::Settled => settled.push(item),
+            Plan::Choice if with_choices => choices.push(item),
             Plan::Choice => {}
+            Plan::Settled if item.needs_choice => choices.push(item),
+            Plan::Settled => settled.push(item),
             Plan::None if !ready_only => unplanned.push(item),
             Plan::None => {}
         }
     }
+    settled.extend(choices);
     settled.extend(unplanned);
     Ok(settled)
 }
@@ -874,7 +881,12 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     worktree::link_local_settings(&root, &path).map_err(|e| e.to_string())?;
 
     let extra = worktree::one_line(&given.all("--prompt").join(" "));
+    let hands_free = in_hands_free_tab();
     let plan_words = match (&plan, &plan_name) {
+        (Some(p), _) if hands_free => format!(
+            "Its plan is {}: read it first. This tab is hands-free: where the plan or the item still marks a choice as needed, take the recommended option (else the plan's first), tick it in the plan with a `Decided hands-free: <choice>` line, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me as usual). ",
+            p.display()
+        ),
         (Some(p), _) => format!(
             "Its plan is {}: read it first, and before building, ask me about any choice it still marks as needed. ",
             p.display()
@@ -882,6 +894,10 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         (None, Some(n)) => format!(
             "It links a plan, \"{n}\", that isn't in the notes directory: tell me before going on. "
         ),
+        (None, None) if hands_free => {
+            "It has no plan: read the code the item touches. This tab is hands-free: decide what it leaves open with the option you recommend, writing each decision as an indented `Decided hands-free: <question> → <choice>` line under the item in the note, then build it, as long as `switchboard show @autopilot_handsfree` still prints 1 when you decide (otherwise hands-free was turned off: ask me before building anything it leaves open). "
+                .to_string()
+        }
         (None, None) => {
             "It has no plan: read the code the item touches, and ask me before building anything it leaves open. "
                 .to_string()
@@ -911,6 +927,21 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     Ok(worktree::run_in("claude", &[prompt], &path))
+}
+
+/// Whether the tab this runs in is one of autopilot's, hands-free
+/// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
+fn in_hands_free_tab() -> bool {
+    if !crate::mux::socket::in_pane() {
+        return false;
+    }
+    let pane = std::env::var("SWITCHBOARD_PANE").ok();
+    crate::mux::socket::ask_quiet(
+        vec!["show".into(), crate::autopilot::HANDS_FREE.into()],
+        pane,
+        None,
+    )
+    .is_some_and(|(code, out, _)| code == 0 && String::from_utf8_lossy(&out).trim() == "1")
 }
 
 /// What Claude does before building, as `wt`'s prompt has it for a ticket:
@@ -1044,6 +1075,7 @@ mod tests {
             "Work.md",
             &HashSet::new(),
             true,
+            false,
             &dir.join("claims.tsv"),
         )
         .unwrap()
@@ -1054,6 +1086,24 @@ mod tests {
             taken,
             vec!["Picked", "Ticked"],
             "an item still saying it needs a choice never taken, whatever its plan says"
+        );
+        let hands_free: Vec<String> = queue(
+            &dir,
+            &dir,
+            "Work.md",
+            &HashSet::new(),
+            true,
+            true,
+            &dir.join("claims.tsv"),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|i| i.text)
+        .collect();
+        assert_eq!(
+            hands_free,
+            vec!["Picked", "Ticked", "Open", "Asking"],
+            "hands-free takes the items needing a choice too, after the settled ones"
         );
         let _ = fs::remove_dir_all(&dir);
     }

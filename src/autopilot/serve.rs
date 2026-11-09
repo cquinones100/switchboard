@@ -65,8 +65,19 @@ pub const LAND: &str = "@autopilot_land";
 /// Landed without asking, the commit it pushed, which queue-and-clean sets
 /// (`switchboard land-lock autolanded`).
 pub const AUTOLAND: &str = "@autopilot_autoland";
+/// To take the recommended option of what it would ask (hands-free), which
+/// the server reads as its Claude's hooks ask (src/agent/hands_free.rs).
+pub const HANDS_FREE: &str = "@autopilot_handsfree";
+/// How many times hands-free has had its Claude carry on past a turn that
+/// ended on a question.
+pub const NUDGED: &str = "@autopilot_nudged";
+/// Pushed, asked about or not, the commit it pushed, which queue-and-clean
+/// sets as soon as its push succeeds, so hands-free sends no turn back after.
+pub const PUSHED: &str = "@autopilot_pushed";
 /// Every mark of the mode's, taken off as a tab leaves it.
-const MARKS: [&str; 8] = [OPENED, IN, ITEM, NOTE, LEFT, SEEN, LAND, AUTOLAND];
+const MARKS: [&str; 11] = [
+    OPENED, IN, ITEM, NOTE, LEFT, SEEN, LAND, AUTOLAND, HANDS_FREE, NUDGED, PUSHED,
+];
 
 /// The commit `HEAD` is at in the checkout `dir` is in, read from git's
 /// files: a loose ref, `packed-refs`, or a detached `HEAD`'s own.
@@ -535,7 +546,12 @@ impl Server {
             .find(|o| o.key == "autopilot_close")
             .map(|o| o.value_words())
             .unwrap_or_default();
-        let list = line::choices(&mode, &self.autopilot.pilot.next.text, &close);
+        let list = line::choices(
+            &mode,
+            &self.autopilot.pilot.next.text,
+            &close,
+            settings::is_on("autopilot_handsfree"),
+        );
         let options = list
             .iter()
             .map(|(_, label, _)| MenuOption::new(label.clone()))
@@ -596,6 +612,19 @@ impl Server {
                     |server, client, yes| {
                         if yes {
                             server.autopilot_change(client, Act::LandWithoutAsking);
+                        }
+                    },
+                );
+            }
+            // Asked first too, naming what it decides and what still stops.
+            Act::HandsFree => {
+                let (question, list) = line::hands_free_question();
+                self.ask(
+                    client,
+                    crate::ui::Confirm::new(question).list(list),
+                    |server, client, yes| {
+                        if yes {
+                            server.autopilot_change(client, Act::HandsFree);
                         }
                     },
                 );
@@ -695,7 +724,9 @@ impl Server {
     /// read or opened when it is time.
     pub fn autopilot_tick(&mut self) {
         let state = paths::state_dir();
-        let mode = Mode::read(&state);
+        let mut mode = Mode::read(&state);
+        // Hands-free counts only while its setting allows it.
+        mode.hands_free &= settings::is_on("autopilot_handsfree");
         self.autopilot_notices(&mode);
         let on = settings::is_on("autopilot");
         let repo = mode
@@ -946,6 +977,7 @@ impl Server {
                     home,
                     prompted_since,
                     land: tab.opts.get(LAND).is_some_and(|v| v == "1"),
+                    hands_free: tab.opts.get(HANDS_FREE).is_some_and(|v| v == "1"),
                 });
             }
         }
@@ -986,6 +1018,7 @@ impl Server {
                 Mark::Note(t, _)
                 | Mark::In(t)
                 | Mark::Land(t, _)
+                | Mark::HandsFree(t, _)
                 | Mark::Left(t)
                 | Mark::Landed(t, _)
                 | Mark::Seen(t) => t,
@@ -1012,6 +1045,12 @@ impl Server {
                 }
                 Mark::Land(_, false) => {
                     t.opts.remove(LAND);
+                }
+                Mark::HandsFree(_, true) => {
+                    t.opts.insert(HANDS_FREE.into(), "1".into());
+                }
+                Mark::HandsFree(_, false) => {
+                    t.opts.remove(HANDS_FREE);
                 }
                 Mark::Landed(_, at) => {
                     t.opts.insert(LEFT.into(), at.to_string());
@@ -1205,6 +1244,10 @@ impl Server {
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.insert(OPENED.into(), util::now_secs().to_string());
             t.opts.insert(ITEM.into(), item.text.clone());
+            // Marked at once, so its wtn and its first question find it so.
+            if mode.hands_free && settings::is_on("autopilot_handsfree") {
+                t.opts.insert(HANDS_FREE.into(), "1".into());
+            }
             if !mode.note_id.is_empty() {
                 t.opts.insert(NOTE.into(), mode.note_id.clone());
             }
@@ -1280,7 +1323,7 @@ impl Server {
                 item.lines = vec![format!(
                     "Landed on the default branch without asking, as autopilot's \"Land without asking\" allows, at {at}"
                 )];
-                item.data = serde_json::json!({ "tab": l.tab });
+                item.data = serde_json::json!({ "tab": l.tab, "plan": l.plan });
                 item
             })
             .collect();

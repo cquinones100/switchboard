@@ -279,11 +279,36 @@ fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_and_says_when
     });
     client.wait_text("lands on its own");
 
+    // Its menu's "Hands-free", after a yes naming what it decides and what
+    // still stops: its tabs are marked, and its line says so.
+    client.type_text("\r");
+    client.wait_text("Hands-free: decide for me");
+    client.type_text("jjjj\r");
+    let screen = client.wait_text("decide for you, hands-free?");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Still asked: what your rules or a skill say")),
+        "{}",
+        screen.join("\n")
+    );
+    client.type_text("\r");
+    wait("its tabs marked hands-free", &server, || {
+        std::fs::read_to_string(server.state.join("autopilot.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|m| m["handsFree"] == true && m["landWithoutAsking"] == true)
+            && opened(&server)
+                .iter()
+                .all(|t| t["options"]["@autopilot_handsfree"] == "1")
+    });
+    client.wait_text("hands-free");
+
     // Its menu's "Change the target branch…": the tabs it opens from now
     // land on the branch picked, which its line names.
     client.type_text("\r");
     client.wait_text("Change the target branch…");
-    client.type_text("jjjj\r");
+    client.type_text("jjjjj\r");
     client.wait_text("Another branch…");
     client.type_text("team/next\r");
     wait("the target kept", &server, || {

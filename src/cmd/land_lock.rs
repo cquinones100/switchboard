@@ -41,12 +41,14 @@
 //!                     `tests failed [words]` and `review blocked [words]`
 //!                     mark a failed stage, which the Landing view draws red
 //!                     with the words after them
-//! land-lock autolanded <short hash> [item]
+//! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [item]
 //!                     says this tab landed without asking (autopilot's
 //!                     "Land without asking"): marks the tab
 //!                     @autopilot_autoland with the hash, which the sidebar
 //!                     shows, and adds the landing to the notifications
-//!                     (autolanded.json in the state directory)
+//!                     (autolanded.json in the state directory), with the
+//!                     count of its plan's `Decided hands-free` lines (or,
+//!                     for an item with no plan, the count given)
 //! ```
 //!
 //! A landing holds it only to rebase, test and push, but one whose change no
@@ -81,7 +83,7 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|autolanded <short hash> [--plan <file> | --decided <n>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -214,22 +216,57 @@ fn phase(words: &[String]) {
 /// notifications ("Landed <hash>: <item>"), naming the tab while it is
 /// open.
 fn autolanded(args: &[String]) -> ExitCode {
-    let Some(hash) = args.first().filter(|h| !h.is_empty()) else {
-        eprintln!("usage: land-lock autolanded <short hash> [item]");
+    let mut args = args.to_vec();
+    let mut plan_file = None;
+    if let Some(at) = args.iter().position(|a| a == "--plan")
+        && at + 1 < args.len()
+    {
+        plan_file = Some(PathBuf::from(args.remove(at + 1)));
+        args.remove(at);
+    }
+    // With no plan, the count of the decisions written under the item.
+    let mut decided_given = None;
+    if let Some(at) = args.iter().position(|a| a == "--decided")
+        && at + 1 < args.len()
+    {
+        decided_given = args.remove(at + 1).parse::<usize>().ok();
+        args.remove(at);
+    }
+    let notes = crate::notes::store::notes_dir();
+    // Both resolved, since wtn names the plan by its real path and the
+    // notes directory may be a link.
+    let notes = notes.canonicalize().unwrap_or(notes);
+    let real_plan = plan_file.as_ref().and_then(|f| f.canonicalize().ok());
+    let plan = real_plan
+        .as_ref()
+        .and_then(|f| f.strip_prefix(&notes).ok())
+        .map(|rel| rel.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let decided = plan_file
+        .and_then(|f| fs::read_to_string(f).ok())
+        .map(|text| crate::autopilot::landed::decided_in(&text))
+        .or(decided_given)
+        .unwrap_or(0);
+    let Some(hash) = args.first().filter(|h| !h.is_empty()).cloned() else {
+        eprintln!(
+            "usage: land-lock autolanded <short hash> [--plan <file> | --decided <n>] [item]"
+        );
         return ExitCode::from(2);
     };
     let mut tab = String::new();
     if socket::in_pane() {
-        let _ = socket::ask(&["set", "@autopilot_autoland", hash]);
+        let _ = socket::ask(&["set", "@autopilot_autoland", &hash]);
         tab = socket::ask_ok(&["display", "tab"])
             .map(|t| t.trim().to_string())
             .unwrap_or_default();
     }
     let landing = crate::autopilot::landed::Landing {
-        hash: hash.clone(),
+        hash,
         item: worktree::one_line(&args[1..].join(" ")),
         tab,
         at: util::now_ms(),
+        plan,
+        decided,
     };
     match crate::autopilot::landed::add(&crate::paths::state_dir(), landing) {
         Ok(()) => ExitCode::SUCCESS,
