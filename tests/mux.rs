@@ -342,6 +342,40 @@ fn killing_the_server_ends_its_clients() {
     );
 }
 
+/// The tests ask the server from their own process (`TestServer::run`), so
+/// what that gives has to be what the binary run as a process gives.
+#[test]
+fn a_command_asked_in_process_answers_as_the_binary_does() {
+    let server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    let tab = server.list()["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["set", "-t", &tab, "@tab_name", "asked"]);
+    for args in [
+        &["show", "-t", &tab, "@tab_name"][..],
+        &["list-keys"],
+        &["select-tab", "-t", "@999"],
+        &["select-tab"],
+        &["list", "--help"],
+    ] {
+        let asked = server.run(args);
+        assert_eq!(asked, server.run_binary(args), "switchboard {args:?}");
+        assert_eq!(asked, server.ask(args), "switchboard {args:?}");
+    }
+    let (code, out, _) = server.run(&["show", "-t", &tab, "@tab_name"]);
+    assert_eq!((code, out.trim()), (0, "asked"));
+    let (code, out, err) = server.run(&["select-tab", "-t", "@999"]);
+    assert_ne!(code, 0, "a tab that isn't there");
+    assert!(out.is_empty() && !err.is_empty(), "{out:?} {err:?}");
+    // A program of its own is still the binary run.
+    let (code, _, err) = server.run(&["no-such-command"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("no command named no-such-command"), "{err}");
+}
+
 #[test]
 fn a_command_with_no_server_says_so() {
     let dir = common::TempDir::new("sbt-none");

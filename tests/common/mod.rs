@@ -343,8 +343,46 @@ impl TestServer {
         std::fs::read_to_string(self.dir.path().join("server.log")).unwrap_or_default()
     }
 
-    /// `switchboard <args>` against this server: (code, stdout, stderr).
+    /// `switchboard <args>` against this server: (code, stdout, stderr). A
+    /// command the server runs (`commands::NAMES`) is asked of it over the
+    /// socket from the test's own process, since the binary does nothing more
+    /// for one and a full run would otherwise start thousands of processes,
+    /// each inspected by a security agent where there is one; anything else
+    /// is the binary run.
     pub fn run(&self, args: &[&str]) -> (i32, String, String) {
+        let is_server_command = args
+            .first()
+            .is_some_and(|name| switchboard::mux::commands::NAMES.contains(name));
+        if is_server_command {
+            self.ask(args)
+        } else {
+            self.run_binary(args)
+        }
+    }
+
+    /// A server command sent over the socket as the binary sends it, from
+    /// the test's temporary directory and no pane: its code, what it printed
+    /// and what it said went wrong, as the binary would exit and print them.
+    pub fn ask(&self, args: &[&str]) -> (i32, String, String) {
+        let msg = ClientMsg::Command {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            cwd: self.dir.path().to_path_buf(),
+            pane: None,
+            stdin: None,
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code =
+            switchboard::mux::socket::run_command_at(&self.socket(), &msg, &mut out, &mut err);
+        (
+            i32::from(code),
+            String::from_utf8_lossy(&out).into_owned(),
+            String::from_utf8_lossy(&err).into_owned(),
+        )
+    }
+
+    /// The built `switchboard` run as a process with `args`: a program of
+    /// its own, or a test of the process itself.
+    pub fn run_binary(&self, args: &[&str]) -> (i32, String, String) {
         let mut cmd = Command::new(BIN);
         cmd.args(args).stdin(Stdio::null());
         Self::env(&mut cmd, &self.home, &self.state);

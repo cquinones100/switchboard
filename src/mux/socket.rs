@@ -233,9 +233,16 @@ pub fn stdin_is_data() -> bool {
     is_data(libc::STDIN_FILENO)
 }
 
-/// `run_command` on the socket at `path`, writing to `out` and `err`, for the
-/// tests to run against a server of their own.
-fn run_command_at(path: &Path, msg: &ClientMsg, out: &mut impl Write, err: &mut impl Write) -> u8 {
+/// `run_command` on the socket at `path`, writing to `out` and `err`: all
+/// the binary does for a server command once it has read its environment.
+/// The integration tests call it for theirs (`tests/common`), so a command
+/// asked of a test's server starts no process.
+pub fn run_command_at(
+    path: &Path,
+    msg: &ClientMsg,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> u8 {
     let Ok(mut stream) = UnixStream::connect(path) else {
         let _ = writeln!(err, "switchboard: no server is running");
         let _ = err.flush();
