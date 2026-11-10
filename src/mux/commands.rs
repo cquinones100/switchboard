@@ -531,9 +531,9 @@ impl Server {
             .values()
             .map(|c| json!({ "session": c.session, "cols": c.cols, "rows": c.rows }))
             .collect();
-        // How long since a key was last pressed in a client: what idle is
-        // where the desktop can't say (the Slack relay's presence, as the
-        // server's own `away`).
+        // How long since a key was last pressed in a client, which the Slack
+        // relay folds into the desktop's reading as the server's own `away`
+        // does (src/presence.rs).
         let idle_ms = u64::try_from(self.last_input.elapsed().as_millis()).unwrap_or(u64::MAX);
         json!({ "sessions": sessions, "clients": clients, "idle_ms": idle_ms })
     }

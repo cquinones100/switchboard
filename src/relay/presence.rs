@@ -1,8 +1,9 @@
 //! Whether you're at the computer (lib/slack-relay/presence.js), read the
 //! one way everything here reads it (src/presence.rs): you count as away
-//! once nothing has been typed or clicked for `AWAY_AFTER_MS`, or at once
-//! when the screen is locked. It is read every `CHECK_MS`, in the
-//! background, so asking costs nothing.
+//! once nothing has been typed or clicked for `AWAY_AFTER_MS`, at the
+//! computer or in a workspace client on another, or at once when the
+//! screen is locked. It is read every `CHECK_MS`, in the background, so
+//! asking costs nothing.
 //!
 //! The lines the relay puts in the main DM on its own (a tab waiting on
 //! you, a dialog, a stall, a failure) are what notify you, and while you're
@@ -16,11 +17,13 @@
 //! Writing to the relay from Slack also counts as away, for
 //! `SLACK_AWAY_MS` from your latest message: you're on Slack, most likely on
 //! your phone, even if the computer was touched a moment ago. Unless its
-//! keyboard or mouse was used within `TYPED_HERE_MS` of the message
-//! arriving, which means you wrote it in Slack on the computer itself.
+//! keyboard or mouse was used, or a key pressed in the workspace, within
+//! `TYPED_HERE_MS` of the message arriving, which means you wrote it in
+//! Slack where you work.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::rc::Rc;
 
 use futures_util::future::LocalBoxFuture;
 
@@ -49,22 +52,27 @@ pub struct Presence {
 }
 
 impl Presence {
-    /// The computer's own readings; where the desktop can't say how long
-    /// you've been idle (Linux with no idle monitor, over SSH, under WSL),
-    /// the time since a key was last pressed in the workspace, which the
-    /// server keeps for its own `away`. Without it, idle would read as none
-    /// at all and every notice would be held until you wrote from Slack.
+    /// The computer's own readings with the time since a key was last
+    /// pressed in the workspace folded in, which the server keeps for its
+    /// own `away` (src/presence.rs): the desktop never sees a key pressed in
+    /// a client on another computer, and where it can't say how long you've
+    /// been idle (Linux with no idle monitor, under WSL), idle would
+    /// otherwise read as none at all and every notice would be held until
+    /// you wrote from Slack.
     pub fn new() -> Presence {
-        Presence::reading_with(Box::new(|| {
-            Box::pin(async {
-                let mut reading = crate::presence::read_presence_async().await;
-                if reading.idle_ms.is_none() {
-                    reading.idle_ms = tokio::task::spawn_blocking(super::mux::server_idle_ms)
-                        .await
-                        .ok()
-                        .flatten();
-                }
-                reading
+        let desktop = Rc::new(Cell::new(crate::presence::Desktop::default()));
+        Presence::reading_with(Box::new(move || {
+            let desktop = desktop.clone();
+            Box::pin(async move {
+                let reading = crate::presence::read_presence_async().await;
+                let typed = tokio::task::spawn_blocking(super::mux::server_idle_ms)
+                    .await
+                    .ok()
+                    .flatten();
+                let mut d = desktop.get();
+                d.take(reading);
+                desktop.set(d);
+                d.with_keys(typed)
             })
         }))
     }

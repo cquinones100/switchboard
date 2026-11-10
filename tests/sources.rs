@@ -3,7 +3,10 @@
 //! state, merge-queue place, checks and review in its facts, mission
 //! control's PRs and Merge queues views fill in, and appending to the
 //! `github` file in the state directory has the PR asked about again at
-//! once rather than on its next round. GitHub is a stand-in on 127.0.0.1.
+//! once rather than on its next round; keys typed in a client keep the
+//! lookups going while the computer's own keyboard sits idle and its screen
+//! locked, as when the workspace is used over SSH. GitHub is a stand-in on
+//! 127.0.0.1.
 
 #![cfg(feature = "net")]
 
@@ -324,5 +327,55 @@ fn a_fork_s_tab_gets_its_pr_from_the_project_upstream_names() {
     assert_eq!(
         views["views"]["prs"]["items"][0]["data"]["pr"]["repo"],
         "acme/widgets"
+    );
+}
+
+#[test]
+fn keys_typed_from_another_computer_keep_the_lookups_going_while_it_sits_idle_and_locked() {
+    let fake = fake_github(Arc::new(AtomicBool::new(false)));
+    // The computer's own keyboard and mouse untouched for three days and
+    // its screen locked, as a Mac's are while the workspace is used over
+    // SSH; "Pause lookups while away" on, as it is unless turned off.
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ("SWITCHBOARD_PRESENCE", "259200000,locked"),
+        ],
+        &json!({"notifications": false, "linear": false, "poll_fast": false}).to_string(),
+    );
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["symbolic-ref", "HEAD", "refs/heads/fix-login"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    // Every lookup's first ask goes ahead away or not; the PR board's comes
+    // after the tabs' PRs' (src/sources/schedule.rs), so once it has
+    // answered, a lookup asks again only while you're here.
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    wait("the first round of lookups", sources, |s| {
+        !s["views"]["prs"].is_null()
+    });
+
+    // Keys typed in the client, after the lock was seen: the tab's new PR
+    // is asked about at once, as it is while you're at the computer.
+    client.type_text(&format!("cd {}\r", work.display()));
+    let tab = || server.list()["sessions"][0]["tabs"][0].clone();
+    let facts = wait(
+        "the tab's PR facts",
+        || tab()["facts"].clone(),
+        |f| f["pr"]["number"] == 12,
+    );
+    assert_eq!(
+        facts["pr"]["checks"],
+        json!({"pass": 3, "fail": 1, "pending": 0})
     );
 }

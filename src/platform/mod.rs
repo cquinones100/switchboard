@@ -81,16 +81,39 @@ pub struct Presence {
 
 /// Reads the idle time and the lock. Blocking: call it from
 /// `tokio::task::spawn_blocking` on a runtime. Where the desktop can't say
-/// (a Linux with no desktop session, WSL), the idle time is `None`, and the
-/// server goes by the last key pressed in any of its clients instead.
+/// (a Linux with no desktop session, WSL), the idle time is `None`. Either
+/// way the server and the Slack relay fold in the last key pressed in any
+/// of the server's clients (src/presence.rs), which the desktop doesn't see
+/// from a client on another computer.
 /// `SWITCHBOARD_PRESENCE=unknown` has the desktop say nothing, as the tests'
 /// servers run, so a test goes by what it typed whatever the computer's own
-/// idle time (a CI Mac nobody touches is always away).
+/// idle time (a CI Mac nobody touches is always away);
+/// `SWITCHBOARD_PRESENCE=<idle ms>[,locked]` has it say that, for a test of
+/// a computer left alone while the workspace is used from another.
 pub fn presence() -> Presence {
-    if std::env::var_os("SWITCHBOARD_PRESENCE").is_some_and(|v| v == "unknown") {
-        return Presence::default();
+    if let Some(said) = std::env::var_os("SWITCHBOARD_PRESENCE") {
+        let said = said.to_string_lossy();
+        if said == "unknown" {
+            return Presence::default();
+        }
+        if let Some(p) = presence_said(&said) {
+            return p;
+        }
     }
     os::presence()
+}
+
+/// A reading given as `<idle ms>` or `<idle ms>,locked`.
+fn presence_said(said: &str) -> Option<Presence> {
+    let (idle, locked) = match said.split_once(',') {
+        Some((idle, "locked")) => (idle, true),
+        Some(_) => return None,
+        None => (said, false),
+    };
+    Some(Presence {
+        idle_ms: Some(idle.parse().ok()?),
+        locked: Some(locked),
+    })
 }
 
 /// Keeps the computer from sleeping while it is held (`caffeinate -is` on

@@ -536,7 +536,7 @@
     "key": "pause_when_away",
     "category": "Mission control",
     "label": "Pause lookups while away",
-    "description": "Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer is locked or has been idle 10 minutes, and catch up on return",
+    "description": "Stop asking GitHub, Linear and the calendar for mission control's views, and telling the diff's stories ahead, while no terminal is attached, or the computer has been locked, or idle 10 minutes, with no key pressed in Switchboard since (from another computer over SSH too), and catch up on return",
     "default": true
   },
   {
