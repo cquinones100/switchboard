@@ -477,6 +477,10 @@ static MAY_MATTER: LazyLock<Regex> = LazyLock::new(|| {
 /// "[Request interrupted by user for tool use]" after a denied permission
 /// request, "[Request interrupted by user]" after Esc.
 const INTERRUPTED: &str = "[Request interrupted by user";
+/// How Claude Code records a /compact you typed, as a message of yours, and
+/// then what came of it, the next message, under the same prompt.
+const COMPACT_TYPED: &str = "<command-name>/compact</command-name>";
+const LOCAL_RESULT: &str = "<local-command-std";
 static LOCAL_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*<(local-command-|command-name>|command-message>|bash-)").expect("a regex")
 });
@@ -651,8 +655,9 @@ pub struct Work {
     /// The message of a turn an API error cut short, while nothing has been
     /// said since, and when it came (ms).
     pub api_error: Option<(String, i64)>,
-    /// When a turn you interrupted (a permission request denied, Esc) was
-    /// (ms), while nothing has been said since.
+    /// When a turn you interrupted (a permission request denied, Esc) was,
+    /// or a /compact you typed ended (ms), while nothing has been said since:
+    /// neither runs a hook (the /compact when it fails or you cancel it).
     pub interrupted_at: Option<i64>,
 }
 
@@ -695,8 +700,11 @@ struct Seen {
     crons: IndexMap<String, Cron>,
     wakeup: Option<Wakeup>,
     api_error: Option<(String, i64)>,
-    /// When a turn you interrupted was, while nothing has been said since.
+    /// When a turn you interrupted was, or a /compact you typed ended, while
+    /// nothing has been said since.
     interrupted: Option<i64>,
+    /// A /compact you typed whose result hasn't been read, by its prompt.
+    compacting: Option<String>,
 }
 
 fn timestamp_ms(entry: &Value) -> i64 {
@@ -785,9 +793,14 @@ impl Seen {
         // ("[Request interrupted by user for tool use]") and runs no hook
         // for, so the pane can be left waiting on the request. It stands
         // until anything else is said, by you or Claude, as an API error
-        // does; a tool's result (a denied call's) doesn't carry it on.
+        // does; a tool's result (a denied call's) doesn't carry it on. A
+        // /compact you typed marks the tab working (PreCompact) and runs no
+        // hook when it fails or you cancel it, so its result, the message
+        // after it under the same prompt, ends it the same way; one that
+        // compacted has left the tab idle already (PostCompact).
         let interrupt = !sidechain && line.contains(INTERRUPTED);
-        if (self.interrupted.is_some() || interrupt)
+        let compact = !sidechain && line.contains(COMPACT_TYPED);
+        if (self.interrupted.is_some() || self.compacting.is_some() || interrupt || compact)
             && !sidechain
             && (line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""))
             && let Ok(entry) = serde_json::from_str::<Value>(line)
@@ -808,10 +821,21 @@ impl Seen {
             let results_only = content
                 .and_then(Value::as_array)
                 .is_some_and(|parts| parts.iter().all(|p| str_of(p.get("type")) == "tool_result"));
-            if conversation && kind == "user" && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
+            let yours = conversation && kind == "user";
+            let starts = |with: &str| text.is_some_and(|t| t.trim_start().starts_with(with));
+            let prompt = string_of(entry.get("promptId"));
+            if yours && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
                 self.interrupted = Some(timestamp_ms(&entry));
+                self.compacting = None;
+            } else if yours && starts(COMPACT_TYPED) {
+                self.interrupted = None;
+                self.compacting = Some(prompt);
+            } else if yours && starts(LOCAL_RESULT) && self.compacting.as_ref() == Some(&prompt) {
+                self.interrupted = Some(timestamp_ms(&entry));
+                self.compacting = None;
             } else if conversation && !results_only {
                 self.interrupted = None;
+                self.compacting = None;
             }
         }
         if !MAY_MATTER.is_match(line) {
@@ -1765,6 +1789,55 @@ mod tests {
             json!({"type": "user", "timestamp": at(500), "message": {"content": "[Request interrupted by user]"}}),
         ]);
         assert_eq!(interrupted(&mut r, now - 60_000), Some(now - 500));
+    }
+
+    #[test]
+    fn a_compact_you_typed_ends_with_its_result() {
+        let t = Transcript::new("compact");
+        let now = crate::util::now_ms();
+        let at = |ago: i64| iso(now - ago);
+        let typed = |ago: i64, prompt: &str| json!({"type": "user", "promptId": prompt, "timestamp": at(ago), "message": {"content": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}});
+        let result = |ago: i64, prompt: &str, text: &str| json!({"type": "user", "promptId": prompt, "timestamp": at(ago), "message": {"content": text}});
+        let mut r = Reader::default();
+        let ended = |r: &mut Reader| {
+            r.background_work(&t.file, now - 60_000, now)
+                .unwrap()
+                .interrupted_at
+        };
+        // Failed: its error is its result.
+        t.add(&[typed(9_000, "p1")]);
+        assert_eq!(ended(&mut r), None, "still compacting");
+        t.add(&[result(
+            8_000,
+            "p1",
+            "<local-command-stderr>Error compacting conversation: overloaded</local-command-stderr>",
+        )]);
+        assert_eq!(ended(&mut r), Some(now - 8_000));
+        // The next prompt carries the conversation on.
+        t.add(&[result(7_000, "p2", "go on")]);
+        assert_eq!(ended(&mut r), None);
+        // Cancelled with Esc.
+        t.add(&[
+            typed(6_000, "p3"),
+            result(
+                5_000,
+                "p3",
+                "<local-command-stdout>Compaction canceled.</local-command-stdout>",
+            ),
+        ]);
+        assert_eq!(ended(&mut r), Some(now - 5_000));
+        // Another command's output, under a prompt of its own, says nothing
+        // of a /compact.
+        t.add(&[
+            result(4_000, "p4", "thanks"),
+            typed(3_000, "p5"),
+            result(
+                2_000,
+                "p6",
+                "<local-command-stdout>Set model to Opus</local-command-stdout>",
+            ),
+        ]);
+        assert_eq!(ended(&mut r), None);
     }
 
     #[test]

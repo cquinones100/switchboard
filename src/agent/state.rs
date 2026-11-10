@@ -593,8 +593,9 @@ impl Agents {
     /// pane would stay as it was until the next prompt (agent-state.sh's
     /// `interrupted`, run by the sidebar daemon from the transcript): a
     /// permission request denied, or Esc pressed on it, leaves it waiting,
-    /// and Esc pressed while it works (a command auto mode let run) leaves
-    /// it working. It goes idle unless it has moved on since: it isn't
+    /// and Esc pressed while it works (a command auto mode let run) or a
+    /// /compact you typed that failed or you cancelled leaves it working. It
+    /// goes idle unless it has moved on since: it isn't
     /// waiting or working, its state began after (a new request or prompt),
     /// or, working, the conversation has run a hook since (a prompt typed
     /// after it, which keeps the state's old `since`). What it was doing and
@@ -1318,6 +1319,17 @@ mod tests {
         on(&mut a, "PreCompact", json!({"trigger": "manual"}), 110);
         on(&mut a, "PostCompact", json!({"trigger": "manual"}), 120);
         assert!(a.get(P).is_none());
+        // One that fails, or that you cancel, runs no PostCompact: its result
+        // in the transcript hands the tab back.
+        on(&mut a, "PreCompact", json!({"trigger": "manual"}), 130);
+        a.heard(
+            P,
+            &hook("PreCompact", json!({"trigger": "manual"})),
+            130_000,
+        );
+        assert_eq!(a.state(P), Some(State::Working));
+        assert!(a.interrupted(P, 150_000));
+        assert_eq!(a.state(P), None);
     }
 
     #[test]

@@ -238,8 +238,9 @@ impl Server {
         }
     }
 
-    /// A turn you interrupted, waiting on a request or working, runs no
-    /// hook, so its pane is left as it was: each pane whose transcript says so is handed
+    /// A turn you interrupted, waiting on a request or working, or a /compact
+    /// you typed that failed, runs no hook, so its pane is left as it was:
+    /// each pane whose transcript says so is handed
     /// back as idle (`agent_interrupted`, the daemon's `handBack`), once for
     /// each interruption (`at`, ms), a parked one included, as every pane is
     /// read.

@@ -391,6 +391,39 @@ fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
 }
 
 #[test]
+fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "compacted", "cwd": "/work"}),
+    );
+    let dir = server.home.join(".claude/projects/-work");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("compacted.jsonl");
+
+    say(
+        &file,
+        json!({"type": "user", "promptId": "p1", "message": {"content": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}),
+    );
+    hook(&server, &pane, "PreCompact", json!({"trigger": "manual"}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // It fails: no PostCompact runs, but its error is in the transcript.
+    say(
+        &file,
+        json!({"type": "user", "promptId": "p1", "message": {"content": "<local-command-stderr>Error compacting conversation</local-command-stderr>"}}),
+    );
+    wait_list(&server, "the pane handed back", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
+    });
+}
+
+#[test]
 fn a_pane_not_running_claude_keeps_no_state() {
     let server = TestServer::start();
     settings(&server, json!({}));

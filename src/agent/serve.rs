@@ -584,7 +584,8 @@ impl Server {
     }
 
     /// A turn you interrupted, waiting on a request (denied, or Esc on it)
-    /// or working, at `at_ms` (ms), read from the pane's transcript by the
+    /// or working, or a /compact you typed that ended without compacting,
+    /// at `at_ms` (ms), read from the pane's transcript by the
     /// sidebar (`claude::Work::interrupted_at`), since no hook runs for it:
     /// the pane waiting or working since then or before goes idle, for the
     /// tab bar, the sidebar, M-a and the Slack relay, and one that has moved
