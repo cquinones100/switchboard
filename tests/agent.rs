@@ -10,6 +10,7 @@
 mod common;
 
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -39,19 +40,19 @@ fn run_hook(
         .env_remove("SLACK_RELAY_HELPER")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some((socket, pane)) = pane {
         cmd.env("SWITCHBOARD", socket).env("SWITCHBOARD_PANE", pane);
     }
-    let mut child = cmd.spawn().expect("switchboard runs");
+    // The JSON on a socket, as Claude Code hands a hook its input, written
+    // and closed before the hook runs.
+    let (mut ours, theirs) = UnixStream::pair().expect("a socket pair");
+    cmd.stdin(Stdio::from(std::os::fd::OwnedFd::from(theirs)));
+    let child = cmd.spawn().expect("switchboard runs");
     // A hook that has stopped reading is no reason to fail here.
-    let _ = child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(input.as_bytes());
+    let _ = ours.write_all(input.as_bytes());
+    drop(ours);
     let out = child.wait_with_output().expect("switchboard ends");
     (
         out.status.code().unwrap_or(-1),
