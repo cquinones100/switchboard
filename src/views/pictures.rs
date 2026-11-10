@@ -361,7 +361,8 @@ fn fetch_all(queue: Arc<Mutex<Queue>>, tx: Sender<Got>, kept: Option<Cache>, hel
 }
 
 /// The link a diagram is kept under in the cache: its source's hash and
-/// its theme.
+/// its theme, under a version that changes when diagrams are drawn another
+/// way (`v2`: at their own size), so the ones kept before are drawn again.
 fn diagram_key(source: &str, light: bool) -> String {
     use sha2::{Digest, Sha256};
     let hash: String = Sha256::digest(source.as_bytes())
@@ -369,7 +370,7 @@ fn diagram_key(source: &str, light: bool) -> String {
         .map(|b| format!("{b:02x}"))
         .collect();
     let theme = if light { "light" } else { "dark" };
-    format!("mermaid:{hash}:{theme}")
+    format!("mermaid-v2:{hash}:{theme}")
 }
 
 /// The diagram drawn, from the cache or by Mermaid in Chrome (and kept).
@@ -656,6 +657,10 @@ mod tests {
             diagram_key("graph TD; A-->C", true)
         );
         assert!(!diagram_key("graph TD; A#B", true).contains('#'));
+        assert!(
+            diagram_key("graph TD; A-->B", true).starts_with("mermaid-v2:"),
+            "not the key the diagrams drawn small were kept under"
+        );
     }
 
     #[test]

@@ -138,8 +138,13 @@ fn script(pin: Pin, local: &Local) -> String {
 /// The page a Mermaid diagram alone is drawn on, for the Markdown views
 /// (`super::render::Renderer::diagram`): its source escaped in a hidden
 /// element, read back as text and given to Mermaid, which draws it in the
-/// page's one box, or leaves the box empty when it can't. Nothing else is on
-/// the page and nothing is painted behind it. The page loads nothing but
+/// page's one box, or leaves the box empty when it can't. Mermaid writes its
+/// SVG as `width="100%"`, which a box with no width of its own can't
+/// resolve, so Chrome drew every diagram 300 CSS pixels wide, its text a
+/// fraction of a row: the page gives the SVG the size its `viewBox` names,
+/// its own, whatever the kind of diagram, and scales one wider than the
+/// window to fit it rather than cut it off at the right edge. Nothing else
+/// is on the page and nothing is painted behind it. The page loads nothing but
 /// Mermaid (its copy, or the pinned file on the CDN): its policy refuses
 /// every other request, so a diagram naming a picture (a node's `img`)
 /// reaches nowhere, which keeps a note's diagram on the computer.
@@ -151,6 +156,7 @@ pub fn diagram_html(source: &str, light: bool, local: &Local) -> String {
 <style>
 html, body {{ margin: 0; background: transparent; overflow: hidden; }}
 #drawn {{ display: inline-block; padding: 8px; }}
+#drawn svg {{ max-width: calc(100vw - 16px) !important; height: auto; }}
 </style>
 </head><body>
 <pre id="source" hidden>{source}</pre>
@@ -163,6 +169,12 @@ async function draw() {{
   try {{
     const {{ svg }} = await mermaid.render("diagram", document.getElementById("source").textContent);
     drawn.innerHTML = svg;
+    const picture = drawn.querySelector("svg");
+    const box = picture.viewBox.baseVal;
+    if (box.width > 0 && box.height > 0) {{
+      picture.setAttribute("width", box.width);
+      picture.setAttribute("height", box.height);
+    }}
   }} catch {{
     drawn.innerHTML = "";
     document.querySelectorAll("body > :not(#drawn):not(#source):not(script)").forEach((e) => e.remove());
@@ -717,5 +729,20 @@ mod tests {
         assert!(page.contains("img-src data:;"));
         assert!(page.contains("A--&gt;B&lt;/pre&gt;&lt;img src=x&gt;"));
         assert!(page.contains("theme: \"dark\""));
+    }
+
+    #[test]
+    fn a_diagrams_page_draws_it_at_its_own_size_and_no_wider_than_the_window() {
+        let page = diagram_html("graph TD; A-->B", true, &Local::new());
+        let drawn = page.find("drawn.innerHTML = svg;").unwrap();
+        let sized = page
+            .find(r#"picture.setAttribute("width", box.width);"#)
+            .unwrap();
+        assert!(sized > drawn, "sized once Mermaid has drawn it");
+        assert!(page.contains("const box = picture.viewBox.baseVal;"));
+        assert!(page.contains(r#"picture.setAttribute("height", box.height);"#));
+        assert!(
+            page.contains("#drawn svg { max-width: calc(100vw - 16px) !important; height: auto; }")
+        );
     }
 }
