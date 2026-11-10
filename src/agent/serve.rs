@@ -601,6 +601,22 @@ impl Server {
         true
     }
 
+    /// Claude Code says the pane's session went idle at `at_ms` (ms), read
+    /// from its session file by the sidebar (`claude::SessionRef::idle_since`):
+    /// a pane still working from before then, its conversation silent since,
+    /// goes idle (`Agents::went_idle`), for a turn that ended without a hook,
+    /// such as a /compact you typed that failed or that you cancelled. Gives
+    /// whether it changed.
+    pub fn agent_went_idle(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.went_idle(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
     /// A question the pane's transcript shows unanswered, asked at `at`
     /// (ms), read by the sidebar (`claude::Turn::asks`): the pane waits on
     /// it, unless the conversation's own hooks have said more since

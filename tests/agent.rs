@@ -10,6 +10,7 @@
 mod common;
 
 use std::io::Write;
+use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -39,19 +40,19 @@ fn run_hook(
         .env_remove("SLACK_RELAY_HELPER")
         .env_remove("TMUX")
         .env_remove("TMUX_PANE")
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some((socket, pane)) = pane {
         cmd.env("SWITCHBOARD", socket).env("SWITCHBOARD_PANE", pane);
     }
-    let mut child = cmd.spawn().expect("switchboard runs");
+    // The JSON on a socket, as Claude Code hands a hook its input, written
+    // and closed before the hook runs.
+    let (mut ours, theirs) = UnixStream::pair().expect("a socket pair");
+    cmd.stdin(Stdio::from(std::os::fd::OwnedFd::from(theirs)));
+    let child = cmd.spawn().expect("switchboard runs");
     // A hook that has stopped reading is no reason to fail here.
-    let _ = child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(input.as_bytes());
+    let _ = ours.write_all(input.as_bytes());
+    drop(ours);
     let out = child.wait_with_output().expect("switchboard ends");
     (
         out.status.code().unwrap_or(-1),
@@ -388,6 +389,41 @@ fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
     std::thread::sleep(Duration::from_millis(2_500));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+}
+
+#[test]
+fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    let now_ms = || jiff::Timestamp::now().as_millisecond();
+    // Idle, as Claude Code said when the last turn ended.
+    let before = now_ms();
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "compacted", "cwd": "/work", "status": "idle", "statusUpdatedAt": before}),
+    );
+    std::thread::sleep(Duration::from_millis(1_100));
+    hook(&server, &pane, "PreCompact", json!({"trigger": "manual"}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+    // Claude Code's word from before it began doesn't end it, past the
+    // sidebar's next read.
+    std::thread::sleep(Duration::from_millis(2_500));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // It fails, or you cancel it: no PostCompact runs, but Claude Code says
+    // the session is idle again.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "compacted", "cwd": "/work", "status": "idle", "statusUpdatedAt": now_ms()}),
+    );
+    wait_list(&server, "the pane handed back", |l| {
+        pane_of(l, &pane)["agent"]["state"].is_null()
+    });
 }
 
 #[test]

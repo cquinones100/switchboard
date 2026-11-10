@@ -1,6 +1,6 @@
 //! What each Claude session in the workspace is doing, as tmux/agent-state.sh
 //! kept it in pane options (`@agent_state`, `@agent_since`, `@agent_activity`,
-//! `@agent_wait`, `@agent_loop`, `@agent_phase`, `@agent_compact_from`): here
+//! `@agent_wait`, `@agent_loop`, `@agent_phase`): here
 //! a typed record per pane, changed only by the server task, with nothing in
 //! it that reads a file or starts a process, so every rule can be tested on
 //! its own.
@@ -125,24 +125,6 @@ pub struct PaneAgent {
     /// The step a loop says it is at (queue-and-clean's landing), set by the
     /// loop and ended by a new prompt or session.
     pub phase: Option<String>,
-    /// How it was before an automatic compaction began, to hand it back
-    /// after: `None` when it was working (nothing to hand back), `Some(None)`
-    /// when it was idle, else its state and since.
-    #[serde(
-        deserialize_with = "some_even_if_null",
-        skip_serializing_if = "Option::is_none"
-    )]
-    compact_from: Option<Option<(State, i64)>>,
-}
-
-/// `null` read as `Some(None)`, which serde would read as `None`: an absent
-/// field is the `None`.
-fn some_even_if_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(d).map(Some)
 }
 
 impl PaneAgent {
@@ -154,7 +136,6 @@ impl PaneAgent {
             && self.wait_call.is_none()
             && self.loop_name.is_none()
             && self.phase.is_none()
-            && self.compact_from.is_none()
     }
 
     /// The pane's record, as `switchboard list` shows it.
@@ -323,7 +304,7 @@ impl Hook {
     }
 
     /// Whether this is a new prompt or a new or ended session, which ends a
-    /// loop, its phase and a compaction cut short.
+    /// loop and its phase.
     fn begins_anew(&self) -> bool {
         matches!(
             self.event.as_str(),
@@ -468,13 +449,21 @@ impl Agents {
         let Some(mut state) = hook.marks() else {
             return false;
         };
-        // Compaction: Claude is at work on it, whatever the tab showed, and a
-        // session it restarts (SessionStart from compact) is the same one
-        // going on, so it keeps its state and loop. After a /compact you
-        // typed, nothing follows, so the tab is idle again. An automatic one
-        // hands the tab back as it was before: working in the middle of a
-        // turn, idle or done when Claude compacted while idle.
+        // Compaction. A session it restarts (SessionStart from compact) is the
+        // same one going on, so it keeps its state and loop. A /compact you
+        // typed has Claude at work on it, whatever the tab showed, and nothing
+        // follows it, so the tab is idle again after. An automatic one leaves
+        // the state as it is and only says what a working pane is doing:
+        // Claude Code also writes a compaction's summary ahead of time, in the
+        // background (as a turn ends, while idle, or mid-turn), running
+        // PreCompact with no PostCompact after it, and a compaction while idle
+        // can take that summary up behind a PreCompact of its own. A mark made
+        // at PreCompact would stay on an idle tab until its next turn ended.
         if hook.event == "SessionStart" && hook.source == "compact" {
+            return false;
+        }
+        let compaction = matches!(hook.event.as_str(), "PreCompact" | "PostCompact");
+        if compaction && hook.source != "manual" && self.state(pane) != Some(State::Working) {
             return false;
         }
         // A tool call by someone other than whoever waits (a background
@@ -508,43 +497,15 @@ impl Agents {
             return false;
         }
         let agent = self.panes.entry(pane).or_default();
-        let mut handed_back = false;
-        match hook.event.as_str() {
-            "PreCompact" => {
-                agent.compact_from = match agent.state {
-                    Some(State::Working) => None,
-                    other => Some(other.map(|s| (s, agent.since))),
-                };
-            }
-            "PostCompact" => {
-                let before = agent.compact_from.take();
-                state = if hook.source == "manual" {
-                    None
-                } else {
-                    match before {
-                        // As it was, since included, so a finished tab keeps
-                        // its age.
-                        Some(Some((s, since))) => {
-                            handed_back = agent.state != Some(s);
-                            agent.state = Some(s);
-                            agent.since = since;
-                            Some(s)
-                        }
-                        // A look while it compacted has already made it idle.
-                        Some(None) => None,
-                        None => Some(State::Working),
-                    }
-                };
-            }
-            _ => {}
+        if hook.event == "PostCompact" && hook.source == "manual" {
+            state = None;
         }
         // A question to you is a wait from the moment it is asked.
         if asks {
             state = Some(State::Waiting);
         }
-        let changed = set_state(agent, state, now, front) || handed_back;
-        // Whoever asked last owns the wait, as its words are the ones shown;
-        // a wait handed back after a compaction has none, so any call ends it.
+        let changed = set_state(agent, state, now, front);
+        // Whoever asked last owns the wait, as its words are the ones shown.
         if (asks || hook.event == "PermissionRequest") && agent.state == Some(State::Waiting) {
             agent.wait_by = Some(hook.waiter());
             agent.wait_call = (!hook.call.is_empty()).then(|| hook.call.clone());
@@ -608,8 +569,7 @@ impl Agents {
         changed
     }
 
-    /// A tab's panes, in front for a second: a finished one has been seen,
-    /// and one seen while it compacts comes back idle rather than finished.
+    /// A tab's panes, in front for a second: a finished one has been seen.
     /// Gives whether a state changed.
     pub fn seen(&mut self, panes: &[PaneId]) -> bool {
         let mut changed = false;
@@ -622,14 +582,37 @@ impl Agents {
                 agent.since = 0;
                 changed = true;
             }
-            if matches!(agent.compact_from, Some(Some((State::Done, _)))) {
-                agent.compact_from = Some(None);
-            }
             if agent.is_empty() {
                 self.panes.remove(p);
             }
         }
         changed
+    }
+
+    /// Claude Code said the pane's session went idle at `at_ms` (ms), its
+    /// session file's status: a turn can end with no hook, as a /compact you
+    /// typed that failed or that you cancelled does (no PostCompact), so a
+    /// pane still working from before then, with no hook from the
+    /// conversation since, goes idle. What it was doing and its loop are
+    /// kept, as for an interruption. A wait is left to its own hooks and the
+    /// transcript (`interrupted`): Claude Code may not yet say it waits when
+    /// the question's hook comes. Gives whether it changed.
+    pub fn went_idle(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        let Some(agent) = self.panes.get_mut(&pane) else {
+            return false;
+        };
+        if agent.state != Some(State::Working)
+            || agent.since > at_ms.div_euclid(1000)
+            || agent.heard > at_ms
+        {
+            return false;
+        }
+        agent.state = None;
+        agent.since = 0;
+        if agent.is_empty() {
+            self.panes.remove(&pane);
+        }
+        true
     }
 
     /// A turn you interrupted at `at_ms` (ms), which runs no hook, so the
@@ -800,9 +783,7 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
         agent.loop_name = None;
     }
     if hook.begins_anew() {
-        // A compaction cut short by a new prompt or session leaves nothing to
-        // hand back, and a loop's step is set again by the loop as it goes on.
-        agent.compact_from = None;
+        // A loop's step is set again by the loop as it goes on.
         agent.phase = None;
     }
     match state {
@@ -943,12 +924,13 @@ mod tests {
         on(&mut a, "PermissionRequest", json!({"agent_id": "a2"}), 159);
         assert!(!on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 160));
         assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a2"}), 161));
-        // A wait an automatic compaction hands back is anyone's.
+        // An automatic compaction leaves a subagent's wait with the subagent.
         on(&mut a, "PermissionRequest", json!({"agent_id": "a1"}), 162);
-        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 163);
-        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 164);
+        assert!(!on(&mut a, "PreCompact", json!({"trigger": "auto"}), 163));
+        assert!(!on(&mut a, "PostCompact", json!({"trigger": "auto"}), 164));
         assert_eq!(a.state(P), Some(State::Waiting));
-        assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 165));
+        assert!(!on(&mut a, "PostToolUse", json!({}), 165));
+        assert!(on(&mut a, "PostToolUse", json!({"agent_id": "a1"}), 166));
         assert_eq!(a.get(P).unwrap().wait_by, None);
         // A wait only a Notification said may be anyone's: any call ends it.
         on(&mut a, "PostToolUse", json!({}), 151);
@@ -1309,31 +1291,50 @@ mod tests {
     }
 
     #[test]
-    fn an_automatic_compaction_while_idle_hands_the_tab_back() {
+    fn an_automatic_compaction_while_idle_leaves_the_tab_as_it_was() {
+        // A turn ends, Claude Code writes a summary ahead of time (PreCompact
+        // alone), and later compacts while idle, taking that summary up
+        // behind a PreCompact of its own.
         let mut a = Agents::default();
         on(&mut a, "Stop", json!({}), 100);
-        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 110);
-        assert_eq!(a.state(P), Some(State::Working));
-        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 120);
+        assert!(!on(&mut a, "PreCompact", json!({"trigger": "auto"}), 101));
+        assert_eq!(a.state(P), Some(State::Done));
+        assert!(!on(&mut a, "PreCompact", json!({"trigger": "auto"}), 3300));
+        assert!(!on(
+            &mut a,
+            "SessionStart",
+            json!({"source": "compact"}),
+            3390
+        ));
+        assert!(!on(&mut a, "PostCompact", json!({"trigger": "auto"}), 3390));
         let agent = a.get(P).unwrap();
-        assert_eq!(agent.state, Some(State::Done));
-        assert_eq!(agent.since, 100, "a finished tab keeps its age");
-        // From idle, it goes back to idle.
-        let mut a = Agents::default();
-        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 110);
-        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 120);
-        assert_eq!(a.state(P), None);
+        assert_eq!(
+            (agent.state, agent.since),
+            (Some(State::Done), 100),
+            "a finished tab keeps its age"
+        );
+        assert_eq!(agent.activity, None);
+        // Seen, it is idle, and an idle tab stays idle.
+        assert!(a.seen(&[P]));
+        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 3400);
+        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 3410);
+        assert!(a.get(P).is_none());
     }
 
     #[test]
-    fn a_finished_tab_seen_while_it_compacts_comes_back_idle() {
+    fn a_summary_written_ahead_while_claude_waits_leaves_it_waiting() {
         let mut a = Agents::default();
-        on(&mut a, "Stop", json!({}), 100);
-        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 110);
-        a.seen(&[P]);
-        assert_eq!(a.state(P), Some(State::Working), "working stays");
-        on(&mut a, "PostCompact", json!({"trigger": "auto"}), 120);
-        assert_eq!(a.state(P), None);
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        on(
+            &mut a,
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "tool_input": {"command": "git push"}}),
+            110,
+        );
+        assert!(!on(&mut a, "PreCompact", json!({"trigger": "auto"}), 111));
+        let agent = a.get(P).unwrap();
+        assert_eq!((agent.state, agent.since), (Some(State::Waiting), 110));
+        assert_eq!(agent.wait.as_deref(), Some("permission: Bash git push"));
     }
 
     #[test]
@@ -1343,10 +1344,46 @@ mod tests {
         on(&mut a, "PreCompact", json!({"trigger": "manual"}), 110);
         on(&mut a, "PostCompact", json!({"trigger": "manual"}), 120);
         assert!(a.get(P).is_none());
+        // One that fails, or that you cancel, runs no PostCompact: Claude
+        // Code saying the session went idle after it hands the tab back.
+        on(&mut a, "PreCompact", json!({"trigger": "manual"}), 130);
+        a.heard(
+            P,
+            &hook("PreCompact", json!({"trigger": "manual"})),
+            130_000,
+        );
+        assert_eq!(a.state(P), Some(State::Working));
+        assert!(!a.went_idle(P, 129_000), "idle from before it began");
+        assert!(a.went_idle(P, 131_200));
+        let agent = a.get(P).unwrap();
+        assert_eq!((agent.state, agent.since), (None, 0));
+        assert_eq!(agent.activity.as_deref(), Some("compacting context"));
     }
 
     #[test]
-    fn a_new_prompt_cuts_a_compaction_short() {
+    fn claude_saying_it_went_idle_ends_only_work_nothing_has_followed() {
+        let mut a = Agents::default();
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        a.heard(P, &hook("UserPromptSubmit", json!({})), 100_400);
+        on(&mut a, "PreToolUse", json!({"tool_name": "Read"}), 101);
+        a.heard(P, &hook("PreToolUse", json!({})), 101_200);
+        // Idle as the turn began, written before the prompt's hook came.
+        assert!(!a.went_idle(P, 100_300));
+        assert!(!a.went_idle(P, 101_100), "a hook came after it");
+        assert_eq!(a.state(P), Some(State::Working));
+        // A wait is its own hooks' and the transcript's to end.
+        on(&mut a, "PermissionRequest", json!({}), 105);
+        assert!(!a.went_idle(P, 106_000));
+        assert_eq!(a.state(P), Some(State::Waiting));
+        // A finished turn stays finished.
+        on(&mut a, "Stop", json!({}), 110);
+        assert!(!a.went_idle(P, 111_000));
+        assert_eq!(a.state(P), Some(State::Done));
+        assert!(!a.went_idle(PaneId(9), 111_000));
+    }
+
+    #[test]
+    fn a_prompt_sent_while_it_compacts_idle_works_on() {
         let mut a = Agents::default();
         on(&mut a, "Stop", json!({}), 100);
         on(&mut a, "PreCompact", json!({"trigger": "auto"}), 110);

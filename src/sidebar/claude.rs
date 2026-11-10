@@ -42,6 +42,9 @@ pub struct SessionInfo {
     pub entrypoint: String,
     pub job_id: String,
     pub parked_job_id: String,
+    /// When Claude Code said the session went idle (`status` `idle`, at its
+    /// `statusUpdatedAt`, ms), while it says so.
+    pub idle_since: Option<i64>,
 }
 
 impl SessionInfo {
@@ -62,6 +65,10 @@ impl SessionInfo {
             entrypoint: text("entrypoint").unwrap_or_default(),
             job_id: text("jobId").unwrap_or_default(),
             parked_job_id: text("parkedJobId").unwrap_or_default(),
+            idle_since: (text("status").as_deref() == Some("idle"))
+                .then(|| v.get("statusUpdatedAt").and_then(Value::as_f64))
+                .flatten()
+                .map(|n| n as i64),
         }
     }
 
@@ -81,6 +88,9 @@ pub struct SessionRef {
     /// The name it was given by you or a skill, not one derived.
     pub name: Option<String>,
     pub started_at: Option<i64>,
+    /// When Claude Code said the session it is now went idle (ms), while
+    /// it says so.
+    pub idle_since: Option<i64>,
 }
 
 /// The session shown for a pane, from the sessions whose processes are in
@@ -119,6 +129,7 @@ pub fn session_of(all: &[SessionInfo], front: &[&SessionInfo]) -> Option<Session
         cwd: current.cwd.clone().or_else(|| session.cwd.clone()),
         name: named,
         started_at: current.started_at.or(session.started_at),
+        idle_since: current.idle_since,
     })
 }
 
@@ -2232,8 +2243,25 @@ mod tests {
                 cwd: Some("/work".into()),
                 name: Some("Login retry".into()),
                 started_at: Some(1_700_000_000_000),
+                idle_since: None,
             })
         );
+        // When Claude Code says it went idle, while it says so.
+        let status = |status: &str| {
+            SessionInfo::from_json(
+                &json!({"pid": 111, "sessionId": "s1", "status": status, "statusUpdatedAt": 1_700_000_000_500_i64}),
+            )
+        };
+        let idle = status("idle");
+        assert_eq!(idle.idle_since, Some(1_700_000_000_500));
+        assert_eq!(
+            session_of(std::slice::from_ref(&idle), &[&idle])
+                .unwrap()
+                .idle_since,
+            Some(1_700_000_000_500)
+        );
+        assert_eq!(status("busy").idle_since, None);
+        assert_eq!(status("waiting").idle_since, None);
         assert_eq!(project_dir_name("/Users/me/my.repo"), "-Users-me-my-repo");
     }
 

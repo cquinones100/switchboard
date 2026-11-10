@@ -99,9 +99,10 @@ pub fn bind() -> Result<tokio::net::UnixListener> {
 ///
 /// It never starts a server: a command that changes a tab means nothing to
 /// a server that has none, and a hook run outside Switchboard should cost
-/// nothing. Stdin is read whole when it is a pipe or a file, as a hook's JSON
-/// is given, and only for the commands that take it (`commands::TAKES_STDIN`);
-/// a terminal, `/dev/null` or a socket is not read at all.
+/// nothing. Stdin is read whole when it is a pipe, a socket or a file, as a
+/// hook's JSON is given (Claude Code hands it a socket), and only for the
+/// commands that take it (`commands::TAKES_STDIN`); a terminal or
+/// `/dev/null` is not read at all.
 pub fn run_command(args: Vec<String>) -> ExitCode {
     let cwd = std::env::current_dir()
         .ok()
@@ -227,8 +228,8 @@ pub fn in_pane() -> bool {
     set("SWITCHBOARD") && set("SWITCHBOARD_PANE")
 }
 
-/// Whether stdin holds data to read: a pipe or a file, as a hook's JSON is
-/// given, not a terminal.
+/// Whether stdin holds data to read: a pipe, a socket or a file, as a
+/// hook's JSON is given (Claude Code hands it a socket), not a terminal.
 pub fn stdin_is_data() -> bool {
     is_data(libc::STDIN_FILENO)
 }
@@ -290,8 +291,9 @@ fn exchange(stream: &mut UnixStream, msg: &ClientMsg) -> Result<(i32, Vec<u8>, V
     }
 }
 
-/// Whether a file descriptor holds data to pass on: a pipe or a regular
-/// file, not a terminal, a device or a socket.
+/// Whether a file descriptor holds data to pass on: a pipe, a socket (as
+/// Claude Code hands a hook its JSON) or a regular file, not a terminal or
+/// a device.
 fn is_data(fd: libc::c_int) -> bool {
     // SAFETY: fstat only fills the struct it is given; a closed descriptor
     // is an error, not undefined.
@@ -300,7 +302,7 @@ fn is_data(fd: libc::c_int) -> bool {
         return false;
     }
     let kind = st.st_mode & libc::S_IFMT;
-    kind == libc::S_IFIFO || kind == libc::S_IFREG
+    kind == libc::S_IFIFO || kind == libc::S_IFREG || kind == libc::S_IFSOCK
 }
 
 /// Makes a directory (and those above it) readable by its owner alone. One
@@ -874,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn only_pipes_and_files_count_as_input() {
+    fn pipes_sockets_and_files_count_as_input() {
         let tmp = TempDir::new();
         let file = File::create(tmp.path().join("input")).unwrap();
         assert!(is_data(file.as_raw_fd()));
@@ -890,7 +892,7 @@ mod tests {
         let null = File::open("/dev/null").unwrap();
         assert!(!is_data(null.as_raw_fd()), "a device is not input");
         let (a, _b) = UnixStream::pair().unwrap();
-        assert!(!is_data(a.as_raw_fd()), "a socket is not input");
+        assert!(is_data(a.as_raw_fd()), "Claude Code hands a hook a socket");
         assert!(!is_data(-1), "nor is a closed descriptor");
     }
 
