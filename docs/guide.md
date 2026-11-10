@@ -812,7 +812,7 @@ A source that fails shows a row saying why, which reads nothing when chosen. Git
 
 ### Reading a link
 
-`M-p`'s "Read a link in a pane beside this one, typed or one this pane shows" lists the links the pane shows and has scrolled past, newest first, each once; a link a program wrote into its text (an OSC 8 hyperlink, as Claude Code writes them) shows that text before its address. In the notes pane the list is the links of the note it shows, top to bottom, since Notes shows a link's text alone. Type to narrow the list, or type or paste a link of your own; `M-Enter` takes what you typed even when a listed link matches it. Enter reads the link in a pane to the right, half the width, in place of any link read in that tab before, and `Ctrl-O` opens it in the browser instead. What the link is decides how it is read:
+`M-p`'s "Read a link in a pane beside this one, typed or one this pane shows" lists the links the pane shows and has scrolled past, newest first, each once; a link a program wrote into its text (an OSC 8 hyperlink, as Claude Code writes them) shows that text before its address. After them come the links in what you sent the pane's Claude that the pane doesn't show, marked "you gave it", newest first: Claude Code shows a long paste as "[Pasted text #1 +12 lines]", so a link inside one is never on the screen. The newest 50 are kept, on this computer alone, until the pane's Claude starts a new session or the pane closes, and through a restart that keeps every pane (Settings' "Links you gave Claude", `prompt_links`; off, the commands list only what the pane shows). In the notes pane the list is the links of the note it shows, top to bottom, since Notes shows a link's text alone. Type to narrow the list, or type or paste a link of your own; `M-Enter` takes what you typed even when a listed link matches it. Enter reads the link in a pane to the right, half the width, in place of any link read in that tab before, and `Ctrl-O` opens it in the browser instead. What the link is decides how it is read:
 
 - a GitHub pull request, as `M-v` lays one out;
 - a Linear ticket, as `M-i` lays one out;
@@ -825,7 +825,7 @@ A source that fails shows a row saying why, which reads nothing when chosen. Git
 
 The same list does two more things. "Open a link from this pane in the browser, or read it in a pane beside" opens the chosen link in the browser, `Ctrl-O` reading it beside instead; "Copy a link from this pane to the clipboard, or open it in the browser" copies it (to your terminal's clipboard and the computer's, as a selection is), `Ctrl-O` opening it. With no links in the pane, each says so.
 
-"Open an image or video from this pane in its app, or show it in its folder" lists the pictures and videos the pane names, newest first: a file's path (absolute, from `~`, or from the pane's directory, listed only when the file is there; png, jpg, gif, webp, heic, svg, bmp, tiff, mp4, mov, webm, mkv, m4v and avi), then the links among the pane's whose address ends in one. Enter opens a file in the app the desktop opens it with (Preview or QuickTime on a Mac) and a link in the browser; `Ctrl-O` shows a file in Finder, or opens its folder on Linux.
+"Open an image or video from this pane in its app, or show it in its folder" lists the pictures and videos the pane names, newest first: a file's path (absolute, from `~`, or from the pane's directory, listed only when the file is there; png, jpg, gif, webp, heic, svg, bmp, tiff, mp4, mov, webm, mkv, m4v and avi), then the links among the pane's whose address ends in one, those you gave its Claude included (a file's path in a prompt is not listed). Enter opens a file in the app the desktop opens it with (Preview or QuickTime on a Mac) and a link in the browser; `Ctrl-O` shows a file in Finder, or opens its folder on Linux.
 
 Mission control's menus read a link beside your work too: "Read it here" on a pull request or ticket on the boards and in the Inbox, "Read the PR here" in the CI and Landing views, and an event's linked tickets and pull requests in the Calendar view, each in a pane beside the one you were in when mission control opened.
 
@@ -1997,6 +1997,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Setting | Default | What it does |
 |---|---|---|
 | Learn from what you pick (`palette_learn`) | on | M-p remembers what you typed before each pick, and puts that command first when you type the same again |
+| Links you gave Claude (`prompt_links`) | on | M-p's link commands also list the links in what you sent the pane's Claude, pasted text included, which Claude Code doesn't show. Off, they list only what the pane shows |
 | Commands button (`palette_button`) | on | A ⌘ Commands button that opens M-p when clicked: in the status bar after the session name, or with UX 2.0 at the right end of the tab header's keys, where a click while the palette is open closes it |
 
 ### Help

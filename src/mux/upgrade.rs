@@ -145,6 +145,9 @@ pub struct Handover {
     /// A cell's size in pixels as the terminal answered when asked.
     #[serde(default)]
     pub asked_cell: Option<(u16, u16)>,
+    /// The links in what you sent each pane's Claude (src/views/given.rs).
+    #[serde(default)]
+    pub given: Vec<(PaneId, Vec<String>)>,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -579,6 +582,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         next_tab: server.next_tab,
         images: server.sixel.hand_over(),
         asked_cell: server.terminal.asked_cell,
+        given: server.views.given.records(),
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -740,6 +744,11 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     for (id, agent) in handover.agents {
         if server.panes.contains_key(&id) {
             server.agents.put(id, agent);
+        }
+    }
+    for (id, links) in handover.given {
+        if server.panes.contains_key(&id) {
+            server.views.given.put(id, links);
         }
     }
     // The one used longest ago first, so the one used last sizes its
@@ -922,6 +931,7 @@ mod tests {
                 }],
             )],
             asked_cell: Some((10, 20)),
+            given: vec![(PaneId(4), vec!["https://a.example/1".into()])],
         }
     }
 

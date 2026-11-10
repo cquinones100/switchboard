@@ -747,9 +747,29 @@ impl Server {
         }
     }
 
+    /// A hook from a pane's Claude: a prompt's links are kept for the link
+    /// commands (src/views/given.rs), since Claude Code shows pasted text
+    /// as "[Pasted text #1]"; a fresh session starts with none.
+    pub fn links_hook(&mut self, pane: PaneId, hook: &crate::agent::Hook, payload: &Value) {
+        if !hook.agent.is_empty() {
+            return;
+        }
+        match hook.event.as_str() {
+            "SessionStart" if hook.source != "compact" => self.views.given.forget(pane),
+            "UserPromptSubmit" if settings::is_on("prompt_links") => {
+                if let Some(prompt) = payload.get("prompt").and_then(Value::as_str) {
+                    self.views.given.took(pane, prompt);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The links a pane shows: the note's, top to bottom, in the notes
     /// pane while it shows one; else the screen's and its scrollback's,
-    /// newest first. Why there are none, when there are none.
+    /// newest first, then those in what you sent its Claude that it
+    /// doesn't show (`prompt_links`). Why there are none, when there are
+    /// none.
     fn pane_links(&self, pane: PaneId) -> Result<Vec<Shown>, String> {
         let Some(slot) = self.panes.get(&pane) else {
             return Err("No pane here".into());
@@ -769,7 +789,14 @@ impl Server {
             }
         }
         let (text, hyperlinks) = slot.pane.text_and_links(3000);
-        let found = shown::links_in(&text, &hyperlinks);
+        let mut found = shown::links_in(&text, &hyperlinks);
+        if settings::is_on("prompt_links") {
+            for given in self.views.given.of(pane) {
+                if !found.iter().any(|s| s.url == given.url) {
+                    found.push(given);
+                }
+            }
+        }
         if found.is_empty() {
             return Err("No links in this pane".into());
         }

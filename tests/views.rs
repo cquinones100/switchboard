@@ -530,6 +530,132 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
     );
 }
 
+/// Runs `switchboard hook <event>` in `pane` of the test's server with
+/// `input` on its stdin, as Claude Code runs its hooks there.
+fn hook(server: &TestServer, pane: &str, event: &str, input: Value) {
+    use std::io::Write;
+    let mut child = Command::new(BIN)
+        .args(["hook", event])
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", pane)
+        .env_remove("SWITCHBOARD_SETTINGS")
+        .env_remove("SLACK_RELAY_HELPER")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("switchboard runs");
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.to_string().as_bytes());
+    let out = child.wait_with_output().expect("switchboard ends");
+    assert!(out.status.success(), "hook {event}: {}", server.log());
+}
+
+#[test]
+fn the_link_commands_list_the_links_you_gave_the_panes_claude() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    // Nothing listens on port 9, and nothing here reads a link anyway.
+    let prompt = |text: &str| json!({"hook_event_name": "UserPromptSubmit", "prompt": text});
+
+    // A link in a prompt, which Claude Code would show as "[Pasted text
+    // #1]": on no screen, and listed.
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        prompt("look at this:\nhttp://127.0.0.1:9/pasted."),
+    );
+    server.ok(&["press", "copy-link"]);
+    client.wait_text("you gave it  http://127.0.0.1:9/pasted");
+    client.type_text("\r");
+    client.wait_text("Copied http://127.0.0.1:9/pasted");
+    client.type_text("x");
+
+    // A fresh session starts with none.
+    hook(&server, &pane, "SessionStart", json!({"source": "clear"}));
+    server.ok(&["press", "copy-link"]);
+    client.wait_text("No links in this pane");
+    client.type_text("x");
+
+    // One the pane shows too is listed once, as the pane's.
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        prompt("http://127.0.0.1:9/pasted and http://127.0.0.1:9/shot.png"),
+    );
+    client.type_text("echo http://127.0.0.1:9/pasted\r");
+    client.wait_for("the echoed link", |s| {
+        s.iter().any(|l| l.starts_with("http://127.0.0.1:9/pasted"))
+    });
+    server.ok(&["press", "copy-link"]);
+    let screen = client.wait_text("you gave it  http://127.0.0.1:9/shot.png");
+    assert!(
+        screen.iter().any(|l| l.contains("│   2/2 "))
+            && !screen
+                .iter()
+                .any(|l| l.contains("you gave it  http://127.0.0.1:9/pasted")),
+        "the pane's link once, then the prompt's:\n{}",
+        screen.join("\n")
+    );
+    // A lone Esc is taken once nothing follows it, so the list is waited
+    // out before the next command.
+    client.type_text("\x1b");
+    client.wait_for("the list closed", |s| {
+        !s.iter().any(|l| l.contains("Copy a link"))
+    });
+
+    // A link to a picture among them is one of the pane's pictures.
+    server.ok(&["press", "open-media"]);
+    client.wait_text("Images and videos");
+    client.wait_text("you gave it  http://127.0.0.1:9/shot.png");
+}
+
+#[test]
+fn with_prompt_links_off_the_link_commands_list_only_what_the_pane_shows() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false, "prompt_links": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let pane = panes(&server)[0]["id"].as_str().unwrap().to_string();
+    // The server reads the settings again a moment after they change, so
+    // a list that still shows the link is closed and asked for again.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        hook(
+            &server,
+            &pane,
+            "UserPromptSubmit",
+            json!({"prompt": "see http://127.0.0.1:9/pasted"}),
+        );
+        server.ok(&["press", "copy-link"]);
+        let screen = client.wait_for("an answer", |s| {
+            s.iter()
+                .any(|l| l.contains("No links in this pane") || l.contains("you gave it"))
+        });
+        if screen.iter().any(|l| l.contains("No links in this pane")) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still listed:\n{}",
+            screen.join("\n")
+        );
+        client.type_text("\x1b");
+        hook(&server, &pane, "SessionStart", json!({"source": "clear"}));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// What the image views keep, under a test's home.
 fn image_cache(home: &Path) -> switchboard::views::image::cache::Cache {
     switchboard::views::image::cache::Cache::at(home.join(".cache/switchboard"))

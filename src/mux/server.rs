@@ -1630,6 +1630,9 @@ impl Server {
     /// Takes a pane out of its tab; the tab goes when it was its last, and
     /// the session when that was its last tab.
     pub fn remove_pane(&mut self, pane: PaneId) {
+        // Whichever way it goes, a pane parked behind a tool included, the
+        // links you gave its Claude go with it (src/views/given.rs).
+        self.views.given.forget(pane);
         // A tool in a pane's place gives the place back (src/diff/in_place.rs).
         if self.give_place_back(pane) {
             return;
@@ -1670,6 +1673,7 @@ impl Server {
             if let Some(mut slot) = self.panes.remove(&p) {
                 slot.pane.kill();
             }
+            self.views.given.forget(p);
         }
         self.remove_tab(tab);
     }

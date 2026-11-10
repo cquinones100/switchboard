@@ -29,6 +29,8 @@
 //! - `search`: search everything's sources (lib/search.js).
 //! - `shown`: the links, images and videos a pane shows, for M-p's link
 //!   commands (link-view.sh's `links_of` and `media_of`).
+//! - `given`: the links in what you sent each pane's Claude, pasted text
+//!   included, which the link commands list too.
 //! - `ready`: whether the PR can merge (pr-ready.sh).
 //! - `serve`: the server's side: the keys, the boxes, the panes beside.
 
@@ -36,6 +38,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 pub mod board;
+pub mod given;
 pub mod image;
 pub mod markdown;
 pub mod mermaid;
@@ -325,11 +328,13 @@ pub enum ViewsEvent {
 }
 
 /// What the server keeps for the views: each client's search, its rows so
-/// far and the sources still looking.
+/// far and the sources still looking; and the links in what you sent each
+/// pane's Claude.
 #[derive(Default)]
 pub struct Views {
     pub(crate) searches: u64,
     pub(crate) found: std::collections::HashMap<ClientId, search::Running>,
+    pub(crate) given: given::Given,
 }
 
 /// The program's directory argument, else where it runs.

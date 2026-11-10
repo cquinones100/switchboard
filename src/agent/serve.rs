@@ -136,6 +136,7 @@ impl Server {
             self.name_tab(tab);
         }
         self.history_hook(pane, &hook, &payload);
+        self.links_hook(pane, &hook, &payload);
         if changed {
             // A pane that has gone back to a shell keeps no state, so a
             // session that died without SessionEnd leaves no mark behind.

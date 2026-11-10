@@ -746,6 +746,13 @@
     "default": true
   },
   {
+    "key": "prompt_links",
+    "category": "Palette",
+    "label": "Links you gave Claude",
+    "description": "M-p's link commands also list the links in what you sent the pane's Claude, pasted text included, which Claude Code doesn't show. Off, they list only what the pane shows",
+    "default": true
+  },
+  {
     "key": "palette_button",
     "category": "Palette",
     "label": "Commands button",

@@ -71,7 +71,7 @@ The workspace:
 | `day` | Your day: the calendar, Slack, the notes written for you |
 | `usage` | How the workspace is used, on this computer alone: habits, resources, sessions and spend, closed tabs, your own files' settings, plugins |
 | `links` | Opening a link in its site's Chrome profile |
-| `views` | Reading beside your work: the PR description, the ticket (with UX 2.0 laid out as boards 13 and 14, a column with a panel beside it, `board`), a link, a pane's links and images, search everything, whether a PR can merge, and the branch's merge queue, Linear project, ticket and PR opened or copied |
+| `views` | Reading beside your work: the PR description, the ticket (with UX 2.0 laid out as boards 13 and 14, a column with a panel beside it, `board`), a link, a pane's links and images (with the links in what you sent its Claude, which the server keeps by pane from the UserPromptSubmit hook, `given`, and hands over in an upgrade), search everything, whether a PR can merge, and the branch's merge queue, Linear project, ticket and PR opened or copied |
 | `diff` | `M-d`'s diff in a pane's place, from the merge base to the working tree, told as a story of its commits with what isn't committed in a last chapter, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control |
