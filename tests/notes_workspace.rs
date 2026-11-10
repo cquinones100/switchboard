@@ -378,3 +378,44 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
         marked(l, "@notes_pane").is_some_and(|(i, _)| tabs(l)[i]["current"] == true)
     });
 }
+
+#[test]
+fn a_new_notes_notification_takes_notes_home_from_beside_a_tab_before_opening_it() {
+    let rig = Rig::with(json!({ "notice_list": false }));
+    std::fs::write(rig.notes_dir().join("Work/Later.md"), "# Later\n").unwrap();
+    let (mut client, first, notes) = notes_open(&rig);
+    let first_tab = tabs(&rig.list())[0]["id"].as_str().unwrap().to_string();
+    rig.server
+        .ok(&["set", "-t", &first_tab, "@tab_note", "Plan.md"]);
+    // Notes beside the first tab's pane, showing that tab's note.
+    client.type_text(&format!("{ALT}e"));
+    rig.wait("Notes beside the first pane", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone(), notes.clone()]
+    });
+    rig.wait_heard("open Plan.md");
+    std::fs::write(
+        rig.notes_dir().join(".notes.json"),
+        json!({ "last": "Plan.md" }).to_string(),
+    )
+    .unwrap();
+
+    note_written(&rig, "Work/Later.md", "Later");
+    client.wait_text("● New note: Later");
+    client.type_text(&format!("{ALT}s"));
+    client.type_text("n");
+    client.type_text("\r");
+    // Home, in the place of the pane left there, and gone to; the first tab
+    // has its pane alone again.
+    let list = rig.wait("Notes home and in front", |l| {
+        pane_ids(&tabs(l)[0]) == [first.clone()]
+            && pane_ids(&tabs(l)[1]) == [notes.clone()]
+            && tabs(l)[1]["current"] == true
+    });
+    assert!(marked(&list, "@notes_placeholder").is_none(), "{list:#}");
+    assert_eq!(tabs(&list)[1]["options"]["@notes"], "1");
+    // The tab it was beside keeps its own note as the one last shown there.
+    assert_eq!(tabs(&list)[0]["options"]["@tab_note"], "Plan.md");
+    assert_eq!(tabs(&list)[0]["options"]["@tab_note_last"], "Plan.md");
+    rig.wait_heard("open Work/Later.md");
+    rig.wait_heard("sidebar on");
+}

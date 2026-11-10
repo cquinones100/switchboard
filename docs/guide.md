@@ -673,7 +673,7 @@ With Settings' "Today's todo note" (`todo_note`) on, each weekday, once Switchbo
 
 ### New notes in the notifications
 
-Each note written for you (a meeting's, the standup, today's todo) is in the sidebar's notifications until Notes shows it, its file is gone, or its menu in the Notifications view dismisses it. Enter on one opens it in Notes, through the running app's socket (or as the note it opens with when it isn't running), and goes to Notes wherever it is, or opens it in a tab of its own (Settings' "New notes", `new_notes`).
+Each note written for you (a meeting's, the standup, today's todo) is in the sidebar's notifications until Notes shows it, its file is gone, or its menu in the Notifications view dismisses it. Enter on one opens it in Notes, through the running app's socket (or as the note it opens with when it isn't running), and goes to Notes in its own tab, or opens it in one (Settings' "New notes", `new_notes`). Notes beside a tab's pane goes home first, as `M-e` pressed again there takes it, so that tab keeps its work and its own note.
 
 ## How you use it
 
@@ -1134,7 +1134,7 @@ The multiplexer passes those four keys only to the notes app's pane while it run
 
 There is only ever one Notes in the workspace, since two would save the same notes over each other.
 
-`M-N` (Alt-Shift-N) goes to Notes wherever it is open, or opens it in a tab of its own, named Notes. `M-e` brings that same Notes into a pane to the right of the one you are in, or starts it there; pressed again in that tab, or `M-w` on Notes there, it goes back to a tab of its own rather than closing. While it is away, its own tab shows which tab has it ("Notes is beside tab 3"), so the tab stays in the sidebar: Enter there goes to that tab, and `M-e` brings Notes back. When the last of a tab's own panes closes, Notes goes back to its own tab rather than stay there alone. While Notes is beside a tab's pane, that tab says "✎ Notes here" in the sidebar and on its mission control card.
+`M-N` (Alt-Shift-N) goes to Notes wherever it is open, or opens it in a tab of its own, named Notes. `M-e` brings that same Notes into a pane to the right of the one you are in, or starts it there; pressed again in that tab, or `M-w` on Notes there, it goes back to a tab of its own rather than closing. While it is away, its own tab shows which tab has it ("Notes is beside tab 3"), so the tab stays in the sidebar: Enter there goes to that tab, and `M-e` brings Notes back. When the last of a tab's own panes closes, Notes goes back to its own tab rather than stay there alone. A note opened from a notification, or from anywhere but `M-e`, opens in Notes' own tab, Notes going home first when it was beside a tab. While Notes is beside a tab's pane, that tab says "✎ Notes here" in the sidebar and on its mission control card.
 
 Beside another tab's pane, Notes' list is put away, so the note has the room (Ctrl-F still finds a note), and it comes back in Notes' own tab (Settings' "Hide the sidebar beside a tab", `notes_hide_sidebar`).
 
