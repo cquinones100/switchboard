@@ -18,6 +18,12 @@
 //! conversation waits on a question, so only the one waiting ends its wait
 //! by going on with its tools; a new prompt, a finished turn or a session
 //! starting or ending ends any.
+//!
+//! A wait belongs to its call too (the hook's `tool_use_id`): the
+//! conversation's other calls end while it waits (a backgrounded agent
+//! returning, a monitor firing), and a call ending ends the wait only when it
+//! is the one waited on, or when either hook names no call, as before waits
+//! had calls.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -101,9 +107,17 @@ pub struct PaneAgent {
     /// waits, or for a wait only a Notification said, whose hook may not
     /// say who asked, which any tool call ends, as before waits had owners.
     pub wait_by: Option<Waiter>,
-    /// When the conversation itself last ran a hook (ms), which tells a
-    /// question its transcript shows unanswered from one asked before.
+    /// The call the wait is on (its `tool_use_id`), when the hook that
+    /// began the wait named one: another call ending leaves the wait.
+    pub wait_call: Option<String>,
+    /// When the conversation itself last ran a hook (ms), which tells work
+    /// you interrupted from work a prompt came after.
     pub heard: i64,
+    /// When the conversation itself last ran a hook that could have
+    /// followed an answer (ms: any but another call ending, or one that
+    /// marks nothing), which tells a question its transcript shows
+    /// unanswered from one asked before.
+    pub went_on: i64,
     /// The loop the session runs (review, ci, queue or deploy), from the
     /// moment its skill is asked for until a new prompt or session: the turns
     /// between a loop's rounds are the loop's too.
@@ -137,6 +151,7 @@ impl PaneAgent {
             && self.activity.is_none()
             && self.wait.is_none()
             && self.wait_by.is_none()
+            && self.wait_call.is_none()
             && self.loop_name.is_none()
             && self.phase.is_none()
             && self.compact_from.is_none()
@@ -177,6 +192,9 @@ pub struct Hook {
     /// The subagent the hook fires in (`agent_id`); empty for the
     /// conversation itself.
     pub agent: String,
+    /// The tool call the hook fires for (`tool_use_id`); empty when it
+    /// names none.
+    pub call: String,
 }
 
 impl Hook {
@@ -266,6 +284,7 @@ impl Hook {
             message: text(payload, "message").unwrap_or_default(),
             session_id: text(payload, "session_id").unwrap_or_default(),
             agent: text(payload, "agent_id").unwrap_or_default(),
+            call: text(payload, "tool_use_id").unwrap_or_default(),
         }
     }
 
@@ -290,6 +309,17 @@ impl Hook {
             "SessionStart" | "SessionEnd" => Some(None),
             _ => None,
         }
+    }
+
+    /// Whether the conversation running this hook could have followed an
+    /// answer to its question: any hook that marks a state but a call other
+    /// than a question ending, which a backgrounded agent returning is.
+    fn follows_an_answer(&self) -> bool {
+        let another_call_ended =
+            matches!(self.event.as_str(), "PostToolUse" | "PostToolUseFailure")
+                && !self.tool.is_empty()
+                && self.tool != "AskUserQuestion";
+        self.marks().is_some() && !another_call_ended
     }
 
     /// Whether this is a new prompt or a new or ended session, which ends a
@@ -362,8 +392,13 @@ impl Agents {
         all
     }
 
-    /// A pane's record as a build before this one had it.
-    pub fn put(&mut self, pane: PaneId, agent: PaneAgent) {
+    /// A pane's record as a build before this one had it. One from a build
+    /// that kept no `went_on` takes it from the last hook heard, as that
+    /// build did.
+    pub fn put(&mut self, pane: PaneId, mut agent: PaneAgent) {
+        if agent.went_on == 0 {
+            agent.went_on = agent.heard;
+        }
         if !agent.is_empty() {
             self.panes.insert(pane, agent);
         }
@@ -461,6 +496,17 @@ impl Agents {
         {
             return false;
         }
+        // Nor is another call ending while the wait is on one: the
+        // conversation's own backgrounded agent returning, a monitor firing.
+        let call_ended = matches!(hook.event.as_str(), "PostToolUse" | "PostToolUseFailure");
+        if call_ended
+            && !hook.call.is_empty()
+            && let Some(agent) = self.panes.get(&pane)
+            && agent.state == Some(State::Waiting)
+            && agent.wait_call.as_ref().is_some_and(|c| *c != hook.call)
+        {
+            return false;
+        }
         let agent = self.panes.entry(pane).or_default();
         let mut handed_back = false;
         match hook.event.as_str() {
@@ -501,6 +547,7 @@ impl Agents {
         // a wait handed back after a compaction has none, so any call ends it.
         if (asks || hook.event == "PermissionRequest") && agent.state == Some(State::Waiting) {
             agent.wait_by = Some(hook.waiter());
+            agent.wait_call = (!hook.call.is_empty()).then(|| hook.call.clone());
         }
         details(agent, state, hook);
         if agent.is_empty() {
@@ -520,22 +567,35 @@ impl Agents {
         changed
     }
 
-    /// The conversation itself ran a hook at `at` (ms), kept while the pane
-    /// has a record.
-    pub fn heard(&mut self, pane: PaneId, at: i64) {
+    /// The conversation itself ran `hook` at `at` (ms), kept while the
+    /// pane has a record.
+    pub fn heard(&mut self, pane: PaneId, hook: &Hook, at: i64) {
         if let Some(agent) = self.panes.get_mut(&pane) {
             agent.heard = agent.heard.max(at);
+            if hook.follows_an_answer() {
+                agent.went_on = agent.went_on.max(at);
+            }
         }
     }
 
     /// A question the pane's transcript shows unanswered, asked at `at`
-    /// (ms): a wait, unless the pane waits already or the conversation has
-    /// run a hook since, which says the transcript is behind (the answer not
-    /// written yet) or the hook marked it itself. For a question whose hook
-    /// never came. Gives whether its state changed.
-    pub fn asked(&mut self, pane: PaneId, at: i64, question: &str, now: i64, front: bool) -> bool {
+    /// (ms) by the call `call`: a wait on that call, unless the pane waits
+    /// already or the conversation has since run a hook that could have
+    /// followed its answer, which says the transcript is behind (the answer
+    /// not written yet) or the hook marked it itself; another call ending
+    /// since (a backgrounded agent returning) says neither. For a question
+    /// whose hook never came. Gives whether its state changed.
+    pub fn asked(
+        &mut self,
+        pane: PaneId,
+        at: i64,
+        call: &str,
+        question: &str,
+        now: i64,
+        front: bool,
+    ) -> bool {
         let agent = self.panes.entry(pane).or_default();
-        if agent.state == Some(State::Waiting) || agent.heard >= at {
+        if agent.state == Some(State::Waiting) || agent.went_on >= at {
             if agent.is_empty() {
                 self.panes.remove(&pane);
             }
@@ -543,6 +603,7 @@ impl Agents {
         }
         let changed = set_state(agent, Some(State::Waiting), now, front);
         agent.wait_by = Some(Waiter::Conversation);
+        agent.wait_call = (!call.is_empty()).then(|| call.to_string());
         agent.wait = Some(one_line(&short(&format!("asks: {question}"), 80)));
         changed
     }
@@ -598,6 +659,7 @@ impl Agents {
         agent.since = 0;
         agent.wait = None;
         agent.wait_by = None;
+        agent.wait_call = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -614,6 +676,7 @@ impl Agents {
         let changed = agent.state.take().is_some();
         agent.since = 0;
         agent.wait_by = None;
+        agent.wait_call = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -697,6 +760,7 @@ impl Agents {
         };
         if agent.state != Some(State::Waiting) {
             agent.wait_by = None;
+            agent.wait_call = None;
         }
         if agent.is_empty() {
             self.panes.remove(&pane);
@@ -746,10 +810,12 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
             agent.activity = None;
             agent.wait = None;
             agent.wait_by = None;
+            agent.wait_call = None;
         }
         Some(State::Working) => {
             agent.wait = None;
             agent.wait_by = None;
+            agent.wait_call = None;
             match hook.event.as_str() {
                 "UserPromptSubmit" | "PostCompact" => agent.activity = None,
                 "PreCompact" => agent.activity = Some("compacting context".into()),
@@ -894,27 +960,136 @@ mod tests {
         assert_eq!(a.state(P), Some(State::Done));
     }
 
+    /// A hook of the conversation's as the server takes it: applied, then
+    /// heard, at `now` seconds.
+    fn runs(agents: &mut Agents, event: &str, payload: Value, now: i64) -> bool {
+        let hook = hook(event, payload);
+        let changed = agents.apply(P, &hook, now, false);
+        agents.heard(P, &hook, now * 1000);
+        changed
+    }
+
+    fn ask(call: &str) -> Value {
+        json!({"tool_name": "AskUserQuestion", "tool_use_id": call, "tool_input": {"questions": [{"question": "Which?"}]}})
+    }
+
+    #[test]
+    fn a_question_stays_a_wait_while_another_call_of_the_conversation_ends() {
+        let mut a = Agents::default();
+        let agent = json!({"tool_name": "Agent", "tool_use_id": "a1", "tool_input": {"description": "Security review"}});
+        runs(
+            &mut a,
+            "UserPromptSubmit",
+            json!({"prompt": "/queue-and-clean"}),
+            100,
+        );
+        runs(&mut a, "PreToolUse", agent.clone(), 101);
+        assert!(runs(&mut a, "PreToolUse", ask("q1"), 110));
+        // The backgrounded agent returns: the conversation's own hook, for
+        // another call than the question.
+        assert!(!runs(&mut a, "PostToolUse", agent.clone(), 120));
+        assert!(!runs(&mut a, "PostToolUseFailure", agent, 121));
+        let pane = a.get(P).unwrap();
+        assert_eq!((pane.state, pane.since), (Some(State::Waiting), 110));
+        assert_eq!(pane.wait.as_deref(), Some("asks: Which?"));
+        assert_eq!(pane.loop_name.as_deref(), Some("queue"));
+        // A notification marks nothing new, and ends nothing.
+        assert!(!a.wait(P, 122, false));
+        // The question's own call ending is the answer.
+        assert!(runs(&mut a, "PostToolUse", ask("q1"), 130));
+        let pane = a.get(P).unwrap();
+        assert_eq!(pane.state, Some(State::Working));
+        assert_eq!(
+            (pane.wait.as_deref(), pane.wait_call.as_deref()),
+            (None, None)
+        );
+
+        // Going on with another tool, a new prompt and a finished turn each
+        // end a wait on a call, as does a call ending that names none.
+        for (event, payload, want) in [
+            (
+                "PreToolUse",
+                json!({"tool_name": "Read", "tool_use_id": "r1"}),
+                State::Working,
+            ),
+            ("UserPromptSubmit", json!({}), State::Working),
+            ("Stop", json!({}), State::Done),
+            ("PostToolUse", json!({"tool_name": "Agent"}), State::Working),
+        ] {
+            runs(&mut a, "PreToolUse", ask("q2"), 140);
+            assert_eq!(a.state(P), Some(State::Waiting));
+            runs(&mut a, event, payload, 150);
+            assert_eq!(a.state(P), Some(want), "after {event}");
+            assert_eq!(a.get(P).unwrap().wait_call, None, "after {event}");
+        }
+
+        // A permission request's wait is its call's too, when it names one.
+        let push = json!({"tool_name": "Bash", "tool_use_id": "b1", "tool_input": {"command": "git push"}});
+        runs(&mut a, "PermissionRequest", push.clone(), 160);
+        assert!(!runs(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "Monitor", "tool_use_id": "m1"}),
+            161
+        ));
+        assert!(runs(&mut a, "PostToolUse", push, 162));
+        // A new question takes the wait over, with its call.
+        runs(&mut a, "PreToolUse", ask("q3"), 170);
+        runs(&mut a, "PreToolUse", ask("q4"), 171);
+        assert!(!runs(&mut a, "PostToolUse", ask("q3"), 172));
+        assert!(runs(&mut a, "PostToolUse", ask("q4"), 173));
+    }
+
     #[test]
     fn a_question_the_transcript_shows_waits_unless_a_hook_came_since() {
         let mut a = Agents::default();
-        on(&mut a, "UserPromptSubmit", json!({}), 100);
-        a.heard(P, 100_000);
+        runs(&mut a, "UserPromptSubmit", json!({}), 100);
         // Asked after the conversation's last hook: its hook never came.
-        assert!(a.asked(P, 105_000, "Which layout?", 106, false));
+        assert!(a.asked(P, 105_000, "q1", "Which layout?", 106, false));
         assert_eq!(a.state(P), Some(State::Waiting));
         assert_eq!(
             a.get(P).unwrap().wait.as_deref(),
             Some("asks: Which layout?")
         );
-        assert!(!a.asked(P, 105_000, "Which layout?", 107, false));
+        assert!(!a.asked(P, 105_000, "q1", "Which layout?", 107, false));
+        // A backgrounded agent returning leaves the wait, which is its
+        // call's.
+        let agent = json!({"tool_name": "Agent", "tool_use_id": "a1"});
+        assert!(!runs(&mut a, "PostToolUse", agent.clone(), 110));
+        assert_eq!(a.get(P).unwrap().since, 106);
         // Answered: the hook comes before the transcript has the answer.
-        on(&mut a, "PostToolUse", json!({}), 120);
-        a.heard(P, 120_000);
-        assert!(!a.asked(P, 105_000, "Which layout?", 121, false));
+        runs(&mut a, "PostToolUse", ask("q1"), 120);
+        assert!(!a.asked(P, 105_000, "q1", "Which layout?", 121, false));
         assert_eq!(a.state(P), Some(State::Working));
+
+        // A question asked before the agent returned, whose hook never came
+        // and which no read of the transcript had shown yet: the agent's
+        // return doesn't hide it.
+        runs(&mut a, "PostToolUse", agent, 135);
+        assert!(a.asked(P, 130_000, "q2", "And now?", 136, false));
+        // One asked before a hook that followed an answer was answered.
+        runs(&mut a, "PreToolUse", json!({"tool_name": "Read"}), 140);
+        assert!(!a.asked(P, 130_000, "q2", "And now?", 141, false));
+        // A hook that marks nothing (a subagent stopping) says nothing
+        // about an answer either.
+        runs(&mut a, "SubagentStop", json!({}), 150);
+        assert!(a.asked(P, 145_000, "q3", "Last?", 151, false));
+
         // An idle pane with no record waits on a question too.
         let mut b = Agents::default();
-        assert!(b.asked(P, 5, "Go?", 1, false));
+        assert!(b.asked(P, 5, "", "Go?", 1, false));
+        // A record a build before this one kept takes what it heard as
+        // when it went on.
+        let mut c = Agents::default();
+        c.put(
+            P,
+            PaneAgent {
+                state: Some(State::Working),
+                heard: 200_000,
+                ..PaneAgent::default()
+            },
+        );
+        assert!(!c.asked(P, 150_000, "q", "Old?", 201, false));
     }
 
     #[test]
@@ -1262,7 +1437,7 @@ mod tests {
             json!({"tool_name": "Bash", "tool_input": {"command": "sleep 120"}}),
             100,
         );
-        a.heard(P, 100_500);
+        a.heard(P, &hook("UserPromptSubmit", json!({})), 100_500);
         assert!(a.interrupted(P, 130_000));
         let agent = a.get(P).unwrap();
         assert_eq!((agent.state, agent.since), (None, 0));
@@ -1270,14 +1445,14 @@ mod tests {
 
         // A prompt sent after the interruption works on.
         on(&mut a, "UserPromptSubmit", json!({}), 140);
-        a.heard(P, 140_000);
+        a.heard(P, &hook("UserPromptSubmit", json!({})), 140_000);
         assert!(!a.interrupted(P, 139_000));
         assert_eq!(a.state(P), Some(State::Working));
 
         // Never handed back, the pane still works from before; a prompt
         // typed after the interruption keeps that `since`, but its hook was
         // heard after it.
-        a.heard(P, 150_000);
+        a.heard(P, &hook("UserPromptSubmit", json!({})), 150_000);
         assert!(!a.interrupted(P, 145_000));
         assert_eq!(a.state(P), Some(State::Working));
     }

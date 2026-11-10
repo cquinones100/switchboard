@@ -1113,8 +1113,8 @@ pub struct Turn {
     pub tools: usize,
     pub pending: Option<String>,
     /// The question it is stopped on, when the call it is stopped on is
-    /// one (AskUserQuestion), and when it was asked (ms).
-    pub asks: Option<(String, i64)>,
+    /// one (AskUserQuestion), when it was asked (ms) and the call's id.
+    pub asks: Option<(String, i64, String)>,
 }
 
 /// The prompt as you typed it: a slash command as `/name args`, pasted text
@@ -1246,7 +1246,7 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
     let pending = stopped_on.map(|(part, _, _)| tool_text(part));
     let asks = stopped_on
         .filter(|(part, _, at)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
-        .map(|(part, _, at)| (tool_text(part), *at));
+        .map(|(part, _, at)| (tool_text(part), *at, str_of(part.get("id")).to_string()));
     let at = timestamp_ms(&entries[start]);
     Some(Turn {
         prompt: prompt_text(&entries[start]).unwrap_or_default(),
@@ -2125,7 +2125,10 @@ mod tests {
             .parse::<jiff::Timestamp>()
             .unwrap()
             .as_millisecond();
-        assert_eq!(asked(false), Some(("Which layout?".to_string(), at)));
+        assert_eq!(
+            asked(false),
+            Some(("Which layout?".to_string(), at, "q".to_string()))
+        );
         assert_eq!(asked(true), None);
     }
 

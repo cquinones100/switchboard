@@ -218,6 +218,63 @@ fn a_tab_a_hook_marked_waiting_is_under_needs_you() {
 }
 
 #[test]
+fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
+    // The log's setting from the start, so the first hook finds it read.
+    let server = TestServer::start_with_settings(r#"{"notifications": false, "hook_log": true}"#);
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    // A loop's turn that starts an agent in the background, then asks.
+    let agent = json!({"tool_name": "Agent", "tool_use_id": "a1", "tool_input": {"description": "Security review of branch"}});
+    let ask = json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": {"questions": [{"question": "Push it?"}]}});
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "/queue-and-clean"}),
+    );
+    hook(&server, &pane, "PreToolUse", agent.clone());
+    client.wait_for("its loop's stage", |s| {
+        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN 1"))
+    });
+    hook(&server, &pane, "PreToolUse", ask.clone());
+    // The agent returns: the conversation's own hook, for another call.
+    hook(&server, &pane, "PostToolUse", agent);
+    let waiting = server.list();
+    let record = &tabs(&waiting)[0]["panes"][0]["agent"];
+    assert_eq!(record["state"], "waiting", "{record}");
+    assert_eq!(record["wait"], "asks: Push it?");
+    assert_eq!(record["loop"], "queue");
+    let screen = client.wait_for("Needs you", |s| {
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU 1"))
+    });
+    assert!(
+        !screen
+            .iter()
+            .any(|l| left(l, 34).contains("QUEUE-AND-CLEAN")),
+        "{}",
+        screen.join("\n")
+    );
+    // Each hook left a line in the server's log, with the setting on.
+    let log = server.log();
+    assert!(
+        log.contains(&format!(
+            "agent hook PostToolUse Agent {pane} call=a1 agent=- kind=-"
+        )),
+        "{log}"
+    );
+    assert!(!log.contains("Push it?"), "{log}");
+    // The answer: the question's own call ends, and the loop goes on.
+    hook(&server, &pane, "PostToolUse", ask);
+    client.wait_for("its loop's stage again", |s| {
+        s.iter().any(|l| left(l, 34).contains("QUEUE-AND-CLEAN 1"))
+    });
+}
+
+#[test]
 fn m_s_and_its_keys_move_between_tabs() {
     let server = TestServer::start();
     settings(&server, json!({}));

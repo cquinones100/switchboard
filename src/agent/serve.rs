@@ -75,6 +75,35 @@ impl Server {
             return Reply::ok("");
         };
         let mut hook = super::Hook::read(event, &payload);
+        // Which hooks came, in what order and for which call, can't be read
+        // back from anything else once a tab shows the wrong state.
+        if settings::cached("hook_log") == Some(Value::Bool(true)) {
+            eprintln!(
+                "agent hook {} {} {} call={} agent={} kind={}",
+                hook.event,
+                if hook.tool.is_empty() {
+                    "-"
+                } else {
+                    &hook.tool
+                },
+                pane,
+                if hook.call.is_empty() {
+                    "-"
+                } else {
+                    &hook.call
+                },
+                if hook.agent.is_empty() {
+                    "-"
+                } else {
+                    &hook.agent
+                },
+                if hook.kind.is_empty() {
+                    "-"
+                } else {
+                    &hook.kind
+                },
+            );
+        }
         let answer = if caller.is_some() && hook.agent.is_empty() {
             self.hands_free_answer(tab, &hook, &payload)
         } else {
@@ -112,7 +141,7 @@ impl Server {
             self.agents.apply(pane, &hook, now, front)
         };
         if hook.agent.is_empty() {
-            self.agents.heard(pane, util::now_ms());
+            self.agents.heard(pane, &hook, util::now_ms());
         }
         // Where the conversation works now, which its Bash tool's `cd`
         // moves while Claude's own process stays where it started: the tab
@@ -578,14 +607,14 @@ impl Server {
     /// (`Agents::asked`). For a question whose hook never reached the
     /// server, which would leave the tab looking busy while Claude waits on
     /// you. Gives whether it changed.
-    pub fn agent_asked(&mut self, pane: PaneId, at: i64, question: &str) -> bool {
+    pub fn agent_asked(&mut self, pane: PaneId, at: i64, call: &str, question: &str) -> bool {
         let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
             return false;
         };
         let front = self.tab_in_front(tab);
         if !self
             .agents
-            .asked(pane, at, question, util::now_secs(), front)
+            .asked(pane, at, call, question, util::now_secs(), front)
         {
             return false;
         }

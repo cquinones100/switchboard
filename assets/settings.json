@@ -690,6 +690,13 @@
     "default": true
   },
   {
+    "key": "hook_log",
+    "category": "Sessions",
+    "label": "Log Claude's hooks",
+    "description": "Write a line to the server's log (server.log in Switchboard's state directory) for each hook Claude Code runs in a pane: the event, the tool, the pane, the call's id, the subagent and a notification's kind, never what was asked or run; for finding out why a tab showed the wrong state. Off, nothing is logged",
+    "default": false
+  },
+  {
     "key": "tab_title",
     "category": "Tabs and status bar",
     "label": "Show a tab's full title",
