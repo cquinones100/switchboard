@@ -349,7 +349,8 @@ pub fn testing_deploy(tab: &TabModel) -> bool {
             || (tab.state.busy() && matches!(tab.loop_skill.as_deref(), Some("deploy" | "queue"))))
 }
 
-/// A tab whose only background work is Monitor watches is watching, not
+/// A tab whose only background work is watches (Monitor's, or a shell
+/// command that only waits, `claude::WAITS`) is watching, not
 /// working: Claude has nothing to do until one reports.
 pub fn monitoring_only(tab: &TabModel) -> bool {
     tab.state == TabState::Background

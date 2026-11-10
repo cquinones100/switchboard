@@ -218,6 +218,252 @@ static MOVED: LazyLock<Regex> = LazyLock::new(|| {
 static MONITOR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Monitor started \(task ([A-Za-z0-9_-]+), expires in (\d+)m").expect("a regex")
 });
+/// What makes a background command a wait, which a tab's turn may end on as
+/// it would on a `Monitor` watch: a `while` or `until` loop that sleeps
+/// between its looks, or a command that blocks until a run or a file moves
+/// on. It counts only when everything the command runs is in `LOOKS`
+/// (`only_waits`), so a loop that builds or tests between its sleeps stays
+/// background work. A wait a loop's skill runs (`land-lock wait`,
+/// `wait-deploy`, `gh pr checks --watch`) reads as that loop.
+static WAITS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:while|until)\b[\s\S]*\bsleep\b|\bgh run watch\b|\btail -[fF]\b")
+        .expect("a regex")
+});
+/// The commands a wait may run: a sleep, and commands that only look at
+/// something (a file, a process, a run, a branch) and say what they saw,
+/// never one whose arguments can run a program or write a file (`awk`'s
+/// `system`, `sed -i`, `sort -o`, `find -exec`). Each is the words a simple
+/// command starts with, the first by its name alone or in one of
+/// `SYSTEM_BINS` (`/bin/sleep`), never a project's own (`./test`).
+const LOOKS: &[&str] = &[
+    "sleep",
+    "echo",
+    "printf",
+    "true",
+    "false",
+    "test",
+    "[",
+    "[[",
+    "grep",
+    "ps",
+    "pgrep",
+    "kill -0",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "jq",
+    "cut",
+    "tr",
+    "date",
+    "ls",
+    "stat",
+    "cd",
+    "gh run watch",
+    "gh run view",
+    "gh run list",
+    "gh pr view",
+    "gh pr checks",
+    "git rev-parse",
+    "git log",
+    "git status",
+    "git fetch",
+    "git ls-remote",
+    "git show",
+    "git diff",
+    "git merge-base",
+    "switchboard tabs",
+    "switchboard show",
+    "switchboard land-lock wait",
+    "switchboard wait-deploy",
+];
+/// The shell's words that only steer what runs, which a simple command may
+/// start with before the command itself.
+/// The directories a look may be named in (`/bin/sleep`): the system's and
+/// Homebrew's, where a project's own scripts never are.
+const SYSTEM_BINS: &[&str] = &["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"];
+const STEERING: &[&str] = &[
+    "while", "until", "do", "done", "if", "then", "else", "elif", "fi", "!", "{", "}",
+];
+
+/// Whether a background command only waits: it is a wait (`WAITS`) and
+/// every simple command in it, those in `$(…)` included, starts as one of
+/// `LOOKS` does and writes no file: its output goes nowhere but the
+/// terminal, `/dev/null` or another of its streams, and no `--output`.
+fn only_waits(command: &str) -> bool {
+    WAITS.is_match(command)
+        && simple_commands(command).iter().all(|all| {
+            // The command's words with its redirections taken out, each
+            // checked to write nowhere.
+            let mut words = Vec::new();
+            let mut iter = all.iter().map(String::as_str);
+            while let Some(w) = iter.next() {
+                let Some((_, to)) = w.rsplit_once('>') else {
+                    if w.starts_with("--output") {
+                        return false;
+                    }
+                    words.push(w);
+                    continue;
+                };
+                let to = if to.is_empty() {
+                    iter.next().unwrap_or("")
+                } else {
+                    to
+                };
+                let to_a_stream = to
+                    .strip_prefix('&')
+                    .is_some_and(|fd| fd == "-" || fd.trim_end_matches('-').parse::<u8>().is_ok());
+                if to != "/dev/null" && !to_a_stream {
+                    return false;
+                }
+            }
+            let mut words = words.into_iter().skip_while(|w| {
+                STEERING.contains(w)
+                    || w.split_once('=').is_some_and(|(name, _)| {
+                        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    })
+            });
+            let Some(first) = words.next() else {
+                return true;
+            };
+            let first = match first.rsplit_once('/') {
+                Some((dir, name)) if SYSTEM_BINS.contains(&dir) => name,
+                Some(_) => return false,
+                None => first,
+            };
+            let rest: Vec<&str> = words.collect();
+            LOOKS.iter().any(|look| {
+                let mut look = look.split(' ');
+                look.next() == Some(first) && look.enumerate().all(|(i, w)| rest.get(i) == Some(&w))
+            })
+        })
+}
+
+/// The simple commands a shell command runs, each as its words with their
+/// quotes taken off: split at `;`, `&`, `|`, newlines and parentheses
+/// outside quotes (a redirection's `&`, as in `2>&1`, excepted), with what a
+/// `$(…)` or backticks run as commands of their own and a `$((…))`'s sum
+/// left out.
+fn simple_commands(command: &str) -> Vec<Vec<String>> {
+    enum Frame {
+        Run,
+        Sum(usize),
+        Ticks,
+    }
+    let mut commands = Vec::new();
+    // Each frame's words and the word being read, saved while an inner
+    // `$(…)` is read.
+    let mut stack: Vec<(Frame, Vec<String>, String, Option<char>)> = Vec::new();
+    let mut frame = Frame::Run;
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = command.chars().peekable();
+    let end_word = |words: &mut Vec<String>, word: &mut String| {
+        if !word.is_empty() {
+            words.push(std::mem::take(word));
+        }
+    };
+    let end_command =
+        |commands: &mut Vec<Vec<String>>, words: &mut Vec<String>, word: &mut String| {
+            end_word(words, word);
+            if !words.is_empty() {
+                commands.push(std::mem::take(words));
+            }
+        };
+    while let Some(c) = chars.next() {
+        if quote == Some('\'') {
+            if c == '\'' {
+                quote = None;
+            } else {
+                word.push(c);
+            }
+            continue;
+        }
+        if c == '\\' {
+            if let Some(next) = chars.next().filter(|&next| next != '\n') {
+                word.push(next);
+            }
+            continue;
+        }
+        let opens = (c == '$' && chars.peek() == Some(&'('))
+            || (c == '`' && !matches!(frame, Frame::Ticks));
+        if opens {
+            let sum = c == '$' && {
+                chars.next();
+                chars.peek() == Some(&'(')
+            };
+            if sum {
+                chars.next();
+            }
+            let inner = if sum {
+                Frame::Sum(0)
+            } else if c == '`' {
+                Frame::Ticks
+            } else {
+                Frame::Run
+            };
+            stack.push((
+                std::mem::replace(&mut frame, inner),
+                std::mem::take(&mut words),
+                std::mem::take(&mut word),
+                quote.take(),
+            ));
+            continue;
+        }
+        let closes = match frame {
+            Frame::Ticks => c == '`',
+            Frame::Sum(depth) => depth == 0 && c == ')' && chars.peek() == Some(&')'),
+            Frame::Run => quote.is_none() && c == ')' && !stack.is_empty(),
+        };
+        if closes {
+            if matches!(frame, Frame::Sum(_)) {
+                chars.next();
+                words.clear();
+                word.clear();
+            } else {
+                end_command(&mut commands, &mut words, &mut word);
+            }
+            if let Some((outer, outer_words, outer_word, outer_quote)) = stack.pop() {
+                (frame, words, word, quote) = (outer, outer_words, outer_word, outer_quote);
+                word.push('X');
+            }
+            continue;
+        }
+        if let Frame::Sum(depth) = &mut frame {
+            match c {
+                '(' => *depth += 1,
+                ')' => *depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            continue;
+        }
+        if quote == Some('"') {
+            if c == '"' {
+                quote = None;
+            } else {
+                word.push(c);
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => quote = Some(c),
+            '#' if word.is_empty() => while chars.next_if(|&next| next != '\n').is_some() {},
+            '&' if word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => word.push(c),
+            ';' | '&' | '|' | '\n' | '(' | ')' => end_command(&mut commands, &mut words, &mut word),
+            c if c.is_whitespace() => end_word(&mut words, &mut word),
+            c => word.push(c),
+        }
+    }
+    end_command(&mut commands, &mut words, &mut word);
+    for (_, mut outer_words, mut outer_word, _) in stack.into_iter().rev() {
+        end_command(&mut commands, &mut outer_words, &mut outer_word);
+    }
+    commands
+}
+/// How much of a background wait's command names it when its call gives no
+/// description.
+const WAIT_NAME_CHARS: usize = 40;
 static TASK_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<task-id>([A-Za-z0-9_-]+)</task-id>").expect("a regex"));
 static CRON_JOB: LazyLock<Regex> = LazyLock::new(|| {
@@ -248,9 +494,12 @@ fn head_of(block: &str) -> &str {
 /// when it has one (completed, failed, killed), among the fields before its
 /// summary, and a watch's event after it, with no status. So a status before
 /// the summary ends the task, whatever the summary quotes; with none, an
-/// event keeps it going and anything else ends it.
+/// event keeps it going and anything else ends it. A watch's expiry also
+/// comes as an event (`[Monitor expired after 30m …]`), which ends it.
 fn ends_task(block: &str) -> bool {
-    head_of(block).contains("<status>") || !block.contains("<event>")
+    head_of(block).contains("<status>")
+        || !block.contains("<event>")
+        || block.contains("<event>[Monitor expired")
 }
 
 /// The notifications a message or a queued command carries, each a block:
@@ -438,6 +687,8 @@ struct Seen {
     started: IndexMap<String, Task>,
     ended: HashSet<String>,
     commands: HashMap<String, String>,
+    /// A background wait's name, by its tool call.
+    waits: HashMap<String, String>,
     watches: HashMap<String, String>,
     loop_at: HashMap<&'static str, i64>,
     cron_calls: HashMap<String, Value>,
@@ -633,7 +884,15 @@ impl Seen {
                     let command = field("command")
                         .filter(|v| !v.is_null())
                         .or_else(|| field("prompt"));
-                    self.commands.insert(id.clone(), string_of(command));
+                    let command = string_of(command);
+                    if name == "Bash" && only_waits(&command) {
+                        let named = field("description")
+                            .filter(|v| crate::util::truthy(v))
+                            .map(|v| string_of(Some(v)))
+                            .unwrap_or_else(|| command.chars().take(WAIT_NAME_CHARS).collect());
+                        self.waits.insert(id.clone(), named);
+                    }
+                    self.commands.insert(id.clone(), command);
                 }
                 if name == "Monitor" {
                     let description = field("description")
@@ -750,12 +1009,14 @@ impl Seen {
                 for m in STARTED.captures_iter(&result) {
                     let id = m[1].to_string();
                     if !self.started.contains_key(&id) {
+                        let loop_kind = loop_of(command);
+                        let monitor = self.waits.get(use_id).filter(|_| loop_kind.is_none());
                         self.started.insert(
                             id,
                             Task {
                                 at,
-                                loop_kind: loop_of(command),
-                                monitor: None,
+                                loop_kind,
+                                monitor: monitor.cloned(),
                                 until: None,
                             },
                         );
@@ -1533,6 +1794,102 @@ mod tests {
             r.background_work(&t.file, now - 60_000, now).unwrap(),
             Work::default()
         );
+    }
+
+    #[test]
+    fn the_newer_expiry_notice_ends_a_watch() {
+        let t = Transcript::new("expiry");
+        let now = crate::util::now_ms();
+        let at = |ago: i64| iso(now - ago);
+        t.add(&[
+            json!({"type": "assistant", "timestamp": at(5_000), "message": {"content": [{"type": "tool_use", "id": "w1", "name": "Monitor", "input": {"description": "items landing", "command": "watch.sh"}}]}}),
+            json!({"type": "user", "timestamp": at(5_000), "message": {"content": [{"type": "tool_result", "tool_use_id": "w1", "content": "Monitor started (task m1, expires in 30m unless the source ends first)"}]}}),
+            json!({"type": "user", "timestamp": at(0), "origin": {"kind": "task-notification"}, "message": {"content": "<task-notification>\n<task-id>m1</task-id>\n<summary>Monitor event: \"items landing\"</summary>\n<event>[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch.]</event>\n</task-notification>"}}),
+        ]);
+        let mut r = Reader::default();
+        assert_eq!(
+            r.background_work(&t.file, now - 60_000, now).unwrap(),
+            Work::default()
+        );
+    }
+
+    #[test]
+    fn a_command_only_waits_when_all_it_runs_is_a_look_or_a_sleep() {
+        for wait in [
+            r#"f="$HOME/Notes/Some Notes.md"; until grep -q "^- \[x\] it's done" "$f" && grep -q "other" "$f"; do sleep 300; done; echo "landed""#,
+            "until ! ps -p 91340 >/dev/null 2>&1; do sleep 2; done; echo released",
+            "end=$(( $(date +%s) + 900 )); while kill -0 83967 2>/dev/null && [ $(date +%s) -lt $end ]; do /bin/sleep 10; done; /bin/sleep 5; kill -0 83967 2>/dev/null && echo still-running || echo free",
+            "while [ \"$(gh run view 5 --json status -q .status)\" != completed ]; do sleep 30; done",
+            "gh run watch 123 --exit-status",
+            "while sleep 30; do gh run view 123 --json status; done",
+            "while true; do \\\n  sleep 30; done 2> /dev/null",
+            "tail -f build.log | grep --line-buffered ERROR",
+            "# Wait for the status file\nuntil grep -q done status.txt; do sleep 30; done # then say so\necho '#1 done'",
+        ] {
+            assert!(only_waits(wait), "{wait}");
+        }
+        for work in [
+            "while true; do cargo test; sleep 30; done",
+            "until cargo test; do sleep 30; done",
+            "gh run watch 123 && cargo build",
+            "while sleep 60; do git push; done",
+            "while true; do x=$(cargo build 2>&1); sleep 5; done",
+            "sleep 600; kill 1234",
+            "while true; do awk 'BEGIN { system(\"cargo test\") }'; sleep 30; done",
+            "while true; do sed -i '' s/a/b/ f; sleep 30; done",
+            "while sleep 5; do x=1 # comment\ncargo build; done",
+            "while sleep 30; do printf 'replacement' > generated.rs; done",
+            "while sleep 30; do git diff --output=patch.diff; done",
+            "until grep -q done f; do sleep 5; done >>log",
+            "while sleep 30; do printf replacement >&generated.rs; done",
+            "while true; do ./test; sleep 30; done",
+            "cargo test",
+            "echo $$ > pid; exec caffeinate -i",
+        ] {
+            assert!(!only_waits(work), "{work}");
+        }
+    }
+
+    #[test]
+    fn a_shell_wait_in_the_background_is_a_watch() {
+        let t = Transcript::new("waits");
+        let now = crate::util::now_ms();
+        let at = |ago: i64| iso(now - ago);
+        let call = |id: &str, input: Value| {
+            vec![
+                json!({"type": "assistant", "timestamp": at(5_000), "message": {"content": [{"type": "tool_use", "id": format!("use-{id}"), "name": "Bash", "input": input}]}}),
+                json!({"type": "user", "timestamp": at(5_000), "message": {"content": [{"type": "tool_result", "tool_use_id": format!("use-{id}"), "content": format!("Command running in background with ID: {id}. Output is being written to: /tmp/x")}]}}),
+            ]
+        };
+        t.add(&call(
+            "b1",
+            json!({"command": "until grep -q done notes.md; do sleep 30; done; echo ok", "description": "Wait for the items to land", "run_in_background": true}),
+        ));
+        let mut r = Reader::default();
+        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        assert_eq!(
+            (work.count, work.monitors),
+            (1, vec!["Wait for the items to land".to_string()])
+        );
+        // With no description, the command names it.
+        t.add(&call(
+            "b2",
+            json!({"command": "gh run watch 123 --exit-status", "run_in_background": true}),
+        ));
+        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        assert_eq!(work.monitors[1], "gh run watch 123 --exit-status");
+        // A test run is work, and a loop's wait reads as its loop.
+        t.add(&call(
+            "b3",
+            json!({"command": "cargo test", "description": "Run the tests", "run_in_background": true}),
+        ));
+        t.add(&call(
+            "b4",
+            json!({"command": "while ! switchboard land-lock wait; do sleep 5; done", "run_in_background": true}),
+        ));
+        let work = r.background_work(&t.file, now - 60_000, now).unwrap();
+        assert_eq!((work.count, work.monitors.len()), (4, 2));
+        assert_eq!(work.loop_run.map(|l| l.kind), Some("queue"));
     }
 
     #[test]

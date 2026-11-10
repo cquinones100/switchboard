@@ -400,7 +400,7 @@ Each tab is in one group, the same as its stage in mission control's Tabs view, 
 | Needs you | Its Claude waits on you or has finished there, you pinned it, or its reminder came due. Pinned tabs and reminders come first, then waiting tabs, the longest-waiting first, then finished ones, the oldest first. |
 | Build failing | Its open pull request has a failing check and isn't in a merge queue, and no `/ci-loop` is at work on it. The heading is in red. |
 | Working | Claude is working, or its turn ended with background tasks still running, which Claude carries on from when they end, with none of the loops below. |
-| Monitoring | Claude's only background work is `Monitor` watches, each named ("monitoring · CI on #12"). |
+| Monitoring | Claude's only background work is watches, each named ("monitoring · CI on #12"): `Monitor` watches, and background shell commands that only wait (a `while` or `until` loop that sleeps, `gh run watch`, `tail -f`) and run nothing but a sleep and commands that look (`grep`, `kill -0`, `gh run view`, `git log` and the like), named by their description; one that builds or tests between its looks stays working. |
 | Review loop | Its Claude works under `/review-loop`, from the moment you ask for it and between its rounds, or the loop runs in the background. |
 | CI loop | The same for `/ci-loop`, a failing build's included. |
 | Queue-and-clean | The same for `/queue-and-clean`, until its pull request is queued, landing or merged. |
