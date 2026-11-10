@@ -200,6 +200,9 @@ pub struct Editor {
     /// L and the scrolling keys; the app keeps them.
     pub top: usize,
     pub height: usize,
+    /// `zz` asked for the cursor's line in the middle of the screen, which
+    /// the app does as it draws, knowing how many rows each line wraps to.
+    pub center: bool,
     /// Easy mode: Shift with an arrow starts a selection, and typing over
     /// one replaces it.
     pub easy: bool,
@@ -259,6 +262,7 @@ impl Editor {
             folds: Folds::default(),
             top: 0,
             height: 20,
+            center: false,
             easy: false,
             out: Vec::new(),
         }
@@ -1683,7 +1687,10 @@ impl Editor {
             }
             ('z', 'M') => self.folds.close_all(&kinds),
             ('z', 'R') => self.folds.open_all(),
-            ('z', 'z') => self.top = row.saturating_sub(self.height / 2),
+            ('z', 'z') => {
+                self.top = row.saturating_sub(self.height / 2);
+                self.center = true;
+            }
             ('z', 't') => self.top = row,
             ('z', 'b') => self.top = row.saturating_sub(self.height.saturating_sub(1)),
             ('g', 'J') => self.join(count, false),

@@ -502,6 +502,201 @@ fn the_wheel_scrolls_a_note_and_the_list_past_where_their_cursors_were() {
     assert_eq!(app.list_top, 1, "a key brings the cursor back in sight");
 }
 
+/// A narrow app, as beside a tab, on a note of `count` lines after its
+/// title, each `L<n>` and words enough to wrap to several rows.
+fn tall_lines(name: &str, rows: u16, count: usize, words: usize) -> (Dir, App) {
+    let (dir, mut store) = temp(name);
+    let note = store.create("", Some("Tall"));
+    let body: String = (1..=count)
+        .map(|i| format!("L{i:02} {}\n", "word ".repeat(words).trim_end()))
+        .collect();
+    write(&note, &format!("# Tall\n{body}"));
+    let (tx, _) = channel();
+    let mut app = App::new(
+        store,
+        Options {
+            list: false,
+            ..options()
+        },
+        40,
+        rows,
+        tx,
+    );
+    app.claude = None;
+    app.start();
+    app.open_note(&note, false, false);
+    screen(&mut app);
+    (dir, app)
+}
+
+/// The screen rows the note's line `L<n>` takes, from its first to past
+/// its last, when all of it shows.
+fn whole(app: &App, shown: &[String], n: usize) -> Option<(usize, usize)> {
+    let text = app.geo.text;
+    let (from, to) = (text.y as usize, text.bottom() as usize);
+    let start = (from..to).find(|&y| shown[y].contains(&format!("L{n:02}")))?;
+    let end = (start + 1..to)
+        .find(|&y| !shown[y].trim_start().starts_with("word"))
+        .unwrap_or(to);
+    // A line cut off at the view's end is followed by nothing, so it is
+    // whole only when the next line starts under it or the note ends.
+    let cut = end == to
+        && n < lines(app).len() - 1
+        && !shown[..to]
+            .iter()
+            .any(|l| l.contains(&format!("L{:02}", n + 1)));
+    let rows = whole_height(app);
+    (!cut || end - start == rows).then_some((start, end))
+}
+
+/// How many rows each of `tall_lines`' lines wraps to.
+fn whole_height(app: &App) -> usize {
+    let line = &lines(app)[1];
+    let mut rows = 1;
+    let mut used = 0;
+    for word in line.split(' ') {
+        let w = word.len() + usize::from(used > 0);
+        if used + w > app.geo.text.width as usize {
+            rows += 1;
+            used = word.len();
+        } else {
+            used += w;
+        }
+    }
+    rows
+}
+
+#[test]
+fn the_view_stays_still_as_the_cursor_moves_through_lines_that_wrap_tall() {
+    let (_dir, mut app) = tall_lines("tall-still", 24, 30, 36);
+    let view = app.editor.height;
+    let tall = whole_height(&app);
+    assert!(tall >= 5 && tall * 2 <= view, "{tall} rows in {view}");
+    // Down the note: the cursor's line always shows whole, the view moves a
+    // line at most (the title's one row going with the first), and drawing
+    // again moves nothing.
+    for _ in 0..12 {
+        let before = app.editor.top;
+        keys(&mut app, "j");
+        let shown = screen(&mut app);
+        let (row, top) = (app.editor.doc.row, app.editor.top);
+        assert!(
+            whole(&app, &shown, row).is_some(),
+            "L{row} whole:\n{shown:#?}"
+        );
+        let most = if before == 0 { 2 } else { 1 };
+        assert!((before..=before + most).contains(&top), "{before} to {top}");
+        assert_eq!(screen(&mut app), shown, "the same drawn again");
+        assert_eq!(app.editor.top, top);
+    }
+    // Along a line in the middle of the note, nothing moves: before, every
+    // key flipped the view between the line at its top and at its bottom.
+    let (top, shown) = (app.editor.top, screen(&mut app));
+    for key in ["l", "l", "l", "l", "l", "w", "h", "$", "0"] {
+        keys(&mut app, key);
+        assert_eq!(screen(&mut app), shown, "after {key}");
+        assert_eq!(app.editor.top, top, "after {key}");
+    }
+    // And back up the same way.
+    for _ in 0..12 {
+        let before = app.editor.top;
+        keys(&mut app, "k");
+        let shown = screen(&mut app);
+        let (row, top) = (app.editor.doc.row, app.editor.top);
+        let on_the_title = row == 0;
+        assert!(
+            on_the_title || whole(&app, &shown, row).is_some(),
+            "L{row} whole:\n{shown:#?}"
+        );
+        let most = if top == 0 { 2 } else { 1 };
+        assert!((top..=top + most).contains(&before), "{before} to {top}");
+        assert_eq!(screen(&mut app), shown, "the same drawn again");
+    }
+    assert_eq!(app.editor.top, 0);
+    // Where the view has room for more lines than the scrolloff keeps, the
+    // cursor moves between them without the view moving.
+    let (_dir, mut app) = tall_lines("tall-within", 44, 30, 36);
+    keys(&mut app, "10j");
+    screen(&mut app);
+    let top = app.editor.top;
+    for key in ["k", "k", "j", "j"] {
+        keys(&mut app, key);
+        screen(&mut app);
+        assert_eq!(app.editor.top, top, "after {key}");
+    }
+}
+
+#[test]
+fn a_line_taller_than_the_view_sits_at_its_top_and_zz_centers_by_rows() {
+    let (_dir, mut app) = tall_lines("tall-over", 16, 8, 120);
+    let view = app.editor.height;
+    assert!(whole_height(&app) > view);
+    for _ in 0..4 {
+        keys(&mut app, "j");
+        let shown = screen(&mut app);
+        let row = app.editor.doc.row;
+        assert_eq!(app.editor.top, row);
+        let at = app.geo.text.y as usize;
+        assert!(shown[at].contains(&format!("L{row:02}")), "{shown:#?}");
+        keys(&mut app, "ll");
+        assert_eq!(screen(&mut app), shown, "still along it");
+    }
+    // zz puts the cursor's line in the middle by the rows the lines over
+    // it take, not by as many lines as half the view has rows.
+    let (_dir, mut app) = tall_lines("tall-zz", 30, 30, 18);
+    let (view, tall) = (app.editor.height, whole_height(&app));
+    assert!(tall >= 3 && tall * 4 <= view, "{tall} rows in {view}");
+    keys(&mut app, "15jzz");
+    let shown = screen(&mut app);
+    let (start, end) = whole(&app, &shown, 15).expect("the cursor's line whole");
+    let text = app.geo.text;
+    let (above, below) = (start - text.y as usize, text.bottom() as usize - end);
+    assert!(above.abs_diff(below) <= tall, "{above} over, {below} under");
+    assert_eq!(screen(&mut app), shown, "the same drawn again");
+}
+
+#[test]
+fn the_wheel_over_lines_that_wrap_tall_lands_the_cursor_on_a_line_shown_whole() {
+    let (_dir, mut app) = tall_lines("tall-wheel", 24, 40, 36);
+    let wheel = |app: &mut App, down: bool| {
+        let r = app.geo.note;
+        app.mouse(Mouse {
+            kind: MouseKind::Press,
+            button: if down {
+                MouseButton::WheelDown
+            } else {
+                MouseButton::WheelUp
+            },
+            col: r.x + 2,
+            row: r.y + 2,
+            mods: Mods::NONE,
+        })
+    };
+    let mut tops = vec![app.editor.top];
+    for _ in 0..6 {
+        wheel(&mut app, true);
+        let shown = screen(&mut app);
+        let row = app.editor.doc.row;
+        assert!(
+            whole(&app, &shown, row).is_some(),
+            "L{row} whole:\n{shown:#?}"
+        );
+        tops.push(app.editor.top);
+    }
+    assert!(tops.windows(2).all(|t| t[1] == t[0] + 3), "{tops:?}");
+    for _ in 0..3 {
+        wheel(&mut app, false);
+        let shown = screen(&mut app);
+        let row = app.editor.doc.row;
+        assert!(
+            whole(&app, &shown, row).is_some(),
+            "L{row} whole:\n{shown:#?}"
+        );
+        tops.push(app.editor.top);
+    }
+    assert_eq!(tops[tops.len() - 4..], [18, 15, 12, 9], "never held back");
+}
+
 #[test]
 fn a_note_keeps_its_undo_history_and_folds_while_another_is_open() {
     let (_dir, mut store) = temp("undo");

@@ -20,7 +20,8 @@ use crate::notes::render::{self, Cell, Hl};
 use crate::notes::sidebar::Look as RowLook;
 use crate::ui::draw::{put_line, width};
 
-/// Lines kept above and below the cursor (the config's `scrolloff`).
+/// Rows of the screen kept above and below the cursor's line (the config's
+/// `scrolloff`, in rows since a line may wrap to many).
 const SCROLLOFF: usize = 8;
 
 /// A line's cells broken into the pieces a window `cols` wide shows, at a
@@ -184,6 +185,65 @@ impl App {
             }
             buf.set_stringn(r.x, y, &row.text, r.width as usize, style);
         }
+    }
+
+    /// How many rows of the screen the `i`th shown line takes.
+    fn tall(&mut self, fit: &mut Fit, i: usize) -> usize {
+        let row = fit.rows[i];
+        if let Some(n) = fit.heights.get(&row) {
+            return *n;
+        }
+        let n = self.pieces(row, fit.ctx).len();
+        fit.heights.insert(row, n);
+        n
+    }
+
+    /// The line the view starts at with the cursor on the `ci`th shown
+    /// line, having started at the `ti`th: the same one while the cursor's
+    /// line shows whole with the scrolloff's rows over and under it, else
+    /// the nearest that shows it so. The scrolloff is counted in rows of
+    /// the screen, as the lines' heights are: counted in lines beside
+    /// heights in rows, lines that wrap tall had the two disagree, and the
+    /// view flipped between them on every key. A line too tall to have the
+    /// scrolloff on both sides has what fits, one taller than the view sits
+    /// at its top, and where both sides can't be had the rows under win, so
+    /// the answer is the same on the next draw.
+    fn settled(&mut self, fit: &mut Fit, ti: usize, ci: usize) -> usize {
+        let own = self.tall(fit, ci);
+        let so = fit.so.min(fit.view.saturating_sub(own) / 2);
+        // The rows under the cursor's line, fewer at the note's end.
+        let (mut under, mut i) = (0, ci + 1);
+        while under < so && i < fit.rows.len() {
+            under += self.tall(fit, i);
+            i += 1;
+        }
+        let room = fit.view.saturating_sub(own + under.min(so));
+        let (mut top, mut above) = (ci, 0);
+        while top > 0 && !(top <= ti && above >= so) {
+            let next = above + self.tall(fit, top - 1);
+            if next > room {
+                break;
+            }
+            above = next;
+            top -= 1;
+        }
+        top
+    }
+
+    /// The line the view starts at to have the cursor's line in its middle
+    /// (`zz`), by the rows the lines over it take.
+    fn centered(&mut self, fit: &mut Fit, ci: usize) -> usize {
+        let half = fit.view.saturating_sub(self.tall(fit, ci)) / 2;
+        let (mut top, mut above) = (ci, 0);
+        while top > 0 {
+            let next = above + self.tall(fit, top - 1);
+            if next > half {
+                break;
+            }
+            above = next;
+            top -= 1;
+        }
+        top
     }
 
     /// The rows a buffer row takes on the screen, and its pieces.
@@ -365,67 +425,67 @@ impl App {
             folded,
             selected,
         };
-        // Scrolled so the cursor's line shows with lines around it.
+        // Scrolled so the cursor's line shows with rows around it, and only
+        // when it doesn't already: a cursor moving within the view moves
+        // nothing else.
         let rows: Vec<usize> = visible.iter().map(|v| v.0).collect();
-        let mut ci = rows.iter().rposition(|&r| r <= cursor_row).unwrap_or(0);
+        let ci = rows.iter().rposition(|&r| r <= cursor_row).unwrap_or(0);
         let mut ti = rows.iter().position(|&r| r >= self.editor.top).unwrap_or(0);
-        let so = SCROLLOFF.min((text.height as usize).saturating_sub(1) / 2);
-        let mut heights = std::collections::HashMap::new();
-        // The wheel moved the view: the cursor comes into it, the
-        // scrolloff's distance from its edges (but at the note's own first
-        // and last lines), as Vim moves it, rather than the view going back
-        // to the cursor.
-        if std::mem::take(&mut self.scrolled) && !rows.is_empty() {
-            let low = if ti == 0 {
-                0
-            } else {
-                (ti + so).min(rows.len() - 1)
+        let view = text.height as usize;
+        let so = SCROLLOFF.min(view.saturating_sub(1) / 2);
+        let center = std::mem::take(&mut self.editor.center);
+        let scrolled = std::mem::take(&mut self.scrolled);
+        if scrolled && !rows.is_empty() {
+            // The wheel moved the view: the cursor comes into it, onto the
+            // nearest line the view would stay still around (the
+            // scrolloff's rows from its edges, but at the note's own first
+            // and last lines), as Vim moves it, rather than the view going
+            // back to the cursor. Where lines wrap so tall that none is,
+            // any line shown whole does, and the view stays where the wheel
+            // put it.
+            let mut fit = Fit {
+                rows: &rows,
+                ctx: &ctx,
+                heights: std::collections::HashMap::new(),
+                view,
+                so,
             };
-            let (mut total, mut last) = (0, ti);
-            for (i, &r) in rows.iter().enumerate().skip(ti) {
-                total += *heights
-                    .entry(r)
-                    .or_insert_with(|| self.pieces(r, &ctx).len());
-                if total > text.height as usize {
+            let (mut whole, mut total) = (Vec::new(), 0);
+            for i in ti..rows.len() {
+                total += self.tall(&mut fit, i);
+                if total > view {
                     break;
                 }
-                last = i;
+                whole.push(i);
             }
-            let high = if last + 1 >= rows.len() {
-                last
-            } else {
-                last.saturating_sub(so)
+            let mut still = Vec::new();
+            for &i in &whole {
+                if self.settled(&mut fit, ti, i) == ti {
+                    still.push(i);
+                }
+            }
+            let within = if still.is_empty() { &whole } else { &still };
+            let want = match (within.first(), within.last()) {
+                (Some(&first), Some(&last)) => ci.clamp(first, last),
+                _ => ti,
             };
-            let want = ci.clamp(low, high.max(low));
             if want != ci {
-                ci = want;
                 self.editor.doc.row = rows[want];
                 self.editor.clamp();
                 ctx.cursor_row = rows[want];
             }
-        }
-        if ci < ti + so {
-            ti = ci.saturating_sub(so);
-        } else {
-            loop {
-                let end = (ci + so).min(rows.len() - 1);
-                let mut total = 0;
-                for &r in &rows[ti..=end] {
-                    let n = match heights.get(&r) {
-                        Some(n) => *n,
-                        None => {
-                            let n = self.pieces(r, &ctx).len();
-                            heights.insert(r, n);
-                            n
-                        }
-                    };
-                    total += n;
-                }
-                if total <= text.height as usize || ti >= ci {
-                    break;
-                }
-                ti += 1;
+        } else if !rows.is_empty() {
+            let mut fit = Fit {
+                rows: &rows,
+                ctx: &ctx,
+                heights: std::collections::HashMap::new(),
+                view,
+                so,
+            };
+            if center {
+                ti = self.centered(&mut fit, ci);
             }
+            ti = self.settled(&mut fit, ti, ci);
         }
         self.editor.top = rows.get(ti).copied().unwrap_or(0);
         // The rows on the screen, and the pictures near it, which the
@@ -747,6 +807,17 @@ fn tail_within(text: &str, cols: usize) -> String {
         tail.push(c);
     }
     std::iter::once('…').chain(tail.into_iter().rev()).collect()
+}
+
+/// The note's shown lines measured for scrolling: each one's height in rows
+/// of the screen, worked out once a draw, the view's height and the
+/// scrolloff.
+struct Fit<'a> {
+    rows: &'a [usize],
+    ctx: &'a Ctx,
+    heights: std::collections::HashMap<usize, usize>,
+    view: usize,
+    so: usize,
 }
 
 /// What drawing a note's lines works from.
