@@ -1,5 +1,5 @@
-# A release, from a tag `v<version>` pushed to GitHub: the three targets
-# built in release mode, each packed as switchboard-<version>-<target>.tar.gz
+# A release, from a version bump on main: the three targets built in release
+# mode, each packed as switchboard-<version>-<target>.tar.gz
 # (a folder of that name holding the binary) with its SHA-256 beside it in
 # <archive>.sha256, and all six published as a GitHub release whose notes are
 # the commits since the tag before (the newest of them and a link to the
@@ -7,12 +7,30 @@
 # the newest release's archive for their computer and refuse it unless its
 # checksum matches.
 #
-# The version is the tag's, and Cargo.toml's `version` has to say the same,
-# since the binary compares its own (CARGO_PKG_VERSION) with the releases'
-# to know when one is newer: bump Cargo.toml in a commit of its own
-# (`cargo check` updates Cargo.lock to match), then tag that commit and push
-# the tag (`git tag v0.2.0 && git push origin v0.2.0`). A tag that disagrees
-# with Cargo.toml fails the first job, and nothing is built or published.
+# The version is Cargo.toml's `version`, which the binary compares
+# (CARGO_PKG_VERSION) with the releases' to know when one is newer. Bump it
+# in a commit of its own (`cargo check` updates Cargo.lock to match): once
+# that commit is on main, the bump is the whole release. Every push to main
+# runs the first job, which reads the version and looks for its release on
+# GitHub. With the release there, as after any ordinary commit, nothing
+# else runs. With none, the commit that set the version is built, tagged
+# `v<version>` once every target has built (so a build that fails leaves no
+# tag) and published; a version tagged and not published, by a run that
+# failed after tagging or a tag pushed by hand whose run was dropped, is
+# built from its tag's commit and published by the next push to main. The
+# commit is found from main's history rather than taken to be the one
+# pushed, since the run of a bump waiting behind another release is dropped
+# for the run of a commit pushed after it, which then makes the bump's
+# release. The run of a tag pushed by hand for another version than main's
+# can be dropped the same way, and is run again from GitHub's Actions page. The tag is made here, in the run that
+# publishes, since one a workflow pushes with its own token starts no other
+# workflow.
+#
+# A tag pushed by hand (`git tag v0.2.0 && git push origin v0.2.0`) still
+# releases its commit: one that disagrees with Cargo.toml fails the first
+# job, and one whose release is already published builds nothing. Runs go
+# one at a time, so a push to main that follows a bump closely finds the
+# bump's release published rather than making it a second time.
 #
 # The binaries are built with SWITCHBOARD_RELEASE set, which lets the
 # server look for newer releases by itself (src/update); a binary built from
@@ -26,7 +44,12 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -37,26 +60,76 @@ env:
 
 jobs:
   version:
-    name: Tag and Cargo.toml agree
+    name: Whether this commit is a release
     runs-on: ubuntu-latest
     outputs:
+      release: ${{ steps.version.outputs.release }}
       version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Main's history, to find the commit that set the version.
+          fetch-depth: 0
       - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          version="${tag#v}"
           cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
-          if [ "$version" != "$cargo_version" ]; then
-            echo "::error::The tag says $version and Cargo.toml says $cargo_version; bump Cargo.toml and tag that commit."
+          if [ -z "$cargo_version" ]; then
+            echo "::error::Cargo.toml names no version."
             exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [ "$version" != "$cargo_version" ]; then
+              echo "::error::The tag says $version and Cargo.toml says $cargo_version; bump Cargo.toml and tag that commit."
+              exit 1
+            fi
+            commit=$(git rev-parse HEAD)
+          else
+            version="$cargo_version"
+            # The commit its tag names, when it has one (the last line is
+            # the commit of a tag with a message of its own). Asked on a
+            # line of its own, so the job fails when GitHub can't be asked,
+            # rather than taking that for no tag.
+            tagged=$(git ls-remote origin "refs/tags/v$version" "refs/tags/v$version^{}")
+            commit=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
+            if [ -z "$commit" ]; then
+              # Else the one that set the version: the oldest of main's
+              # latest commits to Cargo.toml that says it.
+              commit=$(git rev-parse HEAD)
+              for changed in $(git rev-list --first-parent HEAD -- Cargo.toml); do
+                said=$(git show "$changed:Cargo.toml" | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n 1)
+                [ "$said" = "$version" ] || break
+                commit="$changed"
+              done
+            fi
+          fi
+          # Published already, as after any ordinary commit to main: nothing
+          # to do. Only GitHub saying there is no such release counts as
+          # none.
+          release=true
+          if found=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v$version" --jq .tag_name 2>&1); then
+            echo "::notice::Switchboard $version is already published."
+            release=false
+          else
+            case "$found" in
+              *"HTTP 404"*) ;;
+              *) echo "::error::Couldn't ask GitHub for the release v$version: $found"; exit 1 ;;
+            esac
+          fi
+          echo "Version $version, set by $commit: release=$release"
+          {
+            echo "release=$release"
+            echo "version=$version"
+            echo "commit=$commit"
+          } >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.target }}
     needs: version
+    if: needs.version.outputs.release == 'true'
     strategy:
       fail-fast: true
       matrix:
@@ -80,6 +153,8 @@ jobs:
       SWITCHBOARD_RELEASE: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.commit }}
       - name: Install rustup in the container
         if: matrix.container
         run: |
@@ -135,17 +210,55 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  tag:
+    name: Tag the commit
+    needs: [version, build]
+    # A tag pushed by hand is there already; on main, so may this one be.
+    if: needs.version.outputs.release == 'true' && github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+      COMMIT: ${{ needs.version.outputs.commit }}
+    steps:
+      - name: Make the tag, or find it made on this commit
+        run: |
+          tag="v$VERSION"
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$tag" -f "sha=$COMMIT" > /dev/null; then
+            echo "Tagged $COMMIT as $tag."
+            exit 0
+          fi
+          # One there already is the same release when it names this
+          # commit (the last line is the commit
+          # of a tag with a message of its own).
+          tagged=$(git ls-remote "https://x-access-token:$GH_TOKEN@github.com/$GITHUB_REPOSITORY" \
+            "refs/tags/$tag" "refs/tags/$tag^{}")
+          there=$(printf '%s\n' "$tagged" | tail -n 1 | cut -f 1)
+          if [ "$there" != "$COMMIT" ]; then
+            echo "::error::Couldn't tag $COMMIT as $tag (the tag names '$there')."
+            exit 1
+          fi
+          echo "$tag is already on $COMMIT."
+
   publish:
     name: Publish the release
-    needs: [version, build]
+    needs: [version, build, tag]
+    # The tag job is skipped for a tag pushed by hand, which would skip this
+    # one with it.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.tag.result == 'success' || needs.tag.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      COMMIT: ${{ needs.version.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.commit }}
           # Every tag and commit, for the notes since the tag before.
           fetch-depth: 0
       - uses: actions/download-artifact@v4
@@ -160,12 +273,12 @@ jobs:
           sha256sum --check *.sha256
       - name: Write the notes from the commits since the tag before
         run: |
-          tag="${GITHUB_REF_NAME}"
-          previous=$(git describe --tags --abbrev=0 --match 'v*' "$tag^" 2>/dev/null || true)
+          tag="v$VERSION"
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$COMMIT^" 2>/dev/null || true)
           if [ -n "$previous" ]; then
-            range="$previous..$tag"
+            range="$previous..$COMMIT"
           else
-            range="$tag"
+            range="$COMMIT"
           fi
           git log --no-merges --format='- %s (%h)' "$range" > commits.md
           # GitHub refuses notes over 125,000 characters, and the first
@@ -192,7 +305,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release create "v$VERSION" dist/* \
             --title "Switchboard $VERSION" \
             --notes-file notes.md \
             --verify-tag

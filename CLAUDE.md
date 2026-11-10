@@ -101,7 +101,7 @@ A repository may define its own skill by one of these names, and Claude Code may
 
 This repository's `.claude/settings.json` runs `.claude/hooks/enforce-push-review.sh`, which refuses `git push --no-verify`, a push that names `hooksPath` and `switchboard setting review_before_push` with a value, and `.claude/hooks/enforce-git-hooks-run.sh`, which refuses `git commit --no-verify` (or `-n`) and any change to `core.hooksPath`, before every command, so they apply to any Claude working here and nowhere else. They read Claude Code's JSON with `jq`, which a clone working on Switchboard needs.
 
-A release is a tag `v<version>` matching `Cargo.toml`'s version: bump `Cargo.toml` in a commit of its own (`cargo check` updates `Cargo.lock`), then tag that commit. Pushing the tag is a push, and asked about as one.
+A release is a version bump on main: bump `Cargo.toml` in a commit of its own (`cargo check` updates `Cargo.lock`), and once that commit is on main `.github/workflows/release.yml`, finding no release of that version, builds it, tags it `v<version>` and publishes the release. So the bump's commit is the release: pushing or merging it publishes, and is asked about as the push to main it is. A tag `v<version>` pushed by hand to a commit whose `Cargo.toml` says the same still releases, and is a push, asked about as one.
 
 ## Pushing
 

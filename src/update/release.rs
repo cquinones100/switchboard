@@ -21,8 +21,8 @@ use serde_json::Value;
 use crate::integrations::github;
 use crate::net::{self, Audit, ErrorKind, ServiceError};
 
-/// The repository releases come from, the one the code lives in: a `v*`
-/// tag pushed there publishes one (.github/workflows/release.yml).
+/// The repository releases come from, the one the code lives in: a version
+/// bump on its main publishes one (.github/workflows/release.yml).
 /// install.sh's `REPO` and the README's install line and clone URL name it
 /// too, and change with it.
 pub const REPO: &str = "cquinones100/switchboard";
