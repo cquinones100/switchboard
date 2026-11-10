@@ -116,8 +116,9 @@ fn answer_json(out: &[u8]) -> Option<String> {
         .map(|_| text.to_string())
 }
 
-/// The hook's JSON: stdin when it is a pipe or a file. One run by hand at a
-/// terminal reads nothing, rather than waiting for input that won't come.
+/// The hook's JSON: stdin when it is a pipe, a socket (as Claude Code gives
+/// it) or a file. One run by hand at a terminal reads nothing, rather than
+/// waiting for input that won't come.
 fn read_input() -> Vec<u8> {
     let mut input = Vec::new();
     if socket::stdin_is_data() {

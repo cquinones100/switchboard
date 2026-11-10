@@ -284,8 +284,9 @@ fn exchange(stream: &mut UnixStream, msg: &ClientMsg) -> Result<(i32, Vec<u8>, V
     }
 }
 
-/// Whether a file descriptor holds data to pass on: a pipe or a regular
-/// file, not a terminal, a device or a socket.
+/// Whether a file descriptor holds data to pass on: a pipe, a socket (as
+/// Claude Code hands a hook its JSON) or a regular file, not a terminal or
+/// a device.
 fn is_data(fd: libc::c_int) -> bool {
     // SAFETY: fstat only fills the struct it is given; a closed descriptor
     // is an error, not undefined.
