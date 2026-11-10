@@ -533,9 +533,10 @@ impl Server {
             .collect();
         // How long since a key was last pressed in a client, which the Slack
         // relay folds into the desktop's reading as the server's own `away`
-        // does (src/presence.rs).
+        // does (src/presence.rs); since the server started, and `typed`
+        // false, until one has been.
         let idle_ms = u64::try_from(self.last_input.elapsed().as_millis()).unwrap_or(u64::MAX);
-        json!({ "sessions": sessions, "clients": clients, "idle_ms": idle_ms })
+        json!({ "sessions": sessions, "clients": clients, "idle_ms": idle_ms, "typed": self.typed })
     }
 
     fn cmd_new_tab(

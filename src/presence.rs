@@ -80,6 +80,18 @@ impl Desktop {
         self.with_keys_at(typed_ms, Instant::now())
     }
 
+    /// The last reading with what the workspace's server says folded in:
+    /// `since_ms` is how long since a key was pressed in one of its clients
+    /// when `typed`, and how long since the server started when none has
+    /// been. A key is folded in as `with_keys` does; the server's start is
+    /// no key, so it counts only where the desktop can't say how long
+    /// you've been idle, which would otherwise read as none at all.
+    pub fn with_workspace(&self, since_ms: f64, typed: bool) -> Presence {
+        let mut p = self.with_keys(typed.then_some(since_ms));
+        p.idle_ms = p.idle_ms.or(Some(since_ms));
+        p
+    }
+
     fn with_keys_at(&self, typed_ms: Option<f64>, now: Instant) -> Presence {
         let mut p = self.reading;
         let Some(typed) = typed_ms else {
@@ -163,6 +175,25 @@ mod tests {
         d.take(reading(None, None));
         assert_eq!(d.with_keys(Some(7_000.0)), reading(Some(7_000.0), None));
         assert_eq!(d.with_keys(None), reading(None, None));
+    }
+
+    #[test]
+    fn a_server_starting_is_no_key_but_stands_in_where_the_desktop_cant_say() {
+        let mut d = Desktop::default();
+        d.take(reading(Some(3.0 * 3_600_000.0), Some(false)));
+        let p = d.with_workspace(2_000.0, false);
+        assert_eq!(p, reading(Some(3.0 * 3_600_000.0), Some(false)));
+        assert!(away_by(&p, AFTER), "started with nobody at the computer");
+        assert!(!away_by(&d.with_workspace(2_000.0, true), AFTER), "a key");
+
+        d.take(reading(Some(3.0 * 3_600_000.0), Some(true)));
+        assert_eq!(d.with_workspace(0.0, false).locked, Some(true));
+
+        d.take(reading(None, None));
+        assert_eq!(
+            d.with_workspace(7_000.0, false),
+            reading(Some(7_000.0), None)
+        );
     }
 
     #[test]

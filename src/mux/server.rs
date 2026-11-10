@@ -352,8 +352,12 @@ pub struct Server {
     pub quit: bool,
     /// When a key was last pressed in any client, for telling whether you're
     /// here when the desktop can't see it: where it can't say, or the client
-    /// is on another computer.
+    /// is on another computer. The server's start until one is pressed.
     pub last_input: Instant,
+    /// Whether a key has been pressed in a client since the server started:
+    /// until one has, `last_input` is no key, and counts only where the
+    /// desktop can't say how long you've been idle.
+    pub typed: bool,
     /// The settings file's modification time when last read, so a change
     /// made in the Settings view or by hand takes effect on the next tick.
     settings_seen: Option<std::time::SystemTime>,
@@ -992,6 +996,7 @@ impl Server {
             next_pane: 1,
             quit: false,
             last_input: Instant::now(),
+            typed: false,
             settings_seen: None,
             presence: Default::default(),
             presence_asked: None,
@@ -1231,8 +1236,8 @@ impl Server {
         if self.clients.is_empty() {
             return true;
         }
-        let typed = self.last_input.elapsed().as_secs_f64() * 1000.0;
-        crate::presence::away_by(&self.presence.with_keys(Some(typed)), AWAY_MS)
+        let since = self.last_input.elapsed().as_secs_f64() * 1000.0;
+        crate::presence::away_by(&self.presence.with_workspace(since, self.typed), AWAY_MS)
     }
 
     /// The soonest a pane's held frame must be shown.
@@ -2125,6 +2130,7 @@ impl Server {
 
     fn input(&mut self, id: ClientId, bytes: &[u8]) {
         self.last_input = Instant::now();
+        self.typed = true;
         let parsed = match self.clients.get_mut(&id) {
             Some(c) => {
                 c.activity = Instant::now();

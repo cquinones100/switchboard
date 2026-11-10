@@ -155,11 +155,13 @@ impl Server {
 }
 
 /// How long since a key was last pressed in the workspace, in ms, as the
-/// running server says (`list`'s `idle_ms`), or `None` when it can't be
-/// asked.
-pub fn server_idle_ms() -> Option<f64> {
+/// running server says (`list`'s `idle_ms`), and whether one has been
+/// since it started (`typed`; a server a version behind doesn't say, and
+/// counted its start as one), or `None` when it can't be asked.
+pub fn server_idle_ms() -> Option<(f64, bool)> {
     let list: Value = serde_json::from_str(&Server::current().ask(&["list"]).ok()?).ok()?;
-    list.get("idle_ms").and_then(Value::as_f64)
+    let typed = list.get("typed").and_then(Value::as_bool).unwrap_or(true);
+    Some((list.get("idle_ms").and_then(Value::as_f64)?, typed))
 }
 
 impl Mux for Server {

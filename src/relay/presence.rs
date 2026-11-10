@@ -72,7 +72,10 @@ impl Presence {
                 let mut d = desktop.get();
                 d.take(reading);
                 desktop.set(d);
-                d.with_keys(typed)
+                match typed {
+                    Some((since_ms, typed)) => d.with_workspace(since_ms, typed),
+                    None => d.with_keys(None),
+                }
             })
         }))
     }
