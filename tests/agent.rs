@@ -398,26 +398,28 @@ fn a_compact_you_typed_that_fails_hands_the_tab_back_as_idle() {
     let mut client = server.attach(100, 30);
     client.wait_text("$");
     let (pane, pid) = first_pane(&server);
+    let now_ms = || jiff::Timestamp::now().as_millisecond();
+    // Idle, as Claude Code said when the last turn ended.
+    let before = now_ms();
     session_file(
         &server.home,
         pid,
-        json!({"sessionId": "compacted", "cwd": "/work"}),
+        json!({"sessionId": "compacted", "cwd": "/work", "status": "idle", "statusUpdatedAt": before}),
     );
-    let dir = server.home.join(".claude/projects/-work");
-    std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("compacted.jsonl");
-
-    say(
-        &file,
-        json!({"type": "user", "promptId": "p1", "message": {"content": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}),
-    );
+    std::thread::sleep(Duration::from_millis(1_100));
     hook(&server, &pane, "PreCompact", json!({"trigger": "manual"}));
     assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+    // Claude Code's word from before it began doesn't end it, past the
+    // sidebar's next read.
+    std::thread::sleep(Duration::from_millis(2_500));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
 
-    // It fails: no PostCompact runs, but its error is in the transcript.
-    say(
-        &file,
-        json!({"type": "user", "promptId": "p1", "message": {"content": "<local-command-stderr>Error compacting conversation</local-command-stderr>"}}),
+    // It fails, or you cancel it: no PostCompact runs, but Claude Code says
+    // the session is idle again.
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "compacted", "cwd": "/work", "status": "idle", "statusUpdatedAt": now_ms()}),
     );
     wait_list(&server, "the pane handed back", |l| {
         pane_of(l, &pane)["agent"]["state"].is_null()

@@ -584,8 +584,7 @@ impl Server {
     }
 
     /// A turn you interrupted, waiting on a request (denied, or Esc on it)
-    /// or working, or a /compact you typed that ended without compacting,
-    /// at `at_ms` (ms), read from the pane's transcript by the
+    /// or working, at `at_ms` (ms), read from the pane's transcript by the
     /// sidebar (`claude::Work::interrupted_at`), since no hook runs for it:
     /// the pane waiting or working since then or before goes idle, for the
     /// tab bar, the sidebar, M-a and the Slack relay, and one that has moved
@@ -594,6 +593,22 @@ impl Server {
     /// the Slack relay. Gives whether it changed.
     pub fn agent_interrupted(&mut self, pane: PaneId, at_ms: i64) -> bool {
         if !self.agents.interrupted(pane, at_ms) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
+        true
+    }
+
+    /// Claude Code says the pane's session went idle at `at_ms` (ms), read
+    /// from its session file by the sidebar (`claude::SessionRef::idle_since`):
+    /// a pane still working from before then, its conversation silent since,
+    /// goes idle (`Agents::went_idle`), for a turn that ended without a hook,
+    /// such as a /compact you typed that failed or that you cancelled. Gives
+    /// whether it changed.
+    pub fn agent_went_idle(&mut self, pane: PaneId, at_ms: i64) -> bool {
+        if !self.agents.went_idle(pane, at_ms) {
             return false;
         }
         if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {

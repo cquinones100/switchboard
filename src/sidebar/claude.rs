@@ -42,6 +42,9 @@ pub struct SessionInfo {
     pub entrypoint: String,
     pub job_id: String,
     pub parked_job_id: String,
+    /// When Claude Code said the session went idle (`status` `idle`, at its
+    /// `statusUpdatedAt`, ms), while it says so.
+    pub idle_since: Option<i64>,
 }
 
 impl SessionInfo {
@@ -62,6 +65,10 @@ impl SessionInfo {
             entrypoint: text("entrypoint").unwrap_or_default(),
             job_id: text("jobId").unwrap_or_default(),
             parked_job_id: text("parkedJobId").unwrap_or_default(),
+            idle_since: (text("status").as_deref() == Some("idle"))
+                .then(|| v.get("statusUpdatedAt").and_then(Value::as_f64))
+                .flatten()
+                .map(|n| n as i64),
         }
     }
 
@@ -81,6 +88,9 @@ pub struct SessionRef {
     /// The name it was given by you or a skill, not one derived.
     pub name: Option<String>,
     pub started_at: Option<i64>,
+    /// When Claude Code said the session it is now went idle (ms), while
+    /// it says so.
+    pub idle_since: Option<i64>,
 }
 
 /// The session shown for a pane, from the sessions whose processes are in
@@ -119,6 +129,7 @@ pub fn session_of(all: &[SessionInfo], front: &[&SessionInfo]) -> Option<Session
         cwd: current.cwd.clone().or_else(|| session.cwd.clone()),
         name: named,
         started_at: current.started_at.or(session.started_at),
+        idle_since: current.idle_since,
     })
 }
 
@@ -477,10 +488,6 @@ static MAY_MATTER: LazyLock<Regex> = LazyLock::new(|| {
 /// "[Request interrupted by user for tool use]" after a denied permission
 /// request, "[Request interrupted by user]" after Esc.
 const INTERRUPTED: &str = "[Request interrupted by user";
-/// How Claude Code records a /compact you typed, as a message of yours, and
-/// then what came of it, the next message, under the same prompt.
-const COMPACT_TYPED: &str = "<command-name>/compact</command-name>";
-const LOCAL_RESULT: &str = "<local-command-std";
 static LOCAL_COMMAND: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*<(local-command-|command-name>|command-message>|bash-)").expect("a regex")
 });
@@ -655,9 +662,8 @@ pub struct Work {
     /// The message of a turn an API error cut short, while nothing has been
     /// said since, and when it came (ms).
     pub api_error: Option<(String, i64)>,
-    /// When a turn you interrupted (a permission request denied, Esc) was,
-    /// or a /compact you typed ended (ms), while nothing has been said since:
-    /// neither runs a hook (the /compact when it fails or you cancel it).
+    /// When a turn you interrupted (a permission request denied, Esc) was
+    /// (ms), while nothing has been said since.
     pub interrupted_at: Option<i64>,
 }
 
@@ -700,11 +706,8 @@ struct Seen {
     crons: IndexMap<String, Cron>,
     wakeup: Option<Wakeup>,
     api_error: Option<(String, i64)>,
-    /// When a turn you interrupted was, or a /compact you typed ended, while
-    /// nothing has been said since.
+    /// When a turn you interrupted was, while nothing has been said since.
     interrupted: Option<i64>,
-    /// A /compact you typed whose result hasn't been read, by its prompt.
-    compacting: Option<String>,
 }
 
 fn timestamp_ms(entry: &Value) -> i64 {
@@ -793,14 +796,9 @@ impl Seen {
         // ("[Request interrupted by user for tool use]") and runs no hook
         // for, so the pane can be left waiting on the request. It stands
         // until anything else is said, by you or Claude, as an API error
-        // does; a tool's result (a denied call's) doesn't carry it on. A
-        // /compact you typed marks the tab working (PreCompact) and runs no
-        // hook when it fails or you cancel it, so its result, the message
-        // after it under the same prompt, ends it the same way; one that
-        // compacted has left the tab idle already (PostCompact).
+        // does; a tool's result (a denied call's) doesn't carry it on.
         let interrupt = !sidechain && line.contains(INTERRUPTED);
-        let compact = !sidechain && line.contains(COMPACT_TYPED);
-        if (self.interrupted.is_some() || self.compacting.is_some() || interrupt || compact)
+        if (self.interrupted.is_some() || interrupt)
             && !sidechain
             && (line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\""))
             && let Ok(entry) = serde_json::from_str::<Value>(line)
@@ -821,21 +819,10 @@ impl Seen {
             let results_only = content
                 .and_then(Value::as_array)
                 .is_some_and(|parts| parts.iter().all(|p| str_of(p.get("type")) == "tool_result"));
-            let yours = conversation && kind == "user";
-            let starts = |with: &str| text.is_some_and(|t| t.trim_start().starts_with(with));
-            let prompt = string_of(entry.get("promptId"));
-            if yours && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
+            if conversation && kind == "user" && text.is_some_and(|t| t.starts_with(INTERRUPTED)) {
                 self.interrupted = Some(timestamp_ms(&entry));
-                self.compacting = None;
-            } else if yours && starts(COMPACT_TYPED) {
-                self.interrupted = None;
-                self.compacting = Some(prompt);
-            } else if yours && starts(LOCAL_RESULT) && self.compacting.as_ref() == Some(&prompt) {
-                self.interrupted = Some(timestamp_ms(&entry));
-                self.compacting = None;
             } else if conversation && !results_only {
                 self.interrupted = None;
-                self.compacting = None;
             }
         }
         if !MAY_MATTER.is_match(line) {
@@ -1792,55 +1779,6 @@ mod tests {
     }
 
     #[test]
-    fn a_compact_you_typed_ends_with_its_result() {
-        let t = Transcript::new("compact");
-        let now = crate::util::now_ms();
-        let at = |ago: i64| iso(now - ago);
-        let typed = |ago: i64, prompt: &str| json!({"type": "user", "promptId": prompt, "timestamp": at(ago), "message": {"content": "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}});
-        let result = |ago: i64, prompt: &str, text: &str| json!({"type": "user", "promptId": prompt, "timestamp": at(ago), "message": {"content": text}});
-        let mut r = Reader::default();
-        let ended = |r: &mut Reader| {
-            r.background_work(&t.file, now - 60_000, now)
-                .unwrap()
-                .interrupted_at
-        };
-        // Failed: its error is its result.
-        t.add(&[typed(9_000, "p1")]);
-        assert_eq!(ended(&mut r), None, "still compacting");
-        t.add(&[result(
-            8_000,
-            "p1",
-            "<local-command-stderr>Error compacting conversation: overloaded</local-command-stderr>",
-        )]);
-        assert_eq!(ended(&mut r), Some(now - 8_000));
-        // The next prompt carries the conversation on.
-        t.add(&[result(7_000, "p2", "go on")]);
-        assert_eq!(ended(&mut r), None);
-        // Cancelled with Esc.
-        t.add(&[
-            typed(6_000, "p3"),
-            result(
-                5_000,
-                "p3",
-                "<local-command-stdout>Compaction canceled.</local-command-stdout>",
-            ),
-        ]);
-        assert_eq!(ended(&mut r), Some(now - 5_000));
-        // Another command's output, under a prompt of its own, says nothing
-        // of a /compact.
-        t.add(&[
-            result(4_000, "p4", "thanks"),
-            typed(3_000, "p5"),
-            result(
-                2_000,
-                "p6",
-                "<local-command-stdout>Set model to Opus</local-command-stdout>",
-            ),
-        ]);
-        assert_eq!(ended(&mut r), None);
-    }
-
-    #[test]
     fn a_monitor_watch_runs_through_its_events_until_it_expires() {
         let t = Transcript::new("watch");
         let now = crate::util::now_ms();
@@ -2305,8 +2243,25 @@ mod tests {
                 cwd: Some("/work".into()),
                 name: Some("Login retry".into()),
                 started_at: Some(1_700_000_000_000),
+                idle_since: None,
             })
         );
+        // When Claude Code says it went idle, while it says so.
+        let status = |status: &str| {
+            SessionInfo::from_json(
+                &json!({"pid": 111, "sessionId": "s1", "status": status, "statusUpdatedAt": 1_700_000_000_500_i64}),
+            )
+        };
+        let idle = status("idle");
+        assert_eq!(idle.idle_since, Some(1_700_000_000_500));
+        assert_eq!(
+            session_of(std::slice::from_ref(&idle), &[&idle])
+                .unwrap()
+                .idle_since,
+            Some(1_700_000_000_500)
+        );
+        assert_eq!(status("busy").idle_since, None);
+        assert_eq!(status("waiting").idle_since, None);
         assert_eq!(project_dir_name("/Users/me/my.repo"), "-Users-me-my-repo");
     }
 
