@@ -9,7 +9,7 @@
 //! onto a notification brings the window to the front on that one, and
 //! moving in the window moves the sidebar's cursor with it. j and k choose,
 //! Enter (or l) opens the chosen one's menu over it (mission control's
-//! `notice_choices`, as the Notifications view offers them), and Esc, q or
+//! `notice_menu`, the box the Notifications view opens for it), and Esc, q or
 //! h go back to the tab it was brought in front of. With Tab moving focus,
 //! Tab and Shift-Tab go round "‹ tabs" and the notifications, Enter pressing
 //! the one focused. The wheel chooses, and a click chooses one, opens the

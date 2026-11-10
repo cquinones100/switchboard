@@ -26,6 +26,7 @@ use ratatui::text::Span;
 use super::render::{Line, Owner};
 use super::text::{self, width};
 use crate::items::Item;
+use crate::mission::views::ViewId;
 use crate::mux::TabId;
 use crate::mux::server::ClientId;
 use crate::ui::Theme;
@@ -51,6 +52,45 @@ pub const ORDER: [&str; 9] = [
     "landed",
     "habits",
 ];
+
+/// The view a kind of notification is an item of, by its source: a Slack
+/// message is the Slack view's, an Inbox notification the Inbox's, the
+/// meeting about to start an event of the Calendar's. Its menu is that
+/// item's menu there (`mission::choices::notice_choices`), so a new kind
+/// that a view lists names its view here and lists no choices of its own.
+/// The kinds no view lists as an item are `NO_VIEW`'s.
+pub fn view_of(source: &str) -> Option<ViewId> {
+    match source {
+        "slack" => Some(ViewId::Slack),
+        "inbox" => Some(ViewId::Inbox),
+        "meeting" => Some(ViewId::Calendar),
+        _ => None,
+    }
+}
+
+/// The kinds no view lists as an item, which lead somewhere of their own
+/// (`mission::choices::notice_leads`): a change on the calendar (the
+/// Calendar lists the day's events, not what changed), a note written for
+/// you, what autopilot said and the landings it tells of (its view's rows
+/// are its tabs), and a suggestion.
+pub const NO_VIEW: [&str; 6] = [
+    "calendar",
+    "new-notes",
+    "autolanded",
+    "autopilot",
+    "landed",
+    "habits",
+];
+
+/// A notification as its view lists it, `item` under its own id: the
+/// meeting about to start as its event, which it carries.
+pub fn as_its_view_has_it(source: &str, item: &Item) -> Item {
+    let mut own = item.clone();
+    if source == "meeting" {
+        own.data = item.data.get("event").cloned().unwrap_or_default();
+    }
+    own
+}
 
 /// A source's place in `ORDER`.
 pub fn rank(source: &str) -> usize {
@@ -407,6 +447,14 @@ mod tests {
             summary("habits", &[change("Turn off the Slack view")]).0,
             "Suggestion: Turn off the Slack view"
         );
+        // Every kind says whose item it is, or that it is no view's.
+        for source in ORDER {
+            assert_ne!(
+                view_of(source).is_some(),
+                NO_VIEW.contains(&source),
+                "{source} names its view in view_of, or is in NO_VIEW"
+            );
+        }
         let mut sources = vec!["habits", "slack", "inbox", "meeting", "autopilot"];
         sources.sort_by_key(|s| rank(s));
         assert_eq!(

@@ -20,6 +20,7 @@ use crate::day::calendar::{self, CalEvent, Rsvp};
 use crate::items::{Item, Target};
 use crate::mux::{PaneId, TabId};
 use crate::sidebar::model::{MergeState, TabModel, TabState};
+use crate::sidebar::notices;
 use crate::sources::Waiter;
 use crate::usage::habits;
 use crate::worktree;
@@ -941,11 +942,62 @@ pub fn notice_opens(source: &str, item: &Item) -> Option<Do> {
     }
 }
 
-/// A notification's menu (daemon.js's `noticeChoices`): a suggestion's own
-/// choices; else what its view's menu does with it, then putting it away,
-/// which for a Slack message is the Slack view's own dismissing, worded as
-/// there. Whatever is picked but a suggestion's, the notification is dismissed
-/// after, since it was dealt with (`dismisses`).
+/// What a notification no view lists as an item leads to (`notices::NO_VIEW`):
+/// a new note opens in Notes and a calendar change opens the Calendar view
+/// (`notice_opens`), what autopilot said opens its view, a landing made
+/// without asking goes to its tab, while it is open, and to its plan; else
+/// what its target offers.
+fn notice_leads(source: &str, item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
+    if let Some(open) = notice_opens(source, item) {
+        let label = match &open {
+            Do::OpenNote(_) => "Open it in Notes",
+            _ => "Open the Calendar view",
+        };
+        return vec![choice('o', label, open)];
+    }
+    match source {
+        // Its line's own way there; putting it away is the notification's.
+        "autopilot" => crate::autopilot::line::notice_choices()
+            .into_iter()
+            .filter(|(_, _, act)| *act != crate::autopilot::Act::Dismiss)
+            .map(|(key, label, act)| choice(key, label, Do::Autopilot(act)))
+            .collect(),
+        "autolanded" => item
+            .data
+            .get("tab")
+            .and_then(Value::as_str)
+            .and_then(|t| t.parse::<TabId>().ok())
+            .filter(|t| ctx.tabs.iter().any(|m| m.id == *t))
+            .map(|t| choice('o', "Go to its tab", Do::GoTo(t)))
+            .into_iter()
+            // Its plan, where a hands-free tab wrote what it decided.
+            .chain(
+                item.data
+                    .get("plan")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                    .map(|p| choice('p', "Open its plan in Notes", Do::OpenNote(p.to_string()))),
+            )
+            .collect(),
+        _ => target_choices(item, ctx),
+    }
+}
+
+/// Whether a choice puts the item itself away: a notification's own
+/// dismissing, or its view's.
+pub fn puts_away(act: &Do) -> bool {
+    matches!(act, Do::Dismiss { .. } | Do::SlackDismiss(_))
+}
+
+/// A notification's menu (daemon.js's `noticeChoices`), built here for every
+/// kind: its item's menu in the view it came from (`notices::view_of`, the
+/// item as that view lists it), less what acts on everything the view shows,
+/// the notifications being put away one at a time; for a kind no view lists,
+/// what it leads to (`notice_leads`). Then putting it away: the view's own
+/// dismissing where its menu has one (a Slack message's, worded as there),
+/// else "Dismiss it". A suggestion has its habit's choices alone. Whatever is
+/// picked but a suggestion's, the notification is dismissed after, since it
+/// was dealt with (`dismisses`).
 pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let (source, id) = notice_of(item);
     if source == "habits" {
@@ -963,61 +1015,22 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             })
             .collect();
     }
-    if source == "autopilot" {
-        return crate::autopilot::line::notice_choices()
-            .into_iter()
-            .map(|(key, label, act)| choice(key, label, Do::Autopilot(act)))
-            .collect();
-    }
     let mut own = item.clone();
     own.id = id;
-    let mut out = if source == "autolanded" {
-        // A landing made without asking: its tab, while it is open.
-        item.data
-            .get("tab")
-            .and_then(Value::as_str)
-            .and_then(|t| t.parse::<TabId>().ok())
-            .filter(|t| ctx.tabs.iter().any(|m| m.id == *t))
-            .map(|t| vec![choice('o', "Go to its tab", Do::GoTo(t))])
-            .unwrap_or_default()
-            .into_iter()
-            // Its plan, where a hands-free tab wrote what it decided.
-            .chain(
-                item.data
-                    .get("plan")
-                    .and_then(Value::as_str)
-                    .filter(|p| !p.is_empty())
-                    .map(|p| choice('p', "Open its plan in Notes", Do::OpenNote(p.to_string()))),
-            )
-            .collect()
-    } else if let Some(open) = notice_opens(&source, item) {
-        vec![choice(
-            'o',
-            match &open {
-                Do::OpenNote(_) => "Open it in Notes",
-                _ => "Open the Calendar view",
-            },
-            open,
-        )]
-    } else {
-        match source.as_str() {
-            "inbox" => item_choices(&ViewId::Inbox, &own, &[], ctx),
-            // The Slack view's menu, less dismissing every message shown:
-            // the notifications are put away one at a time.
-            "slack" => item_choices(&ViewId::Slack, &own, &[], ctx)
+    let mut out = match notices::view_of(&source) {
+        Some(view) => {
+            let listed = notices::as_its_view_has_it(&source, &own);
+            // With nothing shown beside it, what acts on all shown acts on none.
+            let acts_on_all_shown =
+                |c: &Choice| matches!(&c.act, Do::SlackDismiss(all) if all.is_empty());
+            item_choices(&view, &listed, &[], ctx)
                 .into_iter()
-                .filter(|c| c.key != 'X')
-                .collect(),
-            // The Calendar view's menu on the meeting's event.
-            "meeting" => {
-                let mut event = own.clone();
-                event.data = own.data.get("event").cloned().unwrap_or_default();
-                item_choices(&ViewId::Calendar, &event, &[], ctx)
-            }
-            _ => target_choices(&own, ctx),
+                .filter(|c| !acts_on_all_shown(c))
+                .collect()
         }
+        None => notice_leads(&source, &own, ctx),
     };
-    let has_its_views_dismissing = out.iter().any(|c| matches!(c.act, Do::SlackDismiss(_)));
+    let has_its_views_dismissing = out.iter().any(|c| puts_away(&c.act));
     if !has_its_views_dismissing {
         out.push(choice(
             'x',
@@ -1029,6 +1042,39 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
         ));
     }
     out
+}
+
+/// What a menu shows above an item's choices in a view: a Slack message
+/// whole, since its row cuts it; a notification what the view it came from
+/// shows of its item, and one no view lists itself whole, having no view to
+/// be read in. So the Slack view, the Notifications view and the
+/// Notifications window draw one box for one item.
+pub fn item_body(view: &ViewId, item: &Item) -> Option<String> {
+    let body = match view {
+        ViewId::Slack => whole(item),
+        ViewId::Notifications => {
+            let (source, id) = notice_of(item);
+            let mut own = item.clone();
+            own.id = id;
+            return match notices::view_of(&source) {
+                Some(view) => item_body(&view, &notices::as_its_view_has_it(&source, &own)),
+                None => Some(whole(item)).filter(|b| !b.is_empty()),
+            };
+        }
+        _ => String::new(),
+    };
+    Some(body).filter(|b| !b.is_empty())
+}
+
+/// The Slack message an item's menu marks seen whatever is picked in it: the
+/// Slack view's item, or its notification.
+pub fn is_slack_message(view: &ViewId, item: &Item) -> bool {
+    let from_slack = match view {
+        ViewId::Slack => true,
+        ViewId::Notifications => notices::view_of(&notice_of(item).0) == Some(ViewId::Slack),
+        _ => false,
+    };
+    from_slack && item.data.get("message").is_some()
 }
 
 /// What a notification's menu puts away after whatever is picked in it:
@@ -1348,6 +1394,97 @@ mod tests {
         // One with no message to dismiss by keeps the plain way.
         let bare = Item::new("slack\tD1:1.6", "DM Ada · Slack");
         assert_eq!(keys(&notice_choices(&bare, &c)), "x");
+    }
+
+    // A view's new choice reaches its notifications by itself: for every
+    // kind that names its view, the notification's menu is the view's menu on
+    // the item as the view lists it, then putting it away.
+    #[test]
+    fn a_notifications_menu_is_its_items_menu_in_its_view_for_every_kind() {
+        let tabs = vec![tab(8, "AB-3: Do it")];
+        let repo = |_: &Path| Vec::new();
+        let c = ctx(&tabs, &repo);
+        let of = |source: &str| match source {
+            "slack" => Item::new("D1:1.5", "DM Ada · Slack")
+                .target(Target::Url("https://slack.example/m".into()))
+                .data(json!({ "kind": "dm", "old": false,
+                    "message": { "channel": "D1", "ts": "1.5" } })),
+            "inbox" => Item::new("n1", "AB-3 Do it")
+                .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
+                .data(json!({ "ticket": "AB-3", "notification": "n1" })),
+            "meeting" => Item::new("m1", "Standup in 5m").data(json!({ "kind": "meeting",
+                "event": { "title": "Standup", "join": "https://meet.example/x",
+                    "link": "https://calendar.example/e" } })),
+            other => panic!("{other} names a view: give this test an item of its kind"),
+        };
+        let mut with_a_view = 0;
+        for source in notices::ORDER {
+            let Some(view) = notices::view_of(source) else {
+                continue;
+            };
+            with_a_view += 1;
+            let own = of(source);
+            let mut notice = own.clone();
+            notice.id = format!("{source}\t{}", own.id);
+            let listed = notices::as_its_view_has_it(source, &own);
+            let shown = std::slice::from_ref(&listed);
+            let mut in_its_view = item_choices(&view, &listed, shown, &c);
+            assert!(!in_its_view.is_empty(), "{source}'s item has a menu there");
+            // What acts on everything the view shows stays the view's.
+            in_its_view.retain(|c| c.key != 'X');
+            if !in_its_view.iter().any(|c| puts_away(&c.act)) {
+                in_its_view.push(choice(
+                    'x',
+                    "Dismiss it",
+                    Do::Dismiss {
+                        source: source.to_string(),
+                        item: Box::new(own),
+                    },
+                ));
+            }
+            assert_eq!(notice_choices(&notice, &c), in_its_view, "{source}");
+            assert!(dismisses(&notice).is_some(), "{source} is put away after");
+        }
+        assert_eq!(with_a_view, 3);
+        // A kind no view lists leads somewhere of its own and can be put away.
+        let said = Item::new("autopilot\tsaid", "Nothing left to open");
+        let choices = notice_choices(&said, &c);
+        assert_eq!(keys(&choices), "ox");
+        assert!(matches!(&choices[1].act, Do::Dismiss { source, .. } if source == "autopilot"));
+        let closed = Item::new("landed\tabc", "Landed: Make the thing");
+        assert_eq!(keys(&notice_choices(&closed, &c)), "x");
+    }
+
+    // The menu's body is the view's rule for the item, wherever it is opened.
+    #[test]
+    fn a_menu_shows_above_its_choices_what_the_items_view_shows() {
+        let mut message = Item::new("D1:1.5", "DM Ada").detail("its first line");
+        message.lines = vec!["its first line".into(), "its second".into()];
+        let whole = Some("its first line\nits second".to_string());
+        assert_eq!(item_body(&ViewId::Slack, &message), whole);
+        let mut notice = message.clone();
+        notice.id = "slack\tD1:1.5".into();
+        assert_eq!(item_body(&ViewId::Notifications, &notice), whole);
+        // The Inbox shows nothing above an item's menu, so neither does its
+        // notification.
+        let inbox = Item::new("inbox\tn1", "AB-3 Do it").detail("Ada: a comment");
+        assert_eq!(item_body(&ViewId::Inbox, &inbox), None);
+        assert_eq!(item_body(&ViewId::Notifications, &inbox), None);
+        // One no view lists is read here alone.
+        let mut closed = Item::new("landed\tabc", "Landed: Make the thing");
+        closed.lines = vec!["Closed by autopilot once it landed".into()];
+        assert_eq!(
+            item_body(&ViewId::Notifications, &closed).as_deref(),
+            Some("Closed by autopilot once it landed")
+        );
+        assert!(is_slack_message(
+            &ViewId::Notifications,
+            &Item::new("slack\tD1:1.5", "DM").data(json!({ "message": {} }))
+        ));
+        assert!(!is_slack_message(
+            &ViewId::Notifications,
+            &Item::new("inbox\tn1", "AB-3").data(json!({ "message": {} }))
+        ));
     }
 
     #[test]

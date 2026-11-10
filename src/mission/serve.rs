@@ -1555,19 +1555,22 @@ impl Server {
             }
             return;
         }
-        let list = self.item_choices(&view.id, &item, &view.data.items);
+        self.item_menu(client, &view.id, item, &view.data.items);
+    }
+
+    /// An item's menu in a view, with what the view shows of the item above
+    /// its choices (`choices::item_body`): the one box the Slack view, the
+    /// Notifications view and the Notifications window draw for an item.
+    fn item_menu(&mut self, client: ClientId, view: &ViewId, item: Item, shown: &[Item]) {
+        let list = self.item_choices(view, &item, shown);
         if list.is_empty() {
             return;
         }
-        // A Slack message is shown whole above its choices, since the row
-        // cuts it: in the Slack view, and as a notification.
-        let is_slack_message = view.id == ViewId::Slack
-            || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack");
-        let body = is_slack_message.then(|| choices::whole(&item));
+        let body = choices::item_body(view, &item);
         // A Slack message acted on, whatever was picked, is seen.
-        let seen = is_slack_message && item.data.get("message").is_some();
+        let seen = choices::is_slack_message(view, &item);
         // A notification is dismissed after whatever is picked in its menu.
-        let dismiss = (view.id == ViewId::Notifications)
+        let dismiss = (*view == ViewId::Notifications)
             .then(|| choices::dismisses(&item))
             .flatten();
         let title = item.title.clone();
@@ -1607,20 +1610,10 @@ impl Server {
     }
 
     /// A notification's menu, over whatever is in front (the Notifications
-    /// window's Enter), as its row in the Notifications view opens it: its
-    /// whole message above what it leads to and putting it away. `item.id`
-    /// is `<source>\t<id>`, as that view gives it.
+    /// window's Enter), as its row in the Notifications view opens it.
+    /// `item.id` is `<source>\t<id>`, as that view gives it.
     pub(crate) fn notice_menu(&mut self, client: ClientId, item: Item) {
-        let list = self.item_choices(&ViewId::Notifications, &item, &[]);
-        if list.is_empty() {
-            return;
-        }
-        let body = choices::whole(&item);
-        let seen = choices::notice_of(&item).0 == "slack" && item.data.get("message").is_some();
-        let body = (!body.is_empty()).then_some(body);
-        let dismiss = choices::dismisses(&item);
-        let title = item.title.clone();
-        self.mission_menu(client, title, body, list, seen.then_some(item), dismiss);
+        self.item_menu(client, &ViewId::Notifications, item, &[]);
     }
 
     /// A menu of choices over mission control; the one taken is done. Its
@@ -1655,7 +1648,7 @@ impl Server {
                 server.slack_item_acted(item);
             }
             let label = c.label.clone();
-            let dismissed = matches!(c.act, Do::Dismiss { .. } | Do::SlackDismiss(_));
+            let dismissed = choices::puts_away(&c.act);
             server.mission_do(client, c.act, &label);
             if let Some((source, item)) = dismiss.filter(|_| !dismissed) {
                 server.notice_dismiss(&source, &item);

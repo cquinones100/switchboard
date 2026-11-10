@@ -779,3 +779,52 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
+
+// A notification no view lists as an item is shown whole above its choices
+// in the Notifications view, as the Notifications window shows it: a landing
+// made without asking says what it was, then leads to its tab.
+#[test]
+fn a_notification_no_view_lists_is_whole_above_its_choices() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let said = std::process::Command::new(common::BIN)
+        .args(["land-lock", "autolanded", "abc1234", "Make", "the", "thing"])
+        .current_dir(server.dir.path())
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", &pane)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        said.status.success(),
+        "{}",
+        String::from_utf8_lossy(&said.stderr)
+    );
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Landed abc1234: Make the thing");
+    client.type_text("\r");
+    let screen = client.wait_text("Dismiss it");
+    let all = screen.join("\n");
+    let row = |text: &str| {
+        screen
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{text} isn't shown: {all}"))
+    };
+    assert!(
+        row("Landed on the default branch without asking") < row("Go to its tab"),
+        "what it was above its choices: {all}"
+    );
+    assert!(row("Go to its tab") < row("Dismiss it"), "{all}");
+    pick(&mut client, "Dismiss it");
+    client.wait_text("No notifications.");
+}
