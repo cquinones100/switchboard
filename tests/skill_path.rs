@@ -332,6 +332,24 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
     ] {
         assert!(text.contains(shape), "{shape}");
     }
+    // The item's first line names the branch, the worktree and the tab,
+    // so step 6 keeps it to the outcome, and the reply quotes it.
+    let step = |number: usize| {
+        text.lines()
+            .skip_while(|l| !l.starts_with(&format!("{number}. **")))
+            .take_while(|l| !l.starts_with(&format!("{}. **", number + 1)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    for rule in [
+        "its first line the item's outcome",
+        "under 90 characters",
+        "Its first six words differ from every other item's",
+        "No file paths, line numbers, dates or screenshots",
+    ] {
+        assert!(step(6).contains(rule), "step 6: {rule}");
+    }
+    assert!(step(8).contains("the item's first line quoted as written"));
 }
 
 // test/skills.test.js's "a tab of autopilot lands without asking
