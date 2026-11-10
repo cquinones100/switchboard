@@ -126,6 +126,13 @@
     "default": true
   },
   {
+    "key": "autopilot_push_rule",
+    "category": "Sessions",
+    "label": "Autopilot's push allowed in auto mode",
+    "description": "A tab autopilot opens in a repository that lands straight on a branch starts its Claude with the landing's one push, git push origin HEAD:<branch>, allowed for that session, so Claude Code's auto mode doesn't refuse it; every other push and tab still asks. Off, the push is judged as any command is, and a tab landing without asking may stop at it",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",

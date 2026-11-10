@@ -26,6 +26,14 @@
 //! before notes had IDs, by the note's path, are brought to IDs once per
 //! repository (`id::migrate_claims`); one it can't place is listed, and
 //! still read by path.
+//!
+//! A tab of autopilot's in a repository landing straight on a branch starts
+//! its Claude with one permission for the session, the landing's own push
+//! (`push_rule`), since Claude Code's auto mode otherwise judges that push
+//! itself and may refuse it. It is passed on the command line
+//! (`claude --settings`), so it is in no file and no other session has it;
+//! the `wtn` function, which starts Claude itself, reads it back from
+//! `--settings-file`.
 
 use std::collections::HashSet;
 use std::fs;
@@ -132,32 +140,41 @@ fn usage() -> ExitCode {
 /// the cd-file after the first, since the item it carries can run to
 /// several. WT_PROMPT and WTN_NOTE, which /wtn sets on the pane it respawns,
 /// are passed on and cleared, so the note's path never has to be quoted into
-/// a command.
+/// a command. The settings Claude starts with (`push_rule`), when the
+/// command writes any, come back in a file of their own, so a function
+/// defined by an older build, which passes no `--settings-file`, reads the
+/// cd-file as it always did.
 pub fn shell_function() -> String {
     format!(
         r#"wtn() {{
-  local cdfile rc dir prompt
+  local cdfile settingsfile settings rc dir prompt
   local -a extra
   extra=()
   [ -n "${{WT_PROMPT:-}}" ] && extra+=(--prompt "$WT_PROMPT")
   [ -n "${{WTN_NOTE:-}}" ] && extra+=(--note "$WTN_NOTE")
   unset WT_PROMPT WTN_NOTE
   cdfile=$(mktemp) || return 1
-  {} --no-claude --cd-file "$cdfile" "${{extra[@]}}" "$@"
+  settingsfile=$(mktemp) || {{ rm -f "$cdfile"; return 1; }}
+  {} --no-claude --cd-file "$cdfile" --settings-file "$settingsfile" "${{extra[@]}}" "$@"
   rc=$?
   if [ $rc -ne 0 ]; then
-    rm -f "$cdfile"
+    rm -f "$cdfile" "$settingsfile"
     return $rc
   fi
   dir=$(sed -n 1p "$cdfile")
   prompt=$(sed -n '2,$p' "$cdfile")
-  rm -f "$cdfile"
+  settings=$(cat "$settingsfile")
+  rm -f "$cdfile" "$settingsfile"
   if [ ! -d "$dir" ]; then
     echo "wtn: expected a worktree directory, got: $dir" >&2
     return 1
   fi
   cd "$dir" || return 1
-  claude "$prompt"
+  if [ -n "$settings" ]; then
+    claude --settings "$settings" "$prompt"
+  else
+    claude "$prompt"
+  fi
 }}"#,
         worktree::self_command("worktree-from-note")
     )
@@ -675,7 +692,16 @@ pub fn tracked(root: &Path, branch: &str) -> Option<(String, String)> {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
-    let given = match Given::parse(&args, &["--prompt", "--note", "--item", "--target"]) {
+    let given = match Given::parse(
+        &args,
+        &[
+            "--prompt",
+            "--note",
+            "--item",
+            "--target",
+            "--settings-file",
+        ],
+    ) {
         Ok(g) => g,
         Err(flag) if flag == "--cd-file" => return worktree::fail("--cd-file requires a path"),
         Err(flag) => return worktree::fail(&format!("{flag} requires a value")),
@@ -920,30 +946,93 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     if !extra.is_empty() {
         prompt.push_str(&format!(" Also, from me for this item: {extra}"));
     }
+    let settings = push_rule(&path, &root, &start, target);
     // Read by the `wtn` function: line 1 the worktree, the rest the prompt.
     if let Some(cd_file) = &given.cd_file {
         worktree::write_cd_file(cd_file, &format!("{}\n{prompt}\n", path.display()))
             .map_err(|e| e.to_string())?;
     }
+    // Read by it too: the settings its Claude starts with, empty for none.
+    if let Some(settings_file) = given.last("--settings-file") {
+        fs::write(settings_file, settings.as_deref().unwrap_or_default())
+            .map_err(|e| format!("couldn't write {settings_file}: {e}"))?;
+    }
     if given.no_claude {
         return Ok(ExitCode::SUCCESS);
     }
-    Ok(worktree::run_in("claude", &[prompt], &path))
+    let args = match settings {
+        Some(settings) => vec!["--settings".to_string(), settings, prompt],
+        None => vec![prompt],
+    };
+    Ok(worktree::run_in("claude", &args, &path))
+}
+
+/// What the tab this runs in has an option set to, read from the server;
+/// `None` outside a pane, or with it unset.
+fn tab_option(option: &str) -> Option<String> {
+    if !crate::mux::socket::in_pane() {
+        return None;
+    }
+    let pane = std::env::var("SWITCHBOARD_PANE").ok();
+    let (code, out, _) =
+        crate::mux::socket::ask_quiet(vec!["show".into(), option.into()], pane, None)?;
+    let value = String::from_utf8_lossy(&out).trim().to_string();
+    (code == 0 && !value.is_empty()).then_some(value)
 }
 
 /// Whether the tab this runs in is one of autopilot's, hands-free
 /// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
 fn in_hands_free_tab() -> bool {
-    if !crate::mux::socket::in_pane() {
-        return false;
+    tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
+}
+
+/// The settings a tab of autopilot's starts its Claude with, for that
+/// session alone: the one push queue-and-clean's landing makes, allowed, so
+/// Claude Code's auto mode, which takes an allow rule before its own
+/// judgment, doesn't refuse a push the landing's checks already passed.
+/// Only in a tab autopilot opened (`@autopilot`), in a repository landing
+/// straight on a branch that is on a remote, with `autopilot_push_rule` on:
+/// every other tab and push is judged as before. Whether the tab lands
+/// without asking isn't read, since that is turned on and off while it
+/// works and the landing reads it just before the push.
+fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Option<String> {
+    if !crate::settings::is_on("autopilot_push_rule") {
+        return None;
     }
-    let pane = std::env::var("SWITCHBOARD_PANE").ok();
-    crate::mux::socket::ask_quiet(
-        vec!["show".into(), crate::autopilot::HANDS_FREE.into()],
-        pane,
-        None,
-    )
-    .is_some_and(|(code, out, _)| code == 0 && String::from_utf8_lossy(&out).trim() == "1")
+    tab_option(crate::autopilot::OPENED)?;
+    // The default branch on origin, which the item's branch starts from; a
+    // target, the remote branch it tracks. With no remote the landing moves
+    // a local branch, which needs no rule.
+    let (remote, branch) = match target {
+        Some(target) => tracked(root, target)?,
+        None => (
+            "origin".to_string(),
+            start.strip_prefix("origin/")?.to_string(),
+        ),
+    };
+    let settings = push_settings(&remote, &branch)?;
+    let lands_direct = crate::repos::landing_for(path, false).is_ok_and(|l| l.landing == "direct");
+    lands_direct.then_some(settings)
+}
+
+/// Claude Code's settings allowing `git push <remote> HEAD:<branch>`, the
+/// command queue-and-clean's step 11 runs, and nothing else; none for a
+/// name a permission rule could read as more than itself (a parenthesis, a
+/// space), which then asks as any push does.
+fn push_settings(remote: &str, branch: &str) -> Option<String> {
+    let plain = |name: &str| {
+        !name.is_empty()
+            && !name.starts_with('-')
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+    };
+    (plain(remote) && plain(branch)).then(|| {
+        serde_json::json!({
+            "permissions": { "allow": [format!("Bash(git push {remote} HEAD:{branch})")] }
+        })
+        .to_string()
+    })
 }
 
 /// What Claude does before building, as `wt`'s prompt has it for a ticket:
@@ -969,6 +1058,26 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_settings_allow_the_landings_one_push_and_none_for_a_name_a_rule_could_widen() {
+        assert_eq!(
+            push_settings("origin", "main").as_deref(),
+            Some(r#"{"permissions":{"allow":["Bash(git push origin HEAD:main)"]}}"#)
+        );
+        assert_eq!(
+            push_settings("team", "release/2.x").as_deref(),
+            Some(r#"{"permissions":{"allow":["Bash(git push team HEAD:release/2.x)"]}}"#)
+        );
+        for (remote, branch) in [
+            ("origin", "fix(ui)"),
+            ("origin", "--force"),
+            ("origin", ""),
+            ("my remote", "main"),
+        ] {
+            assert_eq!(push_settings(remote, branch), None, "{remote} {branch}");
+        }
+    }
 
     #[test]
     fn the_item_on_a_line_is_an_unticked_top_level_one_or_says_why_not() {

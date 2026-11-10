@@ -555,3 +555,155 @@ fn its_menu_sets_each_count_alone_and_changing_its_note_keeps_them() {
         (json!(4), json!(4), json!(20))
     );
 }
+
+/// What the stand-in claude was last started with, a line an argument.
+fn claude_args(home: &Path) -> String {
+    std::fs::read_to_string(home.join("claude-args")).unwrap_or_default()
+}
+
+/// `wtn --item <line>` on the note "Work", through its shell function as a
+/// tab runs it, in `repo`, from the pane given (none, outside a pane).
+fn wtn(server: &TestServer, notes: &Path, repo: &Path, pane: Option<&str>, more: &[&str]) {
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        &format!(
+            "eval \"$('{}' worktree-from-note init bash)\"; wtn \"$@\"",
+            common::BIN
+        ),
+        "wtn",
+        "--note",
+        "Work",
+    ])
+    .args(more)
+    .current_dir(repo)
+    .env("HOME", &server.home)
+    .env(
+        "PATH",
+        format!("{}:{path}", server.home.join("bin").display()),
+    )
+    .env("SWITCHBOARD_STATE_DIR", &server.state)
+    .env("NOTES_DIR", notes)
+    .env("GIT_CONFIG_NOSYSTEM", "1")
+    .env_remove("SWITCHBOARD")
+    .env_remove("SWITCHBOARD_PANE")
+    .env_remove("SWITCHBOARD_SETTINGS")
+    .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
+    .env_remove("WT_PROMPT")
+    .env_remove("WTN_NOTE");
+    if let Some(pane) = pane {
+        cmd.env("SWITCHBOARD", server.socket())
+            .env("SWITCHBOARD_PANE", pane);
+    }
+    let out = cmd.output().unwrap();
+    assert!(
+        out.status.success(),
+        "wtn {more:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_does() {
+    let notes = TempDir::new("sbn");
+    std::fs::write(
+        notes.path().join("Work.md"),
+        "# Work\n\n- [ ] One\n- [ ] Two\n- [ ] Three\n- [ ] Four\n- [ ] Five\n- [ ] Six\n",
+    )
+    .unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    let quiet = json!({"notifications": false, "tips": false, "github": false, "linear": false});
+    common::write_settings(&server.home, quiet.clone());
+    Claude::new()
+        .answer("printf '%s\\n' \"$@\" > \"$HOME/claude-args\"")
+        .install(&server.home.join("bin"));
+    // A repository with its main and a branch `feature` on origin, and a
+    // branch `local` that is on no remote.
+    let origin = server.home.join("origin.git");
+    std::fs::create_dir_all(&origin).unwrap();
+    git(&origin, &["init", "-q", "--bare"]);
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    git(&repo, &["push", "-q", "origin", "main", "main:feature"]);
+    git(&repo, &["fetch", "-q", "origin"]);
+    git(
+        &repo,
+        &["branch", "-q", "--track", "feature", "origin/feature"],
+    );
+    git(&repo, &["branch", "-q", "local"]);
+    let repo = repo.canonicalize().unwrap();
+    let lands = |way: &str| {
+        std::fs::write(
+            config.join("repos.json"),
+            json!({ repo.join(".git").to_str().unwrap(): { "landing": way } }).to_string(),
+        )
+        .unwrap();
+    };
+    lands("direct");
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let tab = server.list()["sessions"][0]["tabs"][0].clone();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    let allowed = |branch: &str| {
+        format!(
+            "--settings\n{{\"permissions\":{{\"allow\":[\"Bash(git push origin HEAD:{branch})\"]}}}}\nWork on this checklist item"
+        )
+    };
+
+    // A tab autopilot didn't open, and a run outside any pane: no rule.
+    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    let args = claude_args(&server.home);
+    assert!(args.starts_with("Work on this checklist item"), "{args}");
+    wtn(&server, notes.path(), &repo, None, &["--item", "4"]);
+    assert!(!claude_args(&server.home).contains("--settings"));
+
+    // Autopilot's tab: the push onto origin's default branch, and nothing
+    // else, allowed for the session.
+    server.ok(&["set", "-t", tab["id"].as_str().unwrap(), "@autopilot", "1"]);
+    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "5"]);
+    let args = claude_args(&server.home);
+    assert!(args.starts_with(&allowed("main")), "{args}");
+
+    // Landing on a target: the remote branch it tracks; a target on no
+    // remote lands by moving the local branch, which needs no rule.
+    wtn(
+        &server,
+        notes.path(),
+        &repo,
+        Some(&pane),
+        &["--item", "6", "--target", "feature"],
+    );
+    let args = claude_args(&server.home);
+    assert!(args.starts_with(&allowed("feature")), "{args}");
+    wtn(
+        &server,
+        notes.path(),
+        &repo,
+        Some(&pane),
+        &["--item", "7", "--target", "local"],
+    );
+    assert!(!claude_args(&server.home).contains("--settings"));
+
+    // A repository landing through a PR, and the setting off: no rule.
+    lands("pr");
+    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "8"]);
+    assert!(!claude_args(&server.home).contains("--settings"));
+    lands("direct");
+    let mut off = quiet;
+    off["autopilot_push_rule"] = json!(false);
+    common::write_settings(&server.home, off);
+    wtn(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    let args = claude_args(&server.home);
+    assert!(args.starts_with("Work on this checklist item"), "{args}");
+}
