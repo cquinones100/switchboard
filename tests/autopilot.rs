@@ -238,6 +238,61 @@ fn with_ux2_its_command_opens_the_board_and_m_or_its_button_opens_the_menu() {
 }
 
 #[test]
+fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
+    let (notes, note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
+    client.wait_text("Waiting on you");
+    // The first item's plan, in the plans folder beside the note, linked
+    // under it; the second item links none.
+    std::fs::create_dir_all(notes.path().join("Plans")).unwrap();
+    std::fs::write(
+        notes.path().join("Plans/Plan - First thing.md"),
+        "# Plan - First thing\n\nItem: \"First thing\"\n\n## Today\n\nNothing shows the plan.\n\n## Steps\n\n1. Draw it beside the board.\n",
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&note).unwrap();
+    std::fs::write(
+        &note,
+        text.replace(
+            "- [ ] First thing\n",
+            "- [ ] First thing\n  Plan: [[Plan - First thing]]\n",
+        ),
+    )
+    .unwrap();
+    // Wide enough for the pane beside the board's columns.
+    client.resize(230, 40);
+    // Down and up the board's cards until the pane beside it says `text`.
+    let mut seek = |text: &str| {
+        for step in 0..80 {
+            let screen = client.screen();
+            if screen.iter().any(|l| l.contains(text)) {
+                return screen;
+            }
+            client.type_text(if (step / 2) % 2 == 0 { "j" } else { "k" });
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        panic!("{text} never shown: {:#?}", client.screen());
+    };
+    let screen = seek("Plan - First thing");
+    let line_of = |s: &str| {
+        screen
+            .iter()
+            .position(|l| l.contains(s))
+            .unwrap_or_else(|| panic!("{s} in {screen:#?}"))
+    };
+    // Under the card's stages, without the plan's own heading and Item line.
+    assert!(line_of("leak check") < line_of("Plan - First thing"));
+    assert!(line_of("Plan - First thing") < line_of("Nothing shows the plan."));
+    assert!(line_of("Nothing shows the plan.") < line_of("1. Draw it beside the board."));
+    assert!(
+        !screen.iter().any(|l| l.contains("Item: \"First thing\"")),
+        "{screen:#?}"
+    );
+    // A card whose item links no plan says so.
+    seek("No plan");
+    drop(server);
+}
+
+#[test]
 fn turning_it_on_opens_a_tab_for_the_notes_next_item_then_the_next_until_none_is_left() {
     let (notes, note, server, mut client, repo) = set_up(json!({}));
     client.wait_text("AUTO Work");

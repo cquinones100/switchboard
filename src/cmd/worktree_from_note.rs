@@ -35,7 +35,7 @@
 //! the `wtn` function, which starts Claude itself, reads it back from
 //! `--settings-file`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -189,6 +189,9 @@ pub fn notes_dir() -> PathBuf {
 }
 
 static UNTICKED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^- \[ \] (.*\S.*)$").unwrap());
+static ITEM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^- \[[ xX]\] (.*\S.*)$").unwrap());
+static SUB_ITEM: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s+[-*+]\s+\[[ xX]\]\s").unwrap());
 static TICKED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^- \[[xX]\] ").unwrap());
 static PLAN_LINK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Plan: \[\[([^\]]+)\]\]").unwrap());
@@ -250,6 +253,127 @@ pub fn plan_file(dir: &Path, name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The plan note an item links, for the pane beside the Autopilot board:
+/// its file's name, and its words (`plan_body`), none when no note has the
+/// name.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlanNote {
+    pub name: String,
+    pub text: Option<String>,
+}
+
+/// A plan note's words for a pane its item already heads: without its ID,
+/// its `# Plan - …` heading and its `Item:` line.
+pub fn plan_body(text: &str) -> String {
+    let text = id::strip(text);
+    let mut lines = text.lines().skip_while(|l| l.trim().is_empty()).peekable();
+    if lines.peek().is_some_and(|l| l.starts_with("# ")) {
+        lines.next();
+    }
+    let mut lines = lines.skip_while(|l| l.trim().is_empty()).peekable();
+    if lines.peek().is_some_and(|l| l.starts_with("Item:")) {
+        lines.next();
+    }
+    lines.collect::<Vec<_>>().join("\n").trim().to_string()
+}
+
+/// Every note under `dir` by its name without `.md`, in the order
+/// `plan_file` looks through them, so the first of a name is the one it
+/// finds.
+fn note_files(dir: &Path, out: &mut HashMap<String, PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in &entries {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            note_files(&path, out);
+        } else if let Some(name) = file_name.strip_suffix(".md")
+            && path.is_file()
+        {
+            out.entry(name.to_string()).or_insert(path);
+        }
+    }
+}
+
+/// The note a line under an item names as its plan, read as Notes reads
+/// it (`notes::render::plan_of`): the line, after an optional bullet,
+/// starts with `Plan:` and holds a `[[…]]`, its name without the spaces
+/// around it.
+fn plan_line(line: &str) -> Option<String> {
+    let text = line.trim_start();
+    let text = text.strip_prefix("- ").unwrap_or(text);
+    let (_, after) = text.strip_prefix("Plan:")?.split_once("[[")?;
+    let (name, _) = after.split_once("]]")?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The plan an item's block links as its own: the first `Plan:` line under
+/// it that isn't a sub-item's, since a plan linked under a sub-item is the
+/// sub-item's, as Notes reads it; else a `Plan: [[…]]` on its own first
+/// line.
+fn own_plan(block: &str) -> Option<String> {
+    let indent_of = |line: &str| line.len() - line.trim_start().len();
+    let mut lines = block.split('\n');
+    let first = lines.next()?;
+    // The indent of the sub-item the lines are under, if any.
+    let mut sub: Option<usize> = None;
+    for line in lines {
+        if line.trim().is_empty() || sub.is_some_and(|s| indent_of(line) > s) {
+            continue;
+        }
+        sub = SUB_ITEM.is_match(line).then(|| indent_of(line));
+        if sub.is_none()
+            && let Some(name) = plan_line(line)
+        {
+            return Some(name);
+        }
+    }
+    PLAN_LINK
+        .captures(first)
+        .map(|m| m[1].trim().to_string())
+        .filter(|name| !name.is_empty())
+}
+
+/// The plan each top-level item of a note links (`Plan: [[…]]` on its line
+/// or under it), ticked or not, by the item's first line: the notes
+/// directory walked once and each plan read once, off the server's task,
+/// for the Autopilot board to show beside the item.
+pub fn plan_notes(notes: &Path, text: &str) -> HashMap<String, PlanNote> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let linked: Vec<(String, String)> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(at, line)| {
+            let first = ITEM.captures(line)?[1].trim().to_string();
+            let name = own_plan(&item_block(&lines, at))?;
+            Some((first, name))
+        })
+        .collect();
+    if linked.is_empty() {
+        return HashMap::new();
+    }
+    let mut files = HashMap::new();
+    note_files(notes, &mut files);
+    linked
+        .into_iter()
+        .map(|(first, name)| {
+            let text = files
+                .get(&name)
+                .and_then(|file| fs::read_to_string(file).ok())
+                .map(|text| plan_body(&text));
+            (first, PlanNote { name, text })
+        })
+        .collect()
 }
 
 /// The item's first line, when the line is an unticked item.
@@ -1094,6 +1218,45 @@ mod tests {
         assert_eq!(item_at(text, 10), Err("is in a section of parked work"));
         assert_eq!(item_at(text, 0), Err("isn't in the note"));
         assert_eq!(item_at(text, 99), Err("isn't in the note"));
+    }
+
+    #[test]
+    fn each_item_carries_the_plan_it_links_without_the_plans_heading_and_item_line() {
+        let dir = std::env::temp_dir().join(format!("sb-plan-notes-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("Plans")).unwrap();
+        fs::create_dir_all(dir.join(".trash")).unwrap();
+        fs::write(
+            dir.join("Plans/Plan - Stable IDs.md"),
+            "# Plan - Stable IDs\n\nItem: \"Give notes stable IDs\"\n\n## Today\n\nNotes are found by name.\n\n<!-- note-id: n-0123456789ab -->\n",
+        )
+        .unwrap();
+        fs::write(dir.join(".trash/Plan - Gone.md"), "# Plan - Gone\n").unwrap();
+        let note = "# Work\n\n- [ ] Give notes stable IDs\n  Context: see Plan: [[Plan - Gone]]\n  - Plan:  [[ Plan - Stable IDs ]]\n- [ ] No plan here\n- [x] Landed already\n  - [ ] A step under it\n    Plan: [[Plan - Stable IDs]]\n  Plan: [[Plan - Gone]]\n- [ ] Only a step has one\n  -  [ ] Its step\n    Plan: [[Plan - Stable IDs]]\n";
+        let plans = plan_notes(&dir, note);
+        assert_eq!(
+            plans.get("Give notes stable IDs"),
+            Some(&PlanNote {
+                name: "Plan - Stable IDs".into(),
+                text: Some("## Today\n\nNotes are found by name.".into()),
+            })
+        );
+        assert_eq!(plans.get("No plan here"), None);
+        assert_eq!(
+            plans.get("Landed already"),
+            Some(&PlanNote {
+                name: "Plan - Gone".into(),
+                text: None,
+            }),
+            "a ticked item's own link, past its sub-item's, its note in the trash not found"
+        );
+        assert_eq!(
+            plans.get("Only a step has one"),
+            None,
+            "a plan under a sub-item is the sub-item's"
+        );
+        assert_eq!(plans.len(), 2, "top-level items alone: {plans:?}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

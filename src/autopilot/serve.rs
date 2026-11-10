@@ -860,6 +860,7 @@ impl Server {
                 left: marked(&tab.opts, LEFT) || model.autopilot_landed,
                 autoland: model.autopilot_autoland,
                 closed: None,
+                in_note: !other_note,
             });
         }
         let now = util::now_ms();
@@ -883,6 +884,7 @@ impl Server {
                 left: true,
                 autoland: false,
                 closed: Some(l.clone()),
+                in_note: true,
             });
         }
         let summary = self.autopilot.pilot.summary(mode, self.away_now());
@@ -893,6 +895,7 @@ impl Server {
             &rows,
             &self.autopilot.pilot.next.queue,
             &skipped,
+            &self.autopilot.pilot.next.plans,
         ))
     }
 
@@ -1402,6 +1405,7 @@ impl Server {
                 .map(|i| i.text)
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
+            let plans = job.plans(&notes);
             let spent = if job.spend_limit > 0.0 {
                 crate::usage::sessions::spent_today(&state, util::now_ms())
             } else {
@@ -1411,6 +1415,7 @@ impl Server {
                 key: job.key,
                 text,
                 queue,
+                plans,
                 spent,
             }));
         });
@@ -1440,13 +1445,16 @@ impl Server {
                 key,
                 text,
                 queue,
+                plans,
                 spent,
             } => {
                 let changed = self.autopilot.pilot.next.text != text
                     || self.autopilot.pilot.next.queue != queue
+                    || self.autopilot.pilot.next.plans != plans
                     || self.autopilot.pilot.next.spent != spent;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
                 self.autopilot.pilot.next.queue = queue;
+                self.autopilot.pilot.next.plans = plans;
                 self.autopilot.pilot.next.spent = spent;
                 if changed {
                     self.autopilot_redraw();

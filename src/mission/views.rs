@@ -908,12 +908,20 @@ mod tests {
             left: false,
             autoland: false,
             closed: None,
+            in_note: true,
         };
         let view = View {
             id: ViewId::Autopilot,
             title: "Autopilot".into(),
             data: ViewData {
-                items: crate::autopilot::view::items(&summary, "", &[row], &["Later".into()], &[]),
+                items: crate::autopilot::view::items(
+                    &summary,
+                    "",
+                    &[row],
+                    &["Later".into()],
+                    &[],
+                    &std::collections::HashMap::new(),
+                ),
                 ..ViewData::default()
             },
             loaded: true,

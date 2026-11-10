@@ -943,24 +943,7 @@ fn board_cards(
     let chosen_item = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| view.data.items.get(c));
-    // The diagrams ready to draw as pictures, where the client draws them.
-    let images = m
-        .snap
-        .cell
-        .filter(|_| side_w > 0 && !m.snap.diagrams.is_empty())
-        .map(|cell| Images {
-            cell: (cell.0 as u32, cell.1 as u32),
-            rows: crate::ui::images::MARKS.len(),
-            ready: m
-                .snap
-                .diagrams
-                .iter()
-                .map(|(key, diagram)| {
-                    let id = crate::ui::images::id_of(&format!("mission/diagram/{key}"));
-                    (key.clone(), (id, diagram.image.dimensions()))
-                })
-                .collect(),
-        });
+    let images = ready_diagrams(m).filter(|_| side_w > 0);
     let about = chosen_item
         .filter(|_| side_w > 0)
         .map(|item| {
@@ -1382,6 +1365,27 @@ fn week_words(item: &Item, tickets: bool, now_secs: i64) -> String {
         .join(" · ")
 }
 
+/// The diagrams ready to draw as pictures in the pane beside a board,
+/// where the client draws them.
+fn ready_diagrams(m: &Mission) -> Option<Images> {
+    m.snap
+        .cell
+        .filter(|_| !m.snap.diagrams.is_empty())
+        .map(|cell| Images {
+            cell: (cell.0 as u32, cell.1 as u32),
+            rows: crate::ui::images::MARKS.len(),
+            ready: m
+                .snap
+                .diagrams
+                .iter()
+                .map(|(key, diagram)| {
+                    let id = crate::ui::images::id_of(&format!("mission/diagram/{key}"));
+                    (key.clone(), (id, diagram.image.dimensions()))
+                })
+                .collect(),
+        })
+}
+
 /// How wide a screen shows the chosen item's description beside the board,
 /// and how many columns it takes there.
 const SIDE_AT: usize = 140;
@@ -1414,19 +1418,22 @@ struct About {
 
 /// The description the board draws beside its columns now, and the place
 /// its Markdown is read for (`Markdown::parse`): the chosen PR's or
-/// ticket's, on a screen wide enough for the pane.
+/// ticket's, or the plan of the Autopilot board's chosen item, on a screen
+/// wide enough for the pane.
 pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
     let view = m.current()?;
-    let (field, place) = match view.id {
-        ViewId::Prs => ("body", crate::views::pr::PLACE),
-        ViewId::Tickets => ("description", crate::views::ticket::PLACE),
+    let (field, place, side_at) = match view.id {
+        ViewId::Prs => ("body", crate::views::pr::PLACE, SIDE_AT),
+        ViewId::Tickets => ("description", crate::views::ticket::PLACE, SIDE_AT),
+        ViewId::Autopilot => ("plan", PLAN_PLACE, PILOT_SIDE_AT),
         _ => return None,
     };
+    let is_a_board = view.columns().is_some() || view.id == ViewId::Autopilot;
     let board_with_the_pane = m.snap.rules.ux2
-        && view.columns().is_some()
+        && is_a_board
         && view.data.setup.is_none()
         && view.loaded
-        && m.size.0 as usize >= SIDE_AT;
+        && m.size.0 as usize >= side_at;
     if !board_with_the_pane {
         return None;
     }
@@ -2266,6 +2273,9 @@ fn stage_rows(
 pub const PILOT_BOARD_AT: usize = 108;
 const PILOT_SIDE_AT: usize = 152;
 const PILOT_SIDE_W: usize = 44;
+/// Where a diagram of a plan that can't be drawn beside the board is shown
+/// properly (`Markdown::parse`).
+const PLAN_PLACE: &str = "its plan note in Notes";
 
 /// A meter the board places as an image atom (src/ui/images.rs) once its
 /// lines are drawn: where it starts and how wide, how full, in what color.
@@ -2307,7 +2317,8 @@ fn pilot_tone(item: &Item) -> Tone {
 /// item's card, in the last column, is its first line dim over two lines
 /// and "skipped by you", with no meter. On a screen
 /// `PILOT_SIDE_AT` wide the chosen item sits beside it in full, with its
-/// stages.
+/// stages and its plan under them, and the diagrams the plan draws as
+/// pictures come back, for the frame to place.
 #[allow(clippy::too_many_arguments)]
 fn pilot_board(
     view: &View,
@@ -2317,7 +2328,7 @@ fn pilot_board(
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
     meters: &mut Vec<Meter>,
-) {
+) -> Vec<Picture> {
     const TALL: usize = 6;
     const SPEND_W: usize = 12;
     let theme = &m.snap.theme;
@@ -2399,9 +2410,20 @@ fn pilot_board(
         .ok()
         .and_then(|c| items.get(c))
         .filter(|_| side_w > 0)
-        .map(|item| pilot_about(item, side_w, theme))
+        .map(|item| pilot_about(item, side_w, body, theme, ready_diagrams(m).as_ref()))
         .unwrap_or_default();
     let board_w = cols - side_w;
+    // Each picture where the pane's lines put it on the screen.
+    let pictures = about
+        .pictures
+        .iter()
+        .map(|p| Picture {
+            x: p.x + (board_w + 2) as u16,
+            y: p.y + lines.len() as u16,
+            ..p.clone()
+        })
+        .collect();
+    let about = about.lines;
     let columns = crate::autopilot::view::COLUMNS;
     let col_w = board_w / columns.len();
     let w = col_w - 1;
@@ -2560,12 +2582,24 @@ fn pilot_board(
         }
         lines.push(Line { spans, fill: None });
     }
+    pictures
 }
 
 /// The chosen item beside the board: its first line in full, bold and
 /// wrapped, where it stands dim, a rule, then a tab's eight stages, each
-/// its name and its words in its stage's color.
-fn pilot_about(item: &Item, side_w: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+/// its name and its words in its stage's color; under them, for a card, a
+/// rule and its plan, as a ticket's description sits beside the Tickets
+/// board: the plan note's name dim, then its Markdown, cut at the pane's
+/// bottom. A card whose item links no plan says so, faint, and so does one
+/// whose plan note isn't there, and a tab left from a note worked before,
+/// whose plans aren't read.
+fn pilot_about(
+    item: &Item,
+    side_w: usize,
+    body: usize,
+    theme: &Theme,
+    images: Option<&Images>,
+) -> About {
     let inner = side_w.saturating_sub(3);
     let name = item
         .data
@@ -2585,15 +2619,17 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme) -> Vec<Vec<Span<'stati
     for l in text::wrap(&detail, inner) {
         out.push(vec![Span::styled(l, fg(theme.dim))]);
     }
-    let Some(stages) = item
+    let stages = item
         .data
         .pointer("/pilot/stages")
-        .and_then(serde_json::Value::as_array)
-    else {
-        return out;
-    };
-    out.push(vec![kit::rule(inner, theme)]);
-    for (name, cell) in crate::autopilot::view::STAGES.iter().zip(stages) {
+        .and_then(serde_json::Value::as_array);
+    if stages.is_some() {
+        out.push(vec![kit::rule(inner, theme)]);
+    }
+    for (name, cell) in crate::autopilot::view::STAGES
+        .iter()
+        .zip(stages.into_iter().flatten())
+    {
         let look = cell
             .get(0)
             .and_then(serde_json::Value::as_str)
@@ -2607,7 +2643,44 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme) -> Vec<Vec<Span<'stati
             Span::styled(words.to_string(), Stage::named(look).tone().style(theme)),
         ]);
     }
-    out
+    let is_a_card = item.group.is_some();
+    if !is_a_card {
+        out.truncate(body);
+        return About {
+            lines: out,
+            pictures: Vec::new(),
+        };
+    }
+    out.push(vec![kit::rule(inner, theme)]);
+    let plan_name = item.data["planName"].as_str();
+    let said = |words: String, tone: Color, out: &mut Vec<Vec<Span<'static>>>| {
+        for l in text::wrap(&words, inner) {
+            out.push(vec![Span::styled(l, fg(tone))]);
+        }
+    };
+    match (plan_name, item.data["plan"].as_str()) {
+        (Some(name), Some(plan)) if !plan.trim().is_empty() => {
+            said(name.to_string(), theme.dim, &mut out);
+            out.push(Vec::new());
+            with_description(out, plan, PLAN_PLACE, inner, body, theme, images)
+        }
+        (name, plan) => {
+            let words = match (name, plan) {
+                (Some(name), None) => format!("Plan not found: {name}"),
+                (Some(name), Some(_)) => format!("Nothing in {name} yet"),
+                (None, _) if item.data["planElsewhere"] == true => {
+                    "Its plan is with another note".to_string()
+                }
+                (None, _) => "No plan".to_string(),
+            };
+            said(words, theme.faint, &mut out);
+            out.truncate(body);
+            About {
+                lines: out,
+                pictures: Vec::new(),
+            }
+        }
+    }
 }
 
 impl Row {
@@ -2884,7 +2957,8 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
 
 /// The screen as `screen` draws it, with what is placed over it as images:
 /// the meters (the Autopilot board's) and the pictures (the diagrams of the
-/// description beside the PR and ticket boards).
+/// description beside the PR and ticket boards, and of the plan beside the
+/// Autopilot board).
 pub fn drawn(
     m: &Mission,
     cols: usize,
@@ -3075,7 +3149,7 @@ pub fn drawn(
                 && v.data.setup.is_none()
                 && !v.data.items.is_empty();
             if pilot_board_shown {
-                pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+                pictures = pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if let Some(columns) = v.columns() {
                 if v.data.setup.is_some() || !v.loaded {
                     list(v, cols, rows, m, 0, &mut lines, &mut hits);
@@ -4132,6 +4206,7 @@ mod tests {
             left: false,
             autoland: false,
             closed: None,
+            in_note: true,
         }
     }
 
@@ -4140,7 +4215,14 @@ mod tests {
         let rows: Vec<_> = (1..=10)
             .map(|n| pilot_row(n, &format!("item-{n}"), TabState::Working))
             .collect();
-        let list = crate::autopilot::view::items(&pilot_summary(), "", &rows, &[], &[]);
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &[],
+            &[],
+            &std::collections::HashMap::new(),
+        );
         let last = list
             .iter()
             .position(|i| i.title.contains("item-10"))
@@ -4178,20 +4260,68 @@ mod tests {
             &rows,
             &["Third".into(), "Fourth".into()],
             &["Old idea".into()],
+            &std::collections::HashMap::from([
+                (
+                    "Give notes stable IDs".to_string(),
+                    crate::cmd::worktree_from_note::PlanNote {
+                        name: "Plan - Stable IDs".into(),
+                        text: Some(
+                            "## Today\n\nNotes are found by name.\n\n## Steps\n\n1. Give each a line of its own."
+                                .into(),
+                        ),
+                    },
+                ),
+                (
+                    "Third".to_string(),
+                    crate::cmd::worktree_from_note::PlanNote {
+                        name: "Plan - Third".into(),
+                        text: None,
+                    },
+                ),
+            ]),
         );
-        let chosen = list
-            .iter()
-            .position(|i| i.title == "Give notes stable IDs")
-            .unwrap();
+        let at_title = |title: &str| list.iter().position(|i| i.title == title).unwrap();
+        let chosen = at_title("Give notes stable IDs");
+        let (no_plan, plan_missing) = (at_title("Port the PR board"), at_title("1. Third"));
         let mut m = mission(
             Vec::new(),
             vec![list_view(ViewId::Autopilot, "Autopilot", list)],
         );
         m.snap.rules.ux2 = true;
         m.view = 1;
+        m.size = (160, 30);
+        // A card whose item links no plan says so, and so does one whose
+        // plan note isn't there; the heading says nothing of a plan.
+        let beside = |m: &mut Mission, cursor: usize| {
+            m.cursor = cursor as isize;
+            texts(&drawn(m, 160, 30).0).join("\n")
+        };
+        let pane = beside(&mut m, no_plan);
+        assert!(pane.contains("No plan"), "{pane}");
+        assert!(description_beside(&m).is_none());
+        let pane = beside(&mut m, plan_missing);
+        assert!(pane.contains("Plan not found: Plan - Third"), "{pane}");
+        let pane = beside(&mut m, 0);
+        assert!(!pane.contains("No plan"), "{pane}");
         m.cursor = chosen as isize;
         let (lines, _, meters, _) = drawn(&m, 160, 30);
         let text = texts(&lines);
+        // The chosen card's plan under its stages: the plan note's name,
+        // then its Markdown, which is the text its diagrams are asked for.
+        let line_of = |s: &str| {
+            text.iter()
+                .position(|l| l.contains(s))
+                .unwrap_or_else(|| panic!("{s} in {text:#?}"))
+        };
+        assert!(line_of("closed") < line_of("Plan - Stable IDs"));
+        assert!(line_of("Plan - Stable IDs") < line_of("Today"));
+        assert!(line_of("Today") < line_of("Notes are found by name."));
+        assert!(line_of("Notes are found by name.") < line_of("Give each a line of its own."));
+        let (plan, _) = description_beside(&m).expect("the plan beside the board");
+        assert!(plan.starts_with("## Today"), "{plan}");
+        m.size = (140, 30);
+        assert!(description_beside(&m).is_none(), "too narrow for the pane");
+        m.size = (160, 30);
         let at = text
             .iter()
             .position(|l| l.contains("AUTO Switchboard"))

@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use super::line::Summary;
 use super::mode::{Mode, note_title};
 use super::place::{Kind, Mine, kind_of};
-use crate::cmd::worktree_from_note::{Item, queue};
+use crate::cmd::worktree_from_note::{Item, PlanNote, plan_notes, queue};
 use crate::mux::TabId;
 use crate::notes::id;
 use crate::util;
@@ -107,6 +107,9 @@ pub struct Next {
     /// The items it will open, in that order, for its view (the first is
     /// `text`), at most `QUEUE_SHOWN`.
     pub queue: Vec<String>,
+    /// The plan each of the note's items links, by the item's first line,
+    /// read with them for the board's side panel.
+    pub plans: HashMap<String, PlanNote>,
     /// Today's spend, read with them while there is a spend limit.
     pub spent: f64,
 }
@@ -176,6 +179,13 @@ impl Job {
             self.with_choices,
             &crate::cmd::worktree_from_note::claims_in(state),
         )
+    }
+
+    /// The plan each item of the note links, by the item's first line.
+    pub fn plans(&self, notes: &Path) -> HashMap<String, PlanNote> {
+        std::fs::read_to_string(notes.join(&self.note))
+            .map(|text| plan_notes(notes, &text))
+            .unwrap_or_default()
     }
 
     /// The look for the next item to open: nothing once today's spend has
@@ -770,6 +780,7 @@ impl Pilot {
             at: now_ms,
             key,
             queue: Vec::new(),
+            plans: HashMap::new(),
             spent: 0.0,
         };
     }

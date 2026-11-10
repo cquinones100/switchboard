@@ -23,12 +23,16 @@
 //! the tab works and no phase names them, the leak check until the lock is
 //! asked for, and closing while the tab is open. The next items are the
 //! queue the mode last read for its line (`Pilot::next`), off the server's
-//! task, never read here.
+//! task, never read here; the plan each item links was read with them, and
+//! goes on its card for the side panel to show under its stages.
+
+use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
 use super::line::Summary;
 use super::mode::Landed;
+use crate::cmd::worktree_from_note::PlanNote;
 use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::sidebar::model::TabState;
@@ -81,6 +85,9 @@ pub struct Row {
     pub autoland: bool,
     /// For a landing whose tab is closed, what the mode kept of it.
     pub closed: Option<Landed>,
+    /// Its item is in the note the mode works now, whose plans were read:
+    /// not so for a tab still open from a note worked before.
+    pub in_note: bool,
 }
 
 /// A stage cell: its look (`done`, `running`, `waiting`, `queued`,
@@ -246,18 +253,38 @@ fn why_paused(s: &Summary, said: &str) -> Vec<String> {
     out
 }
 
+/// A card's data with its item's plan: `planName`, the plan note's name,
+/// and `plan`, its Markdown; the name alone when no note has it, neither
+/// for an item that links no plan. A tab of a note worked before, whose
+/// plans weren't read, gets `planElsewhere` instead (`elsewhere`).
+fn elsewhere(mut data: Value) -> Value {
+    data["planElsewhere"] = json!(true);
+    data
+}
+
+fn with_plan(mut data: Value, plans: &HashMap<String, PlanNote>, item: &str) -> Value {
+    if let Some(plan) = plans.get(item) {
+        data["planName"] = json!(plan.name);
+        if let Some(text) = &plan.text {
+            data["plan"] = json!(text);
+        }
+    }
+    data
+}
+
 /// The view's items: the heading, the next items under a heading the
 /// cursor passes over, a row per tab under one too, in its column's order
 /// and, within a column, the least far along first, then the skipped ones
 /// under a heading, the board's last column. Every item on the board has
-/// its column as its `group`; the headings, in none, lead the plain list a
-/// narrow screen shows.
+/// its column as its `group`, and the plan its item links (`with_plan`);
+/// the headings, in none, lead the plain list a narrow screen shows.
 pub fn items(
     s: &Summary,
     said: &str,
     rows: &[Row],
     next: &[String],
     skipped: &[String],
+    plans: &HashMap<String, PlanNote>,
 ) -> Vec<Item> {
     let mut facts = Vec::new();
     // Where its tabs land, when not the repository's default branch.
@@ -308,7 +335,11 @@ pub fn items(
             out.push(
                 Item::new(format!("next:{text}"), format!("{}. {text}", at + 1))
                     .group(COLUMNS[0])
-                    .data(json!({ "next": text, "place": at + 1, "mode": pilot })),
+                    .data(with_plan(
+                        json!({ "next": text, "place": at + 1, "mode": pilot }),
+                        plans,
+                        text,
+                    )),
             );
         }
     }
@@ -354,7 +385,14 @@ pub fn items(
             Some(_) => item,
             None => item.target(Target::Tab(r.tab)),
         };
-        out.push(item.data(json!({
+        let data = |data: Value| {
+            if r.in_note {
+                with_plan(data, plans, &r.item)
+            } else {
+                elsewhere(data)
+            }
+        };
+        out.push(item.data(data(json!({
             "pilot": {
                 "tab": r.tab.to_string(),
                 "index": r.index,
@@ -366,7 +404,7 @@ pub fn items(
                 "left": r.left,
             },
             "mode": pilot,
-        })));
+        }))));
     }
     if !skipped.is_empty() {
         out.push(
@@ -378,7 +416,11 @@ pub fn items(
                 Item::new(format!("skipped:{text}"), text.clone())
                     .detail("skipped by you from autopilot's menu")
                     .group(COLUMNS[5])
-                    .data(json!({ "skipped": text, "mode": pilot })),
+                    .data(with_plan(
+                        json!({ "skipped": text, "mode": pilot }),
+                        plans,
+                        text,
+                    )),
             );
         }
     }
@@ -402,6 +444,7 @@ mod tests {
             left: false,
             autoland: false,
             closed: None,
+            in_note: true,
         }
     }
 
@@ -434,6 +477,73 @@ mod tests {
     }
 
     #[test]
+    fn a_card_carries_its_items_plan_the_name_alone_when_its_note_is_missing() {
+        let plans = HashMap::from([
+            (
+                "Give notes stable IDs".to_string(),
+                PlanNote {
+                    name: "Plan - Stable IDs".into(),
+                    text: Some("## Today\n\nFound by name.".into()),
+                },
+            ),
+            (
+                "Next".to_string(),
+                PlanNote {
+                    name: "Plan - Next".into(),
+                    text: None,
+                },
+            ),
+        ]);
+        let s = Summary {
+            note: "Work".into(),
+            busy: 1,
+            open: 1,
+            slots: 2,
+            cap: 5,
+            next: String::new(),
+            paused: false,
+            away: false,
+            ready_only: false,
+            skipped: 1,
+            spend_limit: 0.0,
+            spent: 0.0,
+            lands_alone: false,
+            hands_free: false,
+            target: String::new(),
+            drained: false,
+        };
+        let mut other = row(TabState::Working);
+        other.tab = TabId(5);
+        other.in_note = false;
+        let items = items(
+            &s,
+            "",
+            &[row(TabState::Working), other],
+            &["Next".into()],
+            &["Old".into()],
+            &plans,
+        );
+        let of = |id: &str| &items.iter().find(|i| i.id == id).unwrap().data;
+        // A tab left from a note worked before has none of this note's
+        // plans, though its item's first line is the same.
+        let left = of("pilot:@5");
+        assert!(left.get("planName").is_none(), "{left}");
+        assert_eq!(left["planElsewhere"], true);
+        let tab = of("pilot:@4");
+        assert_eq!(tab["planName"], "Plan - Stable IDs");
+        assert_eq!(tab["plan"], "## Today\n\nFound by name.");
+        let next = of("next:Next");
+        assert_eq!(next["planName"], "Plan - Next");
+        assert!(next.get("plan").is_none(), "{next}");
+        let skipped = of("skipped:Old");
+        assert!(
+            skipped.get("planName").is_none() && skipped.get("plan").is_none(),
+            "{skipped}"
+        );
+        assert!(of(HEADING).get("planName").is_none());
+    }
+
+    #[test]
     fn the_heading_says_slots_cap_landing_and_why_it_is_paused() {
         let s = Summary {
             note: "Work".into(),
@@ -459,6 +569,7 @@ mod tests {
             &[row(TabState::Waiting)],
             &["Next".into()],
             &["Old".into()],
+            &HashMap::new(),
         );
         assert_eq!(items[0].title, "Work");
         assert_eq!(
@@ -548,6 +659,7 @@ mod tests {
             ],
             &["Later".into()],
             &[],
+            &HashMap::new(),
         );
         let placed: Vec<(&str, &str)> = items
             .iter()
@@ -616,7 +728,7 @@ mod tests {
             target: String::new(),
             drained: false,
         };
-        let items = items(&summary, "", &[open, closed], &[], &[]);
+        let items = items(&summary, "", &[open, closed], &[], &[], &HashMap::new());
         let landed: Vec<&Item> = items
             .iter()
             .filter(|i| i.group.as_deref() == Some("Landed"))
@@ -653,7 +765,14 @@ mod tests {
             target: String::new(),
             drained: true,
         };
-        let items = items(&s, "Nothing left in the note", &[], &[], &[]);
+        let items = items(
+            &s,
+            "Nothing left in the note",
+            &[],
+            &[],
+            &[],
+            &HashMap::new(),
+        );
         assert_eq!(
             items[0].detail,
             "1 of 2 working · 1 of 4 open · asks before landing · planned items only · $4.20 of $20 today · nothing more to start · paused while you're away · Nothing left in the note"
