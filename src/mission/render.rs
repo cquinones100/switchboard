@@ -38,6 +38,7 @@ use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, SPINNER, width};
 use crate::ui::Theme;
 use crate::ui::kit::{self, Mark, Tone};
+use crate::views::markdown::{Images, PictureRow};
 
 /// A box's border takes a column each side.
 const BORDER: usize = 2;
@@ -909,7 +910,8 @@ fn board(
 /// card's edge in the accent. The views' last group (the PRs merged and the
 /// tickets canceled in the last week) is a row of the same cards, faint,
 /// under the columns, each saying when. On a screen `SIDE_AT` wide, the
-/// chosen item's description sits beside them, through Markdown.
+/// chosen item's description sits beside them, through Markdown, and the
+/// diagrams it draws as pictures come back, for the frame to place.
 #[allow(clippy::too_many_arguments)]
 fn board_cards(
     view: &View,
@@ -921,7 +923,7 @@ fn board_cards(
     top_row: usize,
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
-) {
+) -> Vec<Picture> {
     // A card's five lines and the blank one under it.
     const TALL: usize = 6;
     // The row's rule, label and blank line, and a card.
@@ -941,17 +943,46 @@ fn board_cards(
     let chosen_item = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| view.data.items.get(c));
+    // The diagrams ready to draw as pictures, where the client draws them.
+    let images = m
+        .snap
+        .cell
+        .filter(|_| side_w > 0 && !m.snap.diagrams.is_empty())
+        .map(|cell| Images {
+            cell: (cell.0 as u32, cell.1 as u32),
+            rows: crate::ui::images::MARKS.len(),
+            ready: m
+                .snap
+                .diagrams
+                .iter()
+                .map(|(key, diagram)| {
+                    let id = crate::ui::images::id_of(&format!("mission/diagram/{key}"));
+                    (key.clone(), (id, diagram.image.dimensions()))
+                })
+                .collect(),
+        });
     let about = chosen_item
         .filter(|_| side_w > 0)
         .map(|item| {
             if tickets {
-                ticket_about(item, side_w, body, theme)
+                ticket_about(item, side_w, body, theme, images.as_ref())
             } else {
-                pr_about(item, side_w, body, theme)
+                pr_about(item, side_w, body, theme, images.as_ref())
             }
         })
         .unwrap_or_default();
     let cols = cols - side_w;
+    // Each picture where the pane's lines put it on the screen.
+    let pictures = about
+        .pictures
+        .iter()
+        .map(|p| Picture {
+            x: p.x + (cols + 2) as u16,
+            y: p.y + top_row as u16,
+            ..p.clone()
+        })
+        .collect();
+    let about = about.lines;
     // The week's row when it has anything and the columns keep room for a
     // card.
     let week_h = if !week_items.is_empty() && body >= 2 + TALL + WEEK_ROWS {
@@ -1121,6 +1152,7 @@ fn board_cards(
         }
         lines.push(Line { spans, fill: None });
     }
+    pictures
 }
 
 /// A board column's tone: where a PR or ticket stands, as the kit marks it.
@@ -1354,13 +1386,70 @@ fn week_words(item: &Item, tickets: bool, now_secs: i64) -> String {
 /// and how many columns it takes there.
 const SIDE_AT: usize = 140;
 const SIDE_W: usize = 50;
+/// The columns the description is laid out in there.
+pub const ABOUT_COLS: usize = SIDE_W - 3;
+
+/// A diagram the pane beside a board places as an image once its lines are
+/// drawn (`ui::images::picture_cut`): its key among the snapshot's
+/// diagrams, the id its layout gave it, where its corner is, its size in
+/// cells, and how many of its rows show above the pane's bottom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picture {
+    pub key: String,
+    pub id: u32,
+    pub x: u16,
+    pub y: u16,
+    pub cols: u16,
+    pub rows: u16,
+    pub shown: u16,
+}
+
+/// The pane beside a board: its lines, and the diagrams placed over them,
+/// each by its place among the lines.
+#[derive(Clone, Debug, Default)]
+struct About {
+    lines: Vec<Vec<Span<'static>>>,
+    pictures: Vec<Picture>,
+}
+
+/// The description the board draws beside its columns now, and the place
+/// its Markdown is read for (`Markdown::parse`): the chosen PR's or
+/// ticket's, on a screen wide enough for the pane.
+pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
+    let view = m.current()?;
+    let (field, place) = match view.id {
+        ViewId::Prs => ("body", crate::views::pr::PLACE),
+        ViewId::Tickets => ("description", crate::views::ticket::PLACE),
+        _ => return None,
+    };
+    let board_with_the_pane = m.snap.rules.ux2
+        && view.columns().is_some()
+        && view.data.setup.is_none()
+        && view.loaded
+        && m.size.0 as usize >= SIDE_AT;
+    if !board_with_the_pane {
+        return None;
+    }
+    let text = m.chosen_item()?.data[field].as_str()?;
+    Some((text, place))
+}
 
 /// Markdown laid out `cols` wide for the pane beside a board, as the PR
 /// and ticket views lay it out but without their margin or the blank lines
-/// at its ends.
-fn markdown_lines(text: &str, place: &str, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
-    let doc = crate::views::markdown::Markdown::parse(text, place).layout(cols + 4);
-    let mut out: Vec<Vec<Span<'static>>> = doc
+/// at its ends. Each Mermaid diagram `images` has ready is the rows its
+/// picture takes at the pane's width, blank for the frame to place it
+/// over, however tall, since the pane cuts it as it cuts the text; one not
+/// ready, and every one without `images`, is its text drawing.
+fn markdown_lines(
+    text: &str,
+    place: &str,
+    cols: usize,
+    theme: &Theme,
+    images: Option<&Images>,
+) -> About {
+    type Row = (Vec<Span<'static>>, Option<PictureRow>);
+    let doc = crate::views::markdown::Markdown::parse(text, place).layout_with(cols + 4, images);
+    let mut rows: Vec<Row> = doc
         .lines
         .iter()
         .map(|l| {
@@ -1381,42 +1470,90 @@ fn markdown_lines(text: &str, place: &str, cols: usize, theme: &Theme) -> Vec<Ve
                     spans.push(Span::styled(t.to_string(), style));
                 }
             }
-            spans
+            (spans, l.picture)
         })
-        .skip_while(|l| l.iter().all(|s| s.content.trim().is_empty()))
         .collect();
-    while out
-        .last()
-        .is_some_and(|l| l.iter().all(|s| s.content.trim().is_empty()))
-    {
-        out.pop();
+    let blank = |(spans, picture): &Row| {
+        picture.is_none() && spans.iter().all(|s| s.content.trim().is_empty())
+    };
+    let first = rows.iter().position(|r| !blank(r)).unwrap_or(rows.len());
+    rows.drain(..first);
+    while rows.last().is_some_and(blank) {
+        rows.pop();
     }
-    out
+    let mut about = About::default();
+    for (y, (mut spans, picture)) in rows.into_iter().enumerate() {
+        if let Some(row) = picture {
+            let x: usize = spans.iter().map(|s| width(&s.content)).sum();
+            if row.row == 0
+                && let Some(placed) = doc.placed.iter().find(|p| p.id == row.id)
+            {
+                about.pictures.push(Picture {
+                    key: placed.key.clone(),
+                    id: row.id,
+                    x: x as u16,
+                    y: y as u16,
+                    cols: row.cols,
+                    rows: placed.rows,
+                    shown: placed.rows,
+                });
+            }
+            spans.push(Span::raw(" ".repeat(row.cols as usize)));
+        }
+        about.lines.push(spans);
+    }
+    about
 }
 
 /// A description under the pane's head, or a faint line saying it has
-/// none, cut to the board's height.
+/// none, cut to the board's height, a picture with it.
 fn with_description(
-    mut out: Vec<Vec<Span<'static>>>,
+    head: Vec<Vec<Span<'static>>>,
     description: &str,
     place: &str,
     inner: usize,
     body: usize,
     theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    if description.trim().is_empty() {
-        out.push(vec![Span::styled("No description.", fg(theme.faint))]);
+    images: Option<&Images>,
+) -> About {
+    let described = if description.trim().is_empty() {
+        About {
+            lines: vec![vec![Span::styled("No description.", fg(theme.faint))]],
+            pictures: Vec::new(),
+        }
     } else {
-        out.extend(markdown_lines(description, place, inner, theme));
-    }
-    out.truncate(body);
-    out
+        markdown_lines(description, place, inner, theme, images)
+    };
+    let under = head.len();
+    let mut lines = head;
+    lines.extend(described.lines);
+    lines.truncate(body);
+    let pictures = described
+        .pictures
+        .into_iter()
+        .filter_map(|p| {
+            let y = p.y as usize + under;
+            let room = body.saturating_sub(y);
+            (room > 0).then(|| Picture {
+                y: y as u16,
+                shown: p.shown.min(room as u16),
+                ..p
+            })
+        })
+        .collect();
+    About { lines, pictures }
 }
 
 /// The chosen PR's description, as the board draws it beside the columns:
 /// its number and title bold, a dim line of its author, commits, lines
 /// changed and checks, a rule, then its body through Markdown.
-fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+fn pr_about(
+    item: &Item,
+    side_w: usize,
+    body: usize,
+    theme: &Theme,
+    images: Option<&Images>,
+) -> About {
     let inner = side_w.saturating_sub(3);
     let d = &item.data;
     let mut facts: Vec<String> = Vec::new();
@@ -1445,13 +1582,20 @@ fn pr_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<S
         inner,
         body,
         theme,
+        images,
     )
 }
 
 /// The chosen ticket's description beside the board: its ID and title
 /// bold, a dim line of its state, priority, project, estimate and
 /// assignee, a rule, then its description through Markdown.
-fn ticket_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+fn ticket_about(
+    item: &Item,
+    side_w: usize,
+    body: usize,
+    theme: &Theme,
+    images: Option<&Images>,
+) -> About {
     let inner = side_w.saturating_sub(3);
     let d = &item.data;
     let dim = |s: String| Span::styled(s, fg(theme.dim));
@@ -1483,6 +1627,7 @@ fn ticket_about(item: &Item, side_w: usize, body: usize, theme: &Theme) -> Vec<V
         inner,
         body,
         theme,
+        images,
     )
 }
 
@@ -2733,17 +2878,23 @@ fn grouped_bar(
 /// Mission control's lines for a screen `cols` by `rows`, and where a click
 /// on each part lands.
 pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>) {
-    let (lines, hits, _) = drawn(m, cols, rows);
+    let (lines, hits, _, _) = drawn(m, cols, rows);
     (lines, hits)
 }
 
-/// The screen as `screen` draws it, with the meters to place over it as
-/// images (the Autopilot board's).
-pub fn drawn(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>, Vec<Meter>) {
+/// The screen as `screen` draws it, with what is placed over it as images:
+/// the meters (the Autopilot board's) and the pictures (the diagrams of the
+/// description beside the PR and ticket boards).
+pub fn drawn(
+    m: &Mission,
+    cols: usize,
+    rows: usize,
+) -> (Vec<Line>, Vec<HitBox>, Vec<Meter>, Vec<Picture>) {
     let snap = &m.snap;
     let theme = &snap.theme;
     let mut hits = Vec::new();
     let mut meters = Vec::new();
+    let mut pictures = Vec::new();
     let jumped = m.jump.as_ref().and_then(|j| j.matched);
     // The filter, a view's name being typed, or, with Tab moving focus, a
     // stop of its own even while empty on a view that filters.
@@ -2942,7 +3093,9 @@ pub fn drawn(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>, 
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
                     if snap.rules.ux2 && matches!(v.id, ViewId::Prs | ViewId::Tickets) {
-                        board_cards(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                        pictures = board_cards(
+                            v, columns, cols, room, m, theme, top, &mut lines, &mut hits,
+                        );
                     } else {
                         board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
                     }
@@ -2985,7 +3138,7 @@ pub fn drawn(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>, 
     lines.push(foot.line(cols, None));
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
     meters.retain(|meter| (meter.y as usize) < rows.saturating_sub(1));
-    (lines, hits, meters)
+    (lines, hits, meters, pictures)
 }
 
 #[cfg(test)]
@@ -3024,6 +3177,8 @@ mod tests {
             screens: Default::default(),
             pilot: None,
             caps: false,
+            cell: None,
+            diagrams: Default::default(),
         };
         m
     }
@@ -3560,6 +3715,79 @@ mod tests {
     }
 
     #[test]
+    fn the_description_beside_a_board_draws_a_ready_diagram_as_a_picture_cut_at_its_bottom() {
+        let body = "Why\n\n```mermaid\nflowchart LR\n  A[Login] --> B[Token]\n```\n\nAfter it.";
+        let item = Item::new("1", "#1 PR 1")
+            .group("In review")
+            .data(serde_json::json!({ "pr": { "number": 1 }, "author": "ana", "body": body }));
+        let mut m = mission(vec![], vec![list_view(ViewId::Prs, "PRs", vec![item])]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 0;
+        m.size = (160, 20);
+        let columns = crate::sources::prboard::columns(true);
+        let draw = |m: &Mission| {
+            let (mut lines, mut hits) = (Vec::new(), Vec::new());
+            let view = &m.snap.views[0];
+            let pictures = board_cards(
+                view,
+                columns,
+                160,
+                20,
+                m,
+                &Theme::DARK,
+                2,
+                &mut lines,
+                &mut hits,
+            );
+            (texts(&lines), pictures)
+        };
+        // Nothing ready, or a client that draws no images: its text drawing.
+        let (text, pictures) = draw(&m);
+        assert!(pictures.is_empty());
+        assert!(text.iter().any(|l| l.contains("Login")), "{text:?}");
+
+        let (found, place) = description_beside(&m).expect("the pane is shown");
+        let source = super::super::diagrams::sources(found, place).remove(0);
+        let key = crate::views::markdown::Wanted::Diagram(source).key();
+        let image = std::sync::Arc::new(image::RgbaImage::new(400, 800));
+        let ready = super::super::diagrams::Ready {
+            content: crate::ui::images::picture_key(&image),
+            image,
+        };
+        m.snap.diagrams.insert(key.clone(), ready);
+        let (text, pictures) = draw(&m);
+        assert!(pictures.is_empty(), "ready, but the client draws no images");
+        assert!(text.iter().any(|l| l.contains("Login")), "{text:?}");
+
+        // Ready on a client that draws them: the rows its picture takes at
+        // the pane's width, blank, and no text drawing.
+        m.snap.cell = Some((8, 16));
+        let (text, pictures) = draw(&m);
+        assert!(!text.iter().any(|l| l.contains("Login")), "{text:?}");
+        let [picture] = &pictures[..] else {
+            panic!("one picture: {pictures:?}");
+        };
+        assert_eq!(picture.key, key);
+        assert!(picture.id >= crate::ui::images::SERVER_IDS);
+        assert_eq!((picture.cols, picture.rows), (47, 47), "the pane's width");
+        // Under the head and "Why", inside the pane right of the rule, on
+        // the screen's rows, and cut where the pane ends.
+        let why = text.iter().position(|l| l.contains("│ Why")).unwrap();
+        assert_eq!(picture.y as usize, 2 + why + 2);
+        assert_eq!(picture.x as usize, 160 - SIDE_W + 2);
+        assert_eq!(picture.shown as usize, 20 - (why + 2));
+        assert!(
+            !text.iter().any(|l| l.contains("After it.")),
+            "cut: {text:?}"
+        );
+
+        // On a screen too narrow for the pane there is nothing to ask for.
+        m.size = (120, 20);
+        assert!(description_beside(&m).is_none());
+    }
+
+    #[test]
     fn with_ux2_the_pr_board_names_reviewers_or_the_tab_and_shows_the_chosen_pr_beside_it() {
         let item = |n: u32, column: &str, reviewers: &str| {
             Item::new(n.to_string(), format!("#{n} PR {n}"))
@@ -3616,8 +3844,9 @@ mod tests {
             .find(|s| s.content.contains("Settings"))
             .unwrap();
         assert!(bold_word.style.add_modifier.contains(Modifier::BOLD));
-        let light = pr_about(&m.snap.views[0].data.items[1], 50, 20, &Theme::LIGHT);
+        let light = pr_about(&m.snap.views[0].data.items[1], 50, 20, &Theme::LIGHT, None);
         let plain = light
+            .lines
             .iter()
             .flatten()
             .find(|s| s.content.contains("Lay the"))
@@ -3720,7 +3949,8 @@ mod tests {
         );
         assert!(text.iter().any(|l| l.contains("│ Steps")), "{text:?}");
         let low = ticket("AB-5", "Todo", 4, serde_json::json!({}));
-        let pane: Vec<String> = ticket_about(&low, 50, 10, &Theme::DARK)
+        let pane: Vec<String> = ticket_about(&low, 50, 10, &Theme::DARK, None)
+            .lines
             .iter()
             .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
             .collect();
@@ -3922,7 +4152,7 @@ mod tests {
         m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = last as isize;
-        let (lines, hits, meters) = drawn(&m, 125, 24);
+        let (lines, hits, meters, _) = drawn(&m, 125, 24);
         let text = texts(&lines);
         assert!(
             text[..23].iter().any(|l| l.contains("item-10")),
@@ -3960,7 +4190,7 @@ mod tests {
         m.snap.rules.ux2 = true;
         m.view = 1;
         m.cursor = chosen as isize;
-        let (lines, _, meters) = drawn(&m, 160, 30);
+        let (lines, _, meters, _) = drawn(&m, 160, 30);
         let text = texts(&lines);
         let at = text
             .iter()

@@ -756,6 +756,45 @@ pub fn picture_shared(
     }
 }
 
+/// A picture `rows` rows tall of which `area` shows the top (one cut at
+/// the bottom of the pane it is laid out in): drawn whole, `area`'s width
+/// by `rows` cells, as `picture` draws one, under the id its layout gave
+/// it, with only `area`'s cells carrying its placeholders. Nothing where
+/// the terminal draws no images, since what lays it out lays out its text
+/// there instead.
+pub fn picture_cut(
+    frame: &mut Frame,
+    id: u32,
+    area: Rect,
+    rows: u16,
+    img: &std::sync::Arc<RgbaImage>,
+    content: u64,
+) {
+    let Some(cell) = frame.graphics else {
+        return;
+    };
+    let cols = area.width;
+    let shown = area.intersection(frame.buf.area);
+    let starts_on_the_screen = (shown.x, shown.y) == (area.x, area.y);
+    let fits_the_marks =
+        rows >= area.height && (rows as usize) <= MARKS.len() && (cols as usize) <= MARKS.len();
+    if shown.is_empty() || !starts_on_the_screen || !fits_the_marks {
+        return;
+    }
+    let area = shown;
+    let tones = Tones::now();
+    let img = img.clone();
+    put_placeholders(frame, id, area);
+    frame.images.push(Placed {
+        id,
+        cols,
+        rows,
+        spot: Spot::Placeholders,
+        key: key_of(("picture", cols, rows, cell, tones, content)),
+        draw: Box::new(move || raster_picture(&img, cols, rows, cell, &tones)),
+    });
+}
+
 /// A meter one row tall across `area`, filled to `frac` in `color`, with a
 /// tick at `tick`; as text, `━` in the fill's color and the rule's, the
 /// tick a `│`.
@@ -1279,6 +1318,34 @@ mod tests {
 
     fn text(out: &[u8]) -> String {
         String::from_utf8_lossy(out).into_owned()
+    }
+
+    #[test]
+    fn a_cut_picture_is_drawn_whole_with_placeholders_on_the_rows_that_show() {
+        let img = std::sync::Arc::new(RgbaImage::new(40, 80));
+        let content = picture_key(&img);
+        let id = id_of("mission/diagram/x");
+        let mut f = graphics_frame(20, 6);
+        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 8, &img, content);
+        let [placed] = &f.images[..] else {
+            panic!("one image: {:?}", f.images);
+        };
+        assert_eq!((placed.id, placed.cols, placed.rows), (id, 10, 8));
+        let marked = |f: &Frame, x: u16, y: u16| f.buf[(x, y)].symbol().starts_with(PLACEHOLDER);
+        assert!(marked(&f, 2, 1) && marked(&f, 11, 3));
+        assert_eq!(f.buf[(11, 3)].symbol(), placeholder(2, 9));
+        assert!(!marked(&f, 2, 4) && !marked(&f, 12, 1) && !marked(&f, 2, 0));
+
+        // One reaching past the screen's bottom keeps the rows on it.
+        let mut f = graphics_frame(20, 6);
+        picture_cut(&mut f, id, Rect::new(2, 4, 10, 5), 8, &img, content);
+        assert_eq!(f.images.len(), 1);
+        assert!(marked(&f, 2, 5));
+
+        // Where the terminal draws no images, nothing: its text was laid out.
+        let mut f = Frame::new(20, 6);
+        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 8, &img, content);
+        assert!(f.images.is_empty() && !marked(&f, 2, 1));
     }
 
     fn red() -> Color {

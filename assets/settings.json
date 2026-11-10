@@ -634,7 +634,7 @@
     "key": "view_images",
     "category": "Appearance",
     "label": "Pictures and diagrams in the views",
-    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome. Off, a picture is its name and a diagram is drawn with characters",
+    "description": "Draws the pictures on lines of their own and the Mermaid diagrams in the PR, ticket, link and file views as images where the terminal can show them (Ghostty, kitty), fetching the pictures and drawing the diagrams with Mermaid in Chrome, and draws the diagrams of the description beside mission control's PR and ticket boards the same way (with \"Images in the workspace\" on too). Off, a picture is its name and a diagram is drawn with characters",
     "default": true
   },
   {

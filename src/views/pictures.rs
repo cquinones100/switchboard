@@ -18,7 +18,9 @@
 //! view opened again shows them at once, the cache held to its limit as a
 //! view starts. Until one is had, and for one that
 //! can't be (a picture that isn't one, an SVG, a diagram Mermaid refuses),
-//! the text stays.
+//! the text stays. Mission control's boards draw the diagrams of the
+//! description beside them the same way, on the server (`draw_diagrams`,
+//! src/mission/diagrams.rs).
 //!
 //! Each is drawn as Images' picture atom (`ui::images::raster_picture`, in
 //! a rounded border on the sunken surface) and sent with its data inline,
@@ -363,7 +365,7 @@ fn fetch_all(queue: Arc<Mutex<Queue>>, tx: Sender<Got>, kept: Option<Cache>, hel
 /// The link a diagram is kept under in the cache: its source's hash and
 /// its theme, under a version that changes when diagrams are drawn another
 /// way (`v2`: at their own size), so the ones kept before are drawn again.
-fn diagram_key(source: &str, light: bool) -> String {
+pub fn diagram_key(source: &str, light: bool) -> String {
     use sha2::{Digest, Sha256};
     let hash: String = Sha256::digest(source.as_bytes())
         .iter()
@@ -394,6 +396,29 @@ pub fn diagram(source: &str, light: bool, renderer: &Renderer) -> Result<RgbaIma
         }
     }
     Ok(img)
+}
+
+/// Each of `sources` drawn in turn, for what draws diagrams without a view
+/// of its own (mission control's boards, on the server): from the image
+/// cache while Settings' `image_cache` is on, else by Mermaid in Chrome in
+/// a folder made for the run and removed after it, each handed to `got` as
+/// it is had, and the cache held to its limit at the end. It reads files
+/// and runs Chrome, so never on the server's own task.
+pub fn draw_diagrams(
+    sources: &[String],
+    light: bool,
+    mut got: impl FnMut(&str, Result<RgbaImage, String>),
+) {
+    let renderer = Renderer {
+        chrome: render::find_chrome(),
+        work: private_dir(std::process::id()),
+        cache: settings::is_on("image_cache").then(Cache::here),
+    };
+    for source in sources {
+        got(source, diagram(source, light, &renderer).map(shrunk));
+    }
+    let _ = std::fs::remove_dir_all(&renderer.work);
+    prune(renderer.cache.as_ref());
 }
 
 /// A picture had, or why not, by its key.

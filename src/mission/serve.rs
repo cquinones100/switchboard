@@ -325,6 +325,54 @@ impl Server {
         } else {
             self.mission_prepare(client);
         }
+        self.mission_diagrams(client);
+    }
+
+    /// Asks, off the server's task, for the Mermaid diagrams of the
+    /// description a client's board shows beside it, where the client draws
+    /// them as pictures: once for each description chosen, and only those
+    /// nothing is known of yet (`diagrams::Diagrams`). Each comes back as
+    /// `MissionEvent::Diagram`, one Chrome at a time.
+    fn mission_diagrams(&mut self, client: ClientId) {
+        use std::hash::{Hash, Hasher};
+        /// Held by the one task drawing, since each diagram is a run of
+        /// Chrome.
+        static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let light = crate::status::theme::light();
+        let Some(m) = self.mission_mut(client) else {
+            return;
+        };
+        if m.snap.cell.is_none() {
+            return;
+        }
+        let Some((text, place)) = super::render::description_beside(m) else {
+            return;
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (text, light).hash(&mut hasher);
+        let description = Some(hasher.finish());
+        if m.diagrams_asked == description {
+            return;
+        }
+        let sources = super::diagrams::sources(text, place);
+        m.diagrams_asked = description;
+        let sources = self.mission.diagrams.ask(sources, light);
+        if sources.is_empty() {
+            return;
+        }
+        let cell = self.terminal.cell.unwrap_or(crate::mux::pane::CELL);
+        let width = super::render::ABOUT_COLS as u32 * cell.0 as u32;
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+            crate::views::pictures::draw_diagrams(&sources, light, |source, drawn| {
+                let _ = tx.send(Event::Mission(MissionEvent::Diagram {
+                    source: source.to_string(),
+                    light,
+                    image: drawn.ok().map(|img| super::diagrams::fitted(img, width)),
+                }));
+            });
+        });
     }
 
     /// Something that may change what mission control shows has happened:
@@ -516,6 +564,16 @@ impl Server {
                 .clients
                 .get(&client)
                 .is_some_and(|c| crate::ui::kit::caps(&c.term)),
+            cell: self
+                .clients
+                .get(&client)
+                .filter(|c| {
+                    // With sixel chosen every placeholder is blanked for the
+                    // panes' pictures (src/mux/sixel), so the text stays.
+                    c.graphics() && settings::is_on("view_images") && !crate::mux::sixel::chosen()
+                })
+                .map(|_| self.terminal.cell.unwrap_or(crate::mux::pane::CELL)),
+            diagrams: self.mission.diagrams.ready(crate::status::theme::light()),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -930,6 +988,15 @@ impl Server {
                 if found != self.mission.worktrees {
                     self.mission.worktrees = found;
                     self.untabbed_prs();
+                    self.mission_redraw();
+                }
+            }
+            MissionEvent::Diagram {
+                source,
+                light,
+                image,
+            } => {
+                if self.mission.diagrams.got(&source, light, image) {
                     self.mission_redraw();
                 }
             }

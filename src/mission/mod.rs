@@ -30,6 +30,8 @@
 //! - `ask`: a line to type in a box.
 //! - `busy`: the box an option shows while it works.
 //! - `remind`: a tab's reminder (remind.sh).
+//! - `diagrams`: the Mermaid diagrams of the description beside the PR and
+//!   ticket boards, drawn as pictures off the server's task and kept.
 //! - `serve`: the server's side: opening it, its keys and mouse, the menus,
 //!   the reminders said once, the worktrees read in the background.
 
@@ -38,6 +40,7 @@ pub mod ask;
 pub mod busy;
 pub mod calendar;
 pub mod choices;
+pub mod diagrams;
 pub mod keymap;
 pub mod remind;
 pub mod render;
@@ -132,6 +135,14 @@ pub struct Snapshot {
     pub pilot: Option<crate::autopilot::Summary>,
     /// The client's terminal draws the kit's half circles (src/ui/kit.rs).
     pub caps: bool,
+    /// The terminal's cell in pixels where the description beside a board
+    /// draws its diagrams as pictures: the client draws the server's images,
+    /// Settings' `view_images` is on and `image_protocol` isn't sixel.
+    /// `None` keeps them text.
+    pub cell: Option<(u16, u16)>,
+    /// The diagrams ready to draw there, by their key in the layout
+    /// (`diagrams`).
+    pub diagrams: HashMap<String, diagrams::Ready>,
 }
 
 impl Default for Snapshot {
@@ -155,6 +166,8 @@ impl Default for Snapshot {
             screens: HashMap::new(),
             pilot: None,
             caps: false,
+            cell: None,
+            diagrams: HashMap::new(),
         }
     }
 }
@@ -200,6 +213,12 @@ pub struct Mission {
     /// The meters it last drew, placed as images over its text (`images`),
     /// where they sit on the whole screen.
     pub meters: Vec<render::Meter>,
+    /// The diagrams it last laid out as pictures beside a board, placed the
+    /// same way.
+    pub pictures: Vec<render::Picture>,
+    /// The description whose diagrams were last asked for, by its hash and
+    /// theme, so a draw asks only once the chosen item's changes.
+    pub(crate) diagrams_asked: Option<u64>,
     /// The screen it was last drawn on: with UX 2.0, the area right of
     /// the sidebar.
     pub size: (u16, u16),
@@ -236,6 +255,8 @@ impl Mission {
             taken_at: None,
             hits: Vec::new(),
             meters: Vec::new(),
+            pictures: Vec::new(),
+            diagrams_asked: None,
             size: (0, 0),
             left: 0,
             came: None,
@@ -289,8 +310,17 @@ impl Overlay for Mission {
         let area =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
-        let (lines, hits, meters) = render::drawn(self, area.width as usize, area.height as usize);
+        let (lines, hits, meters, pictures) =
+            render::drawn(self, area.width as usize, area.height as usize);
         self.hits = hits;
+        self.pictures = pictures
+            .into_iter()
+            .map(|picture| render::Picture {
+                x: picture.x + area.x,
+                y: picture.y + area.y,
+                ..picture
+            })
+            .collect();
         self.meters = meters
             .into_iter()
             .map(|meter| render::Meter {
@@ -313,6 +343,18 @@ impl Overlay for Mission {
                 meter.color,
                 None,
             );
+        }
+        for picture in &self.pictures {
+            if let Some(diagram) = self.snap.diagrams.get(&picture.key) {
+                crate::ui::images::picture_cut(
+                    frame,
+                    picture.id,
+                    ratatui::layout::Rect::new(picture.x, picture.y, picture.cols, picture.shown),
+                    picture.rows,
+                    &diagram.image,
+                    diagram.content,
+                );
+            }
         }
     }
 
@@ -380,6 +422,13 @@ pub enum MissionEvent {
     /// The worktrees no tab is in, from wherever they are known; `None`
     /// when the look failed or took too long, so the rows had stay.
     Revived(Option<Vec<Revived>>),
+    /// A diagram of the description beside a board, drawn for a theme, or
+    /// `None` for one that couldn't be, which stays its text.
+    Diagram {
+        source: String,
+        light: bool,
+        image: Option<image::RgbaImage>,
+    },
 }
 
 /// What the server keeps for mission control across clients.
@@ -405,4 +454,7 @@ pub struct MissionState {
     pub(crate) own: Option<(Instant, Vec<Item>)>,
     /// When each repository's landing was last worked out from Settings.
     pub(crate) landing_asked: HashMap<String, Instant>,
+    /// The diagrams of the descriptions beside the boards, asked for and
+    /// drawn.
+    pub(crate) diagrams: diagrams::Diagrams,
 }

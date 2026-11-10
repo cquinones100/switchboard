@@ -379,3 +379,86 @@ fn keys_typed_from_another_computer_keep_the_lookups_going_while_it_sits_idle_an
         json!({"pass": 3, "fail": 1, "pending": 0})
     );
 }
+
+#[test]
+fn the_description_beside_the_pr_board_draws_its_diagram_as_a_picture_where_the_client_draws_images()
+ {
+    const BODY: &str = "Why\n\n```mermaid\nflowchart LR\n  A[Login] --> B[Token]\n```\n";
+    let fake = Fake::github("test-token", |request| {
+        if request.path() != "/graphql" {
+            return None;
+        }
+        let mut pr = pr(false);
+        pr["body"] = json!(BODY);
+        let answer = if request.text().contains("search(") {
+            json!({"data": {"open": {"nodes": [pr]}, "merged": {"nodes": []}, "search": {"nodes": []}}})
+        } else {
+            json!({"data": {}})
+        };
+        Some(Reply::json(200, answer))
+    });
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+        ],
+        &json!({"notifications": false, "linear": false, "pause_when_away": false, "ux2": true})
+            .to_string(),
+    );
+    // The diagram as Mermaid would have drawn it, kept in the image cache
+    // under its source and theme, so no Chrome runs.
+    let source = switchboard::mission::diagrams::sources(BODY, "").remove(0);
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(400, 200, image::Rgba([200, 60, 60, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let cache = switchboard::views::image::cache::Cache::at(server.home.join(".cache/switchboard"));
+    for light in [false, true] {
+        let key = switchboard::views::pictures::diagram_key(&source, light);
+        cache.keep_asset(&key, "png", &png).expect("kept");
+    }
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["symbolic-ref", "HEAD", "refs/heads/fix-login"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    let placeholder = '\u{10EEEE}';
+
+    // A terminal that draws the server's images: the picture is sent, its
+    // placeholders are in the pane beside the board, and the text drawing
+    // is gone.
+    {
+        let mut ghostty = server.attach_as("xterm-ghostty", 200, 40);
+        ghostty.wait_text("$");
+        ghostty.type_text(&format!("cd {}\r", work.display()));
+        wait("the PR board", sources, |s| {
+            s["views"]["prs"]["items"][0]["title"] == "#12 Fix the login"
+        });
+        server.ok(&["press", "mission-prs"]);
+        ghostty.wait_text("Why");
+        let screen = ghostty.wait_for("the diagram's picture", |s| {
+            s.iter().any(|l| l.contains(placeholder))
+        });
+        assert!(!screen.iter().any(|l| l.contains("Login")), "{screen:#?}");
+        let (_, col) = ghostty.find_cell(placeholder).expect("its first cell");
+        assert!(col >= 150, "in the pane beside the board: column {col}");
+        assert!(
+            common::sent(&ghostty.raw, b"\x1b_Ga=T,U=1,f=100,t=d,q=2,i="),
+            "the picture sent inline"
+        );
+    }
+
+    // One that doesn't: the diagram stays its text drawing.
+    let mut plain = server.attach_as("xterm-256color", 200, 40);
+    plain.wait_text("$");
+    server.ok(&["press", "mission-prs"]);
+    let screen = plain.wait_text("Login");
+    assert!(!screen.iter().any(|l| l.contains(placeholder)));
+    assert!(!common::sent(&plain.raw, b"\x1b_Ga=T"));
+}
