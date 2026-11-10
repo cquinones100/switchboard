@@ -1,7 +1,10 @@
 //! Syntax colours for the diff's two sides, in place of the tree-sitter
-//! highlighting nvim/diff.lua started for each file: syntect's grammars,
-//! picked by the file's extension (else its first line), with its
-//! pure-Rust regex engine, so nothing is needed beyond the binary.
+//! highlighting nvim/diff.lua started for each file: syntect with bat's
+//! grammars (the two-face crate), which hold syntect's own and the
+//! languages those leave out (TypeScript, TSX, TOML, Dockerfile, Svelte,
+//! Vue and more), picked by the file's extension (else its name, else its
+//! first line), with syntect's pure-Rust regex engine, so nothing is
+//! needed beyond the binary.
 //!
 //! The colours are the terminal's own: each kind of text takes one of the
 //! sixteen ANSI colours, by the roles a base16 scheme gives them, as
@@ -86,7 +89,7 @@ const RULES: &[(&str, u8)] = &[
 /// What a rule gives for the terminal's own text colour.
 const DEFAULT: u8 = u8::MAX;
 
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
 
 /// A theme whose colours are the terminal's: an ANSI colour's number in
 /// red with alpha 0, and the text's own as alpha 1, as bat's `ansi` theme
@@ -209,5 +212,54 @@ mod tests {
             "every rule's scopes read"
         );
         assert!(highlight("notes.unknownext", &["hello".into()]).is_none());
+    }
+
+    /// The color of the run holding `text`'s first byte in a one-line file.
+    fn color_in(path: &str, line: &str, text: &str) -> Option<Color> {
+        let runs = highlight(path, &[line.to_string()])?;
+        let at = line.find(text)?;
+        runs[0]
+            .iter()
+            .find(|h| h.range.contains(&at))
+            .map(|h| h.color)
+    }
+
+    #[test]
+    fn typescript_and_tsx_are_colored() {
+        let ts = "const n: number = f(\"a\"); // c";
+        assert_eq!(color_in("src/a.ts", ts, "const"), Some(Color::Indexed(5)));
+        assert_eq!(color_in("src/a.ts", ts, "number"), Some(Color::Indexed(3)));
+        assert_eq!(color_in("src/a.ts", ts, "f("), Some(Color::Indexed(4)));
+        assert_eq!(color_in("src/a.ts", ts, "\"a\""), Some(Color::Indexed(2)));
+        assert_eq!(color_in("src/a.ts", ts, "// c"), Some(Color::Indexed(8)));
+
+        let tsx = "const e = <div className=\"x\">{n}</div>;";
+        assert_eq!(color_in("src/a.tsx", tsx, "const"), Some(Color::Indexed(5)));
+        assert_eq!(color_in("src/a.tsx", tsx, "div"), Some(Color::Indexed(1)));
+        assert_eq!(
+            color_in("src/a.tsx", tsx, "className"),
+            Some(Color::Indexed(9))
+        );
+        assert_eq!(color_in("src/a.tsx", tsx, "\"x\""), Some(Color::Indexed(2)));
+    }
+
+    #[test]
+    fn the_languages_syntect_s_own_set_leaves_out_are_colored() {
+        for (path, line, text, color) in [
+            ("Cargo.toml", "name = \"x\" # c", "\"x\"", 2),
+            ("docker/Dockerfile", "FROM rust:1 AS build", "FROM", 5),
+            ("src/A.svelte", "<script>let a = 1;</script>", "let", 5),
+            ("src/A.vue", "<template><div>a</div></template>", "div", 1),
+            ("src/a.kt", "fun main() { val a = 1 }", "fun", 5),
+            ("src/a.swift", "let a = 1", "let", 5),
+            ("main.tf", "resource \"a\" \"b\" {}", "resource", 5),
+            ("src/a.zig", "const a = 1;", "const", 5),
+        ] {
+            assert_eq!(
+                color_in(path, line, text),
+                Some(Color::Indexed(color)),
+                "{path}"
+            );
+        }
     }
 }

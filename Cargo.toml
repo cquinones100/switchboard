@@ -49,6 +49,9 @@ nucleo-matcher = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false }
 htmd = "0.5"
 syntect = { version = "5.3.0", default-features = false, features = ["default-fancy"] }
+# The diff's grammars: bat's set for syntect, which holds the languages
+# syntect's own leaves out (TypeScript, TSX, TOML, Dockerfile and more).
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-fancy"] }
 similar = "3.2.1"
 # The Slack relay's tall screenshots, cut into slices: PNG's zlib, in Rust.
 miniz_oxide = "0.9"

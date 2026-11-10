@@ -126,7 +126,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | `display-popup`, `say.sh`, `tip.sh`, `menu.sh`, `confirm.sh` | overlays in `src/ui/` |
 | fzf (palette, pickers) | `src/ui/picker.rs` with nucleo-matcher |
 | glow, mermaid-ascii, less | `src/views/` (pulldown-cmark, a Mermaid flowchart and sequence drawer, a pager, and `pictures`, which draws a view's pictures and diagrams as images, the diagrams by Mermaid in Chrome) |
-| diffview.nvim, `diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `src/diff/` (syntect for highlighting, similar for the line and word diffs) |
+| diffview.nvim, `diffstory.lua`, `diffask.lua`, `pane-in-place.sh`, `diff-base.sh`, `diff-story-ahead.sh` | `src/diff/` (syntect with bat's syntaxes (two-face) for highlighting, similar for the line and word diffs) |
 | the notes app (`notes/`, Neovim), `bin/notes` | `src/notes/` (ropey for the text, notify for the watch, image for pictures other than PNGs) |
 | a note's stable ID (`notes/lua/notes/id.lua`, `lib/note-id.js`) | `src/notes/id.rs`, which the app, `wtn` and autopilot share |
 | the sidebar daemon (`bin/tmux-sidebar`, `lib/sidebar/`) | `src/sidebar/`, `src/mission/`, `src/sources/`, `src/day/`, `src/usage/` |
