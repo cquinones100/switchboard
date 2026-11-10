@@ -22,6 +22,12 @@
 //! the same layout, softer. Chrome is used only when it is installed: the
 //! view says so plainly when it isn't (`NEEDS_CHROME`).
 //!
+//! Every run has a profile of its own, thrown away with the view's working
+//! directory, and asks for no keychain (`SWITCHES`): a new profile's Chrome
+//! otherwise makes a key and stores it in the login keychain as "Chrome Safe
+//! Storage", and macOS, with no keychain to offer a process the server
+//! started, shows "Keychain Not Found" over whatever is in front.
+//!
 //! With the image cache on, what the page loads is fetched before Chrome
 //! runs and named by its copies (`super::cache`), so neither run reaches
 //! the web for it, and the pages are kept once drawn with everything
@@ -52,6 +58,22 @@ const TALLEST: f64 = 32_000.0;
 const CHROME_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long Chrome lets the page's scripts run before it reads the page.
 const SCRIPT_BUDGET_MS: u32 = 15_000;
+
+/// What every run of Chrome is started with. The last two keep it from the
+/// computer's keychain, the first on macOS and the second on Linux's secret
+/// service: the profile's key stays in memory, and the pages drawn keep no
+/// password or cookie that would need one.
+const SWITCHES: [&str; 9] = [
+    "--headless",
+    "--hide-scrollbars",
+    "--mute-audio",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-extensions",
+    "--run-all-compositor-stages-before-draw",
+    "--use-mock-keychain",
+    "--password-store=basic",
+];
 
 /// The window a diagram is drawn in, in CSS pixels: as wide as a diagram
 /// is drawn at its own size, which the view makes smaller to fit the pane.
@@ -389,7 +411,8 @@ impl Renderer {
     /// CSS pixels, with `what` (`--dump-dom`, or `--screenshot=<file>`,
     /// and any other flags);
     /// gives what it printed. Its own profile in the working directory, so
-    /// it never touches yours, nor waits on a Chrome you have open. `cdn`
+    /// it never touches yours, nor waits on a Chrome you have open, and no
+    /// keychain asked for (`SWITCHES`). `cdn`
     /// is how many of the pinned files it loads from the CDN, for the
     /// request audit.
     fn chrome(
@@ -406,27 +429,19 @@ impl Renderer {
             crate::requests::count_n("cdn.jsdelivr.net", "HTTPS", SOURCE, cdn);
         }
         let mut cmd = Command::new(program);
-        cmd.args([
-            "--headless",
-            "--hide-scrollbars",
-            "--mute-audio",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-extensions",
-            "--run-all-compositor-stages-before-draw",
-        ])
-        .arg(format!(
-            "--user-data-dir={}",
-            self.work.join("chrome").display()
-        ))
-        .arg(format!("--force-device-scale-factor={scale}"))
-        .arg(format!("--window-size={width},{height}"))
-        .arg(format!("--virtual-time-budget={SCRIPT_BUDGET_MS}"))
-        .args(what)
-        .arg(format!("file://{}", file.display()))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        cmd.args(SWITCHES)
+            .arg(format!(
+                "--user-data-dir={}",
+                self.work.join("chrome").display()
+            ))
+            .arg(format!("--force-device-scale-factor={scale}"))
+            .arg(format!("--window-size={width},{height}"))
+            .arg(format!("--virtual-time-budget={SCRIPT_BUDGET_MS}"))
+            .args(what)
+            .arg(format!("file://{}", file.display()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
         {
             use std::os::unix::process::CommandExt;
             // A group of its own, so its helpers go with it if it hangs.
@@ -753,6 +768,13 @@ mod tests {
         );
         assert!(!pages[0].0.exists() && one[0].0.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chrome_is_started_asking_for_no_keychain() {
+        assert!(SWITCHES.contains(&"--headless"));
+        assert!(SWITCHES.contains(&"--use-mock-keychain"));
+        assert!(SWITCHES.contains(&"--password-store=basic"));
     }
 
     #[test]
