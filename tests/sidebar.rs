@@ -880,3 +880,60 @@ fn a_tab_whose_work_landed_straight_on_a_branch_is_under_merged_while_in_its_mai
     });
     assert_eq!(server.ok(&["show", "-t", &tab, "@tab_landed"]).trim(), "");
 }
+
+// The window's menu on a Slack message is the Slack view's: the message
+// above the choices, its dismissing worded as there.
+#[test]
+fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    // Sent now: a dismissal is kept two days past its message.
+    let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": 1, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+            "text": "its first line\nits second line\nits third line",
+            "ts": ts, "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("1 new on Slack");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("n");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    client.type_text("\r");
+    wait_list(&server, "the focus in the window", |l| !focused(l));
+    client.type_text("\r");
+    let screen = client.wait_text("Dismiss it, until its thread gets a reply");
+    let all = screen.join("\n");
+    let choices = screen
+        .iter()
+        .position(|l| l.contains("Open it in Slack"))
+        .unwrap_or_else(|| panic!("{all}"));
+    assert!(
+        screen[..choices]
+            .iter()
+            .any(|l| l.contains("its third line")),
+        "the message above the choices: {all}"
+    );
+    assert!(all.contains("Open a tab for this thread with Claude"));
+    assert!(!all.contains("Dismiss every message shown"), "{all}");
+    assert!(
+        !all.replace("Dismiss it, until", "").contains("Dismiss it"),
+        "one way to dismiss it: {all}"
+    );
+    // Taken, it dismisses the message, and the notification with it.
+    client.type_text("jj\r");
+    client.wait_for("the notification gone", |s| {
+        !s.iter().any(|l| l.contains("1 new on Slack"))
+    });
+    let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
+    assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
+}

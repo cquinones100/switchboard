@@ -1560,18 +1560,12 @@ impl Server {
             return;
         }
         // A Slack message is shown whole above its choices, since the row
-        // cuts it.
-        let body = (view.id == ViewId::Slack).then(|| {
-            if item.lines.is_empty() {
-                item.detail.clone()
-            } else {
-                item.lines.join("\n")
-            }
-        });
+        // cuts it: in the Slack view, and as a notification.
+        let is_slack_message = view.id == ViewId::Slack
+            || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack");
+        let body = is_slack_message.then(|| choices::whole(&item));
         // A Slack message acted on, whatever was picked, is seen.
-        let seen = (view.id == ViewId::Slack
-            || (view.id == ViewId::Notifications && choices::notice_of(&item).0 == "slack"))
-            && item.data.get("message").is_some();
+        let seen = is_slack_message && item.data.get("message").is_some();
         // A notification is dismissed after whatever is picked in its menu.
         let dismiss = (view.id == ViewId::Notifications)
             .then(|| choices::dismisses(&item))
@@ -1621,11 +1615,7 @@ impl Server {
         if list.is_empty() {
             return;
         }
-        let body = if item.lines.is_empty() {
-            item.detail.clone()
-        } else {
-            item.lines.join("\n")
-        };
+        let body = choices::whole(&item);
         let seen = choices::notice_of(&item).0 == "slack" && item.data.get("message").is_some();
         let body = (!body.is_empty()).then_some(body);
         let dismiss = choices::dismisses(&item);
@@ -1665,7 +1655,7 @@ impl Server {
                 server.slack_item_acted(item);
             }
             let label = c.label.clone();
-            let dismissed = matches!(c.act, Do::Dismiss { .. });
+            let dismissed = matches!(c.act, Do::Dismiss { .. } | Do::SlackDismiss(_));
             server.mission_do(client, c.act, &label);
             if let Some((source, item)) = dismiss.filter(|_| !dismissed) {
                 server.notice_dismiss(&source, &item);

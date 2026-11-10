@@ -768,11 +768,7 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     .map_or(item.title.as_str(), |(_, rest)| rest)
                     .trim_end_matches(" · seen")
                     .to_string();
-                let said = if item.lines.is_empty() {
-                    item.detail.clone()
-                } else {
-                    item.lines.join("\n")
-                };
+                let said = whole(item);
                 out.push(choice(
                     't',
                     "Open a tab for this thread with Claude",
@@ -911,6 +907,16 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
     out
 }
 
+/// An item's message whole, as it was written: its lines, else its detail.
+/// A Slack message's menu shows it above the choices, since the row cuts it.
+pub fn whole(item: &Item) -> String {
+    if item.lines.is_empty() {
+        item.detail.clone()
+    } else {
+        item.lines.join("\n")
+    }
+}
+
 /// A notification's source and its own id, from the id the Notifications
 /// view gives it (`<source>\t<id>`).
 pub fn notice_of(item: &Item) -> (String, String) {
@@ -936,8 +942,9 @@ pub fn notice_opens(source: &str, item: &Item) -> Option<Do> {
 }
 
 /// A notification's menu (daemon.js's `noticeChoices`): a suggestion's own
-/// choices; else what its view's menu does with it, then putting it away.
-/// Whatever is picked but a suggestion's, the notification is dismissed
+/// choices; else what its view's menu does with it, then putting it away,
+/// which for a Slack message is the Slack view's own dismissing, worded as
+/// there. Whatever is picked but a suggestion's, the notification is dismissed
 /// after, since it was dealt with (`dismisses`).
 pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let (source, id) = notice_of(item);
@@ -995,10 +1002,11 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     } else {
         match source.as_str() {
             "inbox" => item_choices(&ViewId::Inbox, &own, &[], ctx),
-            // The Slack view's menu, less its own dismissing.
+            // The Slack view's menu, less dismissing every message shown:
+            // the notifications are put away one at a time.
             "slack" => item_choices(&ViewId::Slack, &own, &[], ctx)
                 .into_iter()
-                .filter(|c| !c.label.starts_with("Dismiss"))
+                .filter(|c| c.key != 'X')
                 .collect(),
             // The Calendar view's menu on the meeting's event.
             "meeting" => {
@@ -1009,14 +1017,17 @@ pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
             _ => target_choices(&own, ctx),
         }
     };
-    out.push(choice(
-        'x',
-        "Dismiss it",
-        Do::Dismiss {
-            source,
-            item: Box::new(own),
-        },
-    ));
+    let has_its_views_dismissing = out.iter().any(|c| matches!(c.act, Do::SlackDismiss(_)));
+    if !has_its_views_dismissing {
+        out.push(choice(
+            'x',
+            "Dismiss it",
+            Do::Dismiss {
+                source,
+                item: Box::new(own),
+            },
+        ));
+    }
     out
 }
 
@@ -1316,6 +1327,27 @@ mod tests {
         let choices = notice_choices(&inbox, &c);
         assert_eq!(keys(&choices), "wsDvoyrx");
         assert!(matches!(&choices[7].act, Do::Dismiss { source, .. } if source == "inbox"));
+        // A Slack message offers the Slack view's menu, its dismissing
+        // worded as there, less dismissing every message shown.
+        let message = Item::new("slack\tD1:1.5", "DM Ada · Slack")
+            .target(Target::Url("https://slack.example/m".into()))
+            .data(json!({ "kind": "dm", "old": false,
+                "message": { "channel": "D1", "ts": "1.5" } }));
+        let choices = notice_choices(&message, &c);
+        assert_eq!(
+            choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
+            [
+                "Open it in Slack",
+                "Open a tab for this thread with Claude",
+                "Dismiss it, until its thread gets a reply"
+            ]
+        );
+        let mut own = message.clone();
+        own.id = "D1:1.5".into();
+        assert_eq!(choices[2].act, Do::SlackDismiss(vec![own]));
+        // One with no message to dismiss by keeps the plain way.
+        let bare = Item::new("slack\tD1:1.6", "DM Ada · Slack");
+        assert_eq!(keys(&notice_choices(&bare, &c)), "x");
     }
 
     #[test]

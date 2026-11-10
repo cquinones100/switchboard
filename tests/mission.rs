@@ -724,3 +724,58 @@ fn with_the_keys_view_off_m_slash_reaches_the_pane() {
             .any(|l| l.contains("MISSION CONTROL"))
     );
 }
+
+// A Slack message's notification has the Slack view's menu: the message
+// whole above the choices, since the row cuts it, and its dismissing worded
+// as there.
+#[test]
+fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let long = "the end of a first line too long for its row ".repeat(4);
+    // Sent now: a dismissal is kept two days past its message.
+    let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": 1, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+            "text": format!("{long}cut here\nits second line\nits third line"),
+            "ts": ts, "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "view_slack": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("DM Ada");
+    client.type_text("\r");
+    let screen = client.wait_text("Dismiss it, until its thread gets a reply");
+    let all = screen.join("\n");
+    let row = |text: &str| {
+        screen
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{text} isn't shown: {all}"))
+    };
+    let choices = row("Open it in Slack");
+    assert!(row("cut here") < choices, "its first line whole: {all}");
+    assert!(row("its second line") < row("its third line"), "{all}");
+    assert!(row("its third line") < choices, "above the choices: {all}");
+    assert!(
+        row("Open a tab for this thread with Claude") < row("Dismiss it, until"),
+        "{all}"
+    );
+    assert!(!all.contains("Dismiss every message shown"), "{all}");
+    assert!(
+        !all.replace("Dismiss it, until", "").contains("Dismiss it"),
+        "one way to dismiss it: {all}"
+    );
+    // Dismissed as the Slack view dismisses it: until its thread gets more.
+    pick(&mut client, "Dismiss it, until its thread gets a reply");
+    client.wait_text("No notifications.");
+    let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
+    assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
+}
