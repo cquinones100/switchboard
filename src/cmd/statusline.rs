@@ -5,10 +5,11 @@
 //! It prints the model in the project's accent color (src/tabs, so the
 //! Claude statusline and the tab agree on a project's color), then, outside
 //! the workspace, the directory and branch, which inside it the tab already
-//! shows, and the context used, colored by how full it is. With UX 2.0 on
-//! (`ux2`) and mission control's Sessions view on (`view_sessions`) it
-//! leaves the context out inside the workspace, where that view shows it; a
-//! plain terminal has no Sessions view, so there it stays.
+//! shows, and the context used, colored by how full it is, inside the
+//! workspace as outside it. Settings' `statusline_context` off leaves the
+//! context out inside the workspace while UX 2.0 (`ux2`) and mission
+//! control's Sessions view (`view_sessions`) are both on, where that view
+//! shows it; a plain terminal has no Sessions view, so there it stays.
 //!
 //! It also keeps what Claude Code tells the statusline alone, for mission
 //! control's Sessions and Usage views (src/usage/sessions.rs), under
@@ -61,9 +62,10 @@ pub fn main(_args: Vec<String>) -> ExitCode {
         &paths::state_dir(),
         &util::ymd(&util::local_now()),
     );
-    let sessions_show_the_context =
-        crate::settings::is_on("ux2") && crate::settings::is_on("view_sessions");
-    let line = line(&payload, in_workspace, sessions_show_the_context);
+    let hide_context = !crate::settings::is_on("statusline_context")
+        && crate::settings::is_on("ux2")
+        && crate::settings::is_on("view_sessions");
+    let line = line(&payload, in_workspace, hide_context);
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
@@ -85,7 +87,7 @@ fn or_empty(v: &Value) -> Option<String> {
 }
 
 /// What the statusline prints.
-pub fn line(payload: &Value, in_workspace: bool, sessions_show_the_context: bool) -> String {
+pub fn line(payload: &Value, in_workspace: bool, hide_context: bool) -> String {
     let model = raw(&payload["model"]["display_name"]);
     let raw_cwd = match &payload["workspace"]["current_dir"] {
         Value::String(s) => s.clone(),
@@ -101,16 +103,16 @@ pub fn line(payload: &Value, in_workspace: bool, sessions_show_the_context: bool
 
     let mut output = format!("{accent}{model}{RESET}");
     // Inside the workspace the tab already names the directory and branch,
-    // so only the model and context are shown there (the model alone with
-    // UX 2.0, whose Sessions view shows the context); in a plain terminal this
-    // is the only place they appear.
+    // so only the model and context are shown there (the model alone when
+    // the context is hidden for the Sessions view to show); in a plain
+    // terminal this is the only place they appear.
     if !in_workspace {
         output.push_str(&format!(" | {accent}{}{RESET}", tilde_start(&raw_cwd)));
         if let Some(p) = &place {
             output.push_str(&format!(" | {accent}{}{RESET}", p.branch));
         }
     }
-    if in_workspace && sessions_show_the_context {
+    if in_workspace && hide_context {
         return output;
     }
     match used(payload) {
@@ -365,9 +367,9 @@ mod tests {
             line(&payload, true, false),
             format!("{accent}Opus{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}")
         );
-        for sessions in [true, false] {
+        for hide_context in [true, false] {
             assert_eq!(
-                line(&payload, false, sessions),
+                line(&payload, false, hide_context),
                 format!(
                     "{accent}Opus{RESET} | {accent}/nowhere/at-all{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}"
                 )
@@ -375,9 +377,10 @@ mod tests {
         }
         let bare =
             json!({ "model": { "display_name": "Haiku" }, "workspace": { "current_dir": "/x" } });
-        for (in_workspace, sessions) in [(true, true), (true, false), (false, true), (false, false)]
+        for (in_workspace, hide_context) in
+            [(true, true), (true, false), (false, true), (false, false)]
         {
-            assert!(!line(&bare, in_workspace, sessions).contains("Context"));
+            assert!(!line(&bare, in_workspace, hide_context).contains("Context"));
         }
     }
 

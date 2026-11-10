@@ -1966,6 +1966,40 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
     assert!(!state.join("x").exists() && !state.join("context/../x").exists());
 }
 
+#[test]
+fn the_statusline_shows_the_context_in_the_workspace_unless_its_setting_is_off() {
+    let h = Home::new("statusline-context");
+    let payload = json!({
+        "model": { "display_name": "Opus" },
+        "workspace": { "current_dir": h.home.to_string_lossy() },
+        "context_window": { "used_percentage": 12.5 }
+    });
+    h.settings(json!({ "ux2": true, "view_sessions": true }));
+    let line = statusline(&h, &payload, true);
+    assert!(
+        line.ends_with("Context: \x1b[97m12.5% used\x1b[0m"),
+        "on by default, beside the Sessions view: {line:?}"
+    );
+
+    h.settings(json!({ "ux2": true, "view_sessions": true, "statusline_context": false }));
+    let line = statusline(&h, &payload, true);
+    assert!(line.contains("Opus"), "{line:?}");
+    assert!(
+        !line.contains("Context:"),
+        "off, the Sessions view shows it: {line:?}"
+    );
+    assert!(
+        statusline(&h, &payload, false).contains("Context:"),
+        "a plain terminal has no Sessions view"
+    );
+
+    h.settings(json!({ "ux2": true, "view_sessions": false, "statusline_context": false }));
+    assert!(
+        statusline(&h, &payload, true).contains("Context:"),
+        "off with no Sessions view, nothing else shows it"
+    );
+}
+
 // ── What the skills ask of the server ───────────────────────────────────────
 
 #[test]

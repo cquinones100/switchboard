@@ -725,6 +725,13 @@
     "default": true
   },
   {
+    "key": "statusline_context",
+    "category": "Sessions",
+    "label": "Context in Claude's status line",
+    "description": "Claude Code's status line under its prompt says how full the context is, beside the model, inside the workspace as outside it. Off, with UX 2.0 and mission control's Sessions view on, the status line inside the workspace shows the model alone and the Sessions view shows the context; without both of those it shows the context anyway",
+    "default": true
+  },
+  {
     "key": "review_rules",
     "category": "Safety",
     "label": "Rules in reviews",
