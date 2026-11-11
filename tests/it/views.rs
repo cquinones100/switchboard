@@ -249,6 +249,165 @@ mod with_github {
         client.wait_for("the board gone", |s| !s.iter().any(|l| l.contains("FILES")));
     }
 
+    /// A stand-in for GitHub with a PR whose first hundred checks all pass,
+    /// a failing one coming on the second page, and whose first hundred
+    /// review threads are all resolved, an open one on the second page:
+    /// each second page answered only for the first page's cursor.
+    fn paged_github() -> Fake {
+        Fake::github("test-token", |request| {
+            if request.path() != "/graphql" {
+                return None;
+            }
+            let body = request.json();
+            let asked = body["query"].as_str().unwrap_or("").to_string();
+            let after = body["variables"]["after"].as_str().map(str::to_string);
+            let pr = json!({
+                "number": 12, "url": "https://github.com/acme/widgets/pull/12",
+                "title": "Fix the login", "state": "OPEN", "isDraft": false,
+                "baseRefName": "main", "headRefName": "feature-x",
+                "headRepositoryOwner": {"login": "acme"}, "author": {"login": "jo"},
+                "commits": {"totalCount": 2}, "changedFiles": 0, "body": "Why."
+            });
+            let in_pr = |pr: Value| json!({"data": {"repository": {"pullRequest": pr}}});
+            let page = |nodes: Vec<Value>, next: Option<&str>| json!({"pageInfo": {"hasNextPage": next.is_some(), "endCursor": next}, "nodes": nodes});
+            let answer = if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": [pr]}}}})
+            } else if asked.contains("mergeStateStatus") {
+                let checks = match after.as_deref() {
+                    None => page(
+                        (0..100)
+                            .map(|i| json!({"__typename": "CheckRun", "name": format!("job {i}"), "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true}))
+                            .collect(),
+                        Some("checks-1"),
+                    ),
+                    Some("checks-1") => page(
+                        vec![json!({"__typename": "CheckRun", "name": "late e2e", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": true, "detailsUrl": "https://ci.example/9"})],
+                        None,
+                    ),
+                    Some(other) => panic!("asked after {other}"),
+                };
+                let mut checks = checks;
+                checks["checkRunCountsByState"] =
+                    json!([{"state": "SUCCESS", "count": 100}, {"state": "FAILURE", "count": 1}]);
+                checks["statusContextCountsByState"] = json!([]);
+                let mut pr = pr;
+                pr["mergeable"] = json!("MERGEABLE");
+                pr["mergeStateStatus"] = json!("BLOCKED");
+                pr["reviewDecision"] = json!("APPROVED");
+                pr["commits"] =
+                    json!({"nodes": [{"commit": {"statusCheckRollup": {"contexts": checks}}}]});
+                in_pr(pr)
+            } else if asked.contains("reviewThreads") {
+                let thread = |open: bool, path: &str| {
+                    json!({"isResolved": !open, "path": path, "line": 3,
+                        "comments": {"totalCount": 1, "nodes": [{"author": {"login": "ana"}, "body": "Look here."}]},
+                        "latest": {"nodes": [{"author": {"login": "ana"}, "body": "Look here."}]}})
+                };
+                let threads = match after.as_deref() {
+                    None => page(
+                        (0..100)
+                            .map(|i| thread(false, &format!("done{i}.rs")))
+                            .collect(),
+                        Some("threads-1"),
+                    ),
+                    Some("threads-1") => page(vec![thread(true, "src/late.rs")], None),
+                    Some(other) => panic!("asked after {other}"),
+                };
+                let mut pr = if asked.contains("files(") {
+                    pr
+                } else {
+                    json!({})
+                };
+                pr["reviewThreads"] = threads;
+                in_pr(pr)
+            } else {
+                in_pr(pr)
+            };
+            Some(Reply::json(200, answer))
+        })
+    }
+
+    /// A repository on feature-x with origin on GitHub, in the test's home.
+    fn widgets(server: &TestServer) -> std::path::PathBuf {
+        let work = server.dir.path().join("widgets");
+        std::fs::create_dir_all(&work).unwrap();
+        git(&work, &["init", "-q"]);
+        git(&work, &["symbolic-ref", "HEAD", "refs/heads/feature-x"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(
+            &work,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widgets.git",
+            ],
+        );
+        work
+    }
+
+    fn cd(server: &TestServer, client: &mut common::TestClient, dir: &Path) {
+        client.type_text(&format!("cd {}\r", dir.display()));
+        let deadline = common::deadline(std::time::Duration::from_secs(10));
+        while !panes(server)[0]["cwd"]
+            .as_str()
+            .is_some_and(|d| d.ends_with("widgets"))
+        {
+            assert!(Instant::now() < deadline, "the shell didn't cd");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[test]
+    fn m_m_shows_a_check_failing_past_the_first_page() {
+        let fake = paged_github();
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+        ]);
+        settings(&server, json!({"linear": false}));
+        let work = widgets(&server);
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        client.send(b"\x1bm");
+        client.wait_text("100 pass, 1 fail");
+        client.wait_text("See the failing checks");
+        client.send(b"\r");
+        client.wait_text("Failing checks of #12");
+        client.wait_text("late e2e");
+        client.wait_text("https://ci.example/9");
+    }
+
+    #[test]
+    fn m_v_counts_an_open_thread_past_the_first_page() {
+        let fake = paged_github();
+        let server = TestServer::start_with_env_and_settings(
+            &[
+                ("GH_TOKEN", "test-token"),
+                ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+                ("SWITCHBOARD_GITHUB_API", &fake.url),
+            ],
+            &json!({"notifications": false, "tips": false, "linear": false, "ux2": true, "sidebar": false, "photos": false}).to_string(),
+        );
+        let work = widgets(&server);
+        let mut client = server.attach(140, 36);
+        client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        client.send(b"\x1bv");
+        let screen = client.wait_text("REVIEW COMMENTS");
+        let row = screen
+            .iter()
+            .find(|l| l.contains("REVIEW COMMENTS"))
+            .unwrap();
+        assert!(row.trim_end().ends_with("1 open"), "{row:?}");
+        client.wait_text("src/late.rs:3");
+    }
+
     #[test]
     fn the_branch_s_ticket_and_pr_are_copied_and_its_merge_queue_opened() {
         let fake = fake_github();

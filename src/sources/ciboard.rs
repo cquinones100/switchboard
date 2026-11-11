@@ -2,7 +2,9 @@
 //! pull requests whose checks are failing, in the repositories your tabs are
 //! in (and a fork's upstream, as the PR board searches them), each with the
 //! checks that failed and the line of its log that says why. One search for
-//! the pull requests and their checks, then the log of each one's first
+//! the pull requests and their first hundred checks (and, for a failing PR
+//! whose failures aren't among them, the rest a hundred a query, through
+//! `github::rest_of`), then the log of each one's first
 //! failing GitHub Actions job, read once (a finished job's log doesn't
 //! change) and kept in `ci-logs/<job>.log` in the state directory for "Read
 //! the failing log"; at most `MAX_LOGS` are read a look, and the logs of
@@ -29,9 +31,22 @@ const FAILED: [&str; 5] = [
     "ERROR",
 ];
 const FIELDS: &str = "... on PullRequest { number title url headRefName repository { nameWithOwner } \
-  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes { \
+  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { \
+    pageInfo { hasNextPage endCursor } nodes { \
     __typename ... on CheckRun { name conclusion detailsUrl } ... on StatusContext { context state targetUrl } \
   } } } } } } }";
+/// One PR's checks a page at a time, for a failing PR whose failures
+/// GitHub didn't put on the search's first page.
+const CHECKS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { \
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) { \
+    pageInfo { hasNextPage endCursor } nodes { \
+    __typename ... on CheckRun { name conclusion detailsUrl } ... on StatusContext { context state targetUrl } \
+  } } } } } } } } }";
+/// Where a PR's checks are, in the search's answer and in `CHECKS_QUERY`'s.
+const CONTEXTS: &str = "/commits/nodes/0/commit/statusCheckRollup/contexts";
+/// The most pages of a PR's checks read, a thousand checks.
+const CHECK_PAGES: usize = 10;
 
 /// A failing check: its name, its page, and its GitHub Actions job's id
 /// when it is one.
@@ -191,6 +206,46 @@ pub(crate) async fn read_log(repo: &str, job: &str) -> Option<String> {
     Some(log)
 }
 
+/// Whether a PR's checks past the search's first page are needed: GitHub
+/// says its checks failed, none of the first page's did, and there are more.
+fn needs_rest(pr: &Value) -> bool {
+    let rollup = text(pr, "/commits/nodes/0/commit/statusCheckRollup/state");
+    let more = pr
+        .pointer(&format!("{CONTEXTS}/pageInfo/hasNextPage"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    FAILED.contains(&rollup) && more && failing_of(pr).is_empty()
+}
+
+/// Every check of a PR, the search's first page and the rest; none for a
+/// PR the search didn't name a repository and number for.
+async fn rest_of_checks(pr: &Value) -> anyhow::Result<Option<github::Paged>> {
+    let (Some((owner, name)), Some(number), Some(first)) = (
+        text(pr, "/repository/nameWithOwner").split_once('/'),
+        pr.get("number").and_then(Value::as_u64),
+        pr.pointer(CONTEXTS),
+    ) else {
+        return Ok(None);
+    };
+    let paged = github::rest_of(
+        CHECKS_QUERY,
+        &json!({ "owner": owner, "name": name, "number": number }),
+        &format!("/repository/pullRequest{CONTEXTS}"),
+        first,
+        CHECK_PAGES,
+        "sidebar: CI",
+    )
+    .await?;
+    Ok(Some(paged))
+}
+
+/// The PR with every check read in place of the first page's.
+fn with_checks(pr: &mut Value, paged: github::Paged) {
+    if let Some(contexts) = pr.pointer_mut(CONTEXTS) {
+        contexts["nodes"] = Value::Array(paged.nodes);
+    }
+}
+
 /// Looks for your failing PRs in the repositories, and why each fails.
 pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result<Vec<Item>> {
     let query = format!(
@@ -203,11 +258,18 @@ pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result
         "sidebar: CI",
     )
     .await?;
-    let prs = data
+    let mut prs = data
         .pointer("/search/nodes")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    // A page that can't be read fails the look, so the view keeps what the
+    // last one found rather than dropping a PR whose failure it can't see.
+    for pr in prs.iter_mut().filter(|p| needs_rest(p)) {
+        if let Some(paged) = rest_of_checks(pr).await? {
+            with_checks(pr, paged);
+        }
+    }
     let mut logs = 0;
     let mut items = Vec::new();
     for pr in prs.iter().filter(|p| p.get("number").is_some()) {
@@ -275,6 +337,32 @@ mod tests {
             readable(log),
             "Run tests\nFAIL a test\n\nError: Process completed with exit code 1."
         );
+    }
+
+    #[test]
+    fn a_failure_past_the_first_page_of_checks_is_found_once_the_rest_is_read() {
+        let passing: Vec<Value> = (0..100)
+            .map(|i| json!({ "__typename": "CheckRun", "name": format!("job {i}"), "conclusion": "SUCCESS" }))
+            .collect();
+        let mut pr = json!({ "number": 9, "repository": { "nameWithOwner": "o/r" },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE", "contexts": {
+                "pageInfo": { "hasNextPage": true, "endCursor": "c1" }, "nodes": passing.clone() } } } }] } });
+        assert!(failing_of(&pr).is_empty());
+        assert!(needs_rest(&pr));
+        let mut nodes = passing;
+        nodes.push(json!({ "__typename": "CheckRun", "name": "e2e", "conclusion": "FAILURE", "detailsUrl": "https://github.com/o/r/actions/runs/1/job/12" }));
+        with_checks(
+            &mut pr,
+            github::Paged {
+                nodes,
+                complete: true,
+            },
+        );
+        let failing = failing_of(&pr);
+        assert_eq!(failing.len(), 1);
+        assert_eq!(failing[0].name, "e2e");
+        assert_eq!(failing[0].job.as_deref(), Some("12"));
+        assert!(!needs_rest(&pr), "found on the pages read");
     }
 
     #[test]

@@ -230,6 +230,81 @@ pub async fn graphql_partial(
         .map(|(data, errors, _)| (data, errors))
 }
 
+/// Every node of a connection GitHub sends a page at a time, and whether
+/// they are all there: false when `cap` pages were read and GitHub said
+/// there were more.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Paged {
+    pub nodes: Vec<Value>,
+    pub complete: bool,
+}
+
+/// The rest of a connection whose first page (its `nodes` and `pageInfo {
+/// hasNextPage endCursor }`) is `first`: `query` asked again with `after`
+/// set to the last page's `endCursor`, its connection found in the answer's
+/// `data` at the pointer `connection`, until GitHub says there are no more
+/// or `cap` pages (the first among them) are read. Every node, in order,
+/// the first page's first; each page is a `graphql` call of its own, so the
+/// request audit counts it as it counts the first.
+pub async fn rest_of(
+    query: &str,
+    variables: &Value,
+    connection: &str,
+    first: &Value,
+    cap: usize,
+    source: &str,
+) -> Result<Paged> {
+    pages_after(first, cap, |after| {
+        let mut asked = variables.clone();
+        asked["after"] = Value::String(after);
+        async move {
+            let data = graphql(query, asked, source).await?;
+            Ok(data.pointer(connection).cloned().unwrap_or(Value::Null))
+        }
+    })
+    .await
+}
+
+// `rest_of`'s paging, with how a page after a cursor is read given, so it
+// is tested without GitHub.
+async fn pages_after<F, Fut>(first: &Value, cap: usize, mut next: F) -> Result<Paged>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Value>>,
+{
+    let nodes_of = |page: &Value| {
+        page.get("nodes")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut nodes = nodes_of(first);
+    let mut page = first.clone();
+    let mut read = 1;
+    loop {
+        let more = page
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            == Some(true);
+        let cursor = page.pointer("/pageInfo/endCursor").and_then(Value::as_str);
+        let (true, Some(cursor)) = (more, cursor) else {
+            return Ok(Paged {
+                nodes,
+                complete: true,
+            });
+        };
+        if read >= cap {
+            return Ok(Paged {
+                nodes,
+                complete: false,
+            });
+        }
+        page = next(cursor.to_string()).await?;
+        nodes.extend(nodes_of(&page));
+        read += 1;
+    }
+}
+
 // `graphql_partial`'s answer, with the response its errors came in, for a
 // caller that takes some of them as failing the whole (`graphql_error`).
 async fn graphql_answer(
@@ -956,6 +1031,58 @@ pub async fn open_fork_prs(repo: &Repo, source: &str) -> Result<Vec<ForkPr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn page(names: &[&str], next: Option<&str>) -> Value {
+        json!({
+            "nodes": names.iter().map(|n| json!({"name": n})).collect::<Vec<_>>(),
+            "pageInfo": {"hasNextPage": next.is_some(), "endCursor": next},
+        })
+    }
+
+    fn names(paged: &Paged) -> Vec<&str> {
+        paged
+            .nodes
+            .iter()
+            .map(|n| n["name"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn the_pages_after_the_first_are_read_in_order_with_each_cursor() {
+        let mut asked = Vec::new();
+        let paged = util::block_on(pages_after(&page(&["a", "b"], Some("c1")), 10, |after| {
+            asked.push(after.clone());
+            let answer = match after.as_str() {
+                "c1" => page(&["c"], Some("c2")),
+                _ => page(&["d"], None),
+            };
+            async move { Ok(answer) }
+        }))
+        .unwrap();
+        assert_eq!(names(&paged), ["a", "b", "c", "d"]);
+        assert!(paged.complete);
+        assert_eq!(asked, ["c1", "c2"]);
+    }
+
+    #[test]
+    fn a_single_page_asks_nothing_and_the_cap_stops_the_rest() {
+        let paged = util::block_on(pages_after(&page(&["a"], None), 10, |_| async {
+            panic!("asked for a second page")
+        }))
+        .unwrap();
+        assert_eq!(names(&paged), ["a"]);
+        assert!(paged.complete);
+
+        let mut asked = 0;
+        let paged = util::block_on(pages_after(&page(&["a"], Some("c")), 3, |_| {
+            asked += 1;
+            async { Ok(page(&["more"], Some("c"))) }
+        }))
+        .unwrap();
+        assert_eq!(asked, 2, "three pages, the first among them");
+        assert_eq!(names(&paged), ["a", "more", "more"]);
+        assert!(!paged.complete);
+    }
 
     fn repo(owner: &str, name: &str) -> Option<Repo> {
         Some(Repo {

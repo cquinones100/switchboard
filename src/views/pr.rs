@@ -43,11 +43,22 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { rep
       ... on CheckRun { name status conclusion } ... on StatusContext { context state } } } } } } } \
     reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } \
     latestReviews(first: 20) { nodes { author { login } state } } \
-    reviewThreads(first: 50) { nodes { isResolved path line \
+    reviewThreads(first: 100) { pageInfo { hasNextPage endCursor } nodes { isResolved path line \
       comments(first: 1) { totalCount nodes { author { login } body } } \
       latest: comments(last: 1) { nodes { author { login } body } } } } \
     files(first: 100) { nodes { path additions deletions } } \
     comments(first: 100) { nodes { author { login } body createdAt } } } } }";
+
+/// The PR's review threads after the first hundred, a page at a time, for
+/// the panel to count the open ones among them all: GitHub can't be asked
+/// for only the unresolved ones.
+const THREADS_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { \
+    repository(owner: $owner, name: $name) { pullRequest(number: $number) { \
+    reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { isResolved path line \
+      comments(first: 1) { totalCount nodes { author { login } body } } \
+      latest: comments(last: 1) { nodes { author { login } body } } } } } } }";
+/// The most pages of review threads read, five hundred threads.
+const THREAD_PAGES: usize = 5;
 
 /// The PR as Markdown: pr-view.js's header over its description.
 pub fn markdown(pr: &Value) -> String {
@@ -437,18 +448,29 @@ pub fn cache_file(dir: &Path) -> Option<PathBuf> {
     )
 }
 
-/// A PR by its number, with the fields `gh pr view --json` gave.
+/// A PR by its number, with the fields `gh pr view --json` gave, and every
+/// review thread (up to `THREAD_PAGES` pages of them).
 pub async fn by_number(repo: &github::Repo, number: u64, source: &str) -> anyhow::Result<Value> {
-    let data = github::graphql(
-        QUERY,
-        json!({ "owner": repo.owner, "name": repo.name, "number": number }),
-        source,
-    )
-    .await?;
-    data.pointer("/repository/pullRequest")
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": number });
+    let data = github::graphql(QUERY, variables.clone(), source).await?;
+    let mut pr = data
+        .pointer("/repository/pullRequest")
         .filter(|pr| pr.is_object())
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("GitHub has no PR #{number} in {repo}."))
+        .ok_or_else(|| anyhow::anyhow!("GitHub has no PR #{number} in {repo}."))?;
+    if let Some(first) = pr.get("reviewThreads").cloned() {
+        let paged = github::rest_of(
+            THREADS_QUERY,
+            &variables,
+            "/repository/pullRequest/reviewThreads",
+            &first,
+            THREAD_PAGES,
+            source,
+        )
+        .await?;
+        pr["reviewThreads"]["nodes"] = Value::Array(paged.nodes);
+    }
+    Ok(pr)
 }
 
 /// The PR for the branch checked out in `dir`, or why there is none, in

@@ -16,9 +16,11 @@
 //! Where pr-ready.sh asked gh three times (the PR, its queue entry and
 //! checks counted by outcome, and `gh pr checks --required` one by one),
 //! one GraphQL query gives it all here: the counts by state, and each of
-//! the first hundred checks with whether it is required. GitHub works out
-//! mergeability lazily, so an UNKNOWN is asked again, up to three times a
-//! second apart, as pr-ready.sh did.
+//! the first hundred checks with whether it is required, and the rest a
+//! hundred a query (`github::rest_of`, up to a thousand) only when a check
+//! failed or is running, since a failure can be anywhere in GitHub's list.
+//! GitHub works out mergeability lazily, so an UNKNOWN is asked again, up
+//! to three times a second apart, as pr-ready.sh did.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -40,11 +42,12 @@ use crate::util;
 
 const SOURCE: &str = "M-m PR check";
 
-const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { \
+const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $after: String) { repository(owner: $owner, name: $name) { \
     pullRequest(number: $number) { number title url state isDraft mergeable mergeStateStatus reviewDecision \
     autoMergeRequest { enabledAt } mergeQueueEntry { state position } \
-    commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { \
+    commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100, after: $after) { \
     checkRunCountsByState { state count } statusContextCountsByState { state count } \
+    pageInfo { hasNextPage endCursor } \
     nodes { __typename \
       ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) } \
       ... on StatusContext { context state targetUrl description isRequired(pullRequestNumber: $number) } \
@@ -371,27 +374,65 @@ pub fn answer_from(pr: &Value) -> Answer {
     Answer { lines, choices }
 }
 
+/// Where the PR's checks are in M-m's answer, from the PR and from `data`.
+const CONTEXTS: &str = "/commits/nodes/0/commit/statusCheckRollup/contexts";
+/// The most pages of checks read, a thousand checks.
+const CHECK_PAGES: usize = 10;
+
+/// Whether the checks GitHub left off the first page are needed: its
+/// counts say a check failed or is still running, so the list of them has
+/// to have every check, and there are more pages. A PR whose checks all
+/// passed, or that has a hundred or fewer, costs one query.
+fn needs_rest(pr: &Value) -> bool {
+    let Some(contexts) = pr.pointer(CONTEXTS) else {
+        return false;
+    };
+    let unsettled = ["checkRunCountsByState", "statusContextCountsByState"]
+        .iter()
+        .filter_map(|k| contexts.get(*k).and_then(Value::as_array))
+        .flatten()
+        .any(|c| {
+            c.get("count").and_then(Value::as_u64).unwrap_or(0) > 0
+                && matches!(
+                    bucket(c.get("state").and_then(Value::as_str).unwrap_or("")),
+                    "fail" | "pending"
+                )
+        });
+    let more = contexts
+        .pointer("/pageInfo/hasNextPage")
+        .and_then(Value::as_bool)
+        == Some(true);
+    unsettled && more
+}
+
+/// The PR with every check read in place of the first page's.
+fn with_checks(mut pr: Value, paged: github::Paged) -> Value {
+    if let Some(contexts) = pr.pointer_mut(CONTEXTS) {
+        contexts["nodes"] = Value::Array(paged.nodes);
+    }
+    pr
+}
+
 /// The PR for `dir`'s branch as M-m's query gives it, asked again while
-/// GitHub hasn't worked out whether it can merge.
-async fn pr_state(dir: &Path) -> Result<(github::Repo, Value), String> {
+/// GitHub hasn't worked out whether it can merge, with every check when
+/// any failed or is running (`needs_rest`), and whether every check is
+/// there: false when there were more than `CHECK_PAGES` pages.
+async fn pr_state(dir: &Path) -> Result<(github::Repo, Value, bool), String> {
     let found = github::branch_pr(dir, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
     let Some((repo, pr)) = found else {
         return Err("No pull request for this branch.".into());
     };
+    let variables = json!({ "owner": repo.owner, "name": repo.name, "number": pr.number });
     let mut answer = Value::Null;
     for attempt in 0..3 {
         if attempt > 0 {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        let data = github::graphql(
-            QUERY,
-            json!({ "owner": repo.owner, "name": repo.name, "number": pr.number }),
-            SOURCE,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let data = github::graphql(QUERY, variables.clone(), SOURCE)
+            .await
+            .map_err(|e| e.to_string())?;
         answer = data
             .pointer("/repository/pullRequest")
             .cloned()
@@ -400,13 +441,35 @@ async fn pr_state(dir: &Path) -> Result<(github::Repo, Value), String> {
             break;
         }
     }
-    Ok((repo, answer))
+    if !needs_rest(&answer) {
+        return Ok((repo, answer, true));
+    }
+    let first = answer.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
+    let paged = github::rest_of(
+        QUERY,
+        &variables,
+        &format!("/repository/pullRequest{CONTEXTS}"),
+        &first,
+        CHECK_PAGES,
+        SOURCE,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let complete = paged.complete;
+    Ok((repo, with_checks(answer, paged), complete))
 }
 
 /// M-m's answer for `dir`, or why there is none.
 pub async fn check(dir: PathBuf) -> Result<Answer, String> {
-    let (_, pr) = pr_state(&dir).await?;
-    Ok(answer_from(&pr))
+    let (_, pr, complete) = pr_state(&dir).await?;
+    let mut answer = answer_from(&pr);
+    if !complete {
+        answer.lines.push(Line::from(Span::styled(
+            "The counts of required checks leave out the ones GitHub didn't send.",
+            dim(),
+        )));
+    }
+    Ok(answer)
 }
 
 static JOB: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/actions/runs/\d+/job/(\d+)").unwrap());
@@ -417,7 +480,14 @@ static STAMP: LazyLock<Regex> =
 /// a GitHub Actions job's last 25 lines of log, as pr-ready.sh's
 /// `failing` showed them in less.
 pub async fn failing_markdown(dir: &Path) -> Result<String, String> {
-    let (repo, pr) = pr_state(dir).await?;
+    let (repo, pr, complete) = pr_state(dir).await?;
+    Ok(failing_text(&repo, &pr, complete).await)
+}
+
+/// `failing_markdown`'s text for the PR as `pr_state` read it: when GitHub
+/// had more checks than were read, it ends saying so rather than that
+/// nothing is failing.
+async fn failing_text(repo: &github::Repo, pr: &Value, complete: bool) -> String {
     let nodes: Vec<Value> = pr
         .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts/nodes")
         .and_then(Value::as_array)
@@ -471,10 +541,12 @@ pub async fn failing_markdown(dir: &Path) -> Result<String, String> {
             }
         }
     }
-    if !any {
+    if !complete {
+        out.push_str("_And more checks GitHub didn't send._\n");
+    } else if !any {
         out.push_str("_No check is failing now._\n");
     }
-    Ok(out)
+    out
 }
 
 /// `switchboard pr-view --checks [dir]`: the failing checks, paged.
@@ -770,6 +842,64 @@ mod tests {
                 .text()
                 .ends_with("In the merge queue at position 2, waiting on the queue's checks.")
         );
+    }
+
+    #[test]
+    fn a_check_failing_past_the_first_page_is_read_and_listed() {
+        let passing: Vec<Value> = (0..100)
+            .map(|i| json!({ "__typename": "CheckRun", "name": format!("job {i}"), "status": "COMPLETED", "conclusion": "SUCCESS", "isRequired": true }))
+            .collect();
+        let mut first = pr("OPEN", "BLOCKED", "MERGEABLE");
+        first["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"] = json!({
+            "checkRunCountsByState": [{ "state": "SUCCESS", "count": 100 }, { "state": "FAILURE", "count": 1 }],
+            "statusContextCountsByState": [],
+            "pageInfo": { "hasNextPage": true, "endCursor": "c1" },
+            "nodes": passing,
+        });
+        assert!(needs_rest(&first));
+        let mut all_passed = first.clone();
+        all_passed["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["checkRunCountsByState"] =
+            json!([{ "state": "SUCCESS", "count": 101 }]);
+        assert!(
+            !needs_rest(&all_passed),
+            "nothing past the first page to find"
+        );
+
+        let mut nodes = passing_nodes(&first);
+        nodes.push(json!({ "__typename": "CheckRun", "name": "e2e", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": true }));
+        let pr = with_checks(
+            first,
+            github::Paged {
+                nodes,
+                complete: true,
+            },
+        );
+        let answer = answer_from(&pr);
+        assert!(
+            answer.text().contains("Required checks   100 pass, 1 fail"),
+            "{}",
+            answer.text()
+        );
+        assert_eq!(answer.choices, vec![Choice::SeeFailing]);
+        let repo = github::Repo {
+            owner: "acme".into(),
+            name: "w".into(),
+        };
+        let text = util::block_on(failing_text(&repo, &pr, true));
+        assert!(text.contains("## e2e"), "{text}");
+        assert!(!text.contains("No check is failing"), "{text}");
+        let text = util::block_on(failing_text(&repo, &pr, false));
+        assert!(
+            text.ends_with("## e2e\n\n_And more checks GitHub didn't send._\n"),
+            "{text}"
+        );
+    }
+
+    fn passing_nodes(pr: &Value) -> Vec<Value> {
+        pr.pointer(&format!("{CONTEXTS}/nodes"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap()
     }
 
     #[test]
