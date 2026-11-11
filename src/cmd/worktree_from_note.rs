@@ -532,7 +532,8 @@ pub fn item_text(text: &str, line: usize) -> String {
 /// `<note's ID>: <item's first line>`, the ID read from the note's text, so
 /// a note renamed or moved keeps its claims; a claim from before notes had
 /// IDs that wtn couldn't place still reads `<note's path within the notes
-/// directory>: <item's first line>`. An item counts as taken only while its
+/// directory>: <item's first line>`. An item worded the same as one claimed
+/// from another note is the same item, copied there, and taken too. An item counts as taken only while its
 /// branch is checked out in a worktree, so one whose worktree was removed,
 /// its branch kept, shows again. `repo` is any directory of the repository.
 pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
@@ -552,13 +553,21 @@ pub fn unclaimed(repo: &Path, note: &str, text: &str) -> Vec<Item> {
             checked_out.contains(branch).then_some(value)
         })
         .collect();
+    // The same first line claimed from another note is the same item, which
+    // wtn would take over (`run`), so it is taken here too.
+    let words: HashSet<&str> = claimed
+        .iter()
+        .filter_map(|c| id::claim_of(c).map(|(_, text)| text))
+        .collect();
     items(text)
         .into_iter()
         .filter(|item| {
             let by_id = note_id
                 .as_ref()
                 .is_some_and(|id| claimed.contains(format!("{id}: {}", item.text).as_str()));
-            !by_id && !claimed.contains(format!("{note}: {}", item.text).as_str())
+            !by_id
+                && !words.contains(item.text.as_str())
+                && !claimed.contains(format!("{note}: {}", item.text).as_str())
         })
         .collect()
 }
@@ -970,7 +979,9 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     // has none) and the item's first line, kept in its git config, so
     // another item whose first line slugs the same, in this note or another,
     // is refused rather than started inside this one's work, and the note
-    // renamed or moved since is still the same note. Claims from before
+    // renamed or moved since is still the same note. The same first line in
+    // another note is the same item, copied there: its worktree is taken
+    // over and the claim moved to this note. Claims from before
     // notes had IDs, by the note's path, are brought to IDs once first.
     let unplaced = id::migrate_claims(&root, &dir);
     if !unplaced.is_empty() {
@@ -995,34 +1006,54 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     // A claim from before IDs that the migration couldn't place, its note
     // back at that path since, is this item's too, and is rewritten below.
     let by_path = recorded == format!("{relative}: {first}");
-    if !recorded.is_empty() && recorded != identity && !by_path {
-        // The other item named by its words and its note's title, found by
-        // its ID wherever it is now.
-        let other = match id::claim_of(&recorded) {
-            Some((other_id, other_text)) => {
-                let title = id::find_by_id(other_id, &dir).map(|f| {
-                    fs::read_to_string(&f)
-                        .ok()
-                        .and_then(|t| id::title_of(&t))
-                        .unwrap_or_else(|| {
-                            f.file_stem()
-                                .map(|s| s.to_string_lossy().into_owned())
-                                .unwrap_or_default()
-                        })
-                });
-                format!(
-                    "\"{other_text}\" in {}",
-                    title.unwrap_or_else(|| "a note no longer there".into())
-                )
-            }
+    let other_note = id::claim_of(&recorded).filter(|_| recorded != identity && !by_path);
+    // The other note, found by its ID wherever it is now, its title and
+    // whether it still has an unticked item reading `first`.
+    let other_title = other_note.map(|(other_id, other_text)| {
+        let found = id::find_by_id(other_id, &dir).map(|f| {
+            let text = fs::read_to_string(&f).unwrap_or_default();
+            let title = id::title_of(&text).unwrap_or_else(|| {
+                f.file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            });
+            let open = items(&text).iter().any(|i| i.text == other_text);
+            (title, open)
+        });
+        (other_text, found)
+    });
+    if let Some((other_text, found)) = &other_title
+        && *other_text == first
+    {
+        let (from, open) = match found {
+            Some((title, open)) => (title.as_str(), *open),
+            None => ("a note no longer there", false),
+        };
+        let still = if open {
+            format!("; it is still open in {from} too")
+        } else {
+            String::new()
+        };
+        eprintln!("Taking over {branch}, started from {from}{still}.");
+    } else if !recorded.is_empty() && recorded != identity && !by_path {
+        let other = match &other_title {
+            Some((other_text, found)) => format!(
+                "\"{other_text}\" in {}",
+                found
+                    .as_ref()
+                    .map(|(title, _)| title.as_str())
+                    .unwrap_or("a note no longer there")
+            ),
             None => format!("\"{recorded}\""),
         };
-        return Err(format!(
+        let refusal = format!(
             "{branch} is for another item: {other}.\n\
              Land or remove that worktree first, or, if the item was only reworded, tell git it is the same one:\n  \
              git config {key} '{}'",
             identity.replace('\'', r"'\''")
-        ));
+        );
+        refused_in_autopilot(&format!("{branch} is for another item: {other}."));
+        return Err(refusal);
     }
     let target = given.last("--target").filter(|t| !t.is_empty());
     let start = start_point(&root, target)?;
@@ -1131,6 +1162,15 @@ fn tab_option(option: &str) -> Option<String> {
 /// (`@autopilot_handsfree`, which autopilot sets as it opens the tab).
 fn in_hands_free_tab() -> bool {
     tab_option(crate::autopilot::HANDS_FREE).as_deref() == Some("1")
+}
+
+/// In a tab autopilot opened (`@autopilot`), why wtn refused its item, set
+/// as the tab's `@autopilot_refused`, so autopilot skips the item with that
+/// reason and closes the tab rather than leave a slot waiting at a shell.
+fn refused_in_autopilot(why: &str) {
+    if tab_option(crate::autopilot::OPENED).is_some() {
+        let _ = crate::mux::socket::ask(&["set", crate::autopilot::REFUSED, why]);
+    }
 }
 
 /// The settings a tab of autopilot's starts its Claude with, for that

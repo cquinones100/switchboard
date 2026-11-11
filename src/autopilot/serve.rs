@@ -77,6 +77,12 @@ pub const PUSHED: &str = "@autopilot_pushed";
 /// Landed and made yours by a prompt typed in it since: the mode lets go
 /// of it, while its item stays under the view's Landed.
 pub const YOURS: &str = "@autopilot_yours";
+/// Why wtn refused the tab's item (its claim check), which wtn sets as it
+/// exits: the item is skipped and the tab closed, so no slot waits at the
+/// shell wtn leaves.
+pub const REFUSED: &str = "@autopilot_refused";
+/// What its notification says of a refused item, after the item.
+const REFUSED_SAID: &str = "wtn refused it";
 /// The marks of what the mode has a tab do, taken off once it is yours.
 const WORKING: [&str; 3] = [LAND, HANDS_FREE, NUDGED];
 
@@ -909,6 +915,7 @@ impl Server {
     /// Every tick: the mode read again, its tabs marked, and the next item
     /// read or opened when it is time.
     pub fn autopilot_tick(&mut self) {
+        self.autopilot_refused();
         let state = paths::state_dir();
         let mut mode = Mode::read(&state);
         // Hands-free counts only while its setting allows it.
@@ -1221,6 +1228,7 @@ impl Server {
                         self.autopilot_closed_unseen(m);
                     }
                     self.autopilot_close_tab(t);
+                    eprintln!("autopilot: closed {t}, landed");
                     continue;
                 }
             };
@@ -1400,7 +1408,45 @@ impl Server {
         } else {
             self.kill_tab(tab);
         }
-        eprintln!("autopilot: closed {tab}, landed");
+    }
+
+    /// Each of its tabs whose wtn refused the item (`REFUSED`): the item
+    /// skipped in its note, why said, and the tab closed.
+    fn autopilot_refused(&mut self) {
+        let refused: Vec<(TabId, String, String, Option<String>)> = self
+            .tabs
+            .iter()
+            .filter(|(_, t)| t.opts.contains_key(OPENED) && !t.opts.contains_key(YOURS))
+            .filter_map(|(id, t)| {
+                let why = t.opts.get(REFUSED).filter(|v| !v.is_empty())?;
+                let item = t.opts.get(ITEM).filter(|v| !v.is_empty())?;
+                Some((*id, item.clone(), why.clone(), t.opts.get(NOTE).cloned()))
+            })
+            .collect();
+        for (tab, item, why, note) in refused {
+            let written = Mode::update(&paths::state_dir(), |m| {
+                let skipped = mode::Skipped {
+                    note: note
+                        .clone()
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| m.note_id.clone()),
+                    text: item.clone(),
+                };
+                if !m.skipped.contains(&skipped) {
+                    m.skipped.push(skipped);
+                }
+            });
+            match written {
+                Ok(mode) => self.autopilot.mode = mode,
+                Err(e) => {
+                    eprintln!("autopilot: couldn't skip the refused item: {e}");
+                    continue;
+                }
+            }
+            self.autopilot_close_tab(tab);
+            self.autopilot_say(&format!("Skipped {item}: {REFUSED_SAID}, {why}"));
+            eprintln!("autopilot: closed {tab}, wtn refused its item");
+        }
     }
 
     /// The next item read again, off the task, for mission control's line.
@@ -1551,7 +1597,19 @@ impl Server {
     /// What it has to say, kept in its file for the notifications; empty
     /// for nothing.
     fn autopilot_say(&mut self, said: &str) {
-        match Mode::update(&paths::state_dir(), |m| m.said = said.to_string()) {
+        // A refusal not yet dismissed stays, what is said after it added, so
+        // nothing said later hides why an item was skipped; empty, dismissed,
+        // clears it too.
+        let keep = |was: &str| {
+            if said.is_empty() || !was.contains(REFUSED_SAID) {
+                said.to_string()
+            } else if was.contains(said) {
+                was.to_string()
+            } else {
+                format!("{was}. {said}")
+            }
+        };
+        match Mode::update(&paths::state_dir(), |m| m.said = keep(&m.said)) {
             Ok(mode) => {
                 self.autopilot_notices(&mode);
                 self.autopilot.mode = mode;

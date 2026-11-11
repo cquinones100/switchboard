@@ -619,6 +619,22 @@ fn claude_args(home: &Path) -> String {
 /// `wtn --item <line>` on the note "Work", through its shell function as a
 /// tab runs it, in `repo`, from the pane given (none, outside a pane).
 fn wtn(server: &TestServer, notes: &Path, repo: &Path, pane: Option<&str>, more: &[&str]) {
+    let out = wtn_output(server, notes, repo, pane, more);
+    assert!(
+        out.status.success(),
+        "wtn {more:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// What `wtn` gives, as above, succeeding or not.
+fn wtn_output(
+    server: &TestServer,
+    notes: &Path,
+    repo: &Path,
+    pane: Option<&str>,
+    more: &[&str],
+) -> std::process::Output {
     let path = std::env::var("PATH").unwrap_or_default();
     let mut cmd = Command::new("bash");
     cmd.args([
@@ -651,11 +667,64 @@ fn wtn(server: &TestServer, notes: &Path, repo: &Path, pane: Option<&str>, more:
         cmd.env("SWITCHBOARD", server.socket())
             .env("SWITCHBOARD_PANE", pane);
     }
-    let out = cmd.output().unwrap();
+    cmd.output().unwrap()
+}
+
+#[test]
+fn an_item_wtn_refuses_in_its_tab_is_skipped_with_why_and_the_tab_closed() {
+    let notes = TempDir::new("sbn");
+    std::fs::write(notes.path().join("Work.md"), "# Work\n\n- [ ] Taken\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    common::write_settings(
+        &server.home,
+        json!({"notifications": false, "tips": false, "github": false, "linear": false}),
+    );
+    Claude::new().install(&server.home.join("bin"));
+    let repo = server.home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    // The item's branch claimed by other words.
+    git(
+        &repo,
+        &[
+            "config",
+            "branch.note/taken.wtnItem",
+            "n-0123456789ab: Taken!",
+        ],
+    );
+    let repo = repo.canonicalize().unwrap();
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-c", repo.to_str().unwrap()]);
+    let tab = server.list()["sessions"][0]["tabs"][1].clone();
+    let id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    for (option, value) in [
+        ("@autopilot", "1"),
+        ("@autopilot_item", "Taken"),
+        ("@autopilot_note", "n-ffffffffffff"),
+    ] {
+        server.ok(&["set", "-t", &id, option, value]);
+    }
+    let out = wtn_output(&server, notes.path(), &repo, Some(&pane), &["--item", "3"]);
+    assert!(!out.status.success());
+
+    wait("the tab closed", &server, || opened(&server).is_empty());
+    let mode = mode(&server);
+    assert_eq!(
+        mode["skipped"],
+        json!([{ "note": "n-ffffffffffff", "text": "Taken" }]),
+        "the item skipped in its note"
+    );
+    let said = mode["said"].as_str().unwrap();
     assert!(
-        out.status.success(),
-        "wtn {more:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
+        said.starts_with(
+            "Skipped Taken: wtn refused it, note/taken is for another item: \"Taken!\""
+        ),
+        "{said}"
     );
 }
 

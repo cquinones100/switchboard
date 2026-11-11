@@ -1211,24 +1211,71 @@ fn an_item_of_a_note_gets_a_worktree_on_note_its_slug_with_the_item_its_plan_and
         "{}",
         stderr(&clash)
     );
-    // The same words in another note: another item.
+    // The same words in another note: the same item, its worktree and
+    // commits taken over and the claim moved there.
     std::fs::write(
         notes.join("Other.md"),
         "# Other\n\n- [ ] Copy Claude's last reply (with a key!)\n",
     )
     .unwrap();
+    w.git(
+        &worktree,
+        &["commit", "-q", "--allow-empty", "-m", "begun in Work Notes"],
+    );
+    let begun = w.git(&worktree, &["rev-parse", "HEAD"]);
     let elsewhere = w.run(
         &repo,
         &[
             "worktree-from-note",
             "--no-claude",
+            "--cd-file",
+            cd.to_str().unwrap(),
             "--note",
             "Other",
             "--item",
             "3",
         ],
     );
-    assert!(stderr(&elsewhere).contains("is for another item"));
+    assert_eq!(elsewhere.status.code(), Some(0), "{}", stderr(&elsewhere));
+    assert!(
+        stderr(&elsewhere).contains(
+            "Taking over note/copy-claudes-last-reply-with-a-key, started from Work Notes; it is still open in Work Notes too."
+        ),
+        "{}",
+        stderr(&elsewhere)
+    );
+    assert_eq!(
+        read(&cd).lines().next().unwrap(),
+        worktree.to_str().unwrap(),
+        "the worktree is reused"
+    );
+    assert_eq!(
+        w.git(&worktree, &["rev-parse", "HEAD"]),
+        begun,
+        "with its commits"
+    );
+    let other_id = switchboard::notes::id::of_file(&notes.join("Other.md")).unwrap();
+    assert_eq!(
+        w.git(
+            &repo,
+            &[
+                "config",
+                "branch.note/copy-claudes-last-reply-with-a-key.wtnItem"
+            ]
+        ),
+        format!("{other_id}: Copy Claude's last reply (with a key!)"),
+        "the claim names the note it was taken over from"
+    );
+    assert!(
+        !switchboard::cmd::worktree_from_note::unclaimed(
+            &repo,
+            "Work Notes.md",
+            &read(&notes.join("Work Notes.md"))
+        )
+        .iter()
+        .any(|i| i.text == "Copy Claude's last reply (with a key!)"),
+        "nor offered again in the note it was started from"
+    );
     // A worktree of another branch where this item's would go: refused.
     append("- [ ] Add search\n");
     let taken_at = repo.join(".claude/worktrees/note-add-search");
@@ -1469,8 +1516,8 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     let listed = || rows(unclaimed(&repo, "Work/Plan's Notes.md", &read(&note)));
     assert_eq!(
         listed(),
-        vec!["3\tFirst thing", "6\tThird thing"],
-        "the item with a worktree left out, a like item of another note kept"
+        vec!["3\tFirst thing"],
+        "the item with a worktree left out, and the same words worked from another note"
     );
     w.git(
         &repo,
@@ -1484,11 +1531,7 @@ fn the_items_a_worktree_works_on_are_left_out_until_it_is_removed_and_the_queue_
     );
     assert_eq!(
         listed(),
-        vec![
-            "3\tFirst thing",
-            "4\tSecond thing (needs a choice)",
-            "6\tThird thing"
-        ],
+        vec!["3\tFirst thing", "4\tSecond thing (needs a choice)"],
         "back once its worktree is removed, its branch kept"
     );
 
