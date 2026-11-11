@@ -95,14 +95,25 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", BREAK.replace_all(text, " ").replace('\'', r"'\''"))
 }
 
-/// A tab as an alert names it, with what is known of it now.
+/// The tab an alert was made for, as it is now: its number moves as the
+/// tabs before it close, and it may have been renamed, so the alert's own
+/// index and name stand only for a tab that is gone. A tab whose Claude has
+/// exited is still open, so it is looked for among all the server's windows
+/// when it isn't one of the Claude tabs.
 pub fn named(cx: &Relay, window: &str, index: i64, name: &str) -> Tab {
-    let fresh = tabs::tab(cx, window);
+    if let Some(tab) = tabs::tab(cx, window) {
+        return tab;
+    }
+    let open = cx
+        .mux
+        .windows()
+        .and_then(|ws| ws.into_iter().find(|w| w.id == window));
+    let (index, name) = open.map_or_else(|| (index, name.to_string()), |w| (w.index, w.name));
     Tab {
         id: window.to_string(),
         index,
-        name: name.to_string(),
-        ..fresh.unwrap_or_default()
+        name,
+        ..Tab::default()
     }
 }
 

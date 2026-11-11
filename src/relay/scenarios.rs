@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::commands::handle;
+use super::commands::{handle, named};
 use super::config::{PICKUP_WARN_MS, REPLY_WAIT_MS};
 use super::dashboard::{DOING_EVERY_MS, Refresh, refresh_dashboard};
 use super::followups::{follow_ups, new_events};
@@ -1453,6 +1453,54 @@ fn a_reply_that_isnt_one_of_a_waiting_prompts_options_types_nothing() {
     );
     assert_eq!(rig.screen(&tab), before, "nothing typed, no Enter");
     assert!(rig.cx.state.borrow().following.is_empty());
+}
+
+#[test]
+fn a_reply_in_a_thread_names_its_tab_by_its_number_now_not_when_the_thread_began() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    rig.set_screen(
+        &tab,
+        "Allow rm -rf build?\n❯ 1. Yes\n  2. No, and tell Claude what to do differently\n",
+    );
+    rig.set_state(&tab, "waiting", "100");
+    let now = rig.index_of(&tab);
+    // Alerted while a tab ahead of it was still open, and under an old name.
+    let thread = alert(&rig, &tab, now + 1, "old name");
+    rig.block_on(handle(
+        &rig.cx,
+        message(&now_ts(20), "cancel", Some(&thread)),
+    ))
+    .unwrap();
+    let posts = rig.posts();
+    assert!(
+        posts[0]
+            .body
+            .contains(&format!("{} is showing a choice", tabs::label(now, "work"))),
+        "{}",
+        posts[0].body
+    );
+
+    // A tab whose Claude has exited is still named as it is now.
+    let (other, _) = rig.claude_tab("shell");
+    rig.mux
+        .windows
+        .borrow_mut()
+        .iter_mut()
+        .find(|(w, _)| w.id == other)
+        .unwrap()
+        .1[0]
+        .info
+        .claude = false;
+    let exited = named(&rig.cx, &other, 9, "old name");
+    assert_eq!(
+        (exited.index, exited.name.as_str()),
+        (rig.index_of(&other), "shell")
+    );
+
+    // A tab that is gone is named as the alert stored it.
+    let gone = named(&rig.cx, "@999", 7, "closed");
+    assert_eq!((gone.index, gone.name.as_str()), (7, "closed"));
 }
 
 #[test]
