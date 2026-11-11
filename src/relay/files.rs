@@ -16,7 +16,8 @@
 //! image or video extension: a file only a tool call or its output names
 //! was made along the way, not for you. They are only shared when the file
 //! really is one (by its first bytes), was written during the turn, is
-//! under the size limit, and isn't one you sent.
+//! under the size limit, and isn't one you sent. A path with spaces in it
+//! is found when it is written whole between backticks or double quotes.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -261,8 +262,54 @@ pub fn looks_like_video(head: &[u8]) -> bool {
     head.len() >= 8 && (&head[4..8] == b"ftyp" || head[..4] == [0x1a, 0x45, 0xdf, 0xa3])
 }
 
-/// The image and video paths a text names.
+/// The image and video paths a text names, in the order it names them. A
+/// span between backticks or double quotes that may be one path with
+/// spaces is listed whole, before the pieces the pattern for a path
+/// without spaces finds in it, since only the file system can tell
+/// `./render.sh /tmp/out.png` from `./my shots/out.png`: `turn_media`
+/// shares only what is a real file.
 pub fn media_paths(text: &str) -> Vec<String> {
+    let mut found: Vec<(usize, String)> = quoted_paths(text);
+    found.extend(unquoted_paths(text));
+    found.sort_by_key(|(start, _)| *start);
+    let mut paths: Vec<String> = Vec::new();
+    for (_, path) in found {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    paths
+}
+
+/// The spans between backticks or double quotes, on one line, that hold a
+/// space, start as a path does (`/`, `~/`, `./`, `../`, or a first word
+/// holding a `/`) and end in an image or video extension, with where each
+/// starts.
+fn quoted_paths(text: &str) -> Vec<(usize, String)> {
+    // Each kind of quote on its own, so a path in double quotes inside a
+    // command in backticks is found too.
+    static QUOTED: LazyLock<[Regex; 2]> = LazyLock::new(|| {
+        [r"`([^`\n]+)`", r#""([^"\n]+)""#].map(|r| Regex::new(r).expect("a regex"))
+    });
+    static MEDIA: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\.(?:png|jpe?g|gif|webp|mp4|mov|webm)$").expect("a regex")
+    });
+    let mut spans = Vec::new();
+    for c in QUOTED.iter().flat_map(|q| q.captures_iter(text)) {
+        let m = c.get(1).expect("the span");
+        let span = m.as_str();
+        let first_word = span.split(' ').next().unwrap_or("");
+        let starts_as_a_path = ["/", "~/", "./", "../"].iter().any(|p| span.starts_with(p))
+            || first_word.contains('/');
+        if span.contains(' ') && starts_as_a_path && MEDIA.is_match(span) {
+            spans.push((m.start(), span.to_string()));
+        }
+    }
+    spans
+}
+
+/// The paths without spaces a text names, with where each starts.
+fn unquoted_paths(text: &str) -> Vec<(usize, String)> {
     static PATH: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?i)(?:^|[\s"'`(=:\[])((?:~|\.{1,2})?/?[\w@%+.,/-]*\.(?:png|jpe?g|gif|webp|mp4|mov|webm))"#)
             .expect("a regex")
@@ -281,7 +328,7 @@ pub fn media_paths(text: &str) -> Vec<String> {
             _ => false,
         };
         if ends {
-            found.push(m.as_str().to_string());
+            found.push((m.start(), m.as_str().to_string()));
         }
     }
     found
@@ -422,6 +469,45 @@ mod tests {
             ["shots/login.png", "/tmp/a.mp4", "x.webp", "b.PNG"]
         );
         assert!(media_paths("see file.png.bak").is_empty());
+    }
+
+    #[test]
+    fn a_path_with_spaces_is_found_whole_in_backticks_or_quotes() {
+        assert_eq!(
+            media_paths("Saved `/tmp/a b/Board 50 - Home.png` and \"~/Shots/My shot (1).jpg\"."),
+            [
+                "/tmp/a b/Board 50 - Home.png",
+                "Home.png",
+                "~/Shots/My shot (1).jpg"
+            ]
+        );
+        assert_eq!(
+            media_paths("Ran `./render.sh /tmp/out.png`, then `cp shots/a.png b.png`."),
+            [
+                "./render.sh /tmp/out.png",
+                "/tmp/out.png",
+                "shots/a.png",
+                "b.png"
+            ],
+            "a command's files are still found, the file system telling which is real"
+        );
+        assert_eq!(
+            media_paths("Ran `open \"/tmp/my shots/out.png\"`."),
+            ["/tmp/my shots/out.png", "shots/out.png"],
+            "a path in double quotes inside backticks"
+        );
+        assert!(media_paths("`/tmp/a b/Board 50`").is_empty());
+        assert_eq!(
+            media_paths("`/tmp/a b/Board\n50 - Home.png`"),
+            ["Home.png"],
+            "a span ends at a newline"
+        );
+        assert!(
+            media_paths("`my shot.png` is \"a plain sentence.png\"")
+                .iter()
+                .all(|p| !p.contains(' ')),
+            "a span that doesn't start as a path is prose"
+        );
     }
 
     #[test]

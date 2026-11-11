@@ -2238,6 +2238,35 @@ fn a_turns_new_images_are_shared_under_it_and_nothing_that_only_looks_like_one()
 }
 
 #[test]
+fn a_turns_image_at_a_path_with_spaces_named_in_backticks_is_shared() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let dir = rig.root.join("slack proposal");
+    std::fs::create_dir_all(&dir).unwrap();
+    let shot = dir.join("Board 50 - Slack Home.png");
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    png.extend_from_slice(&[0; 8]);
+    std::fs::write(&shot, &png).unwrap();
+    let sent = jiff::Timestamp::from_millisecond(util::now_ms() - 60_000)
+        .unwrap()
+        .to_string();
+    let text = format!("Here it is: `{}`", shot.display());
+    let transcript = rig.transcript(&tab, "media", &[
+        json!({ "type": "user", "timestamp": sent, "message": { "content": "send me the PNG" } }),
+        json!({ "type": "assistant", "cwd": rig.root, "message": { "content": [{ "type": "text", "text": text }] } }),
+    ]);
+    assert_eq!(super::files::turn_media(&rig.cx, &transcript), [shot]);
+    rig.block_on(super::files::share_media(
+        &rig.cx,
+        Some(&transcript),
+        "1.000100",
+    ));
+    let shared = rig.calls("files.completeUploadExternal");
+    assert_eq!(shared[0]["thread_ts"], "1.000100");
+    assert_eq!(shared[0]["files"][0]["title"], "Board 50 - Slack Home.png");
+}
+
+#[test]
 fn the_watchdog_restarts_a_crashed_relay_telling_it_why_until_it_ends_cleanly() {
     let rig = Rig::new();
     let runs = rig.root.join("runs.txt");
