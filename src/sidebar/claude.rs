@@ -249,14 +249,14 @@ static MONITOR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Monitor started \(task ([A-Za-z0-9_-]+), expires in (\d+)m").expect("a regex")
 });
 /// What makes a background command a wait, which a tab's turn may end on as
-/// it would on a `Monitor` watch: a `while` or `until` loop that sleeps
+/// it would on a `Monitor` watch: a `while`, `until` or `for` loop that sleeps
 /// between its looks, or a command that blocks until a run or a file moves
 /// on. It counts only when everything the command runs is in `LOOKS`
 /// (`only_waits`), so a loop that builds or tests between its sleeps stays
 /// background work. A wait a loop's skill runs (`land-lock wait`,
 /// `wait-deploy`, `gh pr checks --watch`) reads as that loop.
 static WAITS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(?:while|until)\b[\s\S]*\bsleep\b|\bgh run watch\b|\btail -[fF]\b")
+    Regex::new(r"\b(?:while|until|for)\b[\s\S]*\bsleep\b|\bgh run watch\b|\btail -[fF]\b")
         .expect("a regex")
 });
 /// The commands a wait may run: a sleep, and commands that only look at
@@ -267,6 +267,11 @@ static WAITS: LazyLock<Regex> = LazyLock::new(|| {
 /// `SYSTEM_BINS` (`/bin/sleep`), never a project's own (`./test`).
 const LOOKS: &[&str] = &[
     "sleep",
+    "seq",
+    "exit",
+    "break",
+    "continue",
+    ":",
     "echo",
     "printf",
     "true",
@@ -321,52 +326,79 @@ const STEERING: &[&str] = &[
 /// `LOOKS` does and writes no file: its output goes nowhere but the
 /// terminal, `/dev/null` or another of its streams, and no `--output`.
 fn only_waits(command: &str) -> bool {
-    WAITS.is_match(command)
-        && simple_commands(command).iter().all(|all| {
-            // The command's words with its redirections taken out, each
-            // checked to write nowhere.
-            let mut words = Vec::new();
-            let mut iter = all.iter().map(String::as_str);
-            while let Some(w) = iter.next() {
-                let Some((_, to)) = w.rsplit_once('>') else {
-                    if w.starts_with("--output") {
-                        return false;
-                    }
-                    words.push(w);
-                    continue;
-                };
-                let to = if to.is_empty() {
-                    iter.next().unwrap_or("")
-                } else {
-                    to
-                };
-                let to_a_stream = to
-                    .strip_prefix('&')
-                    .is_some_and(|fd| fd == "-" || fd.trim_end_matches('-').parse::<u8>().is_ok());
-                if to != "/dev/null" && !to_a_stream {
+    if !WAITS.is_match(command) {
+        return false;
+    }
+    // A wait has to run its `sleep` or blocking command, not only name it
+    // in an argument (`grep -n sleep`).
+    let mut waits = false;
+    let only_looks = simple_commands(command).iter().all(|all| {
+        // The command's words with its redirections taken out, each
+        // checked to write nowhere.
+        let mut words = Vec::new();
+        let mut iter = all.iter().map(String::as_str);
+        while let Some(w) = iter.next() {
+            let Some((_, to)) = w.rsplit_once('>') else {
+                if w.starts_with("--output") {
                     return false;
                 }
+                words.push(w);
+                continue;
+            };
+            let to = if to.is_empty() {
+                iter.next().unwrap_or("")
+            } else {
+                to
+            };
+            let to_a_stream = to
+                .strip_prefix('&')
+                .is_some_and(|fd| fd == "-" || fd.trim_end_matches('-').parse::<u8>().is_ok());
+            if to != "/dev/null" && !to_a_stream {
+                return false;
             }
-            let mut words = words.into_iter().skip_while(|w| {
-                STEERING.contains(w)
-                    || w.split_once('=').is_some_and(|(name, _)| {
-                        !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                    })
-            });
-            let Some(first) = words.next() else {
-                return true;
+        }
+        // A `for` loop's head names a variable and the words it takes,
+        // which run nothing but the `$(…)` among them, each read as a
+        // command of its own; what follows a `do` in it (`for a do …`) is
+        // the loop's first command.
+        let starts_a_for = |w: &&str| *w == "for";
+        if words
+            .iter()
+            .find(|w| !STEERING.contains(w))
+            .is_some_and(starts_a_for)
+        {
+            match words.iter().position(|w| *w == "do") {
+                Some(at) => words.drain(..=at),
+                None => return true,
             };
-            let first = match first.rsplit_once('/') {
-                Some((dir, name)) if SYSTEM_BINS.contains(&dir) => name,
-                Some(_) => return false,
-                None => first,
-            };
-            let rest: Vec<&str> = words.collect();
-            LOOKS.iter().any(|look| {
-                let mut look = look.split(' ');
-                look.next() == Some(first) && look.enumerate().all(|(i, w)| rest.get(i) == Some(&w))
-            })
+        }
+        let mut words = words.into_iter().skip_while(|w| {
+            STEERING.contains(w)
+                || w.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                })
+        });
+        let Some(first) = words.next() else {
+            return true;
+        };
+        let first = match first.rsplit_once('/') {
+            Some((dir, name)) if SYSTEM_BINS.contains(&dir) => name,
+            Some(_) => return false,
+            None => first,
+        };
+        let rest: Vec<&str> = words.collect();
+        waits |= match first {
+            "sleep" => true,
+            "gh" => rest.starts_with(&["run", "watch"]),
+            "tail" => rest.first().is_some_and(|w| *w == "-f" || *w == "-F"),
+            _ => false,
+        };
+        LOOKS.iter().any(|look| {
+            let mut look = look.split(' ');
+            look.next() == Some(first) && look.enumerate().all(|(i, w)| rest.get(i) == Some(&w))
         })
+    });
+    only_looks && waits
 }
 
 /// The simple commands a shell command runs, each as its words with their
@@ -416,6 +448,26 @@ fn simple_commands(command: &str) -> Vec<Vec<String>> {
             }
             continue;
         }
+        // An arithmetic `for ((…; …; …))` head is a sum, as `$((…))` is,
+        // `for((` with no space too.
+        let opens_twice = quote.is_none() && c == '(' && chars.peek() == Some(&'(');
+        if opens_twice {
+            end_word(&mut words, &mut word);
+        }
+        let for_sum = opens_twice
+            && words.split_last().is_some_and(|(last, before)| {
+                last == "for" && before.iter().all(|w| STEERING.contains(&w.as_str()))
+            });
+        if for_sum {
+            chars.next();
+            stack.push((
+                std::mem::replace(&mut frame, Frame::Sum(0)),
+                std::mem::take(&mut words),
+                std::mem::take(&mut word),
+                None,
+            ));
+            continue;
+        }
         let opens = (c == '$' && chars.peek() == Some(&'('))
             || (c == '`' && !matches!(frame, Frame::Ticks));
         if opens {
@@ -456,7 +508,13 @@ fn simple_commands(command: &str) -> Vec<Vec<String>> {
             }
             if let Some((outer, outer_words, outer_word, outer_quote)) = stack.pop() {
                 (frame, words, word, quote) = (outer, outer_words, outer_word, outer_quote);
+                // A `for ((…))` head ends where its sum does, so a `do`
+                // with no `;` before it starts a command of its own.
+                let ends_a_for_head = word.is_empty() && words.last().is_some_and(|w| w == "for");
                 word.push('X');
+                if ends_a_for_head {
+                    end_command(&mut commands, &mut words, &mut word);
+                }
             }
             continue;
         }
@@ -1875,6 +1933,15 @@ mod tests {
             "while true; do \\\n  sleep 30; done 2> /dev/null",
             "tail -f build.log | grep --line-buffered ERROR",
             "# Wait for the status file\nuntil grep -q done status.txt; do sleep 30; done # then say so\necho '#1 done'",
+            "for i in $(seq 1 480); do if grep -q x f; then git fetch -q origin; exit 0; fi; sleep 30; done",
+            "for i in 1 2 3; do git log -1 --oneline origin/main | grep -q item && break; sleep 30; done; :",
+            "for ((i=0; i<480; i++)); do grep -q x f && exit 0; sleep 30; done",
+            "if test -f s; then for ((i=0; i<480; i++)); do grep -q done s && break; sleep 30; done; fi",
+            "for((i=0;i<480;i++)); do sleep 30; done",
+            "for ((i=0;i<480;i++)) do grep -q x f && break; sleep 30; done",
+            "for f do grep -q x \"$f\" && break; sleep 30; done",
+            "while true; do LC_ALL=C sleep 30; done",
+            "while true; do 2>/dev/null sleep 30; done",
         ] {
             assert!(only_waits(wait), "{wait}");
         }
@@ -1895,6 +1962,15 @@ mod tests {
             "while true; do ./test; sleep 30; done",
             "cargo test",
             "echo $$ > pid; exec caffeinate -i",
+            "for i in $(seq 1 480); do if grep -q x f; then cargo test; exit 0; fi; sleep 30; done",
+            "for f in *.rs; do cat \"$f\"; done",
+            "for i in $(rm x); do sleep 30; done",
+            "for ((i=0; i<480; i++)); do cargo test; sleep 30; done",
+            "for ((i=0;i<480;i++)) do cargo test; sleep 30; done",
+            "for arg do cargo test \"$arg\"; sleep 30; done",
+            "for f in logs/*.log; do grep -n sleep \"$f\"; done",
+            "while true; do grep -q sleep f; done",
+            "for f in logs/*.log; do grep -n 'tail -f' \"$f\"; done",
         ] {
             assert!(!only_waits(work), "{work}");
         }
