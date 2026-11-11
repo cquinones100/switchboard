@@ -661,6 +661,27 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     );
     client.wait_text("Landed abc1234: Make the thing");
 
+    // Said again by a hands-free tab, with what it left for you to apply:
+    // the same notification, carrying it.
+    let again = inside(&[
+        "land-lock",
+        "autolanded",
+        "abc1234",
+        "--not-applied",
+        "Build Switchboard",
+        "Make",
+        "the",
+        "thing",
+    ]);
+    assert!(again.status.success());
+    let kept: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(server.state.join("autolanded.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept.as_array().unwrap().len(), 1, "one landing: {kept}");
+    assert_eq!(kept[0]["notApplied"], "Build Switchboard");
+    assert_eq!(kept[0]["item"], "Make the thing");
+
     // A second tab in front; Enter on the notification goes back to the
     // landing's tab and dismisses it.
     server.ok(&["new-tab"]);
@@ -678,8 +699,8 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     client.wait_for("the notification let go", |s| {
         !s.iter().any(|l| l.contains("Landed abc1234"))
     });
-    let kept = std::fs::read_to_string(server.state.join("autolanded.json")).unwrap();
-    assert_eq!(kept.trim(), "[]");
+    let left = std::fs::read_to_string(server.state.join("autolanded.json")).unwrap();
+    assert_eq!(left.trim(), "[]");
 }
 
 /// `switchboard landing`, as queue-and-clean asks it how a repository lands.

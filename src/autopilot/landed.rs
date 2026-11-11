@@ -2,9 +2,12 @@
 //! "Land without asking"), for the notifications: what queue-and-clean's
 //! `switchboard land-lock autolanded <short hash> [--plan <file>] <item>` adds
 //! once such a landing has pushed, `autolanded.json` in the state directory,
-//! `[{ hash, item, tab, at, plan, decided }]`, `plan` the item's plan note
-//! by its path within the notes directory and `decided` how many
-//! `Decided hands-free` lines it holds (autopilot's hands-free mode), the last `KEPT`, each until it is dismissed. Ported
+//! `[{ hash, item, tab, at, plan, decided, notApplied }]`, `plan` the item's
+//! plan note by its path within the notes directory, `decided` how many
+//! `Decided hands-free` lines it holds (autopilot's hands-free mode) and
+//! `notApplied` what the change needs to take effect that a hands-free tab
+//! left for you rather than ask (`--not-applied`, queue-and-clean saying the
+//! landing again once it knows), the last `KEPT`, each until it is dismissed. Ported
 //! from autopilot.js's `readLanded` and `dismissLanded` and land-lock.js's
 //! `autolanded`, the tab named by its id where tmux named its window.
 
@@ -36,6 +39,9 @@ pub struct Landing {
     pub plan: String,
     /// The decisions its tab took hands-free, as its plan records them.
     pub decided: usize,
+    /// What the change needs to take effect that the landing left for you,
+    /// the actions' labels joined; empty for nothing.
+    pub not_applied: String,
 }
 
 impl Landing {
@@ -46,10 +52,19 @@ impl Landing {
         } else {
             &self.item
         };
+        let mut notes = Vec::new();
         match self.decided {
-            0 => format!("Landed {}: {item}", self.hash),
-            1 => format!("Landed {}: {item} (1 decided hands-free)", self.hash),
-            n => format!("Landed {}: {item} ({n} decided hands-free)", self.hash),
+            0 => {}
+            1 => notes.push("1 decided hands-free".to_string()),
+            n => notes.push(format!("{n} decided hands-free")),
+        }
+        if !self.not_applied.is_empty() {
+            notes.push(format!("not applied: {}", self.not_applied));
+        }
+        if notes.is_empty() {
+            format!("Landed {}: {item}", self.hash)
+        } else {
+            format!("Landed {}: {item} ({})", self.hash, notes.join("; "))
         }
     }
 }
@@ -75,6 +90,7 @@ pub fn read(state: &Path) -> Vec<Landing> {
                 at: l.get("at").and_then(Value::as_f64).unwrap_or(0.0) as i64,
                 plan: text("plan"),
                 decided: l.get("decided").and_then(Value::as_u64).unwrap_or(0) as usize,
+                not_applied: text("notApplied"),
             })
         })
         .collect()
@@ -88,6 +104,7 @@ fn write(state: &Path, list: &[Landing]) -> io::Result<()> {
                 "hash": l.hash, "item": l.item, "tab": l.tab,
                 "at": util::js_number(l.at as f64),
                 "plan": l.plan, "decided": util::js_number(l.decided as f64),
+                "notApplied": l.not_applied,
             })
         })
         .collect();
@@ -141,6 +158,7 @@ mod tests {
             at: 1,
             plan: String::new(),
             decided: 0,
+            not_applied: String::new(),
         };
         add(&dir, landing("abc1234", "Make the thing")).unwrap();
         add(&dir, landing("def5678", "")).unwrap();
@@ -171,6 +189,23 @@ mod tests {
             "Landed fff0000: Make X (2 decided hands-free)"
         );
         assert_eq!(last.plan, "Plans/Plan - X.md");
+        // Said again once the landing knows what it left for you: the
+        // same entry, carrying it.
+        let left = |decided| Landing {
+            decided,
+            not_applied: "build Switchboard".into(),
+            ..landing("fff0000", "Make X")
+        };
+        add(&dir, left(2)).unwrap();
+        assert_eq!(read(&dir).iter().filter(|l| l.hash == "fff0000").count(), 1);
+        assert_eq!(
+            read(&dir).pop().unwrap().title(),
+            "Landed fff0000: Make X (2 decided hands-free; not applied: build Switchboard)"
+        );
+        assert_eq!(
+            left(0).title(),
+            "Landed fff0000: Make X (not applied: build Switchboard)"
+        );
         dismiss(&dir, Some("0000019")).unwrap();
         assert!(!read(&dir).iter().any(|l| l.hash == "0000019"));
         dismiss(&dir, None).unwrap();

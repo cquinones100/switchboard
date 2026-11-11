@@ -391,6 +391,15 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
         queue.contains("<lock> autolanded <short hash>"),
         "it says so after landing"
     );
+    let hands_free = step("3. **Hands-free leaves it to the user.**");
+    assert!(
+        hands_free.contains("switchboard show @autopilot_handsfree")
+            && hands_free.contains("ask nothing")
+            && hands_free.contains("--not-applied"),
+        "a hands-free tab leaves applying to the user: {hands_free}"
+    );
+    let ask = step("4. **Ask** with `AskUserQuestion`");
+    assert!(queue.find(&hands_free).unwrap() < queue.find(&ask).unwrap());
     let step11 = step("11. **Push**");
     let again = step11
         .find("read `@autopilot_land` again")

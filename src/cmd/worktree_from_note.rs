@@ -1084,10 +1084,11 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         None => "the default branch".to_string(),
     };
     let mut prompt = format!(
-        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{CHECK_FIRST}\
+        "Work on this checklist item from my note \"{title}\" ({}), line {item} there, as written:\n\n<item>\n{block}\n</item>\n\n{plan_words}{}\
          Commit the work on this worktree's branch, following the repository's CLAUDE.md, and don't push it or tick the item in the note. \
          When the work is done, say so in a line, then land it as /queue-and-clean does, which only I can start, so read the file `switchboard skill-path queue-and-clean` prints and follow it: it asks me before pushing, lands it and ticks the item, as `switchboard landing` says for the repository: straight on {onto}, with the steps it gives, or else through a PR it offers to open.",
-        file.display()
+        file.display(),
+        check_first(hands_free),
     );
     if !extra.is_empty() {
         prompt.push_str(&format!(" Also, from me for this item: {extra}"));
@@ -1184,11 +1185,25 @@ fn push_settings(remote: &str, branch: &str) -> Option<String> {
 /// What Claude does before building, as `wt`'s prompt has it for a ticket:
 /// an item can sit in a note while the code moves under it. A stale one stops
 /// short of landing, so autopilot's tab, which runs `wtn` too, waits on you
-/// rather than building it.
-const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? \
-     If it is already done or no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, \
-     without building, landing or ticking it, so I decide. \
-     Where the plan gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
+/// rather than building it; in a hands-free tab, one already done on the
+/// target is ticked and its tab freed instead, since nothing is left to
+/// decide, and starting it there asked for its worktree's removal once done.
+fn check_first(hands_free: bool) -> String {
+    let done = if hands_free {
+        "If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1 when you find it so (otherwise hands-free was turned off: tell me with the evidence and stop, as usual), tick it in the note, as the note's rules say, with an indented `Done: <short hash of the commit that did it>, already on <that branch>. <what it does now>` line under it, \
+         then land it as below, which finds the work already there and cleans up, without asking me; what you built beyond what that branch has (a test, a doc) lands as the item's change instead. \
+         If it no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, without building, landing or ticking it, so I decide. \
+         Starting this item hands-free is my ask to remove its worktree and branch once its work has landed: don't ask about that cleanup when nothing would be lost. "
+    } else {
+        "If it is already done or no longer applies, tell me so with the evidence (the code, or the commit that did it) and stop there, \
+         without building, landing or ticking it, so I decide. "
+    };
+    format!("{CHECK_FIRST}{done}{THEN}")
+}
+
+const CHECK_FIRST: &str = "Before building, compare the item and its plan with the code as it is now: is it still needed, already done, or worth doing another way? ";
+
+const THEN: &str = "Where the plan gets a detail wrong (a wrong type, the wrong file, a function that turns out to be unused), \
      build what the code actually needs rather than stopping to ask, then correct the plan so it matches what you built. \
      Stop and wait for my answer only for a change of scope: doing it another way, widening the work to another file, deleting a caller, changing an API. ";
 
@@ -1204,6 +1219,25 @@ pub fn skip_from(text: &str) -> HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hands_free_tab_ticks_an_item_already_done_and_frees_itself_where_another_stops() {
+        let hands_free = check_first(true);
+        assert!(hands_free.contains("If it is already done on the branch it lands on, and `switchboard show @autopilot_handsfree` still prints 1"));
+        assert!(hands_free.contains("don't ask about that cleanup when nothing would be lost"));
+        assert!(!hands_free.contains("If it is already done or no longer applies"));
+        let asking = check_first(false);
+        assert!(
+            asking.contains(
+                "If it is already done or no longer applies, tell me so with the evidence"
+            )
+        );
+        assert!(!asking.contains("tick it in the note"));
+        for text in [hands_free, asking] {
+            assert!(text.starts_with("Before building, compare"));
+            assert!(text.ends_with("deleting a caller, changing an API. "));
+        }
+    }
 
     #[test]
     fn the_settings_allow_the_landings_one_push_and_none_for_a_name_a_rule_could_widen() {

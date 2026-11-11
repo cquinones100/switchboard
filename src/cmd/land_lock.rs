@@ -51,14 +51,17 @@
 //!                     main clone's branch, which files it under Merged in
 //!                     the sidebar and mission control while the tab is in
 //!                     that main clone on that branch
-//! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [item]
+//! land-lock autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]
 //!                     says this tab landed without asking (autopilot's
 //!                     "Land without asking"): marks the tab
 //!                     @autopilot_autoland with the hash, which the sidebar
 //!                     shows, and adds the landing to the notifications
 //!                     (autolanded.json in the state directory), with the
 //!                     count of its plan's `Decided hands-free` lines (or,
-//!                     for an item with no plan, the count given)
+//!                     for an item with no plan, the count given), and
+//!                     what the change needs to take effect that a
+//!                     hands-free tab left for you (`--not-applied`); said
+//!                     again for the same hash, it updates that landing
 //! ```
 //!
 //! A landing holds it only to rebase, test and push, but one whose change no
@@ -106,7 +109,7 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -292,6 +295,14 @@ fn autolanded(args: &[String]) -> ExitCode {
         decided_given = args.remove(at + 1).parse::<usize>().ok();
         args.remove(at);
     }
+    // What a hands-free tab left for you to apply, rather than ask.
+    let mut not_applied = String::new();
+    if let Some(at) = args.iter().position(|a| a == "--not-applied")
+        && at + 1 < args.len()
+    {
+        not_applied = worktree::one_line(&args.remove(at + 1));
+        args.remove(at);
+    }
     let notes = crate::notes::store::notes_dir();
     // Both resolved, since wtn names the plan by its real path and the
     // notes directory may be a link.
@@ -309,7 +320,7 @@ fn autolanded(args: &[String]) -> ExitCode {
         .unwrap_or(0);
     let Some(hash) = args.first().filter(|h| !h.is_empty()).cloned() else {
         eprintln!(
-            "usage: land-lock autolanded <short hash> [--plan <file> | --decided <n>] [item]"
+            "usage: land-lock autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]"
         );
         return ExitCode::from(2);
     };
@@ -327,6 +338,7 @@ fn autolanded(args: &[String]) -> ExitCode {
         at: util::now_ms(),
         plan,
         decided,
+        not_applied,
     };
     match crate::autopilot::landed::add(&crate::paths::state_dir(), landing) {
         Ok(()) => ExitCode::SUCCESS,
