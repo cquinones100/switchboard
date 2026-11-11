@@ -358,6 +358,32 @@ fn worktrees_landing_on_different_branches_hold_their_own_locks_at_once() {
 }
 
 #[test]
+fn a_branch_named_lock_queues_apart_from_the_default_branch_s_mutex() {
+    let tmp = TempDir::new("land-named-lock");
+    let home = tmp.path();
+    let repo = repo(home);
+    git(&repo, &["branch", "lock"]);
+    let one = worktree(home, &repo, home, "one");
+    let two = worktree(home, &repo, home, "two");
+    let three = worktree(home, &repo, home, "three");
+    git(&repo, &["config", "branch.one.wtnTarget", "lock"]);
+    git(&repo, &["config", "branch.two.wtnTarget", "lock"]);
+
+    assert_eq!(code(&lock(home, &one, &["take"])), 0);
+    assert_eq!(code(&lock(home, &two, &["take"])), 3, "waits on lock's");
+    assert!(repo.join(".git/land.lock.lock/holder").exists());
+    assert!(repo.join(".git/land.queue.lock").is_file());
+
+    assert_eq!(
+        code(&lock(home, &three, &["take"])),
+        0,
+        "the default branch's queue isn't locked by lock's queue"
+    );
+    assert!(!repo.join(".git/land.mutex").exists());
+    assert!(repo.join(".git/land.queue.lock").is_file());
+}
+
+#[test]
 fn waiters_take_it_in_the_queue_s_order_which_a_take_cant_jump_and_move_reorders() {
     let tmp = TempDir::new("land-queue");
     let home = tmp.path();

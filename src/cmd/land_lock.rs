@@ -14,6 +14,9 @@
 //! `land.queue`, so a landing in flight from before goes on; another has
 //! `land.lock.<branch>` and `land.queue.<branch>`, its `%` written `%25` and
 //! its `/` `%2F` (`file_suffix`), which src/sources/landing.rs reads back.
+//! Each queue is changed under a mutex directory, `land.mutex` and
+//! `land.mutex.<branch>`, named apart from both so no branch's queue can be
+//! another's mutex.
 //!
 //! ```text
 //! land-lock take      takes it for this worktree: exit 0 taken (or held by
@@ -353,12 +356,11 @@ impl Lock {
             None => base.to_string(),
         };
         let dir = common.join(named("land.lock"));
-        let queue = named("land.queue");
         Lock {
             holder_file: dir.join("holder"),
             dir,
-            queue_mutex: common.join(format!("{queue}.lock")),
-            queue_file: common.join(queue),
+            queue_mutex: common.join(named("land.mutex")),
+            queue_file: common.join(named("land.queue")),
             here,
         }
     }
@@ -759,6 +761,32 @@ mod tests {
             assert_eq!(branch_of_suffix(&suffix), branch);
         }
         assert_eq!(file_suffix("team/next"), "team%2Fnext");
+    }
+
+    #[test]
+    fn no_branch_s_queue_is_a_mutex() {
+        let locks: Vec<Lock> = [None, Some("team%2Fnext"), Some("lock")]
+            .into_iter()
+            .map(|suffix| Lock::new(Path::new("/git"), PathBuf::from("/w"), suffix))
+            .collect();
+        let names = |pick: fn(&Lock) -> &PathBuf| -> Vec<String> {
+            locks
+                .iter()
+                .map(|l| pick(l).file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        let mutexes = names(|l| &l.queue_mutex);
+        assert_eq!(
+            mutexes,
+            ["land.mutex", "land.mutex.team%2Fnext", "land.mutex.lock"]
+        );
+        assert_eq!(
+            names(|l| &l.queue_file),
+            ["land.queue", "land.queue.team%2Fnext", "land.queue.lock"]
+        );
+        for name in names(|l| &l.queue_file).iter().chain(&names(|l| &l.dir)) {
+            assert!(!mutexes.contains(name), "{name} is a mutex too");
+        }
     }
 
     #[test]

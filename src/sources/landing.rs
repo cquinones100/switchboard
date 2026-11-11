@@ -209,8 +209,7 @@ fn targets_in(common: &Path) -> Vec<String> {
             let rest = name
                 .strip_prefix("land.queue.")
                 .or_else(|| name.strip_prefix("land.lock."))?;
-            // A queue's mutex; no branch's name ends in `.lock`.
-            (!rest.ends_with(".lock")).then(|| crate::cmd::land_lock::branch_of_suffix(rest))
+            Some(crate::cmd::land_lock::branch_of_suffix(rest))
         })
         .collect();
     targets.sort();
@@ -620,6 +619,28 @@ mod tests {
     }
 
     #[test]
+    fn a_branch_named_lock_is_a_target_and_no_mutex_is() {
+        let scratch = Scratch::new("landing-targets");
+        let common = &scratch.0;
+        for dir in [
+            "land.lock",
+            "land.mutex",
+            "land.mutex.lock",
+            "land.lock.team%2Fnext",
+        ] {
+            fs::create_dir_all(common.join(dir)).unwrap();
+        }
+        for file in [
+            "land.queue",
+            "land.queue.lock",
+            "land.tmp.1.land.queue.lock",
+        ] {
+            fs::write(common.join(file), "[]").unwrap();
+        }
+        assert_eq!(targets_in(common), ["lock", "team/next"]);
+    }
+
+    #[test]
     fn a_target_branch_s_queue_is_a_section_of_its_own_and_places_its_tabs() {
         let scratch = Scratch::new("landing-target");
         let main = scratch.0.join("repo");
@@ -670,7 +691,8 @@ mod tests {
             serde_json::json!([{ "path": three, "since": 3 }]).to_string(),
         )
         .unwrap();
-        fs::create_dir_all(common.join("land.queue.team%2Fnext.lock")).unwrap();
+        fs::create_dir_all(common.join("land.mutex")).unwrap();
+        fs::create_dir_all(common.join("land.mutex.team%2Fnext")).unwrap();
         let tabs = vec![
             (TabId(1), vec![one.clone()]),
             (TabId(2), vec![two.clone()]),
