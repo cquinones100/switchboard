@@ -103,6 +103,80 @@ pub fn all_usage() -> Vec<ProcUsage> {
     list
 }
 
+/// The whole computer as the Resources view's top shows it: the CPU time
+/// all its cores have spent busy and in all (so two readings give the
+/// share used between them), how many cores, and its memory used and
+/// installed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct System {
+    pub cpu_ns_busy: u64,
+    pub cpu_ns_total: u64,
+    pub cores: usize,
+    /// In bytes: on macOS app memory, wired and compressed, as Activity
+    /// Monitor's "Memory Used" counts it; on Linux what isn't available.
+    pub memory_used: u64,
+    pub memory_total: u64,
+}
+
+impl System {
+    /// The share of the whole computer's CPU used between `before` and
+    /// this reading, in percent of all its cores.
+    pub fn cpu_since(&self, before: &System) -> f64 {
+        let total = self.cpu_ns_total.saturating_sub(before.cpu_ns_total);
+        let busy = self.cpu_ns_busy.saturating_sub(before.cpu_ns_busy);
+        if total == 0 {
+            return 0.0;
+        }
+        (busy as f64 / total as f64 * 100.0).clamp(0.0, 100.0)
+    }
+}
+
+/// The computer's CPU and memory now, read from the kernel as `all_usage`
+/// is (`/proc/stat` and `/proc/meminfo`, or Mach's host statistics);
+/// `None` where it can't be read.
+pub fn system() -> Option<System> {
+    imp::system()
+}
+
+/// `/proc/stat`'s first line, `cpu  user nice system idle iowait irq
+/// softirq steal ...` in clock ticks, as the ticks busy and in all: idle
+/// and iowait are the time not busy.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_proc_stat_cpu(stat: &str) -> Option<(u64, u64)> {
+    let line = stat.lines().find(|l| l.starts_with("cpu "))?;
+    let ticks: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .take(8)
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    if ticks.len() < 4 {
+        return None;
+    }
+    let total: u64 = ticks.iter().sum();
+    let idle = ticks[3] + ticks.get(4).copied().unwrap_or(0);
+    Some((total - idle, total))
+}
+
+/// `/proc/meminfo`'s MemTotal and MemAvailable, in bytes, as used and
+/// installed.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_meminfo(info: &str) -> Option<(u64, u64)> {
+    let field = |name: &str| -> Option<u64> {
+        let line = info.lines().find(|l| l.starts_with(name))?;
+        let kb: u64 = line[name.len()..]
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()?;
+        Some(kb * 1024)
+    };
+    let total = field("MemTotal:")?;
+    let available = field("MemAvailable:")?;
+    Some((total.saturating_sub(available), total))
+}
+
 /// What `/proc/<pid>/stat` says of a process for the Resources view: its
 /// name (between the first `(` and the last `)`), parent, and user and
 /// system time in clock ticks (fields 14 and 15, counting from one).
@@ -290,6 +364,25 @@ mod imp {
                 })
             })
             .collect()
+    }
+
+    pub fn system() -> Option<super::System> {
+        // SAFETY: sysconf only reads the system's configuration.
+        let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        let ns_per_tick = if tick > 0 {
+            1_000_000_000 / tick as u64
+        } else {
+            10_000_000
+        };
+        let (busy, total) = super::parse_proc_stat_cpu(&fs::read_to_string("/proc/stat").ok()?)?;
+        let (used, installed) = super::parse_meminfo(&fs::read_to_string("/proc/meminfo").ok()?)?;
+        Some(super::System {
+            cpu_ns_busy: busy * ns_per_tick,
+            cpu_ns_total: total * ns_per_tick,
+            cores: std::thread::available_parallelism().map_or(1, usize::from),
+            memory_used: used,
+            memory_total: installed,
+        })
     }
 
     fn pids() -> impl Iterator<Item = u32> {
@@ -524,6 +617,76 @@ mod imp {
             .collect()
     }
 
+    /// The host's CPU ticks over every core (`HOST_CPU_LOAD_INFO`, at 100 a
+    /// second) and its pages by kind (`HOST_VM_INFO64`), with the memory
+    /// installed (`hw.memsize`). (The libc crate marks `mach_host_self`
+    /// deprecated in favor of the mach2 crate.)
+    #[allow(deprecated)]
+    pub fn system() -> Option<super::System> {
+        // SAFETY: returns a send right to the host port; nothing is passed.
+        let host = unsafe { libc::mach_host_self() };
+        // SAFETY: a plain C struct, for which all zeroes is a valid value.
+        let mut load: libc::host_cpu_load_info = unsafe { std::mem::zeroed() };
+        let mut count = libc::HOST_CPU_LOAD_INFO_COUNT;
+        // SAFETY: the out-pointer is the struct the flavor fills, its size
+        // in ints given in `count`.
+        let ok = unsafe {
+            libc::host_statistics(
+                host,
+                libc::HOST_CPU_LOAD_INFO,
+                (&raw mut load).cast(),
+                &mut count,
+            )
+        };
+        if ok != libc::KERN_SUCCESS {
+            return None;
+        }
+        let ticks = load.cpu_ticks.map(u64::from);
+        let total: u64 = ticks.iter().sum();
+        let idle = ticks[libc::CPU_STATE_IDLE as usize];
+        // SAFETY: a plain C struct, for which all zeroes is a valid value.
+        let mut vm: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+        let mut count = libc::HOST_VM_INFO64_COUNT;
+        // SAFETY: as above, for the 64-bit VM statistics.
+        let ok = unsafe {
+            libc::host_statistics64(host, libc::HOST_VM_INFO64, (&raw mut vm).cast(), &mut count)
+        };
+        if ok != libc::KERN_SUCCESS {
+            return None;
+        }
+        // SAFETY: sysconf only reads the system's configuration.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let page = if page > 0 { page as u64 } else { 16384 };
+        // App memory (anonymous pages less purgeable ones), wired and
+        // compressed: Activity Monitor's "Memory Used".
+        let app = u64::from(vm.internal_page_count).saturating_sub(u64::from(vm.purgeable_count));
+        let pages = app + u64::from(vm.wire_count) + u64::from(vm.compressor_page_count);
+        let mut installed: u64 = 0;
+        let mut size = size_of::<u64>();
+        // SAFETY: the out-pointer is a u64 and the size says so.
+        let ok = unsafe {
+            libc::sysctlbyname(
+                c"hw.memsize".as_ptr(),
+                (&raw mut installed).cast::<c_void>(),
+                &mut size,
+                ptr::null_mut(),
+                0,
+            )
+        };
+        if ok != 0 || installed == 0 {
+            return None;
+        }
+        // A tick is a hundredth of a second.
+        const NS_PER_TICK: u64 = 10_000_000;
+        Some(super::System {
+            cpu_ns_busy: (total - idle) * NS_PER_TICK,
+            cpu_ns_total: total * NS_PER_TICK,
+            cores: std::thread::available_parallelism().map_or(1, usize::from),
+            memory_used: (pages * page).min(installed),
+            memory_total: installed,
+        })
+    }
+
     /// Every pid: asked once with no buffer for how many, then filled, with
     /// room for a few more started between the two calls.
     fn all_pids() -> Vec<u32> {
@@ -611,11 +774,40 @@ mod imp {
     pub fn all_usage() -> Vec<super::ProcUsage> {
         Vec::new()
     }
+    pub fn system() -> Option<super::System> {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_whole_computer_reads_its_memory_and_cpu() {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let before = system().expect("the computer's figures");
+            assert!(before.memory_total > 0);
+            assert!(before.memory_used <= before.memory_total);
+            assert!(before.cores >= 1);
+            assert!(before.cpu_ns_busy <= before.cpu_ns_total);
+            let after = system().expect("the computer's figures");
+            let cpu = after.cpu_since(&before);
+            assert!((0.0..=100.0).contains(&cpu));
+        }
+        let stat = "cpu  100 0 50 800 50 0 0 0 0 0\ncpu0 1 2 3 4\n";
+        assert_eq!(parse_proc_stat_cpu(stat), Some((150, 1000)));
+        let info = "MemTotal:       16000 kB\nMemFree:  1000 kB\nMemAvailable:   4000 kB\n";
+        assert_eq!(parse_meminfo(info), Some((12000 * 1024, 16000 * 1024)));
+        let at = |busy, total| System {
+            cpu_ns_busy: busy,
+            cpu_ns_total: total,
+            ..System::default()
+        };
+        assert_eq!(at(300, 1000).cpu_since(&at(100, 600)), 50.0);
+        assert_eq!(at(100, 600).cpu_since(&at(100, 600)), 0.0);
+    }
 
     #[test]
     fn stat_is_read_after_the_last_parenthesis() {

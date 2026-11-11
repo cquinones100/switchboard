@@ -5,7 +5,8 @@
 //! the Settings view changes a setting in the settings file, M-j opens the
 //! Work map as a picker of the open tabs, and q closes it. With UX 2.0 and
 //! many tabs, moving about leaves what it shows standing, while a tab's new
-//! output and a tab closing still show.
+//! output and a tab closing still show. With UX 2.0, the Resources board ends
+//! a tab's busy process from its menu after a yes.
 
 use crate::common;
 
@@ -930,4 +931,45 @@ fn the_notifications_history_folds_old_days_and_x_says_what_is_out_of_the_sideba
         "{}",
         screen.join("\n")
     );
+}
+
+#[test]
+fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
+    let server = TestServer::start();
+    settings(&server, json!({"view_resources": true, "ux2": true}));
+    let mut client = server.attach(150, 36);
+    client.wait_text("$");
+    // A process pegging a core in the tab.
+    client.type_text("yes > /dev/null\r");
+    open(&mut client);
+    client.type_text("vresources\r");
+    // The tab's row, chosen, with its busiest process under it.
+    client.wait_text("CPU, LAST 2 MINUTES");
+    client.wait_for("the busy process read", |s| {
+        s.iter().any(|l| l.contains("yes ") && l.contains('%'))
+    });
+    client.type_text("\r");
+    client.wait_text("Go to tab 1");
+    pick(&mut client, "End yes");
+    client.wait_text("End yes in tab 1?");
+    client.type_text("\r");
+    client.wait_text("Ended yes.");
+    // The shell has its prompt back.
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        let pids: Vec<u32> = server.list()["sessions"][0]["tabs"][0]["panes"][0]["pid"]
+            .as_u64()
+            .map(|p| vec![p as u32])
+            .unwrap_or_default();
+        let still = pids.iter().any(|&shell| {
+            switchboard::mux::procinfo::children_of(shell)
+                .iter()
+                .any(|&c| switchboard::mux::procinfo::command_of(c).as_deref() == Some("yes"))
+        });
+        if !still {
+            break;
+        }
+        assert!(Instant::now() < deadline, "yes still runs");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

@@ -133,6 +133,13 @@ pub enum Do {
     /// A workspace key from the Keys view, pressed in the pane mission
     /// control was over once it has closed, as an M-p pick is.
     Press(crate::mux::keys::Action),
+    /// A process in a tab ended (SIGTERM), asked first, and only while the
+    /// pid still has that name and is still under the tab's panes.
+    EndProcess {
+        tab: TabId,
+        pid: u32,
+        name: String,
+    },
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -561,6 +568,49 @@ pub fn board_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     out
 }
 
+/// The processes a Resources row's menu offers to end: up to five heavier
+/// than this CPU or memory, heaviest first.
+const END_CPU: f64 = 1.0;
+const END_MEMORY: f64 = 100.0 * 1024.0 * 1024.0;
+
+/// A Resources row's menu: going to the tab, then ending each of its
+/// heaviest processes, its CPU or memory in the label.
+fn resource_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
+    let mut out = target_choices(item, ctx);
+    let Target::Tab(tab) = item.target else {
+        return out;
+    };
+    let n = |p: &Value, key: &str| p[key].as_f64().unwrap_or(0.0);
+    let weight = |p: &Value| {
+        n(p, "cpu") / crate::usage::resources::CPU_HEAVY
+            + n(p, "memory") / crate::usage::resources::MEMORY_HEAVY as f64
+    };
+    let mut heavy: Vec<&Value> = item.data["tree"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| n(p, "cpu") > END_CPU || n(p, "memory") > END_MEMORY)
+        .collect();
+    heavy.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+    for (p, key) in heavy.into_iter().zip(['1', '2', '3', '4', '5']) {
+        let name = text(p, "/name").to_string();
+        let Some(pid) = p["pid"].as_u64().and_then(|p| u32::try_from(p).ok()) else {
+            continue;
+        };
+        let figure = if n(p, "cpu") > END_CPU {
+            format!("{:.0}%", n(p, "cpu"))
+        } else {
+            crate::usage::resources::bytes(n(p, "memory") as u64)
+        };
+        out.push(choice(
+            key,
+            format!("End {name} ({figure})"),
+            Do::EndProcess { tab, pid, name },
+        ));
+    }
+    out
+}
+
 /// What an item's target offers when its source has nothing of its own.
 fn target_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     match &item.target {
@@ -592,6 +642,7 @@ fn target_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
 pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice> {
     let mut out = Vec::new();
     match view {
+        ViewId::Resources => return resource_choices(item, ctx),
         ViewId::Prs | ViewId::Tickets => return board_choices(item, ctx),
         ViewId::Inbox => {
             out = board_choices(item, ctx);

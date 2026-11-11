@@ -108,6 +108,7 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "Notifications: go to it (its menu's first choice; on a folded day, show it), its whole menu, put it out of the sidebar",
     ),
     ("1-7", "Notifications: show one kind (1 all)"),
+    ("s", "Resources view: sort the tabs by CPU or by memory"),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
@@ -571,6 +572,9 @@ impl Server {
                 if m.picker && v.id == ViewId::WorkMap {
                     v.data.items.retain(|i| !views::is_repo_heading(i));
                 }
+                if v.id == ViewId::Resources {
+                    m.resources_sort.sort(&mut v.data.items);
+                }
                 v
             })
             .collect();
@@ -579,9 +583,11 @@ impl Server {
         // Tab's focus on a view's name on that view.
         let was = m.current().map(|v| v.id.clone());
         // The Autopilot view orders its items by how far along they are, and
-        // CI by whether their checks fail, run or pass, so a stage or a
-        // check changing moves them: the cursor follows the chosen one.
-        let follows = |id: &ViewId| matches!(id, ViewId::Autopilot | ViewId::Ci);
+        // CI by whether their checks fail, run or pass, and Resources by
+        // each tab's CPU or memory, so a stage, a check or a reading
+        // changing moves them: the cursor follows the chosen one.
+        let follows =
+            |id: &ViewId| matches!(id, ViewId::Autopilot | ViewId::Ci | ViewId::Resources);
         let followed = m.current().map(|v| v.id.clone()).filter(follows);
         let pilot_chosen = followed
             .as_ref()
@@ -1391,6 +1397,13 @@ impl Server {
                 return;
             }
             None => {}
+        }
+        if k.code == KeyCode::Char('s')
+            && plain(&k)
+            && m.current().is_some_and(|v| v.id == ViewId::Resources)
+        {
+            m.resources_sort = m.resources_sort.next();
+            return;
         }
         let count = match m.current() {
             Some(v) => v.data.items.len(),
@@ -2202,6 +2215,52 @@ impl Server {
                             server.kill_tab(tab);
                             server.mission_note(client, format!("Closed tab {name}."));
                         }
+                    },
+                );
+            }
+            Do::EndProcess { tab, pid, name } => {
+                let index = self
+                    .sidebar_all_tabs()
+                    .into_iter()
+                    .find(|t| t.id == tab)
+                    .map_or(0, |t| t.index);
+                let panes: Vec<u32> = self
+                    .panes_with_parked(tab)
+                    .iter()
+                    .filter_map(|p| self.panes.get(p)?.pane.pid())
+                    .collect();
+                let label = format!("Ending {name}");
+                self.ask(
+                    client,
+                    Confirm::new(format!("End {name} in tab {index}?")),
+                    move |server, client, yes| {
+                        if !yes {
+                            return;
+                        }
+                        server.mission_busy(client, &label, None, async move {
+                            let ended = tokio::task::spawn_blocking(move || {
+                                let list = crate::mux::procinfo::all_usage();
+                                if !crate::usage::resources::still_under(&list, &panes, pid, &name)
+                                {
+                                    return format!("{name} had already ended.");
+                                }
+                                let Ok(signaled) = libc::pid_t::try_from(pid) else {
+                                    return format!("{name} had already ended.");
+                                };
+                                // SAFETY: kill only sends a signal; the pid was
+                                // checked just now to be the process offered.
+                                if unsafe { libc::kill(signaled, libc::SIGTERM) } == 0 {
+                                    format!("Ended {name}.")
+                                } else {
+                                    format!(
+                                        "Couldn't end {name}: {}",
+                                        std::io::Error::last_os_error()
+                                    )
+                                }
+                            })
+                            .await;
+                            Some(ended.unwrap_or_else(|e| format!("Couldn't end it: {e}")))
+                        });
                     },
                 );
             }

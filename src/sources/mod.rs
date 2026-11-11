@@ -192,6 +192,7 @@ impl Sources {
             empty: None,
             columns: Vec::new(),
             footer: Vec::new(),
+            head: serde_json::Value::Null,
             at: None,
         };
         Some(self.views.get(name).unwrap_or(&EMPTY))

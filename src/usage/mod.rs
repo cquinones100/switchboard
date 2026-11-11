@@ -29,7 +29,7 @@ use std::time::{Instant, SystemTime};
 
 use crate::items::ViewData;
 use crate::mux::PaneId;
-use crate::mux::procinfo::ProcUsage;
+use crate::mux::procinfo::{ProcUsage, System};
 
 pub use serve::{ViewKind, WANT_FOR};
 
@@ -44,6 +44,9 @@ pub enum UsageEvent {
         at: Instant,
         list: Vec<ProcUsage>,
         procs: Vec<resources::Proc>,
+        /// The whole computer then, and its CPU since the reading before.
+        system: Option<System>,
+        system_cpu: Option<f64>,
     },
     /// A view worked out again.
     View(ViewKind, ViewData),
@@ -84,8 +87,13 @@ pub struct Usage {
     /// Each view as last worked out.
     views: HashMap<ViewKind, ViewData>,
     /// The last reading of every process, and each one's CPU then.
-    reading: Option<(Instant, Vec<ProcUsage>)>,
+    reading: Option<(Instant, Vec<ProcUsage>, Option<System>)>,
     procs: Option<Vec<resources::Proc>>,
+    /// The whole computer as last read, and the last two minutes of
+    /// readings, for the Resources board.
+    system: Option<System>,
+    system_cpu: Option<f64>,
+    history: resources::History,
     /// Which pane runs which Claude session, as last read.
     pub claudes: HashMap<PaneId, sessions::Claude>,
     surveying: bool,

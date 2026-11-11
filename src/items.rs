@@ -142,6 +142,10 @@ pub struct ViewData {
     pub columns: Vec<Column>,
     #[serde(default)]
     pub footer: Vec<String>,
+    /// What a board draws above its items, as the view keeps it (the
+    /// whole computer's figures over the Resources board).
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub head: serde_json::Value,
     /// When it was last looked up, in milliseconds since the epoch.
     #[serde(default)]
     pub at: Option<i64>,

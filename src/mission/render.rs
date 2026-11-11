@@ -19,8 +19,9 @@
 //! - a board (the PR and ticket boards): a column for each place, side by
 //!   side, each item two lines;
 //! - with UX 2.0, the Autopilot view as a board of cards (`pilot_board`),
-//!   each with a meter placed as an image over the lines (`Meter`);
+//!   each with a meter placed as an image over the lines (`Image`);
 //! - a table (Resources): its columns' names, its rows, and a totals row;
+//!   with UX 2.0 and room, the board `resources_board` draws instead;
 //! - any other view, one row per item, a heading over each group, Settings'
 //!   rows as name, value and what the option does.
 
@@ -2724,16 +2725,60 @@ const PILOT_SIDE_W: usize = 44;
 /// properly (`Markdown::parse`).
 const PLAN_PLACE: &str = "its plan note in Notes";
 
-/// A meter the board places as an image atom (src/ui/images.rs) once its
-/// lines are drawn: where it starts and how wide, how full, in what color.
+/// An image atom (src/ui/images.rs) a board places once its lines are
+/// drawn: its name, which the next draw replaces in place, where it starts,
+/// how wide and tall, and what it draws.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Meter {
+pub struct Image {
     pub name: String,
     pub x: u16,
     pub y: u16,
     pub width: u16,
-    pub frac: f32,
-    pub color: Color,
+    pub height: u16,
+    pub shape: Shape,
+}
+
+/// What an image atom draws: a meter (`images::meter`) how full, in what
+/// color, with a tick; or a series of bars (`images::series`) scaled to
+/// `max`, what is past `over` red, which one row tall is a sparkline.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Shape {
+    Meter {
+        frac: f32,
+        color: Color,
+        tick: Option<f32>,
+    },
+    Series {
+        bars: Vec<crate::ui::images::Bar>,
+        max: f32,
+        over: Option<f32>,
+    },
+}
+
+impl Image {
+    /// A meter one row tall.
+    fn meter(name: String, x: usize, y: usize, width: usize, frac: f32, color: Color) -> Image {
+        Image {
+            name,
+            x: x as u16,
+            y: y as u16,
+            width: width as u16,
+            height: 1,
+            shape: Shape::Meter {
+                frac,
+                color,
+                tick: None,
+            },
+        }
+    }
+
+    /// How full a meter is; `None` for a series.
+    pub fn frac(&self) -> Option<f32> {
+        match self.shape {
+            Shape::Meter { frac, .. } => Some(frac),
+            Shape::Series { .. } => None,
+        }
+    }
 }
 
 /// A card's meter's color: its column's tone, red once a stage failed.
@@ -2774,7 +2819,7 @@ fn pilot_board(
     m: &Mission,
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
-    meters: &mut Vec<Meter>,
+    meters: &mut Vec<Image>,
 ) -> Vec<Picture> {
     const TALL: usize = 6;
     const SPEND_W: usize = 12;
@@ -2834,14 +2879,14 @@ fn pilot_board(
             } else {
                 Tone::Done
             };
-            meters.push(Meter {
-                name: "autopilot/spend".into(),
-                x: cols.saturating_sub(SPEND_W + 1) as u16,
-                y: lines.len() as u16,
-                width: SPEND_W as u16,
+            meters.push(Image::meter(
+                "autopilot/spend".into(),
+                cols.saturating_sub(SPEND_W + 1),
+                lines.len(),
+                SPEND_W,
                 frac,
-                color: tone.fg(theme),
-            });
+                tone.fg(theme),
+            ));
             spans.push(Span::raw(" ".repeat(spend_w)));
         }
         lines.push(Line { spans, fill });
@@ -2991,14 +3036,14 @@ fn pilot_board(
             out.push(vec![Span::raw(" ".repeat(col_w))]);
             let y = top + 2 + (shown - first) * TALL;
             if !skipped && y + 3 < top + body {
-                meters.push(Meter {
-                    name: format!("autopilot/{}", item.id),
-                    x: (ci * col_w + 2) as u16,
-                    y: (y + 3) as u16,
-                    width: inner as u16,
+                meters.push(Image::meter(
+                    format!("autopilot/{}", item.id),
+                    ci * col_w + 2,
+                    y + 3,
+                    inner,
                     frac,
-                    color: pilot_tone(item).fg(theme),
-                });
+                    pilot_tone(item).fg(theme),
+                ));
             }
             for dy in 0..TALL - 1 {
                 hits.push(HitBox {
@@ -3641,6 +3686,12 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("1-7", "kind"),
             ("/", "filter"),
         ]),
+        ViewId::Resources => with(&[
+            ("jk", "move"),
+            ("↵", "menu: go to the tab, end a process"),
+            ("s", "sort by CPU or memory"),
+            ("/", "filter"),
+        ]),
         ViewId::Prs | ViewId::Tickets => with(&[
             ("hl", "column"),
             ("jk", "move"),
@@ -3899,7 +3950,7 @@ fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
     crate::mux::input::Key::parse(name)
 }
 
-/// UX 2.0's footer whose keys take a click (the CI view's): the kit's
+/// UX 2.0's footer whose keys take a click (the CI, Work map and Resources views'): the kit's
 /// hints, each key that names one a spot (`Spot::Key`) at row `y`, lit
 /// under the mouse.
 fn key_footer(
@@ -4104,14 +4155,14 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
 }
 
 /// The screen as `screen` draws it, with what is placed over it as images:
-/// the meters (the Autopilot board's) and the pictures (the diagrams of the
+/// the meters and sparklines (the Autopilot and Resources boards') and the pictures (the diagrams of the
 /// description beside the PR and ticket boards, and of the plan beside the
 /// Autopilot board).
 pub fn drawn(
     m: &Mission,
     cols: usize,
     rows: usize,
-) -> (Vec<Line>, Vec<HitBox>, Vec<Meter>, Vec<Picture>) {
+) -> (Vec<Line>, Vec<HitBox>, Vec<Image>, Vec<Picture>) {
     let snap = &m.snap;
     let theme = &snap.theme;
     let mut hits = Vec::new();
@@ -4301,8 +4352,15 @@ pub fn drawn(
                 && v.loaded
                 && v.data.setup.is_none()
                 && !v.data.items.is_empty();
+            let resources_shown = snap.rules.ux2
+                && v.id == ViewId::Resources
+                && cols >= super::resources_board::BOARD_AT
+                && v.loaded
+                && !v.data.items.is_empty();
             if pilot_board_shown {
                 pictures = pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+            } else if resources_shown {
+                super::resources_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if ci_shown {
                 ci_rows(v, cols, rows, m, &mut lines, &mut hits);
             } else if let Some(columns) = v.columns() {
@@ -4362,7 +4420,10 @@ pub fn drawn(
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             let pairs = hints(m, view, beside);
-            if snap.rules.ux2 && view.is_some_and(|v| matches!(v.id, ViewId::Ci | ViewId::WorkMap))
+            if snap.rules.ux2
+                && view.is_some_and(|v| {
+                    matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
+                })
             {
                 let y = rows.saturating_sub(1) as u16;
                 row.spans
@@ -5648,6 +5709,115 @@ mod tests {
         assert!(text[10].contains("All tabs"), "{text:#?}");
     }
 
+    #[test]
+    fn with_ux2_resources_is_a_board_of_the_computer_and_each_tab() {
+        use crate::usage::resources::{self, History, Proc, TabPanes, Top};
+        let proc = |pid, ppid, name: &str, cpu, memory| Proc {
+            pid,
+            ppid,
+            name: name.into(),
+            cpu,
+            memory,
+        };
+        let list = vec![
+            proc(100, 1, "zsh", 0.0, 2 << 20),
+            proc(101, 100, "node", 120.0, 900 << 20),
+            proc(102, 101, "sh", 0.0, 1 << 20),
+            proc(103, 101, "esbuild", 4.0, 300 << 20),
+            proc(104, 100, "git", 0.0, 10 << 20),
+            proc(105, 100, "cat", 0.0, 1 << 20),
+            proc(200, 1, "zsh", 0.5, 3 << 20),
+        ];
+        let tabs = [
+            TabPanes {
+                tab: TabId(1),
+                index: 1,
+                name: "calm".into(),
+                pids: vec![200],
+            },
+            TabPanes {
+                tab: TabId(3),
+                index: 3,
+                name: "build".into(),
+                pids: vec![100],
+            },
+        ];
+        let mut history = History::default();
+        let now = std::time::Instant::now();
+        history.add(now, &resources::tab_usage(&tabs, &list), Some(38.0));
+        let top = Top {
+            cpu: Some(38.0),
+            cores: 10,
+            memory_used: 21 << 30,
+            memory_total: 32 << 30,
+            own_cpu: 2.0,
+            own_memory: 84 << 20,
+        };
+        let data = resources::view(&tabs, Some(&list), Some(1), &history, Some(&top));
+        let view = View {
+            id: ViewId::Resources,
+            title: "Resources".into(),
+            data,
+            loaded: true,
+        };
+        let mut m = mission(vec![tab(1, "calm"), tab(3, "build")], vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        // The snapshot's CPU order, as the server sorts it for the client.
+        super::super::resources_board::Sort::Cpu.sort(&mut m.snap.views[0].data.items);
+        m.cursor = 0;
+        let (lines, hits, images, _) = drawn(&m, 160, 30);
+        let s = crate::mux::input::Key::parse("s").unwrap();
+        assert!(
+            hits.iter().any(|h| h.spot == Spot::Key(s)),
+            "the footer's s takes a click"
+        );
+        let text = texts(&lines);
+        let all = text.join("\n");
+        assert!(all.contains("CPU 38% of 10 cores"), "{all}");
+        assert!(all.contains("Memory 21.0 GB of 32.0 GB"), "{all}");
+        assert!(all.contains("Switchboard itself: 2% CPU, 84 MB"), "{all}");
+        assert!(all.contains("CPU, LAST 2 MINUTES"), "{all}");
+        let build = text
+            .iter()
+            .position(|l| l.contains("3 build"))
+            .expect("build's row");
+        assert!(text[build].contains("124%"), "{}", text[build]);
+        assert!(text[build + 1].contains("node 120%"), "{}", text[build + 1]);
+        assert!(
+            text[build + 1].contains("✕ a core pegged"),
+            "{}",
+            text[build + 1]
+        );
+        // The chosen row's tree: its four heaviest, then the rest.
+        assert!(text[build + 2].contains("├ zsh"), "{all}");
+        assert!(text[build + 3].contains("  ├ node"), "{all}");
+        assert!(text[build + 6].contains("2 more: sh, cat"), "{all}");
+        let calm = text
+            .iter()
+            .position(|l| l.contains("1 calm"))
+            .expect("calm's row");
+        assert!(calm > build + 6);
+        assert!(all.contains("Memory is resident"), "{all}");
+        // One CPU and one memory sparkline a row, and the top's two.
+        let named = |n: &str| images.iter().filter(|i| i.name == n).count();
+        assert_eq!(named("resources/3/cpu"), 1);
+        assert_eq!(named("resources/3/memory"), 1);
+        assert_eq!(named("resources/1/cpu"), 1);
+        assert_eq!(named("resources/1/memory"), 1);
+        assert_eq!(named("resources/cpu"), 1);
+        assert_eq!(
+            images
+                .iter()
+                .find(|i| i.name == "resources/memory")
+                .and_then(|i| i.frac()),
+            Some(21.0 / 32.0)
+        );
+        // Narrower, the table.
+        let (lines, _) = screen(&m, 120, 30);
+        assert!(texts(&lines).iter().any(|l| l.contains("% CPU")));
+    }
+
     fn pilot_summary() -> crate::autopilot::Summary {
         crate::autopilot::Summary {
             target: String::new(),
@@ -5855,12 +6025,12 @@ mod tests {
             .iter()
             .find(|meter| meter.name == "autopilot/pilot:@3")
             .unwrap();
-        assert_eq!(held.frac, 6.0 / 8.0);
+        assert_eq!(held.frac(), Some(6.0 / 8.0));
         let spend = meters
             .iter()
             .find(|meter| meter.name == "autopilot/spend")
             .unwrap();
-        assert_eq!((spend.frac, spend.y as usize), (0.25, at));
+        assert_eq!((spend.frac(), spend.y as usize), (Some(0.25), at));
         assert_eq!(meters.len(), 5);
     }
 

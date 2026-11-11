@@ -31,6 +31,9 @@
 //! - `ask`: a line to type in a box.
 //! - `busy`: the box an option shows while it works.
 //! - `remind`: a tab's reminder (remind.sh).
+//! - `resources_board`: with UX 2.0, the Resources view as a board: the
+//!   whole computer, each tab's figures and sparklines, the chosen one's
+//!   process tree.
 //! - `diagrams`: the Mermaid diagrams of the description beside the PR and
 //!   ticket boards, drawn as pictures off the server's task and kept.
 //! - `serve`: the server's side: opening it, its keys and mouse, the menus,
@@ -46,6 +49,7 @@ pub mod history;
 pub mod keymap;
 pub mod remind;
 pub mod render;
+pub mod resources_board;
 mod serve;
 pub mod views;
 
@@ -234,9 +238,9 @@ pub struct Mission {
     pub(crate) taken_at: Option<u64>,
     /// Where each part was last drawn, for clicks and the mouse.
     pub hits: Vec<HitBox>,
-    /// The meters it last drew, placed as images over its text (`images`),
+    /// The meters and sparklines it last drew, placed as images over its text (`images`),
     /// where they sit on the whole screen.
-    pub meters: Vec<render::Meter>,
+    pub meters: Vec<render::Image>,
     /// The diagrams it last laid out as pictures beside a board, placed the
     /// same way.
     pub pictures: Vec<render::Picture>,
@@ -274,6 +278,8 @@ pub struct Mission {
     pub notice_kind: usize,
     /// The Notifications view's days unfolded, by their date.
     pub unfolded: HashSet<String>,
+    /// What the Resources view sorts its tabs by (`s`).
+    pub resources_sort: resources_board::Sort,
 }
 
 impl Mission {
@@ -305,6 +311,7 @@ impl Mission {
             ci_check: None,
             notice_kind: 1,
             unfolded: HashSet::new(),
+            resources_sort: resources_board::Sort::default(),
         }
     }
 
@@ -455,7 +462,7 @@ impl Overlay for Mission {
             .collect();
         self.meters = meters
             .into_iter()
-            .map(|meter| render::Meter {
+            .map(|meter| render::Image {
                 x: meter.x + area.x,
                 y: meter.y + area.y,
                 ..meter
@@ -466,15 +473,16 @@ impl Overlay for Mission {
 
     fn draw_frame(&mut self, frame: &mut crate::mux::compose::Frame, look: &Look) {
         self.draw(&mut frame.buf, look);
-        for meter in &self.meters {
-            crate::ui::images::meter(
-                frame,
-                &meter.name,
-                ratatui::layout::Rect::new(meter.x, meter.y, meter.width, 1),
-                meter.frac,
-                meter.color,
-                None,
-            );
+        for image in &self.meters {
+            let area = ratatui::layout::Rect::new(image.x, image.y, image.width, image.height);
+            match &image.shape {
+                render::Shape::Meter { frac, color, tick } => {
+                    crate::ui::images::meter(frame, &image.name, area, *frac, *color, *tick)
+                }
+                render::Shape::Series { bars, max, over } => {
+                    crate::ui::images::series(frame, &image.name, area, bars, *max, *over)
+                }
+            }
         }
         for picture in &self.pictures {
             if let Some(diagram) = self.snap.diagrams.get(&picture.key) {

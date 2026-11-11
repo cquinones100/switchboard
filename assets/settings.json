@@ -403,7 +403,7 @@
     "key": "view_resources",
     "category": "Mission control",
     "label": "Resources",
-    "description": "Mission control's Resources view: a table of the CPU and memory each tab's processes use, heaviest overall first, read with ps every few seconds only while the view is in front",
+    "description": "Mission control's Resources view: the computer's CPU and memory, and a table of the CPU and memory each tab's processes use, sorted by CPU or memory, read from the kernel every few seconds only while the view is in front; with UX 2.0 a board of sparklines and each tab's process tree, whose menu can end a process. Off, the view and its readings are gone",
     "default": true
   },
   {

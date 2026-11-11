@@ -135,14 +135,42 @@ impl Server {
                 self.usage.surveying = false;
                 self.usage_see_tabs();
             }
-            UsageEvent::Reading { at, list, procs } => {
-                self.usage.reading = Some((at, list));
-                self.usage.procs = Some(procs);
+            UsageEvent::Reading {
+                at,
+                list,
+                procs,
+                system,
+                system_cpu,
+            } => {
+                self.usage.reading = Some((at, list, system));
+                self.usage.system = system;
+                self.usage.system_cpu = system_cpu;
                 self.usage.in_flight.insert(ViewKind::Resources, false);
+                let tabs = self.usage_tab_panes();
+                let usage = resources::tab_usage(&tabs, &procs);
+                self.usage.history.add(at, &usage, system_cpu);
+                let panes: Vec<u32> = self
+                    .panes
+                    .values()
+                    .filter_map(|slot| slot.pane.pid())
+                    .collect();
+                let (own_cpu, own_memory) =
+                    resources::own_usage(&procs, &panes, std::process::id());
+                let top = system.map(|s| resources::Top {
+                    cpu: system_cpu,
+                    cores: s.cores,
+                    memory_used: s.memory_used,
+                    memory_total: s.memory_total,
+                    own_cpu,
+                    own_memory,
+                });
+                self.usage.procs = Some(procs);
                 let data = resources::view(
-                    &self.usage_tab_panes(),
+                    &tabs,
                     self.usage.procs.as_deref(),
                     Some(util::now_ms()),
+                    &self.usage.history,
+                    top.as_ref(),
                 );
                 self.usage_set_view(ViewKind::Resources, data);
                 if self.usage_wanted(ViewKind::Resources, Instant::now()) {
@@ -249,23 +277,35 @@ impl Server {
                 // A reading from before the view was last put away would
                 // average the CPU over the whole time between; the first
                 // look takes two readings of its own.
-                let before = self.usage.reading.clone().filter(|(at, _)| {
+                let before = self.usage.reading.clone().filter(|(at, _, _)| {
                     at.elapsed() < Duration::from_millis(resources::RESOURCES_MS) * 3
                 });
                 tokio::task::spawn_blocking(move || {
-                    let (then, before) = match before {
+                    use crate::mux::procinfo;
+                    let (then, before, system_before) = match before {
                         Some(b) => b,
                         None => {
-                            let first = crate::mux::procinfo::all_usage();
+                            let system = procinfo::system();
+                            let first = procinfo::all_usage();
                             let at = Instant::now();
                             std::thread::sleep(resources::FIRST_GAP);
-                            (at, first)
+                            (at, first, system)
                         }
                     };
-                    let list = crate::mux::procinfo::all_usage();
+                    let system = procinfo::system();
+                    let list = procinfo::all_usage();
                     let at = Instant::now();
                     let procs = resources::between(&before, &list, at.duration_since(then));
-                    let _ = tx.send(Event::Usage(UsageEvent::Reading { at, list, procs }));
+                    let system_cpu = system
+                        .zip(system_before)
+                        .map(|(now, was)| now.cpu_since(&was));
+                    let _ = tx.send(Event::Usage(UsageEvent::Reading {
+                        at,
+                        list,
+                        procs,
+                        system,
+                        system_cpu,
+                    }));
                 });
             }
             ViewKind::Sessions => {
@@ -303,7 +343,8 @@ impl Server {
     }
 
     /// Each tab's number in its session, its label and its panes' own
-    /// processes, for Resources.
+    /// processes, a pane parked behind the diff or lazygit among them, for
+    /// Resources.
     fn usage_tab_panes(&self) -> Vec<TabPanes> {
         self.usage_tab_list()
             .into_iter()
@@ -312,10 +353,7 @@ impl Server {
                 index,
                 name: self.tab_label(tab),
                 pids: self
-                    .tabs
-                    .get(&tab)
-                    .map(|t| t.layout.panes())
-                    .unwrap_or_default()
+                    .panes_with_parked(tab)
                     .iter()
                     .filter_map(|p| self.panes.get(p)?.pane.pid())
                     .collect(),
