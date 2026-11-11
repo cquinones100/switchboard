@@ -80,16 +80,28 @@ fn strip_pr(name: &str) -> &str {
 /// background look and `gw`'s look for a tab on the item, off the
 /// server's task.
 pub fn wtn_item_at(dir: &std::path::Path) -> Option<String> {
-    let place = crate::tabs::git::locate(dir).filter(|p| p.on_branch())?;
-    let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
-    wtn_item(&config, &place.branch)
+    wtn_claim_at(dir).map(|(_, item)| item)
 }
 
-/// The item a branch is for, from the text of a repository's git config:
-/// `branch.<branch>.wtnItem`, `<note's ID>: <item's first line>`, or
-/// `<note's path>: <item's first line>` from before notes had IDs, the note
-/// left off.
+/// `wtn_claim` for a directory's branch, read as `wtn_item_at` reads it:
+/// for Notes' chips, which show a tab only on its item's own note.
+pub fn wtn_claim_at(dir: &std::path::Path) -> Option<(Option<String>, String)> {
+    let place = crate::tabs::git::locate(dir).filter(|p| p.on_branch())?;
+    let config = std::fs::read_to_string(place.common_dir.join("config")).ok()?;
+    wtn_claim(&config, &place.branch)
+}
+
+/// The item a branch is for, from the text of a repository's git config,
+/// the note left off: `wtn_claim`'s item.
 pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
+    wtn_claim(config, branch).map(|(_, item)| item)
+}
+
+/// The note and item a branch is for, from the text of a repository's git
+/// config: `branch.<branch>.wtnItem`, `<note's ID>: <item's first line>`,
+/// the ID given, or `<note's path>: <item's first line>` from before notes
+/// had IDs, no ID given.
+pub fn wtn_claim(config: &str, branch: &str) -> Option<(Option<String>, String)> {
     let mut in_branch = false;
     for line in config.lines() {
         let line = line.trim();
@@ -112,14 +124,14 @@ pub fn wtn_item(config: &str, branch: &str) -> Option<String> {
             continue;
         }
         let value = unquote(value.trim());
-        if let Some((_, item)) = crate::notes::id::claim_of(&value) {
-            return Some(item.to_string());
+        if let Some((id, item)) = crate::notes::id::claim_of(&value) {
+            return Some((Some(id.to_string()), item.to_string()));
         }
         let item = match value.split_once(".md: ") {
             Some((_, item)) => item.to_string(),
             None => value,
         };
-        return Some(item);
+        return Some((None, item));
     }
     None
 }
@@ -224,6 +236,18 @@ mod tests {
             wtn_item(by_id, "note/copy").as_deref(),
             Some("Copy the .md: reply"),
             "a claim by the note's ID too"
+        );
+        assert_eq!(
+            wtn_claim(by_id, "note/copy"),
+            Some((
+                Some("n-0123456789ab".to_string()),
+                "Copy the .md: reply".to_string()
+            ))
+        );
+        assert_eq!(
+            wtn_claim(config, "note/copy"),
+            Some((None, "Copy \"the\" reply".to_string())),
+            "a claim by path names no ID"
         );
     }
 

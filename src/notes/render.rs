@@ -855,6 +855,9 @@ pub struct ItemTab {
     pub id: String,
     /// The note the tab is linked to (`@tab_note`), empty when none.
     pub note: String,
+    /// The ID of the note its item is in, from its branch's `wtnItem`,
+    /// empty when unknown.
+    pub note_id: String,
     /// The tab's number in its session.
     pub index: usize,
     /// Its Claude waits on you, else it works.
@@ -960,7 +963,8 @@ pub fn landed<S: AsRef<str>>(lines: &[S], kinds: &[Kind]) -> Vec<Option<String>>
 
 /// Each line's chips: an unticked item's, from it and the lines indented
 /// under it up to the next item, a tab working on it or waiting on you
-/// first (`tabs`, keyed by the item's first line); none for any other line.
+/// first (`tabs`, the note's own tabs keyed by the item's first line); none
+/// for any other line.
 pub fn chips<S: AsRef<str>>(
     lines: &[S],
     kinds: &[Kind],
@@ -1478,6 +1482,7 @@ mod tests {
                 ItemTab {
                     id: "@3".into(),
                     note: String::new(),
+                    note_id: String::new(),
                     index: 3,
                     waits: false,
                     detail: "review round 1".into(),
@@ -1488,6 +1493,7 @@ mod tests {
                 ItemTab {
                     id: "@2".into(),
                     note: String::new(),
+                    note_id: String::new(),
                     index: 2,
                     waits: true,
                     detail: "git push".into(),

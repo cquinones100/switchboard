@@ -654,6 +654,32 @@ impl App {
         self.open.as_ref().map(|o| o.path.as_path())
     }
 
+    /// The open note's tabs by its items' first lines, for its chips and
+    /// `o`: a tab keyed under the note's ID first, then under its path, then
+    /// one whose note isn't known under the item alone, so a tab on another
+    /// note's item of the same words isn't this note's.
+    fn note_tabs(&self) -> HashMap<String, render::ItemTab> {
+        let Some(open) = &self.open else {
+            return HashMap::new();
+        };
+        let path = self.store.relative(&open.path);
+        let id = open.id.as_deref().unwrap_or("");
+        let mut out = HashMap::new();
+        for note in [id, path.as_str(), ""] {
+            for (key, tab) in &self.item_tabs {
+                let item = match key.split_once('\0') {
+                    Some((of, item)) if !note.is_empty() && of == note => item,
+                    None if note.is_empty() && tab.note.is_empty() && tab.note_id.is_empty() => {
+                        key.as_str()
+                    }
+                    _ => continue,
+                };
+                out.entry(item.to_string()).or_insert_with(|| tab.clone());
+            }
+        }
+        out
+    }
+
     fn modified(&self) -> bool {
         self.open
             .as_ref()
@@ -1471,15 +1497,10 @@ impl App {
         {
             return false;
         }
-        let note = self
-            .current_path()
-            .map(|p| self.store.relative(p))
-            .unwrap_or_default();
         let item = render::item_text(&line, kind);
         let Some(id) = self
-            .item_tabs
-            .get(&note_item_key(&note, item))
-            .or_else(|| self.item_tabs.get(item).filter(|t| t.note.is_empty()))
+            .note_tabs()
+            .get(item)
             .map(|t| t.id.clone())
             .filter(|id| !id.is_empty())
         else {
@@ -3054,7 +3075,9 @@ fn look_at_tabs(tx: Sender<Msg>) {
                 .ok()
                 .and_then(|out| serde_json::from_str::<serde_json::Value>(&out).ok())
                 .map(|list| {
-                    item_tabs_of(&list, |dir| crate::tabs::title::wtn_item_at(Path::new(dir)))
+                    item_tabs_of(&list, |dir| {
+                        crate::tabs::title::wtn_claim_at(Path::new(dir))
+                    })
                 })
                 .unwrap_or_default();
             if last.as_ref() != Some(&found) {
@@ -3068,14 +3091,15 @@ fn look_at_tabs(tx: Sender<Msg>) {
     });
 }
 
-/// The tabs working on an item or waiting on you, by the item's first
-/// line, from `switchboard list`'s JSON: the item from the tab's
-/// `@tab_title` or `@autopilot_item`, else from `wtn_item` on its
-/// directory; working with its Claude's phase, or waiting with what it
-/// waits on.
+/// The tabs working on an item or waiting on you, from `switchboard list`'s
+/// JSON: the item from the tab's `@tab_title` or `@autopilot_item`, else
+/// from `wtn_claim` on its directory, keyed by `note_item_key` under the
+/// note's ID (the claim's), else the note it is linked to (`@tab_note`),
+/// else by the item's first line alone; working with its
+/// Claude's phase, or waiting with what it waits on.
 fn item_tabs_of(
     list: &serde_json::Value,
-    wtn_item: impl Fn(&str) -> Option<String>,
+    wtn_claim: impl Fn(&str) -> Option<(Option<String>, String)>,
 ) -> HashMap<String, render::ItemTab> {
     let mut out = HashMap::new();
     let sessions = list["sessions"].as_array().into_iter().flatten();
@@ -3091,9 +3115,10 @@ fn item_tabs_of(
                 .filter(|v| !v.is_empty())
                 .map(str::to_string)
         };
+        let claim = tab["path"].as_str().and_then(&wtn_claim);
         let Some(item) = opt("@tab_title")
             .or_else(|| opt("@autopilot_item"))
-            .or_else(|| tab["path"].as_str().and_then(&wtn_item))
+            .or_else(|| claim.as_ref().map(|(_, item)| item.clone()))
         else {
             continue;
         };
@@ -3112,22 +3137,31 @@ fn item_tabs_of(
         let found = render::ItemTab {
             id,
             note: opt("@tab_note").unwrap_or_default(),
+            // The claim's note only when the claim is for this item: the
+            // directory may be another worktree's, a split's say.
+            note_id: claim
+                .filter(|(_, claimed)| claimed.trim() == item.trim())
+                .and_then(|(id, _)| id)
+                .unwrap_or_default(),
             index,
             waits,
             detail,
         };
-        // Also under its note, so `o` finds this note's tab when another
-        // note's item of the same words came first.
-        if !found.note.is_empty() {
-            out.entry(note_item_key(&found.note, item.trim()))
-                .or_insert(found.clone());
-        }
-        out.entry(item.trim().to_string()).or_insert(found);
+        // Under its note's ID, else the note it is linked to (which may be
+        // another note than the one its branch claims an item of), so
+        // another note's item of the same words gets no chip of it; under
+        // the item alone only when neither is known.
+        let item = item.trim();
+        let key = [&found.note_id, &found.note]
+            .into_iter()
+            .find(|note| !note.is_empty())
+            .map_or_else(|| item.to_string(), |note| note_item_key(note, item));
+        out.entry(key).or_insert(found);
     }
     out
 }
 
-/// `item_tabs_of`'s key for an item's tab linked to a note.
+/// `item_tabs_of`'s key for an item's tab in a note, by its ID or its path.
 fn note_item_key(note: &str, item: &str) -> String {
     format!("{note}\0{item}")
 }

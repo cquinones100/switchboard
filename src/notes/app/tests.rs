@@ -1331,17 +1331,26 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
         { "id": "@12", "index": 2, "agent": "waiting", "options": { "@autopilot_item": "stable IDs" },
           "panes": [{ "agent": { "state": "waiting", "wait": "git push" } }] },
         { "index": 4, "agent": "working", "options": {}, "path": "/repo/wt", "panes": [] },
+        { "index": 7, "agent": "working", "options": {}, "path": "/repo/by-id", "panes": [] },
+        { "index": 8, "agent": "working", "options": { "@tab_note": "Home.md" }, "path": "/repo/by-id", "panes": [] },
+        { "index": 9, "agent": "working", "options": { "@tab_title": "Tidy up", "@tab_note": "Work.md" }, "path": "/repo/by-id", "panes": [] },
         { "index": 5, "agent": "done", "options": { "@tab_title": "finished" }, "panes": [] },
         { "index": 6, "agent": null, "options": { "@tab_title": "idle" }, "panes": [] },
     ]}]});
-    let got = item_tabs_of(&list, |dir| {
-        (dir == "/repo/wt").then(|| "from git".to_string())
+    let got = item_tabs_of(&list, |dir| match dir {
+        "/repo/wt" => Some((None, "from git".to_string())),
+        "/repo/by-id" => Some((
+            Some("n-aaaaaaaaaaaa".to_string()),
+            "Fix the login".to_string(),
+        )),
+        _ => None,
     });
     assert_eq!(
         got["show uncommitted changes"],
         render::ItemTab {
             id: "@13".into(),
             note: String::new(),
+            note_id: String::new(),
             index: 3,
             waits: false,
             detail: "review round 1".into()
@@ -1352,13 +1361,29 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
         render::ItemTab {
             id: "@12".into(),
             note: String::new(),
+            note_id: String::new(),
             index: 2,
             waits: true,
             detail: "git push".into()
         }
     );
     assert_eq!(got["from git"].index, 4);
-    assert_eq!(got.len(), 3, "a finished or idle tab is no chip");
+    let on_a = &got[&note_item_key("n-aaaaaaaaaaaa", "Fix the login")];
+    assert_eq!((on_a.index, on_a.note_id.as_str()), (7, "n-aaaaaaaaaaaa"));
+    assert!(
+        !got.contains_key("Fix the login"),
+        "a tab whose note is known isn't under the item alone"
+    );
+    assert!(
+        !got.contains_key(&note_item_key("Home.md", "Fix the login")),
+        "a note linked to the tab doesn't outweigh the note its claim names"
+    );
+    assert_eq!(
+        got[&note_item_key("Work.md", "Tidy up")].index,
+        9,
+        "a claim for another item names no note of this one"
+    );
+    assert_eq!(got.len(), 5, "a finished or idle tab is no chip");
 }
 
 #[test]
@@ -1595,16 +1620,17 @@ fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
     let tab = |note: &str| render::ItemTab {
         id: "@7".into(),
         note: note.into(),
+        note_id: String::new(),
         index: 7,
         waits: false,
         detail: String::new(),
     };
-    app.item_tabs = HashMap::from([("Fix tests".to_string(), tab("Other.md"))]);
+    app.item_tabs = HashMap::from([(note_item_key("Other.md", "Fix tests"), tab("Other.md"))]);
     keys(&mut app, "3Go");
     assert_eq!(app.editor.mode, Mode::Insert, "another note's tab: Vim's o");
     keys(&mut app, "<Esc>u");
     app.item_tabs = HashMap::from([
-        ("Fix tests".to_string(), tab("Other.md")),
+        (note_item_key("Other.md", "Fix tests"), tab("Other.md")),
         (note_item_key("Design.md", "Fix tests"), tab("Design.md")),
     ]);
     keys(&mut app, "3Go");
@@ -1614,6 +1640,37 @@ fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
         "this note's tab: o goes there"
     );
     assert_eq!(lines(&app), ["# Design", "", "- [ ] Fix tests"]);
+}
+
+#[test]
+fn a_tabs_chip_shows_only_on_the_note_its_item_is_in() {
+    let (_dir, mut app) = started_ux2("chips by id");
+    let work = app.store.create("", Some("Work"));
+    write(
+        &work,
+        &id::with("# Work\n\n- [ ] Fix the login\n", "n-aaaaaaaaaaaa"),
+    );
+    let home = app.store.create("", Some("Home"));
+    write(
+        &home,
+        &id::with("# Home\n\n- [ ] Fix the login\n", "n-bbbbbbbbbbbb"),
+    );
+    let list = serde_json::json!({ "sessions": [{ "tabs": [
+        { "id": "@7", "index": 7, "agent": "working", "options": {}, "path": "/repo/wt", "panes": [] },
+    ]}]});
+    app.item_tabs = item_tabs_of(&list, |_| {
+        Some((
+            Some("n-aaaaaaaaaaaa".to_string()),
+            "Fix the login".to_string(),
+        ))
+    });
+    app.open_note(&work, false, false);
+    assert_eq!(app.note_tabs()["Fix the login"].index, 7, "its own note");
+    app.open_note(&home, false, false);
+    assert!(
+        app.note_tabs().is_empty(),
+        "another note's item of the same words"
+    );
 }
 
 #[test]

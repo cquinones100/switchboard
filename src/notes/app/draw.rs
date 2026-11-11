@@ -405,7 +405,7 @@ impl App {
         }
         let (chips, landed) = if self.opts.ux2 {
             (
-                render::chips(&lines, &kinds, &self.item_tabs),
+                render::chips(&lines, &kinds, &self.note_tabs()),
                 render::landed(&lines, &kinds),
             )
         } else {
