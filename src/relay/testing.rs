@@ -498,6 +498,24 @@ impl Rig {
         w.focused = focused;
     }
 
+    /// Puts a tab in a sidebar stage, as the server's `list` says it.
+    pub fn set_stage(&self, tab: &str, key: &str, title: &str, rank: u64, place: u64) {
+        let mut windows = self.mux.windows.borrow_mut();
+        let (w, _) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();
+        w.stage = Some(super::mux::TabStage {
+            key: key.into(),
+            title: title.into(),
+            rank,
+            place,
+        });
+    }
+
+    pub fn set_remind_at(&self, tab: &str, at: i64) {
+        let mut windows = self.mux.windows.borrow_mut();
+        let (w, _) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();
+        w.remind_at = Some(at);
+    }
+
     pub fn set_loop(&self, tab: &str) {
         let mut windows = self.mux.windows.borrow_mut();
         let (w, _) = windows.iter_mut().find(|(w, _)| w.id == tab).unwrap();

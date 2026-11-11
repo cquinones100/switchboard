@@ -49,6 +49,17 @@ pub struct PaneInfo {
     pub active: bool,
 }
 
+/// A tab's stage as the sidebar groups it (`list`'s `stage`): its key and
+/// title, the stage's place among the sidebar's stages and the tab's within
+/// it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabStage {
+    pub key: String,
+    pub title: String,
+    pub rank: u64,
+    pub place: u64,
+}
+
 /// One tab, with its panes in order.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Window {
@@ -68,6 +79,10 @@ pub struct Window {
     pub loop_tab: bool,
     /// The pane the relay recorded as its Claude (`@claude_pane`).
     pub recorded: Option<String>,
+    /// Its stage in the sidebar, or `None` from a server too old to say.
+    pub stage: Option<TabStage>,
+    /// A reminder set on it (`@remind_at`, in seconds).
+    pub remind_at: Option<i64>,
     pub panes: Vec<PaneInfo>,
 }
 
@@ -336,6 +351,18 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                 relay: opt("@slack_relay").as_deref() == Some("1"),
                 loop_tab: opt("@loop_tab").as_deref() == Some("1"),
                 recorded: opt("@claude_pane"),
+                stage: tab
+                    .get("stage")
+                    .filter(|s| s.is_object())
+                    .map(|s| TabStage {
+                        key: text(s, "key"),
+                        title: text(s, "title"),
+                        rank: s.get("rank").and_then(Value::as_u64).unwrap_or(0),
+                        place: s.get("place").and_then(Value::as_u64).unwrap_or(0),
+                    }),
+                remind_at: opt("@remind_at")
+                    .and_then(|v| v.trim().parse::<i64>().ok())
+                    .filter(|n| *n != 0),
                 panes,
             });
         }
@@ -355,7 +382,8 @@ mod tests {
                 "name": "main",
                 "tabs": [{
                     "id": "@1", "index": 1, "name": "work", "label": "#12 ABC-1: Fix it", "current": true,
-                    "options": { "@loop_tab": "1", "@claude_pane": "%2", "@tab_name": "mine" },
+                    "options": { "@loop_tab": "1", "@claude_pane": "%2", "@tab_name": "mine", "@remind_at": "1800" },
+                    "stage": { "key": "later", "title": "Reminders", "rank": 13, "place": 2 },
                     "panes": [
                         { "id": "%1", "pid": 100, "cwd": "/w", "agent": null, "claude": null,
                           "command": "zsh", "active": true },
@@ -399,6 +427,17 @@ mod tests {
             t.panes[1].transcript.as_deref(),
             Some(Path::new("/t/s1.jsonl"))
         );
+        assert_eq!(
+            t.stage,
+            Some(TabStage {
+                key: "later".into(),
+                title: "Reminders".into(),
+                rank: 13,
+                place: 2
+            })
+        );
+        assert_eq!(t.remind_at, Some(1800));
+        assert_eq!(tabs[1].stage, None, "none from a server too old to say");
         assert_eq!(tabs[1].name, "relay", "its name when it has no label");
         assert!(tabs[1].relay && !tabs[1].focused);
     }

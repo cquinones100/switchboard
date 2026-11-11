@@ -31,6 +31,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::config::{Paths, SCREEN_LINES};
+use super::mux::TabStage;
 use super::{Cx, Relay};
 use crate::mission::answer::{self, Answer, Press, Prompt, PromptOption};
 use crate::util;
@@ -59,6 +60,9 @@ pub struct Tab {
     pub transcript: Option<PathBuf>,
     pub own_name: String,
     pub cwd: Option<PathBuf>,
+    /// Its stage in the sidebar, which the Home groups by.
+    pub stage: Option<TabStage>,
+    pub remind_at: Option<i64>,
 }
 
 /// What this module keeps in memory: each tab's Claude pane as last seen,
@@ -104,6 +108,8 @@ pub fn claude_tabs(cx: &Relay) -> Vec<Tab> {
             transcript: chosen.transcript.clone(),
             own_name: w.own_name.clone(),
             cwd: chosen.cwd.clone(),
+            stage: w.stage.clone(),
+            remind_at: w.remind_at,
         });
     }
     let mut mem = cx.mem.borrow_mut();

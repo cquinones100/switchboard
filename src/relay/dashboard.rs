@@ -49,11 +49,37 @@ pub struct Row {
     pub choices: Vec<Button>,
 }
 
-/// The tabs in groups, so what needs you is at the top on a phone: waiting
-/// on you, then finished and not yet looked at, the longest first within
-/// each (as M-a walks them), then working, then idle, each in tab order.
-/// Empty groups are left out.
-pub fn grouped(rows: &[Row]) -> Vec<(&'static str, Vec<&Row>)> {
+/// The tabs in the sidebar's groups and order (each tab's `stage`, from the
+/// server's `list`), so the Home and the sidebar never place a tab apart.
+/// Empty groups are left out. From a server too old to say, the Home's own
+/// three: what needs you, then working, then idle.
+pub fn grouped(rows: &[Row]) -> Vec<(String, Vec<&Row>)> {
+    if rows.is_empty() || rows.iter().any(|r| r.tab.stage.is_none()) {
+        return grouped_by_state(rows);
+    }
+    let mut stages: Vec<(u64, String, Vec<&Row>)> = Vec::new();
+    for r in rows {
+        let Some(s) = &r.tab.stage else { continue };
+        match stages.iter_mut().find(|(rank, ..)| *rank == s.rank) {
+            Some((.., members)) => members.push(r),
+            None => stages.push((s.rank, s.title.clone(), vec![r])),
+        }
+    }
+    stages.sort_by_key(|(rank, ..)| *rank);
+    stages
+        .into_iter()
+        .map(|(_, title, mut members)| {
+            members.sort_by_key(|r| r.tab.stage.as_ref().map(|s| s.place));
+            (title, members)
+        })
+        .collect()
+}
+
+/// The Home's own groups, so what needs you is at the top on a phone:
+/// waiting on you, then finished and not yet looked at, the longest first
+/// within each (as M-a walks them), then working, then idle, each in tab
+/// order.
+fn grouped_by_state(rows: &[Row]) -> Vec<(String, Vec<&Row>)> {
     const GROUPS: &[(&str, &[&str])] = &[
         ("Needs you", &["waiting", "done"]),
         ("Working", &["working"]),
@@ -83,7 +109,7 @@ pub fn grouped(rows: &[Row]) -> Vec<(&'static str, Vec<&Row>)> {
                 };
                 first.then(a.tab.index.cmp(&b.tab.index))
             });
-            (*title, members)
+            (title.to_string(), members)
         })
         .filter(|(_, m)| !m.is_empty())
         .collect()
@@ -114,6 +140,17 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
         }
         if !r.context.is_empty() {
             text.push_str(&format!(" · {}", r.context));
+        }
+        // A tab under Reminders says when, as its sidebar row does.
+        if let Some(at) = r
+            .tab
+            .remind_at
+            .filter(|_| r.tab.stage.as_ref().is_some_and(|s| s.key == "later"))
+        {
+            text.push_str(&format!(
+                " · remind {}",
+                crate::sidebar::text::until(at, util::now_ms())
+            ));
         }
         if !r.doing.is_empty() {
             text.push_str(&format!("\n_{}_", flat(&r.doing)));

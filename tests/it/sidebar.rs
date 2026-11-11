@@ -982,3 +982,31 @@ fn a_slack_message_s_menu_in_the_notifications_window_is_the_slack_view_s() {
     let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
+
+#[test]
+fn list_gives_each_tab_its_stage_as_the_sidebar_groups_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    server.ok(&["new-tab", "-n", "later"]);
+    client.wait_text("2:later");
+    let second = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    let at = jiff::Timestamp::now().as_second() + 3600;
+    server.ok(&["set", "-t", &second, "@remind_at", &at.to_string()]);
+    let ask = json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1", "tool_input": {"questions": [{"question": "Push it?"}]}});
+    hook(&server, &pane, "PreToolUse", ask);
+    let list = wait_list(&server, "both stages", |l| {
+        tabs(l)[0]["stage"]["key"] == "needs" && tabs(l)[1]["stage"]["key"] == "later"
+    });
+    let (first, later) = (&tabs(&list)[0]["stage"], &tabs(&list)[1]["stage"]);
+    assert_eq!(first["title"], "Needs you");
+    assert_eq!(later["title"], "Reminders");
+    assert_eq!(
+        (first["rank"].as_u64(), first["place"].as_u64()),
+        (Some(0), Some(0))
+    );
+    assert!(later["rank"].as_u64() > first["rank"].as_u64(), "{list}");
+}

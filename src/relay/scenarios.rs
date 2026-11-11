@@ -1245,6 +1245,109 @@ fn the_home_tab_puts_what_needs_you_first() {
     assert!(checkin.get("accessory").is_none());
 }
 
+/// The Home's headers and tab numbers, top to bottom.
+fn home_order(view: &Value) -> Vec<String> {
+    view["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| match b["type"].as_str() {
+            Some("header") => b["text"]["text"].as_str().map(str::to_string),
+            Some("section") => b["text"]["text"]
+                .as_str()
+                .filter(|t| t.starts_with('*') && t[1..].starts_with(|c: char| c.is_ascii_digit()))
+                .map(|t| t[1..t[1..].find('*').unwrap() + 1].to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn the_home_tab_groups_as_the_sidebar_does() {
+    let rig = Rig::new();
+    let row = |index: i64, stage: (&str, &str, u64, u64)| super::dashboard::Row {
+        tab: tabs::Tab {
+            id: format!("@{index}"),
+            index,
+            name: format!("tab{index}"),
+            state: "idle".into(),
+            pid: "1".into(),
+            stage: Some(super::mux::TabStage {
+                key: stage.0.into(),
+                title: stage.1.into(),
+                rank: stage.2,
+                place: stage.3,
+            }),
+            ..Default::default()
+        },
+        lasted: String::new(),
+        last: String::new(),
+        context: String::new(),
+        doing: String::new(),
+        choices: Vec::new(),
+    };
+    let rows = vec![
+        row(1, ("later", "Reminders", 13, 1)),
+        row(2, ("idle", "Idle", 12, 0)),
+        row(3, ("review", "Review loop", 4, 0)),
+        row(4, ("later", "Reminders", 13, 0)),
+        row(5, ("merged", "Merged", 11, 0)),
+        row(6, ("idle", "Idle", 12, 1)),
+    ];
+    let view = super::dashboard::dashboard_view(&rig.cx, &rows, None);
+    assert_eq!(
+        home_order(&view),
+        [
+            "Claude tabs",
+            "Review loop (1)",
+            "3",
+            "Merged (1)",
+            "5",
+            "Idle (2)",
+            "2",
+            "6",
+            "Reminders (2)",
+            "4",
+            "1"
+        ]
+    );
+}
+
+#[test]
+fn a_published_home_lists_a_reminder_tab_under_reminders_after_idle() {
+    let rig = Rig::new();
+    let (idle, _) = rig.claude_tab("idle");
+    let (later, _) = rig.claude_tab("later");
+    rig.set_stage(&idle, "idle", "Idle", 12, 0);
+    rig.set_stage(&later, "later", "Reminders", 13, 0);
+    rig.set_remind_at(&later, util::now_secs() + 2 * 3600);
+    let quick = Refresh {
+        quick: true,
+        ..Refresh::default()
+    };
+    rig.block_on(refresh_dashboard(&rig.cx, quick)).unwrap();
+    let view = rig.calls("views.publish").last().unwrap()["view"].clone();
+    let (i, l) = (rig.index_of(&idle), rig.index_of(&later));
+    assert_eq!(
+        home_order(&view),
+        [
+            "Claude tabs".to_string(),
+            "Idle (1)".into(),
+            i.to_string(),
+            "Reminders (1)".into(),
+            l.to_string()
+        ]
+    );
+    let shown = view["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["text"]["text"].as_str())
+        .find(|t| t.starts_with(&format!("*{l}*")))
+        .unwrap();
+    assert!(shown.contains(" · remind in 2h"), "{shown}");
+}
+
 #[test]
 fn an_answer_to_a_waiting_tabs_choice_presses_just_the_number() {
     let rig = Rig::new();

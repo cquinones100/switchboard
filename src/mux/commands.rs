@@ -456,6 +456,7 @@ impl Server {
 
     /// Everything, as JSON: sessions, their tabs in order, each tab's panes.
     pub fn list(&self) -> Value {
+        let stages = self.list_stages();
         let sessions: Vec<Value> = self
             .sessions
             .iter()
@@ -523,6 +524,7 @@ impl Server {
                             "zoomed": tab.zoomed,
                             "options": tab.opts,
                             "agent": self.tab_agent(*id).map(|a| a.name()),
+                            "stage": stages.get(id),
                             "panes": panes,
                         }))
                     })
@@ -554,6 +556,31 @@ impl Server {
             // Whether the computer is held awake, and what holds it (src/awake).
             "awake": self.awake_json(),
         })
+    }
+
+    /// Each tab's stage as the sidebar groups it once you stop browsing:
+    /// its key and title, the stage's place among the sidebar's stages
+    /// (`rank`) and the tab's within it (`place`), for the Slack relay's
+    /// Home, which groups as the sidebar does. The Notifications window has
+    /// none.
+    fn list_stages(&self) -> std::collections::HashMap<TabId, Value> {
+        use crate::sidebar::model::{self, Rules, Stage};
+        let tabs = self.sidebar_all_tabs();
+        model::grouped(&tabs, None, &Rules::now())
+            .into_iter()
+            .flat_map(|g| {
+                let rank = Stage::ALL.iter().position(|s| *s == g.stage);
+                g.tabs.into_iter().enumerate().map(move |(place, t)| {
+                    let stage = json!({
+                        "key": g.stage.key(),
+                        "title": g.stage.title(),
+                        "rank": rank,
+                        "place": place,
+                    });
+                    (t.id, stage)
+                })
+            })
+            .collect()
     }
 
     fn cmd_new_tab(
