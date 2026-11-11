@@ -5,7 +5,9 @@
 //! kit's keycaps, ending in half circles on a terminal that draws them.
 //! With pictures drawn as sixel (src/mux/sixel), never over the header or
 //! on the last row a pane now reaches, never from mission control's copy of
-//! a tab's screen, and drawn by the image view in Claude's place.
+//! a tab's screen, and drawn by the image view in Claude's place. Mission
+//! control's Settings is a board of categories beside the options of the
+//! one in front.
 
 use crate::common;
 
@@ -485,4 +487,62 @@ fn with_ux2_m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
         .find(|p| p["active"] == true)
         .and_then(|p| p["id"].as_str());
     assert_eq!(active, Some(pane.as_str()), "{tab:#}");
+}
+
+#[test]
+fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
+    let server = TestServer::start();
+    settings(
+        &server,
+        json!({"ux2": true, "notifications": false, "github": false, "linear": false}),
+    );
+    // The editor `e` starts: one that says what it was given and waits.
+    let opened = server.home.join("opened");
+    common::stand_in::install(
+        &server.home.join("bin/vi"),
+        &format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nexec sleep 60\n",
+            opened.display()
+        ),
+    );
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    client.type_text("\x1b ");
+    client.wait_text("MISSION CONTROL");
+    client.type_text("vsett\r");
+    client.wait_for("the board, Integrations in front", |s| {
+        s.iter().any(|l| l.contains("CATEGORIES")) && s.iter().any(|l| l.contains("│ Integrations"))
+    });
+    // l: the next category, Notifications, whose first option is off.
+    client.type_text("l");
+    client.wait_for("Notifications in front", |s| {
+        s.iter().any(|l| l.contains("│ Notifications"))
+            && s.iter().any(|l| l.contains("1 changed from its default"))
+    });
+    // Enter turns it back on: its default, so the file no longer names it.
+    client.type_text("\r");
+    let file = server.home.join(".config/switchboard/settings.json");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    loop {
+        let saved: Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap_or_default();
+        if saved.get("notifications").is_none() && saved["github"] == false {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "not written: {saved}");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // e: the settings file in your editor, in a tab of its own.
+    client.type_text("e");
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while std::fs::read_to_string(&opened).unwrap_or_default() != file.to_string_lossy() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the editor didn't open it"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let list = server.list();
+    let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
+    assert_eq!(tabs.len(), 2, "{list}");
 }

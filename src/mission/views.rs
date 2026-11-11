@@ -425,10 +425,18 @@ pub fn loaded(data: &ViewData) -> bool {
 /// The Settings view's rows: each category a heading, then its options, the
 /// name, the value and what it does (an option at "off" drawn as idle), then
 /// your own files' settings under a heading each.
-pub fn settings_items(own: &[Item]) -> Vec<Item> {
-    let all = settings::current_settings();
+/// Mission control's Settings view: every option under a heading for its
+/// category (named as `settings::category_name` gives it), each heading
+/// counting its options and how many of them differ from their defaults,
+/// each option with its value and default in words and whether it
+/// changed; then your own files' rows under a heading for each.
+pub fn settings_items(own: &[Item], ux2: bool) -> Vec<Item> {
+    settings_items_of(&settings::current_settings(), own, ux2)
+}
+
+pub(crate) fn settings_items_of(all: &[settings::Setting], own: &[Item], ux2: bool) -> Vec<Item> {
     let mut categories: Vec<&str> = Vec::new();
-    for o in &all {
+    for o in all {
         if !categories.contains(&o.category.as_str()) {
             categories.push(&o.category);
         }
@@ -437,7 +445,10 @@ pub fn settings_items(own: &[Item]) -> Vec<Item> {
     for category in categories {
         let members: Vec<&settings::Setting> =
             all.iter().filter(|o| o.category == category).collect();
-        items.push(header(category, category, members.len()));
+        let name = settings::category_name(category, ux2);
+        let mut heading = header(category, name, members.len());
+        heading.data["changed"] = json!(members.iter().filter(|o| o.changed()).count());
+        items.push(heading);
         for o in members {
             let words = o.value_words();
             let off = o.value == Value::Bool(false) || o.value == "off";
@@ -448,7 +459,11 @@ pub fn settings_items(own: &[Item]) -> Vec<Item> {
                     .data(json!({
                         "setting": o.key,
                         "value": words,
-                        "search": format!("{category} {} {words}", o.key),
+                        "default": o.default_words(),
+                        "changed": o.changed(),
+                        "choice": o.choices.is_some(),
+                        "next": settings::Setting { value: o.next_value(), ..(*o).clone() }.value_words(),
+                        "search": format!("{category} {name} {} {words}", o.key),
                     })),
             );
         }
@@ -1497,7 +1512,7 @@ mod tests {
 
     #[test]
     fn settings_are_listed_by_category_and_a_filter_keeps_only_categories_with_a_match() {
-        let items = settings_items(&[]);
+        let items = settings_items(&[], false);
         assert!(is_header(&items[0]));
         assert_eq!(items[0].title, "Integrations");
         assert_eq!(items[1].title, "GitHub");
@@ -1519,6 +1534,35 @@ mod tests {
             .map(|i| i.title.as_str())
             .collect();
         assert_eq!(titles, ["Notifications", "Push notifications"]);
+    }
+
+    #[test]
+    fn a_changed_option_is_marked_with_its_default_and_counted_under_its_heading() {
+        let mut all = settings::schema();
+        let github = all.iter_mut().find(|o| o.key == "github").unwrap();
+        github.value = serde_json::Value::Bool(false);
+        let items = settings_items_of(&all, &[], false);
+        assert_eq!(items[0].data["changed"], 1);
+        assert_eq!(items[1].data["changed"], true);
+        assert_eq!(items[1].data["default"], "on");
+        assert_eq!(items[1].data["value"], "off");
+        assert_eq!(items[2].data["changed"], false);
+
+        let named = |ux2: bool| {
+            settings_items_of(&all, &[], ux2)
+                .into_iter()
+                .filter(is_header)
+                .map(|h| h.title)
+                .collect::<Vec<_>>()
+        };
+        assert!(named(true).contains(&"Tabs and header".to_string()));
+        assert!(!named(true).contains(&"Tabs and status bar".to_string()));
+        assert!(named(false).contains(&"Tabs and status bar".to_string()));
+        // Either name finds the category's options.
+        let tabs = settings_items_of(&all, &[], true)
+            .into_iter()
+            .find(|i| search_text(i).contains("tabs and status bar") && !is_header(i));
+        assert!(tabs.is_some_and(|i| search_text(&i).contains("tabs and header")));
     }
 
     #[test]

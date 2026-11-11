@@ -34,6 +34,9 @@
 //! - `resources_board`: with UX 2.0, the Resources view as a board: the
 //!   whole computer, each tab's figures and sparklines, the chosen one's
 //!   process tree.
+//! - `settings_board`: with UX 2.0, the Settings view as a board: the
+//!   categories and your files at the left, the category in front's
+//!   options with their switches beside them.
 //! - `diagrams`: the Mermaid diagrams of the description beside the PR and
 //!   ticket boards, drawn as pictures off the server's task and kept.
 //! - `serve`: the server's side: opening it, its keys and mouse, the menus,
@@ -51,6 +54,7 @@ pub mod remind;
 pub mod render;
 pub mod resources_board;
 mod serve;
+pub mod settings_board;
 pub mod usage_board;
 pub mod views;
 
@@ -109,6 +113,9 @@ pub enum Spot {
     Key(Key),
     /// A keycap of the Notifications view, by its key.
     Kind(usize),
+    /// A category of the Settings board, by the place of its first row,
+    /// which a click chooses without changing it.
+    Category(isize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -489,6 +496,9 @@ impl Overlay for Mission {
                     over,
                     marks,
                 } => crate::ui::images::series(frame, &image.name, area, bars, *max, *over, marks),
+                render::Shape::Switch { on } => {
+                    crate::ui::images::switch(frame, &image.name, area, *on)
+                }
             }
         }
         for picture in &self.pictures {

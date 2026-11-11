@@ -23,7 +23,8 @@
 //! - a table (Resources): its columns' names, its rows, and a totals row;
 //!   with UX 2.0 and room, the board `resources_board` draws instead;
 //! - any other view, one row per item, a heading over each group, Settings'
-//!   rows as name, value and what the option does.
+//!   rows as name, value and what the option does; with UX 2.0 and room,
+//!   Settings as the board `settings_board` draws.
 
 use std::sync::LazyLock;
 
@@ -1928,8 +1929,12 @@ fn list(
             row.put(text::pad(&item.title, label_width), name)
                 .put("  ", Style::new())
                 .put(text::pad(value, 13), value_style)
-                .put(" ", Style::new())
-                .put(item.detail.clone(), fg(theme.dim));
+                .put(" ", Style::new());
+            if snap.rules.ux2 && item.data["changed"] == true {
+                row.spans
+                    .extend(kit::chip("changed", Tone::Needs, snap.caps, theme));
+            }
+            row.put(item.detail.clone(), fg(theme.dim));
             lines.push(row.line(cols, fill));
             continue;
         }
@@ -2725,6 +2730,12 @@ const PILOT_SIDE_W: usize = 44;
 /// properly (`Markdown::parse`).
 const PLAN_PLACE: &str = "its plan note in Notes";
 
+/// Whether the Settings view is drawn as its board: with UX 2.0 on and the
+/// screen wide enough.
+pub fn settings_board_shown(m: &Mission) -> bool {
+    m.snap.rules.ux2 && m.size.0 as usize >= super::settings_board::BOARD_AT
+}
+
 /// An image atom (src/ui/images.rs) a board places once its lines are
 /// drawn: its name, which the next draw replaces in place, where it starts,
 /// how wide and tall, and what it draws.
@@ -2741,7 +2752,8 @@ pub struct Image {
 /// What an image atom draws: a meter (`images::meter`) how full, in what
 /// color, with a tick; or a series of bars (`images::series`) scaled to
 /// `max`, what is past `over` red, with its `marks` (a chart's outlined
-/// part, grid and "now" edge), which one row tall is a sparkline.
+/// part, grid and "now" edge), which one row tall is a sparkline; or a
+/// setting's switch (`images::switch`), on or off.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Meter {
@@ -2754,6 +2766,9 @@ pub enum Shape {
         max: f32,
         over: Option<f32>,
         marks: crate::ui::images::Marks,
+    },
+    Switch {
+        on: bool,
     },
 }
 
@@ -2778,7 +2793,7 @@ impl Image {
     pub fn frac(&self) -> Option<f32> {
         match self.shape {
             Shape::Meter { frac, .. } => Some(frac),
-            Shape::Series { .. } => None,
+            Shape::Series { .. } | Shape::Switch { .. } => None,
         }
     }
 }
@@ -3657,6 +3672,13 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ]);
     };
     match view.id {
+        ViewId::Settings if settings_board_shown(m) => with(&[
+            ("hl", "category"),
+            ("jk", "option"),
+            ("↵", "change"),
+            ("/", "search every category"),
+            ("e", "open the file"),
+        ]),
         ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
         ViewId::Keys => with(&[("jk", "move"), ("↵", "press it"), ("/", "filter")]),
         ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
@@ -4363,6 +4385,10 @@ pub fn drawn(
                 && v.loaded
                 && v.data.setup.is_none()
                 && !v.data.items.is_empty();
+            let settings_shown = snap.rules.ux2
+                && v.id == ViewId::Settings
+                && cols >= super::settings_board::BOARD_AT
+                && v.loaded;
             let resources_shown = snap.rules.ux2
                 && v.id == ViewId::Resources
                 && cols >= super::resources_board::BOARD_AT
@@ -4370,6 +4396,8 @@ pub fn drawn(
                 && !v.data.items.is_empty();
             if pilot_board_shown {
                 pictures = pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+            } else if settings_shown {
+                super::settings_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters);
             } else if resources_shown {
                 super::resources_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if ci_shown {
@@ -4440,6 +4468,7 @@ pub fn drawn(
                 && view.is_some_and(|v| {
                     matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
                         || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
+                        || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
                 })
             {
                 let y = rows.saturating_sub(1) as u16;
@@ -5203,7 +5232,7 @@ mod tests {
 
     #[test]
     fn settings_rows_line_up_as_name_value_and_what_it_does() {
-        let items = views::settings_items(&[]);
+        let items = views::settings_items(&[], false);
         let mut m = mission(
             Vec::new(),
             vec![list_view(ViewId::Settings, "Settings", items)],
@@ -5217,6 +5246,115 @@ mod tests {
             "{}",
             text[2]
         );
+    }
+
+    #[test]
+    fn with_ux2_settings_is_a_board_of_categories_and_the_options_of_the_one_in_front() {
+        let mut all = crate::settings::schema();
+        let changed = all
+            .iter_mut()
+            .find(|o| o.category == "Sidebar" && o.choices.is_none())
+            .unwrap();
+        changed.value = serde_json::Value::Bool(!crate::util::truthy(&changed.default));
+        let (key, label) = (changed.key.clone(), changed.label.clone());
+        let items = views::settings_items_of(&all, &[], true);
+        let at = items
+            .iter()
+            .position(|i| i.id == format!("setting:{key}"))
+            .unwrap();
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Settings, "Settings", items.clone())],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 40);
+        m.cursor = at as isize;
+        let (lines, hits, images, _) = drawn(&m, 160, 40);
+        let text = texts(&lines);
+        let all_text = text.join("\n");
+        // The panel: the Sidebar's chip of 1 before its count.
+        let sidebar = text
+            .iter()
+            .find(|l| l.starts_with("▌ Sidebar"))
+            .unwrap_or_else(|| panic!("{all_text}"));
+        let count = items
+            .iter()
+            .find(|i| i.id == "header:Sidebar")
+            .unwrap()
+            .data["count"]
+            .to_string();
+        assert!(
+            sidebar[..sidebar.find('│').unwrap()]
+                .trim_end()
+                .ends_with(&format!(" 1  {count}")),
+            "{sidebar}"
+        );
+        assert!(all_text.contains("Tabs and header"), "{all_text}");
+        assert!(all_text.contains("YOUR FILES"), "{all_text}");
+        // The pane: the category's heading, the changed option with its
+        // chip and key, and what Enter does.
+        assert!(
+            all_text.contains("1 changed from its default"),
+            "{all_text}"
+        );
+        let row = text
+            .iter()
+            .find(|l| l.contains(&format!(" {label} ")) && l.contains(&key))
+            .unwrap_or_else(|| panic!("{all_text}"));
+        assert!(row.contains(" changed "), "{row}");
+        assert!(all_text.contains("· Enter turns it back"), "{all_text}");
+        // A switch an on/off option in front, flipped by a click on it.
+        let switches: Vec<&Image> = images
+            .iter()
+            .filter(|i| i.name.starts_with("settings/switch/"))
+            .collect();
+        let options = items
+            .iter()
+            .filter(|i| i.id.starts_with("setting:") && i.data["choice"] == false)
+            .filter(|i| views::search_text(i).contains("sidebar"))
+            .count();
+        assert!(!switches.is_empty() && switches.len() <= options);
+        assert!(hits.iter().any(|h| h.spot == Spot::Menu(at as isize)));
+        // A click on a category chooses its first row without changing it.
+        let sidebar_first = items.iter().position(|i| i.id == "header:Sidebar").unwrap() + 1;
+        assert!(
+            hits.iter()
+                .any(|h| h.x0 == 0 && h.spot == Spot::Category(sidebar_first as isize))
+        );
+        assert!(
+            !hits
+                .iter()
+                .any(|h| h.x0 == 0 && matches!(h.spot, Spot::Index(_)))
+        );
+        assert!(
+            text.last().unwrap().contains("hl category"),
+            "{:?}",
+            text.last()
+        );
+
+        // A search lists the matches of every category.
+        m.filter = Some(crate::sidebar::render::Filter {
+            text: "notif".into(),
+            typing: false,
+        });
+        let shown = views::shown(&m.snap.views[0], "notif", None, &views::Folds::default());
+        m.snap.views[0] = shown;
+        m.cursor = 1;
+        let text = texts(&drawn(&m, 160, 40).0).join("\n");
+        assert!(text.contains("Matching “notif”"), "{text}");
+        let labels = m.snap.views[0]
+            .data
+            .items
+            .iter()
+            .filter(|i| views::is_header(i))
+            .count();
+        assert!(labels >= 2, "{text}");
+
+        // Narrower, the plain list.
+        m.size = (120, 40);
+        let text = texts(&drawn(&m, 120, 40).0).join("\n");
+        assert!(!text.contains("CATEGORIES"), "{text}");
     }
 
     #[test]

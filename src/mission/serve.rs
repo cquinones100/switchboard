@@ -895,7 +895,7 @@ impl Server {
         }
         let own = self.mission_own();
         let data = ViewData {
-            items: views::settings_items(&own),
+            items: views::settings_items(&own, settings::is_on("ux2")),
             at: Some(1),
             ..ViewData::default()
         };
@@ -1481,6 +1481,28 @@ impl Server {
                 }
             }
             KeyCode::Char('v') if none => m.jump = Some(Jump::default()),
+            KeyCode::Char('e')
+                if none
+                    && m.current().is_some_and(|v| v.id == ViewId::Settings)
+                    && super::render::settings_board_shown(m) =>
+            {
+                let (dir, file) = match super::settings_board::file_of(m.chosen_item()) {
+                    Some(file) => (crate::usage::own::own_dir(), file),
+                    None => {
+                        // A relative SWITCHBOARD_SETTINGS is the server's, not
+                        // the editor's, which starts in the file's folder.
+                        let path = settings::settings_file();
+                        let path = std::path::absolute(&path).unwrap_or(path);
+                        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+                        let file = path
+                            .file_name()
+                            .map(|f| f.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "settings.json".into());
+                        (dir, file)
+                    }
+                };
+                self.edit_own_file(client, &dir, &file);
+            }
             KeyCode::Char('w') if none && m.current().is_some_and(|v| v.id == ViewId::Usage) => {
                 m.usage_week = !m.usage_week;
             }
@@ -2951,6 +2973,26 @@ impl Server {
         None
     }
 
+    /// A file of yours (or the settings file) opened in your editor in a
+    /// tab of its own, mission control closed.
+    fn edit_own_file(&mut self, client: ClientId, dir: &Path, file: &str) {
+        let _ = std::fs::create_dir_all(dir);
+        let path = dir.join(file);
+        let editor = std::env::var("VISUAL")
+            .ok()
+            .filter(|e| !e.trim().is_empty())
+            .or_else(|| {
+                std::env::var("EDITOR")
+                    .ok()
+                    .filter(|e| !e.trim().is_empty())
+            })
+            .unwrap_or_else(|| "vi".into());
+        let mut command: Vec<String> = editor.split_whitespace().map(str::to_string).collect();
+        command.push(path.to_string_lossy().into_owned());
+        self.mission_close(client);
+        self.mission_new_tab(client, dir, Some(command), Some(file.to_string()));
+    }
+
     /// Enter on a setting kept in a file of yours: typed in, starting from
     /// what it is; a Chrome profile picked from Chrome's own; a whole file
     /// opened in your editor in a tab of its own.
@@ -3011,24 +3053,7 @@ impl Server {
                     server.mission_note(client, said);
                 });
             }
-            own::Kind::File => {
-                let _ = std::fs::create_dir_all(&dir);
-                let path = dir.join(&file);
-                let editor = std::env::var("VISUAL")
-                    .ok()
-                    .filter(|e| !e.trim().is_empty())
-                    .or_else(|| {
-                        std::env::var("EDITOR")
-                            .ok()
-                            .filter(|e| !e.trim().is_empty())
-                    })
-                    .unwrap_or_else(|| "vi".into());
-                let mut command: Vec<String> =
-                    editor.split_whitespace().map(str::to_string).collect();
-                command.push(path.to_string_lossy().into_owned());
-                self.mission_close(client);
-                self.mission_new_tab(client, &dir, Some(command), Some(file.clone()));
-            }
+            own::Kind::File => self.edit_own_file(client, &dir, &file),
             _ => {
                 let hint = match kind {
                     own::Kind::Number => "A number; empty for the default.",
@@ -3628,8 +3653,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::Key(k) => Then::Press(k),
-                // A row's menu button: chosen and opened in one click.
+                // A row's menu button or a setting's switch: chosen and
+                // opened or flipped in one click, a filter being typed
+                // ending first so Enter reaches the row.
                 Spot::Menu(i) => {
+                    if let Some(f) = m.filter.as_mut() {
+                        f.typing = false;
+                    }
                     m.cursor = i;
                     Then::Enter
                 }
@@ -3641,6 +3671,10 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 Spot::Side(_) => Then::Nothing,
                 Spot::Kind(key) => {
                     choose_kind(m, key);
+                    Then::Prepare
+                }
+                Spot::Category(i) => {
+                    m.cursor = i;
                     Then::Prepare
                 }
             }
@@ -3937,6 +3971,9 @@ fn side_step(m: &Mission, by: isize) -> isize {
     if view.id == ViewId::Calendar {
         let at = m.cursor.max(0) as usize;
         return super::calendar::beside(&view.data.items, at, by, &m.snap.tz) as isize;
+    }
+    if view.id == ViewId::Settings && super::render::settings_board_shown(m) {
+        return super::settings_board::side_step(&view.data.items, m.cursor, by);
     }
     let pilot_board = view.id == ViewId::Autopilot
         && m.snap.rules.ux2
@@ -4748,6 +4785,32 @@ mod tests {
         assert_eq!(mouse_in(&mut m, click(second), true), Then::Prepare);
         assert_eq!(m.chosen_check(), Some(1));
         assert_eq!(mouse_in(&mut m, click(second), true), Then::Enter);
+    }
+
+    #[test]
+    fn a_click_on_a_switch_while_a_filter_is_typed_ends_it_and_flips_the_row() {
+        let mut m = mission(0, vec![list("Closed", 3)]);
+        m.view = 1;
+        m.filter = Some(Filter {
+            text: "x".into(),
+            typing: true,
+        });
+        m.hits = vec![crate::mission::HitBox {
+            y: 3,
+            x0: 10,
+            x1: 13,
+            spot: Spot::Menu(2),
+        }];
+        let click = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col: 11,
+            row: 3,
+            mods: Mods::NONE,
+        };
+        assert_eq!(mouse_in(&mut m, click, true), Then::Enter);
+        assert_eq!(m.cursor, 2);
+        assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Images the server draws itself, with the kitty graphics protocol: the
 //! image atoms of the UX 2.0 canvas's board 0 (an avatar's photo, a
-//! picture, a meter with a tick, a series as a chart or a sparkline, and
-//! the soft shadow under a box), and board 6's lane and chart over time (a
+//! picture, a meter with a tick, a series as a chart or a sparkline, a
+//! setting's on/off switch, and the soft shadow under a box), and board 6's lane and chart over time (a
 //! tab's history), rastered here in Rust at the size of the
 //! terminal's cell (src/mux/terminal.rs) and sent to each client that can
 //! show them.
@@ -189,6 +189,8 @@ pub struct Tones {
     pub secondary: Color,
     /// A series' value past where it should be.
     pub failed: Color,
+    /// A switch's track while on.
+    pub done: Color,
 }
 
 impl Tones {
@@ -204,6 +206,7 @@ impl Tones {
             light: theme.bright,
             secondary: theme.dim,
             failed: crate::status::theme::RED,
+            done: super::kit::Tone::Done.fg(&theme),
         }
     }
 }
@@ -378,6 +381,43 @@ pub fn raster_meter(
             );
         }
     }
+    pm
+}
+
+/// How many columns a switch takes.
+pub const SWITCH_COLS: u16 = 4;
+
+/// A switch one row tall and `SWITCH_COLS` wide: a track 3.6 cells wide and
+/// 0.64 of the row tall with a full radius, green when on and the rule's
+/// color when off, and its knob a circle 0.48 of the row, dark at the
+/// right when on, light at the left when off.
+pub fn raster_switch(on: bool, cell: Cell, tones: &Tones) -> Pixmap {
+    let (cw, h) = (cell.0 as f32, cell.1 as f32);
+    let w = SWITCH_COLS as f32 * cw;
+    let mut pm = canvas(w as u32, h as u32);
+    let (tw, th) = (cw * 3.6, h * 0.64);
+    let (tx, ty) = ((w - tw) / 2.0, (h - th) / 2.0);
+    let track = if on { tones.done } else { tones.rule };
+    fill(
+        &mut pm,
+        round_rect(tx, ty, tw, th, th / 2.0),
+        rgb(track),
+        1.0,
+    );
+    let d = h * 0.48;
+    let inset = (th - d) / 2.0;
+    let kx = if on { tx + tw - inset - d } else { tx + inset };
+    let knob = if on {
+        Color::Indexed(234)
+    } else {
+        Color::Indexed(255)
+    };
+    fill(
+        &mut pm,
+        round_rect(kx, (h - d) / 2.0, d, d, d / 2.0),
+        rgb(knob),
+        1.0,
+    );
     pm
 }
 
@@ -889,6 +929,54 @@ pub fn meter(
             let fg = if i < filled { color } else { tones.rule };
             cell.set_symbol("━").set_style(Style::new().fg(fg));
         }
+    }
+}
+
+/// A switch at `area`'s left, on or off (`raster_switch`); as text,
+/// ` ━●` green when on and `○━ ` dim when off, `SWITCH_COLS` wide.
+pub fn switch(frame: &mut Frame, name: &str, area: Rect, on: bool) {
+    let area = Rect {
+        width: area.width.min(SWITCH_COLS),
+        height: area.height.min(1),
+        ..area
+    }
+    .intersection(frame.buf.area);
+    let tones = Tones::now();
+    if let Some(cell) = frame.graphics
+        && area.width == SWITCH_COLS
+        && placeable(frame, area)
+    {
+        let key = key_of(("switch", cell, tones, on));
+        place(
+            frame,
+            name,
+            area,
+            key,
+            Box::new(move || raster_switch(on, cell, &tones)),
+        );
+        return;
+    }
+    if area.height == 0 {
+        return;
+    }
+    frame.links.clear_area(area);
+    let (text, color) = switch_text(on, &tones);
+    put_text(
+        frame,
+        area.x,
+        area.y,
+        text,
+        Style::new().fg(color),
+        area.width,
+    );
+}
+
+/// A switch's text form and its color.
+pub fn switch_text(on: bool, tones: &Tones) -> (&'static str, Color) {
+    if on {
+        (" ━●", tones.done)
+    } else {
+        ("○━ ", tones.secondary)
     }
 }
 
@@ -1560,6 +1648,7 @@ mod tests {
                 raster_shadow(4, 2, CELL),
                 (32 + 2 * SHADOW_REACH, 32 + 2 * SHADOW_REACH),
             ),
+            (raster_switch(true, CELL, &tones), (32, 16)),
         ];
         for (pm, (w, h)) in &cases {
             assert_eq!((pm.width(), pm.height()), (*w, *h));
@@ -1579,6 +1668,38 @@ mod tests {
         // Clear under the box, whose surface it would darken.
         let under = shadow.pixel(SHADOW_REACH + 16, SHADOW_REACH + 16).unwrap();
         assert_eq!(under.alpha(), 0);
+    }
+
+    #[test]
+    fn a_switch_differs_on_and_off_and_reads_as_text_without_images() {
+        let tones = Tones::now();
+        let (on, off) = (
+            raster_switch(true, CELL, &tones),
+            raster_switch(false, CELL, &tones),
+        );
+        assert_ne!(png(&on), png(&off));
+        // The track is green at its middle while on, the rule's off.
+        let mid = |pm: &Pixmap| {
+            let p = pm.pixel(16, 3).unwrap().demultiply();
+            [p.red(), p.green(), p.blue()]
+        };
+        assert_eq!(mid(&on), rgb(tones.done));
+        assert_eq!(mid(&off), rgb(tones.rule));
+
+        let mut f = Frame::new(10, 1);
+        switch(&mut f, "s", Rect::new(1, 0, 4, 1), true);
+        let row: String = (1..4).map(|x| f.buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(row, " ━●");
+        assert_eq!(f.buf[(3, 0)].fg, tones.done);
+        let mut f = Frame::new(10, 1);
+        switch(&mut f, "s", Rect::new(1, 0, 4, 1), false);
+        let row: String = (1..4).map(|x| f.buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(row, "○━ ");
+
+        let mut f = graphics_frame(10, 1);
+        switch(&mut f, "s", Rect::new(1, 0, 4, 1), true);
+        assert_eq!(f.images.len(), 1);
+        assert_eq!(f.buf[(4, 0)].symbol(), placeholder(0, 3));
     }
 
     #[test]

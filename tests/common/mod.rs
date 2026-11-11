@@ -372,6 +372,9 @@ impl TestServer {
             .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
+            // A file opened in your editor opens in the test's `vi`.
+            .env_remove("VISUAL")
+            .env_remove("EDITOR")
             // No token of the person running the tests reaches a stand-in
             // service, which would refuse it as GitHub refuses a wrong one;
             // a test gives its own (`start_with_env`).

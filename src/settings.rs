@@ -93,6 +93,30 @@ impl Setting {
     pub fn is_on(&self) -> bool {
         self.value != Value::Bool(false)
     }
+
+    /// Whether its value differs from its default.
+    pub fn changed(&self) -> bool {
+        self.value != self.default
+    }
+
+    /// Its default in words, as `value_words` gives its value.
+    pub fn default_words(&self) -> String {
+        Setting {
+            value: self.default.clone(),
+            ..self.clone()
+        }
+        .value_words()
+    }
+}
+
+/// A category's name as the Settings view shows it: with UX 2.0 on, the
+/// tabs' row is a header rather than the status bar's, so "Tabs and status
+/// bar" reads "Tabs and header".
+pub fn category_name(category: &str, ux2: bool) -> &str {
+    match category {
+        "Tabs and status bar" if ux2 => "Tabs and header",
+        _ => category,
+    }
 }
 
 /// The list of options, as compiled in.
