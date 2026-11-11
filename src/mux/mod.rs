@@ -41,6 +41,7 @@ pub mod input;
 pub mod keys;
 pub mod latest;
 pub mod layout;
+pub mod main_clone;
 pub mod pane;
 pub mod passthrough;
 pub mod persist;

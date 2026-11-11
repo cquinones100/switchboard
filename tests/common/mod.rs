@@ -361,8 +361,11 @@ impl TestServer {
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
             .env("PS1", "$ ")
-            // M-p's restart builds no checkout, this repository least of all.
+            // M-p's restart builds no checkout, this repository least of all:
+            // cargo gives a test build.rs's values for both, the real main
+            // clone among them.
             .env("SWITCHBOARD_CHECKOUT", "")
+            .env("SWITCHBOARD_MAIN_CLONE", "")
             .env_remove("SWITCHBOARD")
             .env_remove("SWITCHBOARD_PANE")
             .env_remove("SWITCHBOARD_SETTINGS")

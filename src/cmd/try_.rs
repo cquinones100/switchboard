@@ -345,6 +345,7 @@ fn start(mode: Mode, target: Option<&Path>) -> Result<ExitCode> {
     let env = Env::new(
         &real,
         &home,
+        &wt,
         &std::env::var("PATH").unwrap_or_default(),
         std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()),
     );
@@ -534,8 +535,16 @@ impl Env {
     /// `SWITCHBOARD_*`, left out, but `SWITCHBOARD_CLAUDE_MANAGED_SETTINGS`,
     /// which names the computer's policy for Claude Code rather than a place
     /// of yours (the tests set it, so a try's setup never reads the real
-    /// one).
-    pub fn new(real: &Path, home: &Path, path: &str, vars: impl Iterator<Item = String>) -> Env {
+    /// one). `SWITCHBOARD_CHECKOUT` names the worktree `wt`, so M-p's
+    /// restart in the try builds the worktree under test, not its main
+    /// clone (src/mux/latest.rs).
+    pub fn new(
+        real: &Path,
+        home: &Path,
+        wt: &Path,
+        path: &str,
+        vars: impl Iterator<Item = String>,
+    ) -> Env {
         let mut unset: Vec<String> = LEFT_OUT.iter().map(|v| v.to_string()).collect();
         let mut present: Vec<String> = vars
             .filter(|v| v.starts_with("CLAUDE") || v == "AI_AGENT" || v.starts_with("SWITCHBOARD"))
@@ -551,6 +560,10 @@ impl Env {
             set: vec![
                 ("HOME".into(), home.to_string_lossy().into_owned()),
                 ("PATH".into(), try_path(real, home, path)),
+                (
+                    "SWITCHBOARD_CHECKOUT".into(),
+                    wt.to_string_lossy().into_owned(),
+                ),
             ],
         }
     }
@@ -1302,6 +1315,7 @@ mod tests {
         let env = Env::new(
             Path::new("/home/me"),
             Path::new("/tmp/sb-1"),
+            Path::new("/code/wt"),
             "/home/me/.cargo/bin:/usr/bin:~/go/bin",
             [
                 "CLAUDECODE",
@@ -1338,9 +1352,11 @@ mod tests {
         let exports = env.exports();
         assert!(exports.starts_with("unset SWITCHBOARD SWITCHBOARD_PANE "));
         assert!(exports.contains("export HOME=/tmp/sb-1\n"));
+        // A restart in the try builds the worktree under test.
+        assert!(exports.contains("export SWITCHBOARD_CHECKOUT=/code/wt\n"));
         let prefix = env.prefix(Path::new("/tmp/sb-1/.local/bin/switchboard"));
         assert!(prefix.starts_with("env -u SWITCHBOARD -u SWITCHBOARD_PANE"));
-        assert!(prefix.ends_with("HOME=/tmp/sb-1 PATH=/tmp/sb-1/.local/bin:/home/me/.cargo/bin:/usr/bin:/home/me/go/bin /tmp/sb-1/.local/bin/switchboard"));
+        assert!(prefix.ends_with("HOME=/tmp/sb-1 PATH=/tmp/sb-1/.local/bin:/home/me/.cargo/bin:/usr/bin:/home/me/go/bin SWITCHBOARD_CHECKOUT=/code/wt /tmp/sb-1/.local/bin/switchboard"));
     }
 
     #[test]

@@ -1,10 +1,19 @@
 //! M-p's "Restart Switchboard on the latest build on disk": what runs before
 //! the restart (src/mux/upgrade.rs) so that it has something new to restart
-//! on. A binary built from a clone knows the checkout and target directory
-//! it was built in (build.rs's `SWITCHBOARD_CHECKOUT` and
-//! `SWITCHBOARD_TARGET_DIR`), so it builds that checkout again with `cargo
-//! build --release --locked` in that target directory, as `swb build` and
-//! the README's install do, and puts the result in place of the binary the
+//! on. A binary built from a clone knows the main clone of the checkout it
+//! was built in (build.rs's `SWITCHBOARD_MAIN_CLONE`, src/mux/main_clone.rs),
+//! and builds that, not the checkout itself: a worktree is removed once its
+//! work lands, and what counts then is the main clone. The main clone is
+//! brought up to date first: on its default branch (`origin/HEAD`, else
+//! `main`) with nothing uncommitted, or nothing is built and the restart
+//! says why; then `git fetch origin <default>` and a fast-forward to it,
+//! refused when the clone has commits origin lacks, and, when the fetch
+//! fails (offline) or Settings' GitHub is off, which leaves it unmade, the
+//! clone checked against what it last fetched and built as it is, with a
+//! note saying so. It is
+//! built with `cargo build --release --locked` (in the target directory the
+//! binary was built in when that was the main clone's, else cargo's own),
+//! as `swb build` and the README's install do, and the result put in place of the binary the
 //! server runs when that isn't the build's own file (a copy installed in
 //! `~/.local/bin`). Cargo runs the checkout's own code, so it builds only
 //! a checkout `src/trust.rs` finds yours or listed in `trusted-dirs`, as
@@ -39,8 +48,15 @@
 //! build has written over it.
 //!
 //! `SWITCHBOARD_CHECKOUT` in the server's environment names another
-//! checkout to build (with cargo's own target directory), or, empty, none;
-//! the tests use it so that nothing they do builds this repository.
+//! checkout to build as it is (with cargo's own target directory), or,
+//! empty, none: `switchboard try` names its worktree, so a try's restart
+//! builds the worktree under test, and the tests name none, so that nothing
+//! they do builds this repository. `SWITCHBOARD_MAIN_CLONE` there names a
+//! main clone to bring up to date and build, ahead of it, for the tests
+//! (cargo gives a test both of build.rs's values, which the tests' servers
+//! set empty).
+//! A binary without a main clone (built from a source archive) builds the
+//! checkout it was built in, as it is.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -103,15 +119,70 @@ pub fn is_new(binary: &Path) -> bool {
     }
 }
 
-/// The checkout this binary was built from and the target directory it was
-/// built in, as the module's comment says; `None` for a release build.
-pub fn checkout() -> Option<(PathBuf, Option<PathBuf>)> {
-    let nonempty = |s: &str| (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()));
-    if let Ok(given) = std::env::var("SWITCHBOARD_CHECKOUT") {
-        return nonempty(&given).map(|dir| (dir, None));
+/// What M-p's restart builds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checkout {
+    pub dir: PathBuf,
+    /// The target directory to build in, or cargo's own.
+    pub target: Option<PathBuf>,
+    /// A main clone, brought up to date before it is built.
+    pub main_clone: bool,
+}
+
+fn nonempty(s: &str) -> Option<PathBuf> {
+    (!s.trim().is_empty()).then(|| PathBuf::from(s.trim()))
+}
+
+/// The checkout M-p's restart builds, as the module's comment says;
+/// `None` for a release build.
+pub fn checkout() -> Option<Checkout> {
+    let given = |var| std::env::var(var).ok();
+    choose(
+        given("SWITCHBOARD_MAIN_CLONE").as_deref(),
+        given("SWITCHBOARD_CHECKOUT").as_deref(),
+        env!("SWITCHBOARD_MAIN_CLONE"),
+        env!("SWITCHBOARD_CHECKOUT"),
+        env!("SWITCHBOARD_TARGET_DIR"),
+    )
+}
+
+/// `checkout`'s choice, from the environment's main clone and checkout
+/// and the ones the build recorded.
+fn choose(
+    env_main: Option<&str>,
+    env_checkout: Option<&str>,
+    main: &str,
+    built_in: &str,
+    target: &str,
+) -> Option<Checkout> {
+    if let Some(dir) = env_main.and_then(nonempty) {
+        return Some(Checkout {
+            dir,
+            target: None,
+            main_clone: true,
+        });
     }
-    let dir = nonempty(env!("SWITCHBOARD_CHECKOUT"))?;
-    Some((dir, nonempty(env!("SWITCHBOARD_TARGET_DIR"))))
+    if let Some(given) = env_checkout {
+        return nonempty(given).map(|dir| Checkout {
+            dir,
+            target: None,
+            main_clone: false,
+        });
+    }
+    let built_in = nonempty(built_in)?;
+    let target = nonempty(target);
+    Some(match nonempty(main) {
+        Some(main) => Checkout {
+            target: target.filter(|_| main == built_in),
+            dir: main,
+            main_clone: true,
+        },
+        None => Checkout {
+            dir: built_in,
+            target,
+            main_clone: false,
+        },
+    })
 }
 
 /// The `cargo` to build with: the PATH's, else the one the build had.
@@ -121,9 +192,9 @@ fn cargo() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("cargo"))
 }
 
-/// Builds `checkout` as the module's comment says and gives the binary it
-/// made, or why it couldn't, in words.
-pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> {
+/// Whether `checkout` may be built (or brought up to date, which runs its
+/// git hooks): it is there, and its code is yours.
+fn may_build(checkout: &Path) -> Result<(), String> {
     if !checkout.join("Cargo.toml").is_file() {
         return Err(format!(
             "{}, the checkout it was built from, isn't there any more",
@@ -138,7 +209,101 @@ pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> 
             paths::tilde(checkout)
         ));
     }
-    crate::trust::yours_or_listed(&paths::home(), checkout)?;
+    crate::trust::yours_or_listed(&paths::home(), checkout)
+}
+
+/// Brings the main clone `dir` up to date with its origin, as the module's
+/// comment says, or says why it can't be built; gives a note when the
+/// fetch failed, or wasn't made (`fetch` false: Settings' GitHub off),
+/// and it is built as it is.
+fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
+    let name = paths::tilde(dir);
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+    };
+    let text = |args: &[&str]| {
+        git(args)
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let first_line = |o: &std::process::Output| {
+        let err = String::from_utf8_lossy(&o.stderr);
+        err.lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("git failed")
+            .trim_start_matches("fatal: ")
+            .to_string()
+    };
+    let default = text(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .and_then(|r| r.strip_prefix("origin/").map(String::from))
+        .unwrap_or_else(|| "main".to_string());
+    let branch = text(&["symbolic-ref", "--short", "HEAD"]);
+    if branch.as_deref() != Some(default.as_str()) {
+        return Err(format!(
+            "{name} is on {}, not {default}; switch it back to restart on a new build",
+            branch.unwrap_or_else(|| "a detached HEAD".to_string())
+        ));
+    }
+    let status = text(&["status", "--porcelain", "--untracked-files=normal"])
+        .ok_or_else(|| format!("git couldn't read {name}"))?;
+    if !status.is_empty() {
+        return Err(format!(
+            "{name} has uncommitted changes; commit or stash them to restart on a new build"
+        ));
+    }
+    // Fetched only while Settings' GitHub is on; off, or offline, the
+    // clone is checked against what it last fetched and built as it is.
+    let note = match fetch {
+        false => Some("(origin not fetched: GitHub is turned off in Settings)".to_string()),
+        true => {
+            crate::requests::count("github", "git", "restart");
+            // Into origin/<default> by name, whatever origin's refspec fetches.
+            let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
+            let fetch = git(&["fetch", "-q", "origin", &refspec])
+                .map_err(|e| format!("git couldn't be run ({e})"))?;
+            (!fetch.status.success())
+                .then(|| format!("(couldn't fetch origin: {})", first_line(&fetch)))
+        }
+    };
+    let upstream = format!("origin/{default}");
+    if text(&["rev-parse", "--verify", "-q", &upstream]).is_none() {
+        return Err(format!(
+            "{name} has no {upstream} to check it against; fetch it to restart on a new build"
+        ));
+    }
+    let behind =
+        git(&["merge-base", "--is-ancestor", "HEAD", &upstream]).is_ok_and(|o| o.status.success());
+    if !behind {
+        return Err(format!(
+            "{name} has commits {upstream} doesn't; push or reset them to restart on a new build"
+        ));
+    }
+    // Not fetched: built as it is, not moved to what origin was once.
+    if note.is_some() {
+        return Ok(note);
+    }
+    let merge = git(&["merge", "-q", "--ff-only", &upstream])
+        .map_err(|e| format!("git couldn't be run ({e})"))?;
+    if !merge.status.success() {
+        return Err(format!(
+            "{name} couldn't be brought up to {upstream}: {}",
+            first_line(&merge)
+        ));
+    }
+    Ok(note)
+}
+
+/// Builds `checkout` as the module's comment says and gives the binary it
+/// made, or why it couldn't, in words.
+pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> {
+    may_build(checkout)?;
     let cargo = cargo();
     let mut cmd = Command::new(&cargo);
     // rustup's cargo runs the toolchain's, which finds rustc on the PATH: a
@@ -222,7 +387,7 @@ pub fn in_target_dir(binary: &Path) -> bool {
     let tagged = |dir: &Path| {
         std::fs::read_to_string(dir.join("CACHEDIR.TAG")).is_ok_and(|tag| tag.contains("cargo"))
     };
-    let built_in = checkout().and_then(|(_, target)| target);
+    let built_in = nonempty(env!("SWITCHBOARD_TARGET_DIR"));
     real.ancestors().skip(1).any(tagged)
         || built_in.is_some_and(|target| {
             let target = std::fs::canonicalize(&target).unwrap_or(target);
@@ -299,6 +464,31 @@ fn put(home: &Path, built: &Path, on: &Path) -> Result<(), String> {
         })
 }
 
+/// What M-p's build gives: the binary to restart on, `None` when there is
+/// nothing new, and a note for the message after the restart (the fetch
+/// that failed), else empty.
+#[derive(Debug, Default)]
+pub struct Brought {
+    pub on: Option<PathBuf>,
+    pub note: String,
+}
+
+/// Brings the main clone up to date when `checkout` is one, telling
+/// `building` once it is about to build, then builds it.
+fn make(
+    checkout: &Checkout,
+    building: &dyn Fn(&Path),
+    note: &mut String,
+) -> Result<PathBuf, String> {
+    if checkout.main_clone {
+        may_build(&checkout.dir)?;
+        let fetch = crate::integrations::ensure_on("github", "GitHub").is_ok();
+        *note = update(&checkout.dir, fetch)?.unwrap_or_default();
+    }
+    building(&checkout.dir);
+    build(&checkout.dir, checkout.target.as_deref())
+}
+
 /// Builds and installs as the module's comment says (unless `build` is
 /// off), and gives the binary to restart on, or `None` when there is
 /// nothing new. A binary already put at the server's path since it started
@@ -310,13 +500,16 @@ pub fn bring_up_to_date(
     home: &Path,
     binary: &Path,
     build_first: bool,
-) -> Result<Option<PathBuf>, String> {
+    building: &dyn Fn(&Path),
+) -> Result<Brought, String> {
     let to_build = checkout().filter(|_| build_first);
+    let mut note = String::new();
+    let brought = |on: Option<PathBuf>, note: String| Ok(Brought { on, note });
     if in_target_dir(binary) {
-        let Some((dir, target)) = to_build else {
+        let Some(to_build) = to_build else {
             return match installed(home) {
-                Some(installed) => Ok(Some(installed)),
-                None if !is_new(binary) => Ok(None),
+                Some(installed) => brought(Some(installed), note),
+                None if !is_new(binary) => brought(None, note),
                 None => Err(
                     "Switchboard runs from a cargo target directory, which other worktrees' builds write over, and has no checkout to build; install a build (install.sh) to restart on it"
                         .to_string(),
@@ -331,27 +524,27 @@ pub fn bring_up_to_date(
             let now = Stamp::of(&installed);
             let since_start = INSTALLED.get().is_some_and(|started| *started != now);
             if since_start && *last_built != now {
-                return Ok(Some(installed));
+                return brought(Some(installed), note);
             }
         }
         let on = restart_on(home, binary);
-        let built = build(&dir, target.as_deref())?;
+        let built = make(&to_build, building, &mut note)?;
         put(home, &built, &on)?;
         *last_built = Stamp::of(&on);
-        return Ok(Some(on));
+        return brought(Some(on), note);
     }
     let mut last_built = LAST_BUILT.lock().unwrap_or_else(|e| e.into_inner());
     let now = Stamp::of(binary);
     let installed_by_hand = now.is_some() && is_new(binary) && *last_built != now;
     if installed_by_hand {
-        return Ok(Some(binary.to_path_buf()));
+        return brought(Some(binary.to_path_buf()), note);
     }
-    if let Some((dir, target)) = to_build {
-        let built = build(&dir, target.as_deref())?;
+    if let Some(to_build) = to_build {
+        let built = make(&to_build, building, &mut note)?;
         install(&built, binary)?;
         *last_built = Stamp::of(binary);
     }
-    Ok(is_new(binary).then(|| binary.to_path_buf()))
+    brought(is_new(binary).then(|| binary.to_path_buf()), note)
 }
 
 #[cfg(test)]
@@ -466,6 +659,149 @@ mod tests {
         let elsewhere = dir.join("switchboard");
         std::fs::write(&elsewhere, "").unwrap();
         assert_eq!(restart_on(&home, &elsewhere), elsewhere);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_restart_builds_the_main_clone_unless_the_environment_names_a_checkout() {
+        let main = |dir: &str, target: Option<&str>| Checkout {
+            dir: PathBuf::from(dir),
+            target: target.map(PathBuf::from),
+            main_clone: true,
+        };
+        // Built in a worktree: its main clone, in cargo's own target.
+        assert_eq!(
+            choose(None, None, "/c/main", "/c/main/wt", "/c/main/wt/target"),
+            Some(main("/c/main", None))
+        );
+        // Built in the main clone: there, in the target it used.
+        assert_eq!(
+            choose(None, None, "/c/main", "/c/main", "/t"),
+            Some(main("/c/main", Some("/t")))
+        );
+        // No main clone known: the checkout as it is.
+        assert_eq!(
+            choose(None, None, "", "/c/src", "/t"),
+            Some(Checkout {
+                dir: PathBuf::from("/c/src"),
+                target: Some(PathBuf::from("/t")),
+                main_clone: false
+            })
+        );
+        // A try names its worktree; the tests name none.
+        assert_eq!(
+            choose(None, Some("/c/main/wt"), "/c/main", "/c/main", "/t"),
+            Some(Checkout {
+                dir: PathBuf::from("/c/main/wt"),
+                target: None,
+                main_clone: false
+            })
+        );
+        assert_eq!(choose(None, Some(""), "/c/main", "/c/main", "/t"), None);
+        assert_eq!(
+            choose(Some("/m"), Some(""), "/c/main", "/c/main", "/t"),
+            Some(main("/m", None))
+        );
+        // A release build has nothing to build.
+        assert_eq!(choose(None, None, "", "", ""), None);
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn the_main_clone_is_brought_up_to_date_only_on_its_default_branch_and_clean() {
+        let dir = fresh("update");
+        let origin = dir.join("origin.git");
+        let main = dir.join("main");
+        let other = dir.join("other");
+        git(
+            &dir,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git(&other, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                main.to_str().unwrap(),
+            ],
+        );
+
+        // Behind origin: fast-forwarded to it.
+        git(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        assert_eq!(update(&main, true), Ok(None));
+        assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "two");
+
+        // Another branch, or anything uncommitted: nothing done.
+        git(&main, &["checkout", "-q", "-b", "item"]);
+        let on_item = update(&main, true).unwrap_err();
+        assert!(
+            on_item.ends_with("is on item, not main; switch it back to restart on a new build"),
+            "{on_item}"
+        );
+        git(&main, &["checkout", "-q", "main"]);
+        std::fs::write(main.join("file"), "").unwrap();
+        let dirty = update(&main, true).unwrap_err();
+        assert!(dirty.contains("has uncommitted changes"), "{dirty}");
+        std::fs::remove_file(main.join("file")).unwrap();
+
+        // A commit origin lacks: refused.
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let ahead = update(&main, true).unwrap_err();
+        assert!(ahead.contains("has commits origin/main doesn't"), "{ahead}");
+        git(&main, &["reset", "-q", "--hard", "origin/main"]);
+
+        // An origin that can't be reached: built as it is, with a note,
+        // unless the clone has commits it last saw origin lack.
+        std::fs::rename(&origin, dir.join("gone.git")).unwrap();
+        let note = update(&main, true).unwrap().unwrap();
+        assert!(note.starts_with("(couldn't fetch origin: "), "{note}");
+        // Nor fetched with GitHub off, and not moved to what origin was.
+        git(&main, &["reset", "-q", "--hard", "HEAD~1"]);
+        let off = update(&main, false).unwrap().unwrap();
+        assert!(off.contains("GitHub is turned off"), "{off}");
+        assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "one");
+        git(&main, &["reset", "-q", "--hard", "origin/main"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        let ahead = update(&main, true).unwrap_err();
+        assert!(ahead.contains("has commits origin/main doesn't"), "{ahead}");
+        // No origin branch to check against: refused.
+        git(&main, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let unknown = update(&main, true).unwrap_err();
+        assert!(unknown.contains("has no origin/main"), "{unknown}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

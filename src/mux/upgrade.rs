@@ -108,6 +108,10 @@ pub struct Handover {
     /// The build handing over, as `switchboard --version` names it.
     #[serde(default)]
     pub from: String,
+    /// What M-p's build adds to the message after the restart (a fetch
+    /// that failed), else empty.
+    #[serde(default)]
+    pub note: String,
     /// The listening socket's descriptor.
     pub listener: RawFd,
     /// The server lock's descriptor.
@@ -313,15 +317,19 @@ struct Pending {
     checked: bool,
     /// The binary the restart execs.
     on: PathBuf,
+    /// What M-p's build adds to the message after the restart.
+    note: String,
 }
 
 /// What the check off the server's task found.
 #[derive(Debug)]
 pub enum UpgradeEvent {
     Checked(Result<(), String>),
+    /// M-p's main clone brought up to date, its build begun.
+    Building(ClientId, PathBuf),
     /// M-p's build for the terminal that asked: the binary to restart on,
     /// `None` when there is nothing new, or why the build failed.
-    Built(ClientId, Result<Option<PathBuf>, String>),
+    Built(ClientId, Result<super::latest::Brought, String>),
 }
 
 /// Whether a command's arguments ask for an upgrade (and not its usage).
@@ -347,6 +355,7 @@ impl Server {
             client,
             checked: false,
             on: on.clone().unwrap_or_default(),
+            note: String::new(),
         };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
             self.upgrade_refused(pending, "it is restarting on the new build already");
@@ -387,11 +396,13 @@ impl Server {
             return;
         };
         let build_first = settings::is_on(super::latest::SETTING);
-        if build_first && let Some((dir, _)) = super::latest::checkout() {
-            self.say(
-                Some(client),
-                &format!("Building Switchboard in {}…", paths::tilde(&dir)),
-            );
+        if build_first && let Some(checkout) = super::latest::checkout() {
+            let text = if checkout.main_clone {
+                format!("Updating {}…", paths::tilde(&checkout.dir))
+            } else {
+                format!("Building Switchboard in {}…", paths::tilde(&checkout.dir))
+            };
+            self.say(Some(client), &text);
         }
         if tokio::runtime::Handle::try_current().is_err() {
             return;
@@ -399,7 +410,14 @@ impl Server {
         self.upgrade.building = true;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let result = super::latest::bring_up_to_date(&paths::home(), &binary, build_first);
+            let building = |dir: &std::path::Path| {
+                let _ = tx.send(Event::Upgrade(UpgradeEvent::Building(
+                    client,
+                    dir.to_path_buf(),
+                )));
+            };
+            let result =
+                super::latest::bring_up_to_date(&paths::home(), &binary, build_first, &building);
             let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
         });
     }
@@ -407,11 +425,26 @@ impl Server {
     pub fn upgrade_event(&mut self, event: UpgradeEvent) {
         let checked = match event {
             UpgradeEvent::Checked(checked) => checked,
+            UpgradeEvent::Building(client, dir) => {
+                self.say(
+                    Some(client),
+                    &format!("Building Switchboard in {}…", paths::tilde(&dir)),
+                );
+                return;
+            }
             UpgradeEvent::Built(client, result) => {
                 self.upgrade.building = false;
                 match result {
-                    Ok(Some(on)) => self.upgrade_asked(None, Some(client), Some(on)),
-                    Ok(None) => self.say(Some(client), "Already on the latest build."),
+                    Ok(super::latest::Brought { on: Some(on), note }) => {
+                        self.upgrade_asked(None, Some(client), Some(on));
+                        if let Some(pending) = self.upgrade.pending.as_mut() {
+                            pending.note = note;
+                        }
+                    }
+                    Ok(super::latest::Brought { on: None, note }) => self.say(
+                        Some(client),
+                        format!("Already on the latest build. {note}").trim_end(),
+                    ),
                     Err(why) => self.say(
                         Some(client),
                         &format!("The build failed: {why}. Switchboard goes on as it was."),
@@ -532,6 +565,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         return;
     };
     let binary = pending.on.clone();
+    let pending_note = pending.note.clone();
     server.upgrade.handing = true;
     let client = pending.client;
     let asker = match pending.asker {
@@ -578,6 +612,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     let handover = Handover {
         version: VERSION,
         from: crate::update::version_line(),
+        note: pending_note,
         listener: listener.as_raw_fd(),
         lock: super::socket::lock_fd(),
         layout: super::persist::layout_now(server),
@@ -813,6 +848,9 @@ pub fn adopt(server: &mut Server, handover: Handover) {
     if !lost.is_empty() {
         text.push_str(&format!(" It couldn't take up {}.", lost.join(", ")));
     }
+    if !handover.note.is_empty() {
+        text.push_str(&format!(" {}", handover.note));
+    }
     eprintln!("switchboard server: {text}");
     let client = handover.client.map(ClientId);
     match handover.asker.filter(|fd| pty::is_open(*fd)) {
@@ -882,6 +920,7 @@ mod tests {
         Handover {
             version: VERSION,
             from: "0.1.0 (abc)".into(),
+            note: String::new(),
             listener: 7,
             lock: Some(3),
             layout: Saved {

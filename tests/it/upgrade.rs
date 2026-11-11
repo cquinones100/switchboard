@@ -607,3 +607,137 @@ fn m_p_restarts_a_target_directory_server_on_a_build_installed_since_as_it_is() 
     );
     assert!(client.exit.is_none());
 }
+
+/// Runs git in `dir`, failing the test when it fails.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// Whether the screen says `text`, a box's wrapped lines read as one.
+fn says(client: &mut common::TestClient, text: &str) -> bool {
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let screen = client
+        .screen()
+        .iter()
+        // A box's borders and shadow are box-drawing and block characters.
+        .map(|l| l.replace(|c| ('\u{2500}'..='\u{259f}').contains(&c), " "))
+        .collect::<Vec<_>>()
+        .join(" ");
+    words(&screen).contains(&words(text))
+}
+
+#[test]
+fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
+    let dir = common::TempDir::new("sbm");
+    let origin = dir.path().join("origin.git");
+    let main = dir.path().join("main");
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            origin.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
+    );
+    std::fs::write(other.join("Cargo.toml"), "").unwrap();
+    std::fs::write(other.join(".gitignore"), "target\nnew\n").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-q", "-m", "one"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            main.to_str().unwrap(),
+        ],
+    );
+    let (server, bin) =
+        TestServer::start_from_copy_with_env(&[("SWITCHBOARD_MAIN_CLONE", main.to_str().unwrap())]);
+    let trusted = server.home.join(".config/switchboard/trusted-dirs");
+    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
+    std::fs::write(&trusted, format!("{}\n", main.display())).unwrap();
+    let target = main.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    common::stand_in::install(
+        &server.home.join("bin/cargo"),
+        &CARGO.replace("$CARGO_TARGET_DIR", target.to_str().unwrap()),
+    );
+    let wrapper = |name: &str| {
+        let path = dir.path().join(name);
+        common::stand_in::install(
+            &path,
+            &format!("#!/bin/sh\n# {name}\nexec {} \"$@\"\n", common::BIN),
+        );
+        path
+    };
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+
+    // Uncommitted changes: said, and nothing built.
+    std::fs::write(main.join("file"), "").unwrap();
+    server.ok(&["press", "upgrade"]);
+    let deadline = common::deadline(Duration::from_secs(10));
+    while !says(&mut client, "has uncommitted changes; commit or stash them") {
+        assert!(Instant::now() < deadline, "{:?}", client.screen());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!target.join("args").exists(), "cargo wasn't run");
+    std::fs::remove_file(main.join("file")).unwrap();
+
+    // Behind origin: fast-forwarded, then built and restarted on.
+    git(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
+    git(&other, &["push", "-q", "origin", "HEAD:main"]);
+    std::fs::write(main.join("new"), wrapper("first").to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    wait_restarted(&server, &mut client);
+    assert_eq!(git(&main, &["log", "-1", "--format=%s"]), "two");
+    assert!(target.join("args").exists(), "the main clone was built");
+    assert_eq!(
+        std::fs::read(&bin).unwrap(),
+        std::fs::read(dir.path().join("first")).unwrap()
+    );
+
+    // An origin that can't be reached: built as it is, and said after the
+    // restart's message.
+    std::fs::rename(&origin, dir.path().join("gone.git")).unwrap();
+    std::fs::remove_file(target.join("args")).unwrap();
+    std::fs::write(main.join("new"), wrapper("second").to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    let deadline = common::deadline(Duration::from_secs(30));
+    while !says(&mut client, "(couldn't fetch origin:") {
+        assert!(
+            Instant::now() < deadline,
+            "{:?}\n{}",
+            client.screen(),
+            server.log()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(target.join("args").exists(), "the main clone was built");
+}
