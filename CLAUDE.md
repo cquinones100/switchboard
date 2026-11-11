@@ -68,7 +68,7 @@ ARCHITECTURE.md has the whole picture; what follows is what a change has to keep
 
 **Keys and the palette.** A new key is an `Action` in `src/mux/keys.rs` (or a part's `Command`, with its `key()`), with `about()` and `tags()`: the palette lists every action by them, and an action no key is bound to by default is in `Action::palette_only`, listed with no key. The defaults are the keys tmux.conf bound. A new binding's tags say what it is about (`#git`, `#pr`, `#tabs`), and one that uses GitHub or Linear carries that service's tag.
 
-**Links.** Every link Switchboard opens goes through `src/links.rs` (`open_url`), which opens it in the Chrome profile `browser.json` gives its site; anything new that opens a link does too.
+**Links.** Every link Switchboard opens goes through `src/links.rs`, which opens it in the Chrome profile `browser.json` gives its site and says where it is going until the browser comes to the front, since a profile's Chrome can take seconds to start: on the server through `Server::open_link` (src/views/serve.rs), in an app in a pane on its own message line with `links::opening_words`. `tests/it/links.rs` fails when any other file calls `links::open_url`, `open_url_as` or `open_in_background`, so anything new that opens a link goes through `Server::open_link` or says the words itself.
 
 **The request audit.** Every request to a service outside the computer is counted as it is made (`src/requests.rs`, a line a request in `~/.local/state/switchboard/requests/<day>.tsv`), for mission control's Usage view. `src/net.rs` counts every HTTPS request itself; anything else that reaches out (a `claude -p`, a git fetch, a connector) calls `requests::count(service, protocol, source)`.
 

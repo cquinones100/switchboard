@@ -23,8 +23,19 @@
 //! neither is, the link opens in the default browser, its profile unchosen.
 //! Opening a link reaches no service itself, so nothing is counted in the
 //! request audit, as open-url.sh counted nothing.
+//!
+//! A profile's link starts a new Chrome process, which hands the link to the
+//! running Chrome and exits, and macOS assesses that process (Gatekeeper, and
+//! any security agent) before it runs, which can take seconds; a link with
+//! no profile chosen goes to the running browser at once. So whatever opens
+//! a link says where it is going (`opening_words`) until the browser comes to
+//! the front (`open_url_watched`): the server through `Server::open_link`,
+//! mission control under its busy box, the notes app and the pager on their
+//! message lines. Nothing else calls `open_url` or `open_in_background`
+//! (tests/it/links.rs checks).
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 use serde_json::Value;
@@ -128,10 +139,117 @@ pub fn choose(
     }
 }
 
+/// Where a link opens, as said while it does: the browser `choose` picks,
+/// and the name Chrome shows for the profile, when Local State has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Destination {
+    pub browser: Browser,
+    pub profile_name: Option<String>,
+}
+
+/// `choose`, with the profile's name from Chrome's `profiles`.
+pub fn destination_in(
+    url: &str,
+    config: &Value,
+    profiles: Option<&[Profile]>,
+    profiles_on: bool,
+) -> Destination {
+    let browser = choose(url, config, profiles, profiles_on);
+    let profile_name = match &browser {
+        Browser::Chrome(dir) => profiles
+            .into_iter()
+            .flatten()
+            .find(|p| &p.dir == dir)
+            .map(|p| p.name.clone()),
+        Browser::Default => None,
+    };
+    Destination {
+        browser,
+        profile_name,
+    }
+}
+
+/// Where a link opens, from browser.json, Chrome's Local State and the
+/// chrome_profiles setting. Reads files, so off the server's task.
+pub fn destination(url: &str) -> Destination {
+    let config = util::read_json(browser_file()).unwrap_or(Value::Null);
+    let profiles = platform::chrome_local_state().and_then(|f| profiles_in(&f));
+    destination_in(
+        url.trim(),
+        &config,
+        profiles.as_deref(),
+        settings::is_on("chrome_profiles"),
+    )
+}
+
+/// What shows while a link opens: "Opening github.com in Chrome · Work…",
+/// or "Opening github.com in your browser…".
+pub fn words_for(url: &str, to: &Destination) -> String {
+    let host = host_of(url.trim()).unwrap_or_else(|| "the link".into());
+    let words = match &to.browser {
+        // No profile: the one Chrome picks itself (the AWS login's).
+        Browser::Chrome(dir) if dir.is_empty() => format!("Opening {host} in Chrome…"),
+        Browser::Chrome(dir) => {
+            let profile = to.profile_name.as_deref().unwrap_or(dir);
+            format!("Opening {host} in Chrome · {profile}…")
+        }
+        Browser::Default => format!("Opening {host} in your browser…"),
+    };
+    // Without control characters, which a crafted link or a profile's name
+    // could carry to a terminal the words are printed on, or into a
+    // message's rows.
+    words.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// `words_for` the link's own destination. Reads files.
+pub fn opening_words(url: &str) -> String {
+    words_for(url, &destination(url))
+}
+
+/// Whether what opens a link says so (the link_opening_message setting),
+/// read from the file each time, since the notes app and the pager run on
+/// while it changes.
+pub fn says_it() -> bool {
+    settings::setting("link_opening_message") != Some(Value::Bool(false))
+}
+
+/// How long opening a link waits for the browser to come to the front, and,
+/// where the app in front can't be told (Linux), how long it holds anyway.
+pub const OPEN_WAIT: Duration = Duration::from_secs(8);
+const OPEN_HOLD: Duration = Duration::from_secs(1);
+
+/// Opens a link, then waits until another app comes to the front (the
+/// browser, or any you go to meanwhile), at most `OPEN_WAIT`, as daemon.js's
+/// `openUrl` waited on `frontApp`. Gives whether one did; where the app in
+/// front can't be told, true after a moment. Blocking.
+pub(crate) fn open_url_watched(url: &str) -> Result<bool> {
+    let before = platform::front_app();
+    open_url(url)?;
+    Ok(front_changed(before))
+}
+
+/// After a link was handed over with `before` the app in front: whether
+/// another came to the front within `OPEN_WAIT`; true after a moment where
+/// it can't be told. Blocking.
+pub(crate) fn front_changed(before: Option<String>) -> bool {
+    let Some(before) = before else {
+        std::thread::sleep(OPEN_HOLD);
+        return true;
+    };
+    let until = Instant::now() + OPEN_WAIT;
+    while Instant::now() < until {
+        if platform::front_app().as_deref() != Some(&*before) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    false
+}
+
 /// Opens an http or https link as the module's comment says. Blocking for
 /// as long as it takes to hand the link over (a moment): the server calls
 /// it on a blocking thread (`open_in_background`).
-pub fn open_url(url: &str) -> Result<()> {
+pub(crate) fn open_url(url: &str) -> Result<()> {
     open_url_as(url, None)
 }
 
@@ -172,7 +290,7 @@ pub fn open_url_as(url: &str, as_site: Option<&str>) -> Result<()> {
 /// for the server and what it runs. Off a runtime (a unit test driving the
 /// server's state) it opens nothing, so no test opens a browser. What went
 /// wrong is dropped, for callers with nowhere to say it.
-pub fn open_in_background(url: String) {
+pub(crate) fn open_in_background(url: String) {
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         runtime.spawn_blocking(move || {
             let _ = open_url(&url);
@@ -240,6 +358,20 @@ pub fn main(args: Vec<String>) -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
+    // In a pane of the workspace, the server says where it is going (gh's
+    // --web, the AWS login's page), as every link Switchboard opens does.
+    if says_it() && crate::mux::socket::in_pane() {
+        let chosen_by = as_site.map(|site| format!("https://{site}/"));
+        let mut to = destination(chosen_by.as_deref().unwrap_or(url));
+        // As open_url_as opens it: the AWS login with no profile named for
+        // it in Chrome, in the profile Chrome picks.
+        if as_site.is_some() && to.browser == Browser::Default && settings::is_on("chrome_profiles")
+        {
+            to.browser = Browser::Chrome(String::new());
+        }
+        let words = words_for(url, &to);
+        let _ = crate::mux::socket::ask(&["say", "--", &words]);
+    }
     match open_url_as(url, as_site) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -336,6 +468,45 @@ mod tests {
             choose("https://linear.app/x", &Value::Null, None, true),
             Browser::Default,
             "no browser.json"
+        );
+    }
+
+    #[test]
+    fn opening_a_link_says_the_site_and_the_profile_chrome_shows() {
+        let config = json!({ "hosts": { "github.com": "Profile 2", "linear.app": "Profile 9" }, "default": "Default" });
+        let local = profiles();
+        let words = |url: &str| words_for(url, &destination_in(url, &config, Some(&local), true));
+        assert_eq!(
+            destination_in("https://github.com/o/r", &config, Some(&local), true),
+            Destination {
+                browser: Browser::Chrome("Profile 2".into()),
+                profile_name: Some("Work".into()),
+            }
+        );
+        assert_eq!(
+            words("https://github.com/o/r"),
+            "Opening github.com in Chrome · Work…"
+        );
+        assert_eq!(
+            words("https://example.com/"),
+            "Opening example.com in Chrome · Person 1…",
+            "the default profile"
+        );
+        assert_eq!(
+            words("https://linear.app/x"),
+            "Opening linear.app in Chrome · Profile 9…",
+            "a profile Local State doesn't list, by its folder"
+        );
+        let none = destination_in("https://github.com/o/r", &Value::Null, Some(&local), true);
+        assert_eq!(none.profile_name, None);
+        assert_eq!(
+            words_for("https://git\u{1b}]52;c;eA==\u{7}hub.com/", &none),
+            "Opening git]52;c;ea==hub.com in your browser…",
+            "no control characters"
+        );
+        assert_eq!(
+            words_for("https://github.com/o/r", &none),
+            "Opening github.com in your browser…"
         );
     }
 

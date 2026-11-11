@@ -1787,3 +1787,27 @@ fn enter_in_a_folded_section_opens_the_fold_not_a_hidden_items_plan() {
     assert_eq!(name(&app), "Work.md");
     assert!(screen(&mut app).iter().any(|l| l.contains("Task")));
 }
+
+#[test]
+fn following_a_link_says_where_it_is_going() {
+    let (_dir, mut app) = started("open-link");
+    app.new_note();
+    keys(&mut app, "Links<CR><CR>see https://rfc.example/1<Esc>");
+    assert!(app.follow(2, 8));
+    if crate::links::says_it() {
+        let said = app.message.as_ref().map(|(m, _)| m.as_str()).unwrap_or("");
+        assert_eq!(said, "Opening rfc.example in your browser…");
+        let said = said.to_string();
+        app.link_opened(&said, Ok(false));
+        assert!(
+            app.message
+                .as_ref()
+                .unwrap()
+                .0
+                .ends_with("hasn't shown it yet.")
+        );
+        app.say(said.clone());
+        app.link_opened(&said, Ok(true));
+        assert!(app.message.is_none(), "gone once the browser shows it");
+    }
+}

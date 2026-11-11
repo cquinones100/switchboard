@@ -18,6 +18,7 @@ mod codex_review;
 mod diff;
 mod land_lock;
 mod leak_check;
+mod links;
 mod mission;
 mod mux;
 mod notes_workspace;

@@ -110,37 +110,6 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("?", "these keys"),
 ];
 
-/// Opens a link through the Chrome-profile chooser (`links::open_url`, what
-/// open-url.sh did): the one place mission control opens a link. Blocking,
-/// so it is called off the server's task.
-pub fn open_link(url: &str) -> anyhow::Result<()> {
-    crate::links::open_url(url)
-}
-
-/// How long "Open it…" waits for the browser to come to the front, and,
-/// where the app in front can't be told (Linux), how long it holds anyway.
-const OPEN_WAIT: Duration = Duration::from_secs(8);
-const OPEN_HOLD: Duration = Duration::from_secs(1);
-
-/// Opens a link, then waits until another app comes to the front (the
-/// browser, or any you go to meanwhile, which leaves mission control out of
-/// sight anyway), at most `OPEN_WAIT`, so the busy box lasts until the page
-/// shows, as daemon.js's `openUrl` waited on `frontApp`; where the app in
-/// front can't be told, a moment. Blocking.
-fn open_and_wait(url: &str) -> anyhow::Result<()> {
-    let before = crate::platform::front_app();
-    open_link(url)?;
-    let Some(before) = before else {
-        std::thread::sleep(OPEN_HOLD);
-        return Ok(());
-    };
-    let until = Instant::now() + OPEN_WAIT;
-    while Instant::now() < until && crate::platform::front_app().as_deref() == Some(&*before) {
-        std::thread::sleep(Duration::from_millis(250));
-    }
-    Ok(())
-}
-
 /// What mission control opens on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Opening {
@@ -966,6 +935,14 @@ impl Server {
                 }
                 if again {
                     self.mission_spin_later();
+                }
+            }
+            MissionEvent::Relabel { client, text } => {
+                if let Some(c) = self.clients.get_mut(&client)
+                    && let Some(busy) = c.overlays.find_mut::<Busy>()
+                {
+                    busy.set_text(text);
+                    c.dirty = true;
                 }
             }
             MissionEvent::Done {
@@ -1801,10 +1778,21 @@ impl Server {
             }
             Do::CloseMerged(list) => self.close_merged(client, list),
             Do::Open(url) => {
+                // The busy box says where it is opening as soon as that is
+                // read, and lasts until the browser comes to the front.
+                let tx = self.tx.clone();
                 self.mission_busy(client, label, None, async move {
-                    let opened = tokio::task::spawn_blocking(move || open_and_wait(&url)).await;
+                    let opened = tokio::task::spawn_blocking(move || {
+                        if crate::links::says_it() {
+                            let text = crate::links::opening_words(&url);
+                            let _ = tx.send(Event::Mission(MissionEvent::Relabel { client, text }));
+                        }
+                        crate::links::open_url_watched(&url)
+                    })
+                    .await;
                     match opened {
-                        Ok(Ok(())) => None,
+                        Ok(Ok(true)) => None,
+                        Ok(Ok(false)) => Some("The browser hasn't shown it yet.".into()),
                         Ok(Err(e)) => Some(format!("Couldn't open it: {e}")),
                         Err(e) => Some(format!("Couldn't open it: {e}")),
                     }

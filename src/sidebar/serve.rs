@@ -1649,7 +1649,7 @@ impl Server {
                 }
             }
             "meeting" => match item.map(|i| i.target) {
-                Some(Target::Url(url)) => crate::links::open_in_background(url),
+                Some(Target::Url(url)) => self.open_link(client, url),
                 _ => self.open_mission(client, view("calendar")),
             },
             "calendar" => self.open_mission(client, view("calendar")),

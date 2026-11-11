@@ -25,7 +25,7 @@ use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Server};
 use crate::mux::{Direction, PaneId, TabId};
 use crate::ui::{Menu, MenuOption, Outcome, PickItem, Picker};
-use crate::{links, paths, platform, settings, util, worktree};
+use crate::{paths, platform, settings, util, worktree};
 
 /// What the server keeps for the extras: the clients that pressed `C-w`
 /// and wait for h, j, k or l (tmux.conf's `window-nav` key table), and what
@@ -681,7 +681,7 @@ impl Server {
             ],
         );
         self.choose(client, menu, move |server, client, chose| match chose {
-            Some(0) => links::open_in_background(url),
+            Some(0) => server.open_link(client, url),
             Some(_) => {
                 let command = worktree::tab_running("worktree-from-pr", "wtpr", &[url]);
                 if let Some(tab) =
@@ -764,7 +764,7 @@ impl Server {
         );
         self.choose(client, menu, move |server, client, chose| match chose {
             Some(0) => match url {
-                Some(url) => links::open_in_background(url),
+                Some(url) => server.open_link(client, url),
                 None => server.open_ticket_id(client, id),
             },
             Some(_) => {

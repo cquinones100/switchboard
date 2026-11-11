@@ -35,6 +35,12 @@ impl Busy {
         }
     }
 
+    /// What it says it is doing, changed as the work learns more (where a
+    /// link is opening).
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.text = text.into();
+    }
+
     fn frame(&self) -> &'static str {
         let turns = self.since.elapsed().as_millis() / u128::from(SPINNER_MS);
         SPINNER[turns as usize % SPINNER.len()]

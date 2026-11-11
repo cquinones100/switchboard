@@ -62,7 +62,7 @@ use crate::sidebar::model::{Rules, TabModel};
 use crate::sidebar::render::Filter;
 use crate::ui::{Look, Overlay, Step, Theme};
 
-pub use serve::{Opening, open_link};
+pub use serve::Opening;
 pub use views::{Group, Revived, Scope, View, ViewId, Worktree};
 
 /// Where Tab has put the focus: a group's name (with UX 2.0) or a view's
@@ -459,6 +459,9 @@ pub enum MissionEvent {
         note: Option<String>,
         after: Option<After>,
     },
+    /// What the busy box says, once the work knows more: where a link
+    /// opens.
+    Relabel { client: ClientId, text: String },
     /// The rest of what an answer or a typed command presses in a pane,
     /// once what came before has landed.
     Press {

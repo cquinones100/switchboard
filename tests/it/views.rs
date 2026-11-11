@@ -521,6 +521,8 @@ fn open_url_opens_a_link_in_its_sites_chrome_profile() {
         let status = Command::new(BIN)
             .args(["open-url", url])
             .env("HOME", &home)
+            .env_remove("SWITCHBOARD")
+            .env_remove("SWITCHBOARD_PANE")
             .env("PATH", format!("{}:{path}", bin.display()))
             .env("SWITCHBOARD_STATE_DIR", dir.path().join("s"))
             .env_remove("SWITCHBOARD_SETTINGS")
@@ -940,4 +942,99 @@ fn a_ticket_drawn_before_shows_from_the_cache_without_chrome() {
         String::from_utf8_lossy(&run.stderr).contains("needs Google Chrome or Chromium"),
         "{run:?}"
     );
+}
+
+#[test]
+fn opening_a_link_says_where_it_is_going_until_the_browser_shows_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let did = server.dir.path().join("did");
+    let tools: Vec<&str> = stand_in::OPENERS
+        .iter()
+        .chain(stand_in::CLIPBOARD)
+        .chain(stand_in::CHROMES)
+        .copied()
+        .collect();
+    stand_in::desktop(
+        &server.home.join("bin"),
+        &tools,
+        &did,
+        &server.home.join("clipboard"),
+    );
+    let local_state = json!({"profile": {"info_cache": {
+        "Default": {"name": "Person 1"}, "Profile 2": {"name": "Work"}
+    }}});
+    for at in [
+        ".config/google-chrome/Local State",
+        "Library/Application Support/Google/Chrome/Local State",
+    ] {
+        let file = server.home.join(at);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, local_state.to_string()).unwrap();
+    }
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("browser.json"),
+        json!({"hosts": {"github.com": "Profile 2"}}).to_string(),
+    )
+    .unwrap();
+
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text("echo https://github.com/o/r/pull/12345\r");
+    client.wait_for("the printed link", |s| {
+        s.iter()
+            .any(|l| l.ends_with("│https://github.com/o/r/pull/12345"))
+    });
+    let opens = || {
+        std::fs::read_to_string(&did)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.contains("--profile-directory=Profile 2"))
+            .count()
+    };
+    let wait_opens = |n: usize| {
+        let deadline = common::deadline(Duration::from_secs(10));
+        while opens() < n {
+            assert!(Instant::now() < deadline, "the link wasn't opened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    server.ok(&["press", "open-link"]);
+    client.wait_text("ctrl-o read it beside");
+    client.type_text("\r");
+    client.wait_text("Opening github.com in Chrome · Work…");
+    wait_opens(1);
+    close_message(&mut client, "Opening github.com");
+
+    // Off, it opens with nothing said. The sidebar going too shows the
+    // settings were read again.
+    settings(
+        &server,
+        json!({"sidebar": false, "link_opening_message": false}),
+    );
+    let deadline = common::deadline(Duration::from_secs(10));
+    while server.list()["sessions"][0]["sidebar"]["columns"] != 0 {
+        assert!(Instant::now() < deadline, "the settings weren't read");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    server.ok(&["press", "open-link"]);
+    client.wait_text("ctrl-o read it beside");
+    client.type_text("\r");
+    wait_opens(2);
+    client.wait_for("the picker closed", |s| {
+        !s.iter().any(|l| l.contains("ctrl-o read it beside"))
+    });
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    assert!(
+        !client
+            .screen()
+            .iter()
+            .any(|l| l.contains("Opening github.com")),
+        "nothing said with the setting off:\n{}",
+        client.screen().join("\n")
+    );
+    stand_in::assert_none_refused(&server.home.join("bin"));
 }

@@ -15,7 +15,8 @@
 //! text, which a cell can't carry; Switchboard's multiplexer passes it on
 //! (src/mux/compose.rs), so the terminal knows it as a link. A plain click
 //! on one opens it from here too (the mouse is taken, as `less --mouse`
-//! took it), through `links::open_url`.
+//! took it), through `links::open_url`, saying where it is going on its
+//! prompt line first, as `links::opening_words` words it.
 //!
 //! Where the terminal can show images, the pictures on lines of their own
 //! and the Mermaid diagrams are drawn as pictures once they are had
@@ -967,6 +968,12 @@ impl Pager {
             return format!("/{typed}");
         }
         if let Some(note) = &self.note {
+            // Printed as it is, so without control characters, which a
+            // crafted link's error could carry to the terminal, and cut to
+            // the pane, short of its last column, so it never wraps and
+            // scrolls the page.
+            let note: String = note.chars().filter(|c| !c.is_control()).collect();
+            let note = crate::ui::draw::cut(&note, self.cols.saturating_sub(1));
             return format!("\x1b[7m{note}\x1b[0m");
         }
         let full = self.has_cursor() && self.full_at(self.cursor).is_some();
@@ -1075,6 +1082,8 @@ fn run_with(
         .with_url(url)
         .with_cursor(crate::settings::is_on("view_cursor"));
     let (pictures_tx, pictures) = channel();
+    // A link opened from here: what was said meanwhile, and how it went.
+    let (opened_tx, opened) = channel::<(String, Result<bool, String>)>();
     let screen = match Screen::enter() {
         Ok(s) => s,
         Err(e) => {
@@ -1113,6 +1122,21 @@ fn run_with(
                 redraw = true;
             }
         }
+        while let Ok((words, shown)) = opened.try_recv() {
+            // Unless another note took its place; one closed by a key still
+            // hears how the open went.
+            if pager.note.is_none()
+                || pager.note.as_deref() == Some(words.as_str())
+                || shown.is_err()
+            {
+                pager.note = match shown {
+                    Ok(true) => None,
+                    Ok(false) => Some(format!("{words} The browser hasn't shown it yet.")),
+                    Err(why) => Some(format!("Couldn't open it: {why}")),
+                };
+                redraw = true;
+            }
+        }
         while let Ok(got) = pictures.try_recv() {
             redraw |= pager.picture(got);
         }
@@ -1137,13 +1161,40 @@ fn run_with(
         };
         match act {
             Act::Quit => break,
+            // The pager is gone as the link opens, so the server says where
+            // it is going, when there is one.
             Act::OpenAndQuit(url) => {
+                if crate::links::says_it() && crate::mux::socket::in_pane() {
+                    let words = crate::links::opening_words(&url);
+                    let _ = crate::mux::socket::ask(&["say", "--", &words]);
+                }
                 let _ = crate::links::open_url(&url);
                 break;
             }
             // Drawn again too, since the click that asked moved the cursor.
             Act::Open(url) => {
-                let _ = crate::links::open_url(&url);
+                if crate::links::says_it() {
+                    let words = crate::links::opening_words(&url);
+                    pager.note = Some(words.clone());
+                    draw(&mut pager);
+                    // Handed over before the next key, so quitting at once
+                    // still opens it; only the watch runs on.
+                    let before = crate::platform::front_app();
+                    match crate::links::open_url(&url) {
+                        Ok(()) => {
+                            let tx = opened_tx.clone();
+                            std::thread::spawn(move || {
+                                let shown = crate::links::front_changed(before);
+                                let _ = tx.send((words, Ok(shown)));
+                            });
+                        }
+                        Err(e) => {
+                            let _ = opened_tx.send((words, Err(e.to_string())));
+                        }
+                    }
+                } else {
+                    let _ = crate::links::open_url(&url);
+                }
                 redraw = true;
             }
             Act::Full { key, title } => {

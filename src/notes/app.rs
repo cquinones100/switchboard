@@ -98,6 +98,9 @@ pub enum Msg {
     Socket(Request, Sender<String>),
     /// UX 2.0: the tabs on notes' items, from the background look.
     ItemTabs(HashMap<String, render::ItemTab>),
+    /// A link opened: what was said meanwhile, and whether the browser
+    /// came to the front, or why it couldn't open.
+    Opened(String, Result<bool, String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -494,6 +497,9 @@ pub struct App {
     squash_paths: Vec<PathBuf>,
     squash_cancelled: bool,
     tx: Sender<Msg>,
+    /// What the message line says while a link opens, which stays until
+    /// the browser comes up (`Msg::Opened`).
+    opening: Option<String>,
     cursors: HashMap<PathBuf, (usize, usize, usize)>,
     /// Each note left while the app runs: its undo history and folds, put
     /// back when it opens again.
@@ -584,6 +590,7 @@ impl App {
             squash_paths: Vec::new(),
             squash_cancelled: false,
             tx,
+            opening: None,
             cursors: HashMap::new(),
             kept: HashMap::new(),
             titles: HashSet::new(),
@@ -609,6 +616,64 @@ impl App {
 
     pub fn say(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), Instant::now()));
+    }
+
+    /// Opens a link in the browser, in its site's Chrome profile, off the
+    /// screen's thread, saying where it is going on the message line
+    /// (link_opening_message), since a profile's Chrome can take seconds.
+    fn open_link(&mut self, url: String) {
+        let says = crate::links::says_it();
+        // A unit test reads nothing of your home's (browser.json, Chrome's
+        // profiles): its link goes to the default browser.
+        let words = says.then(|| {
+            if cfg!(test) {
+                let to = crate::links::Destination {
+                    browser: crate::links::Browser::Default,
+                    profile_name: None,
+                };
+                crate::links::words_for(&url, &to)
+            } else {
+                crate::links::opening_words(&url)
+            }
+        });
+        if let Some(words) = &words {
+            self.say(words.clone());
+            self.opening = Some(words.clone());
+        }
+        // No unit test opens a browser.
+        if cfg!(test) {
+            return;
+        }
+        let tx = self.tx.clone();
+        std::thread::spawn(move || match words {
+            Some(words) => {
+                let shown = crate::links::open_url_watched(&url).map_err(|e| e.to_string());
+                let _ = tx.send(Msg::Opened(words, shown));
+            }
+            None => {
+                let _ = crate::links::open_url(&url);
+            }
+        });
+    }
+
+    /// A link has opened: its message gone while it is still the one shown,
+    /// else said how it went.
+    fn link_opened(&mut self, words: &str, shown: Result<bool, String>) {
+        let ours = self.message.as_ref().is_some_and(|(m, _)| m == words);
+        // Another link opened since keeps its own message.
+        if self.opening.as_deref() == Some(words) {
+            self.opening = None;
+        }
+        let nothing_else = ours || self.message.is_none();
+        match shown {
+            Ok(true) if ours => self.message = None,
+            Ok(true) => {}
+            Ok(false) if nothing_else => {
+                self.say(format!("{words} The browser hasn't shown it yet."));
+            }
+            Ok(false) => {}
+            Err(why) => self.say(format!("Couldn't open it: {why}")),
+        }
     }
 
     /// Takes the notes' lock and opens the note open last, or the newest; a
@@ -1955,13 +2020,13 @@ impl App {
                 return true;
             }
             if image.starts_with("http://") || image.starts_with("https://") {
-                open_link(image);
+                self.open_link(image);
                 return true;
             }
             return false;
         }
         if let Some(url) = span.url {
-            open_link(url);
+            self.open_link(url);
             return true;
         }
         if let Some(title) = span.note {
@@ -2019,6 +2084,7 @@ impl App {
                 let _ = back.send(reply);
             }
             Msg::ItemTabs(tabs) => self.item_tabs = tabs,
+            Msg::Opened(words, shown) => self.link_opened(&words, shown),
         }
     }
 
@@ -2075,7 +2141,7 @@ impl App {
         if self
             .message
             .as_ref()
-            .is_some_and(|(_, at)| at.elapsed() >= MESSAGE_FOR)
+            .is_some_and(|(m, at)| at.elapsed() >= MESSAGE_FOR && self.opening.as_ref() != Some(m))
         {
             self.message = None;
             changed = true;
@@ -3006,14 +3072,6 @@ fn alt_arrow(key: &Key) -> Option<char> {
         KeyCode::Right => Some('l'),
         _ => None,
     }
-}
-
-/// Opens a link in the browser, in its site's Chrome profile, off the
-/// screen's thread.
-fn open_link(url: String) {
-    std::thread::spawn(move || {
-        let _ = crate::links::open_url(&url);
-    });
 }
 
 // ── Running it ──────────────────────────────────────────────────────────────

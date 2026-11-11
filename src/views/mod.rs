@@ -311,6 +311,18 @@ impl Command {
 pub enum ViewsEvent {
     /// Something to say on a client: why a link couldn't be opened.
     Say { client: ClientId, text: String },
+    /// A link to open on a client, from a task that found it.
+    Open { client: ClientId, url: String },
+    /// Where a link is opening, read off the server's task: said until
+    /// the browser comes to the front.
+    Opening { client: ClientId, words: String },
+    /// A link opened: whether the browser came to the front, or why it
+    /// couldn't open; `words` is what was said meanwhile.
+    Opened {
+        client: ClientId,
+        words: String,
+        shown: Result<bool, String>,
+    },
     /// Something to copy to a client's clipboard, and say it was.
     Copy { client: ClientId, text: String },
     /// M-m's answer, or why there is none.

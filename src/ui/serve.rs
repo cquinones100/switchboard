@@ -154,6 +154,10 @@ impl Server {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
+        // A message on the status line (message_boxes off) goes too.
+        if kind == "message" {
+            c.overlays.note = None;
+        }
         let (gone, kept): (Vec<Layer>, Vec<Layer>) = std::mem::take(&mut c.overlays.layers)
             .into_iter()
             .partition(|l| l.overlay.kind() == kind);
@@ -452,7 +456,14 @@ impl Server {
         if !setting_on("message_boxes") && crate::status::lines() > 0 {
             if let Some(c) = self.clients.get_mut(&id) {
                 let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
-                c.overlays.note = Some((line, Instant::now() + DISPLAY_TIME));
+                // A message asked to stay longer than a box's usual time
+                // (a link opening) stays as long on the status line.
+                let shown_for = if seconds > message::SECONDS {
+                    Duration::from_secs(seconds)
+                } else {
+                    DISPLAY_TIME
+                };
+                c.overlays.note = Some((line, Instant::now() + shown_for));
             }
             self.overlays_changed(id);
             return;
@@ -460,6 +471,21 @@ impl Server {
         // One message at a time: a new one takes the place of one still up.
         self.close_overlays(id, "message");
         self.open(id, Box::new(Message::new(text, seconds)), None);
+    }
+
+    /// What a client's message says while it is up, in its box or on the
+    /// status line (its words joined there by single spaces).
+    pub fn message_shown(&self, client: ClientId) -> Option<String> {
+        let c = self.clients.get(&client)?;
+        if let Some(m) = c.overlays.find::<Message>() {
+            return Some(m.text().to_string());
+        }
+        c.overlays.note.as_ref().map(|(line, _)| line.clone())
+    }
+
+    /// Closes a client's message, in its box or on the status line.
+    pub fn unsay(&mut self, client: ClientId) {
+        self.close_overlays(client, "message");
     }
 
     // ── Tips ─────────────────────────────────────────────────────────────────

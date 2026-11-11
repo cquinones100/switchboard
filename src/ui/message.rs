@@ -18,6 +18,7 @@ pub const SECONDS: u64 = 5;
 const WRAP: usize = 72;
 
 pub struct Message {
+    text: String,
     lines: Vec<String>,
     until: Instant,
     close_lit: bool,
@@ -27,11 +28,17 @@ pub struct Message {
 impl Message {
     pub fn new(text: &str, seconds: u64) -> Message {
         Message {
+            text: text.trim_end().to_string(),
             lines: draw::wrap(text.trim_end(), WRAP),
             until: Instant::now() + Duration::from_secs(seconds),
             close_lit: false,
             drawn: None,
         }
+    }
+
+    /// The text, as given.
+    pub fn text(&self) -> &str {
+        &self.text
     }
 
     /// The text, as wrapped.

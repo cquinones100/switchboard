@@ -45,6 +45,9 @@ pub const LINK_URL: &str = "@link_url";
 pub const CHECKS_VIEW: &str = "@checks_view";
 
 /// The share of the pane a view takes, as tmux.conf's `split-window -l`.
+/// The longest a link's opening message stays up, closed before then when
+/// the open answers.
+const OPENING_UP_TO: u64 = 120;
 const VIEW_PERCENT: u16 = 45;
 const LINK_PERCENT: u16 = 50;
 
@@ -143,6 +146,21 @@ impl Server {
     pub fn views_event(&mut self, event: ViewsEvent) {
         match event {
             ViewsEvent::Say { client, text } => self.say(Some(client), &text),
+            ViewsEvent::Open { client, url } => self.open_link(client, url),
+            ViewsEvent::Opening { client, words } => {
+                // Never on another client, where nothing would close it.
+                if !self.clients.contains_key(&client) {
+                    return;
+                }
+                // Up until the open answers (`Opened`), however long handing
+                // the link over takes.
+                self.say_for(Some(client), &words, OPENING_UP_TO);
+            }
+            ViewsEvent::Opened {
+                client,
+                words,
+                shown,
+            } => self.link_opened(client, &words, shown),
             ViewsEvent::Copy { client, text } => self.copy_said(client, &text),
             ViewsEvent::Ready { client, answer } => {
                 if let Some(c) = self.clients.get_mut(&client)
@@ -316,6 +334,76 @@ impl Server {
         let _ = tx.send(Event::Views(ViewsEvent::Say { client, text }));
     }
 
+    /// `open_link` from a task off the server's.
+    fn open_link_later(
+        tx: &tokio::sync::mpsc::UnboundedSender<Event>,
+        client: ClientId,
+        url: String,
+    ) {
+        let _ = tx.send(Event::Views(ViewsEvent::Open { client, url }));
+    }
+
+    /// The one way the server opens a link (src/links.rs): where it is going
+    /// said on the client ("Opening github.com in Chrome · Work…") until the
+    /// browser comes to the front, since a profile's Chrome can take seconds
+    /// to start; then the message closes, or says the browser hasn't shown
+    /// it yet, or why it couldn't open. With link_opening_message off, it
+    /// opens with nothing said. Off a runtime (a unit test), nothing opens.
+    pub(crate) fn open_link(&mut self, client: ClientId, url: String) {
+        if !links::says_it() {
+            links::open_in_background(url);
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let tx = self.tx.clone();
+        runtime.spawn_blocking(move || {
+            let words = links::opening_words(&url);
+            let _ = tx.send(Event::Views(ViewsEvent::Opening {
+                client,
+                words: words.clone(),
+            }));
+            let shown = links::open_url_watched(&url).map_err(|e| e.to_string());
+            let _ = tx.send(Event::Views(ViewsEvent::Opened {
+                client,
+                words,
+                shown,
+            }));
+        });
+    }
+
+    /// A link has opened: its message closed while it is still the one
+    /// shown, else left to what took its place.
+    fn link_opened(&mut self, client: ClientId, words: &str, shown: Result<bool, String>) {
+        if !self.clients.contains_key(&client) {
+            return;
+        }
+        let shown_now = self.message_shown(client);
+        // The status line shows it with its spaces run together.
+        let one_line = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let ours = shown_now.as_deref().map(one_line) == Some(one_line(words));
+        let nothing_else = ours || shown_now.is_none();
+        match shown {
+            Ok(true) if ours => self.unsay(client),
+            Ok(true) => {}
+            Ok(false) if nothing_else => {
+                let browser = if words.contains(" in Chrome") {
+                    "Chrome"
+                } else {
+                    "The browser"
+                };
+                self.say_for(
+                    Some(client),
+                    &format!("{words}\n\n{browser} hasn't shown it yet."),
+                    60,
+                );
+            }
+            Ok(false) => {}
+            Err(why) => self.say(Some(client), &format!("Couldn't open it.\n\n{why}")),
+        }
+    }
+
     /// M-r: the branch's PR in the browser, else its repository when the
     /// branch has no PR yet; with `repo`, the repository (M-p's "Open the
     /// repository in the browser"). Why it can't, said.
@@ -367,7 +455,7 @@ impl Server {
                 }
             };
             match url {
-                Ok(url) => links::open_in_background(url),
+                Ok(url) => Server::open_link_later(&tx, client, url),
                 Err(why) => Server::say_later(&tx, client, format!("Can't open {what}.\n\n{why}")),
             }
         });
@@ -390,14 +478,14 @@ impl Server {
     /// M-p's "Open a Linear ticket in the browser by ID").
     pub(crate) fn open_ticket_id(&mut self, client: ClientId, id: String) {
         if let Some(workspace) = linear_workspace() {
-            links::open_in_background(format!("https://linear.app/{workspace}/issue/{id}"));
+            self.open_link(client, format!("https://linear.app/{workspace}/issue/{id}"));
             return;
         }
         // No workspace written down: Linear says where the ticket is.
         let tx = self.tx.clone();
         tokio::spawn(async move {
             match linear::ticket(&id, "M-l open ticket").await {
-                Ok(Some(t)) if !t.url.is_empty() => links::open_in_background(t.url),
+                Ok(Some(t)) if !t.url.is_empty() => Server::open_link_later(&tx, client, t.url),
                 Ok(_) => Server::say_later(&tx, client, format!("Linear has no ticket {id}.")),
                 Err(e) => Server::say_later(&tx, client, format!("Can't open {id}.\n\n{e}")),
             }
@@ -495,7 +583,7 @@ impl Server {
                 Err(e) => Err(e.to_string()),
             };
             match queue {
-                Ok(url) => links::open_in_background(url),
+                Ok(url) => Server::open_link_later(&tx, client, url),
                 Err(why) => {
                     Server::say_later(&tx, client, format!("Can't open the merge queue.\n\n{why}"))
                 }
@@ -524,7 +612,7 @@ impl Server {
         tokio::spawn(async move {
             let said = match linear::project_url(&id, "open the ticket's project").await {
                 Ok(Some(url)) => {
-                    links::open_in_background(url);
+                    Server::open_link_later(&tx, client, url);
                     return;
                 }
                 Ok(None) => format!("{id} isn't in a Linear project."),
@@ -665,7 +753,7 @@ impl Server {
             if (browser && web)
                 || page::kind_of(&picked.value, &page::notes_dir()) == Ok(page::Kind::Slack)
             {
-                links::open_in_background(picked.value);
+                server.open_link(client, picked.value);
                 return;
             }
             let pane = running
@@ -869,7 +957,7 @@ impl Server {
         }
         if browser {
             if shown::safe(url) && links::host_of(url).is_some() {
-                links::open_in_background(url.to_string());
+                self.open_link(client, url.to_string());
             } else {
                 self.say(Some(client), "That isn't a link that can be opened here");
             }
@@ -946,7 +1034,7 @@ impl Server {
             .and_then(|s| s.opts.get(LINK_URL).cloned())
             .filter(|u| links::host_of(u).is_some());
         match url {
-            Some(url) => links::open_in_background(url),
+            Some(url) => self.open_link(client, url),
             None => self.say(Some(client), "No link is being read in this tab"),
         }
     }

@@ -449,6 +449,13 @@
     "default": true
   },
   {
+    "key": "link_opening_message",
+    "category": "Tabs and status bar",
+    "label": "Opening-link message",
+    "description": "Opening a link says where it is going (the site, Chrome and its profile) in a box until the browser comes to the front, since a profile's Chrome can take seconds to start. Off, links open with nothing said",
+    "default": true
+  },
+  {
     "key": "calendar_changes",
     "category": "Sidebar",
     "label": "Calendar changes",
