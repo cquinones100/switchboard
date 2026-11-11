@@ -87,6 +87,11 @@ pub(super) struct Kept {
 }
 
 impl Kept {
+    /// A directory's origin as last read, with no read of its own.
+    pub(super) fn origin_kept(&self, dir: &Path) -> Option<&super::Repo> {
+        self.repos.get(dir)?.0.origin.as_ref()
+    }
+
     // A directory's repositories, as last read unless that was `REPO_KEPT`
     // ago.
     fn remotes(&mut self, dir: &Path) -> repo::Remotes {
@@ -948,6 +953,30 @@ fn todo_line(item: &Item) -> String {
 mod tests {
     use super::*;
     use crate::items::Target;
+
+    #[test]
+    fn a_directory_s_origin_is_what_was_last_read_of_it_with_no_read_of_its_own() {
+        let dir = crate::mux::socket::testing::TempDir::new();
+        let clone = dir.path().join("web");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        std::fs::write(clone.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            clone.join(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:acme/web.git\n",
+        )
+        .unwrap();
+        let mut kept = Kept::default();
+        assert!(kept.origin_kept(&clone).is_none(), "not read yet");
+        kept.remotes(&clone);
+        assert_eq!(
+            kept.origin_kept(&clone).map(ToString::to_string).as_deref(),
+            Some("acme/web")
+        );
+        let outside = dir.path().join("plain");
+        std::fs::create_dir_all(&outside).unwrap();
+        kept.remotes(&outside);
+        assert!(kept.origin_kept(&outside).is_none(), "outside a repository");
+    }
 
     #[test]
     fn a_todo_line_is_the_title_the_detail_and_the_link() {

@@ -1246,11 +1246,21 @@ fn pr_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
         .split_once(' ')
         .filter(|(n, _)| n.starts_with('#'))
         .map_or(item.title.as_str(), |(_, t)| t);
+    // The tab on this PR in this repository, as `choices::pr_places` finds
+    // it, so #42 in one repository never names another's tab.
+    let repo = item.data["pr"]["repo"].as_str().unwrap_or("");
+    let in_repo = |t: &TabModel| {
+        repo.is_empty()
+            || t.pr_repo
+                .as_deref()
+                .or(t.repo.as_deref())
+                .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+    };
     let tab = m
         .snap
         .tabs
         .iter()
-        .find(|t| number.is_some() && t.pr == number);
+        .find(|t| number.is_some() && t.pr == number && in_repo(t));
     let queued = item.group.as_deref() == Some("In merge queue");
     let meta = match (tab, item.data["reviewers"].as_str()) {
         (Some(t), _) => tab_words(t, m, theme),
@@ -3998,6 +4008,44 @@ mod tests {
             (texts(&l), h)
         };
         assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+    }
+
+    #[test]
+    fn a_pr_card_names_the_tab_on_its_number_in_its_own_repository() {
+        let card = |repo: &str| {
+            Item::new(repo.to_string(), "#42 Fix it".to_string())
+                .group("In review")
+                .data(serde_json::json!({
+                    "pr": { "number": 42, "repo": repo }, "reviewers": "sam",
+                }))
+        };
+        let meta = |tabs: Vec<TabModel>, repo: &str| {
+            let m = mission(tabs, vec![]);
+            let face = pr_face(&card(repo), &m, &Theme::DARK);
+            face.meta
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        let mut app = tab(1, "app");
+        app.pr = Some(42);
+        app.pr_repo = Some("acme/app".to_string());
+        assert!(meta(vec![app.clone()], "acme/app").starts_with("tab 1"));
+        assert_eq!(meta(vec![app.clone()], "acme/web"), "sam");
+        let mut web = tab(2, "web");
+        web.pr = Some(42);
+        web.repo = Some("Acme/Web".to_string());
+        assert!(meta(vec![app, web.clone()], "acme/web").starts_with("tab 2"));
+        web.repo = None;
+        assert_eq!(
+            meta(vec![web.clone()], "acme/web"),
+            "sam",
+            "a tab with no repository takes no repository's card"
+        );
+        assert!(
+            meta(vec![web], "").starts_with("tab 2"),
+            "a card with no repository matches by number"
+        );
     }
 
     #[test]

@@ -498,6 +498,7 @@ impl Server {
         t.phase = agent.and_then(|a| some(&a.phase));
         t.since = since;
         t.path = self.tab_path(id).map(std::path::Path::to_path_buf);
+        t.repo = t.path.as_deref().and_then(|p| self.sources.origin_kept(p));
         t.command = read_of(tab.active).and_then(|r| r.command.clone());
         t.panes = panes;
         t.active = Some(tab.active);

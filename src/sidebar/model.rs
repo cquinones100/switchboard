@@ -155,6 +155,9 @@ pub struct TabModel {
     /// clone, possibly the project upstream names); `None` when only its
     /// number is known, its directory's origin's then.
     pub pr_repo: Option<String>,
+    /// Its directory's GitHub repository, origin's `owner/name`, as the
+    /// lookups last read it; `None` outside one or before it is read.
+    pub repo: Option<String>,
     pub color: Option<Rgb>,
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
@@ -232,6 +235,7 @@ impl TabModel {
             own_name: None,
             pr: None,
             pr_repo: None,
+            repo: None,
             color: None,
             state: TabState::Idle,
             pinned: false,

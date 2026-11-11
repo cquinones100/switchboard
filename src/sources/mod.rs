@@ -163,6 +163,13 @@ pub struct Sources {
 }
 
 impl Sources {
+    /// A directory's origin as `owner/name`, as the lookups last read it,
+    /// with no read of its own, so the drawing path may ask
+    /// (`source_tabs` keeps it fresh).
+    pub(crate) fn origin_kept(&self, dir: &std::path::Path) -> Option<String> {
+        self.kept.origin_kept(dir).map(ToString::to_string)
+    }
+
     /// A view's data, or `None` while its settings keep it out of mission
     /// control (the service off, or the view): `PRS`, `CI`, `TICKETS` or
     /// `INBOX`; `LANDING`'s is only how its merge queues were last asked,
