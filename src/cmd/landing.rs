@@ -2,7 +2,7 @@
 //! `<dir>` (the current directory by default) lands its work, `pr` (through
 //! a pull request) or `direct` (straight on its default branch), on the
 //! first line, then, on the second, a direct landing's steps as JSON
-//! (`test`, `squash`, `review`, `beforePush`) with where the answer came
+//! (`test`, `testIn`, `squash`, `review`, `beforePush`) with where the answer came
 //! from (`source`), why, and the repository. `--json` prints both as one
 //! object; `--refresh` asks GitHub and Claude again rather than taking the
 //! answer kept from the last day. It fails when repos.json can't be read.

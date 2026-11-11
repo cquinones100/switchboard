@@ -703,6 +703,13 @@ pub fn landing_rows(
             json!(steps.test),
         ));
         items.push(row(
+            "testIn",
+            "  Tests run".into(),
+            steps.test_in.clone(),
+            "here runs the tests in the worktree; ci pushes the landing's commit to a ci/ branch of its own, waits for the repository's CI on it and deletes the branch, running them here when no CI answers".into(),
+            json!(steps.test_in),
+        ));
+        items.push(row(
             "squash",
             "  Squash".into(),
             if steps.squash { "on" } else { "off" }.into(),
@@ -862,6 +869,7 @@ mod tests {
                 ("acme/auto", "auto: pr"),
                 ("acme/direct", "straight to the branch"),
                 ("  Tests", "npm test"),
+                ("  Tests run", "here"),
                 ("  Squash", "off"),
                 ("  Review", "review-loop"),
                 ("  Before push", "none"),
@@ -874,7 +882,8 @@ mod tests {
             "Worked out: through a PR, since main has a merge queue"
         );
         assert_eq!(rows[0].data["repo_setting"]["value"], "automatic");
-        assert_eq!(rows[3].data["repo_setting"]["field"], "squash");
+        assert_eq!(rows[3].data["repo_setting"]["field"], "testIn");
+        assert_eq!(rows[4].data["repo_setting"]["field"], "squash");
         assert!(rows.iter().all(|r| r.group.as_deref() == Some(LANDING)));
         let broken = landing_rows(&repos[..1], Err("bad".into()), &worked);
         assert_eq!(broken[0].data["value"], "unreadable");

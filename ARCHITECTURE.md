@@ -79,7 +79,7 @@ The workspace:
 | `setup` | `switchboard setup`: Switchboard's plugin for Claude Code (its hooks, skills and instructions), or the same in `~/.claude` the old way, and which way (`way`); Claude Code's statusline and permissions; your CLAUDE.md; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |
 | `extras` | The rest of tmux.conf's keys and `M-p`'s commands: `M-0`, `C-w` between panes, renaming the tab and naming a new one, mission control on a view, the habits report, a reply sent to another tab, setup checked, the loop tabs, a PR or ticket by number, the AWS login |
-| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `pr-risk`, `land-lock`, `apply-actions`, `wait-deploy` and the rest) |
+| `cmd` | The command table, and the commands that are programs of their own (the worktree commands, `codex-review`, `pr-risk`, `land-lock`, `apply-actions`, `wait-ci`, `wait-deploy` and the rest) |
 
 `src/lib.rs` lists them with a line each, and every module opens with a comment saying what it is and why it works as it does.
 

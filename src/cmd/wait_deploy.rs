@@ -122,7 +122,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
 
 /// Whether a failed look is GitHub refusing to be asked at all, which the
 /// next round would meet again.
-fn refused(e: &anyhow::Error) -> bool {
+pub(super) fn refused(e: &anyhow::Error) -> bool {
     matches!(
         net::kind_of(e),
         Some(ErrorKind::Off | ErrorKind::NoCredentials | ErrorKind::Unauthorized)

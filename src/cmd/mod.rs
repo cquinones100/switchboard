@@ -34,6 +34,7 @@ pub mod today_save;
 pub mod try_;
 pub mod try_sealed;
 pub mod update_main;
+pub mod wait_ci;
 pub mod wait_deploy;
 pub mod watch_note;
 pub mod work;
@@ -233,6 +234,11 @@ pub const COMMANDS: &[Command] = &[
         about: "Put a change to Switchboard into effect: install (build the clone and put it in place) or relay (restart it)",
     },
     Command {
+        name: "wait-ci",
+        run: wait_ci::main,
+        about: "Wait for a commit's CI",
+    },
+    Command {
         name: "wait-deploy",
         run: wait_deploy::main,
         about: "Wait for a commit's deploy",
@@ -329,6 +335,7 @@ const OWN_HELP: &[&str] = &[
     "wt-jump",
     "wt-revive",
     "land-lock",
+    "wait-ci",
     "wait-deploy",
     "diff",
     "notes",

@@ -574,12 +574,14 @@ fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_gi
     assert_eq!(
         (
             &steps["test"],
+            &steps["testIn"],
             &steps["squash"],
             &steps["review"],
             &steps["source"]
         ),
         (
             &json!("npm test"),
+            &json!("here"),
             &json!(false),
             &json!("review-loop"),
             &json!("repos.json")

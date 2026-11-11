@@ -20,6 +20,7 @@
       "Bash(switchboard landing *)",
       "Bash(switchboard respawn *)",
       "Bash(switchboard land-lock *)",
+      "Bash(switchboard wait-ci *)",
       "Bash(switchboard wait-deploy *)",
       "Bash(switchboard watch-note *)",
       "Bash(switchboard today-save)",

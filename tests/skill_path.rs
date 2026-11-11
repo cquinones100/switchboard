@@ -404,6 +404,71 @@ fn a_tab_of_the_work_a_note_mode_lands_without_asking_only_once_leak_check_finds
 }
 
 #[test]
+fn a_landing_whose_tests_run_in_ci_checks_for_leaks_pushes_its_own_branch_waits_and_deletes_it() {
+    let all = skills();
+    let (_, queue) = all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap();
+    let section = queue
+        .split("**The tests in CI.**")
+        .nth(1)
+        .and_then(|rest| rest.split("\n1. **The note.**").next())
+        .expect("the section");
+    let at = |said: &str| {
+        section
+            .find(said)
+            .unwrap_or_else(|| panic!("the section says {said}"))
+    };
+    assert!(section.starts_with(" With `testIn` `ci`, steps 5 and 9"));
+    at("`git rev-parse --abbrev-ref HEAD | git hash-object --stdin | cut -c1-12`");
+    assert!(
+        !queue.contains("ci/<branch>"),
+        "the worktree's branch name is never part of what is pushed"
+    );
+    let leak = at("`switchboard leak-check <base>..HEAD`");
+    let push = at("`git push --force origin HEAD:refs/heads/ci/land-<id>`");
+    let wait = at("`switchboard wait-ci --repo <owner/name> --sha \"$(git rev-parse HEAD)\"`");
+    assert!(
+        leak < push && push < wait,
+        "leak-check, then the push, then the wait"
+    );
+    for said in [
+        "- `passed <sha>`",
+        "- `failed <sha> <run id> <job names>`",
+        "`gh run view <run id> --log-failed`",
+        "- `none`: no CI ran on the branch, or every job it has was skipped there. Say so in a line and run the tests here",
+        "- `timeout`: a failure",
+        "being the repository the commit was pushed to",
+        "**Delete the branch** on every way out of this section, with `git push origin --delete ci/land-<id>`",
+    ] {
+        at(said);
+    }
+    let line = |start: &str| {
+        queue
+            .lines()
+            .find(|l| l.starts_with(start))
+            .unwrap_or_else(|| panic!("no {start}"))
+    };
+    for step in [
+        "5. **The tests pass before the review**",
+        "9. **Onto the default branch as it is now, again**",
+    ] {
+        assert!(line(step).contains("with `testIn` `ci`"), "{step}");
+    }
+    for way_out in ["11. **Push**", "**Not yet**"] {
+        assert!(
+            line(way_out).contains("delete the landing's `ci/land-<id>`"),
+            "{way_out}"
+        );
+    }
+    assert!(
+        line("11. **Push**").contains("git push origin HEAD:<name>`, never forced"),
+        "the landing's own push is never forced"
+    );
+}
+
+#[test]
 fn review_loop_reviews_someone_elses_pr_from_outside_its_worktree_and_only_reports() {
     let all = skills();
     let (_, text) = all.iter().find(|(name, _)| name == "review-loop").unwrap();

@@ -3,7 +3,7 @@
 //!
 //! ```json
 //! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
-//!                   "review": "review-loop", "beforePush": "",
+//!                   "testIn": "here", "review": "review-loop", "beforePush": "",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
@@ -11,8 +11,9 @@
 //! `direct`, straight on its default branch. The rest of the landing keys
 //! are how a direct landing goes: `test` the command run before the review
 //! and again after the last rebase (empty, none; not set, what the
-//! repository's CLAUDE.md names), `squash` whether the branch lands as one
-//! commit, `review` `review-loop` or `none`, and `beforePush` a command
+//! repository's CLAUDE.md names), `testIn` where they run, `here` (in the
+//! worktree) or `ci` (the repository's CI, on a branch of the landing's own
+//! pushed for it), `squash` whether the branch lands as one commit, `review` `review-loop` or `none`, and `beforePush` a command
 //! that must pass before the push (empty, none). `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
@@ -130,6 +131,9 @@ pub fn apply_of(dir: &Path) -> Option<Vec<Apply>> {
 pub const METHODS: [&str; 2] = ["pr", "direct"];
 /// The reviews a direct landing can have.
 pub const REVIEWS: [&str; 2] = ["review-loop", "none"];
+/// Where a direct landing's tests can run: in the worktree, or in the
+/// repository's CI.
+pub const TEST_IN: [&str; 2] = ["here", "ci"];
 /// An answer worked out is kept this long, in ms.
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
@@ -139,6 +143,8 @@ pub struct Steps {
     /// The tests' command; `None` when not set, so a landing runs what the
     /// repository's CLAUDE.md names, where an empty one is none.
     pub test: Option<String>,
+    /// Where the tests run, one of `TEST_IN`.
+    pub test_in: String,
     pub squash: bool,
     pub review: String,
     pub before_push: String,
@@ -148,6 +154,7 @@ impl Default for Steps {
     fn default() -> Steps {
         Steps {
             test: None,
+            test_in: "here".into(),
             squash: true,
             review: "review-loop".into(),
             before_push: String::new(),
@@ -160,6 +167,7 @@ impl Steps {
     pub fn json(&self) -> Value {
         json!({
             "test": self.test,
+            "testIn": self.test_in,
             "squash": self.squash,
             "review": self.review,
             "beforePush": self.before_push,
@@ -172,6 +180,7 @@ fn valid(key: &str, value: &Value) -> bool {
     match key {
         "landing" => value.as_str().is_some_and(|v| METHODS.contains(&v)),
         "review" => value.as_str().is_some_and(|v| REVIEWS.contains(&v)),
+        "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
         "test" | "beforePush" => value.is_string(),
         "squash" => value.is_boolean(),
         _ => false,
@@ -192,6 +201,7 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
     let d = Steps::default();
     Steps {
         test: text("test"),
+        test_in: text("testIn").unwrap_or(d.test_in),
         squash: entry
             .get("squash")
             .and_then(Value::as_bool)
@@ -214,7 +224,16 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
     let automatic = key == "landing" && value.as_str() == Some("automatic");
     if !automatic && !valid(key, &value) {
         return Err(
-            if ["landing", "test", "squash", "review", "beforePush"].contains(&key) {
+            if [
+                "landing",
+                "test",
+                "testIn",
+                "squash",
+                "review",
+                "beforePush",
+            ]
+            .contains(&key)
+            {
                 format!("not a value for {key}: {value}")
             } else {
                 format!("not a landing setting: {key}")
@@ -758,6 +777,7 @@ mod tests {
             answer.steps,
             Steps {
                 test: Some("npm test".into()),
+                test_in: "here".into(),
                 squash: false,
                 review: "review-loop".into(),
                 before_push: String::new(),
@@ -769,6 +789,24 @@ mod tests {
         assert_eq!(
             answer.steps.test, None,
             "a test command not set is none, for the CLAUDE.md's tests"
+        );
+        std::fs::write(
+            &r.files.repos,
+            r#"{"acme/direct": {"landing": "direct", "testIn": "ci"}}"#,
+        )
+        .unwrap();
+        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
+        assert_eq!(answer.steps.test_in, "ci");
+        assert_eq!(answer.steps.json()["testIn"], "ci");
+        std::fs::write(
+            &r.files.repos,
+            r#"{"acme/direct": {"landing": "direct", "testIn": "elsewhere"}}"#,
+        )
+        .unwrap();
+        let answer = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap();
+        assert_eq!(
+            answer.steps.test_in, "here",
+            "a place the tests can't run is left out, so they run in the worktree"
         );
         std::fs::write(&r.files.repos, "{ broken").unwrap();
         let err = landing_with(&r.direct, &never, &r.files, 1, false, true).unwrap_err();
@@ -939,6 +977,16 @@ mod tests {
             set_repo_in(&path, "acme/direct", "review", json!("maybe"))
                 .unwrap_err()
                 .contains("not a value")
+        );
+        assert!(
+            set_repo_in(&path, "acme/direct", "testIn", json!("elsewhere"))
+                .unwrap_err()
+                .contains("not a value for testIn")
+        );
+        set_repo_in(&path, "acme/direct", "testIn", json!("ci")).unwrap();
+        assert_eq!(
+            read_file(&path).unwrap()["acme/direct"]["testIn"],
+            json!("ci")
         );
         std::fs::write(&path, "{ not json").unwrap();
         assert!(

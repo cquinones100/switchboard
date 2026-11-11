@@ -2547,8 +2547,8 @@ impl Server {
     }
 
     /// Enter on a repository's landing row in Settings: how its work lands
-    /// from a menu (automatic leaves it to the default), its review from a
-    /// menu, squash on or off, and a command typed in, written to
+    /// from a menu (automatic leaves it to the default), its review and
+    /// where its tests run from a menu each, squash on or off, and a command typed in, written to
     /// ~/.config/switchboard/repos.json (`repos::set_repo`), as the daemon's
     /// `changeRepo` did.
     fn change_repo(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
@@ -2566,16 +2566,19 @@ impl Server {
         };
         let name = r["repo"].as_str().unwrap_or("").to_string();
         match r["field"].as_str().unwrap_or("") {
-            "landing" | "review" => {
-                let landing = r["field"] == "landing";
-                let options: Vec<(&str, &str)> = if landing {
-                    vec![
+            field @ ("landing" | "review" | "testIn") => {
+                let landing = field == "landing";
+                let options: Vec<(&str, &str)> = match field {
+                    "landing" => vec![
                         ("automatic", "Automatic: GitHub's rules, else its CLAUDE.md"),
                         ("pr", "Through a PR"),
                         ("direct", "Straight on the default branch"),
-                    ]
-                } else {
-                    crate::repos::REVIEWS.iter().map(|r| (*r, *r)).collect()
+                    ],
+                    "testIn" => vec![
+                        ("here", "Here, in the worktree"),
+                        ("ci", "In CI, on a ci/ branch of the landing's own"),
+                    ],
+                    _ => crate::repos::REVIEWS.iter().map(|r| (*r, *r)).collect(),
                 };
                 let at = options
                     .iter()
@@ -2584,6 +2587,8 @@ impl Server {
                 let values: Vec<String> = options.iter().map(|(v, _)| v.to_string()).collect();
                 let title = if landing {
                     format!("{name}: how its work lands")
+                } else if field == "testIn" {
+                    format!("{name}: where the tests run")
                 } else {
                     format!("{name}: the review before the push")
                 };

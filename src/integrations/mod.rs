@@ -7,7 +7,7 @@
 //!
 //! The settings are about what the workspace does on its own: its lookups,
 //! views and keys. A program you run yourself (`codex-review`, `wt`, `wtpr`,
-//! `wait-deploy`, `wt-jump`, `worktree-done`) asks the service whatever they
+//! `wait-ci`, `wait-deploy`, `wt-jump`, `worktree-done`) asks the service whatever they
 //! say, as the tmux version's scripts did through gh and curl, which never
 //! read them; such a program calls `run_by_you` first.
 //!
