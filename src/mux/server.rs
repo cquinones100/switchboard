@@ -37,6 +37,11 @@ use crate::{paths, util};
 pub const DEFAULT_SESSION: &str = "main";
 /// Lines of history each pane keeps (tmux.conf's `history-limit`).
 pub const HISTORY: usize = 10_000;
+/// The tab option naming the directory a tab is about when its panes work
+/// elsewhere: the review tab's PR worktree (src/cmd/work.rs's `review_pr`),
+/// whose Claude stays in the main clone. Saved with the tab's options, and
+/// taken away when a pane of the tab is handed over (`respawn`).
+pub const TAB_DIR: &str = "@tab_dir";
 /// How often tab names are read again from their panes' directories.
 const TICK: Duration = Duration::from_secs(2);
 /// Two clicks this close together are a double click.
@@ -1528,7 +1533,7 @@ impl Server {
             .get(&target)
             .map(|s| s.tab)
             .ok_or_else(|| anyhow!("no pane {target}"))?;
-        let cwd = cwd.or_else(|| self.pane_dir(target));
+        let cwd = cwd.or_else(|| self.pane_own_dir(target));
         let area = self
             .session_of_tab(tab_id)
             .map(Session::main_area)
@@ -2217,19 +2222,43 @@ impl Server {
         Some(self.tabs.get(&s.current)?.active)
     }
 
-    /// The directory a pane is in now: where its Claude last said it works,
-    /// while that Claude is still in front, else the directory of its
-    /// program (`Pane::cwd`), whose process stays in the directory it
-    /// started in. Never a directory that no longer exists (a worktree
-    /// removed under it), its nearest ancestor that does taking its place.
+    /// The directory a pane's tab is about: its tab's `@tab_dir` while that
+    /// directory is there (the review tab's PR worktree, whose Claude works
+    /// from the main clone), else the pane's own (`pane_own_dir`). The
+    /// tab's name, color and PR, and the keys that open something for this
+    /// directory (M-v, M-m, M-d), read this one. Never a directory that no
+    /// longer exists (a worktree removed under it), its nearest ancestor
+    /// that does taking its place.
     pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
         crate::util::nearest_existing(&self.pane_dir_as_said(pane)?)
     }
 
-    /// The directory a pane is in as its Claude or its program has it, which
-    /// may no longer exist (a worktree removed under it): `pane_dir` before
-    /// it climbs to the nearest ancestor that does.
+    /// The directory a program started from the pane starts in (a split, a
+    /// new tab, a respawn): the pane's own, never the tab's `@tab_dir`, so
+    /// nothing starts in a worktree of someone else's PR.
+    pub fn pane_own_dir(&self, pane: PaneId) -> Option<PathBuf> {
+        crate::util::nearest_existing(&self.pane_own_dir_as_said(pane)?)
+    }
+
+    /// The directory `pane_dir` names, which may no longer exist (a
+    /// worktree removed under the pane) before it climbs to the nearest
+    /// ancestor that does.
     pub fn pane_dir_as_said(&self, pane: PaneId) -> Option<PathBuf> {
+        let tab_dir = self
+            .panes
+            .get(&pane)
+            .and_then(|slot| self.tabs.get(&slot.tab))
+            .and_then(|tab| tab.opts.get(TAB_DIR))
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_dir());
+        tab_dir.or_else(|| self.pane_own_dir_as_said(pane))
+    }
+
+    /// The directory a pane is in as its Claude or its program has it:
+    /// where its Claude last said it works, while that Claude is still in
+    /// front, else the directory of its program (`Pane::cwd`), whose
+    /// process stays in the directory it started in.
+    fn pane_own_dir_as_said(&self, pane: PaneId) -> Option<PathBuf> {
         let slot = self.panes.get(&pane)?;
         let said = slot
             .pane
@@ -2427,7 +2456,7 @@ impl Server {
                 }
             }
             Action::NewTab => {
-                let cwd = pane.and_then(|p| self.pane_dir(p));
+                let cwd = pane.and_then(|p| self.pane_own_dir(p));
                 if let Err(e) = self.new_tab(&session, cwd, None, None, Opened::Front) {
                     self.say(Some(id), &format!("Couldn't open a tab: {e}"));
                 }

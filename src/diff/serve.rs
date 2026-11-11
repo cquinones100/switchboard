@@ -137,6 +137,23 @@ impl Server {
         let Some(pane) = self.current_pane(client) else {
             return;
         };
+        // lazygit runs the repository's own commands (its hooks, its
+        // config's), so never on a worktree of someone else's PR, which
+        // the review tab is about: known by its path alone, on the
+        // server's task (src/trust.rs).
+        if let Some(dir) = self
+            .pane_dir(pane)
+            .filter(|d| crate::trust::in_review_dir(d))
+        {
+            self.say(
+                Some(client),
+                &format!(
+                    "{} holds a PR wtpr --untrusted set up, so lazygit isn't opened there: it would run the repository's own commands.\n\nM-d shows its diff.",
+                    paths::tilde(&dir)
+                ),
+            );
+            return;
+        }
         if let Err(e) = self.open_in_place(pane, LAZYGIT, vec![LAZYGIT.into()], Some(client)) {
             self.say(Some(client), &format!("Couldn't open lazygit: {e}"));
         }
@@ -242,7 +259,10 @@ impl Server {
         let mut dirs: Vec<PathBuf> = Vec::new();
         for s in &self.sessions {
             for tab in &s.tabs {
+                // Not a worktree of someone else's PR: its story is told
+                // only when you open its diff and ask.
                 if let Some(dir) = self.tab_path(*tab).map(PathBuf::from)
+                    && !crate::trust::in_review_dir(&dir)
                     && !dirs.contains(&dir)
                 {
                     dirs.push(dir);

@@ -64,6 +64,25 @@ pub fn review_dir() -> PathBuf {
     review_dir_in(&paths::home())
 }
 
+/// The folder in the review folder that a repository's PRs are checked out
+/// in, `<owner>-<name>`, anything but letters, digits, `.`, `_` and `-`
+/// made a `-` and no two `-` together, since two repositories' PRs share
+/// numbers.
+pub fn review_folder(owner: &str, name: &str) -> String {
+    let mut slug = String::new();
+    for c in format!("{owner}-{name}").chars() {
+        let c = if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            c
+        } else {
+            '-'
+        };
+        if !(c == '-' && slug.ends_with('-')) {
+            slug.push(c);
+        }
+    }
+    slug
+}
+
 /// The review folder under another home (the Slack relay's).
 pub fn review_dir_in(home: &Path) -> PathBuf {
     home.join(".cache/switchboard").join(REVIEW)
@@ -305,6 +324,13 @@ fn origin_branches(wt: &Path) -> Vec<String> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn a_repositorys_review_folder_is_its_owner_and_name() {
+        assert_eq!(review_folder("acme", "widgets"), "acme-widgets");
+        assert_eq!(review_folder("a.b", "c_d"), "a.b-c_d");
+        assert_eq!(review_folder("ac me", "w/x"), "ac-me-w-x");
+    }
 
     /// A temporary folder under /tmp, removed when dropped.
     struct Temp(PathBuf);

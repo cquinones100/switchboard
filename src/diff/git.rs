@@ -403,6 +403,17 @@ const PLAIN: &[&str] = &[
     "--no-textconv",
 ];
 
+/// `PLAIN` for the repository at `top`, with `--text` in a worktree of
+/// someone else's PR (src/trust.rs), whose `.gitattributes` could mark a
+/// file binary to hide its lines, as `pr-risk` reads it.
+fn plain(top: &Path) -> Vec<&'static str> {
+    let mut args = PLAIN.to_vec();
+    if crate::trust::is_untrusted(top) {
+        args.push("--text");
+    }
+    args
+}
+
 /// The files `git diff -z --name-status` and `--numstat` list, put together.
 pub fn parse_entries(name_status: &str, numstat: &str) -> Vec<Entry> {
     let mut entries: Vec<Entry> = Vec::new();
@@ -515,7 +526,7 @@ pub fn read_commit(top: &Path, commit: &str) -> Result<Change> {
 /// both show.
 fn read_range(top: &Path, base: &str, left: String, right: String) -> Result<Change> {
     let range = |extra: &[&str]| -> Result<String> {
-        let mut args: Vec<&str> = PLAIN.to_vec();
+        let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
         args.extend_from_slice(&[left.as_str(), right.as_str()]);
         git(top, &args)
@@ -561,7 +572,7 @@ pub fn read_working(top: &Path) -> Result<Change> {
         .trim()
         .to_string();
     let run = |extra: &[&str]| -> Result<String> {
-        let mut args: Vec<&str> = PLAIN.to_vec();
+        let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
         git(top, &args)
     };
@@ -660,7 +671,7 @@ pub fn read_to_work_tree(top: &Path, base: &str) -> Result<Change> {
     let committed = read_change(top, base)?;
     let left = committed.left.clone();
     let run = |extra: &[&str]| -> Result<String> {
-        let mut args: Vec<&str> = PLAIN.to_vec();
+        let mut args: Vec<&str> = plain(top);
         args.extend_from_slice(extra);
         args.push(left.as_str());
         git(top, &args)

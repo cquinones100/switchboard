@@ -49,7 +49,10 @@ impl Server {
             .ok_or_else(|| anyhow!("no pane {pane}"))?;
         let tab_id = slot.tab;
         let (cols, rows) = slot.pane.size();
-        let cwd = self.pane_dir(pane);
+        // The pane's own directory, never its tab's `@tab_dir` (someone
+        // else's PR): a tool is given the directory it works on, and a
+        // split or new tab from it starts where this one does.
+        let cwd = self.pane_own_dir(pane);
         if !self
             .tabs
             .get(&tab_id)

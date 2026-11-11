@@ -337,11 +337,14 @@ impl Names {
         let pr = if !switches.prs() {
             None
         } else if let Some(n) = github::pr_number_from_dir(dir) {
-            let repo = place
-                .filter(|_| crate::sources::repo::remotes_of(dir).upstream.is_some())
-                .and_then(|p| self.branch_pr(dir, p, now, asks))
-                .filter(|found| found.number == n)
-                .and_then(|found| found.repo);
+            let repo = match github::reviewed_repo(dir) {
+                Some(repo) => Some(repo),
+                None => place
+                    .filter(|_| crate::sources::repo::remotes_of(dir).upstream.is_some())
+                    .and_then(|p| self.branch_pr(dir, p, now, asks))
+                    .filter(|found| found.number == n)
+                    .and_then(|found| found.repo),
+            };
             Some(BranchPr { number: n, repo })
         } else {
             place.and_then(|p| self.branch_pr(dir, p, now, asks))
@@ -807,7 +810,7 @@ mod tests {
 
     #[test]
     fn a_wtpr_directory_has_its_number_without_asking() {
-        let scratch = Scratch::new("wtpr");
+        let scratch = Scratch::new("wtpr-number");
         let dir = scratch.0.join("pr-77-fix");
         if !repo(&dir) {
             eprintln!("skipped: no git");

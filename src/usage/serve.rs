@@ -375,7 +375,7 @@ impl Server {
             .usage_tab_list()
             .into_iter()
             .map(|(tab, _)| OpenTab {
-                path: self.tab_path(tab).map(PathBuf::from),
+                path: self.tab_reopen_path(tab),
                 session: self.tab_claude_session(tab).map(|c| c.session_id.clone()),
             })
             .collect();
@@ -421,9 +421,27 @@ impl Server {
             index,
             name: self.tab_label(tab),
             tab_name: self.tab_own_name(tab).map(str::to_string),
-            path: self.tab_path(tab).map(PathBuf::from),
+            path: self.tab_reopen_path(tab),
+            tab_dir: self
+                .tabs
+                .get(&tab)
+                .and_then(|t| t.opts.get(crate::mux::server::TAB_DIR))
+                .map(PathBuf::from),
             session: self.tab_claude_session(tab).map(|c| c.session_id.clone()),
         }
+    }
+
+    /// Where a closed tab opens again: the directory it is named from,
+    /// except in a tab about another directory than its panes' (`@tab_dir`,
+    /// the review tab's PR worktree), whose main clone it is, where its
+    /// Claude ran, never someone else's code. Read from git's files alone,
+    /// so it is known as the tab closes, its panes already gone.
+    fn tab_reopen_path(&self, tab: TabId) -> Option<PathBuf> {
+        let t = self.tabs.get(&tab)?;
+        if let Some(dir) = t.opts.get(crate::mux::server::TAB_DIR) {
+            return crate::cmd::work::main_clone(std::path::Path::new(dir));
+        }
+        self.tab_path(tab).map(PathBuf::from)
     }
 
     /// Keeps every tab as it is now, for when it closes.
@@ -478,6 +496,12 @@ impl Server {
             .clone()
             .filter(|p| p.is_dir())
             .unwrap_or_else(paths::home);
+        // A worktree of someone else's PR, kept by a build before the
+        // review tab's record was its main clone's: no shell or Claude
+        // there (src/trust.rs).
+        if crate::trust::in_review_dir(&dir) {
+            return Err(crate::trust::refusal(&dir));
+        }
         let (tab, pane) = self
             .new_tab(
                 &session,
@@ -487,6 +511,17 @@ impl Server {
                 crate::mux::server::Opened::Front,
             )
             .map_err(|e| format!("Couldn't open it: {e}"))?;
+        // The review tab about its PR's worktree again, while that is there.
+        if let Some(about) = closing.tab_dir.as_ref().filter(|d| d.is_dir())
+            && let Some(t) = self.tabs.get_mut(&tab)
+        {
+            t.opts.insert(
+                crate::mux::server::TAB_DIR.into(),
+                about.to_string_lossy().into_owned(),
+            );
+            self.dirty_tab(tab);
+            self.name_tab(tab);
+        }
         if let Some(text) = super::closed::resume_line(closing.session.as_deref()) {
             self.send_later(TYPE_AFTER, Event::Usage(UsageEvent::Type { pane, text }));
         }

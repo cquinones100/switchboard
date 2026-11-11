@@ -669,6 +669,20 @@ impl Server {
     /// there for you to press Enter, since whatever is in its prompt
     /// already can't be seen from here (pr-ready.sh's `resolve_in_tab`).
     fn resolve_in_tab(&mut self, client: ClientId, tab: TabId) {
+        // A review tab's Claude works from the main clone, and the PR is
+        // its author's to rebase: nothing here is the branch to resolve.
+        let reviewing = self
+            .tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(crate::mux::server::TAB_DIR))
+            .is_some_and(|d| crate::trust::in_review_dir(std::path::Path::new(d)));
+        if reviewing {
+            self.say(
+                Some(client),
+                "This tab reviews someone else's PR, whose branch is its author's: its conflicts are theirs to resolve, and its Claude works from your main clone.",
+            );
+            return;
+        }
         let panes = self
             .tabs
             .get(&tab)

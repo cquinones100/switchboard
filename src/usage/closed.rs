@@ -55,6 +55,10 @@ pub struct Closing {
     pub kind: String,
     #[serde(default)]
     pub path: Option<PathBuf>,
+    /// The directory it was about while its panes worked in `path`
+    /// (`@tab_dir`, the review tab's PR worktree), given back as it reopens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_dir: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     #[serde(default)]
@@ -71,6 +75,8 @@ pub struct TabNow {
     /// The name given to it, to take back when it reopens.
     pub tab_name: Option<String>,
     pub path: Option<PathBuf>,
+    /// Its `@tab_dir`, when it has one.
+    pub tab_dir: Option<PathBuf>,
     /// Its Claude's session, when one runs in it.
     pub session: Option<String>,
 }
@@ -121,6 +127,13 @@ impl Closed {
         let was = self.last.get(&now.tab);
         let since = was.map_or(at, |w| w.since);
         let mut now = now;
+        // A directory that can no longer be read (a review worktree removed
+        // before its tab closed) keeps the one last known.
+        if now.path.is_none()
+            && let Some(was) = was
+        {
+            now.path = was.now.path.clone();
+        }
         if now.session.is_none()
             && let Some(was) = was
             && was.now.path == now.path
@@ -145,6 +158,7 @@ impl Closed {
                 was.now.name
             },
             tab_name: was.now.tab_name,
+            tab_dir: was.now.tab_dir,
             kind: "closed".into(),
             path: was.now.path,
             session: was.now.session,
@@ -304,6 +318,7 @@ mod tests {
             index: n as usize,
             name: name.into(),
             tab_name: None,
+            tab_dir: None,
             path: Some(path.into()),
             session: session.map(str::to_string),
         }
@@ -423,6 +438,35 @@ mod tests {
         assert_eq!(
             items[0].data["tabName"], "Slack: a thread",
             "the name it was given, to take back"
+        );
+        let _ = fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_review_tab_keeps_its_worktree_and_the_last_directory_it_had() {
+        let state = temp("review");
+        let mut closed = Closed::default();
+        let now = util::now_ms();
+        let review = TabNow {
+            tab_dir: Some("/cache/pr-review/acme-widgets/7".into()),
+            ..tab(85, "#7 Review PR", "/work/widgets", Some("7777"))
+        };
+        closed.seen(review.clone(), now - 60_000);
+        // Its directory can't be read as it closes (the worktree gone).
+        closed.seen(
+            TabNow {
+                path: None,
+                ..review
+            },
+            now,
+        );
+        closed.closed(&state, TabId(85), now);
+        let id = closed.items(&state, &[], now)[0].id.clone();
+        let found = closed.find(&state, &id).unwrap();
+        assert_eq!(found.path, Some("/work/widgets".into()));
+        assert_eq!(
+            found.tab_dir,
+            Some("/cache/pr-review/acme-widgets/7".into())
         );
         let _ = fs::remove_dir_all(&state);
     }

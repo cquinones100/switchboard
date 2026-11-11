@@ -382,7 +382,7 @@ impl Server {
     /// pane is `pane`.
     pub fn work_action(&mut self, client: ClientId, action: Action, pane: Option<PaneId>) {
         let here = pane
-            .and_then(|p| self.pane_dir(p))
+            .and_then(|p| self.pane_own_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let wanted = match action {
@@ -440,7 +440,8 @@ impl Server {
         );
     }
 
-    /// Every pane's directory, for the directory list.
+    /// Every pane's own directory, for the directory list a tab starts in
+    /// (never a tab's `@tab_dir`, someone else's PR).
     fn pane_dirs(&self) -> Vec<PathBuf> {
         self.panes
             .iter()
@@ -449,7 +450,7 @@ impl Server {
                     .get("@sidebar")
                     .is_none_or(|v| v.is_empty() || v == "0")
             })
-            .filter_map(|(p, _)| self.pane_dir(*p))
+            .filter_map(|(p, _)| self.pane_own_dir(*p))
             .collect()
     }
 
@@ -464,7 +465,7 @@ impl Server {
     ) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.pane_dir(p))
+            .and_then(|p| self.pane_own_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let title = title.to_string();
@@ -755,9 +756,8 @@ impl Server {
 
     /// The palette's "Review a contributor's PR", pressed in `pane`: the
     /// open PRs from forks of the repository the pane is in, the most
-    /// recently updated first (a number typed taken too), then a tab in its
-    /// main clone running Claude with `/review-pr <number>`, which opens
-    /// the PR's worktree itself, untrusted. Never in the PR's own worktree.
+    /// recently updated first (a number typed taken too), then the PR's
+    /// review tab (`review_tab`). Never in the PR's own worktree.
     pub(crate) fn review_pr(&mut self, client: ClientId, pane: Option<PaneId>) {
         let here = pane.and_then(|p| self.pane_dir(p));
         let Some(repo) = here.as_deref().and_then(review_repo) else {
@@ -822,19 +822,57 @@ impl Server {
                         );
                         return;
                     };
-                    let command = worktree::tab_command(
-                        "claude \"$@\"",
-                        "claude",
-                        &[format!("/review-pr {number}")],
-                    );
-                    if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
-                        && let Some(t) = server.tabs.get_mut(&tab)
-                    {
-                        t.opts
-                            .insert("@tab_name".into(), format!("Review PR #{number}"));
-                        server.dirty_tab(tab);
-                    }
+                    server.review_tab(client, repo, number);
                 });
+            },
+        );
+    }
+
+    /// The review tab of PR `number`, once it is picked: the PR checked out
+    /// untrusted first, off the server's task, then a tab running Claude
+    /// with `/review-pr <number>` in the main clone `repo`, nothing of the
+    /// worktree's loaded, while the tab is about the worktree (`TAB_DIR`):
+    /// named, colored and given its PR from it, and M-v, M-m and M-d there
+    /// show the PR's.
+    fn review_tab(&mut self, client: ClientId, repo: PathBuf, number: u64) {
+        self.say(
+            Some(client),
+            &format!("Checking out PR #{number} to review…"),
+        );
+        let root = repo.clone();
+        self.off_task(
+            client,
+            move || {
+                let handle = tokio::runtime::Handle::current();
+                crate::cmd::worktree_from_pr::review_worktree(&handle, &root, number)
+            },
+            move |server, client, checked| {
+                let worktree = match checked {
+                    Ok(worktree) => worktree,
+                    Err(e) => {
+                        server.say(
+                            Some(client),
+                            &format!("Couldn't check out PR #{number}: {e}"),
+                        );
+                        return;
+                    }
+                };
+                let command = worktree::tab_command(
+                    "claude \"$@\"",
+                    "claude",
+                    &[format!("/review-pr {number}")],
+                );
+                if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
+                    && let Some(t) = server.tabs.get_mut(&tab)
+                {
+                    t.opts.insert("@tab_name".into(), "Review PR".to_string());
+                    t.opts.insert(
+                        crate::mux::server::TAB_DIR.into(),
+                        worktree.to_string_lossy().into_owned(),
+                    );
+                    server.dirty_tab(tab);
+                    server.name_tab(tab);
+                }
             },
         );
     }
@@ -1006,7 +1044,7 @@ impl Server {
     pub fn work_on_item(&mut self, client: ClientId, note: String, line: usize) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.pane_dir(p))
+            .and_then(|p| self.pane_own_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let file = worktree_from_note::notes_dir().join(&note);
@@ -1148,7 +1186,7 @@ impl Server {
     ) {
         let here = self
             .current_pane(client)
-            .and_then(|p| self.pane_dir(p))
+            .and_then(|p| self.pane_own_dir(p))
             .unwrap_or_else(paths::home);
         let panes = self.pane_dirs();
         let file = worktree_from_note::notes_dir().join(&note);

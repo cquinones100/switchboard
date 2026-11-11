@@ -630,6 +630,24 @@ fn untrusted(given: &Given, pr: &PrDetails, repo: &Repo, root: &Path) -> Result<
     Ok(ExitCode::SUCCESS)
 }
 
+/// M-p's "Review a contributor's PR": PR `number` of the repository whose
+/// main clone is `root` checked out untrusted, as `--untrusted` does,
+/// printing nothing, before its review tab opens. Gives the worktree. Runs
+/// off the server's task, inside the runtime (`handle`) the lookup awaits on.
+pub(crate) fn review_worktree(
+    handle: &tokio::runtime::Handle,
+    root: &Path,
+    number: u64,
+) -> Result<PathBuf, String> {
+    let repo = numbered_repo(root)?;
+    let pr = match handle.block_on(worktree::pr_details(&repo, number, "M-p review a PR")) {
+        Ok(Some(pr)) => pr,
+        Ok(None) => return Err(format!("{repo} has no pull request #{number}")),
+        Err(e) => return Err(format!("could not read pull request #{number}: {e}")),
+    };
+    untrusted_worktree(&pr, &repo, root).map(|(dir, _)| dir)
+}
+
 /// git's options that run nothing in the review worktree, for the commands
 /// before its own config says so: no hook, no file-system monitor, no
 /// submodule (which `submodule.recurse` in your config would fetch from the
@@ -711,17 +729,7 @@ fn untrusted_worktree(
     root: &Path,
 ) -> Result<(PathBuf, String), String> {
     // A folder per repository, since two repositories' PRs share numbers.
-    let mut slug = String::new();
-    for c in format!("{}-{}", repo.owner, repo.name).chars() {
-        let c = if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-            c
-        } else {
-            '-'
-        };
-        if !(c == '-' && slug.ends_with('-')) {
-            slug.push(c);
-        }
-    }
+    let slug = trust::review_folder(&repo.owner, &repo.name);
     let dir = trust::review_dir().join(&slug).join(pr.number.to_string());
     let branch = format!("pr-review/{}", pr.number);
     let Some(base) = remote_for(root, &repo.to_string()).or_else(|| worktree::default_remote(root))

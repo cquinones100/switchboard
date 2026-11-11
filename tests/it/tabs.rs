@@ -360,3 +360,83 @@ fn the_tabs_command_names_each_panes_claude_and_its_address() {
     assert_eq!(objects[0]["address"], format!("uds:{socket}"));
     assert_eq!(objects[1]["agent"], Value::Null);
 }
+
+/// A tab's `@tab_dir` (the review tab's PR worktree, src/cmd/work.rs) is the
+/// directory it is about while its pane works elsewhere: the tab is named
+/// from it and `list` gives it as the pane's, while a split still starts in
+/// the pane's own directory, and handing the pane over (`respawn`, as /wt
+/// does) forgets it.
+#[test]
+fn a_tab_with_a_tab_dir_is_named_from_it_and_forgets_it_when_handed_over() {
+    let server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let main = server.dir.path().join("app");
+    repo(&main, "main");
+    let worktree = main.join(".claude/worktrees/fix-login");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "fix-login",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let (main, worktree) = (
+        main.canonicalize().unwrap(),
+        worktree.canonicalize().unwrap(),
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", main.display()));
+    let tab = wait_tab(&server, "the main clone's name", |t| t["label"] == "app");
+    let id = tab["id"].as_str().unwrap().to_string();
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+
+    server.ok(&["set", "-t", &id, "@tab_dir", worktree.to_str().unwrap()]);
+    let named = wait_tab(&server, "the worktree's name", |t| {
+        t["label"].as_str().is_some_and(|l| l.contains("fix-login"))
+    });
+    assert_eq!(named["path"], worktree.to_string_lossy().as_ref());
+    assert_eq!(
+        named["panes"][0]["cwd"],
+        worktree.to_string_lossy().as_ref()
+    );
+
+    // A program started from the pane starts where the pane is.
+    let split = server.ok(&[
+        "split",
+        "-t",
+        &pane,
+        "-D",
+        "-d",
+        "--",
+        "sh",
+        "-c",
+        "pwd; sleep 30",
+    ]);
+    let split = split.trim().to_string();
+    let deadline = common::deadline(Duration::from_secs(15));
+    loop {
+        let screen = server.ok(&["capture-pane", "-t", &split]);
+        if screen.lines().any(|l| l.trim() == main.to_string_lossy()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the split's pwd: {screen}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // Handed over, the tab is about its pane's directory again.
+    server.ok(&["respawn", "-t", &pane, "-c", main.to_str().unwrap(), "sh"]);
+    wait_tab(&server, "the main clone's name again", |t| {
+        t["label"] == "app"
+    });
+    assert_eq!(
+        server.ok(&["show", "-t", &id, "@tab_dir"]).trim(),
+        "",
+        "forgotten"
+    );
+}

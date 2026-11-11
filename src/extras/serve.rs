@@ -246,9 +246,10 @@ impl Server {
         Some(self.session(session)?.current)
     }
 
-    /// A pane's directory, your home when it can't be read.
+    /// A pane's own directory (never its tab's `@tab_dir`, someone else's
+    /// PR, since a tab may start in it), your home when it can't be read.
     fn dir_or_home(&self, pane: Option<PaneId>) -> PathBuf {
-        pane.and_then(|p| self.pane_dir(p))
+        pane.and_then(|p| self.pane_own_dir(p))
             .unwrap_or_else(paths::home)
     }
 

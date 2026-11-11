@@ -18,7 +18,8 @@
 //! pictures it gave the terminal (src/mux/sixel), and the options that
 //! belong to the program rather than the pane
 //! (`PROGRAM_MARKS`), so a shell started where Notes ran isn't taken for
-//! Notes, nor allowed what Notes was.
+//! Notes, nor allowed what Notes was. The tab's `@tab_dir` goes too: the
+//! tab is handed to other work, which is about the directory it starts in.
 
 use std::path::PathBuf;
 
@@ -64,7 +65,7 @@ impl Server {
         }
         let tab = slot.tab;
         let (cols, rows) = slot.pane.size();
-        let cwd = cwd.or_else(|| self.pane_dir(pane));
+        let cwd = cwd.or_else(|| self.pane_own_dir(pane));
         let fresh = self.start_program(pane, cwd, command, cols, rows)?;
         let slot = self.panes.get_mut(&pane).expect("checked above");
         let mut old = std::mem::replace(&mut slot.pane, fresh);
@@ -74,6 +75,11 @@ impl Server {
         slot.opts
             .retain(|name, _| !PROGRAM_MARKS.contains(&name.as_str()));
         self.forget_images(pane);
+        // The tab is handed to other work (/wt, /wtn, queue-and-clean's
+        // resume): the directory it was about goes with what it was doing.
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.remove(super::server::TAB_DIR);
+        }
         self.agents.retain(|p| p != pane);
         self.sidebar.panes.remove(&pane);
         self.sidebar.stale = true;

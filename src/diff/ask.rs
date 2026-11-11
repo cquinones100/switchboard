@@ -231,10 +231,18 @@ impl Asking {
 pub const NOT_INSTALLED: &str =
     "Claude Code isn't installed: `claude` is neither on the PATH nor in ~/.local/bin.";
 
+/// What the answer says in a worktree of someone else's PR, alone.
+pub const UNTRUSTED: &str = "This is a worktree of someone else's PR, whose CLAUDE.md and settings are its author's, so Claude isn't asked here: ask from your main clone's session.";
+
 /// Asks Haiku `input` in the repository at `top`, saying what comes
 /// through `said` as it streams; blocks until it is answered, fails, or
 /// `asking` is stopped.
 pub fn run(top: &Path, input: String, asking: &Asking, said: &dyn Fn(Said)) {
+    // Claude started in a worktree of someone else's PR would load its
+    // author's CLAUDE.md and settings (src/trust.rs).
+    if crate::trust::is_untrusted(top) {
+        return said(Said::Done(Err(UNTRUSTED.into())));
+    }
     let Some(claude) = tell::claude_command() else {
         return said(Said::Done(Err(NOT_INSTALLED.into())));
     };

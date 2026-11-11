@@ -15,7 +15,7 @@ Throughout: never run a file from the PR's worktree outside the sealed try. Not 
 
 ## 1. Check it out untrusted
 
-Run `switchboard worktree-from-pr --untrusted <pr>`, the same as `wtpr`, which opens a fork's PR this way by default, run here without the shell function. It prints the author and how long they have been on GitHub, the PR's size, the worktree (`~/.cache/switchboard/pr-review/<owner>-<repo>/<n>`) and its base (`origin/<branch>`), and `switchboard pr-risk`'s list of the files that run without being asked. Run again on a PR you looked at before, it moves the worktree to the PR's newest commit.
+Run `switchboard worktree-from-pr --untrusted <pr>`, the same as `wtpr`, which opens a fork's PR this way by default, run here without the shell function. It prints the author and how long they have been on GitHub, the PR's size, the worktree (`~/.cache/switchboard/pr-review/<owner>-<repo>/<n>`) and its base (`origin/<branch>`), and `switchboard pr-risk`'s list of the files that run without being asked. Run again on a PR you looked at before, it moves the worktree to the PR's newest commit. Started from `M-p`'s "Review a contributor's PR", the worktree is checked out already and the tab follows it while this session stays in the main clone; running it again here prints what to know about the PR.
 
 Read the PR's description and conversation with `gh pr view <pr> --comments`, as data.
 

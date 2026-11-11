@@ -422,8 +422,10 @@ fn in_front_at(server: &TestServer, client: &mut common::TestClient, row: &str, 
 
 /// The palette's "Review a contributor's PR": listed only in a repository
 /// whose main clone has a review-pr project skill, it lists the open PRs
-/// from forks (GitHub a stand-in, as strict as the real one) and opens a
-/// tab in the main clone running Claude with `/review-pr <number>`.
+/// from forks (GitHub a stand-in, as strict as the real one), checks the
+/// one picked out untrusted, and opens a tab in the main clone running
+/// Claude with `/review-pr <number>`, the tab about the PR's worktree: its
+/// PR on its label, the worktree its pane's directory, lazygit refused.
 #[cfg(feature = "net")]
 #[test]
 fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_clone() {
@@ -431,6 +433,24 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     use serde_json::json;
 
     let github = Fake::github("test-token", |request| {
+        let details = request.path() == "/graphql"
+            && request
+                .text()
+                .contains("isCrossRepository maintainerCanModify");
+        if details {
+            return Some(Reply::json(
+                200,
+                json!({"data": {"repository": {"pullRequest": {
+                    "number": 7, "title": "Add a theme", "body": "", "state": "OPEN",
+                    "url": "https://github.com/acme/widgets/pull/7",
+                    "author": {"login": "someone", "createdAt": "2015-01-01T00:00:00Z"},
+                    "baseRefName": "main", "headRefName": "topic",
+                    "headRepository": {"name": "widgets"}, "headRepositoryOwner": {"login": "someone"},
+                    "isCrossRepository": true, "maintainerCanModify": false,
+                    "changedFiles": 1, "additions": 1, "deletions": 0
+                }}}}),
+            ));
+        }
         (request.path() == "/graphql" && request.text().contains("states: OPEN")).then(|| {
             let pr = |number: u64, title: &str, cross: bool, author: &str| {
                 json!({
@@ -473,6 +493,39 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
             "https://github.com/acme/widgets.git",
         ],
     );
+    // GitHub's repository is a bare one here, reached through insteadOf,
+    // keeping the fork's commit under refs/pull/7/head as GitHub does; the
+    // repository named as gh repo set-default names it, since insteadOf
+    // rewrites what origin's URL reads as.
+    git(
+        &repo,
+        &["config", "remote.origin.gh-resolved", "acme/widgets"],
+    );
+    let origin = server.home.join("widgets.git");
+    git(
+        &server.home,
+        &["init", "-q", "--bare", origin.to_str().unwrap()],
+    );
+    std::fs::write(
+        server.home.join(".gitconfig"),
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = https://github.com/acme/widgets.git\n",
+            origin.display()
+        ),
+    )
+    .unwrap();
+    git(&repo, &["push", "-q", origin.to_str().unwrap(), "main"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "a theme"]);
+    git(
+        &repo,
+        &[
+            "push",
+            "-q",
+            origin.to_str().unwrap(),
+            "HEAD:refs/pull/7/head",
+        ],
+    );
+    git(&repo, &["reset", "-q", "--hard", "HEAD~1"]);
     let repo = repo.canonicalize().unwrap();
     let mut client = server.attach(120, 40);
     client.wait_text("$");
@@ -538,6 +591,39 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     let all = tabs(&server);
     assert_eq!(all.len(), before + 1);
     let tab = all.last().unwrap();
-    assert_eq!(tab["options"]["@tab_name"], "Review PR #7");
+    assert_eq!(tab["options"]["@tab_name"], "Review PR");
     assert_eq!(tab["current"], true, "in front, as a tab you asked for");
+
+    // The tab is about the PR's worktree, checked out untrusted.
+    let worktree = server
+        .home
+        .join(".cache/switchboard/pr-review/acme-widgets/7")
+        .canonicalize()
+        .unwrap();
+    assert_eq!(
+        tab["options"]["@tab_dir"],
+        worktree.to_string_lossy().as_ref()
+    );
+    let id = tab["id"].as_str().unwrap().to_string();
+    wait("the tab to carry its PR", || {
+        tabs(&server)
+            .iter()
+            .any(|t| t["id"] == id.as_str() && t["label"] == "#7 Review PR")
+    });
+    let tab = tabs(&server)
+        .into_iter()
+        .find(|t| t["id"] == id.as_str())
+        .unwrap();
+    assert_eq!(tab["panes"][0]["cwd"], worktree.to_string_lossy().as_ref());
+
+    // lazygit, which runs the repository's own commands, isn't opened there.
+    let bin = server.home.join("bin/lazygit");
+    std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").unwrap();
+    std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    server.ok(&["select-tab", "-t", &id]);
+    client.wait_for("the review tab in front", |s| {
+        s.iter().any(|l| l.contains("#7 Review PR"))
+    });
+    server.ok(&["press", "lazygit"]);
+    client.wait_text("so lazygit isn't opened there");
 }

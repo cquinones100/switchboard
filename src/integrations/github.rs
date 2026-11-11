@@ -772,11 +772,47 @@ const FIELDS: &str = "number url title state isDraft baseRefName headRefName";
 
 /// The PR number a `wtpr` worktree's directory carries (`pr-123`, or
 /// `pr-123-...`), which needs no lookup to know. `pr-12abc` is no number.
+/// A `wtpr --untrusted` worktree, `<owner>-<repo>/123` in the review
+/// folder (src/trust.rs), on a branch that names no PR on GitHub, carries
+/// it too.
 pub fn pr_number_from_dir(dir: &Path) -> Option<u64> {
+    pr_number_from_dir_of(&crate::paths::home(), dir)
+}
+
+/// The repository a `wtpr --untrusted` worktree's PR is in, which its
+/// folder names (`<owner>-<name>/<n>`, src/trust.rs's `review_folder`) and
+/// its `pr-review/<n>` branch can't: origin's or upstream's, whichever it
+/// is, read from git's files alone. `None` for any other directory.
+pub fn reviewed_repo(dir: &Path) -> Option<Repo> {
+    if !crate::trust::in_review_dir(dir) {
+        return None;
+    }
+    let folder = dir.parent()?.file_name()?.to_str()?;
+    let remotes = crate::sources::repo::remotes_of(dir);
+    [remotes.upstream, remotes.origin]
+        .into_iter()
+        .flatten()
+        .find(|r| crate::trust::review_folder(&r.owner, &r.name) == folder)
+}
+
+/// `pr_number_from_dir` under another home.
+pub fn pr_number_from_dir_of(home: &Path, dir: &Path) -> Option<u64> {
     let name = dir.file_name()?.to_str()?;
-    let rest = name.strip_prefix("pr-")?;
-    let number = rest.split('-').next()?;
-    if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+    let digits = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    let number = match name.strip_prefix("pr-") {
+        Some(rest) => rest.split('-').next()?,
+        None => {
+            let folder = dir.parent()?.parent()?;
+            let review = crate::trust::review_dir_in(home);
+            let in_review = digits(name)
+                && (folder == review || review.canonicalize().is_ok_and(|r| folder == r));
+            if !in_review {
+                return None;
+            }
+            name
+        }
+    };
+    if !digits(number) {
         return None;
     }
     number.parse().ok()
@@ -810,7 +846,10 @@ pub async fn pr_for_branch(dir: &Path, source: &str) -> Result<Option<PullReques
 /// lookup when origin has no PR, so a PR already known isn't taken as gone.
 pub async fn branch_pr(dir: &Path, source: &str) -> Result<Option<(Repo, PullRequest)>> {
     if let Some(number) = pr_number_from_dir(dir) {
-        let repo = repo_of(dir).await?;
+        let repo = match reviewed_repo(dir) {
+            Some(repo) => repo,
+            None => repo_of(dir).await?,
+        };
         let pr = pr_by_number(&repo, number, source).await?;
         return Ok(pr.map(|pr| (repo, pr)));
     }
@@ -1151,6 +1190,21 @@ mod tests {
         assert_eq!(pr_number_from_dir(Path::new("/w/pr-12abc")), None);
         assert_eq!(pr_number_from_dir(Path::new("/w/pr-")), None);
         assert_eq!(pr_number_from_dir(Path::new("/w/eng-12")), None);
+        let home = Path::new("/h");
+        let review = crate::trust::review_dir_in(home);
+        assert_eq!(
+            pr_number_from_dir_of(home, &review.join("acme-widgets/7")),
+            Some(7),
+            "wtpr --untrusted's worktree"
+        );
+        assert_eq!(
+            pr_number_from_dir_of(home, Path::new("/w/acme-widgets/7")),
+            None
+        );
+        assert_eq!(
+            pr_number_from_dir_of(home, &review.join("acme-widgets/7/src")),
+            None
+        );
     }
 
     fn node(number: u64, state: &str, owner: &str) -> Node {
