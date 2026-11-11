@@ -24,6 +24,7 @@
 //! connector, as Google's own buttons answer it, with the calendar_rsvp
 //! setting on; only an event from the feed, which has its Google ID.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -94,14 +95,24 @@ pub struct CalEvent {
     /// Its description as text, without the call details Google adds.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Who organized it, by name, unless it is you; the feed's alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organizer: Option<String>,
+    /// Where it started when first seen today, when it has moved since
+    /// (`changes::moves`); set as the view is made, never kept in a day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_from: Option<String>,
 }
 
-/// One person invited to an event: their name (else their address) and
-/// their answer, "going", "maybe", "not going" or "not answered".
+/// One person invited to an event: their name (else their address),
+/// their answer, "going", "maybe", "not going" or "not answered", and
+/// their address, which their photo is looked up by.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Attendee {
     pub name: String,
     pub reply: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub address: String,
 }
 
 fn not_answered() -> String {
@@ -215,6 +226,9 @@ impl Saved {
 #[derive(Clone, Debug, Default)]
 pub struct Feed {
     pub day: Option<SavedDay>,
+    /// Every day the feed was read for (`ical::DAYS_BEFORE` to
+    /// `DAYS_AFTER` around today), by date, today's among them.
+    pub days: BTreeMap<String, SavedDay>,
     pub error: Option<String>,
     /// Whether there is an address; `None` before the first look.
     pub configured: Option<bool>,
@@ -230,7 +244,8 @@ pub struct Feed {
 pub enum Fetched {
     /// No address stored.
     NoAddress,
-    Day(SavedDay),
+    /// Today's day, and every day read around it.
+    Day(SavedDay, BTreeMap<String, SavedDay>),
     Failed(String),
 }
 
@@ -262,14 +277,19 @@ impl Feed {
     /// Takes a look's answer.
     pub fn take(&mut self, fetched: Fetched, now: i64) {
         match fetched {
-            Fetched::NoAddress => self.configured = Some(false),
+            Fetched::NoAddress => {
+                self.configured = Some(false);
+                // With no address, the other days it read are no longer kept.
+                self.days.clear();
+            }
             Fetched::Failed(why) => {
                 self.configured = Some(true);
                 self.failed(why, now);
             }
-            Fetched::Day(day) => {
+            Fetched::Day(day, days) => {
                 self.configured = Some(true);
                 self.day = Some(day);
+                self.days = days;
                 self.error = None;
                 self.failing_since = None;
                 self.failures = 0;
@@ -306,11 +326,32 @@ pub async fn fetch_feed() -> Fetched {
         Ok(r) if r.ok() => match r.body {
             Value::String(text) => {
                 let now = util::local_now();
-                Fetched::Day(
-                    tokio::task::spawn_blocking(move || super::ical::day_from(&text, &now))
-                        .await
-                        .unwrap_or_default(),
-                )
+                tokio::task::spawn_blocking(move || {
+                    let today = now.date();
+                    let span = |n: i64| {
+                        today
+                            .checked_add(jiff::Span::new().days(n))
+                            .unwrap_or(today)
+                    };
+                    let days = super::ical::days_from(
+                        &text,
+                        &now,
+                        span(-super::ical::DAYS_BEFORE),
+                        span(super::ical::DAYS_AFTER),
+                    );
+                    let day = days
+                        .get(&util::ymd(&now))
+                        .cloned()
+                        .unwrap_or_else(|| SavedDay {
+                            date: util::ymd(&now),
+                            updated: util::now_ms(),
+                            source: Some("ical".into()),
+                            events: Vec::new(),
+                        });
+                    Fetched::Day(day, days)
+                })
+                .await
+                .unwrap_or_else(|_| Fetched::Failed("Couldn't read the calendar feed".into()))
             }
             _ => Fetched::Failed("Couldn't read the calendar feed: it isn't iCal".into()),
         },
@@ -401,6 +442,9 @@ pub struct Look<'a> {
     /// Claude, or one looping /today).
     pub looping: bool,
     pub now: &'a Zoned,
+    /// Where each of today's events that has moved started when first
+    /// seen, by its key (`changes::moves`).
+    pub moves: &'a HashMap<String, String>,
 }
 
 /// The Calendar view: its events in the order the cursor walks them,
@@ -412,7 +456,6 @@ pub struct Look<'a> {
 pub fn calendar_view(look: &Look) -> ViewData {
     let today = util::ymd(look.now);
     let now_ms = look.now.timestamp().as_millisecond();
-    let tz = look.now.time_zone();
     let feed = look.feed;
     let Some(day) = read_day(feed, look.saved, &today) else {
         let mut view = ViewData::default();
@@ -458,19 +501,102 @@ pub fn calendar_view(look: &Look) -> ViewData {
     } else if feed.configured() && !feed.down() {
         view.error = feed.error.clone();
     }
+    view.items = day_items(&day, look.now, look.moves);
+    view
+}
+
+/// Another day than today in the Calendar view (`date`, YYYY-MM-DD), from
+/// the days the feed was read for; `Err` says why there is none: only
+/// today is saved without the feed, and it is read only so far around today.
+pub fn other_day_view(feed: &Feed, date: &str, now: &Zoned) -> Result<ViewData, String> {
+    let Some(day) = feed.days.get(date) else {
+        return Err(if feed.days.is_empty() {
+            format!(
+                "Only today is saved: the calendar feed reads the other days (switchboard platform secret-set {SECRET})."
+            )
+        } else {
+            "The calendar is read two weeks ahead and one back.".into()
+        });
+    };
+    // A feed failing since it read these days says so, as today's does.
+    let error = feed.error.as_ref().map(|e| {
+        if feed.down() {
+            format!("Out of date: {e}")
+        } else {
+            e.clone()
+        }
+    });
+    Ok(ViewData {
+        at: (feed.fetched_at > 0).then_some(feed.fetched_at),
+        items: day_items(day, now, &HashMap::new()),
+        error,
+        ..ViewData::default()
+    })
+}
+
+/// The next working day after a day the Calendar view shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NextDay {
+    /// YYYY-MM-DD.
+    pub date: String,
+    /// Its timed events, by start.
+    pub events: Vec<CalEvent>,
+    /// Whether a weekend with nothing on it was passed over to reach it.
+    pub skipped: bool,
+}
+
+/// The next working day after `date` the feed was read for: the next day,
+/// past a weekend day with nothing timed on it. `None` past the days read.
+pub fn next_day(feed: &Feed, date: &str, tz: &TimeZone) -> Option<NextDay> {
+    let mut at = date.parse::<jiff::civil::Date>().ok()?;
+    let mut skipped = false;
+    loop {
+        at = at.tomorrow().ok()?;
+        let day = feed.days.get(&at.to_string())?;
+        let mut timed: Vec<CalEvent> = day.events.iter().filter(|e| !e.all_day).cloned().collect();
+        let weekend = matches!(
+            at.weekday(),
+            jiff::civil::Weekday::Saturday | jiff::civil::Weekday::Sunday
+        );
+        if weekend && timed.is_empty() {
+            skipped = true;
+            continue;
+        }
+        timed.sort_by_key(|e| e.starts(tz).map(|t| t.as_millisecond()).unwrap_or(i64::MAX));
+        return Some(NextDay {
+            date: at.to_string(),
+            events: timed,
+            skipped,
+        });
+    }
+}
+
+/// A day's events as the view's items: all day first, then by start, each
+/// one moved since it was first seen marked with where it was.
+fn day_items(day: &SavedDay, now: &Zoned, moves: &HashMap<String, String>) -> Vec<Item> {
+    let now_ms = now.timestamp().as_millisecond();
+    let tz = now.time_zone();
     let mut timed: Vec<&CalEvent> = day.events.iter().filter(|e| !e.all_day).collect();
     timed.sort_by_key(|e| e.starts(tz).map(|t| t.as_millisecond()).unwrap_or(i64::MAX));
-    let midnight = tz
-        .to_ambiguous_timestamp(look.now.date().to_datetime(jiff::civil::Time::midnight()))
-        .compatible()
+    let midnight = day
+        .date
+        .parse::<jiff::civil::Date>()
+        .ok()
+        .and_then(|d| {
+            tz.to_ambiguous_timestamp(d.to_datetime(jiff::civil::Time::midnight()))
+                .compatible()
+                .ok()
+        })
         .map(|t| t.as_millisecond())
         .unwrap_or(now_ms);
-    view.items = day
-        .events
+    day.events
         .iter()
         .filter(|e| e.all_day)
         .chain(timed)
         .map(|e| {
+            let mut e = e.clone();
+            e.moved_from = super::changes::moved_from(&e, moves, tz);
+            let e = &e;
             let (start, end) = (e.starts(tz), e.ends(tz));
             let over = end.is_some_and(|t| t.as_millisecond() <= now_ms);
             let mut item = Item::new(event_id(e), &e.title)
@@ -496,8 +622,7 @@ pub fn calendar_view(look: &Look) -> ViewData {
             }
             item
         })
-        .collect();
-    view
+        .collect()
 }
 
 /// Whether a tab named `name` keeps the calendar: the Calendar tab with

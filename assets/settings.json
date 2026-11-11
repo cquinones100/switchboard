@@ -575,6 +575,13 @@
     "default": true
   },
   {
+    "key": "calendar_photos",
+    "category": "Mission control",
+    "label": "Attendees' photos in the Calendar",
+    "description": "Show the photos of who is going to the Calendar view's chosen event, looked up by each attendee's email address in Linear and the Slack relay's app (users:read.email), which sends those addresses to them. Off, as it is by default, no address is sent and each attendee is their initial",
+    "default": false
+  },
+  {
     "key": "slack_background",
     "category": "Mission control",
     "label": "Slack without a tab",
@@ -693,7 +700,7 @@
     "key": "photos",
     "category": "Appearance",
     "label": "People's photos",
-    "description": "Avatars show people's photos from Slack (through the Slack relay's app, with the users:read scope), Linear and GitHub, each fetched once and kept in ~/.cache/switchboard/photos for 30 days. Off, nothing is fetched and an avatar is the person's initial",
+    "description": "Avatars show people's photos from Slack (through the Slack relay's app, with the users:read scope), Linear and GitHub, and, with calendar_photos on, calendar attendees' by their address, each fetched once and kept in ~/.cache/switchboard/photos for 30 days. Off, nothing is fetched and an avatar is the person's initial",
     "default": true
   },
   {

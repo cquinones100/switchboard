@@ -884,3 +884,37 @@ fn a_linear_ticket() {
     assert!(err.to_string().contains("LINEAR_API_KEY"), "{err}");
     assert_eq!(counted("Linear", "GraphQL"), 3);
 }
+
+#[test]
+fn an_attendee_s_photo_is_asked_of_linear_by_their_address() {
+    let env = Env::new("photo-address");
+    env.settings(json!({ "linear": true }));
+    set("LINEAR_API_KEY", "lin_api_x");
+    let fake = Fake::linear(
+        "lin_api_x",
+        vec![
+            answer(
+                200,
+                json!({ "data": { "users": { "nodes": [
+                { "avatarUrl": "https://public.linear.app/ana.png" } ] } } }),
+            ),
+            answer(200, json!({ "data": { "users": { "nodes": [] } } })),
+        ],
+    );
+    set("SWITCHBOARD_LINEAR_API", fake.http.graphql_url());
+    let url = util::block_on(switchboard::photos::linear_photo_url("ana@example.com")).unwrap();
+    assert_eq!(url.as_deref(), Some("https://public.linear.app/ana.png"));
+    let seen = fake.seen();
+    assert_eq!(seen[0].body["variables"], json!({ "a": "ana@example.com" }));
+    assert!(
+        seen[0].body["query"]
+            .as_str()
+            .unwrap()
+            .contains("users(filter: { email: { eq: $a } })")
+    );
+    assert_eq!(
+        util::block_on(switchboard::photos::linear_photo_url("nobody@example.com")).unwrap(),
+        None,
+        "no one by that address"
+    );
+}

@@ -75,12 +75,20 @@ const REANSWER_AFTER: Duration = Duration::from_millis(400);
 /// keeps its rate.
 const BOXED_SPIN_MS: i64 = 500;
 
+/// How long the note items found for a Calendar event stand before
+/// they are read again.
+const CALENDAR_NOTES_EVERY: Duration = Duration::from_secs(5 * 60);
+
 /// Mission control's keys, for `?` (render.js's `HELP.mission`), and its
 /// Keys view.
 pub(super) const KEYS: &[(&str, &str)] = &[
     (
         "h j k l",
-        "choose a card or row; in the Calendar, h l move between events side by side",
+        "choose a card or row; in the Calendar, j k walk the events and h l move a day",
+    ),
+    (
+        "o y n m",
+        "Calendar: join the chosen event's call; answer it going, not going, maybe",
     ),
     ("g G", "first, last"),
     (
@@ -491,6 +499,77 @@ impl Server {
         out
     }
 
+    /// What the Calendar view in front draws beyond its items: the next
+    /// working day after the day shown, the note items that name the chosen
+    /// event or what it names (read off the task, kept a few minutes per
+    /// event), and the photos of who is going to it, those loaded.
+    fn calendar_extras(&mut self, m: &mut Mission) {
+        let Some(view) = m.current().filter(|v| v.id == ViewId::Calendar) else {
+            return;
+        };
+        let _ = view;
+        let today = util::ymd(&util::local_now());
+        let date = m.calendar_day.clone().unwrap_or(today);
+        m.snap.calendar_next = crate::day::calendar::next_day(&self.day.feed, &date, &m.snap.tz);
+        let Some(item) = m.chosen_item().cloned() else {
+            return;
+        };
+        let Ok(event) = serde_json::from_value::<crate::day::calendar::CalEvent>(item.data.clone())
+        else {
+            return;
+        };
+        // An attendee's photo sends their address to Linear or Slack, so
+        // only with its own setting on.
+        if settings::is_on("calendar_photos") {
+            for who in super::calendar::people(&event) {
+                if let Some(photo) = self.photo(&who) {
+                    m.snap.photos.insert(who, photo);
+                }
+            }
+        }
+        // The note items show in the pane UX 2.0 draws beside the day.
+        if !m.snap.rules.ux2 {
+            return;
+        }
+        let fresh = self
+            .mission
+            .calendar_notes
+            .get(&item.id)
+            .filter(|(at, _)| at.elapsed() < CALENDAR_NOTES_EVERY);
+        match fresh {
+            Some((_, lines)) => m.snap.calendar_notes = lines.clone(),
+            None => {
+                if let Some((_, lines)) = self.mission.calendar_notes.get(&item.id) {
+                    m.snap.calendar_notes = lines.clone();
+                }
+                self.read_calendar_notes(item.id.clone(), &event);
+            }
+        }
+    }
+
+    /// Reads, off the task, the note items that name an event or what it
+    /// names, one read at a time; local alone, never sent.
+    fn read_calendar_notes(&mut self, id: String, event: &crate::day::calendar::CalEvent) {
+        if self.mission.calendar_notes_busy || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.mission.calendar_notes_busy = true;
+        let title = event.title.clone();
+        // Each ticket or PR by its id and by its link, which a note may
+        // name it by instead.
+        let refs: Vec<String> = event
+            .refs
+            .iter()
+            .flat_map(|r| std::iter::once(r.id.clone()).chain(r.url.clone()))
+            .collect();
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let dir = crate::notes::store::notes_dir();
+            let lines = super::calendar::notes_naming(&dir, &title, &refs);
+            let _ = tx.send(Event::Mission(MissionEvent::CalendarNotes(id, lines)));
+        });
+    }
+
     /// Puts together what a client's mission control shows, and does what
     /// bringing a view to the front does.
     fn mission_prepare(&mut self, client: ClientId) {
@@ -556,7 +635,20 @@ impl Server {
                 usize::MAX
             },
         };
-        let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
+        let mut all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
+        // The Calendar on another day than today, from the feed's days.
+        if let Some(date) = m.calendar_day.clone() {
+            let now_z = util::local_now();
+            match crate::day::calendar::other_day_view(&self.day.feed, &date, &now_z) {
+                Ok(data) if date != util::ymd(&now_z) => {
+                    if let Some(v) = all.iter_mut().find(|v| v.id == ViewId::Calendar) {
+                        v.loaded = true;
+                        v.data = data;
+                    }
+                }
+                _ => m.calendar_day = None,
+            }
+        }
         // A picker lists every repository's rows, whatever the map folds.
         let folds = if m.picker {
             views::Folds {
@@ -660,6 +752,9 @@ impl Server {
                     &jiff::tz::TimeZone::system(),
                 )
             }),
+            photos: Default::default(),
+            calendar_next: None,
+            calendar_notes: Vec::new(),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -677,6 +772,14 @@ impl Server {
             m.cursor = at as isize;
         }
         fit_cursor(&mut m);
+        // A Calendar keycap's focus goes with the event it was given on.
+        let keycap_kept = on_calendar(&m)
+            && m.keycap_for.is_some()
+            && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref();
+        if matches!(m.focus, Some(Focus::Key(_))) && !keycap_kept {
+            m.focus = on_calendar(&m).then_some(Focus::Item);
+        }
+        self.calendar_extras(&mut m);
         m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
@@ -1151,6 +1254,21 @@ impl Server {
                     self.mission_redraw();
                 }
             }
+            MissionEvent::CalendarNotes(id, lines) => {
+                self.mission.calendar_notes_busy = false;
+                let changed = self
+                    .mission
+                    .calendar_notes
+                    .get(&id)
+                    .is_none_or(|(_, had)| *had != lines);
+                self.mission
+                    .calendar_notes
+                    .insert(id, (Instant::now(), lines));
+                if changed {
+                    self.mission_changed();
+                    self.mission_redraw();
+                }
+            }
             MissionEvent::Counted(tree, counts) => {
                 self.mission.counting = None;
                 self.mission.counts.insert(tree, counts);
@@ -1313,9 +1431,10 @@ impl Server {
         };
         // Any key puts out what the mouse lit.
         m.hover = None;
-        // A key pressed with the Calendar view in front, whole, is the
-        // calendar looked at: what it shows is seen.
+        // A key pressed with the Calendar view in front, whole and on
+        // today, is the calendar looked at: what it shows is seen.
         let looked = m.current().is_some_and(|v| v.id == ViewId::Calendar)
+            && m.calendar_day.is_none()
             && m.filter.as_ref().is_none_or(|f| f.text.is_empty())
             && settings::is_on("calendar_changes")
             && self.notices.contains_key("calendar");
@@ -1389,6 +1508,13 @@ impl Server {
                 return;
             }
             Some(Focus::Filter) if press => k = Key::new(KeyCode::Char('/'), Mods::NONE),
+            Some(Focus::Key(key))
+                if press
+                    && on_calendar(m)
+                    && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref() =>
+            {
+                k = key
+            }
             Some(Focus::Close) if press => {
                 self.mission_close_from(client, m);
                 return;
@@ -1423,6 +1549,21 @@ impl Server {
         }
         if keys_board_key(m, k) {
             return;
+        }
+        match calendar_key(m, k) {
+            Some(CalendarKey::Day(by)) => {
+                self.calendar_day_step(client, m, by);
+                return;
+            }
+            Some(CalendarKey::Do(act, label)) => {
+                self.mission_do(client, act, &label);
+                return;
+            }
+            Some(CalendarKey::Say(text)) => {
+                self.say(Some(client), &text);
+                return;
+            }
+            None => {}
         }
         if k.code == KeyCode::Char('s')
             && plain(&k)
@@ -1562,6 +1703,25 @@ impl Server {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `h` and `l` in the Calendar: the day before or after the one shown,
+    /// from the feed's days; past them, or with /today's day alone, says
+    /// why not.
+    fn calendar_day_step(&mut self, client: ClientId, m: &mut Mission, by: i64) {
+        let now = util::local_now();
+        match calendar_step(&self.day.feed, m.calendar_day.as_deref(), by, &now) {
+            Ok(day) => {
+                m.calendar_day = day;
+                m.cursor = 0;
+                m.side = None;
+                // A keycap's focus was for the event left behind.
+                if matches!(m.focus, Some(Focus::Key(_))) {
+                    m.focus = Some(Focus::Item);
+                }
+            }
+            Err(why) => self.say(Some(client), &why),
         }
     }
 
@@ -3675,7 +3835,16 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 return Then::Nothing;
             }
             let up = mouse.button == MouseButton::WheelUp;
-            if let Some(Spot::Side(last)) = hit {
+            // The pane beside scrolls under the wheel, a keycap on it too.
+            let side = m
+                .hits
+                .iter()
+                .filter(|h| h.y == mouse.row && mouse.col >= h.x0 && mouse.col <= h.x1)
+                .find_map(|h| match h.spot {
+                    Spot::Side(last) => Some(last),
+                    _ => None,
+                });
+            if let Some(last) = side {
                 let lines = if up { -SIDE_WHEEL } else { SIDE_WHEEL };
                 return if m.scroll_side(lines, last) {
                     Then::Redraw
@@ -3698,6 +3867,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A key on the footer is pressed as typed, the focus kept for it.
             if let Spot::Key(key) = spot {
                 m.hover = None;
+                // A Calendar keycap acts on its event: a filter being typed
+                // is kept, done typing, rather than given the key.
+                if on_calendar(m)
+                    && let Some(f) = m.filter.as_mut()
+                {
+                    f.typing = false;
+                }
                 return Then::Press(key);
             }
             // A click puts away the focus ring Tab draws, and the light.
@@ -3827,6 +4003,95 @@ enum CiKey {
     Moved,
     Do(Do),
     Say(String),
+}
+
+/// The day `by` days from the one the Calendar shows (`None` is today):
+/// `None` for today, else its date while the feed was read for it; `Err`
+/// says why it can't be shown.
+fn calendar_step(
+    feed: &crate::day::calendar::Feed,
+    shown: Option<&str>,
+    by: i64,
+    now: &jiff::Zoned,
+) -> Result<Option<String>, String> {
+    let today = now.date();
+    let from = shown
+        .and_then(|d| d.parse::<jiff::civil::Date>().ok())
+        .unwrap_or(today);
+    let to = from
+        .checked_add(jiff::Span::new().days(by))
+        .map_err(|e| e.to_string())?;
+    if to == today {
+        return Ok(None);
+    }
+    let date = to.to_string();
+    crate::day::calendar::other_day_view(feed, &date, now)?;
+    Ok(Some(date))
+}
+
+/// Whether the Calendar view is in front.
+fn on_calendar(m: &Mission) -> bool {
+    m.current().is_some_and(|v| v.id == ViewId::Calendar)
+}
+
+/// What a key in the Calendar view does, when it is one of its own.
+enum CalendarKey {
+    /// `h` or `l`: a day back or forward.
+    Day(i64),
+    /// `o` joins the chosen event's call; `y`, `n`, `m` answer it.
+    Do(Do, String),
+    /// Why the key can't do it.
+    Say(String),
+}
+
+/// The Calendar's own keys, with its day drawn: `h` and `l` move a day
+/// (`j` and `k` still walk every event); `o` joins the chosen event's
+/// call; `y`, `n`, `m` answer it going, not going or maybe when its menu
+/// offers that answer, else say why not. `None` leaves the key to the
+/// rest.
+fn calendar_key(m: &Mission, k: Key) -> Option<CalendarKey> {
+    // A day shown as a list (an empty one the feed failed since, today or
+    // another) still moves a day, or there would be no way past it.
+    let view = m
+        .current()
+        .filter(|v| v.id == ViewId::Calendar && v.data.setup.is_none())?;
+    if !plain(&k) {
+        return None;
+    }
+    match k.code {
+        KeyCode::Char('h') | KeyCode::Left => return Some(CalendarKey::Day(-1)),
+        KeyCode::Char('l') | KeyCode::Right => return Some(CalendarKey::Day(1)),
+        KeyCode::Char('o' | 'y' | 'n' | 'm') if super::calendar::is_day(view) => {}
+        _ => return None,
+    }
+    let event: crate::day::calendar::CalEvent =
+        serde_json::from_value(m.chosen_item()?.data.clone()).ok()?;
+    use crate::day::calendar::Rsvp;
+    let answer = match k.code {
+        KeyCode::Char('o') => {
+            return Some(match event.join {
+                Some(join) => CalendarKey::Do(Do::Open(join), "Join its call".into()),
+                None => CalendarKey::Say("It has no call to join.".into()),
+            });
+        }
+        KeyCode::Char('y') => Rsvp::Yes,
+        KeyCode::Char('n') => Rsvp::No,
+        _ => Rsvp::Maybe,
+    };
+    if crate::day::calendar::rsvp_choices(&event).contains(&answer) {
+        let label = answer.choice().1.to_string();
+        return Some(CalendarKey::Do(Do::Rsvp(Box::new(event), answer), label));
+    }
+    let why = if !settings::is_on("calendar_rsvp") {
+        "Answering invitations is off in Settings (calendar_rsvp).".to_string()
+    } else if event.id.is_none() {
+        "Not from the calendar feed, so it can't be answered here.".to_string()
+    } else if event.you == "yours" {
+        "It's yours.".to_string()
+    } else {
+        format!("You already said {}.", answer.words())
+    };
+    Some(CalendarKey::Say(why))
 }
 
 /// What a key does in the CI view with UX 2.0, before mission control's
@@ -3968,6 +4233,11 @@ fn only_moves(m: &Mission, key: Key) -> bool {
     if m.filter.as_ref().is_some_and(|f| f.typing) || m.jump.is_some() {
         return false;
     }
+    // The Calendar's chosen event brings its photos and notes, and h and
+    // l move a day, so it takes its snapshot again.
+    if m.current().is_some_and(|v| v.id == ViewId::Calendar) {
+        return false;
+    }
     let none = plain(&k);
     let ctrl = k.mods == Mods::CTRL;
     match k.code {
@@ -4073,16 +4343,11 @@ fn row_step(m: &Mission, by: isize) -> isize {
 }
 
 /// h and l: in the tabs the card before or after; on a board the next
-/// column with items in it, at the same row as far as it reaches; in the
-/// Calendar the event beside the chosen one.
+/// column with items in it, at the same row as far as it reaches.
 fn side_step(m: &Mission, by: isize) -> isize {
     let Some(view) = m.current() else {
         return m.cursor + by;
     };
-    if view.id == ViewId::Calendar {
-        let at = m.cursor.max(0) as usize;
-        return super::calendar::beside(&view.data.items, at, by, &m.snap.tz) as isize;
-    }
     if view.id == ViewId::Settings && super::render::settings_board_shown(m) {
         return super::settings_board::side_step(&view.data.items, m.cursor, by);
     }
@@ -4260,6 +4525,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         Kind(usize),
         Filter,
         Item(isize),
+        Key(Key),
         Close,
     }
     let board = m.current().and_then(View::columns).is_some();
@@ -4299,6 +4565,32 @@ fn move_focus(m: &mut Mission, by: isize) {
             .filter(|i| !heading(*i))
             .map(Stop::Item),
     );
+    // The Calendar's keycaps beside the chosen event, after it.
+    let keycaps: Vec<Key> = m
+        .hits
+        .iter()
+        .filter_map(|h| match h.spot {
+            Spot::Key(k) if m.current().is_some_and(|v| v.id == ViewId::Calendar) => Some(k),
+            _ => None,
+        })
+        .filter(|k| {
+            !matches!(k.code, KeyCode::Char('h' | 'j' | 'k' | 'l')) && k.code != KeyCode::Enter
+        })
+        .collect();
+    if let Some(at) = stops.iter().position(|s| *s == Stop::Item(m.cursor)) {
+        let mut seen = Vec::new();
+        for (n, k) in keycaps
+            .into_iter()
+            .filter(|k| {
+                let new = !seen.contains(k);
+                seen.push(*k);
+                new
+            })
+            .enumerate()
+        {
+            stops.insert(at + 1 + n, Stop::Key(k));
+        }
+    }
     if m.snap.close {
         stops.push(Stop::Close);
     }
@@ -4310,6 +4602,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
         Some(Focus::Item) => stops.iter().position(|s| *s == Stop::Item(m.cursor)),
         Some(Focus::Close) => stops.iter().position(|s| *s == Stop::Close),
+        Some(Focus::Key(k)) => stops.iter().position(|s| *s == Stop::Key(k)),
     };
     let n = stops.len() as isize;
     let to = match at {
@@ -4327,6 +4620,10 @@ fn move_focus(m: &mut Mission, by: isize) {
             m.cursor = i;
         }
         Stop::Close => m.focus = Some(Focus::Close),
+        Stop::Key(k) => {
+            m.focus = Some(Focus::Key(k));
+            m.keycap_for = m.chosen_item().map(|i| i.id.clone());
+        }
     }
 }
 
@@ -4401,6 +4698,140 @@ mod tests {
     use crate::mux::TabId;
     use crate::sidebar::model::TabModel;
     use crate::sidebar::model::tests::rules;
+
+    fn calendar_mission() -> Mission {
+        let event = |id: &str, title: &str, h: i64, extra: serde_json::Value| {
+            let mut data = serde_json::json!({
+                "title": title, "id": id, "you": "not answered",
+                "start": format!("2026-11-02T{h:02}:00:00Z"),
+                "end": format!("2026-11-02T{h:02}:30:00Z"),
+            });
+            if let (Some(d), Some(x)) = (data.as_object_mut(), extra.as_object()) {
+                d.extend(x.clone());
+            }
+            Item::new(id, title).data(data)
+        };
+        let view = View {
+            id: ViewId::Calendar,
+            title: "Calendar".into(),
+            data: ViewData {
+                items: vec![
+                    event(
+                        "g1",
+                        "Standup",
+                        9,
+                        serde_json::json!({ "join": "https://meet.google.com/x" }),
+                    ),
+                    event("g2", "Review", 10, serde_json::json!({ "you": "yours" })),
+                ],
+                at: Some(1),
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![view]);
+        m.view = 1;
+        m
+    }
+
+    #[test]
+    fn the_calendars_keys_move_a_day_join_and_answer() {
+        let key = |c: char| Key::new(KeyCode::Char(c), Mods::NONE);
+        let mut m = calendar_mission();
+        assert!(matches!(
+            calendar_key(&m, key('l')),
+            Some(CalendarKey::Day(1))
+        ));
+        assert!(matches!(
+            calendar_key(&m, key('h')),
+            Some(CalendarKey::Day(-1))
+        ));
+        assert!(
+            calendar_key(&m, key('j')).is_none(),
+            "j walks the events, as everywhere"
+        );
+        assert_eq!(row_step(&m, 1), 1, "j moves to the next event, not joining");
+        match calendar_key(&m, key('o')) {
+            Some(CalendarKey::Do(Do::Open(url), _)) => assert_eq!(url, "https://meet.google.com/x"),
+            _ => panic!("o joins the call"),
+        }
+        m.cursor = 1;
+        assert!(
+            matches!(calendar_key(&m, key('o')), Some(CalendarKey::Say(s)) if s.contains("no call")),
+        );
+        assert!(
+            matches!(calendar_key(&m, key('y')), Some(CalendarKey::Say(s)) if s == "It's yours." || s.contains("calendar_rsvp")),
+        );
+    }
+
+    #[test]
+    fn h_and_l_move_a_day_through_the_feeds_days_and_say_why_not_past_them() {
+        use crate::day::calendar::{Feed, SavedDay};
+        let now = jiff::civil::date(2026, 11, 2)
+            .at(12, 0, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap();
+        let alone = Feed::default();
+        let said = calendar_step(&alone, None, 1, &now).unwrap_err();
+        assert!(said.starts_with("Only today is saved"), "{said}");
+        let mut feed = Feed::default();
+        for date in ["2026-11-01", "2026-11-02", "2026-11-03"] {
+            feed.days.insert(
+                date.into(),
+                SavedDay {
+                    date: date.into(),
+                    ..SavedDay::default()
+                },
+            );
+        }
+        assert_eq!(
+            calendar_step(&feed, None, 1, &now),
+            Ok(Some("2026-11-03".into()))
+        );
+        assert_eq!(
+            calendar_step(&feed, Some("2026-11-03"), -1, &now),
+            Ok(None),
+            "back to today"
+        );
+        assert_eq!(
+            calendar_step(&feed, None, -1, &now),
+            Ok(Some("2026-11-01".into()))
+        );
+        let mut m = calendar_mission();
+        m.snap.views[0].data.items.clear();
+        m.snap.views[0].data.error = Some("Google answered 500".into());
+        assert!(
+            matches!(
+                calendar_key(&m, Key::new(KeyCode::Char('l'), Mods::NONE)),
+                Some(CalendarKey::Day(1))
+            ),
+            "an empty today the feed failed since moves on too"
+        );
+        m.calendar_day = Some("2026-11-03".into());
+        m.snap.views[0].data.items.clear();
+        m.snap.views[0].data.error = Some("Google answered 500".into());
+        assert!(
+            matches!(
+                calendar_key(&m, Key::new(KeyCode::Char('h'), Mods::NONE)),
+                Some(CalendarKey::Day(-1))
+            ),
+            "an empty day the feed failed since still moves back"
+        );
+        let mut gone = feed.clone();
+        gone.take(crate::day::calendar::Fetched::NoAddress, 2);
+        assert!(
+            calendar_step(&gone, None, 1, &now)
+                .unwrap_err()
+                .starts_with("Only today"),
+            "an address taken away takes its days with it"
+        );
+        let past = calendar_step(&feed, Some("2026-11-03"), 1, &now).unwrap_err();
+        assert!(past.contains("two weeks ahead"), "{past}");
+        // A feed failing since says so on the other days too.
+        feed.failed("Google answered 500".into(), 1);
+        let other = crate::day::calendar::other_day_view(&feed, "2026-11-03", &now).unwrap();
+        assert_eq!(other.error.as_deref(), Some("Google answered 500"));
+    }
 
     fn mission(tabs: usize, views: Vec<View>) -> Mission {
         let mut m = Mission::new();

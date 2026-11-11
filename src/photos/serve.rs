@@ -94,6 +94,8 @@ impl Server {
                         .is_some_and(|(held, _)| held.is_some());
                 self.photos.held.insert(who, (photo, due));
                 if changed {
+                    // Mission control's snapshot holds the photos it draws.
+                    self.mission_changed();
                     for c in self.clients.values_mut() {
                         c.dirty = true;
                     }

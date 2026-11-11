@@ -8,7 +8,9 @@
 //! Its own keys only move about: h j k l, g G, numbers, `[` `]` between
 //! views, Tab and Shift-Tab moving focus (with tab_focus), `v` to go to a
 //! view by name, `/` to filter, `?` for its keys, Esc and q to close, M-w
-//! closing it whatever is open over it, and `r` for a plugin's view.
+//! closing it whatever is open over it, `r` for a plugin's view, and a
+//! few views' own (the Calendar's `o` join and `y` `n` `m` reply, its `h`
+//! `l` a day back or forward).
 //! Everything that acts on what is chosen is in the menu Enter opens on it,
 //! a box over the view; an option that takes a moment shows a box with a
 //! spinner until it is done. A click takes what it lands on, the wheel
@@ -29,7 +31,8 @@
 //! - `find_key`: the Find a key box `?` opens on the Keys view: a key
 //!   pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
-//! - `calendar`: the Calendar view drawn as a day, hours down the side.
+//! - `calendar`: the Calendar view drawn as a day, hours down the side,
+//!   the chosen event beside it with who is going as photos.
 //! - `history`: the Notifications view as a history by day.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
@@ -95,6 +98,8 @@ pub enum Focus {
     Close,
     /// A keycap of the Notifications view, by its key.
     Kind(usize),
+    /// A keycap that presses its key (the Calendar's chosen event's).
+    Key(Key),
 }
 
 /// What a click on a part of the screen means, and what the mouse is over:
@@ -186,6 +191,14 @@ pub struct Snapshot {
     /// The Notifications view's counts, while it shows the history; `None`
     /// when it shows the sidebar's notifications as they are.
     pub notice_counts: Option<history::Counts>,
+    /// The photos of the people the view in front draws, those loaded
+    /// (`render::people`).
+    pub photos: HashMap<crate::photos::Who, Arc<image::RgbaImage>>,
+    /// The Calendar's next working day after the day it shows.
+    pub calendar_next: Option<crate::day::calendar::NextDay>,
+    /// The note items that name the Calendar's chosen event, or what it
+    /// names, once read (`calendar::notes_naming`).
+    pub calendar_notes: Vec<calendar::NoteLine>,
 }
 
 impl Default for Snapshot {
@@ -213,6 +226,9 @@ impl Default for Snapshot {
             cell: None,
             diagrams: HashMap::new(),
             notice_counts: None,
+            photos: HashMap::new(),
+            calendar_next: None,
+            calendar_notes: Vec::new(),
         }
     }
 }
@@ -258,7 +274,7 @@ pub struct Mission {
     pub(crate) taken_at: Option<u64>,
     /// Where each part was last drawn, for clicks and the mouse.
     pub hits: Vec<HitBox>,
-    /// The meters and sparklines it last drew, placed as images over its text (`images`),
+    /// The meters, sparklines and avatars it last drew, placed as images over its text (`images`),
     /// where they sit on the whole screen.
     pub meters: Vec<render::Image>,
     /// The diagrams it last laid out as pictures beside a board, placed the
@@ -300,6 +316,13 @@ pub struct Mission {
     pub unfolded: HashSet<String>,
     /// What the Resources view sorts its tabs by (`s`).
     pub resources_sort: resources_board::Sort,
+    /// The day the Calendar view shows (YYYY-MM-DD), `h` and `l` moving
+    /// it; `None` is today.
+    pub calendar_day: Option<String>,
+    /// The event a Calendar keycap's focus was given on, by its item's id:
+    /// once another is chosen (a filter, a day, a view), the focus goes
+    /// back to the item rather than press its key on the new one.
+    pub keycap_for: Option<String>,
 }
 
 impl Mission {
@@ -333,6 +356,8 @@ impl Mission {
             notice_kind: 1,
             unfolded: HashSet::new(),
             resources_sort: resources_board::Sort::default(),
+            calendar_day: None,
+            keycap_for: None,
         }
     }
 
@@ -517,6 +542,17 @@ impl Overlay for Mission {
                     outlined,
                     crate::mux::compose::colors::ACCENT,
                 ),
+                render::Shape::Avatar { who, label, color } => {
+                    let photo = who.as_ref().and_then(|w| self.snap.photos.get(w));
+                    crate::ui::images::avatar(
+                        frame,
+                        &image.name,
+                        area,
+                        label,
+                        *color,
+                        photo.map(|p| p.as_ref()),
+                    )
+                }
             }
         }
         for picture in &self.pictures {
@@ -600,6 +636,8 @@ pub enum MissionEvent {
     Worktrees(HashMap<PathBuf, Vec<Worktree>>, HashMap<PathBuf, String>),
     /// A worktree's branch counted for the Work map's chosen row.
     Counted(PathBuf, views::Counts),
+    /// The note items that name a Calendar event, by its item's id.
+    CalendarNotes(String, Vec<calendar::NoteLine>),
     /// The worktrees no tab is in, from wherever they are known; `None`
     /// when the look failed or took too long, so the rows had stay.
     Revived(Option<Vec<Revived>>),
@@ -644,6 +682,10 @@ pub struct MissionState {
     /// The diagrams of the descriptions beside the boards, asked for and
     /// drawn.
     pub(crate) diagrams: diagrams::Diagrams,
+    /// The note items found for each Calendar event, and when; one read at
+    /// a time.
+    pub(crate) calendar_notes: HashMap<String, (Instant, Vec<calendar::NoteLine>)>,
+    pub(crate) calendar_notes_busy: bool,
     /// What a key does once the mission control it was pressed in is back
     /// in its overlay, for what goes to another view or closes it (Enter
     /// on a notification), which acts on the overlay itself.

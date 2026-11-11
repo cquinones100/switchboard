@@ -17,6 +17,12 @@
 //!   under the `linear` setting as every Linear request (src/integrations).
 //! - GitHub: the login's picture from `avatars.githubusercontent.com`,
 //!   which needs no token, under the `github` setting.
+//! - An address (a calendar's attendee): Linear's user with that email
+//!   while the `linear` setting is on, else (or when Linear has no one by
+//!   it) Slack's `users.lookupByEmail` with the relay's bot token, which
+//!   needs the `users:read.email` scope; with neither, no photo. It is kept
+//!   under the address's SHA-256 in hex, since an address isn't a file's
+//!   name.
 //!
 //! A photo is kept as the bytes the service sent, and someone with none as
 //! an empty `<id>.none`, so neither is asked for again for `KEEP_DAYS`;
@@ -61,6 +67,8 @@ pub enum Service {
     Slack,
     Linear,
     GitHub,
+    /// Someone known only by their email address.
+    Address,
 }
 
 impl Service {
@@ -69,6 +77,7 @@ impl Service {
             Service::Slack => "slack",
             Service::Linear => "linear",
             Service::GitHub => "github",
+            Service::Address => "address",
         }
     }
 }
@@ -89,17 +98,35 @@ impl Who {
         }
     }
 
+    /// Someone by their email address, as an invitation names them.
+    pub fn address(address: &str) -> Who {
+        Who::new(Service::Address, &address.trim().to_lowercase())
+    }
+
     /// The id as a file's name, `None` for one that couldn't be a service's
     /// id (empty, too long, or with anything but letters, digits, `-` and
-    /// `_`), which is never looked up.
-    fn file_name(&self) -> Option<&str> {
+    /// `_`; for an address, one with no `@` or with a space in it), which
+    /// is never looked up. An address is kept by its SHA-256 in hex.
+    fn file_name(&self) -> Option<String> {
+        if self.service == Service::Address {
+            let fits = self.id.contains('@')
+                && self.id.len() <= 254
+                && !self.id.chars().any(|c| c.is_whitespace() || c.is_control());
+            return fits.then(|| {
+                use sha2::Digest;
+                sha2::Sha256::digest(self.id.as_bytes())
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect()
+            });
+        }
         let fits = !self.id.is_empty()
             && self.id.len() <= 100
             && self
                 .id
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        fits.then_some(self.id.as_str())
+        fits.then(|| self.id.clone())
     }
 }
 
@@ -129,6 +156,7 @@ impl Store {
 
     fn path(&self, who: &Who, none: bool) -> Option<PathBuf> {
         let name = who.file_name()?;
+        let name = name.as_str();
         let dir = self.dir.join(who.service.dir());
         Some(if none {
             dir.join(format!("{name}.none"))
@@ -262,21 +290,113 @@ pub async fn fetch(who: &Who) -> Result<Option<Vec<u8>>> {
                 return Ok(None);
             };
             // Linear's own hosts may want the key, as its uploads do.
-            let key;
-            let headers: Vec<(&str, &str)> = if linear_host(url) {
-                key = integrations::linear::api_key().await?;
-                vec![("Authorization", key.as_str())]
-            } else {
-                Vec::new()
-            };
-            download(url, &headers, "Linear").await
+            linear_download(url).await
         }
         Service::GitHub => {
             integrations::ensure_on("github", "GitHub")?;
             let url = format!("{}/{}?s={SIDE}", github_avatars(), who.id);
             download(&url, &[], "GitHub").await
         }
+        Service::Address => {
+            // Linear first, while it is on; Slack for anyone it doesn't know.
+            let mut failed = None;
+            if crate::settings::is_on("linear") {
+                match linear_photo_url(&who.id).await {
+                    Ok(Some(url)) => return linear_download(&url).await,
+                    Ok(None) => {}
+                    Err(e) => failed = Some(e),
+                }
+            }
+            if let Some(token) = crate::relay::slack::token(crate::relay::slack::BOT_TOKEN_SERVICE)
+            {
+                return match slack_photo_by_address(
+                    &crate::relay::slack::api_base(),
+                    &token,
+                    &who.id,
+                )
+                .await?
+                {
+                    Some(url) => download(&url, &[], "Slack").await,
+                    // Slack knowing no photo says nothing of Linear's, when
+                    // Linear failed: asked again rather than kept as none.
+                    None => match failed {
+                        Some(e) => Err(e),
+                        None => Ok(None),
+                    },
+                };
+            }
+            // With neither to ask, nothing is known: an error, so no
+            // photo is kept as missing and it is asked again once one is.
+            match failed {
+                Some(e) => Err(e),
+                None if crate::settings::is_on("linear") => Ok(None),
+                None => bail!(
+                    "Neither Linear nor the Slack relay is set up to find a photo by address."
+                ),
+            }
+        }
     }
+}
+
+/// The photo address of the Linear user with this email, `None` for no
+/// one by it or one without a photo.
+pub async fn linear_photo_url(address: &str) -> Result<Option<String>> {
+    let data = integrations::linear::graphql(
+        "query($a: String!) { users(filter: { email: { eq: $a } }) { nodes { avatarUrl } } }",
+        json!({ "a": address }),
+        SOURCE,
+    )
+    .await?;
+    Ok(data["users"]["nodes"][0]["avatarUrl"]
+        .as_str()
+        .filter(|u| !u.is_empty())
+        .map(str::to_string))
+}
+
+/// A Linear user's photo, with the key when it is on Linear's own hosts.
+async fn linear_download(url: &str) -> Result<Option<Vec<u8>>> {
+    let key;
+    let headers: Vec<(&str, &str)> = if linear_host(url) {
+        key = integrations::linear::api_key().await?;
+        vec![("Authorization", key.as_str())]
+    } else {
+        Vec::new()
+    };
+    download(url, &headers, "Linear").await
+}
+
+/// The address of the photo of the Slack member with this email, from
+/// `users.lookupByEmail` at `base` with the bot's token: `None` for no
+/// member by it, or one who kept Slack's picture.
+pub async fn slack_photo_by_address(
+    base: &str,
+    token: &str,
+    address: &str,
+) -> Result<Option<String>> {
+    let params = json!({ "email": address });
+    crate::relay::slack::refuse("users.lookupByEmail", &params, None, None)?;
+    let auth = format!("Bearer {token}");
+    let audit = Audit {
+        service: "Slack",
+        protocol: "REST",
+        source: SOURCE,
+    };
+    let encoded: String = url::form_urlencoded::byte_serialize(address.as_bytes()).collect();
+    let response = net::get_json(
+        &format!("{base}users.lookupByEmail?email={encoded}"),
+        &[("Authorization", auth.as_str())],
+        audit,
+    )
+    .await?;
+    if response.body["error"].as_str() == Some("users_not_found") {
+        return Ok(None);
+    }
+    if response.body["error"].as_str() == Some("missing_scope") {
+        bail!(
+            "Slack's users.lookupByEmail needs the users:read.email scope in the Slack relay's app, so attendees have no Slack photos."
+        );
+    }
+    slack_photo_of(&response.body)
 }
 
 /// Where GitHub's avatars are (`SWITCHBOARD_GITHUB_AVATARS` moves it).
@@ -463,6 +583,36 @@ mod tests {
                 .write(&Who::new(Service::GitHub, "some-login_2"), None)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn an_address_is_kept_by_its_hash_and_one_that_isnt_an_address_never_is() {
+        let root = Root::new("address");
+        let store = Store {
+            dir: root.0.clone(),
+        };
+        let ana = Who::address(" Ana@Example.com ");
+        assert_eq!(ana, Who::new(Service::Address, "ana@example.com"));
+        store.write(&ana, Some(b"photo")).unwrap();
+        use sha2::Digest;
+        let hash: String = sha2::Sha256::digest(b"ana@example.com")
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        assert!(root.0.join("address").join(&hash).exists());
+        assert!(matches!(
+            store.read(&ana, SystemTime::now()),
+            Kept::Photo { .. }
+        ));
+        for bad in ["ana", "a b@example.com", "../x@y"] {
+            let who = Who::new(Service::Address, bad);
+            if bad.contains('@') && !bad.contains(' ') {
+                // Hashed, so even a path in it names no other file.
+                assert!(store.write(&who, None).is_ok(), "{bad}");
+            } else {
+                assert!(store.write(&who, None).is_err(), "{bad}");
+            }
+        }
     }
 
     #[test]

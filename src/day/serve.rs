@@ -65,7 +65,7 @@ pub struct Day {
     /// "inbox"), which the sources report through `answered` for today's
     /// to-do list.
     pub views: HashMap<String, Answered>,
-    feed: Feed,
+    pub(crate) feed: Feed,
     saved: calendar::Saved,
     started: Option<i64>,
     away: bool,
@@ -820,11 +820,20 @@ impl Server {
         let ms = now.timestamp().as_millisecond();
         let tz = now.time_zone().clone();
         let saved = self.day.saved.read(&dirs.state).cloned();
+        // Where today's events started when first seen, for the view's
+        // "moved" chip, while the view is on.
+        let moves = match calendar::read_day(&self.day.feed, saved.as_ref(), &today) {
+            Some(day) if settings::is_on("view_calendar") => {
+                changes::moves(&dirs.state, &day, &today, &tz)
+            }
+            _ => Default::default(),
+        };
         let calendar = calendar::calendar_view(&calendar::Look {
             feed: &self.day.feed,
             saved: saved.as_ref(),
             looping: self.day.calendar_kept,
             now,
+            moves: &moves,
         });
         let background = settings::is_on("slack_background");
         let slack = slack::slack_view(&slack::Look {

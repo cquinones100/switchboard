@@ -1,8 +1,12 @@
-//! Today's events from a Google Calendar feed in iCal format, in the shape
-//! /today saves them: what lib/sidebar/calendar-feed.js's `dayFrom` made with
-//! ical.js, read here by a parser of its own covering what Google's feeds
-//! use (VEVENT, RRULE, EXDATE, RDATE, RECURRENCE-ID, VTIMEZONE and TZID,
-//! all-day dates), so no Node package is needed.
+//! The events of today, and of the days around it (a week back, two weeks
+//! ahead, for the Calendar view's other days), from a Google Calendar feed in
+//! iCal format, in the shape /today saves them: what
+//! lib/sidebar/calendar-feed.js's `dayFrom` made with ical.js, read here by
+//! a parser of its own covering what Google's feeds use (VEVENT, RRULE,
+//! EXDATE, RDATE, RECURRENCE-ID, VTIMEZONE and TZID, all-day dates), so no
+//! Node package is needed. Who organized an event is ORGANIZER's name, left
+//! out when it is you, and each attendee keeps their address, which their
+//! photo is looked up by.
 //!
 //! A time with a TZID is on that zone's wall clock, worked out by jiff from
 //! the system's time zone database when the TZID is a name it knows (as
@@ -24,7 +28,7 @@
 //! its own date, where the JavaScript took the UTC date of its local
 //! midnight, a day early east of Greenwich.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::LazyLock;
 
 use jiff::civil::{Date, DateTime};
@@ -626,8 +630,34 @@ fn you_of(event: &Component, owner: Option<&str>) -> &'static str {
     }
 }
 
+/// An address as a calendar writes it (`mailto:`, either case), lower case.
+fn address_of(value: &str) -> String {
+    let value = value.trim();
+    value
+        .strip_prefix("mailto:")
+        .or_else(|| value.strip_prefix("MAILTO:"))
+        .unwrap_or(value)
+        .to_lowercase()
+}
+
+/// Who organized an event: ORGANIZER's name (its CN), else its address;
+/// `None` when it is the calendar's owner, or the feed names no one.
+fn organizer_of(event: &Component, owner: Option<&str>) -> Option<String> {
+    let p = event.prop("ORGANIZER")?;
+    let address = address_of(&p.value);
+    if address.is_empty() || owner.is_some_and(|o| o.to_lowercase() == address) {
+        return None;
+    }
+    Some(
+        p.param("CN")
+            .map(|n| n.trim_matches('"').trim().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or(address),
+    )
+}
+
 /// Everyone an event invites but rooms and other resources, by name (the
-/// CN parameter, else the address), with their answer.
+/// CN parameter, else the address), with their address and their answer.
 fn attendees_of(event: &Component) -> Vec<Attendee> {
     event
         .all("ATTENDEE")
@@ -638,16 +668,12 @@ fn attendees_of(event: &Component) -> Vec<Attendee> {
             )
         })
         .map(|a| {
-            let address = a.value.trim();
-            let address = address
-                .strip_prefix("mailto:")
-                .or_else(|| address.strip_prefix("MAILTO:"))
-                .unwrap_or(address);
+            let address = address_of(&a.value);
             let name = a
                 .param("CN")
                 .map(|n| n.trim_matches('"').trim())
                 .filter(|n| !n.is_empty())
-                .unwrap_or(address);
+                .unwrap_or(&address);
             let reply = match a
                 .param("PARTSTAT")
                 .unwrap_or("")
@@ -662,6 +688,7 @@ fn attendees_of(event: &Component) -> Vec<Attendee> {
             Attendee {
                 name: name.to_string(),
                 reply: reply.into(),
+                address: address.clone(),
             }
         })
         .collect()
@@ -739,6 +766,22 @@ type Add<'a> = dyn FnMut(&Component, Timestamp, Timestamp, Option<Date>, bool, T
 /// Today's events from the feed's text, in /today's shape, for the day
 /// `now` falls on in its own time zone.
 pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
+    let today = now.date();
+    days_from(text, now, today, today)
+        .remove(&util::ymd(now))
+        .unwrap_or_default()
+}
+
+/// How many days before today, and after, the feed is read for the
+/// Calendar view's other days.
+pub const DAYS_BEFORE: i64 = 7;
+pub const DAYS_AFTER: i64 = 14;
+
+/// Each day's events from the feed's text, from `from` to `to` (both
+/// included) in `now`'s time zone, in one pass over it: every date in
+/// the range has its day, an empty one when nothing is on it, and an
+/// event that runs over midnight is on each day it touches.
+pub fn days_from(text: &str, now: &Zoned, from: Date, to: Date) -> BTreeMap<String, SavedDay> {
     let root = parse(text);
     let calendar = if root.name == "VCALENDAR" {
         &root
@@ -752,15 +795,25 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
     let owner = calendar
         .text("X-WR-CALNAME")
         .filter(|name| name.contains('@'));
-    let today = now.date();
-    let day_start = zones
-        .resolve(&When::Date(today))
-        .unwrap_or_else(|| now.timestamp());
-    let day_end = today
-        .tomorrow()
-        .ok()
-        .and_then(|d| zones.resolve(&When::Date(d)))
-        .unwrap_or_else(|| day_start + SignedDuration::from_hours(24));
+    // Each date of the range, with when it starts and ends.
+    let mut bounds: Vec<(Date, Timestamp, Timestamp)> = Vec::new();
+    let mut date = from;
+    while date <= to {
+        let Ok(next) = date.tomorrow() else {
+            break;
+        };
+        let start = zones
+            .resolve(&When::Date(date))
+            .unwrap_or_else(|| now.timestamp());
+        let end = zones
+            .resolve(&When::Date(next))
+            .unwrap_or_else(|| start + SignedDuration::from_hours(24));
+        bounds.push((date, start, end));
+        date = next;
+    }
+    let (Some(&(_, day_start, _)), Some(&(_, _, day_end))) = (bounds.first(), bounds.last()) else {
+        return BTreeMap::new();
+    };
 
     let vevents: Vec<&Component> = calendar
         .children
@@ -791,7 +844,7 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
         }
     }
 
-    let mut events = Vec::new();
+    let mut days: Vec<Vec<CalEvent>> = vec![Vec::new(); bounds.len()];
     let mut add = |event: &Component,
                    from: Timestamp,
                    to: Timestamp,
@@ -828,7 +881,7 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
         let id = owner
             .as_ref()
             .and_then(|_| id_of(&uid, original, original_day, recurring));
-        events.push(CalEvent {
+        let e = CalEvent {
             title: event
                 .text("SUMMARY")
                 .filter(|s| !s.is_empty())
@@ -853,7 +906,14 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
             refs: refs_from(&format!("{description} {location}")),
             attendees: attendees_of(event),
             description: description_of(&description),
-        });
+            organizer: organizer_of(event, owner.as_deref()),
+            moved_from: None,
+        };
+        for (i, (_, start, end)) in bounds.iter().enumerate() {
+            if from < *end && to > *start {
+                days[i].push(e.clone());
+            }
+        }
     };
 
     let single = |event: &Component, add: &mut Add| {
@@ -946,7 +1006,7 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
                 moved.insert(rid.as_millisecond(), e);
             }
         }
-        // The occurrences up to the end of today, the rule's and RDATE's.
+        // The occurrences up to the end of the range, the rule's and RDATE's.
         let mut starts: Vec<When> = Vec::new();
         let until_tz = tzid.clone();
         if let Some(rule) = &rule {
@@ -1003,7 +1063,7 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
                 add(master, from, to, day, true, at);
             }
         }
-        // An occurrence of a later day moved into today: the walk above
+        // An occurrence of a later day moved into the range: the walk above
         // stopped before reaching when it was meant to be.
         for (rid, e) in &moved {
             if done.contains(rid) {
@@ -1026,12 +1086,21 @@ pub fn day_from(text: &str, now: &Zoned) -> SavedDay {
     for e in lone {
         single(e, &mut add);
     }
-    SavedDay {
-        date: util::ymd(now),
-        updated: util::now_ms(),
-        source: Some("ical".into()),
-        events,
-    }
+    let updated = util::now_ms();
+    bounds
+        .iter()
+        .zip(days)
+        .map(|((date, _, _), events)| {
+            let date = date.to_string();
+            let day = SavedDay {
+                date: date.clone(),
+                updated,
+                source: Some("ical".into()),
+                events,
+            };
+            (date, day)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1230,6 +1299,77 @@ mod tests {
     }
 
     #[test]
+    fn days_from_gives_each_dates_events_with_addresses_and_the_organizer() {
+        let mut feed: Vec<&str> = FEED[..FEED.len() - 1].to_vec();
+        feed.extend([
+            "BEGIN:VEVENT",
+            "UID:plan@google.com",
+            "SUMMARY:Planning",
+            "DTSTART:20261030T140000Z",
+            "DTEND:20261030T150000Z",
+            "ORGANIZER;CN=Ana Ruiz:mailto:ana@example.com",
+            "ATTENDEE;CN=Ana Ruiz;PARTSTAT=ACCEPTED:mailto:Ana@Example.com",
+            "ATTENDEE;PARTSTAT=ACCEPTED:mailto:me@example.com",
+            "END:VEVENT",
+            "BEGIN:VEVENT",
+            "UID:mine@google.com",
+            "SUMMARY:Mine",
+            "DTSTART:20261029T140000Z",
+            "DTEND:20261029T150000Z",
+            "ORGANIZER:mailto:me@example.com",
+            "END:VEVENT",
+            "END:VCALENDAR",
+        ]);
+        let today = noon().date();
+        let days = days_from(
+            &feed.join("\r\n"),
+            &noon(),
+            today,
+            jiff::civil::date(2026, 11, 2),
+        );
+        let dates: Vec<&str> = days.keys().map(String::as_str).collect();
+        assert_eq!(
+            dates,
+            [
+                "2026-10-28",
+                "2026-10-29",
+                "2026-10-30",
+                "2026-10-31",
+                "2026-11-01",
+                "2026-11-02"
+            ],
+            "every date, an empty one too"
+        );
+        let titles = |date: &str| {
+            let mut t: Vec<String> = days[date].events.iter().map(|e| e.title.clone()).collect();
+            t.sort();
+            t
+        };
+        assert_eq!(
+            titles("2026-10-28"),
+            ["Holiday", "Review (moved)", "Standup"]
+        );
+        assert_eq!(titles("2026-10-29"), ["Mine", "Standup"]);
+        assert_eq!(titles("2026-10-30"), ["Planning", "Standup"]);
+        assert!(titles("2026-10-31").is_empty(), "a Saturday");
+        assert_eq!(titles("2026-11-02"), ["Standup"]);
+        let planning = days["2026-10-30"]
+            .events
+            .iter()
+            .find(|e| e.title == "Planning")
+            .unwrap();
+        assert_eq!(planning.organizer.as_deref(), Some("Ana Ruiz"));
+        assert_eq!(planning.attendees[0].address, "ana@example.com");
+        let mine = days["2026-10-29"]
+            .events
+            .iter()
+            .find(|e| e.title == "Mine")
+            .unwrap();
+        assert_eq!(mine.organizer, None, "your own has no one else's name");
+        assert_eq!(day_from(&feed.join("\r\n"), &noon()).events.len(), 3);
+    }
+
+    #[test]
     fn a_time_zone_the_system_doesnt_name_is_read_from_the_feed() {
         // Outlook's own name for New York, which only the feed's VTIMEZONE
         // explains; daylight saving time still on in late October.
@@ -1285,11 +1425,13 @@ mod tests {
             [
                 Attendee {
                     name: "Ana Ruiz".into(),
-                    reply: "going".into()
+                    reply: "going".into(),
+                    address: "ana@example.com".into(),
                 },
                 Attendee {
                     name: "ben@example.com".into(),
-                    reply: "maybe".into()
+                    reply: "maybe".into(),
+                    address: "ben@example.com".into(),
                 },
             ]
         );

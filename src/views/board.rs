@@ -514,7 +514,7 @@ fn tone(t: Tone, bold: bool, look: &Look) -> Style {
 }
 
 /// A person's color for their initial, from their name.
-fn color_of(name: &str) -> u8 {
+pub fn color_of(name: &str) -> u8 {
     const COLORS: [u8; 8] = [67, 96, 66, 137, 61, 101, 72, 131];
     let h = name.bytes().fold(2_166_136_261u32, |h, b| {
         (h ^ b as u32).wrapping_mul(16_777_619)

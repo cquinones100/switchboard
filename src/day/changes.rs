@@ -229,6 +229,88 @@ pub fn calendar_changes(state: &Path, day: &SavedDay, today: &str, tz: &TimeZone
     }
 }
 
+/// Where today's events started when first seen today, kept in
+/// `calendar-moves.json` in the state directory whatever you have looked
+/// at (unlike `calendar-seen.json`, which looking replaces), so the
+/// Calendar view marks an event moved all day: gives, by its key, where
+/// each event that has moved since started. A new day starts it afresh.
+pub fn moves(
+    state: &Path,
+    day: &SavedDay,
+    today: &str,
+    tz: &TimeZone,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    if day.date.is_empty() || day.date != today {
+        return out;
+    }
+    let path = state.join("calendar-moves.json");
+    let kept = util::read_json_object(&path);
+    let mut starts = match kept.get("date").and_then(Value::as_str) {
+        Some(date) if date == today => kept
+            .get("starts")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default(),
+        _ => Map::new(),
+    };
+    let mut changed = kept.get("date").and_then(Value::as_str) != Some(today);
+    // A repeating series moved whole keys today's occurrence afresh (its
+    // key holds when it was meant to start): one kept under a key of the
+    // same series no event of today's has any more is that occurrence.
+    let keys: Vec<String> = day.events.iter().map(|e| key_of(e, tz)).collect();
+    for e in day.events.iter().filter(|e| !e.all_day) {
+        let key = key_of(e, tz);
+        if starts.contains_key(&key) {
+            continue;
+        }
+        let gone = starts
+            .keys()
+            .find(|k| !keys.contains(k) && series_of(k) == series_of(&key) && **k != key)
+            .cloned();
+        if let Some(old) = gone
+            && let Some(first) = starts.remove(&old)
+        {
+            starts.insert(key, first);
+            changed = true;
+        }
+    }
+    for e in day.events.iter().filter(|e| !e.all_day) {
+        let Value::String(now) = instant(e.start.as_deref(), tz) else {
+            continue;
+        };
+        let key = key_of(e, tz);
+        match starts.get(&key).and_then(Value::as_str) {
+            Some(first) if first != now => {
+                out.insert(key, first.to_string());
+            }
+            Some(_) => {}
+            None => {
+                starts.insert(key, json!(now));
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        let kept = json!({ "date": today, "starts": starts });
+        let _ = util::write_atomic(&path, util::json_compact(&kept));
+    }
+    out
+}
+
+/// Where an event started when first seen today, when it has moved since,
+/// from what `moves` gave.
+pub fn moved_from(
+    e: &CalEvent,
+    moves: &std::collections::HashMap<String, String>,
+    tz: &TimeZone,
+) -> Option<String> {
+    if moves.is_empty() || e.all_day {
+        return None;
+    }
+    moves.get(&key_of(e, tz)).cloned()
+}
+
 /// The changes as notifications, one each.
 pub fn change_notices(changes: &[Change]) -> Vec<Item> {
     changes
@@ -365,6 +447,55 @@ mod tests {
         );
         calendar_seen(&dir, &later, &tz());
         assert!(calendar_changes(&dir, &later, "2026-11-02", &tz()).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn moves_keeps_the_first_start_seen_today_and_starts_over_on_a_new_day() {
+        let dir = std::env::temp_dir().join(format!(
+            "sb-moves-{}-{}",
+            std::process::id(),
+            util::now_ms()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let first = day(vec![event(Some("a1"), "Sync", 14, 15)]);
+        assert!(moves(&dir, &first, "2026-11-02", &tz()).is_empty());
+        let moved = day(vec![event(Some("a1"), "Sync", 15, 16)]);
+        let found = moves(&dir, &moved, "2026-11-02", &tz());
+        assert_eq!(found.get("a1").map(String::as_str), Some(at(14).as_str()));
+        let e = &moved.events[0];
+        assert_eq!(moved_from(e, &found, &tz()), Some(at(14)));
+        // Looking again keeps the first start, not the one seen since.
+        let again = moves(&dir, &moved, "2026-11-02", &tz());
+        assert_eq!(again.get("a1").map(String::as_str), Some(at(14).as_str()));
+        // Back where it was is no move.
+        assert!(moves(&dir, &first, "2026-11-02", &tz()).is_empty());
+        // A repeating series moved whole keys today's occurrence afresh,
+        // and keeps where it first started.
+        let series = |at: u32, from, to| {
+            day(vec![event(
+                Some(&format!("std_20261102T{at:02}0000Z")),
+                "Standup",
+                from,
+                to,
+            )])
+        };
+        assert!(moves(&dir, &series(9, 9, 10), "2026-11-02", &tz()).is_empty());
+        let later = moves(&dir, &series(10, 10, 11), "2026-11-02", &tz());
+        assert_eq!(
+            later.get("std_20261102T100000Z").map(String::as_str),
+            Some(at(9).as_str())
+        );
+        // A new day starts afresh.
+        let tomorrow = SavedDay {
+            date: "2026-11-03".into(),
+            ..moved.clone()
+        };
+        assert!(moves(&dir, &tomorrow, "2026-11-03", &tz()).is_empty());
+        assert!(
+            moves(&dir, &moved, "2026-11-02", &tz()).is_empty(),
+            "a day kept for another starts afresh"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

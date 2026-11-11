@@ -655,6 +655,7 @@ fn the_calendar_view_shows_the_day_today_saved_and_says_when_it_is_out_of_date()
         saved: cache.read(&dirs.state),
         looping: false,
         now: &now,
+        moves: &Default::default(),
     });
     let titles: Vec<&str> = view.items.iter().map(|i| i.title.as_str()).collect();
     assert_eq!(
@@ -687,6 +688,7 @@ fn the_calendar_view_shows_the_day_today_saved_and_says_when_it_is_out_of_date()
         saved: cache.read(&dirs.state),
         looping: false,
         now: &now,
+        moves: &Default::default(),
     });
     assert!(stale.items.is_empty());
     assert_eq!(
@@ -707,6 +709,7 @@ fn the_calendar_view_shows_the_day_today_saved_and_says_when_it_is_out_of_date()
         saved: cache.read(&dirs.state),
         looping: false,
         now: &now,
+        moves: &Default::default(),
     });
     assert!(none.setup.is_some(), "nothing set up says how to set it up");
 }

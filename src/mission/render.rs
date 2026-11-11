@@ -2766,11 +2766,13 @@ pub struct Image {
 }
 
 /// What an image atom draws: a meter (`images::meter`) how full, in what
-/// color, with a tick; or a series of bars (`images::series`) scaled to
+/// color, with a tick; a series of bars (`images::series`) scaled to
 /// `max`, what is past `over` red, with its `marks` (a chart's outlined
 /// part, grid and "now" edge), which one row tall is a sparkline; a
 /// setting's switch (`images::switch`), on or off; or the keyboard as a heatmap (`images::keyboard`), how often each key was
-/// pressed, with the keys of a group outlined.
+/// pressed, with the keys of a group outlined; or someone's avatar
+/// (`images::avatar`), their photo from the snapshot's `photos` once it
+/// has loaded, else the initial of `label` on `color`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Meter {
@@ -2791,6 +2793,11 @@ pub enum Shape {
         heat: crate::ui::images::Heat,
         outlined: crate::ui::images::Outlined,
     },
+    Avatar {
+        who: Option<crate::photos::Who>,
+        label: String,
+        color: Color,
+    },
 }
 
 impl Image {
@@ -2810,11 +2817,14 @@ impl Image {
         }
     }
 
-    /// How full a meter is; `None` for a series.
+    /// How full a meter is; `None` for any other shape.
     pub fn frac(&self) -> Option<f32> {
         match self.shape {
             Shape::Meter { frac, .. } => Some(frac),
-            Shape::Series { .. } | Shape::Switch { .. } | Shape::Keyboard { .. } => None,
+            Shape::Series { .. }
+            | Shape::Switch { .. }
+            | Shape::Keyboard { .. }
+            | Shape::Avatar { .. } => None,
         }
     }
 }
@@ -3724,7 +3734,13 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             out.extend(pairs(&[("esc", "close")]));
             out
         }
-        ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
+        ViewId::Calendar => with(&[
+            ("jk", "events"),
+            ("hl", "day"),
+            ("↵", "menu"),
+            ("o", "join"),
+            ("y n m", "reply"),
+        ]),
         ViewId::Usage if m.snap.rules.ux2 && m.size.0 as usize >= super::usage_board::BOARD_AT => {
             with(&[
                 ("jk", "tab or service"),
@@ -4477,6 +4493,10 @@ pub fn drawn(
             } else if keys_board_shown(m, v, cols) {
                 super::keys_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
+                let lit = match (m.hover, m.focus) {
+                    (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => Some(k),
+                    _ => None,
+                };
                 let look = super::calendar::Look {
                     cols,
                     rows: rows.saturating_sub(1 + lines.len()),
@@ -4486,10 +4506,18 @@ pub fn drawn(
                     theme,
                     top_row: lines.len(),
                     ux2: crate::settings::is_on("ux2"),
+                    caps: snap.caps,
+                    date: m.calendar_day.as_deref().and_then(|d| d.parse().ok()),
+                    next: snap.calendar_next.as_ref(),
+                    work: &snap.views,
+                    notes: &snap.calendar_notes,
+                    lit,
+                    side_top: m.side_top(),
                 };
-                let (day, at) = super::calendar::day(v, &look);
+                let (day, at, avatars) = super::calendar::day(v, &look);
                 lines.extend(day);
                 hits.extend(at);
+                meters.extend(avatars);
             } else {
                 list(v, cols, rows, m, 0, &mut lines, &mut hits);
             }
@@ -4585,6 +4613,9 @@ mod tests {
             cell: None,
             diagrams: Default::default(),
             notice_counts: None,
+            photos: Default::default(),
+            calendar_next: None,
+            calendar_notes: Vec::new(),
         };
         m
     }

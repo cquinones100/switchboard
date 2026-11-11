@@ -868,12 +868,13 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
         ViewId::Calendar => {
             let event: Option<CalEvent> = serde_json::from_value(item.data.clone()).ok();
             if let Some(e) = event {
+                // The keys the view takes without the menu: o joins.
                 if let Some(join) = &e.join {
-                    out.push(choice('j', "Join its call", Do::Open(join.clone())));
+                    out.push(choice('o', "Join its call", Do::Open(join.clone())));
                 }
                 if let Some(link) = &e.link {
                     out.push(choice(
-                        'o',
+                        'g',
                         "Open it in Google Calendar",
                         Do::Open(link.clone()),
                     ));
@@ -1464,7 +1465,7 @@ mod tests {
                 "title": "Standup", "join": "https://meet.example/x",
                 "link": "https://calendar.example/e" } }));
         let choices = notice_choices(&meeting, &c);
-        assert_eq!(keys(&choices), "jox");
+        assert_eq!(keys(&choices), "ogx");
         assert_eq!(choices[0].act, Do::Open("https://meet.example/x".into()));
         assert!(matches!(&choices[2].act, Do::Dismiss { source, .. } if source == "meeting"));
         let (source, own) = dismisses(&meeting).expect("dismissed after");
