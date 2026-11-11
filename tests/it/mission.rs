@@ -737,10 +737,9 @@ fn m_slash_opens_every_key_and_enter_presses_one_in_the_pane_below() {
             .any(|l| l.contains("M-S-L") && l.contains("Split pane to the right"))
             && !s.iter().any(|l| l.contains("Split pane to the left"))
     });
-    // Enter offers to press it, and pressing splits the pane mission
+    // Enter presses it at once, with no menu, splitting the pane mission
     // control was over.
     client.type_text("\r");
-    pick(&mut client, "Press M-S-L");
     wait_list(&server, "the pane split", |l| {
         tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
     });
@@ -972,4 +971,47 @@ fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
         assert!(Instant::now() < deadline, "yes still runs");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_list() {
+    let (server, mut client) = two_tabs(json!({"view_keys": true}));
+    client.type_text(&format!("{ALT}/"));
+    client.wait_text("Search and jump to a tab");
+    // `?` looks a key up without pressing it: j is the sidebar's.
+    client.type_text("?");
+    client.wait_text("Find a key");
+    client.type_text("j");
+    client.wait_text("Sidebar: ");
+    // M-w, which closes mission control elsewhere, is looked up here.
+    client.type_text(&format!("{ALT}w"));
+    client.wait_text("Close the pane");
+    client.type_text(&format!("{ALT}L"));
+    let screen = client.wait_text("Before it, M-w");
+    assert!(
+        screen.iter().any(|l| l.contains("Split pane to the right")),
+        "{}",
+        screen.join("\n")
+    );
+    assert!(
+        screen.iter().any(|l| l.contains("Before it, M-w")),
+        "{}",
+        screen.join("\n")
+    );
+    // Enter shows it in the list, where Enter presses it, splitting the
+    // pane. Nothing was pressed while the box was up.
+    let panes = |server: &TestServer| {
+        tabs(&server.list())[1]["panes"]
+            .as_array()
+            .map_or(0, Vec::len)
+    };
+    assert_eq!(panes(&server), 1);
+    client.type_text("\r");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Find a key"))
+    });
+    client.type_text("\r");
+    wait_list(&server, "the pane split", |l| {
+        tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
+    });
 }

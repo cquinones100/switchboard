@@ -125,7 +125,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     ("esc q", "close"),
     ("M-w", "close, whatever is open over it"),
-    ("?", "these keys"),
+    (
+        "?",
+        "these keys; in the Keys view, find a key by pressing it",
+    ),
 ];
 
 /// The notification a menu is for: its source, its item under its own id,
@@ -710,6 +713,7 @@ impl Server {
             Some(ViewId::Resources) => self.want_view(ViewKind::Resources),
             Some(ViewId::Sessions) => self.want_view(ViewKind::Sessions),
             Some(ViewId::Usage) => self.want_view(ViewKind::Usage),
+            Some(ViewId::Keys) => self.want_key_counts(),
             Some(ViewId::WorkMap) => {
                 self.mission_worktrees(false);
                 self.mission_revived(false);
@@ -886,8 +890,10 @@ impl Server {
                 ask: on("diff_ask"),
                 easy: on("easy_keys"),
             };
+            let counts = self.keys_week();
             let data = ViewData {
-                items: super::keymap::items(&self.bindings, shown),
+                items: super::keymap::items(&self.bindings, shown, &counts),
+                head: super::keymap::head(&counts, on("habits")),
                 at: Some(1),
                 ..ViewData::default()
             };
@@ -1262,8 +1268,13 @@ impl Server {
             .get(&client)
             .is_some_and(|c| c.overlays.top() == Some("mission"));
         let close_key = Key::parse("M-w");
+        // Find a key looks M-w up like any other key.
+        let finding = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| c.overlays.top() == Some("find-key"));
         match &parsed.input {
-            Input::Key(k) if Some(*k) == close_key => {
+            Input::Key(k) if Some(*k) == close_key && !finding => {
                 self.mission_close(client);
                 None
             }
@@ -1339,6 +1350,13 @@ impl Server {
             jump_key(m, k);
             return;
         }
+        if k.code == KeyCode::Char('?')
+            && plain(&k)
+            && m.current().is_some_and(|v| v.id == ViewId::Keys)
+        {
+            self.find_key(client);
+            return;
+        }
         if k.code == KeyCode::Char('?') && plain(&k) {
             let rows = KEYS
                 .iter()
@@ -1402,6 +1420,9 @@ impl Server {
                 return;
             }
             None => {}
+        }
+        if keys_board_key(m, k) {
+            return;
         }
         if k.code == KeyCode::Char('s')
             && plain(&k)
@@ -1860,6 +1881,20 @@ impl Server {
         if views::is_header(&item) {
             return;
         }
+        // A workspace key is pressed at once; an app's own only says so.
+        if view.id == ViewId::Keys {
+            match super::keymap::press_of(&item) {
+                // Pressed once mission control is back in its overlay, since
+                // a key may open mission control again (M-j).
+                Some(action) => {
+                    self.mission.after_key = Some(Box::new(move |server| {
+                        server.mission_do(client, Do::Press(action), "");
+                    }));
+                }
+                None => self.say(Some(client), &super::keymap::only_there(&item)),
+            }
+            return;
+        }
         if view.id == ViewId::Usage {
             if item.data.get("tab_key").is_some() {
                 match item.target {
@@ -2151,6 +2186,48 @@ impl Server {
 
     /// Does what an option says. `label` names it in the busy box, for one
     /// that takes a moment.
+    /// The Find a key box over the Keys view: Enter in it shows the key
+    /// at its row in the list, its filter cleared.
+    fn find_key(&mut self, client: ClientId) {
+        let on = settings::is_on;
+        let shown = super::keymap::Shown {
+            github: on("github"),
+            linear: on("linear"),
+            ask: on("diff_ask"),
+            easy: on("easy_keys"),
+        };
+        let counts = self.keys_week();
+        let lookup = super::find_key::Lookup {
+            rows: super::keymap::items(&self.bindings, shown, &counts),
+            bindings: self.bindings.clone(),
+            counts: on("habits").then_some(counts),
+        };
+        let caps = self
+            .clients
+            .get(&client)
+            .is_some_and(|c| crate::ui::kit::caps(&c.term));
+        self.open(
+            client,
+            Box::new(super::find_key::FindKey::new(lookup, caps)),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Chose(row) = outcome else {
+                    return;
+                };
+                if let Some(m) = server.mission_mut(client) {
+                    m.filter = None;
+                    m.cursor = row as isize;
+                    // So Enter presses it, whatever Tab had focused.
+                    if m.focus.is_some() {
+                        m.focus = Some(Focus::Item);
+                    }
+                    m.taken_at = None;
+                }
+                server.mission_prepare(client);
+                server.mission_redraw();
+            })),
+        );
+    }
+
     pub(crate) fn mission_do(&mut self, client: ClientId, act: Do, label: &str) {
         match act {
             Do::GoTo(tab) => self.mission_go(client, tab),
@@ -3677,10 +3754,44 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     m.cursor = i;
                     Then::Prepare
                 }
+                Spot::Choose(i) => {
+                    m.cursor = i;
+                    if m.focus.is_some() {
+                        m.focus = Some(Focus::Item);
+                    }
+                    Then::Prepare
+                }
             }
         }
         _ => Then::Nothing,
     }
+}
+
+/// The Keys board's moves with UX 2.0: h and l between groups, j and k
+/// between the group's keys (the arrows too). True when it took the key.
+fn keys_board_key(m: &mut Mission, k: Key) -> bool {
+    let Some(view) = m.current() else {
+        return false;
+    };
+    if !super::render::keys_board_shown(m, view, m.size.0 as usize) || !plain(&k) {
+        return false;
+    }
+    let items = &view.data.items;
+    let to = match k.code {
+        KeyCode::Char('h') | KeyCode::Left => super::keys_board::group_step(items, m.cursor, -1),
+        KeyCode::Char('l') | KeyCode::Right => super::keys_board::group_step(items, m.cursor, 1),
+        KeyCode::Char('j') | KeyCode::Down => super::keys_board::row_step(items, m.cursor, 1),
+        KeyCode::Char('k') | KeyCode::Up => super::keys_board::row_step(items, m.cursor, -1),
+        _ => return false,
+    };
+    if let Some(to) = to {
+        m.cursor = to as isize;
+    }
+    // As `move_to`: a move takes Tab's focus to the chosen row.
+    if m.focus.is_some() {
+        m.focus = Some(Focus::Item);
+    }
+    true
 }
 
 /// Whether `m` opens autopilot's menu: in its view while it shows the

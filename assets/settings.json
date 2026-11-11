@@ -431,7 +431,7 @@
     "key": "view_keys",
     "category": "Mission control",
     "label": "Keys",
-    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', with / to filter and Enter to press a workspace key; off, M-/ reaches the pane",
+    "description": "Mission control's Keys view, which M-/ opens: every key Switchboard binds, the workspace's grouped by their first tag, then the sidebar's, mission control's, M-d's and Notes', then the commands reached only through M-p, with / to filter, Enter to press a workspace key and ? to find a key by pressing it; with UX 2.0, a board with a heatmap of the Alt keys you pressed this week (counted with habits on); off, M-/ reaches the pane",
     "default": true
   },
   {

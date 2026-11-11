@@ -962,13 +962,8 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             out.extend(copy);
         }
         ViewId::Notifications => return notice_choices(item, ctx),
-        // A workspace key, pressed; a part's own key only reads.
-        ViewId::Keys => {
-            if let Some(action) = super::keymap::press_of(item) {
-                let key = super::keymap::key_of(item).unwrap_or("it");
-                out.push(choice('p', format!("Press {key}"), Do::Press(action)));
-            }
-        }
+        // Enter presses a key itself, with no menu (`mission_enter`).
+        ViewId::Keys => {}
         _ => out = target_choices(item, ctx),
     }
     out

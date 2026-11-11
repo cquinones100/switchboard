@@ -1,7 +1,8 @@
 //! Images the server draws itself, with the kitty graphics protocol: the
 //! image atoms of the UX 2.0 canvas's board 0 (an avatar's photo, a
 //! picture, a meter with a tick, a series as a chart or a sparkline, a
-//! setting's on/off switch, and the soft shadow under a box), and board 6's lane and chart over time (a
+//! setting's on/off switch, the keyboard as a heatmap of the keys pressed,
+//! and the soft shadow under a box), and board 6's lane and chart over time (a
 //! tab's history), rastered here in Rust at the size of the
 //! terminal's cell (src/mux/terminal.rs) and sent to each client that can
 //! show them.
@@ -1428,6 +1429,234 @@ pub fn chart(
     }
 }
 
+// ── The keyboard ────────────────────────────────────────────────────────────
+
+/// The keyboard's rows, as a keyboard has them.
+pub const KEY_ROWS: [&str; 4] = ["1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"];
+/// How far in each row starts, in cells, staggered as a keyboard's are.
+const KEY_STAGGER: [u16; 4] = [0, 2, 3, 5];
+/// A key's cells across and down.
+pub const KEY_W: u16 = 5;
+pub const KEY_H: u16 = 2;
+
+/// How often each key was pressed, by its letter or digit.
+pub type Heat = std::collections::BTreeMap<char, u64>;
+/// The keys drawn with an edge.
+pub type Outlined = std::collections::BTreeSet<char>;
+
+/// The keyboard's size in cells.
+pub fn keyboard_size() -> (u16, u16) {
+    let cols = KEY_ROWS
+        .iter()
+        .zip(KEY_STAGGER)
+        .map(|(row, at)| at + row.len() as u16 * KEY_W)
+        .max()
+        .unwrap_or(0);
+    (cols, KEY_ROWS.len() as u16 * KEY_H)
+}
+
+/// The key at a cell of the keyboard, counted from its corner.
+pub fn key_at(col: u16, row: u16) -> Option<char> {
+    let r = (row / KEY_H) as usize;
+    let keys = KEY_ROWS.get(r)?;
+    let from = col.checked_sub(KEY_STAGGER[r])?;
+    keys.chars().nth((from / KEY_W) as usize)
+}
+
+/// Each key with the cell its top left is at.
+fn key_cells() -> impl Iterator<Item = (char, u16, u16)> {
+    KEY_ROWS.iter().enumerate().flat_map(|(r, keys)| {
+        keys.chars()
+            .enumerate()
+            .map(move |(i, c)| (c, KEY_STAGGER[r] + i as u16 * KEY_W, r as u16 * KEY_H))
+    })
+}
+
+/// A key's share of the most pressed, 0 to 1.
+fn share(heat: &Heat, c: char) -> f32 {
+    let most = heat.values().copied().max().unwrap_or(0);
+    if most == 0 {
+        return 0.0;
+    }
+    heat.get(&c).copied().unwrap_or(0) as f32 / most as f32
+}
+
+/// A 5 by 7 picture of each letter and digit, a row a byte, its five low
+/// bits the pixels left to right: the binary carries no font to raster the
+/// keys' letters with.
+fn glyph(c: char) -> [u8; 7] {
+    match c {
+        'A' => [0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'B' => [0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E],
+        'C' => [0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E],
+        'D' => [0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E],
+        'E' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F],
+        'F' => [0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10],
+        'G' => [0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F],
+        'H' => [0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11],
+        'I' => [0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        'J' => [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0C],
+        'K' => [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11],
+        'L' => [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F],
+        'M' => [0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11],
+        'N' => [0x11, 0x11, 0x19, 0x15, 0x13, 0x11, 0x11],
+        'O' => [0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'P' => [0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10],
+        'Q' => [0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D],
+        'R' => [0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11],
+        'S' => [0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E],
+        'T' => [0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
+        'U' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E],
+        'V' => [0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        'W' => [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0A],
+        'X' => [0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11],
+        'Y' => [0x11, 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04],
+        'Z' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F],
+        '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        '3' => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+        '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        '5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+        '6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        _ => [0; 7],
+    }
+}
+
+/// The keyboard as a heatmap: a rounded key per letter and digit, staggered
+/// as a keyboard's rows are, filled in `accent` at an alpha from 0.18 to 1
+/// by its share of the most pressed (an unpressed key on the sunken
+/// surface), its letter centered, dark on a key past half and dim below,
+/// and the outlined keys with a 1.5 px edge in the light tone around them,
+/// as a series outlines its part.
+pub fn raster_keyboard(
+    heat: &Heat,
+    outlined: &Outlined,
+    accent: Color,
+    cell: Cell,
+    tones: &Tones,
+) -> Pixmap {
+    let (cols, rows) = keyboard_size();
+    let (cw, ch) = (cell.0 as f32, cell.1 as f32);
+    let mut pm = canvas((cols as f32 * cw) as u32, (rows as f32 * ch) as u32);
+    let dark = rgb(Color::Indexed(232));
+    for (c, x, y) in key_cells() {
+        let (kx, ky) = (x as f32 * cw + 3.0, y as f32 * ch + 3.0);
+        let (kw, kh) = (KEY_W as f32 * cw - 6.0, KEY_H as f32 * ch - 6.0);
+        if outlined.contains(&c) {
+            fill(
+                &mut pm,
+                round_rect(kx - 1.5, ky - 1.5, kw + 3.0, kh + 3.0, 5.5),
+                rgb(tones.light),
+                1.0,
+            );
+        }
+        let s = share(heat, c);
+        fill(
+            &mut pm,
+            round_rect(kx, ky, kw, kh, 4.0),
+            rgb(tones.sunken),
+            1.0,
+        );
+        if s > 0.0 {
+            fill(
+                &mut pm,
+                round_rect(kx, ky, kw, kh, 4.0),
+                rgb(accent),
+                0.18 + 0.82 * s,
+            );
+        }
+        let ink = if s > 0.5 { dark } else { rgb(tones.secondary) };
+        let px = ((kh * 0.5 / 7.0).min(kw * 0.5 / 5.0)).floor().max(1.0);
+        let (gx, gy) = (kx + (kw - 5.0 * px) / 2.0, ky + (kh - 7.0 * px) / 2.0);
+        for (r, bits) in glyph(c).iter().enumerate() {
+            for b in 0..5 {
+                if bits & (0x10 >> b) != 0
+                    && let Some(rect) =
+                        SkRect::from_xywh(gx + b as f32 * px, gy + r as f32 * px, px, px)
+                {
+                    pm.fill_rect(rect, &paint(ink, 1.0), Transform::identity(), None);
+                }
+            }
+        }
+    }
+    pm
+}
+
+/// The keyboard as a heatmap at `area`'s corner (`keyboard_size` cells),
+/// `heat` how often each key was pressed and `outlined` the keys with an
+/// edge; as text, each key's letter centered on its first row, in `accent`
+/// at three steps by its share (dim, plain, bold) and in the rule's tone
+/// when unpressed, the outlined ones bold and underlined.
+pub fn keyboard(
+    frame: &mut Frame,
+    name: &str,
+    area: Rect,
+    heat: &Heat,
+    outlined: &Outlined,
+    accent: Color,
+) {
+    let (cols, rows) = keyboard_size();
+    let area = Rect {
+        width: cols,
+        height: rows,
+        ..area
+    };
+    let tones = Tones::now();
+    if let Some(cell) = frame.graphics
+        && placeable(frame, area)
+    {
+        let key = key_of(("keyboard", cell, tones, heat, outlined, accent));
+        let (heat, outlined) = (heat.clone(), outlined.clone());
+        place(
+            frame,
+            name,
+            area,
+            key,
+            Box::new(move || raster_keyboard(&heat, &outlined, accent, cell, &tones)),
+        );
+        return;
+    }
+    let area = area.intersection(frame.buf.area);
+    if area.is_empty() {
+        return;
+    }
+    frame.links.clear_area(area);
+    for (c, x, y) in key_cells() {
+        let s = share(heat, c);
+        let mut style = if s <= 0.0 {
+            Style::new().fg(tones.rule)
+        } else if s < 1.0 / 3.0 {
+            Style::new()
+                .fg(accent)
+                .add_modifier(ratatui::style::Modifier::DIM)
+        } else if s < 2.0 / 3.0 {
+            Style::new().fg(accent)
+        } else {
+            Style::new()
+                .fg(accent)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        };
+        if outlined.contains(&c) {
+            style = style
+                .add_modifier(ratatui::style::Modifier::BOLD)
+                .add_modifier(ratatui::style::Modifier::UNDERLINED);
+        }
+        let text = format!("[{c}]");
+        put_text(
+            frame,
+            area.x + x + 1,
+            area.y + y,
+            &text,
+            style,
+            area.width.saturating_sub(x + 1),
+        );
+    }
+}
+
 // ── Sending ─────────────────────────────────────────────────────────────────
 
 /// One kitty graphics command carrying `data` base64'd in chunks of 4096
@@ -1869,5 +2098,58 @@ mod tests {
         avatar(&mut f, "a", Rect::new(0, 0, 2, 1), "Bo", red(), None);
         assert!(f.images.is_empty());
         assert_eq!(f.buf[(0, 0)].symbol(), "B");
+    }
+
+    #[test]
+    fn the_keyboard_rasters_at_its_cells_and_outlines_the_given_keys() {
+        let tones = Tones::now();
+        let heat: Heat = [('J', 10), ('K', 2)].into_iter().collect();
+        let outlined: Outlined = ['Q'].into_iter().collect();
+        let (cols, rows) = keyboard_size();
+        assert_eq!((cols, rows), (52, 8));
+        let pm = raster_keyboard(&heat, &outlined, red(), CELL, &tones);
+        assert_eq!(
+            (pm.width(), pm.height()),
+            (cols as u32 * CELL.0 as u32, rows as u32 * CELL.1 as u32)
+        );
+        let at = |pm: &Pixmap, x: u32, y: u32| pm.pixel(x, y).unwrap().demultiply();
+        // Q is the first key of the second row, two cells in: its edge, a
+        // pixel outside the key, is lit, and W's isn't.
+        let (qx, qy) = (2 * CELL.0 as u32 + 1, 2 * CELL.1 as u32 + 10);
+        assert!(at(&pm, qx, qy).alpha() > 0);
+        let wx = qx + KEY_W as u32 * CELL.0 as u32;
+        assert_eq!(at(&pm, wx, qy).alpha(), 0);
+        assert_eq!(
+            raster_keyboard(&heat, &outlined, red(), CELL, &tones).data(),
+            pm.data()
+        );
+        assert_eq!(key_at(0, 0), Some('1'));
+        assert_eq!(key_at(2, 2), Some('Q'));
+        assert_eq!(key_at(1, 2), None);
+        assert_eq!(key_at(5 + 6 * 5, 7), Some('M'));
+    }
+
+    #[test]
+    fn the_keyboards_text_shades_three_steps_and_marks_the_outlined() {
+        use ratatui::style::Modifier;
+        let heat: Heat = [('J', 9), ('K', 5), ('L', 1)].into_iter().collect();
+        let outlined: Outlined = ['A'].into_iter().collect();
+        let mut f = Frame::new(60, 10);
+        keyboard(&mut f, "k", Rect::new(0, 0, 52, 8), &heat, &outlined, red());
+        assert!(f.images.is_empty());
+        let cell_of = |c: char| {
+            let (_, x, y) = key_cells().find(|(k, _, _)| *k == c).unwrap();
+            f.buf[(x + 2, y)].clone()
+        };
+        let j = cell_of('J');
+        assert_eq!(j.symbol(), "J");
+        assert_eq!(j.fg, red());
+        assert!(j.modifier.contains(Modifier::BOLD));
+        let k = cell_of('K');
+        assert!(!k.modifier.contains(Modifier::BOLD) && !k.modifier.contains(Modifier::DIM));
+        assert!(cell_of('L').modifier.contains(Modifier::DIM));
+        assert_eq!(cell_of('Z').fg, Tones::now().rule);
+        let a = cell_of('A');
+        assert!(a.modifier.contains(Modifier::UNDERLINED));
     }
 }

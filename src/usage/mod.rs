@@ -61,6 +61,8 @@ pub enum UsageEvent {
         name: String,
         result: Result<plugins::Output, String>,
     },
+    /// The keys pressed in the last seven days, by their notation.
+    Keys(HashMap<String, u64>),
     /// Text to type into a pane: `claude --resume` into a reopened tab's
     /// shell, once it has drawn its prompt.
     Type { pane: PaneId, text: String },
@@ -105,4 +107,10 @@ pub struct Usage {
     /// The plugins sidebar.json names, and the file's time when read.
     pub plugins: Vec<plugins::Plugin>,
     plugins_seen: Option<Option<SystemTime>>,
+    /// The keys pressed in the last seven days, by their notation, for the
+    /// Keys view's heatmap: read off the task while the view was wanted
+    /// within `WANT_FOR`, at most every `KEEP_EVERY`.
+    week_keys: HashMap<String, u64>,
+    keys_wanted: Option<Instant>,
+    keys_asked: Option<Instant>,
 }

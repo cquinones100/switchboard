@@ -1912,8 +1912,14 @@ fn list(
                 .put(text::pad(key, key_width), bold(theme.bright))
                 .put("  ", Style::new())
                 .put(item.title.clone(), name)
-                .put("  ", Style::new())
-                .put(item.detail.clone(), fg(theme.faint));
+                .put("  ", Style::new());
+            // A key keys.json bound is yours.
+            if super::keymap::yours_of(item) {
+                for s in kit::chip("yours", Tone::Needs, m.snap.caps, theme) {
+                    row.put(s.content.into_owned(), s.style);
+                }
+            }
+            row.put(item.detail.clone(), fg(theme.faint));
             lines.push(row.line(cols, fill));
             continue;
         }
@@ -2720,6 +2726,16 @@ fn stage_rows(
     }
 }
 
+/// Whether the Keys view is drawn as UX 2.0's board (`keys_board`): with
+/// UX 2.0, room for it and a key to show.
+pub fn keys_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
+    m.snap.rules.ux2
+        && v.id == ViewId::Keys
+        && cols >= super::keys_board::BOARD_AT
+        && v.data.items.iter().any(|i| !views::is_header(i))
+        && super::keys_board::fits(&v.data.items, m.size.1 as usize)
+}
+
 /// How wide the main area must be for UX 2.0's Autopilot board (its six
 /// columns 18 wide), narrower showing the plain list; and how wide for the
 /// chosen card's side panel, and how many columns that takes.
@@ -2752,8 +2768,9 @@ pub struct Image {
 /// What an image atom draws: a meter (`images::meter`) how full, in what
 /// color, with a tick; or a series of bars (`images::series`) scaled to
 /// `max`, what is past `over` red, with its `marks` (a chart's outlined
-/// part, grid and "now" edge), which one row tall is a sparkline; or a
-/// setting's switch (`images::switch`), on or off.
+/// part, grid and "now" edge), which one row tall is a sparkline; a
+/// setting's switch (`images::switch`), on or off; or the keyboard as a heatmap (`images::keyboard`), how often each key was
+/// pressed, with the keys of a group outlined.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Meter {
@@ -2769,6 +2786,10 @@ pub enum Shape {
     },
     Switch {
         on: bool,
+    },
+    Keyboard {
+        heat: crate::ui::images::Heat,
+        outlined: crate::ui::images::Outlined,
     },
 }
 
@@ -2793,7 +2814,7 @@ impl Image {
     pub fn frac(&self) -> Option<f32> {
         match self.shape {
             Shape::Meter { frac, .. } => Some(frac),
-            Shape::Series { .. } | Shape::Switch { .. } => None,
+            Shape::Series { .. } | Shape::Switch { .. } | Shape::Keyboard { .. } => None,
         }
     }
 }
@@ -3680,7 +3701,29 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("e", "open the file"),
         ]),
         ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
-        ViewId::Keys => with(&[("jk", "move"), ("↵", "press it"), ("/", "filter")]),
+        ViewId::Keys if keys_board_shown(m, view, m.size.0 as usize) => {
+            let mut out = pairs(&[
+                ("hl", "group"),
+                ("jk", "key"),
+                ("↵", "press it here"),
+                ("/", "filter keys, words, tags"),
+                ("?", "press a key to find it"),
+            ]);
+            out.extend(pairs(next));
+            out.extend(pairs(&[("esc", "close")]));
+            out
+        }
+        ViewId::Keys => {
+            let mut out = pairs(&[
+                ("jk", "move"),
+                ("↵", "press it"),
+                ("/", "filter"),
+                ("?", "find a key"),
+            ]);
+            out.extend(pairs(next));
+            out.extend(pairs(&[("esc", "close")]));
+            out
+        }
         ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
         ViewId::Usage if m.snap.rules.ux2 && m.size.0 as usize >= super::usage_board::BOARD_AT => {
             with(&[
@@ -4431,6 +4474,8 @@ pub fn drawn(
                 && cols >= super::usage_board::BOARD_AT
                 && super::usage_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters)
             {
+            } else if keys_board_shown(m, v, cols) {
+                super::keys_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
                     cols,
@@ -4469,6 +4514,7 @@ pub fn drawn(
                     matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
                         || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
                         || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
+                        || keys_board_shown(m, v, cols)
                 })
             {
                 let y = rows.saturating_sub(1) as u16;
@@ -6773,5 +6819,142 @@ mod tests {
         // Too narrow for the board: the list.
         let text = texts(&drawn(&m, 120, 40).0).join("\n");
         assert!(!text.contains("SPEND BY QUARTER HOUR"), "{text}");
+    }
+
+    #[test]
+    fn with_ux2_the_keys_view_is_a_board_of_groups_a_heatmap_the_chosen_key_and_its_table() {
+        use crate::mission::keymap::{self, Shown};
+        let mut bindings = crate::mux::keys::Bindings::default();
+        bindings.apply(&serde_json::json!({ "root": { "M-g": "new-tab" } }));
+        let counts: std::collections::HashMap<String, u64> =
+            [("M-j".to_string(), 212), ("M-t".to_string(), 3)]
+                .into_iter()
+                .collect();
+        let shown = Shown {
+            github: true,
+            linear: true,
+            ask: true,
+            easy: false,
+        };
+        let items = keymap::items(&bindings, shown, &counts);
+        let mut view = list_view(ViewId::Keys, "Keys", items.clone());
+        view.data.head = keymap::head(&counts, true);
+        let mut m = mission(Vec::new(), vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 44);
+        let find = items
+            .iter()
+            .position(|i| keymap::press_of(i) == Some(crate::mux::keys::Action::FindTab))
+            .unwrap();
+        m.cursor = find as isize;
+        let (lines, hits, images, _) = drawn(&m, 160, 44);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("WORKSPACE"), "{text}");
+        assert!(text.contains("#tabs"), "{text}");
+        assert!(text.contains("EACH APP'S OWN"), "{text}");
+        assert!(text.contains("THROUGH M-P ONLY"), "{text}");
+        assert!(text.contains("212 this week · your most used"), "{text}");
+        assert!(text.contains("the outlined ones are #tabs"), "{text}");
+        assert!(text.contains("WHAT IT DOES"), "{text}");
+        assert!(text.contains("hl group"), "{text}");
+        // The keyboard, with #tabs' Alt keys outlined and M-j's presses.
+        let [keyboard] = &images[..] else {
+            panic!("{images:?}");
+        };
+        match &keyboard.shape {
+            Shape::Keyboard { heat, outlined } => {
+                assert_eq!(heat.get(&'J'), Some(&212));
+                assert!(outlined.contains(&'J'));
+                assert!(outlined.contains(&'1'), "M-1 goes to a tab");
+            }
+            other => panic!("{other:?}"),
+        }
+        // A click on a table row chooses it (and a second presses it); one
+        // on a group or a key of the keyboard only chooses, never pressing.
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(find as isize)));
+        let panel_hits: Vec<_> = hits.iter().filter(|h| h.x0 == 0 && h.y > 2).collect();
+        assert!(!panel_hits.is_empty());
+        assert!(panel_hits.iter().all(|h| matches!(h.spot, Spot::Choose(_))));
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Choose(find as isize) && h.x0 > 0)
+        );
+        // M-g, bound in keys.json, is yours in its group's table.
+        let new_tab = items
+            .iter()
+            .position(|i| keymap::press_of(i) == Some(crate::mux::keys::Action::NewTab))
+            .unwrap();
+        m.cursor = new_tab as isize;
+        let text = texts(&drawn(&m, 160, 44).0).join("\n");
+        let row = text.lines().find(|l| l.contains("▌M-g")).unwrap_or("");
+        assert!(row.contains("yours"), "{text}");
+        // With habits off, what turns the counts on in the keyboard's place.
+        m.snap.views[0].data.head = keymap::head(&Default::default(), false);
+        let (lines, _, images, _) = drawn(&m, 160, 44);
+        assert!(images.is_empty());
+        assert!(texts(&lines).join("\n").contains("Turn on Suggestions"));
+        // Too narrow for the board: the list.
+        let text = texts(&drawn(&m, 90, 44).0).join("\n");
+        assert!(!text.contains("WHAT IT DOES"), "{text}");
+    }
+
+    #[test]
+    fn the_keys_board_lays_out_from_the_screens_width() {
+        use crate::mission::keymap::{self, Shown};
+        let bindings = crate::mux::keys::Bindings::default();
+        let counts: std::collections::HashMap<String, u64> =
+            [("M-j".to_string(), 212)].into_iter().collect();
+        let shown = Shown {
+            github: true,
+            linear: true,
+            ask: true,
+            easy: false,
+        };
+        let items = keymap::items(&bindings, shown, &counts);
+        let mut view = list_view(ViewId::Keys, "Keys", items.clone());
+        view.data.head = keymap::head(&counts, true);
+        let mut m = mission(Vec::new(), vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = items
+            .iter()
+            .position(|i| keymap::press_of(i) == Some(crate::mux::keys::Action::FindTab))
+            .unwrap() as isize;
+        let lines_at = |m: &mut Mission, cols: usize| {
+            m.size = (cols as u16, 45);
+            let (lines, _, images, _) = drawn(m, cols, 45);
+            (texts(&lines), images)
+        };
+        let mut right_edges = Vec::new();
+        for cols in [120, 160, 240] {
+            let (text, images) = lines_at(&mut m, cols);
+            let all = text.join("\n");
+            assert!(text.iter().all(|l| width(l) <= cols), "{cols}: {all}");
+            assert_eq!(images.len(), 1, "{cols}: the keyboard");
+            assert!(all.contains("Search and jump to a tab"), "{cols}: {all}");
+            // The table's From column ends at the right edge.
+            let row = text.iter().find(|l| l.contains("▌M-j")).unwrap();
+            assert!(row.trim_end().ends_with("default"), "{cols}: {row}");
+            right_edges.push(width(row.trim_end()));
+            // The chosen key beside the keyboard at every width here; at
+            // 120 the tags column, less important, has given way.
+            assert!(all.contains("212 this week"), "{cols}: {all}");
+            assert_eq!(all.contains("TAGS"), cols > 120, "{cols}: {all}");
+        }
+        assert!(
+            right_edges.windows(2).all(|w| w[0] < w[1]),
+            "{right_edges:?}"
+        );
+        // Too short for the panel of groups: the list, which reaches them all.
+        m.size = (160, 24);
+        let (lines, _, _, _) = drawn(&m, 160, 24);
+        assert!(!texts(&lines).join("\n").contains("WHAT IT DOES"));
+        // Narrower, the chosen key beside gives way too.
+        let (text, _) = lines_at(&mut m, 104);
+        let all = text.join("\n");
+        assert!(!all.contains("TAGS"), "{all}");
+        assert!(!all.contains("212 this week"), "{all}");
+        assert!(all.contains("WHAT IT DOES"), "{all}");
     }
 }

@@ -379,7 +379,7 @@ impl Command {
                 "Clears the sidebar's repository filter, every tab back in the group of what it is doing, as a click on the filter's chip does."
             }
             Command::Keys => {
-                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes'. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
+                "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
         }
     }

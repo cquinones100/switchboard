@@ -23,7 +23,7 @@
 //! with its keys, and the actions no key is bound to by default
 //! (`Action::palette_only`) with none.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
@@ -737,6 +737,10 @@ pub struct Bindings {
     pub prefix_key: Key,
     pub root: HashMap<Key, Action>,
     pub prefix: HashMap<Key, Action>,
+    /// The keys pressed alone, and after the prefix, that `keys.json`
+    /// binds or binds to something else, for the Keys view's "yours".
+    pub yours: HashSet<Key>,
+    pub yours_prefix: HashSet<Key>,
 }
 
 fn key(notation: &str) -> Key {
@@ -852,6 +856,8 @@ impl Default for Bindings {
             prefix_key: key("M-b"),
             root,
             prefix,
+            yours: HashSet::new(),
+            yours_prefix: HashSet::new(),
         }
     }
 }
@@ -881,7 +887,10 @@ impl Bindings {
                 None => problems.push(format!("prefix-key: {p} isn't a key")),
             }
         }
-        for (table_name, table) in [("root", &mut self.root), ("prefix", &mut self.prefix)] {
+        for (table_name, table, yours) in [
+            ("root", &mut self.root, &mut self.yours),
+            ("prefix", &mut self.prefix, &mut self.yours_prefix),
+        ] {
             let Some(entries) = config.get(table_name).and_then(Value::as_object) else {
                 continue;
             };
@@ -893,9 +902,13 @@ impl Bindings {
                 match action {
                     Value::Null => {
                         table.remove(&k);
+                        yours.remove(&k);
                     }
                     Value::String(name) => match Action::parse(name) {
                         Some(a) => {
+                            if table.get(&k) != Some(&a) {
+                                yours.insert(k);
+                            }
                             table.insert(k, a);
                         }
                         None => problems.push(format!("{table_name}: {name} isn't an action")),
@@ -991,6 +1004,26 @@ mod tests {
         );
         assert_eq!(Action::parse("select-tab-0"), None);
         assert_eq!(Action::parse("fly"), None);
+    }
+
+    #[test]
+    fn the_keys_keys_json_binds_are_yours_and_the_defaults_are_not() {
+        let mut b = Bindings::default();
+        let problems = b.apply(&serde_json::json!({
+            "root": { "M-g": "new-tab", "M-j": "find-tab", "M-w": null },
+            "prefix": { "y": "copy-mode" },
+        }));
+        assert!(problems.is_empty(), "{problems:?}");
+        let k = |n: &str| Key::parse(n).unwrap();
+        assert!(b.yours.contains(&k("M-g")));
+        assert!(
+            !b.yours.contains(&k("M-j")),
+            "bound to what it already does"
+        );
+        assert!(!b.yours.contains(&k("M-w")), "unbound");
+        assert!(!b.yours.contains(&k("M-t")));
+        assert!(b.yours_prefix.contains(&k("y")));
+        assert!(Bindings::default().yours.is_empty());
     }
 
     #[test]

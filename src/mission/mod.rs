@@ -23,6 +23,11 @@
 //!
 //! - `views`: the views after the tabs, the Work map and Settings among them.
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
+//! - `keys_board`: with UX 2.0, the Keys view as a board: the groups, the
+//!   keyboard as a heatmap of the week's presses, the chosen key, the
+//!   group's table.
+//! - `find_key`: the Find a key box `?` opens on the Keys view: a key
+//!   pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
 //! - `calendar`: the Calendar view drawn as a day, hours down the side.
 //! - `history`: the Notifications view as a history by day.
@@ -48,8 +53,10 @@ pub mod busy;
 pub mod calendar;
 pub mod choices;
 pub mod diagrams;
+pub mod find_key;
 pub mod history;
 pub mod keymap;
+pub mod keys_board;
 pub mod remind;
 pub mod render;
 pub mod resources_board;
@@ -116,6 +123,9 @@ pub enum Spot {
     /// A category of the Settings board, by the place of its first row,
     /// which a click chooses without changing it.
     Category(isize),
+    /// A row chosen by a click elsewhere (a group in the Keys board's
+    /// panel, a key of its keyboard), which a second click never presses.
+    Choose(isize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -499,6 +509,14 @@ impl Overlay for Mission {
                 render::Shape::Switch { on } => {
                     crate::ui::images::switch(frame, &image.name, area, *on)
                 }
+                render::Shape::Keyboard { heat, outlined } => crate::ui::images::keyboard(
+                    frame,
+                    &image.name,
+                    area,
+                    heat,
+                    outlined,
+                    crate::mux::compose::colors::ACCENT,
+                ),
             }
         }
         for picture in &self.pictures {

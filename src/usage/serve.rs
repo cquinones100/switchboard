@@ -126,6 +126,18 @@ impl Server {
             self.usage_refresh(ViewKind::Resources);
         }
         self.usage_run_plugins(now);
+        let keys_due = self
+            .usage
+            .keys_asked
+            .is_none_or(|at| now.duration_since(at) >= KEEP_EVERY);
+        if keys_due
+            && self
+                .usage
+                .keys_wanted
+                .is_some_and(|at| now.duration_since(at) < WANT_FOR)
+        {
+            self.keys_refresh();
+        }
     }
 
     /// What the work off the task answered.
@@ -205,6 +217,12 @@ impl Server {
                 self.usage.suggestions = list;
                 self.set_notices("habits", items);
             }
+            UsageEvent::Keys(counts) => {
+                if self.usage.week_keys != counts {
+                    self.usage.week_keys = counts;
+                    self.usage_redraw();
+                }
+            }
             UsageEvent::Type { pane, text } => {
                 if let Some(slot) = self.panes.get_mut(&pane) {
                     let _ = slot.pane.write(text.as_bytes());
@@ -230,6 +248,55 @@ impl Server {
         if first && !self.usage_in_flight(kind) {
             self.usage_refresh(kind);
         }
+    }
+
+    /// The Keys view is in front: the week's presses are read now when
+    /// they haven't been within `KEEP_EVERY`, and kept up to date while it
+    /// stays.
+    pub fn want_key_counts(&mut self) {
+        let now = Instant::now();
+        self.usage.keys_wanted = Some(now);
+        if self
+            .usage
+            .keys_asked
+            .is_none_or(|at| now.duration_since(at) >= KEEP_EVERY)
+        {
+            self.keys_refresh();
+        }
+    }
+
+    /// Reads the last seven days' presses off the task; with `habits` off,
+    /// forgets them.
+    fn keys_refresh(&mut self) {
+        self.usage.keys_asked = Some(Instant::now());
+        if !settings::is_on("habits") {
+            self.usage.week_keys.clear();
+            return;
+        }
+        let tx = self.tx.clone();
+        let job = move || {
+            let tally = habits::tally(&paths::state_dir(), 7, util::now_ms());
+            let counts = tally.of_kind("key").into_iter().collect();
+            let _ = tx.send(Event::Usage(UsageEvent::Keys(counts)));
+        };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::spawn_blocking(job);
+        }
+    }
+
+    /// The keys pressed in the last seven days by their notation, what
+    /// hasn't been written yet included; empty with `habits` off.
+    pub fn keys_week(&self) -> HashMap<String, u64> {
+        if !settings::is_on("habits") {
+            return HashMap::new();
+        }
+        let mut out = self.usage.week_keys.clone();
+        for ((kind, name), n) in &self.usage.pending {
+            if kind == "key" {
+                *out.entry(name.clone()).or_insert(0) += n;
+            }
+        }
+        out
     }
 
     /// A view as last worked out (empty before the first time).
@@ -688,6 +755,11 @@ impl Server {
         } else {
             Vec::new()
         };
+        // The keys written stay in the week's counts until the next read of
+        // the files has them.
+        for c in counts.iter().filter(|c| c.kind == "key") {
+            *self.usage.week_keys.entry(c.name.clone()).or_insert(0) += c.n;
+        }
         let notes = self.habit_key_notes();
         let tx = self.tx.clone();
         let job = move || {
