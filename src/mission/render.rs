@@ -944,17 +944,30 @@ fn board_cards(
         .ok()
         .and_then(|c| view.data.items.get(c));
     let images = ready_diagrams(m).filter(|_| side_w > 0);
-    let about = chosen_item
-        .filter(|_| side_w > 0)
-        .map(|item| {
-            if tickets {
-                ticket_about(item, side_w, body, theme, images.as_ref())
-            } else {
-                pr_about(item, side_w, body, theme, images.as_ref())
-            }
+    let about = chosen_item.filter(|_| side_w > 0).map(|item| {
+        if tickets {
+            ticket_about(item, side_w, theme, images.as_ref())
+        } else {
+            pr_about(item, side_w, theme, images.as_ref())
+        }
+    });
+    let cols = cols - side_w;
+    if let Some(about) = &about {
+        side_hits(
+            about.last_top(body),
+            cols + 2,
+            side_w - 2,
+            top_row,
+            body,
+            hits,
+        );
+    }
+    let about = about
+        .map(|a| {
+            let top = m.side_top().min(a.last_top(body));
+            a.window(top, body)
         })
         .unwrap_or_default();
-    let cols = cols - side_w;
     // Each picture where the pane's lines put it on the screen.
     let pictures = about
         .pictures
@@ -1395,8 +1408,10 @@ pub const ABOUT_COLS: usize = SIDE_W - 3;
 
 /// A diagram the pane beside a board places as an image once its lines are
 /// drawn (`ui::images::picture_cut`): its key among the snapshot's
-/// diagrams, the id its layout gave it, where its corner is, its size in
-/// cells, and how many of its rows show above the pane's bottom.
+/// diagrams, the id its layout gave it, where the corner of what shows of
+/// it is, its size in cells, the first of its rows that shows (past those
+/// scrolled above the pane's top), and how many show above the pane's
+/// bottom.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picture {
     pub key: String,
@@ -1405,6 +1420,7 @@ pub struct Picture {
     pub y: u16,
     pub cols: u16,
     pub rows: u16,
+    pub from: u16,
     pub shown: u16,
 }
 
@@ -1414,6 +1430,39 @@ pub struct Picture {
 struct About {
     lines: Vec<Vec<Span<'static>>>,
     pictures: Vec<Picture>,
+}
+
+impl About {
+    /// The `body` lines from `top` that the pane shows, scrolled there by
+    /// `J` and `K` (`Mission::side_top`), each picture cut at the pane's
+    /// top and bottom to the rows of it that show.
+    fn window(self, top: usize, body: usize) -> About {
+        let end = top + body;
+        let pictures = self
+            .pictures
+            .into_iter()
+            .filter_map(|p| {
+                let (start, stop) = (p.y as usize, p.y as usize + p.rows as usize);
+                let (first, last) = (start.max(top), stop.min(end));
+                (first < last).then(|| Picture {
+                    y: (first - top) as u16,
+                    from: (first - start) as u16,
+                    shown: (last - first) as u16,
+                    ..p
+                })
+            })
+            .collect();
+        About {
+            lines: self.lines.into_iter().skip(top).take(body).collect(),
+            pictures,
+        }
+    }
+
+    /// The most the pane's first line shown can be, its last line then at
+    /// its bottom.
+    fn last_top(&self, body: usize) -> usize {
+        self.lines.len().saturating_sub(body)
+    }
 }
 
 /// The description the board draws beside its columns now, and the place
@@ -1502,6 +1551,7 @@ fn markdown_lines(
                     y: y as u16,
                     cols: row.cols,
                     rows: placed.rows,
+                    from: 0,
                     shown: placed.rows,
                 });
             }
@@ -1512,14 +1562,26 @@ fn markdown_lines(
     about
 }
 
+/// The pane beside a board's rows, `body` of them from `top_row`, `w`
+/// wide from `x`, for the wheel over it to scroll it, each holding the
+/// most its first line shown can be.
+fn side_hits(last: usize, x: usize, w: usize, top_row: usize, body: usize, hits: &mut Vec<HitBox>) {
+    hits.extend((0..body).map(|i| HitBox {
+        y: (top_row + i) as u16,
+        x0: x as u16,
+        x1: (x + w).saturating_sub(1) as u16,
+        spot: Spot::Side(last),
+    }));
+}
+
 /// A description under the pane's head, or a faint line saying it has
-/// none, cut to the board's height, a picture with it.
+/// none, a picture with it, whole: the board shows the part of it its
+/// height has room for (`About::window`).
 fn with_description(
     head: Vec<Vec<Span<'static>>>,
     description: &str,
     place: &str,
     inner: usize,
-    body: usize,
     theme: &Theme,
     images: Option<&Images>,
 ) -> About {
@@ -1534,18 +1596,12 @@ fn with_description(
     let under = head.len();
     let mut lines = head;
     lines.extend(described.lines);
-    lines.truncate(body);
     let pictures = described
         .pictures
         .into_iter()
-        .filter_map(|p| {
-            let y = p.y as usize + under;
-            let room = body.saturating_sub(y);
-            (room > 0).then(|| Picture {
-                y: y as u16,
-                shown: p.shown.min(room as u16),
-                ..p
-            })
+        .map(|p| Picture {
+            y: p.y + under as u16,
+            ..p
         })
         .collect();
     About { lines, pictures }
@@ -1554,13 +1610,7 @@ fn with_description(
 /// The chosen PR's description, as the board draws it beside the columns:
 /// its number and title bold, a dim line of its author, commits, lines
 /// changed and checks, a rule, then its body through Markdown.
-fn pr_about(
-    item: &Item,
-    side_w: usize,
-    body: usize,
-    theme: &Theme,
-    images: Option<&Images>,
-) -> About {
+fn pr_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images>) -> About {
     let inner = side_w.saturating_sub(3);
     let d = &item.data;
     let mut facts: Vec<String> = Vec::new();
@@ -1587,7 +1637,6 @@ fn pr_about(
         d["body"].as_str().unwrap_or(""),
         crate::views::pr::PLACE,
         inner,
-        body,
         theme,
         images,
     )
@@ -1596,13 +1645,7 @@ fn pr_about(
 /// The chosen ticket's description beside the board: its ID and title
 /// bold, a dim line of its state, priority, project, estimate and
 /// assignee, a rule, then its description through Markdown.
-fn ticket_about(
-    item: &Item,
-    side_w: usize,
-    body: usize,
-    theme: &Theme,
-    images: Option<&Images>,
-) -> About {
+fn ticket_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images>) -> About {
     let inner = side_w.saturating_sub(3);
     let d = &item.data;
     let dim = |s: String| Span::styled(s, fg(theme.dim));
@@ -1632,7 +1675,6 @@ fn ticket_about(
         d["description"].as_str().unwrap_or(""),
         crate::views::ticket::PLACE,
         inner,
-        body,
         theme,
         images,
     )
@@ -2410,9 +2452,18 @@ fn pilot_board(
         .ok()
         .and_then(|c| items.get(c))
         .filter(|_| side_w > 0)
-        .map(|item| pilot_about(item, side_w, body, theme, ready_diagrams(m).as_ref()))
-        .unwrap_or_default();
+        .map(|item| pilot_about(item, side_w, theme, ready_diagrams(m).as_ref()));
     let board_w = cols - side_w;
+    if let Some(about) = &about {
+        let last = about.last_top(body);
+        side_hits(last, board_w + 2, side_w - 2, lines.len(), body, hits);
+    }
+    let about = about
+        .map(|a| {
+            let top = m.side_top().min(a.last_top(body));
+            a.window(top, body)
+        })
+        .unwrap_or_default();
     // Each picture where the pane's lines put it on the screen.
     let pictures = about
         .pictures
@@ -2589,17 +2640,11 @@ fn pilot_board(
 /// wrapped, where it stands dim, a rule, then a tab's eight stages, each
 /// its name and its words in its stage's color; under them, for a card, a
 /// rule and its plan, as a ticket's description sits beside the Tickets
-/// board: the plan note's name dim, then its Markdown, cut at the pane's
-/// bottom. A card whose item links no plan says so, faint, and so does one
+/// board: the plan note's name dim, then its Markdown, whole, for the
+/// board to show the part that fits. A card whose item links no plan says so, faint, and so does one
 /// whose plan note isn't there, and a tab left from a note worked before,
 /// whose plans aren't read.
-fn pilot_about(
-    item: &Item,
-    side_w: usize,
-    body: usize,
-    theme: &Theme,
-    images: Option<&Images>,
-) -> About {
+fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images>) -> About {
     let inner = side_w.saturating_sub(3);
     let name = item
         .data
@@ -2645,7 +2690,6 @@ fn pilot_about(
     }
     let is_a_card = item.group.is_some();
     if !is_a_card {
-        out.truncate(body);
         return About {
             lines: out,
             pictures: Vec::new(),
@@ -2662,7 +2706,7 @@ fn pilot_about(
         (Some(name), Some(plan)) if !plan.trim().is_empty() => {
             said(name.to_string(), theme.dim, &mut out);
             out.push(Vec::new());
-            with_description(out, plan, PLAN_PLACE, inner, body, theme, images)
+            with_description(out, plan, PLAN_PLACE, inner, theme, images)
         }
         (name, plan) => {
             let words = match (name, plan) {
@@ -2674,7 +2718,6 @@ fn pilot_about(
                 (None, _) => "No plan".to_string(),
             };
             said(words, theme.faint, &mut out);
-            out.truncate(body);
             About {
                 lines: out,
                 pictures: Vec::new(),
@@ -2704,7 +2747,7 @@ fn label(title: &str, count: Option<usize>) -> String {
 
 /// The keys the footer names for the view in front, each a key and what it
 /// does (a pair with no key is words of its own).
-fn hints(m: &Mission, view: Option<&View>) -> Vec<(String, String)> {
+fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)> {
     let pairs = |p: &[(&str, &str)]| -> Vec<(String, String)> {
         p.iter()
             .map(|(k, w)| (k.to_string(), w.to_string()))
@@ -2740,6 +2783,9 @@ fn hints(m: &Mission, view: Option<&View>) -> Vec<(String, String)> {
     let close: &[(&str, &str)] = &[("?", "keys"), ("esc", "close")];
     let with = |first: &[(&str, &str)]| {
         let mut out = pairs(first);
+        if beside {
+            out.extend(pairs(&[("J K", "scroll")]));
+        }
         out.extend(pairs(next));
         out.extend(pairs(close));
         out
@@ -3204,8 +3250,9 @@ pub fn drawn(
         None => {
             let mut row = Row::default();
             row.put(" ", Style::new());
+            let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             row.spans
-                .extend(footer(&hints(m, view), snap.rules.ux2, theme));
+                .extend(footer(&hints(m, view, beside), snap.rules.ux2, theme));
             row
         }
     };
@@ -3918,7 +3965,7 @@ mod tests {
             .find(|s| s.content.contains("Settings"))
             .unwrap();
         assert!(bold_word.style.add_modifier.contains(Modifier::BOLD));
-        let light = pr_about(&m.snap.views[0].data.items[1], 50, 20, &Theme::LIGHT, None);
+        let light = pr_about(&m.snap.views[0].data.items[1], 50, &Theme::LIGHT, None);
         let plain = light
             .lines
             .iter()
@@ -4023,7 +4070,7 @@ mod tests {
         );
         assert!(text.iter().any(|l| l.contains("│ Steps")), "{text:?}");
         let low = ticket("AB-5", "Todo", 4, serde_json::json!({}));
-        let pane: Vec<String> = ticket_about(&low, 50, 10, &Theme::DARK, None)
+        let pane: Vec<String> = ticket_about(&low, 50, &Theme::DARK, None)
             .lines
             .iter()
             .map(|l| l.iter().map(|s| s.content.as_ref()).collect())
@@ -4567,5 +4614,133 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("1. note-stable-ids"))
         );
+    }
+
+    /// A description of `n` paragraphs, "Line 1" to "Line <n>".
+    fn long_description(n: usize) -> String {
+        (1..=n)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    #[test]
+    fn the_pane_beside_a_board_scrolls_to_its_later_lines_and_stops_at_its_end() {
+        let item = Item::new("menu", "Fix the menu")
+            .group("Todo")
+            .data(serde_json::json!({
+                "ticket": "menu", "state": "Todo", "description": long_description(30),
+            }));
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Tickets, "Tickets", vec![item])],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 20);
+        let pane = |m: &Mission| texts(&drawn(m, 160, 20).0).join("\n");
+        let (_, hits, _, _) = drawn(&m, 160, 20);
+        m.hits = hits;
+        let last = m.side_last().expect("the pane is shown");
+        assert!(last > 0, "longer than the pane");
+        let first = pane(&m);
+        assert!(first.contains("Line 1\n"), "{first}");
+        assert!(!first.contains("Line 30"), "{first}");
+        assert!(first.contains("J K scroll"), "the footer: {first}");
+
+        assert!(m.scroll_side(4, last));
+        assert_eq!(m.side_top(), 4);
+        let scrolled = pane(&m);
+        assert!(!scrolled.contains("Line 1\n"), "{scrolled}");
+        assert!(scrolled.contains("Line 3\n"), "{scrolled}");
+
+        // Past its end it stops with its last line at the bottom.
+        m.scroll_side(1000, last);
+        assert_eq!(m.side_top(), last);
+        let end = pane(&m);
+        assert!(end.contains("Line 30"), "{end}");
+        assert!(!m.scroll_side(1, last), "nothing further");
+        m.scroll_side(-1000, last);
+        assert_eq!(m.side_top(), 0);
+    }
+
+    #[test]
+    fn the_autopilot_plan_beside_the_board_scrolls_too() {
+        let rows = vec![pilot_row(3, "Give notes stable IDs", TabState::Working)];
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &rows,
+            &[],
+            &[],
+            &std::collections::HashMap::from([(
+                "Give notes stable IDs".to_string(),
+                crate::cmd::worktree_from_note::PlanNote {
+                    name: "Plan - Stable IDs".into(),
+                    text: Some(long_description(40)),
+                },
+            )]),
+        );
+        let chosen = list
+            .iter()
+            .position(|i| i.title == "Give notes stable IDs")
+            .unwrap();
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 30);
+        m.cursor = chosen as isize;
+        let (lines, hits, _, _) = drawn(&m, 160, 30);
+        assert!(!texts(&lines).join("\n").contains("Line 40"));
+        m.hits = hits;
+        let last = m.side_last().expect("the pane is shown");
+        m.scroll_side(1000, last);
+        let end = texts(&drawn(&m, 160, 30).0).join("\n");
+        assert!(end.contains("Line 40"), "{end}");
+        assert!(!end.contains("Plan - Stable IDs"), "{end}");
+
+        // Another card's pane shows from its top, and so does this one
+        // once chosen again after it was drawn.
+        m.cursor = 0;
+        assert_eq!(m.side_top(), 0);
+        m.forget_side_elsewhere();
+        m.cursor = chosen as isize;
+        assert_eq!(m.side_top(), 0);
+    }
+
+    #[test]
+    fn a_window_of_the_pane_cuts_a_picture_at_its_top_and_bottom() {
+        let about = About {
+            lines: vec![Vec::new(); 30],
+            pictures: vec![Picture {
+                key: "k".into(),
+                id: 1,
+                x: 0,
+                y: 5,
+                cols: 10,
+                rows: 10,
+                from: 0,
+                shown: 10,
+            }],
+        };
+        let window = about.clone().window(8, 4);
+        assert_eq!(window.lines.len(), 4);
+        let [p] = &window.pictures[..] else {
+            panic!("{:?}", window.pictures);
+        };
+        assert_eq!((p.y, p.from, p.shown), (0, 3, 4));
+        let window = about.clone().window(0, 8);
+        assert_eq!(
+            (
+                window.pictures[0].y,
+                window.pictures[0].from,
+                window.pictures[0].shown
+            ),
+            (5, 0, 3)
+        );
+        assert!(about.window(15, 5).pictures.is_empty(), "scrolled past it");
     }
 }

@@ -567,13 +567,13 @@ fn key_of(parts: impl Hash) -> u64 {
 }
 
 /// Writes an image's placeholder cells into the frame at `area`'s corner.
-fn put_placeholders(frame: &mut Frame, id: u32, area: Rect) {
+fn put_placeholders(frame: &mut Frame, id: u32, area: Rect, from_row: u16) {
     let area = area.intersection(frame.buf.area);
     let style = Style::new().fg(id_color(id));
     for r in 0..area.height {
         for c in 0..area.width {
             frame.buf[(area.x + c, area.y + r)]
-                .set_symbol(&placeholder(r, c))
+                .set_symbol(&placeholder(from_row + r, c))
                 .set_style(style);
         }
     }
@@ -584,7 +584,7 @@ fn put_placeholders(frame: &mut Frame, id: u32, area: Rect) {
 fn place(frame: &mut Frame, name: &str, area: Rect, key: u64, draw: Box<dyn Fn() -> Pixmap>) {
     let id = id_of(name);
     let (cols, rows) = (area.width, area.height);
-    put_placeholders(frame, id, area);
+    put_placeholders(frame, id, area, 0);
     frame.images.push(Placed {
         id,
         cols,
@@ -756,16 +756,18 @@ pub fn picture_shared(
     }
 }
 
-/// A picture `rows` rows tall of which `area` shows the top (one cut at
-/// the bottom of the pane it is laid out in): drawn whole, `area`'s width
-/// by `rows` cells, as `picture` draws one, under the id its layout gave
-/// it, with only `area`'s cells carrying its placeholders. Nothing where
+/// A picture `rows` rows tall of which `area` shows the rows from
+/// `from_row` down (one cut at the top or the bottom of the pane it is laid
+/// out in, or both): drawn whole, `area`'s width by `rows` cells, as
+/// `picture` draws one, under the id its layout gave it, with only `area`'s
+/// cells carrying its placeholders, those of the rows that show. Nothing where
 /// the terminal draws no images, since what lays it out lays out its text
 /// there instead.
 pub fn picture_cut(
     frame: &mut Frame,
     id: u32,
     area: Rect,
+    from_row: u16,
     rows: u16,
     img: &std::sync::Arc<RgbaImage>,
     content: u64,
@@ -776,15 +778,16 @@ pub fn picture_cut(
     let cols = area.width;
     let shown = area.intersection(frame.buf.area);
     let starts_on_the_screen = (shown.x, shown.y) == (area.x, area.y);
-    let fits_the_marks =
-        rows >= area.height && (rows as usize) <= MARKS.len() && (cols as usize) <= MARKS.len();
+    let fits_the_marks = rows >= from_row + area.height
+        && (rows as usize) <= MARKS.len()
+        && (cols as usize) <= MARKS.len();
     if shown.is_empty() || !starts_on_the_screen || !fits_the_marks {
         return;
     }
     let area = shown;
     let tones = Tones::now();
     let img = img.clone();
-    put_placeholders(frame, id, area);
+    put_placeholders(frame, id, area, from_row);
     frame.images.push(Placed {
         id,
         cols,
@@ -1326,7 +1329,7 @@ mod tests {
         let content = picture_key(&img);
         let id = id_of("mission/diagram/x");
         let mut f = graphics_frame(20, 6);
-        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 8, &img, content);
+        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 0, 8, &img, content);
         let [placed] = &f.images[..] else {
             panic!("one image: {:?}", f.images);
         };
@@ -1338,13 +1341,20 @@ mod tests {
 
         // One reaching past the screen's bottom keeps the rows on it.
         let mut f = graphics_frame(20, 6);
-        picture_cut(&mut f, id, Rect::new(2, 4, 10, 5), 8, &img, content);
+        picture_cut(&mut f, id, Rect::new(2, 4, 10, 5), 0, 8, &img, content);
         assert_eq!(f.images.len(), 1);
         assert!(marked(&f, 2, 5));
 
+        // One cut at the top has the placeholders of its rows that show.
+        let mut f = graphics_frame(20, 6);
+        picture_cut(&mut f, id, Rect::new(2, 0, 10, 3), 5, 8, &img, content);
+        assert_eq!(f.images.len(), 1);
+        assert_eq!(f.buf[(2, 0)].symbol(), placeholder(5, 0));
+        assert_eq!(f.buf[(11, 2)].symbol(), placeholder(7, 9));
+
         // Where the terminal draws no images, nothing: its text was laid out.
         let mut f = Frame::new(20, 6);
-        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 8, &img, content);
+        picture_cut(&mut f, id, Rect::new(2, 1, 10, 3), 0, 8, &img, content);
         assert!(f.images.is_empty() && !marked(&f, 2, 1));
     }
 

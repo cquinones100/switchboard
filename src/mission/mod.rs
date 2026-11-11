@@ -89,6 +89,10 @@ pub enum Spot {
     Index(isize),
     Menu(isize),
     Close,
+    /// A row of the pane beside a board, which the wheel scrolls; it holds
+    /// the most the pane's first line shown can be, for `J` and the wheel
+    /// to stop at its end.
+    Side(usize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -236,6 +240,10 @@ pub struct Mission {
     pub keep_landing: bool,
     /// Autopilot's view kept the same way, with the mode off.
     pub keep_autopilot: bool,
+    /// How far the pane beside a board is scrolled (`J`, `K`, the wheel
+    /// over it): the view and the item it was scrolled on, and its first
+    /// line shown. Another view or item shows its pane from the top.
+    pub side: Option<(usize, String, usize)>,
 }
 
 impl Mission {
@@ -263,7 +271,53 @@ impl Mission {
             spun_at: 0,
             keep_landing: false,
             keep_autopilot: false,
+            side: None,
         }
+    }
+
+    /// The first line the pane beside a board shows: where it was scrolled
+    /// while the view and the chosen item are the ones it was scrolled on,
+    /// else the top.
+    pub fn side_top(&self) -> usize {
+        match (&self.side, self.chosen_item()) {
+            (Some((view, id, top)), Some(item)) if *view == self.view && *id == item.id => *top,
+            _ => 0,
+        }
+    }
+
+    /// Scrolls the pane beside a board by `lines` (up when negative),
+    /// kept between its top and `last`, the most its first line shown can
+    /// be; false when it didn't move.
+    pub fn scroll_side(&mut self, lines: isize, last: usize) -> bool {
+        let Some(id) = self.chosen_item().map(|i| i.id.clone()) else {
+            return false;
+        };
+        let was = self.side_top().min(last);
+        let to = was.saturating_add_signed(lines).min(last);
+        self.side = Some((self.view, id, to));
+        to != was
+    }
+
+    /// Lets the pane's scroll go once another view or item is chosen, so
+    /// coming back to the one it was made on shows that pane from the top.
+    pub fn forget_side_elsewhere(&mut self) {
+        let chosen = self.chosen_item().map(|i| i.id.clone());
+        if self
+            .side
+            .as_ref()
+            .is_some_and(|(view, id, _)| *view != self.view || chosen.as_ref() != Some(id))
+        {
+            self.side = None;
+        }
+    }
+
+    /// The most the first line of the pane beside a board can be, as it
+    /// was last drawn; `None` with no pane shown.
+    pub fn side_last(&self) -> Option<usize> {
+        self.hits.iter().find_map(|h| match h.spot {
+            Spot::Side(last) => Some(last),
+            _ => None,
+        })
     }
 
     /// The view in front, after the tabs; `None` on the tabs.
@@ -310,6 +364,7 @@ impl Overlay for Mission {
         let area =
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
+        self.forget_side_elsewhere();
         let (lines, hits, meters, pictures) =
             render::drawn(self, area.width as usize, area.height as usize);
         self.hits = hits;
@@ -350,6 +405,7 @@ impl Overlay for Mission {
                     frame,
                     picture.id,
                     ratatui::layout::Rect::new(picture.x, picture.y, picture.cols, picture.shown),
+                    picture.from,
                     picture.rows,
                     &diagram.image,
                     diagram.content,

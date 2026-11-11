@@ -83,6 +83,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     ("g G", "first, last"),
     (
+        "J K",
+        "scroll the pane beside a board (a PR's or a ticket's description, the Autopilot plan) down, up; the wheel over it too",
+    ),
+    (
         "↵",
         "what can be done with it (on a tab: go there first, so ↵↵ goes)",
     ),
@@ -160,6 +164,9 @@ fn theme() -> Theme {
         Theme::DARK
     }
 }
+
+/// The lines a notch of the wheel over the pane beside a board scrolls it.
+const SIDE_WHEEL: isize = 3;
 
 fn plain(key: &Key) -> bool {
     key.mods.is_empty()
@@ -1261,6 +1268,16 @@ impl Server {
             KeyCode::Char('p') if ctrl => {
                 let to = row_step(m, -1);
                 move_to(m, to, count)
+            }
+            KeyCode::Char('J') if none => {
+                if let Some(last) = m.side_last() {
+                    m.scroll_side(1, last);
+                }
+            }
+            KeyCode::Char('K') if none => {
+                if let Some(last) = m.side_last() {
+                    m.scroll_side(-1, last);
+                }
             }
             KeyCode::Char('g') | KeyCode::Home if none => move_to(m, 0, count),
             KeyCode::Char('G') | KeyCode::End => move_to(m, count - 1, count),
@@ -2957,6 +2974,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             }
             let edge = mouse.col == 0 || mouse.col + 1 >= cols || mouse.row + 1 >= rows;
             let lit = hit.filter(|_| !edge).filter(|s| match s {
+                Spot::Side(_) => false,
                 Spot::Group(g) => first_of(m, *g) != Some(m.view),
                 Spot::View(v) => *v != m.view,
                 Spot::Index(i) => *i != m.cursor,
@@ -2974,6 +2992,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 return Then::Nothing;
             }
             let up = mouse.button == MouseButton::WheelUp;
+            if let Some(Spot::Side(last)) = hit {
+                let lines = if up { -SIDE_WHEEL } else { SIDE_WHEEL };
+                return if m.scroll_side(lines, last) {
+                    Then::Redraw
+                } else {
+                    Then::Nothing
+                };
+            }
             let key = match (m.view == 0, up) {
                 (true, true) => 'h',
                 (true, false) => 'l',
@@ -3018,6 +3044,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     m.cursor = i;
                     Then::Prepare
                 }
+                Spot::Side(_) => Then::Nothing,
             }
         }
         _ => Then::Nothing,

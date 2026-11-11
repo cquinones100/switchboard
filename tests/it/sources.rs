@@ -462,3 +462,66 @@ fn the_description_beside_the_pr_board_draws_its_diagram_as_a_picture_where_the_
     assert!(!screen.iter().any(|l| l.contains(placeholder)));
     assert!(!common::sent(&plain.raw, b"\x1b_Ga=T"));
 }
+
+#[test]
+fn j_and_k_scroll_the_description_beside_the_pr_board() {
+    let body: String = (1..=30)
+        .map(|i| format!("Line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let fake = Fake::github("test-token", move |request| {
+        if request.path() != "/graphql" {
+            return None;
+        }
+        let mut pr = pr(false);
+        pr["body"] = json!(body);
+        let answer = if request.text().contains("search(") {
+            json!({"data": {"open": {"nodes": [pr]}, "merged": {"nodes": []}, "search": {"nodes": []}}})
+        } else {
+            json!({"data": {}})
+        };
+        Some(Reply::json(200, answer))
+    });
+    let server = TestServer::start_with_env_and_settings(
+        &[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+        ],
+        &json!({"notifications": false, "linear": false, "pause_when_away": false, "ux2": true})
+            .to_string(),
+    );
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q"]);
+    git(&work, &["symbolic-ref", "HEAD", "refs/heads/fix-login"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    let mut client = server.attach(200, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    wait("the PR board", sources, |s| {
+        s["views"]["prs"]["items"][0]["title"] == "#12 Fix the login"
+    });
+    server.ok(&["press", "mission-prs"]);
+    let screen = client.wait_text("Line 1");
+    assert!(!screen.iter().any(|l| l.contains("Line 30")), "{screen:#?}");
+    assert!(
+        screen.iter().any(|l| l.contains("J K scroll")),
+        "{screen:#?}"
+    );
+
+    // J to the end of the description, which stops there; K back to its top.
+    client.type_text(&"J".repeat(80));
+    let screen = client.wait_text("Line 30");
+    let first_line = |l: &String| l.trim_end().ends_with("Line 1");
+    assert!(!screen.iter().any(first_line), "{screen:#?}");
+    client.type_text(&"K".repeat(80));
+    client.wait_for("the description from its top", |s| {
+        !s.iter().any(|l| l.contains("Line 30")) && s.iter().any(first_line)
+    });
+}
