@@ -1733,6 +1733,12 @@ fn list(
         );
         return;
     }
+    if let Some(counts) = snap.notice_counts.as_ref().filter(|_| snap.rules.ux2)
+        && view.id == ViewId::Notifications
+    {
+        notice_board(view, counts, cols, rows, m, top_row, lines, hits);
+        return;
+    }
     if data.items.is_empty() {
         if data.error.is_none() {
             let empty = data.empty.clone().unwrap_or_else(|| match view.id {
@@ -1954,9 +1960,19 @@ fn list(
             lines.push(row.line(cols, fill));
             continue;
         }
+        // A kept notification says what it led to and whether the sidebar
+        // still shows it in its detail's place.
+        let detail = match super::history::notice_of(item) {
+            Some((sidebar, led_to)) => [led_to, sidebar]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            None => item.detail.clone(),
+        };
         row.put(item.title.clone(), name)
             .put("  ", Style::new())
-            .put(item.detail.clone(), fg(theme.dim));
+            .put(detail, fg(theme.dim));
         let at = when(item, snap.now_secs);
         let mut spans = row.fitted(cols.saturating_sub(6), Style::new());
         spans.push(Span::styled(format!("{at:>5} "), fg(theme.faint)));
@@ -3617,6 +3633,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("↵", "actions"),
             ("/", "filter"),
         ]),
+        ViewId::Notifications if m.snap.notice_counts.is_some() => with(&[
+            ("jk", "move"),
+            ("↵", "go to it"),
+            ("m", "menu"),
+            ("x", "dismiss"),
+            ("1-7", "kind"),
+            ("/", "filter"),
+        ]),
         ViewId::Prs | ViewId::Tickets => with(&[
             ("hl", "column"),
             ("jk", "move"),
@@ -3648,6 +3672,208 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ]),
         ViewId::WorkMap => with(&[("jk", "move"), ("↵", "actions, or fold"), ("/", "filter")]),
         _ => with(&[("jk", "move"), ("↵", "actions"), ("/", "filter")]),
+    }
+}
+
+/// The Notifications view as a history by day, with UX 2.0 (`history`):
+/// a keycap for each kind with its week's count, the one shown lit, and
+/// the week's count and the sidebar's at the right; the column heads over
+/// a dashed rule; then each day's label and its notifications, a row each:
+/// its time, its kind's mark, its title (bright while the sidebar shows
+/// it), what it led to, and whether the sidebar still shows it.
+#[allow(clippy::too_many_arguments)]
+fn notice_board(
+    view: &View,
+    counts: &super::history::Counts,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    use crate::sidebar::history::Kind;
+    let theme = &m.snap.theme;
+    let caps = m.snap.caps;
+    // The keycaps.
+    let mut spans = vec![Span::raw(" ")];
+    let mut x = 1;
+    for key in 1..=7 {
+        let name = Kind::of_key(key).map_or("All", Kind::name);
+        let lit = m.notice_kind == key;
+        let under = m.hover == Some(Spot::Kind(key)) || m.focus == Some(Focus::Kind(key));
+        let mut cap = kit::keycap(
+            &key.to_string(),
+            &format!("{name} {}", counts.keys[key - 1]),
+            lit,
+            caps,
+            theme,
+        );
+        if under && !lit {
+            cap = cap
+                .into_iter()
+                .map(|s| {
+                    let style = s.style.bg(kit::Surface::Raised.color(theme));
+                    Span::styled(s.content, style)
+                })
+                .collect();
+        }
+        let w = spans_width(&cap);
+        hits.push(HitBox {
+            y: (top_row + lines.len()) as u16,
+            x0: x as u16,
+            x1: (x + w).saturating_sub(1) as u16,
+            spot: Spot::Kind(key),
+        });
+        x += w;
+        spans.extend(cap);
+    }
+    let total = format!(
+        "{} this week · {} in the sidebar ",
+        counts.week, counts.shown
+    );
+    let gap = cols.saturating_sub(x + width(&total));
+    if gap > 0 {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(total, Tone::Dim.style(theme)));
+    }
+    lines.push(Line {
+        spans: kit::fit(spans, cols, Style::new()),
+        fill: None,
+    });
+    lines.push(Row::default().line(cols, None));
+    // The column heads.
+    const WHEN: usize = 6;
+    const SIDEBAR: usize = 10;
+    let rest = cols.saturating_sub(1 + WHEN + 3 + SIDEBAR);
+    let led_w = (rest * 2 / 5).min(36);
+    let what_w = rest.saturating_sub(led_w + 2);
+    let head = |text: &str| Span::styled(text.to_uppercase(), Tone::Dim.bold(theme));
+    let pad = |n: usize| Span::raw(" ".repeat(n));
+    lines.push(Line {
+        spans: kit::fit(
+            vec![
+                pad(2),
+                head(&format!("{:>4}", "When")),
+                pad(WHEN - 3),
+                head(&text::pad("What", what_w)),
+                pad(2),
+                head(&text::pad("What it led to", led_w)),
+                pad(1),
+                head(&format!("{:>w$}", "Sidebar", w = SIDEBAR - 1)),
+            ],
+            cols,
+            Style::new(),
+        ),
+        fill: None,
+    });
+    lines.push(Line {
+        spans: vec![
+            Span::raw(" "),
+            kit::head_rule(cols.saturating_sub(2), theme),
+            Span::raw(" "),
+        ],
+        fill: None,
+    });
+    let items = &view.data.items;
+    if items.is_empty() {
+        let empty = view.data.empty.clone().unwrap_or_default();
+        lines.push(
+            Row::default()
+                .put(format!("  {empty}"), fg(theme.dim))
+                .take()
+                .line(cols, None),
+        );
+        return;
+    }
+    let room = rows.saturating_sub(1 + lines.len()).max(1);
+    let cursor = m.cursor.max(0) as usize;
+    let first = (cursor + 1).saturating_sub(room);
+    for (index, item) in items.iter().enumerate().skip(first).take(room) {
+        let chosen = index == cursor && m.cursor >= 0;
+        let lit = !chosen && m.hover == Some(Spot::Index(index as isize));
+        hits.push(HitBox {
+            y: (top_row + lines.len()) as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(index as isize),
+        });
+        let spans: Vec<Span<'static>> = if views::is_header(item) {
+            let count = item
+                .data
+                .get("count")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize;
+            kit::label(
+                &item.title,
+                Tone::Dim,
+                Some(count),
+                cols.saturating_sub(1),
+                theme,
+            )
+        } else if super::history::fold_of(item).is_some() {
+            vec![
+                Span::styled(
+                    format!(" ▸ {}", item.title.to_uppercase()),
+                    Tone::Dim.bold(theme),
+                ),
+                Span::styled(format!("   {}", item.detail), Tone::Faint.style(theme)),
+            ]
+        } else {
+            let (sidebar, led_to) = super::history::notice_of(item).unwrap_or_default();
+            let shown = sidebar == crate::sidebar::history::Sidebar::Shown.word();
+            let at = item
+                .time
+                .map(|t| crate::util::local_at_ms(t).strftime("%-H:%M").to_string())
+                .unwrap_or_default();
+            let (source, _) = super::choices::notice_of(item);
+            let mark = match crate::sidebar::history::kind_of(&source) {
+                _ if item.state == State::Attention => Mark::Failed,
+                Some(Kind::Landed) => Mark::Landing,
+                Some(Kind::Prs) => Mark::Passed,
+                Some(Kind::Slack) => Mark::Mention,
+                Some(Kind::Inbox) => Mark::Comment,
+                Some(Kind::Calendar) => Mark::Reminder,
+                Some(Kind::Notes) => Mark::Note,
+                None => Mark::Idle,
+            };
+            let title = if shown {
+                Tone::Text.style(theme).fg(theme.bright)
+            } else {
+                Tone::Dim.style(theme)
+            };
+            let state = if shown { Tone::Accent } else { Tone::Faint };
+            vec![
+                Span::styled(format!("{at:>5} "), Tone::Faint.style(theme)),
+                kit::mark(mark, m.snap.frame, theme),
+                Span::raw(" "),
+                Span::styled(text::pad(&text::cut(&item.title, what_w), what_w), title),
+                pad(2),
+                Span::styled(
+                    text::pad(&text::cut(led_to, led_w), led_w),
+                    Tone::Dim.style(theme),
+                ),
+                pad(1),
+                Span::styled(
+                    format!("{sidebar:>w$}", w = SIDEBAR - 1),
+                    state.style(theme),
+                ),
+            ]
+        };
+        let mut line = kit::row(spans, cols, chosen, theme);
+        if lit {
+            line = line
+                .into_iter()
+                .map(|s| {
+                    let style = s.style.bg(theme.panel);
+                    Span::styled(s.content, style)
+                })
+                .collect();
+        }
+        lines.push(Line {
+            spans: line,
+            fill: None,
+        });
     }
 }
 
@@ -4205,6 +4431,7 @@ mod tests {
             caps: false,
             cell: None,
             diagrams: Default::default(),
+            notice_counts: None,
         };
         m
     }
@@ -5635,6 +5862,89 @@ mod tests {
             .unwrap();
         assert_eq!((spend.frac, spend.y as usize), (0.25, at));
         assert_eq!(meters.len(), 5);
+    }
+
+    #[test]
+    fn with_ux2_notifications_are_a_history_by_day_with_their_kinds() {
+        use crate::sidebar::history::{Entry, Kind, Sidebar};
+        const DAY: i64 = 86_400_000;
+        let now = rules().now_ms;
+        let entry = |source: &str, id: &str, title: &str, at: i64, sidebar: Sidebar| Entry {
+            source: source.into(),
+            id: id.into(),
+            at,
+            item: Item::new(id, title),
+            sidebar,
+            led_to: None,
+            replaced: false,
+        };
+        let a = entry("slack", "a", "DM Ada", now, Sidebar::Shown);
+        let mut b = entry(
+            "prs",
+            "b",
+            "PR 12345 merged, widgets",
+            now - DAY,
+            Sidebar::Dismissed,
+        );
+        b.led_to = Some(("you went to tab 5".into(), now));
+        let c = entry(
+            "inbox",
+            "c",
+            "A ticket assigned to you",
+            now - 4 * DAY,
+            Sidebar::Older,
+        );
+        let all = [&a, &b, &c];
+        let tz = jiff::tz::TimeZone::UTC;
+        let today = crate::util::local_at_ms(now)
+            .with_time_zone(tz.clone())
+            .date();
+        let rows = |kind: Option<Kind>| {
+            crate::mission::history::rows(&all, kind, &Default::default(), today, &tz, 3)
+        };
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(
+                ViewId::Notifications,
+                "Notifications",
+                rows(None),
+            )],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.notice_counts = Some(crate::mission::history::counts(&all, today, &tz));
+        m.view = 1;
+        let (lines, hits) = screen(&m, 140, 30);
+        let text = texts(&lines).join("\n");
+        for want in [
+            "1 All 3",
+            "PRs 1",
+            "Slack 1",
+            "Inbox 1",
+            "Landed 0",
+            "3 this week · 1 in the sidebar",
+            "WHEN",
+            "WHAT IT LED TO",
+            "SIDEBAR",
+            "TODAY",
+            "YESTERDAY",
+            "you went to tab 5",
+            "dismissed",
+            "shown",
+            "more, folded · Enter shows them",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(
+            !text.contains("A ticket assigned to you"),
+            "its day is folded: {text}"
+        );
+        assert!(hits.iter().any(|h| h.spot == Spot::Kind(3)));
+        // 3 leaves only the PRs.
+        m.snap.views[0].data.items = rows(Some(Kind::Prs));
+        m.notice_kind = 3;
+        let text = texts(&screen(&m, 140, 30).0).join("\n");
+        assert!(text.contains("PR 12345 merged"), "{text}");
+        assert!(!text.contains("DM Ada"), "{text}");
     }
 
     #[test]

@@ -37,16 +37,17 @@ pub const MARK: &str = "@notices_window";
 /// The kinds of notification by the source that gives them, in the order
 /// they are shown (daemon.js's `notices`): the meeting about to start,
 /// Slack's new messages, what changed on today's calendar, notes written
-/// for you, the Linear inbox, a default branch whose CI fails, the landings its tabs made without asking,
+/// for you, the Linear inbox, your PRs' news, a default branch whose CI fails, the landings its tabs made without asking,
 /// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 10] = [
+pub const ORDER: [&str; 11] = [
     "meeting",
     "slack",
     "calendar",
     "new-notes",
     "inbox",
+    "prs",
     "ci",
     "autolanded",
     "autopilot",
@@ -56,8 +57,8 @@ pub const ORDER: [&str; 10] = [
 
 /// The view a kind of notification is an item of, by its source: a Slack
 /// message is the Slack view's, an Inbox notification the Inbox's, the
-/// meeting about to start an event of the Calendar's, a failing default
-/// branch the CI view's. Its menu is that
+/// meeting about to start an event of the Calendar's, a PR's news the PR
+/// board's, a failing default branch the CI view's. Its menu is that
 /// item's menu there (`mission::choices::notice_choices`), so a new kind
 /// that a view lists names its view here and lists no choices of its own.
 /// The kinds no view lists as an item are `NO_VIEW`'s.
@@ -67,6 +68,7 @@ pub fn view_of(source: &str) -> Option<ViewId> {
         "inbox" => Some(ViewId::Inbox),
         "meeting" => Some(ViewId::Calendar),
         "ci" => Some(ViewId::Ci),
+        "prs" => Some(ViewId::Prs),
         _ => None,
     }
 }
@@ -143,6 +145,8 @@ pub fn summary(source: &str, items: &[Item]) -> (String, String) {
             format!("{n} in your Linear inbox"),
             first.detail.split(": ").next().unwrap_or("").to_string(),
         ),
+        "prs" if one => (first.title.clone(), first.detail.clone()),
+        "prs" => (format!("{n} PR updates"), first.title.clone()),
         // The landings made without asking: the last one, when several.
         "autolanded" if one => (first.title.clone(), "without asking".into()),
         "autolanded" => (

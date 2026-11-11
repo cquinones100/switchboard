@@ -26,7 +26,7 @@ use super::repo::{self, PrKey};
 use super::schedule::GITHUB_LOOKUPS;
 use super::{
     CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, mainci, pr_repos_of,
-    prboard, prs, queues, repos_of, setup, tickets,
+    prboard, prnotices, prs, queues, repos_of, setup, tickets,
 };
 use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
 use crate::integrations::github::Repo;
@@ -172,6 +172,13 @@ impl Server {
                     Ok((open, merged)) => {
                         view.items = self.sources.board.take(&scope, at, open, merged);
                         setup::answered(view);
+                        let board = view.items.clone();
+                        let news = self.sources.pr_known.take(&board, &scope, util::now_ms());
+                        if !news.is_empty() {
+                            self.sources.pr_notices =
+                                prnotices::kept_with(&self.sources.pr_notices, news);
+                        }
+                        self.pr_notices();
                     }
                     Err(e) => setup::failed(view, &e, "your pull requests"),
                 }
@@ -303,6 +310,23 @@ impl Server {
     pub fn main_ci_dismiss(&mut self, item: &Item) {
         self.sources.main_ci_dismissed.insert(item.id.clone());
         self.main_ci_notices();
+    }
+
+    /// Your PRs' news as notifications (the `prs` kind), while
+    /// `pr_notices` and `github` are on.
+    pub(crate) fn pr_notices(&mut self) {
+        let items = if crate::settings::is_on("pr_notices") && crate::settings::is_on("github") {
+            self.sources.pr_notices.clone()
+        } else {
+            Vec::new()
+        };
+        self.set_notices("prs", items);
+    }
+
+    /// Dismisses one of your PRs' news.
+    pub fn pr_notice_dismiss(&mut self, item: &Item) {
+        self.sources.pr_notices.retain(|i| i.id != item.id);
+        self.pr_notices();
     }
 
     /// Dismisses an Inbox item from the notifications, here alone: it stays

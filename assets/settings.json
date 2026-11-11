@@ -154,6 +154,20 @@
     "default": true
   },
   {
+    "key": "notification_history",
+    "category": "Sidebar",
+    "label": "Notifications' history",
+    "description": "Mission control's Notifications view keeps every notification of the last two weeks by day, with what each led to and whether the sidebar still shows it, in ~/.local/state/switchboard/notifications on this computer; off, the view shows only the sidebar's notifications, as they are now, and nothing is kept",
+    "default": true
+  },
+  {
+    "key": "pr_notices",
+    "category": "Sidebar",
+    "label": "PR notifications",
+    "description": "The sidebar tells you when one of your PRs merges, is approved or its checks start failing, from the PRs board's lookups; off, it doesn't",
+    "default": true
+  },
+  {
     "key": "needs_notices",
     "category": "Sidebar",
     "label": "M-a goes to notifications",

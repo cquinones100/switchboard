@@ -27,6 +27,7 @@
 //! something (a browser, Linear, git) runs in a task of its own under the
 //! busy box and answers with `Event::Mission`.
 
+use crate::sidebar::history::Sidebar;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -102,6 +103,11 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "l o M-r",
         "CI view, with UX 2.0: the chosen check's whole log beside, from its failing step; go to the PR's tab; the check in the browser",
     ),
+    (
+        "↵ m x",
+        "Notifications: go to it (its menu's first choice; on a folded day, show it), its whole menu, put it out of the sidebar",
+    ),
+    ("1-7", "Notifications: show one kind (1 all)"),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
@@ -120,6 +126,46 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("M-w", "close, whatever is open over it"),
     ("?", "these keys"),
 ];
+
+/// The notification a menu is for: its source, its item under its own id,
+/// and whether to put it away after what is picked.
+type Notice = Option<(String, Item, bool)>;
+
+/// A kept notification's `Notice`: put away after only while the sidebar
+/// still shows it.
+fn kept_notice(item: &Item) -> Notice {
+    notice_for(item, super::history::shown(item))
+}
+
+/// The notification a menu of the Notifications view is for, put away
+/// after what is picked when `dismiss` says so and its kind is one
+/// dismissing puts away (`choices::dismisses`): a suggestion is recorded
+/// too, though its own choices say what becomes of it.
+fn notice_for(item: &Item, dismiss: bool) -> Notice {
+    let (source, id) = choices::notice_of(item);
+    if source.is_empty() {
+        return None;
+    }
+    let dismiss = dismiss && choices::dismisses(item).is_some();
+    let mut own = item.clone();
+    own.id = id;
+    Some((source, own, dismiss))
+}
+
+/// Whether a row of the Notifications view's history is a notification,
+/// not a day's heading or a fold.
+fn is_a_notice(item: &Item) -> bool {
+    super::history::notice_of(item).is_some()
+}
+
+/// How a client looks at the Notifications view, for its rows: the kind
+/// its keycaps chose, the days it unfolded, and how many rows fit before a
+/// day folds.
+pub(crate) struct NoticeLook {
+    kind: usize,
+    unfolded: std::collections::HashSet<String>,
+    screenful: usize,
+}
 
 /// What mission control opens on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -496,7 +542,17 @@ impl Server {
         let keep_landing = m.keep_landing || m.current().is_some_and(|v| v.id == ViewId::Landing);
         let keep_autopilot =
             m.keep_autopilot || m.current().is_some_and(|v| v.id == ViewId::Autopilot);
-        let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot);
+        let look = NoticeLook {
+            kind: m.notice_kind,
+            unfolded: m.unfolded.clone(),
+            // A text filter looks through every day, folded or not.
+            screenful: if text.is_empty() {
+                (m.size.1 as usize).saturating_sub(8).max(6)
+            } else {
+                usize::MAX
+            },
+        };
+        let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
         // A picker lists every repository's rows, whatever the map folds.
         let folds = if m.picker {
             views::Folds {
@@ -583,6 +639,13 @@ impl Server {
                 })
                 .map(|_| self.terminal.cell.unwrap_or(crate::mux::pane::CELL)),
             diagrams: self.mission.diagrams.ready(crate::status::theme::light()),
+            notice_counts: Self::notice_history_on().then(|| {
+                super::history::counts(
+                    &self.sidebar.history.newest_first(),
+                    util::local_now().date(),
+                    &jiff::tz::TimeZone::system(),
+                )
+            }),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -674,6 +737,7 @@ impl Server {
         picker: bool,
         keep_landing: bool,
         keep_autopilot: bool,
+        look: &NoticeLook,
     ) -> Vec<View> {
         let on = settings::is_on;
         let mut out: Vec<View> = Vec::new();
@@ -683,7 +747,21 @@ impl Server {
             data,
             loaded,
         };
-        if on("sidebar_notifications") {
+        if Self::notice_history_on() {
+            let entries = self.sidebar.history.newest_first();
+            let tz = jiff::tz::TimeZone::system();
+            let today = util::local_now().date();
+            let kind = crate::sidebar::history::Kind::of_key(look.kind);
+            let items =
+                super::history::rows(&entries, kind, &look.unfolded, today, &tz, look.screenful);
+            let data = ViewData {
+                items,
+                empty: Some("No notifications in the last two weeks.".into()),
+                at: Some(1),
+                ..ViewData::default()
+            };
+            out.push(view(ViewId::Notifications, "Notifications", data, true));
+        } else if on("sidebar_notifications") {
             // One by one, in the order of their kinds, as the sidebar and
             // the Notifications window have them.
             let items: Vec<Item> = self
@@ -1235,6 +1313,9 @@ impl Server {
         if !stands {
             self.mission_prepare(client);
         }
+        if let Some(after) = self.mission.after_key.take() {
+            after(self);
+        }
     }
 
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
@@ -1272,6 +1353,10 @@ impl Server {
                 m.view = v;
                 m.cursor = 0;
                 m.scope = None;
+                return;
+            }
+            Some(Focus::Kind(key)) if press && notice_board(m) => {
+                choose_kind(m, key);
                 return;
             }
             Some(Focus::Filter) if press => k = Key::new(KeyCode::Char('/'), Mods::NONE),
@@ -1385,6 +1470,20 @@ impl Server {
                     }
                     m.note = Some("Asked it again.".into());
                 }
+            }
+            KeyCode::Enter if notice_history_here(m) => self.notice_enter(client, m),
+            KeyCode::Char('m') if none && notice_history_here(m) => {
+                if let Some(item) = m.chosen_item().cloned().filter(is_a_notice) {
+                    self.notice_entry_menu(client, item);
+                }
+            }
+            KeyCode::Char('x') if none && notice_history_here(m) => {
+                if let Some(item) = m.chosen_item().cloned().filter(is_a_notice) {
+                    self.notice_entry_dismiss(client, m, &item);
+                }
+            }
+            KeyCode::Char(c @ '1'..='7') if none && notice_history_here(m) => {
+                choose_kind(m, c.to_digit(10).unwrap_or(1) as usize);
             }
             KeyCode::Enter => self.mission_enter(client, m),
             KeyCode::Char('m') if none && pilot_menu_here(m) => self.autopilot_menu(client),
@@ -1766,11 +1865,11 @@ impl Server {
         // A Slack message acted on, whatever was picked, is seen.
         let seen = choices::is_slack_message(view, &item);
         // A notification is dismissed after whatever is picked in its menu.
-        let dismiss = (*view == ViewId::Notifications)
-            .then(|| choices::dismisses(&item))
+        let notice = (*view == ViewId::Notifications)
+            .then(|| notice_for(&item, true))
             .flatten();
         let title = item.title.clone();
-        self.mission_menu(client, title, body, list, seen.then_some(item), dismiss);
+        self.mission_menu(client, title, body, list, seen.then_some(item), notice);
     }
 
     /// What an item's menu offers, with what the menus need to know of the
@@ -1812,10 +1911,102 @@ impl Server {
         self.item_menu(client, &ViewId::Notifications, item, &[]);
     }
 
+    /// Enter in the Notifications view's history: on a fold, its day
+    /// unfolded, the cursor on its first notification; on a notification, the first of its menu's choices done
+    /// (`notice_menu_choices`), as picking it would.
+    fn notice_enter(&mut self, client: ClientId, m: &mut Mission) {
+        let Some(item) = m.chosen_item().cloned() else {
+            return;
+        };
+        if let Some(day) = super::history::fold_of(&item) {
+            // On its first notification, under its heading.
+            m.unfolded.insert(day.to_string());
+            m.cursor += 1;
+            return;
+        }
+        if !is_a_notice(&item) {
+            return;
+        }
+        if self.notice_service_off(client, &item) {
+            return;
+        }
+        let Some(first) = self.notice_menu_choices(&item).into_iter().next() else {
+            return;
+        };
+        let notice = kept_notice(&item);
+        let seen = choices::is_slack_message(&ViewId::Notifications, &item).then_some(item);
+        // Done once mission control is back in its overlay, since going to
+        // a view or a tab acts on it.
+        self.mission.after_key = Some(Box::new(move |server| {
+            server.mission_pick(client, first, seen, notice);
+        }));
+    }
+
+    /// A kept notification's menu: its menu as the sidebar's has it, but
+    /// one the sidebar no longer shows is neither put away nor offered to
+    /// be.
+    fn notice_menu_choices(&self, item: &Item) -> Vec<Choice> {
+        let list = self.item_choices(&ViewId::Notifications, item, &[]);
+        if super::history::shown(item) {
+            return list;
+        }
+        list.into_iter()
+            .filter(|c| !choices::puts_away(&c.act))
+            .collect()
+    }
+
+    /// Whether a kept notification's service is turned off (`github` for
+    /// a PR's news and a failing default branch, `linear` for the Inbox),
+    /// saying so: its choices would reach it.
+    fn notice_service_off(&mut self, client: ClientId, item: &Item) -> bool {
+        let (source, _) = choices::notice_of(item);
+        let (key, name) = match source.as_str() {
+            "prs" | "ci" => ("github", "GitHub"),
+            "inbox" => ("linear", "Linear"),
+            _ => return false,
+        };
+        if settings::is_on(key) {
+            return false;
+        }
+        self.say(Some(client), &format!("{name} is off in Settings."));
+        true
+    }
+
+    /// `m` on a kept notification: its whole menu.
+    fn notice_entry_menu(&mut self, client: ClientId, item: Item) {
+        if self.notice_service_off(client, &item) {
+            return;
+        }
+        let list = self.notice_menu_choices(&item);
+        if list.is_empty() {
+            return;
+        }
+        let body = choices::item_body(&ViewId::Notifications, &item);
+        let seen = choices::is_slack_message(&ViewId::Notifications, &item);
+        let notice = kept_notice(&item);
+        let title = item.title.clone();
+        self.mission_menu(client, title, body, list, seen.then_some(item), notice);
+    }
+
+    /// `x` on a kept notification: put out of the sidebar, when the
+    /// sidebar still shows it.
+    fn notice_entry_dismiss(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
+        if !super::history::shown(item) {
+            self.say(Some(client), "It's already out of the sidebar.");
+            return;
+        }
+        if let Some((source, own)) = choices::dismisses(item) {
+            self.notice_dismiss(&source, &own);
+            m.note = Some("Dismissed.".into());
+        }
+    }
+
     /// A menu of choices over mission control; the one taken is done. Its
     /// options have no keys of their own, as the daemon's menus had none:
     /// j and k move, Enter takes. `seen` is a Slack message seen whatever
-    /// is picked, and `dismiss` a notification dismissed after it.
+    /// is picked, and `notice` the notification it is the menu of, what
+    /// is picked recorded as what it led to, and dismissed after it when
+    /// its flag says so.
     fn mission_menu(
         &mut self,
         client: ClientId,
@@ -1823,7 +2014,7 @@ impl Server {
         body: Option<String>,
         list: Vec<Choice>,
         seen: Option<Item>,
-        dismiss: Option<(String, Item)>,
+        notice: Notice,
     ) {
         let options: Vec<MenuOption> = list
             .iter()
@@ -1840,16 +2031,38 @@ impl Server {
             if let Some(at) = server.clients.get_mut(&client) {
                 at.options_taken = at.options_taken.wrapping_add(1);
             }
-            if let Some(item) = &seen {
-                server.slack_item_acted(item);
-            }
-            let label = c.label.clone();
-            let dismissed = choices::puts_away(&c.act);
-            server.mission_do(client, c.act, &label);
-            if let Some((source, item)) = dismiss.filter(|_| !dismissed) {
-                server.notice_dismiss(&source, &item);
-            }
+            server.mission_pick(client, c, seen, notice);
         });
+    }
+
+    /// A choice taken from an item's menu, done: `seen` a Slack message
+    /// seen whatever it is; `notice` the notification it was picked for,
+    /// what it led to recorded on it, and put away after it when its flag
+    /// says so, unless the choice put it away itself.
+    fn mission_pick(&mut self, client: ClientId, c: Choice, seen: Option<Item>, notice: Notice) {
+        let label = c.label.clone();
+        let dismissed = choices::puts_away(&c.act);
+        if let Some(item) = &seen {
+            self.slack_item_acted(item);
+        }
+        if let Some((source, item, _)) = &notice {
+            self.notice_led_to_by(source, item, &c.act, &label);
+        }
+        self.mission_do(client, c.act, &label);
+        match notice {
+            // Put away by the choice itself, it was dismissed, whatever
+            // seeing it and its list changing made of it on the way.
+            Some((source, item, _)) if dismissed => {
+                self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
+            }
+            Some((source, item, true)) => self.notice_dismiss(&source, &item),
+            // A suggestion's choice says what becomes of it, which puts it
+            // out of the sidebar as you dismissing it.
+            Some((source, item, false)) if source == "habits" => {
+                self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
+            }
+            _ => {}
+        }
     }
 
     /// Puts a notification away, by the source that gave it: the next
@@ -1857,14 +2070,28 @@ impl Server {
     /// the calendar's changes by taking the day as seen, a new note, an
     /// Inbox item (here alone), what autopilot said.
     pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
+        self.notice_history_mark(source, &item.id, Sidebar::Dismissed, false);
         match source {
             "inbox" => self.inbox_dismiss(item),
             "ci" => self.main_ci_dismiss(item),
+            "prs" => self.pr_notice_dismiss(item),
             "autopilot" => self.autopilot_dismiss(),
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "habits" => {}
             _ => self.day_dismiss(source, item),
+        }
+    }
+
+    /// What picking `act` from a notification's menu led to, recorded on
+    /// it (`choices::led_to_words`).
+    /// The occurrence is the history row's, when it was picked from one.
+    pub(crate) fn notice_led_to_by(&mut self, source: &str, item: &Item, act: &Do, label: &str) {
+        let tabs = self.sidebar_all_tabs();
+        let number = |t: TabId| tabs.iter().find(|m| m.id == t).map(|m| m.index);
+        if let Some(words) = choices::led_to_words(act, label, &number) {
+            let occurrence = super::history::occurrence_of(item);
+            self.led_to(source, &item.id, occurrence, &words);
         }
     }
 
@@ -2235,6 +2462,8 @@ impl Server {
     fn mission_after(&mut self, client: ClientId, after: After) {
         match after {
             After::DropInbox(id) => {
+                self.notice_history_mark("inbox", &id, Sidebar::Read, true);
+                self.led_to("inbox", &id, None, "marked read in Linear");
                 self.sources.drop_inbox_item(&id);
                 self.inbox_notices();
                 self.refresh_sources(Some(crate::sources::INBOX));
@@ -3334,6 +3563,10 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::Side(_) => Then::Nothing,
+                Spot::Kind(key) => {
+                    choose_kind(m, key);
+                    Then::Prepare
+                }
             }
         }
         _ => Then::Nothing,
@@ -3796,6 +4029,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     enum Stop {
         Group(views::Group),
         View(usize),
+        Kind(usize),
         Filter,
         Item(isize),
         Close,
@@ -3815,10 +4049,28 @@ fn move_focus(m: &mut Mission, by: isize) {
         }
         None => (0..=m.snap.views.len()).map(Stop::View).collect(),
     };
+    if notice_board(m) {
+        stops.extend((1..=7).map(Stop::Kind));
+    }
     if !board {
         stops.push(Stop::Filter);
     }
-    stops.extend((floor(m)..count as isize).map(Stop::Item));
+    // A grouped view's headings are no stop, the cursor never resting on
+    // one, or Shift-Tab would land on it and be put back where it was.
+    let heading = |i: isize| {
+        m.current().is_some_and(|v| {
+            views::grouped(&v.id)
+                && v.data
+                    .items
+                    .get(i as usize)
+                    .is_some_and(|it| views::is_header(it) && !views::is_summary(it))
+        })
+    };
+    stops.extend(
+        (floor(m)..count as isize)
+            .filter(|i| !heading(*i))
+            .map(Stop::Item),
+    );
     if m.snap.close {
         stops.push(Stop::Close);
     }
@@ -3826,6 +4078,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         None => None,
         Some(Focus::Group(g)) => stops.iter().position(|s| *s == Stop::Group(g)),
         Some(Focus::View(v)) => stops.iter().position(|s| *s == Stop::View(v)),
+        Some(Focus::Kind(k)) => stops.iter().position(|s| *s == Stop::Kind(k)),
         Some(Focus::Filter) => stops.iter().position(|s| *s == Stop::Filter),
         Some(Focus::Item) => stops.iter().position(|s| *s == Stop::Item(m.cursor)),
         Some(Focus::Close) => stops.iter().position(|s| *s == Stop::Close),
@@ -3839,6 +4092,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     match stops[to as usize] {
         Stop::Group(g) => m.focus = Some(Focus::Group(g)),
         Stop::View(v) => m.focus = Some(Focus::View(v)),
+        Stop::Kind(k) => m.focus = Some(Focus::Kind(k)),
         Stop::Filter => m.focus = Some(Focus::Filter),
         Stop::Item(i) => {
             m.focus = Some(Focus::Item);
@@ -3846,6 +4100,25 @@ fn move_focus(m: &mut Mission, by: isize) {
         }
         Stop::Close => m.focus = Some(Focus::Close),
     }
+}
+
+/// Whether the Notifications view in front shows the history with its
+/// keycaps (UX 2.0).
+fn notice_board(m: &Mission) -> bool {
+    m.snap.rules.ux2 && notice_history_here(m)
+}
+
+/// Whether the Notifications view in front shows the history, whose keys
+/// 1-7, x and m are its own.
+fn notice_history_here(m: &Mission) -> bool {
+    m.snap.notice_counts.is_some() && m.current().is_some_and(|v| v.id == ViewId::Notifications)
+}
+
+/// The Notifications view narrowed to a kind's notifications by its key
+/// (1 all), from the top.
+fn choose_kind(m: &mut Mission, key: usize) {
+    m.notice_kind = key;
+    m.cursor = 0;
 }
 
 /// Keys while typing a view's name after `v`: the first view whose name

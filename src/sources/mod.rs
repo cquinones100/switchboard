@@ -37,6 +37,7 @@ pub mod inbox;
 pub mod landing;
 pub mod mainci;
 pub mod prboard;
+pub mod prnotices;
 pub mod prs;
 pub mod queues;
 pub mod repo;
@@ -155,6 +156,10 @@ pub struct Sources {
     checks: Vec<Item>,
     /// The failing tips whose notification you dismissed, by their item's id.
     main_ci_dismissed: HashSet<String>,
+    /// What the PR board's last answer said of each PR, and your PRs' news
+    /// found from it, kept until dismissed (`prnotices`).
+    pr_known: prnotices::Known,
+    pr_notices: Vec<Item>,
     views: BTreeMap<&'static str, ViewData>,
     /// When a view was last asked for by going to it, for asking at most so
     /// often (the daemon's `cameTo`).

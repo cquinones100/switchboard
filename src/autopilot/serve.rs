@@ -720,7 +720,7 @@ impl Server {
             Act::Slots | Act::Cap | Act::SpendLimit => self.autopilot_set_count(client, act),
             Act::ToTabs => self.open_mission(client, super::opening()),
             Act::Dismiss => {
-                self.autopilot_say("");
+                self.autopilot_dismiss();
                 self.mission_note(client, "Dismissed.");
             }
             // The autopilot_close setting to its next choice, as Settings
@@ -1331,6 +1331,12 @@ impl Server {
         let hash = self.autopilot_hash_of(m.tab);
         let item = m.item.clone().unwrap_or_else(|| self.tab_label(m.tab));
         let id = format!("{}@{}", m.tab.0, m.since);
+        let number = self
+            .sidebar_all_tabs()
+            .iter()
+            .find(|t| t.id == m.tab)
+            .map(|t| t.index);
+        let kept = id.clone();
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.closed.iter().any(|c| c.id == id) {
                 return;
@@ -1348,6 +1354,9 @@ impl Server {
             Ok(mode) => {
                 self.autopilot_notices(&mode);
                 self.autopilot.mode = mode;
+                let words =
+                    number.map_or("its tab closed".to_string(), |n| format!("tab {n} closed"));
+                self.led_to("landed", &kept, None, &words);
             }
             Err(e) => eprintln!("autopilot: couldn't keep the tab it closed: {e}"),
         }
@@ -1356,6 +1365,7 @@ impl Server {
     /// The landed tabs it closed unseen, put away: the one with this id, or
     /// every one.
     pub fn autopilot_dismiss_closed(&mut self, id: Option<&str>) {
+        self.notices_dismissed("landed", id);
         match Mode::update(&paths::state_dir(), |m| match id {
             Some(id) => m.closed.retain(|c| c.id != id),
             None => m.closed.clear(),
@@ -1534,6 +1544,7 @@ impl Server {
 
     /// Its notification put away: what it said, forgotten.
     pub fn autopilot_dismiss(&mut self) {
+        self.notices_dismissed("autopilot", None);
         self.autopilot_say("");
     }
 
@@ -1598,6 +1609,7 @@ impl Server {
     /// The landings made without asking put away: the one with this hash,
     /// or every one.
     pub fn autopilot_dismiss_autolanded(&mut self, hash: Option<&str>) {
+        self.notices_dismissed("autolanded", hash);
         if let Err(e) = super::landed::dismiss(&paths::state_dir(), hash) {
             eprintln!("autopilot: couldn't put the landing away: {e}");
         }

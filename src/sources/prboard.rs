@@ -136,6 +136,7 @@ pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
             "pr": { "number": number, "repo": repo },
             "url": url,
             "checks": check,
+            "review": text(pr, "/reviewDecision"),
             "meta": meta,
             "reviewers": reviewers.join(", "),
             "author": text(pr, "/author/login"),

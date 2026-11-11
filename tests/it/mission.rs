@@ -139,7 +139,7 @@ fn a_bracket_moves_to_the_next_view_and_round() {
     open(&mut client);
     // After the tabs: the notifications, then Settings.
     client.type_text("]");
-    client.wait_text("No notifications.");
+    client.wait_text("No notifications");
     client.type_text("]");
     let screen = client.wait_text("INTEGRATIONS");
     assert!(
@@ -148,7 +148,7 @@ fn a_bracket_moves_to_the_next_view_and_round() {
         screen.last()
     );
     client.type_text("[");
-    client.wait_text("No notifications.");
+    client.wait_text("No notifications");
     client.type_text("[");
     client.wait_text("OTHER 2");
 }
@@ -169,7 +169,7 @@ fn the_landing_view_opens_with_nothing_landing_saying_so_and_goes_once_left() {
     client.type_text("]");
     client.wait_text("INTEGRATIONS");
     client.type_text("[");
-    let screen = client.wait_text("No notifications.");
+    let screen = client.wait_text("No notifications");
     assert!(!screen[0].contains("Landing"), "{:?}", screen[0]);
 }
 
@@ -793,7 +793,9 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     open(&mut client);
     client.type_text("]");
     client.wait_text("DM Ada");
-    client.type_text("\r");
+    // m opens a notification's menu; Enter does its first choice.
+    client.type_text("j");
+    client.type_text("m");
     let screen = client.wait_text("Dismiss it, until its thread gets a reply");
     let all = screen.join("\n");
     let row = |text: &str| {
@@ -817,7 +819,8 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     );
     // Dismissed as the Slack view dismisses it: until its thread gets more.
     pick(&mut client, "Dismiss it, until its thread gets a reply");
-    client.wait_text("No notifications.");
+    // Kept in the history, out of the sidebar.
+    client.wait_text("dismissed");
     let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
@@ -853,7 +856,8 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
     open(&mut client);
     client.type_text("]");
     client.wait_text("Landed abc1234: Make the thing");
-    client.type_text("\r");
+    client.type_text("j");
+    client.type_text("m");
     let screen = client.wait_text("Dismiss it");
     let all = screen.join("\n");
     let row = |text: &str| {
@@ -868,5 +872,62 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
     );
     assert!(row("Go to its tab") < row("Dismiss it"), "{all}");
     pick(&mut client, "Dismiss it");
-    client.wait_text("No notifications.");
+    client.wait_text("dismissed");
+}
+
+// The Notifications view keeps every notification of the last two weeks by
+// day: the days before yesterday past the first screenful fold until Enter
+// shows them, x on one the sidebar no longer shows says so, and a number
+// narrows it to a kind.
+#[test]
+fn the_notifications_history_folds_old_days_and_x_says_what_is_out_of_the_sidebar() {
+    let mut server = TestServer::start();
+    settings(&server, json!({}));
+    let now = switchboard::util::now_ms();
+    let entry = |source: &str, id: &str, title: &str, at: i64| {
+        json!({ "source": source, "id": id, "at": at, "sidebar": "older",
+            "item": { "id": id, "title": title } })
+    };
+    let dir = server.state.join("notifications");
+    std::fs::create_dir_all(&dir).unwrap();
+    let day_of = |ms: i64| switchboard::sidebar::history::day_of(ms, &jiff::tz::TimeZone::system());
+    let today: Vec<Value> = (0..30)
+        .map(|n| entry("slack", &format!("s{n}"), &format!("Slack {n}"), now - n))
+        .collect();
+    std::fs::write(
+        dir.join(format!("{}.json", day_of(now))),
+        Value::from(today).to_string(),
+    )
+    .unwrap();
+    let old = now - 4 * 86_400_000;
+    std::fs::write(
+        dir.join(format!("{}.json", day_of(old))),
+        json!([entry("inbox", "i1", "Old inbox one", old)]).to_string(),
+    )
+    .unwrap();
+    server.restart();
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("Slack 0");
+    client.type_text("G");
+    client.wait_text("folded · Enter shows them");
+    assert!(!client.screen().join("\n").contains("Old inbox one"));
+    client.type_text("\r");
+    client.wait_text("Old inbox one");
+    client.type_text("x");
+    client.wait_text("It's already out of the sidebar.");
+    // Any key puts the message away.
+    client.type_text("q");
+    // 3 is the PRs, of which there are none; 5 the Inbox.
+    client.type_text("3");
+    client.wait_text("No notifications in the last two weeks.");
+    client.type_text("5");
+    let screen = client.wait_text("Old inbox one");
+    assert!(
+        !screen.join("\n").contains("Slack 0"),
+        "{}",
+        screen.join("\n")
+    );
 }

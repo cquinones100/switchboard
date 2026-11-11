@@ -36,6 +36,7 @@ use crate::mux::{PaneId, TabId};
 use crate::ui::{Outcome, Theme};
 use crate::{paths, settings, util};
 
+mod history;
 mod window;
 
 /// How often the spinner turns.
@@ -750,6 +751,8 @@ impl Server {
                     }
                 }
             }
+            SidebarEvent::HistoryRead(read) => self.notice_history_read(read),
+            SidebarEvent::HistoryWritten => self.sidebar.history_writing = false,
         }
     }
 
@@ -1691,6 +1694,7 @@ impl Server {
         match source {
             "slack" if on("view_slack") => view("slack"),
             "inbox" if on("linear") && on("view_inbox") => view("inbox"),
+            "prs" if crate::sources::enabled(crate::sources::PRS) => view("prs"),
             "meeting" | "calendar" if on("view_calendar") => view("calendar"),
             "habits" => Some(crate::mission::Opening::Settings),
             "autopilot" | "autolanded" => Some(crate::autopilot::opening()),

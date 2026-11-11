@@ -205,7 +205,12 @@ pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
 pub fn grouped(id: &ViewId) -> bool {
     matches!(
         id,
-        ViewId::Settings | ViewId::Keys | ViewId::Landing | ViewId::Autopilot | ViewId::Ci
+        ViewId::Settings
+            | ViewId::Keys
+            | ViewId::Landing
+            | ViewId::Autopilot
+            | ViewId::Ci
+            | ViewId::Notifications
     )
 }
 

@@ -12,6 +12,8 @@
 //! - `render`: the sidebar's lines, a plain function of the model.
 //! - `walk`: M-a's walk through Needs you, and M-A's through Idle.
 //! - `notices`: the Notifications window's list, in a tab of its own.
+//! - `history`: every notification of the last two weeks, by day, for
+//!   mission control's Notifications view.
 //! - `peek`: a look at a tab without going there.
 //! - `config`: sidebar.json.
 //! - `serve`: the server's side: reading, drawing, focus, keys, the mouse.
@@ -22,6 +24,7 @@
 
 pub mod claude;
 pub mod config;
+pub mod history;
 pub mod model;
 pub mod notices;
 pub mod peek;
@@ -46,6 +49,11 @@ pub use serve::KEYS;
 pub enum SidebarEvent {
     /// Time for the spinner to turn.
     Spin,
+    /// The notifications' history read from its files as the server
+    /// started.
+    HistoryRead(std::collections::BTreeMap<String, Vec<history::Entry>>),
+    /// The history's changed days written.
+    HistoryWritten,
 }
 
 /// What was read for one pane at the last refresh: the Claude conversation
@@ -125,6 +133,10 @@ pub struct Sidebar {
     tips_asked: HashSet<&'static str>,
     /// The interruption each pane was last handed back after (ms).
     handed_back: HashMap<PaneId, i64>,
+    /// Every notification of the last two weeks, by day.
+    pub history: history::History,
+    /// A write of the history's days is under way.
+    history_writing: bool,
 }
 
 impl Sidebar {

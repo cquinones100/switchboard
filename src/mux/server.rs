@@ -518,6 +518,7 @@ async fn run(handover: Option<PathBuf>) -> Result<()> {
     }
     server.note_at_start(&problems);
     server.sidebar_load();
+    server.notice_history_load();
     // The status line's rows, before any tab is laid out.
     server.status_tick();
     match handed {
@@ -1139,6 +1140,7 @@ impl Server {
                 self.autopilot_tick();
                 self.awake_check();
                 self.history_tick();
+                self.notice_history_tick();
             }
             Event::Quit => self.quit = true,
         }
@@ -1202,6 +1204,8 @@ impl Server {
         let first = self.settings_seen.is_none() && seen.is_some();
         self.settings_seen = seen;
         crate::settings::reload_settings();
+        // Your PRs' news follows its setting at once.
+        self.pr_notices();
         if !first {
             for c in self.clients.values_mut() {
                 c.dirty = true;
@@ -1219,6 +1223,7 @@ impl Server {
         } else {
             self.notices.insert(source.to_string(), items);
         }
+        self.notice_history_record(source);
         if changed {
             for c in self.clients.values_mut() {
                 c.dirty = true;

@@ -25,6 +25,7 @@
 //! - `keymap`: the Keys view, every key Switchboard binds (M-/).
 //! - `render`: the screen, as lines, and where a click lands.
 //! - `calendar`: the Calendar view drawn as a day, hours down the side.
+//! - `history`: the Notifications view as a history by day.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
 //! - `ask`: a line to type in a box.
@@ -41,13 +42,14 @@ pub mod busy;
 pub mod calendar;
 pub mod choices;
 pub mod diagrams;
+pub mod history;
 pub mod keymap;
 pub mod remind;
 pub mod render;
 mod serve;
 pub mod views;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -75,6 +77,8 @@ pub enum Focus {
     Filter,
     Item,
     Close,
+    /// A keycap of the Notifications view, by its key.
+    Kind(usize),
 }
 
 /// What a click on a part of the screen means, and what the mouse is over:
@@ -98,6 +102,8 @@ pub enum Spot {
     Check(isize, usize),
     /// A key named in the footer, which a click presses.
     Key(Key),
+    /// A keycap of the Notifications view, by its key.
+    Kind(usize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -155,6 +161,9 @@ pub struct Snapshot {
     /// The diagrams ready to draw there, by their key in the layout
     /// (`diagrams`).
     pub diagrams: HashMap<String, diagrams::Ready>,
+    /// The Notifications view's counts, while it shows the history; `None`
+    /// when it shows the sidebar's notifications as they are.
+    pub notice_counts: Option<history::Counts>,
 }
 
 impl Default for Snapshot {
@@ -181,6 +190,7 @@ impl Default for Snapshot {
             caps: false,
             cell: None,
             diagrams: HashMap::new(),
+            notice_counts: None,
         }
     }
 }
@@ -259,6 +269,11 @@ pub struct Mission {
     /// chosen; none, another item's, or a check no longer failing is the
     /// PR's own row, whose pane shows its first.
     pub ci_check: Option<(String, String)>,
+    /// The Notifications view's keycap lit: 1 all, else a kind's
+    /// (`sidebar::history::Kind::key`).
+    pub notice_kind: usize,
+    /// The Notifications view's days unfolded, by their date.
+    pub unfolded: HashSet<String>,
 }
 
 impl Mission {
@@ -288,6 +303,8 @@ impl Mission {
             keep_autopilot: false,
             side: None,
             ci_check: None,
+            notice_kind: 1,
+            unfolded: HashSet::new(),
         }
     }
 
@@ -584,4 +601,11 @@ pub struct MissionState {
     /// The diagrams of the descriptions beside the boards, asked for and
     /// drawn.
     pub(crate) diagrams: diagrams::Diagrams,
+    /// What a key does once the mission control it was pressed in is back
+    /// in its overlay, for what goes to another view or closes it (Enter
+    /// on a notification), which acts on the overlay itself.
+    pub(crate) after_key: Option<AfterKey>,
 }
+
+/// See `MissionState::after_key`.
+pub(crate) type AfterKey = Box<dyn FnOnce(&mut crate::mux::server::Server) + Send>;

@@ -1105,6 +1105,48 @@ pub fn dismisses(item: &Item) -> Option<(String, Item)> {
     Some((source, own))
 }
 
+/// What picking a choice from a notification's menu led to, in the words
+/// the Notifications view's "What it led to" shows; `tab_number` names a
+/// tab by its number. Putting it away says nothing here, the sidebar's
+/// column saying it was dismissed; a choice with no words of its own is
+/// named as it was picked.
+pub fn led_to_words(
+    act: &Do,
+    label: &str,
+    tab_number: &dyn Fn(TabId) -> Option<usize>,
+) -> Option<String> {
+    let tab = |t: &TabId| tab_number(*t).map_or("its tab".to_string(), |n| format!("tab {n}"));
+    let words = match act {
+        Do::Dismiss { .. } | Do::SlackDismiss(_) => return None,
+        Do::GoTo(t) | Do::Answer(t) | Do::Peek(t) => format!("you went to {}", tab(t)),
+        Do::TypeInto { tab: t, .. } => format!("CI loop started in {}", tab(t)),
+        Do::Open(_) => "opened in the browser".into(),
+        Do::ReadHere(_) => "read beside your pane".into(),
+        Do::StartIn { work, .. } => match work {
+            Work::Ticket(_) | Work::Pr { .. } => "a tab opened for it".into(),
+            Work::Shape(_) => "a tab opened to shape it".into(),
+        },
+        // Asked for, since its directory is picked first, which may be
+        // canceled.
+        Do::SlackThread { .. } => "you asked for a tab for its thread".into(),
+        // Said once Linear answers (`After::DropInbox`).
+        Do::MarkRead(_) => return None,
+        Do::CloseTicket { .. } => "you chose to close it in Linear".into(),
+        Do::Rsvp(_, answer) => match answer {
+            crate::day::calendar::Rsvp::Yes => "you chose yes".into(),
+            crate::day::calendar::Rsvp::Maybe => "you chose maybe".into(),
+            crate::day::calendar::Rsvp::No => "you chose no".into(),
+        },
+        Do::OpenNote(_) => format!(
+            "you opened it at {}",
+            crate::util::local_now().strftime("%-H:%M")
+        ),
+        Do::OpenView(_) => "you opened its view".into(),
+        _ => format!("you chose \"{label}\""),
+    };
+    Some(words)
+}
+
 /// Whether Enter on an item does something of its own rather than open a
 /// menu: a heading, a setting, a plugin's item.
 pub fn is_plain(view: &ViewId, item: &Item) -> bool {
@@ -1431,6 +1473,15 @@ mod tests {
             "meeting" => Item::new("m1", "Standup in 5m").data(json!({ "kind": "meeting",
                 "event": { "title": "Standup", "join": "https://meet.example/x",
                     "link": "https://calendar.example/e" } })),
+            "prs" => Item::new(
+                "merged:https://github.com/acme/widgets/pull/12345",
+                "PR 12345 merged, widgets",
+            )
+            .target(Target::Url(
+                "https://github.com/acme/widgets/pull/12345".into(),
+            ))
+            .data(json!({ "pr": { "number": 12345, "repo": "acme/widgets" },
+                    "url": "https://github.com/acme/widgets/pull/12345" })),
             "ci" => {
                 let w = crate::sources::mainci::Watched {
                     repo: "acme/widgets".into(),
@@ -1477,7 +1528,7 @@ mod tests {
             assert_eq!(notice_choices(&notice, &c), in_its_view, "{source}");
             assert!(dismisses(&notice).is_some(), "{source} is put away after");
         }
-        assert_eq!(with_a_view, 4);
+        assert_eq!(with_a_view, 5);
         // A kind no view lists leads somewhere of its own and can be put away.
         let said = Item::new("autopilot\tsaid", "Nothing left to open");
         let choices = notice_choices(&said, &c);

@@ -235,6 +235,20 @@ impl Server {
     /// nothing over it): today as it is now is seen, so its changes leave
     /// the notifications.
     pub fn calendar_looked_at(&mut self) {
+        // Read there, every change the day had.
+        let shown: Vec<String> = self
+            .notices
+            .get("calendar")
+            .map(|items| items.iter().map(|i| i.id.clone()).collect())
+            .unwrap_or_default();
+        for id in shown {
+            self.notice_history_mark(
+                "calendar",
+                &id,
+                crate::sidebar::history::Sidebar::Read,
+                false,
+            );
+        }
         let dirs = Dirs::here();
         let now = util::local_now();
         if let Some(day) = self.day.today(&dirs, &now) {
@@ -306,6 +320,15 @@ impl Server {
 
     /// Leaving the Slack view: what its look brought is seen.
     pub fn slack_left(&mut self) {
+        // Read there, as the history says before their list lets them go.
+        let shown: Vec<String> = self
+            .notices
+            .get("slack")
+            .map(|items| items.iter().map(|i| i.id.clone()).collect())
+            .unwrap_or_default();
+        for id in shown {
+            self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
+        }
         let dirs = Dirs::here();
         slack::mark_seen(&dirs.state);
         self.day_views(&dirs, &util::local_now());
@@ -314,6 +337,8 @@ impl Server {
     /// A Slack message acted on from its menu (an item of the Slack view or
     /// of the "slack" notifications): seen, on its own.
     pub fn slack_item_acted(&mut self, item: &Item) {
+        let (_, id) = crate::mission::choices::notice_of(item);
+        self.notice_history_mark("slack", &id, crate::sidebar::history::Sidebar::Read, false);
         let dirs = Dirs::here();
         if let Some(m) = item.data.get("message") {
             let get = |k: &str| m.get(k).and_then(Value::as_str).unwrap_or("");
@@ -332,6 +357,17 @@ impl Server {
             .collect();
         slack::dismiss(&dirs.state, &refs, util::now_ms());
         self.day_views(&dirs, &util::local_now());
+        // Dismissed in the history too, however seeing them on the way
+        // and their list changing left them there.
+        for item in items {
+            let (_, id) = crate::mission::choices::notice_of(item);
+            self.notice_history_mark(
+                "slack",
+                &id,
+                crate::sidebar::history::Sidebar::Dismissed,
+                true,
+            );
+        }
     }
 
     /// Dismisses a notification this part gave, by its source ("meeting",
@@ -361,6 +397,8 @@ impl Server {
                 }
             }
             "calendar" => {
+                // The whole day's changes go with it.
+                self.notices_dismissed("calendar", None);
                 if let Some(day) = self.day.today(&dirs, &now) {
                     changes::calendar_seen(&dirs.state, &day, now.time_zone());
                 }
@@ -378,6 +416,13 @@ impl Server {
     /// A new note's notification acted on: the note opened in Notes, and its
     /// notification let go, as daemon.js's `openNote` did.
     pub fn new_note_open(&mut self, client: ClientId, rel: &str) {
+        // Read, from the sidebar or a menu alike.
+        self.notice_history_mark(
+            "new-notes",
+            &format!("note:{rel}"),
+            crate::sidebar::history::Sidebar::Read,
+            false,
+        );
         self.open_note(client, rel);
         let dirs = Dirs::here();
         new_notes::dismiss_note(&dirs.state, rel);
