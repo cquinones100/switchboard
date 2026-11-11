@@ -84,13 +84,17 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("g G", "first, last"),
     (
         "J K",
-        "scroll the pane beside a board (a PR's or a ticket's description, the Autopilot plan) down, up; the wheel over it too",
+        "scroll the pane beside a board or list (a PR's or a ticket's description, the Autopilot plan, a CI check's failing step) down, up; the wheel over it too",
     ),
     (
         "↵",
         "what can be done with it (on a tab: go there first, so ↵↵ goes)",
     ),
     ("↵ on Merged", "Work map: show or hide the merged worktrees"),
+    (
+        "l o M-r",
+        "CI view, with UX 2.0: the chosen check's whole log beside, from its failing step; go to the PR's tab; the check in the browser",
+    ),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
     ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
@@ -461,7 +465,8 @@ impl Server {
             .as_ref()
             .map(|f| f.text.trim().to_lowercase())
             .unwrap_or_default();
-        let mut tabs = self.sidebar_all_tabs();
+        let all_tabs = self.sidebar_all_tabs();
+        let mut tabs = all_tabs.clone();
         if !text.is_empty() {
             tabs.retain(|t| {
                 [
@@ -492,11 +497,13 @@ impl Server {
         // going, as Landing does) leaves it in front, where it now is, and
         // Tab's focus on a view's name on that view.
         let was = m.current().map(|v| v.id.clone());
-        // The Autopilot view orders its items by how far along they are, so
-        // a stage changing moves them: the cursor follows the chosen one.
-        let pilot_chosen = m
-            .current()
-            .filter(|v| v.id == ViewId::Autopilot)
+        // The Autopilot view orders its items by how far along they are, and
+        // CI by whether their checks fail, run or pass, so a stage or a
+        // check changing moves them: the cursor follows the chosen one.
+        let follows = |id: &ViewId| matches!(id, ViewId::Autopilot | ViewId::Ci);
+        let followed = m.current().map(|v| v.id.clone()).filter(follows);
+        let pilot_chosen = followed
+            .as_ref()
             .and_then(|_| m.chosen_item())
             .map(|i| i.id.clone());
         if let Some(id) = was
@@ -517,6 +524,7 @@ impl Server {
         let frame = spin_frame(&mut m, boxed);
         m.snap = Snapshot {
             tabs,
+            all_tabs,
             views,
             rules: Rules::now(),
             theme: theme(),
@@ -561,7 +569,7 @@ impl Server {
         if let Some(id) = pilot_chosen
             && let Some(at) = m
                 .current()
-                .filter(|v| v.id == ViewId::Autopilot)
+                .filter(|v| Some(&v.id) == followed.as_ref())
                 .and_then(|v| v.data.items.iter().position(|i| i.id == id))
         {
             m.cursor = at as isize;
@@ -725,7 +733,10 @@ impl Server {
                 continue;
             }
             if let Some(d) = self.sources.view(name) {
-                let d = d.clone();
+                let mut d = d.clone();
+                if id == ViewId::Ci {
+                    d.items = views::ci_sections(&d.items);
+                }
                 let loaded = views::loaded(&d);
                 out.push(view(id, title, d, loaded));
             }
@@ -1214,6 +1225,22 @@ impl Server {
         {
             k = Key::new(KeyCode::Enter, Mods::NONE);
         }
+        match ci_key(m, k) {
+            Some(CiKey::Moved) => return,
+            Some(CiKey::Do(act)) => {
+                let label = match &act {
+                    Do::Open(_) => "Opening the check",
+                    _ => "",
+                };
+                self.mission_do(client, act, label);
+                return;
+            }
+            Some(CiKey::Say(text)) => {
+                self.say(Some(client), &text);
+                return;
+            }
+            None => {}
+        }
         let count = match m.current() {
             Some(v) => v.data.items.len(),
             None => m.snap.tabs.len(),
@@ -1447,6 +1474,7 @@ impl Server {
                 }
             }
             Then::Enter => self.mission_key(client, Key::new(KeyCode::Enter, Mods::NONE)),
+            Then::Press(key) => self.mission_key(client, key),
             Then::Prepare => {
                 self.mission_prepare(client);
                 self.mission_dirty(client);
@@ -1951,7 +1979,7 @@ impl Server {
                 self.mission_note(client, "Dismissed.");
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
-            Do::ReadLog { job, name } => self.read_ci_log(client, &job, &name),
+            Do::ReadLog { job, name, line } => self.read_ci_log(client, &job, &name, line),
             Do::OpenNote(rel) => {
                 self.mission_close(client);
                 self.new_note_open(client, &rel);
@@ -1965,10 +1993,10 @@ impl Server {
     }
 
     /// A CI job's kept log in a pane beside the one you're in, in place of
-    /// one read there before, paged from its end (`switchboard view --log`),
-    /// as the CI view's "Read the failing log" showed it in a popup with
-    /// `less +G`.
-    fn read_ci_log(&mut self, client: ClientId, job: &str, name: &str) {
+    /// one read there before, paged from `line` (its failing step's first)
+    /// or else from its end (`switchboard view --log`), as the CI view's
+    /// "Read the failing log" showed it in a popup with `less +G`.
+    fn read_ci_log(&mut self, client: ClientId, job: &str, name: &str, line: Option<usize>) {
         const MARK: &str = "@ci_log";
         let file = crate::sources::ciboard::log_file(job);
         if !file.is_file() {
@@ -1992,11 +2020,9 @@ impl Server {
                 }
             }
         }
-        let args = vec![
-            "view".into(),
-            "--log".into(),
-            file.to_string_lossy().into_owned(),
-        ];
+        let mut args = vec!["view".to_string(), "--log".into()];
+        args.extend(line.map(|n| format!("+{n}")));
+        args.push(file.to_string_lossy().into_owned());
         self.open_beside(beside, MARK, args, 50);
     }
 
@@ -2950,6 +2976,9 @@ enum Then {
     Key(Key),
     /// A second click on the chosen one: Enter.
     Enter,
+    /// A footer's key clicked: pressed as it is, a filter being typed
+    /// taking it as it would the key.
+    Press(Key),
     /// A view or the cursor changed: shown again.
     Prepare,
 }
@@ -2972,12 +3001,15 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             if !hover {
                 return Then::Nothing;
             }
+            // The footer's keys are on the bottom edge, and light there.
             let edge = mouse.col == 0 || mouse.col + 1 >= cols || mouse.row + 1 >= rows;
-            let lit = hit.filter(|_| !edge).filter(|s| match s {
+            let footer_key = matches!(hit, Some(Spot::Key(_)));
+            let lit = hit.filter(|_| footer_key || !edge).filter(|s| match s {
                 Spot::Side(_) => false,
                 Spot::Group(g) => first_of(m, *g) != Some(m.view),
                 Spot::View(v) => *v != m.view,
-                Spot::Index(i) => *i != m.cursor,
+                Spot::Index(i) => *i != m.cursor || m.chosen_check().is_some(),
+                Spot::Check(i, n) => *i != m.cursor || m.chosen_check() != Some(*n),
                 _ => true,
             });
             if lit == m.hover {
@@ -3034,7 +3066,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::View(_) => Then::Redraw,
-                Spot::Index(i) if i == m.cursor => Then::Enter,
+                Spot::Index(i) if i == m.cursor && m.chosen_check().is_none() => Then::Enter,
+                Spot::Check(i, n) if i == m.cursor && m.chosen_check() == Some(n) => Then::Enter,
+                Spot::Check(i, n) => {
+                    m.cursor = i;
+                    choose_check(m, Some(n));
+                    Then::Prepare
+                }
+                Spot::Key(k) => Then::Press(k),
                 // A row's menu button: chosen and opened in one click.
                 Spot::Menu(i) => {
                     m.cursor = i;
@@ -3042,6 +3081,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 }
                 Spot::Index(i) => {
                     m.cursor = i;
+                    choose_check(m, None);
                     Then::Prepare
                 }
                 Spot::Side(_) => Then::Nothing,
@@ -3061,6 +3101,132 @@ fn pilot_menu_here(m: &Mission) -> bool {
 }
 
 // ── Moving about ────────────────────────────────────────────────────────────
+
+/// Chooses the chosen CI item's failed check `n`, or its own row with
+/// none; the pane beside starts again where it shows that check's line
+/// that says why.
+fn choose_check(m: &mut Mission, n: Option<usize>) {
+    let chosen = m.chosen_item().and_then(|item| {
+        let key = views::ci_check_key(views::ci_checks(item).get(n?)?);
+        Some((item.id.clone(), key))
+    });
+    let was = m.chosen_check();
+    m.ci_check = chosen;
+    if m.chosen_check() != was {
+        m.side = None;
+    }
+}
+
+/// What a key in the CI view did: moved, or asks for something done or
+/// said.
+#[derive(Debug, PartialEq)]
+enum CiKey {
+    Moved,
+    Do(Do),
+    Say(String),
+}
+
+/// What a key does in the CI view with UX 2.0, before mission control's
+/// own keys: `j` and `k` move through the PRs and their failed checks'
+/// lines; `l` reads the chosen check's whole log beside, from its failing
+/// step; `o` goes to the PR's tab; M-r opens the chosen check in the
+/// browser. `None` leaves the key to the rest.
+fn ci_key(m: &mut Mission, k: Key) -> Option<CiKey> {
+    let view = m
+        .current()
+        .filter(|v| v.id == ViewId::Ci && m.snap.rules.ux2)?;
+    let count = view.data.items.len() as isize;
+    let item = m.chosen_item()?.clone();
+    let checks: Vec<Value> = views::ci_checks(&item).into_iter().cloned().collect();
+    let check = m.chosen_check();
+    let none = plain(&k);
+    let down = matches!(k.code, KeyCode::Char('j') | KeyCode::Down) && none
+        || (k.code == KeyCode::Char('n') && k.mods == Mods::CTRL);
+    let up = matches!(k.code, KeyCode::Char('k') | KeyCode::Up) && none
+        || (k.code == KeyCode::Char('p') && k.mods == Mods::CTRL);
+    let chosen_check = checks.get(check.unwrap_or(0));
+    if (down || up) && m.focus.is_some() {
+        // Moving takes the focus Tab gave a name or the filter back to the
+        // items, as moving between rows does.
+        m.focus = Some(Focus::Item);
+    }
+    if down {
+        match check {
+            None if !checks.is_empty() => choose_check(m, Some(0)),
+            Some(n) if n + 1 < checks.len() => choose_check(m, Some(n + 1)),
+            _ => {
+                // The last line of the last PR stays where it is.
+                let was = m.cursor;
+                let to = row_step(m, 1);
+                move_to(m, to, count);
+                if m.cursor != was {
+                    choose_check(m, None);
+                }
+            }
+        }
+        return Some(CiKey::Moved);
+    }
+    if up {
+        match check {
+            Some(0) => choose_check(m, None),
+            Some(n) => choose_check(m, Some(n - 1)),
+            None => {
+                let was = m.cursor;
+                let to = row_step(m, -1);
+                move_to(m, to, count);
+                let last = m
+                    .chosen_item()
+                    .map(|i| views::ci_checks(i).len())
+                    .filter(|_| m.cursor != was)
+                    .and_then(|n| n.checked_sub(1));
+                choose_check(m, last);
+            }
+        }
+        return Some(CiKey::Moved);
+    }
+    let (number, repo) = super::render::ci_pr(&item);
+    match k.code {
+        KeyCode::Char('l') if none => {
+            let Some(c) = chosen_check else {
+                return Some(CiKey::Say(format!("Nothing is failing on {}.", item.title)));
+            };
+            let name = c["name"].as_str().unwrap_or("check").to_string();
+            // A log is kept once the view has read its step; one not read
+            // yet (past the look's `MAX_LOGS`) is said so here, since the
+            // key's own note would be lost with mission control taken out.
+            let read = c.pointer("/step").is_some_and(Value::is_object);
+            Some(match c["job"].as_str() {
+                Some(_) if !read => CiKey::Say(format!(
+                    "{name}'s log isn't read yet: the CI view reads up to 15 logs a look."
+                )),
+                Some(job) => CiKey::Do(Do::ReadLog {
+                    job: job.to_string(),
+                    name,
+                    line: c
+                        .pointer("/step/first")
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize),
+                }),
+                None => CiKey::Say(format!(
+                    "{name} has no log to read here: M-r opens it in the browser."
+                )),
+            })
+        }
+        KeyCode::Char('o') if none => Some(match m.pr_tab(number, repo) {
+            Some(t) => CiKey::Do(Do::GoTo(t.id)),
+            None if number > 0 => CiKey::Say(format!("No tab has #{number} open.")),
+            None => CiKey::Say("No tab is on it.".into()),
+        }),
+        KeyCode::Char('r') if k.mods == Mods::ALT => {
+            let url = chosen_check
+                .and_then(|c| c["url"].as_str())
+                .or_else(|| item.data.pointer("/ci/url").and_then(Value::as_str))
+                .filter(|u| !u.is_empty())?;
+            Some(CiKey::Do(Do::Open(url.to_string())))
+        }
+        _ => None,
+    }
+}
 
 /// The first place the cursor can be: -1, the line of the note worked
 /// continuously, while it leads the tabs (src/autopilot); else 0.
@@ -3511,6 +3677,148 @@ mod tests {
         }
     }
 
+    /// The CI view with UX 2.0: #12 failing two checks, the first with
+    /// its step read, then #13 passing.
+    fn ci_mission() -> Mission {
+        let failing = Item::new("f", "#12 Fix").data(serde_json::json!({ "ci": {
+            "number": 12, "repo": "acme/app", "state": "failing",
+            "url": "https://github.com/acme/app/pull/12",
+            "checks": [
+                { "name": "test", "job": "77", "url": "https://github.com/acme/app/actions/runs/1/job/77",
+                  "step": { "first": 40, "lines": ["Run test"], "whyAt": 0 } },
+                { "name": "deploy", "job": null, "url": "https://ci.example/2" },
+            ],
+        } }));
+        let passing = Item::new("p", "#13 Docs").data(serde_json::json!({ "ci": {
+            "number": 13, "repo": "acme/app", "state": "passing" } }));
+        let view = View {
+            id: ViewId::Ci,
+            title: "CI".into(),
+            data: ViewData {
+                items: views::ci_sections(&[failing, passing]),
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![view]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        m
+    }
+
+    #[test]
+    fn in_the_ci_view_j_and_k_go_through_a_pr_s_failed_checks() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = ci_mission();
+        let at = |m: &Mission| (m.cursor, m.chosen_check());
+        m.focus = Some(Focus::Filter);
+        assert_eq!(ci_key(&mut m, key("j")), Some(CiKey::Moved));
+        assert_eq!(at(&m), (1, Some(0)));
+        assert_eq!(m.focus, Some(Focus::Item), "the focus back on the items");
+        ci_key(&mut m, key("j"));
+        assert_eq!(at(&m), (1, Some(1)));
+        ci_key(&mut m, key("j"));
+        assert_eq!(at(&m), (3, None), "over the Passing heading to #13");
+        ci_key(&mut m, key("j"));
+        assert_eq!(at(&m), (3, None), "the last row stays");
+        ci_key(&mut m, key("k"));
+        assert_eq!(at(&m), (1, Some(1)), "back up to the last check's line");
+        ci_key(&mut m, key("k"));
+        ci_key(&mut m, key("k"));
+        assert_eq!(at(&m), (1, None), "the PR's own row");
+        // A look that finds the chosen check passing lets it go, and one
+        // that drops another keeps it chosen, wherever it now is.
+        m.ci_check = Some(("f".into(), "deploy\thttps://ci.example/2".into()));
+        let checks = &mut m.snap.views[0].data.items[1].data["ci"]["checks"];
+        checks.as_array_mut().unwrap().remove(0);
+        assert_eq!(m.chosen_check(), Some(0), "the same check");
+        let checks = &mut m.snap.views[0].data.items[1].data["ci"]["checks"];
+        checks.as_array_mut().unwrap().pop();
+        assert_eq!(m.chosen_check(), None, "its first shows");
+        m.forget_side_elsewhere();
+        assert_eq!(m.ci_check, None);
+        // A failing PR last keeps its last check chosen.
+        let mut m = ci_mission();
+        m.snap.views[0].data.items.truncate(2);
+        for _ in 0..3 {
+            ci_key(&mut m, key("j"));
+        }
+        assert_eq!(at(&m), (1, Some(1)), "its last check stays chosen");
+    }
+
+    #[test]
+    fn two_failed_checks_of_one_name_are_chosen_apart() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = ci_mission();
+        let checks = &mut m.snap.views[0].data.items[1].data["ci"]["checks"];
+        checks[1]["name"] = serde_json::json!("test");
+        ci_key(&mut m, key("j"));
+        ci_key(&mut m, key("j"));
+        assert_eq!(m.chosen_check(), Some(1), "the second, by its own page");
+        assert_eq!(
+            ci_key(&mut m, key("M-r")),
+            Some(CiKey::Do(Do::Open("https://ci.example/2".into())))
+        );
+        // And two of one page, by their names.
+        let checks = &mut m.snap.views[0].data.items[1].data["ci"]["checks"];
+        checks[1]["name"] = serde_json::json!("deploy");
+        checks[1]["url"] = checks[0]["url"].clone();
+        ci_key(&mut m, key("k"));
+        ci_key(&mut m, key("k"));
+        ci_key(&mut m, key("j"));
+        ci_key(&mut m, key("j"));
+        assert_eq!(m.chosen_check(), Some(1), "the second, by its own name");
+    }
+
+    #[test]
+    fn in_the_ci_view_l_reads_the_log_from_its_step_o_goes_to_the_tab_and_m_r_opens_the_check() {
+        let key = |k: &str| Key::parse(k).unwrap();
+        let mut m = ci_mission();
+        assert_eq!(
+            ci_key(&mut m, key("l")),
+            Some(CiKey::Do(Do::ReadLog {
+                job: "77".into(),
+                name: "test".into(),
+                line: Some(40),
+            }))
+        );
+        let step = m.snap.views[0].data.items[1].data["ci"]["checks"][0]["step"].take();
+        assert!(
+            matches!(ci_key(&mut m, key("l")), Some(CiKey::Say(s)) if s.contains("isn't read yet")),
+            "a log not read yet says so"
+        );
+        m.snap.views[0].data.items[1].data["ci"]["checks"][0]["step"] = step;
+        assert_eq!(
+            ci_key(&mut m, key("o")),
+            Some(CiKey::Say("No tab has #12 open.".into()))
+        );
+        m.snap.tabs[0].pr = Some(12);
+        m.snap.tabs[0].pr_repo = Some("acme/app".into());
+        assert_eq!(
+            ci_key(&mut m, key("o")),
+            Some(CiKey::Do(Do::GoTo(m.snap.tabs[0].id)))
+        );
+        // A filter that leaves the tab out of the shown ones still finds it.
+        m.snap.all_tabs = std::mem::take(&mut m.snap.tabs);
+        assert_eq!(
+            ci_key(&mut m, key("o")),
+            Some(CiKey::Do(Do::GoTo(m.snap.all_tabs[0].id)))
+        );
+        m.ci_check = Some(("f".into(), "deploy\thttps://ci.example/2".into()));
+        assert_eq!(
+            ci_key(&mut m, key("M-r")),
+            Some(CiKey::Do(Do::Open("https://ci.example/2".into())))
+        );
+        assert!(
+            matches!(ci_key(&mut m, key("l")), Some(CiKey::Say(s)) if s.contains("no log")),
+            "a check with no Actions job has no log"
+        );
+        assert_eq!(ci_key(&mut m, key("v")), None, "the rest's keys");
+        m.snap.rules.ux2 = false;
+        assert_eq!(ci_key(&mut m, key("o")), None, "only with UX 2.0");
+    }
+
     #[test]
     fn only_a_key_that_moves_leaves_the_snapshot_standing() {
         let key = |k: &str| Key::parse(k).unwrap();
@@ -3775,6 +4083,37 @@ mod tests {
         m.cursor = 6;
         assert_eq!(side_step(&m, 1), 6, "the last column stays");
         assert_eq!(side_step(&m, -1), 4);
+    }
+
+    #[test]
+    fn in_the_ci_view_a_footer_key_and_a_check_line_take_a_click() {
+        let mut m = ci_mission();
+        let (_, hits) = super::super::render::screen(&m, 160, 20);
+        m.size = (160, 20);
+        m.hits = hits;
+        let at = |m: &Mission, spot: Spot| {
+            let h = m.hits.iter().find(|h| h.spot == spot).expect("drawn");
+            (h.x0, h.y)
+        };
+        let click = |(col, row): (u16, u16)| Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col,
+            row,
+            mods: Mods::NONE,
+        };
+        let enter = Key::new(KeyCode::Enter, Mods::NONE);
+        let footer = at(&m, Spot::Key(enter));
+        assert_eq!(footer.1, 19, "on the footer");
+        assert_eq!(
+            mouse_in(&mut m, click(footer), true),
+            Then::Press(enter),
+            "pressed as the key is, so a filter being typed keeps it"
+        );
+        let second = at(&m, Spot::Check(1, 1));
+        assert_eq!(mouse_in(&mut m, click(second), true), Then::Prepare);
+        assert_eq!(m.chosen_check(), Some(1));
+        assert_eq!(mouse_in(&mut m, click(second), true), Then::Enter);
     }
 
     #[test]

@@ -118,10 +118,12 @@ pub enum Do {
     },
     /// What autopilot offers (src/autopilot).
     Autopilot(crate::autopilot::Act),
-    /// A CI job's kept log, read in a pane beside the one you're in.
+    /// A CI job's kept log, read in a pane beside the one you're in, from
+    /// `line` (its failing step's first), or from its end with none.
     ReadLog {
         job: String,
         name: String,
+        line: Option<usize>,
     },
     /// A note written for you opened in Notes (a path in the notes
     /// directory), its notification let go.
@@ -603,8 +605,11 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             let number = ci.get("number").and_then(Value::as_u64).unwrap_or(0);
             let (tab, dir) = pr_places(ctx, number, text(ci, "/repo"));
             // A tab already on it whose Claude is idle takes the CI loop
-            // where it is; else a new tab on the PR's worktree starts with it.
+            // where it is; else a new tab on the PR's worktree starts with
+            // it. A PR running or passing has nothing for it to fix.
+            let failing = super::views::ci_state(item) == "failing";
             match &tab {
+                _ if !failing => {}
                 Some(t)
                     if t.claude_pane.is_some()
                         && matches!(t.state, TabState::Idle | TabState::Done) =>
@@ -643,12 +648,22 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             let job = text(ci, "/job");
             if !job.is_empty() && ci.get("logged").and_then(Value::as_bool) == Some(true) {
                 let name = text(ci, "/jobName");
+                let line = ci
+                    .get("checks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .find(|c| c["job"].as_str() == Some(job))
+                    .and_then(|c| c.pointer("/step/first"))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize);
                 out.push(choice(
                     'l',
                     format!("Read the failing log ({name}) in a pane beside"),
                     Do::ReadLog {
                         job: job.to_string(),
                         name: name.to_string(),
+                        line,
                     },
                 ));
             }
@@ -1312,7 +1327,8 @@ mod tests {
             choices[2].act,
             Do::ReadLog {
                 job: "77".into(),
-                name: "test".into()
+                name: "test".into(),
+                line: None,
             }
         );
         let choices = item_choices(&ViewId::Ci, &ci(false), &[], &ctx(&tabs, &repo));
@@ -1425,7 +1441,11 @@ mod tests {
                     names: vec!["Tests".into()],
                     job: Some("5".into()),
                 };
-                crate::sources::mainci::item_of(&w, "abc1234def", &failed, Some("FAIL x")).unwrap()
+                let step = crate::sources::ciboard::Step {
+                    why: "FAIL x".into(),
+                    ..Default::default()
+                };
+                crate::sources::mainci::item_of(&w, "abc1234def", &failed, Some(&step)).unwrap()
             }
             other => panic!("{other} names a view: give this test an item of its kind"),
         };

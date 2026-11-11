@@ -93,6 +93,11 @@ pub enum Spot {
     /// the most the pane's first line shown can be, for `J` and the wheel
     /// to stop at its end.
     Side(usize),
+    /// A failed check's line under its PR in the CI view: the PR's place
+    /// in the view and the check's among its failed ones.
+    Check(isize, usize),
+    /// A key named in the footer, which a click presses.
+    Key(Key),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -137,6 +142,9 @@ pub struct Snapshot {
     /// The line of the note worked continuously, leading the tabs while
     /// the mode is on (src/autopilot); the cursor's -1 is on it.
     pub pilot: Option<crate::autopilot::Summary>,
+    /// Every tab, whatever the filter leaves of `tabs`, for finding the tab
+    /// a PR is open in (`Mission::pr_tab`).
+    pub all_tabs: Vec<TabModel>,
     /// The client's terminal draws the kit's half circles (src/ui/kit.rs).
     pub caps: bool,
     /// The terminal's cell in pixels where the description beside a board
@@ -169,6 +177,7 @@ impl Default for Snapshot {
             frame: 0,
             screens: HashMap::new(),
             pilot: None,
+            all_tabs: Vec::new(),
             caps: false,
             cell: None,
             diagrams: HashMap::new(),
@@ -244,6 +253,11 @@ pub struct Mission {
     /// over it): the view and the item it was scrolled on, and its first
     /// line shown. Another view or item shows its pane from the top.
     pub side: Option<(usize, String, usize)>,
+    /// The CI view's chosen failed check: the PR's item id and the check's
+    /// key (`views::ci_check_key`, its name and page), so a look that changes which checks fail keeps the same one
+    /// chosen; none, another item's, or a check no longer failing is the
+    /// PR's own row, whose pane shows its first.
+    pub ci_check: Option<(String, String)>,
 }
 
 impl Mission {
@@ -272,6 +286,7 @@ impl Mission {
             keep_landing: false,
             keep_autopilot: false,
             side: None,
+            ci_check: None,
         }
     }
 
@@ -281,8 +296,36 @@ impl Mission {
     pub fn side_top(&self) -> usize {
         match (&self.side, self.chosen_item()) {
             (Some((view, id, top)), Some(item)) if *view == self.view && *id == item.id => *top,
+            _ => self.side_start(),
+        }
+    }
+
+    /// Where the pane beside a list starts before it is scrolled: the top,
+    /// but in the CI view a few lines above the chosen check's line that
+    /// says why, so it shows without scrolling.
+    fn side_start(&self) -> usize {
+        match (self.current(), self.chosen_item()) {
+            (Some(view), Some(item)) if view.id == ViewId::Ci && self.snap.rules.ux2 => {
+                render::ci_why_row(item, self.chosen_check().unwrap_or(0))
+                    .map_or(0, |row| row.saturating_sub(render::CI_ABOVE_WHY))
+            }
             _ => 0,
         }
+    }
+
+    /// The CI view's chosen failed check, by its place among the chosen
+    /// PR's now; `None` on the PR's own row, and once a look finds the
+    /// chosen check no longer failing.
+    pub fn chosen_check(&self) -> Option<usize> {
+        let (id, key) = self.ci_check.as_ref()?;
+        let view = self.current()?;
+        let item = self.chosen_item()?;
+        if view.id != ViewId::Ci || item.id != *id {
+            return None;
+        }
+        views::ci_checks(item)
+            .iter()
+            .position(|c| views::ci_check_key(c) == *key)
     }
 
     /// Scrolls the pane beside a board by `lines` (up when negative),
@@ -301,6 +344,11 @@ impl Mission {
     /// Lets the pane's scroll go once another view or item is chosen, so
     /// coming back to the one it was made on shows that pane from the top.
     pub fn forget_side_elsewhere(&mut self) {
+        // A chosen CI check no longer failing lets go, with its scroll.
+        if self.ci_check.is_some() && self.chosen_check().is_none() {
+            self.ci_check = None;
+            self.side = None;
+        }
         let chosen = self.chosen_item().map(|i| i.id.clone());
         if self
             .side
@@ -338,6 +386,17 @@ impl Mission {
         let cw = render::card_width(self.size.0 as usize, self.snap.card);
         let g = render::grid(&self.snap.tabs, &self.snap.rules, self.size.0 as usize, cw);
         g.order.iter().map(|&i| self.snap.tabs[i].id).collect()
+    }
+
+    /// The tab PR `number` of `repo` is open in, among every tab, a filter
+    /// or not (the shown tabs when the snapshot holds no others).
+    pub fn pr_tab(&self, number: u64, repo: &str) -> Option<&TabModel> {
+        let tabs = if self.snap.all_tabs.is_empty() {
+            &self.snap.tabs
+        } else {
+            &self.snap.all_tabs
+        };
+        render::tab_of_pr(tabs, number, repo)
     }
 
     /// The chosen item of a view after the tabs.

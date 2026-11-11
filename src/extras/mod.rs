@@ -103,7 +103,9 @@ impl MissionView {
             MissionView::Inbox => {
                 "Mission control: Inbox, your unread Linear mentions, comments and assignments"
             }
-            MissionView::Ci => "Mission control: CI, your pull requests with failing checks",
+            MissionView::Ci => {
+                "Mission control: CI, your pull requests failing, running and passing"
+            }
             MissionView::Landing => {
                 "Mission control: Landing, what is landing in each repository, its landing queue or merge queue, and which tabs have them"
             }
@@ -143,7 +145,7 @@ impl MissionView {
                 "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
             }
             MissionView::Ci => {
-                "Each with the checks that failed and the log line that says why. Enter starts a CI loop on it or reads the failing job's log beside you. Needs GitHub; Settings' \"CI\" (view_ci)."
+                "Failing, running and passing, each failed check with the log line that says why; with UX 2.0 the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
             }
             MissionView::Landing => {
                 "There only while something lands. A landing queue's row moves up, down or out from its menu; merge queues are asked of GitHub and hold everyone's PRs. Settings' \"Landing view\" (view_landing)."

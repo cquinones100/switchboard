@@ -1246,21 +1246,8 @@ fn pr_face(item: &Item, m: &Mission, theme: &Theme) -> Face {
         .split_once(' ')
         .filter(|(n, _)| n.starts_with('#'))
         .map_or(item.title.as_str(), |(_, t)| t);
-    // The tab on this PR in this repository, as `choices::pr_places` finds
-    // it, so #42 in one repository never names another's tab.
     let repo = item.data["pr"]["repo"].as_str().unwrap_or("");
-    let in_repo = |t: &TabModel| {
-        repo.is_empty()
-            || t.pr_repo
-                .as_deref()
-                .or(t.repo.as_deref())
-                .is_some_and(|r| r.eq_ignore_ascii_case(repo))
-    };
-    let tab = m
-        .snap
-        .tabs
-        .iter()
-        .find(|t| number.is_some() && t.pr == number && in_repo(t));
+    let tab = number.and_then(|n| m.pr_tab(n, repo));
     let queued = item.group.as_deref() == Some("In merge queue");
     let meta = match (tab, item.data["reviewers"].as_str()) {
         (Some(t), _) => tab_words(t, m, theme),
@@ -2741,6 +2728,413 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
     }
 }
 
+// ── The CI view ─────────────────────────────────────────────────────────────
+
+/// The lines the CI pane leaves above the line that says why when it
+/// first shows a check (`Mission::side_start`).
+pub const CI_ABOVE_WHY: usize = 6;
+/// The CI list's width beside the pane, at its narrowest and widest.
+const CI_LIST_MIN: usize = 56;
+const CI_LIST_MAX: usize = 84;
+
+/// The tab open on PR `number` of `repo`, as `choices::pr_places` finds it,
+/// so #42 in one repository never names another's tab; a PR with no
+/// repository matches by number.
+pub fn tab_of_pr<'a>(tabs: &'a [TabModel], number: u64, repo: &str) -> Option<&'a TabModel> {
+    let in_repo = |t: &TabModel| {
+        repo.is_empty()
+            || t.pr_repo
+                .as_deref()
+                .or(t.repo.as_deref())
+                .is_some_and(|r| r.eq_ignore_ascii_case(repo))
+    };
+    tabs.iter()
+        .find(|t| number > 0 && t.pr == Some(number) && in_repo(t))
+}
+
+/// A CI item's PR number and repository.
+pub fn ci_pr(item: &Item) -> (u64, &str) {
+    let ci = &item.data["ci"];
+    (
+        ci["number"].as_u64().unwrap_or(0),
+        ci["repo"].as_str().unwrap_or(""),
+    )
+}
+
+/// How long a check ran: "45s", "4m 12s", "1h 3m".
+fn ran_for(secs: i64) -> String {
+    match secs.max(0) {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m {}s", s / 60, s % 60),
+        s => format!("{}h {}m", s / 3600, s % 3600 / 60),
+    }
+}
+
+/// The pane's row of a check's line that says why: under the pane's head,
+/// at its place in the step; `None` when its log wasn't read.
+pub fn ci_why_row(item: &Item, check: usize) -> Option<usize> {
+    let checks = views::ci_checks(item);
+    let at = checks.get(check)?.pointer("/step/whyAt")?.as_u64()?;
+    Some(3 + at as usize)
+}
+
+/// A failed check's line that says why, numbered as in its whole log.
+fn ci_why_marked(check: &serde_json::Value, inner: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let step = &check["step"];
+    match (step["whyAt"].as_u64(), step["first"].as_u64()) {
+        (Some(at), Some(first)) => {
+            let n = (first + at) as usize;
+            let why = check["why"].as_str().unwrap_or("");
+            kit::marked(n, n.to_string().len(), why, inner, theme)
+        }
+        _ => vec![Span::styled("Its log wasn't read.", fg(theme.faint))],
+    }
+}
+
+/// The chosen failed check beside the CI list: its name, a dim line of its
+/// PR, run, how long it ran and its failing step's name, a rule, then the
+/// step's lines numbered as in the whole log, the line that says why
+/// marked (`kit::marked`); under them each other failed check of the PR,
+/// its name and its own line that says why.
+fn ci_about(item: &Item, chosen: usize, side_w: usize, theme: &Theme) -> About {
+    let inner = side_w.saturating_sub(3);
+    let checks = views::ci_checks(item);
+    let Some(check) = checks.get(chosen) else {
+        return About::default();
+    };
+    let ci = &item.data["ci"];
+    let step = &check["step"];
+    let mut facts: Vec<String> = Vec::new();
+    match ci["number"].as_u64().filter(|n| *n > 0) {
+        Some(n) => facts.push(format!("#{n}")),
+        None => facts.extend(ci["branch"].as_str().map(str::to_string)),
+    }
+    if let Some(run) = check["run"].as_str() {
+        facts.push(format!("run {run}"));
+    }
+    if let Some(secs) = check["secs"].as_i64() {
+        facts.push(ran_for(secs));
+    }
+    if let Some(name) = step["name"].as_str().filter(|n| !n.is_empty()) {
+        facts.push(format!("the failing step, {name}"));
+    } else if step.is_object() {
+        facts.push("the log's last lines".into());
+    }
+    let name = check["name"].as_str().unwrap_or("check");
+    let mut lines = kit::pane(
+        name,
+        vec![Span::styled(facts.join(" · "), fg(theme.dim))],
+        inner,
+        theme,
+    );
+    match step["lines"].as_array() {
+        Some(step_lines) => {
+            let first = step["first"].as_u64().unwrap_or(1) as usize;
+            let why_at = step["whyAt"].as_u64().map(|n| n as usize);
+            let num_w = (first + step_lines.len()).to_string().len();
+            for (i, text) in step_lines.iter().enumerate() {
+                let text = text.as_str().unwrap_or("");
+                if Some(i) == why_at {
+                    lines.push(kit::marked(first + i, num_w, text, inner, theme));
+                    continue;
+                }
+                lines.push(vec![
+                    Span::styled(format!(" {:>num_w$} ", first + i), fg(theme.faint)),
+                    Span::styled(text.to_string(), fg(theme.text)),
+                ]);
+            }
+        }
+        None if check["job"].is_string() => lines.push(vec![Span::styled(
+            "Its log wasn't read this look.",
+            fg(theme.faint),
+        )]),
+        None => lines.push(vec![Span::styled(
+            "Not a GitHub Actions job, with no log to read here: M-r opens it in the browser.",
+            fg(theme.faint),
+        )]),
+    }
+    for (_, other) in checks.iter().enumerate().filter(|(i, _)| *i != chosen) {
+        lines.push(Vec::new());
+        lines.push(vec![kit::head_rule(inner, theme)]);
+        lines.push(vec![
+            kit::mark(Mark::Failed, 0, theme),
+            Span::raw(" "),
+            Span::styled(
+                other["name"].as_str().unwrap_or("check").to_string(),
+                bold(theme.text),
+            ),
+        ]);
+        lines.push(ci_why_marked(other, inner, theme));
+    }
+    About {
+        lines,
+        pictures: Vec::new(),
+    }
+}
+
+/// The spans lit under the mouse, on the panel's surface.
+fn lit(spans: Vec<Span<'static>>, theme: &Theme) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|s| {
+            let style = s.style.bg(theme.panel);
+            Span::styled(s.content, style)
+        })
+        .collect()
+}
+
+/// A CI row's left part and its right (the PR's tab), `cols` wide.
+fn with_right(
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    cols: usize,
+) -> Vec<Span<'static>> {
+    let right_w = spans_width(&right);
+    let mut out = fit(left, cols.saturating_sub(right_w + 1), Style::new());
+    out.extend(right);
+    out.push(Span::raw(" "));
+    out
+}
+
+/// With UX 2.0, the CI view: its sections' labels with their counts; each
+/// failing PR its mark, number, title and tab, a dim line of its
+/// repository, branch and checks failed, and a line for each failed check
+/// with why it failed; each running or passing PR a line. On a wide
+/// screen the chosen check's failing step is a pane beside the list; on a
+/// narrow one under it.
+fn ci_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let theme = &m.snap.theme;
+    if let Some(e) = &view.data.error {
+        for w in text::wrap(e, cols.saturating_sub(4)) {
+            lines.push(
+                Row::default()
+                    .put(format!("  {w}"), fg(RED))
+                    .take()
+                    .line(cols, None),
+            );
+        }
+    }
+    let top = lines.len();
+    let body = rows.saturating_sub(1 + top);
+    let wide = cols >= SIDE_AT;
+    let list_w = if wide {
+        (cols * 2 / 5).clamp(CI_LIST_MIN, CI_LIST_MAX)
+    } else {
+        cols
+    };
+    let cursor = usize::try_from(m.cursor).ok();
+    let check = m.chosen_check();
+    let chosen_item = cursor.and_then(|c| view.data.items.get(c));
+    let shows_pane = chosen_item.is_some_and(|i| !views::ci_checks(i).is_empty());
+    // The list's lines, each with what a click on it chooses.
+    let mut entries: Vec<(Vec<Span<'static>>, Option<Spot>)> = Vec::new();
+    let mut chosen_line = 0;
+    for (index, item) in view.data.items.iter().enumerate() {
+        if views::is_header(item) {
+            let count = item.data["count"].as_u64().unwrap_or(0) as usize;
+            let tone = match item.id.strip_prefix("header:") {
+                Some("running") => Tone::Working,
+                Some("passing") => Tone::Done,
+                _ => Tone::Failed,
+            };
+            if !entries.is_empty() {
+                entries.push((Vec::new(), None));
+            }
+            entries.push((
+                kit::label(&item.title, tone, Some(count), list_w, theme),
+                None,
+            ));
+            continue;
+        }
+        let at = index as isize;
+        let is_chosen = cursor == Some(index);
+        let row_chosen = is_chosen && check.is_none();
+        if row_chosen {
+            chosen_line = entries.len();
+        }
+        let (number, repo) = ci_pr(item);
+        let state = views::ci_state(item);
+        let mark = match state {
+            "running" => kit::mark(Mark::Working, m.snap.frame, theme),
+            "passing" => kit::mark(Mark::Passed, 0, theme),
+            _ => kit::mark(Mark::Failed, 0, theme),
+        };
+        let title = item
+            .title
+            .split_once(' ')
+            .filter(|(n, _)| n.starts_with('#'))
+            .map_or(item.title.as_str(), |(_, t)| t);
+        let mut left = vec![mark, Span::raw(" ")];
+        if number > 0 {
+            left.push(Span::styled(
+                format!("#{number} "),
+                Tone::Accent.style(theme),
+            ));
+        }
+        left.push(Span::styled(title.to_string(), Tone::Text.bold(theme)));
+        // A running or passing PR's counts sit at the right, before its
+        // tab, so a long title is cut rather than them.
+        let mut right = Vec::new();
+        if state != "failing" {
+            right.push(Span::styled(format!("{}  ", item.detail), fg(theme.dim)));
+        }
+        match (number, m.pr_tab(number, repo)) {
+            (0, _) => {}
+            (_, Some(t)) => right.push(Span::styled(format!("tab {}", t.index), fg(theme.dim))),
+            (_, None) => right.push(Span::styled("no tab", fg(theme.faint))),
+        }
+        let spot = Spot::Index(at);
+        let hover = m.hover == Some(spot);
+        let line = kit::row(
+            with_right(left, right, list_w - 1),
+            list_w,
+            row_chosen,
+            theme,
+        );
+        entries.push((if hover { lit(line, theme) } else { line }, Some(spot)));
+        if state != "failing" {
+            continue;
+        }
+        let ci = &item.data["ci"];
+        let mut facts: Vec<String> = [ci["repo"].as_str(), ci["branch"].as_str()]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if let (Some(f), Some(t)) = (ci["failed"].as_u64(), ci["total"].as_u64()) {
+            facts.push(format!("{f} of {t} failed"));
+        }
+        let line = kit::row(
+            vec![Span::styled(
+                format!("  {}", facts.join(" · ")),
+                fg(theme.dim),
+            )],
+            list_w,
+            row_chosen,
+            theme,
+        );
+        entries.push((if hover { lit(line, theme) } else { line }, Some(spot)));
+        for (n, c) in views::ci_checks(item).into_iter().enumerate() {
+            let check_chosen = is_chosen && check == Some(n);
+            if check_chosen {
+                chosen_line = entries.len();
+            }
+            let spot = Spot::Check(at, n);
+            let line = kit::row(
+                vec![
+                    Span::raw("  "),
+                    kit::mark(Mark::Failed, 0, theme),
+                    Span::raw(" "),
+                    Span::styled(
+                        c["name"].as_str().unwrap_or("check").to_string(),
+                        fg(theme.text),
+                    ),
+                    Span::styled(
+                        format!("  {}", c["why"].as_str().unwrap_or("")),
+                        fg(theme.dim),
+                    ),
+                ],
+                list_w,
+                check_chosen,
+                theme,
+            );
+            let line = if m.hover == Some(spot) {
+                lit(line, theme)
+            } else {
+                line
+            };
+            entries.push((line, Some(spot)));
+        }
+    }
+    // The pane: beside the list on a wide screen, else under it, taking
+    // what the list leaves of the screen's lower half.
+    let pane_w = if wide { cols - list_w } else { cols };
+    let list_h = if wide || !shows_pane {
+        body
+    } else {
+        entries.len().max(1).min(body / 2)
+    };
+    let pane_top = if wide { top } else { top + list_h + 1 };
+    let pane_h = if wide {
+        body
+    } else {
+        body.saturating_sub(list_h + 1)
+    };
+    let about = chosen_item
+        .filter(|_| shows_pane && pane_h > 0)
+        .map(|item| ci_about(item, check.unwrap_or(0), pane_w, theme));
+    if let Some(about) = &about {
+        let x = if wide { list_w + 2 } else { 2 };
+        side_hits(
+            about.last_top(pane_h),
+            x,
+            pane_w - 2,
+            pane_top,
+            pane_h,
+            hits,
+        );
+    }
+    let about = about
+        .map(|a| {
+            let top = m.side_top().min(a.last_top(pane_h));
+            a.window(top, pane_h)
+        })
+        .unwrap_or_default()
+        .lines;
+    let first = (chosen_line + 1).saturating_sub(list_h);
+    let shown: Vec<_> = entries.into_iter().skip(first).take(list_h).collect();
+    for (i, (_, spot)) in shown.iter().enumerate() {
+        if let Some(spot) = spot {
+            hits.push(HitBox {
+                y: (top + i) as u16,
+                x0: 0,
+                x1: list_w.saturating_sub(1) as u16,
+                spot: *spot,
+            });
+        }
+    }
+    for i in 0..list_h {
+        let mut spans = fit(
+            shown.get(i).map(|(l, _)| l.clone()).unwrap_or_default(),
+            list_w,
+            Style::new(),
+        );
+        if wide {
+            spans.push(kit::rule_v(theme));
+            spans.push(Span::raw(" "));
+            spans.extend(fit(
+                about.get(i).cloned().unwrap_or_default(),
+                pane_w - 2,
+                Style::new(),
+            ));
+        }
+        lines.push(Line { spans, fill: None });
+    }
+    if !wide && pane_h > 0 {
+        lines.push(Line {
+            spans: vec![kit::rule(cols, theme)],
+            fill: None,
+        });
+        for i in 0..pane_h {
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(fit(
+                about.get(i).cloned().unwrap_or_default(),
+                cols - 2,
+                Style::new(),
+            ));
+            lines.push(Line { spans, fill: None });
+        }
+    }
+}
+
 impl Row {
     /// The row as built so far, taken out of a chain of `put`s.
     fn take(&mut self) -> Row {
@@ -2828,6 +3222,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("m", "menu"),
             ("/", "filter"),
         ]),
+        ViewId::Ci if m.snap.rules.ux2 => with(&[
+            ("jk", "move"),
+            ("l", "log"),
+            ("o", "tab"),
+            ("M-r", "browser"),
+            ("↵", "actions"),
+            ("/", "filter"),
+        ]),
         ViewId::Prs | ViewId::Tickets => with(&[
             ("hl", "column"),
             ("jk", "move"),
@@ -2847,6 +3249,57 @@ pub(super) fn pilot_menu_shown(view: &View) -> bool {
         .items
         .iter()
         .any(|i| i.id == crate::autopilot::view::HEADING)
+}
+
+/// The key a footer's label names: its arrows and words as the keys
+/// they are, a single key as it is written; none for a pair (`jk`, `J K`),
+/// whose rows and pane take the click themselves.
+fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
+    let name = match label {
+        "↵" => "Enter",
+        "esc" => "Escape",
+        "tab" => "Tab",
+        l if l.chars().count() == 1 || l.starts_with("M-") => l,
+        _ => return None,
+    };
+    crate::mux::input::Key::parse(name)
+}
+
+/// UX 2.0's footer whose keys take a click (the CI view's): the kit's
+/// hints, each key that names one a spot (`Spot::Key`) at row `y`, lit
+/// under the mouse.
+fn key_footer(
+    pairs: &[(String, String)],
+    m: &Mission,
+    theme: &Theme,
+    y: u16,
+    hits: &mut Vec<HitBox>,
+) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut x = 1;
+    for (key, what) in pairs {
+        let p: [(&str, &str); 1] = [(key.as_str(), what.as_str())];
+        let mut spans = kit::hints(&p, theme);
+        if !out.is_empty() {
+            out.push(Span::raw("  "));
+            x += 2;
+        }
+        if let Some(k) = footer_key(key) {
+            let w = width(key);
+            hits.push(HitBox {
+                y,
+                x0: x as u16,
+                x1: (x + w).saturating_sub(1) as u16,
+                spot: Spot::Key(k),
+            });
+            if m.hover == Some(Spot::Key(k)) {
+                spans[0].style = spans[0].style.add_modifier(Modifier::REVERSED);
+            }
+        }
+        x += spans_width(&spans);
+        out.extend(spans);
+    }
+    out
 }
 
 /// The footer's keys: with UX 2.0 the kit's hints, each key in the accent;
@@ -3209,8 +3662,15 @@ pub fn drawn(
                 && v.loaded
                 && v.data.setup.is_none()
                 && !v.data.items.is_empty();
+            let ci_shown = snap.rules.ux2
+                && v.id == ViewId::Ci
+                && v.loaded
+                && v.data.setup.is_none()
+                && !v.data.items.is_empty();
             if pilot_board_shown {
                 pictures = pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+            } else if ci_shown {
+                ci_rows(v, cols, rows, m, &mut lines, &mut hits);
             } else if let Some(columns) = v.columns() {
                 if v.data.setup.is_some() || !v.loaded {
                     list(v, cols, rows, m, 0, &mut lines, &mut hits);
@@ -3258,6 +3718,7 @@ pub fn drawn(
     while lines.len() < rows.saturating_sub(1) {
         lines.push(Row::default().line(cols, None));
     }
+    let mut keys_hit = Vec::new();
     let foot = match &m.note {
         Some(note) => Row::default()
             .put(format!(" {note}"), fg(theme.bright))
@@ -3266,13 +3727,20 @@ pub fn drawn(
             let mut row = Row::default();
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
-            row.spans
-                .extend(footer(&hints(m, view, beside), snap.rules.ux2, theme));
+            let pairs = hints(m, view, beside);
+            if snap.rules.ux2 && view.is_some_and(|v| v.id == ViewId::Ci) {
+                let y = rows.saturating_sub(1) as u16;
+                row.spans
+                    .extend(key_footer(&pairs, m, theme, y, &mut keys_hit));
+            } else {
+                row.spans.extend(footer(&pairs, snap.rules.ux2, theme));
+            }
             row
         }
     };
     lines.push(foot.line(cols, None));
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
+    hits.extend(keys_hit);
     meters.retain(|meter| (meter.y as usize) < rows.saturating_sub(1));
     (lines, hits, meters, pictures)
 }
@@ -3324,6 +3792,7 @@ mod tests {
             frame: 0,
             screens: Default::default(),
             pilot: None,
+            all_tabs: Vec::new(),
             caps: false,
             cell: None,
             diagrams: Default::default(),
@@ -3673,6 +4142,177 @@ mod tests {
             },
             loaded: true,
         }
+    }
+
+    /// The CI view as the source and `views::ci_sections` give it: #27
+    /// failing two checks, each with its failing step read, #19
+    /// running and #13 passing.
+    fn ci_view() -> View {
+        let step = |first: u64, lines: &[&str], why_at: u64| {
+            serde_json::json!({ "name": "cargo test", "first": first, "lines": lines,
+                "whyAt": why_at, "why": lines[why_at as usize] })
+        };
+        let failing = Item::new("f", "#27 Cache the images").data(serde_json::json!({ "ci": {
+            "number": 27, "repo": "acme/app", "branch": "cache", "state": "failing",
+            "failed": 2, "total": 9,
+            "checks": [
+                { "name": "test (ubuntu)", "job": "11", "run": "8812", "secs": 252,
+                  "why": "test result: FAILED", "url": "https://github.com/acme/app/actions/runs/8812/job/11",
+                  "step": step(40, &["Run cargo test", "running 3 tests", "test result: FAILED", "Error: exit 101"], 2) },
+                { "name": "clippy", "job": "12", "run": "8812", "secs": 30,
+                  "why": "error: unused variable", "url": "https://github.com/acme/app/actions/runs/8812/job/12",
+                  "step": step(7, &["Run cargo clippy", "error: unused variable"], 1) },
+            ],
+        } }));
+        let progress = |id: &str, title: &str, state: &str, detail: &str, n: u64| {
+            Item::new(id, title)
+                .detail(detail)
+                .data(serde_json::json!({ "ci": {
+                "number": n, "repo": "acme/app", "state": state } }))
+        };
+        let items = views::ci_sections(&[
+            failing,
+            progress(
+                "r",
+                "#19 Image cache",
+                "running",
+                "4 of 5 passed, 1 running",
+                19,
+            ),
+            progress("p", "#13 Docs", "passing", "9/9", 13),
+        ]);
+        list_view(ViewId::Ci, "CI", items)
+    }
+
+    #[test]
+    fn a_footer_label_clicks_the_key_it_names() {
+        let key = |k: &str| crate::mux::input::Key::parse(k);
+        assert_eq!(footer_key("↵"), key("Enter"));
+        assert_eq!(footer_key("esc"), key("Escape"));
+        assert_eq!(footer_key("M-r"), key("M-r"));
+        assert_eq!(footer_key("l"), key("l"));
+        assert_eq!(footer_key("jk"), None);
+        assert_eq!(footer_key("J K"), None);
+    }
+
+    #[test]
+    fn with_ux2_the_ci_view_heads_its_sections_and_shows_the_chosen_check_s_step_beside() {
+        let mut working = tab(6, "cache");
+        working.pr = Some(27);
+        working.pr_repo = Some("acme/app".into());
+        let mut m = mission(vec![working], vec![ci_view()]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        ci_rows(&m.snap.views[0], 160, 21, &m, &mut lines, &mut hits);
+        let text = texts(&lines);
+        assert!(
+            text[0].starts_with(" FAILING") && text[0].contains("1 │"),
+            "{}",
+            text[0]
+        );
+        assert!(
+            text[1].contains("✕ #27 Cache the images") && text[1].contains("tab 6 │"),
+            "{}",
+            text[1]
+        );
+        assert!(
+            text[2].contains("acme/app · cache · 2 of 9 failed"),
+            "{}",
+            text[2]
+        );
+        assert!(
+            text[3].contains("✕ test (ubuntu)  test result: FAILED"),
+            "{}",
+            text[3]
+        );
+        assert!(
+            text[4].contains("✕ clippy  error: unused variable"),
+            "{}",
+            text[4]
+        );
+        assert!(text[6].starts_with(" RUNNING"), "{}", text[6]);
+        assert!(
+            text[7].contains("#19 Image cache")
+                && text[7].contains("4 of 5 passed, 1 running  no tab"),
+            "{}",
+            text[7]
+        );
+        assert!(text[7].contains("no tab"), "{}", text[7]);
+        assert!(
+            text[9].starts_with(" PASSING")
+                && text[10].contains("✓ #13 Docs")
+                && text[10].contains("9/9  no tab")
+        );
+        // The pane: the first check's step, numbered as in its log, the
+        // line that says why marked, then the other check's line.
+        assert!(text[0].contains("│ test (ubuntu)"), "{}", text[0]);
+        assert!(
+            text[1].contains("#27 · run 8812 · 4m 12s · the failing step, cargo test"),
+            "{}",
+            text[1]
+        );
+        assert!(text[3].contains("│  40 Run cargo test"), "{}", text[3]);
+        assert!(text[5].contains("│ ▶42 test result: FAILED"), "{}", text[5]);
+        let marked = lines[5].spans.iter().find(|s| s.content == "▶").unwrap();
+        assert_eq!(marked.style.bg, Some(Tone::Failed.tint(&Theme::DARK)));
+        assert!(text[8].contains("┄┄┄"), "{}", text[8]);
+        assert!(text[9].contains("✕ clippy"), "{}", text[9]);
+        assert!(
+            text[10].contains("▶8 error: unused variable"),
+            "{}",
+            text[10]
+        );
+        assert!(
+            hits.iter().any(|h| h.y == 4 && h.spot == Spot::Check(1, 1)),
+            "a failed check's line is a click"
+        );
+    }
+
+    #[test]
+    fn with_ux2_the_ci_view_draws_on_a_screen_with_room_for_almost_nothing() {
+        let mut m = mission(Vec::new(), vec![ci_view()]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        for rows in 0..4 {
+            let mut lines = Vec::new();
+            let mut hits = Vec::new();
+            ci_rows(&m.snap.views[0], 100, rows, &m, &mut lines, &mut hits);
+        }
+    }
+
+    #[test]
+    fn with_ux2_the_chosen_check_is_the_one_beside_and_a_narrow_screen_puts_it_under() {
+        let mut m = mission(Vec::new(), vec![ci_view()]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        m.ci_check = Some((
+            "f".into(),
+            "clippy\thttps://github.com/acme/app/actions/runs/8812/job/12".into(),
+        ));
+        let mut lines = Vec::new();
+        let mut hits = Vec::new();
+        ci_rows(&m.snap.views[0], 100, 30, &m, &mut lines, &mut hits);
+        let text = texts(&lines);
+        assert!(text[1].contains("no tab"), "{}", text[1]);
+        let under = text
+            .iter()
+            .position(|l| l.contains("  clippy"))
+            .expect("its pane");
+        assert!(under > 10, "under the list: {text:?}");
+        assert!(text[under + 1].contains("#27 · run 8812 · 30s"), "{text:?}");
+        assert!(
+            text.iter().any(|l| l.contains("▶8 error: unused variable")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().any(|l| l.contains("▶42 test result: FAILED")),
+            "the other check's line under it: {text:?}"
+        );
     }
 
     #[test]

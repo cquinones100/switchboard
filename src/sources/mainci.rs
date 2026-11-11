@@ -18,7 +18,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::ciboard::{read_log, why_from};
+use super::ciboard::{Step, failing_step, read_log};
 use crate::cmd::wait_ci::{Seen, look};
 use crate::items::{Item, State, Target};
 
@@ -64,8 +64,10 @@ pub fn watched(
 
 /// A failed tip's item in the CI view; none for one passing, running or
 /// with no CI. Its `ci` data is what the CI view's menu reads: no pull
-/// request, the failing check's run, and its job's log once read.
-pub fn item_of(w: &Watched, sha: &str, seen: &Seen, why: Option<&str>) -> Option<Item> {
+/// request, the failing check's run, and its job's log once read, with
+/// its failing step, as a pull request's failed check has it.
+pub fn item_of(w: &Watched, sha: &str, seen: &Seen, step: Option<&Step>) -> Option<Item> {
+    let why = step.map(|s| s.why.as_str());
     let Seen::Failed { run, names, job } = seen else {
         return None;
     };
@@ -95,6 +97,11 @@ pub fn item_of(w: &Watched, sha: &str, seen: &Seen, why: Option<&str>) -> Option
                 "number": 0, "repo": repo, "url": "",
                 "branch": w.branch,
                 "check": { "name": first, "url": check_url, "job": job },
+                "checks": [{
+                    "name": first, "url": check_url, "job": job,
+                    "run": (run != "-").then_some(run),
+                    "why": why, "step": step.map(Step::to_json),
+                }],
                 "job": job,
                 "logged": why.is_some(),
                 "jobName": first,
@@ -148,16 +155,16 @@ pub async fn fetch(watched: Vec<Watched>) -> anyhow::Result<Vec<Looked>> {
     let mut found = Vec::new();
     for w in &watched {
         let (sha, seen) = look(&w.repo, &w.branch, SOURCE).await?;
-        let why = match &seen {
+        let step = match &seen {
             Seen::Failed { job: Some(job), .. } => {
-                read_log(&w.repo, job).await.map(|log| why_from(&log))
+                read_log(&w.repo, job).await.map(|log| failing_step(&log))
             }
             _ => None,
         };
         found.push(Looked {
             repo: w.repo.clone(),
             settled: matches!(seen, Seen::Passed | Seen::Failed { .. }),
-            item: item_of(w, &sha, &seen, why.as_deref()),
+            item: item_of(w, &sha, &seen, step.as_ref()),
         });
     }
     Ok(found)
@@ -199,7 +206,11 @@ mod tests {
             names: vec!["Clippy and tests (macOS)".into()],
             job: Some("5".into()),
         };
-        let item = item_of(&w, "ebde129e0000", &failed, Some("FAIL views")).unwrap();
+        let step = Step {
+            why: "FAIL views".into(),
+            ..Step::default()
+        };
+        let item = item_of(&w, "ebde129e0000", &failed, Some(&step)).unwrap();
         assert_eq!(
             item.title,
             "main failing at ebde129: Clippy and tests (macOS)"
@@ -215,6 +226,11 @@ mod tests {
             "https://github.com/acme/widgets/actions/runs/77"
         );
         assert_eq!(item.data["ci"]["url"], "", "no pull request to offer");
+        assert_eq!(
+            item.data["ci"]["checks"][0]["why"], "FAIL views",
+            "the CI view's line that says why, as a PR's check has it"
+        );
+        assert_eq!(item.data["ci"]["checks"][0]["run"], "77");
         assert_eq!(
             failing_line(std::slice::from_ref(&item)),
             "main failing at ebde129"

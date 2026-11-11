@@ -6,8 +6,9 @@
 //! state (`mark`), and the atoms: a section's `label`, the `rule`s, a
 //! list's `row`, a `chip`, a stage's `cell`, a `keycap`, a `card`, a box's
 //! `option`, the `pane` beside a list, an `input`, a calendar's `event`,
-//! a two-row bar's `bar_name`, and the key `hints` of every footer and bar
-//! (the key in the accent, what it does dim, two spaces between).
+//! a two-row bar's `bar_name`, the key `hints` of every footer and bar
+//! (the key in the accent, what it does dim, two spaces between), and a
+//! log's line that says why it failed, `marked`.
 //!
 //! Objects are rounded and structure is square: a chip, a cell, a keycap
 //! and an input end in half circles (U+E0B6 and U+E0B4) where the terminal
@@ -595,6 +596,29 @@ pub fn pane(
     ]
 }
 
+/// A log's line that says why it failed, `cols` wide on the failed tint:
+/// a `▶` at its left, its number (right-aligned `num_w` wide) in the
+/// failed tone, its text bold; the other lines of the log beside it put a
+/// space where the `▶` is.
+pub fn marked(
+    number: usize,
+    num_w: usize,
+    text: &str,
+    cols: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let tint = Tone::Failed.tint(theme);
+    let line = vec![
+        Span::styled("▶", Tone::Failed.bold(theme).bg(tint)),
+        Span::styled(
+            format!("{number:>num_w$} "),
+            Tone::Failed.style(theme).bg(tint),
+        ),
+        Span::styled(text.to_string(), Tone::Text.bold(theme).bg(tint)),
+    ];
+    fit(line, cols, Style::new().bg(tint))
+}
+
 /// A field, `cols` wide with its ends, on the panel: a `›` in the accent,
 /// what is typed (or the placeholder faint after the cursor), a `▏` cursor
 /// in the accent, and its hints at the right.
@@ -704,6 +728,19 @@ mod tests {
     }
 
     const T: Theme = Theme::DARK;
+
+    #[test]
+    fn a_marked_line_fills_its_width_in_the_failed_tint() {
+        let line = marked(42, 4, "FAIL a test", 30, &T);
+        assert_eq!(text(&line), format!("▶  42 FAIL a test{}", " ".repeat(13)));
+        assert_eq!(spans_width(&line), 30);
+        let tint = Tone::Failed.tint(&T);
+        assert!(line.iter().all(|s| s.style.bg == Some(tint)), "{line:?}");
+        assert!(
+            line[2].style.add_modifier.contains(Modifier::BOLD),
+            "its text bold"
+        );
+    }
 
     #[test]
     fn a_chip_keeps_its_width_with_and_without_caps() {

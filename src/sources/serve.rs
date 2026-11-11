@@ -329,6 +329,16 @@ impl Server {
                     PRS if column == "Merged" => None,
                     PRS if !column.is_empty() => Some(format!("{column}: {}", todo_line(i))),
                     TICKETS if column == "Done" || column == "Closed" => None,
+                    // The todo hears of failing PRs only, not those running
+                    // or passing the CI view lists too.
+                    CI if i
+                        .data
+                        .pointer("/ci/state")
+                        .and_then(Value::as_str)
+                        .is_some_and(|state| state != "failing") =>
+                    {
+                        None
+                    }
                     _ => Some(todo_line(i)),
                 }
             })

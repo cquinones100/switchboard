@@ -195,14 +195,75 @@ pub(crate) fn header(id: &str, title: &str, count: usize) -> Item {
 }
 
 /// Whether a view lists its rows under headings to pass over (Settings'
-/// categories, the Keys view's groups, Landing's repositories): the cursor
+/// categories, the Keys view's groups, Landing's repositories, CI's
+/// failing, running and passing): the cursor
 /// never rests on one, and a filter leaves out those with nothing under
 /// them.
 pub fn grouped(id: &ViewId) -> bool {
     matches!(
         id,
-        ViewId::Settings | ViewId::Keys | ViewId::Landing | ViewId::Autopilot
+        ViewId::Settings | ViewId::Keys | ViewId::Landing | ViewId::Autopilot | ViewId::Ci
     )
+}
+
+/// The CI view's sections, in order: its items' `ci.state` (the default
+/// branch's failing CI, which has none, is failing), the heading's id and
+/// its title.
+pub const CI_SECTIONS: [(&str, &str); 3] = [
+    ("failing", "Failing"),
+    ("running", "Running"),
+    ("passing", "Passing"),
+];
+
+/// Where a CI item stands: `failing`, `running` or `passing`.
+pub fn ci_state(item: &Item) -> &str {
+    item.data
+        .pointer("/ci/state")
+        .and_then(Value::as_str)
+        .unwrap_or("failing")
+}
+
+/// A failing CI item's failed checks: a PR's each, or the default
+/// branch's first (src/sources/mainci.rs), which lists only that one.
+pub fn ci_checks(item: &Item) -> Vec<&Value> {
+    if ci_state(item) != "failing" {
+        return Vec::new();
+    }
+    match item.data.pointer("/ci/checks").and_then(Value::as_array) {
+        Some(checks) => checks.iter().collect(),
+        None => item
+            .data
+            .pointer("/ci/check")
+            .filter(|c| c.is_object())
+            .into_iter()
+            .collect(),
+    }
+}
+
+/// What tells a failed check from the PR's others: its name and its page
+/// together, since two workflows' checks may share a name and two
+/// statuses a page.
+pub fn ci_check_key(check: &Value) -> String {
+    format!(
+        "{}\t{}",
+        check["name"].as_str().unwrap_or(""),
+        check["url"].as_str().unwrap_or("")
+    )
+}
+
+/// The CI view's items under a heading for each section that has any,
+/// with its count, each section in the order its items came.
+pub fn ci_sections(items: &[Item]) -> Vec<Item> {
+    let mut out = Vec::new();
+    for (state, title) in CI_SECTIONS {
+        let these: Vec<&Item> = items.iter().filter(|i| ci_state(i) == state).collect();
+        if these.is_empty() {
+            continue;
+        }
+        out.push(header(state, title, these.len()));
+        out.extend(these.into_iter().cloned());
+    }
+    out
 }
 
 /// What a `/` filter matches an item by.
@@ -669,6 +730,48 @@ mod tests {
     use super::*;
     use crate::mux::TabId;
     use crate::sidebar::claude::SessionRef;
+
+    #[test]
+    fn the_ci_view_heads_its_failing_running_and_passing_prs_in_order_with_their_counts() {
+        let pr = |n: u32, state: Option<&str>| {
+            let mut ci = json!({ "number": n });
+            if let Some(state) = state {
+                ci["state"] = json!(state);
+            }
+            Item::new(n.to_string(), format!("#{n}")).data(json!({ "ci": ci }))
+        };
+        let items = vec![
+            pr(1, Some("passing")),
+            pr(2, Some("failing")),
+            pr(3, Some("running")),
+            pr(4, None),
+            pr(5, Some("passing")),
+        ];
+        let shown: Vec<(String, Option<u64>)> = ci_sections(&items)
+            .iter()
+            .map(|i| (i.title.clone(), i.data["count"].as_u64()))
+            .collect();
+        let want = [
+            ("Failing", Some(2)),
+            ("#2", None),
+            ("#4", None),
+            ("Running", Some(1)),
+            ("#3", None),
+            ("Passing", Some(2)),
+            ("#1", None),
+            ("#5", None),
+        ];
+        let want: Vec<(String, Option<u64>)> =
+            want.iter().map(|(t, c)| (t.to_string(), *c)).collect();
+        assert_eq!(
+            shown, want,
+            "the default branch's, with no state, is failing"
+        );
+        assert!(
+            ci_sections(&[pr(1, Some("passing"))])[0].title == "Passing",
+            "no empty heads"
+        );
+    }
 
     #[test]
     fn the_bar_groups_the_views_by_feature_leaving_out_a_group_with_none() {

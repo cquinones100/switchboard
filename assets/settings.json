@@ -599,7 +599,7 @@
     "key": "view_ci",
     "category": "Mission control",
     "label": "CI",
-    "description": "Mission control's CI view: your pull requests with failing checks and why, asked of GitHub every two minutes #github",
+    "description": "Mission control's CI view: your pull requests failing, running and passing, each failed check with the line of its log that says why and, with UX 2.0, its failing step beside the list, asked of GitHub every two minutes #github",
     "default": true
   },
   {
