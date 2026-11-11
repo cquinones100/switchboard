@@ -51,7 +51,7 @@ use std::path::PathBuf;
 use crate::facts::PrFacts;
 use crate::integrations::github::Repo;
 use crate::items::{Item, ViewData};
-use crate::mux::TabId;
+use crate::mux::{PaneId, TabId};
 use crate::settings;
 
 pub use landing::Waiter;
@@ -95,6 +95,10 @@ pub struct TabInfo {
     /// Where it works, for the landing queue: its directory, then its panes'
     /// (Notes, which M-e may have put beside it and focused, left out).
     pub dirs: Vec<PathBuf>,
+    /// Its panes and the Claude sessions running in them, which place it in
+    /// the landing queue by the pane or session that took the lock.
+    pub panes: Vec<PaneId>,
+    pub sessions: Vec<String>,
 }
 
 impl TabInfo {
@@ -118,6 +122,8 @@ impl Default for TabInfo {
             upstream: None,
             keys: Vec::new(),
             dirs: Vec::new(),
+            panes: Vec::new(),
+            sessions: Vec::new(),
         }
     }
 }

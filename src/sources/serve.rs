@@ -445,7 +445,16 @@ impl Server {
                 if let Some(p) = path.as_ref().filter(|p| !dirs.contains(p)) {
                     dirs.push(p.clone());
                 }
-                for pane in panes {
+                // Who it is, for the landing queue's entries: every pane,
+                // a Claude parked behind the diff or lazygit included.
+                let with_parked = self.tab_panes(*id);
+                let sessions: Vec<String> = with_parked
+                    .iter()
+                    .filter_map(|p| self.sidebar.panes.get(p)?.session.as_ref())
+                    .map(|s| s.session_id.clone())
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                for &pane in &panes {
                     let Some(slot) = self.panes.get(&pane) else {
                         continue;
                     };
@@ -474,6 +483,8 @@ impl Server {
                     upstream: None,
                     keys: Vec::new(),
                     dirs,
+                    panes: with_parked,
+                    sessions,
                 });
             }
         }
@@ -718,12 +729,19 @@ impl Server {
             return;
         }
         self.sources.kept.landing_busy = true;
-        let dirs: Vec<(TabId, Vec<PathBuf>)> =
-            tabs.iter().map(|t| (t.id, t.dirs.clone())).collect();
+        let places: Vec<landing::TabPlace> = tabs
+            .iter()
+            .map(|t| landing::TabPlace {
+                id: t.id,
+                dirs: t.dirs.clone(),
+                panes: t.panes.clone(),
+                sessions: t.sessions.clone(),
+            })
+            .collect();
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
             let running = landing::running_sessions(&crate::agent::sessions::sessions_dir());
-            let read = landing::landing_of(&dirs, &running);
+            let read = landing::landing_of(&places, &running);
             let _ = tx.send(Event::Sources(Answer::Landing(read)));
         });
     }
@@ -867,12 +885,7 @@ impl Server {
                 .collect();
             queues::queue_items(&one, &infos)
         };
-        let items = landing::view_items(
-            &self.sources.landing.repos,
-            &queued,
-            &tabs,
-            &self.sources.landing.roots,
-        );
+        let items = landing::view_items(&self.sources.landing.repos, &queued, &tabs);
         let unanswered = &self.sources.queues.unanswered;
         let error = github
             .then(|| {

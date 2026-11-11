@@ -25,7 +25,13 @@
 //! runs in the worktree, as `land-lock`'s `gone()` has it, so a landing that
 //! ended without a word leaves the group before the script next reads the
 //! queue. An entry from before entries named their session counts by its
-//! worktree alone. The sessions come from Claude Code's session files and a
+//! worktree alone.
+//!
+//! An entry is filed under the tab whose pane took the lock or joined the
+//! queue (its `pane`), else the tab whose Claude runs its `session`, so
+//! tabs sharing a directory don't all show as landing. Only an entry from
+//! before entries named them goes by its worktree, and only when one tab
+//! is in it. The sessions come from Claude Code's session files and a
 //! signal 0 to each one's process. A session in a worktree nested inside
 //! another (the main clone's `.claude/worktrees`) is that one's, not the
 //! outer one's.
@@ -41,18 +47,20 @@ use serde_json::Value;
 
 use crate::facts::{Landing, Method};
 use crate::items::{Item, State, Target};
-use crate::mux::TabId;
+use crate::mux::{PaneId, TabId};
 use crate::util;
 
 /// A worktree holding the landing lock or waiting for it, since when (ms),
-/// and the Claude session and pane that took it or joined, which an entry
-/// from an older build doesn't name.
+/// the Claude session and pane that took it or joined, which an entry
+/// from an older build doesn't name, and the tab `landing_of` found them
+/// in, `None` before it looks or when no tab has them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub path: PathBuf,
     pub since: i64,
     pub session: Option<String>,
     pub pane: Option<String>,
+    pub tab: Option<TabId>,
 }
 
 /// A running Claude session: its id and its working directory.
@@ -81,14 +89,12 @@ pub struct RepoLanding {
     pub waiting: Vec<Entry>,
 }
 
-/// What one read of the landing queues found: each tab's place, each
-/// repository the tabs are in, in the order their tabs first come, and the
-/// worktree each tab works in.
+/// What one read of the landing queues found: each tab's place, and each
+/// repository the tabs are in, in the order their tabs first come.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Read {
     pub places: HashMap<TabId, Place>,
     pub repos: Vec<RepoLanding>,
-    pub roots: HashMap<TabId, PathBuf>,
 }
 
 /// A waiting tab's worktree and whether it is first or last in line, for
@@ -193,6 +199,7 @@ fn entry_of(value: &Value) -> Option<Entry> {
         since: value.get("since").and_then(Value::as_f64).unwrap_or(0.0) as i64,
         session: text("session"),
         pane: text("pane"),
+        tab: None,
     })
 }
 
@@ -270,74 +277,100 @@ fn repo_landing(
     }
 }
 
-/// Each tab's place in its repository's landing queue, from the first of
-/// its directories in a git repository, given the running sessions, and
-/// each repository the tabs are in with what lands there.
-/// Each repository's files are read once.
-pub fn landing_of(tabs: &[(TabId, Vec<PathBuf>)], running: &[RunningSession]) -> Read {
+/// A tab as the landing read sees it: where it works (`TabInfo.dirs`), its
+/// panes, and the Claude sessions running in them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TabPlace {
+    pub id: TabId,
+    pub dirs: Vec<PathBuf>,
+    pub panes: Vec<PaneId>,
+    pub sessions: Vec<String>,
+}
+
+// The tab an entry belongs to: the one holding its pane, else the one whose
+// Claude runs its session, else, for an entry from before entries named
+// them, the one tab whose worktree is the entry's (none when several tabs
+// share it, since any of them may have taken it).
+fn tab_of(entry: &Entry, tabs: &[TabPlace], roots: &HashMap<TabId, PathBuf>) -> Option<TabId> {
+    if let Some(pane) = entry.pane.as_deref().and_then(|p| p.parse::<PaneId>().ok())
+        && let Some(t) = tabs.iter().find(|t| t.panes.contains(&pane))
+    {
+        return Some(t.id);
+    }
+    if let Some(session) = entry.session.as_deref()
+        && let Some(t) = tabs
+            .iter()
+            .find(|t| t.sessions.iter().any(|s| s == session))
+    {
+        return Some(t.id);
+    }
+    if entry.pane.is_some() || entry.session.is_some() {
+        return None;
+    }
+    let mut there = tabs
+        .iter()
+        .filter(|t| roots.get(&t.id) == Some(&entry.path));
+    let one = there.next()?;
+    there.next().is_none().then_some(one.id)
+}
+
+/// Each tab's place in a landing queue, given the running sessions, and
+/// each repository the tabs are in (by the first of a tab's directories in
+/// a git repository) with what lands there. An entry places the tab that
+/// took it or joined (`tab_of`), so tabs sharing a directory don't all take
+/// its place. Each repository's files are read once.
+pub fn landing_of(tabs: &[TabPlace], running: &[RunningSession]) -> Read {
     let mut repos: Vec<RepoLanding> = Vec::new();
-    let mut places = HashMap::new();
     let mut roots = HashMap::new();
-    for (tab, dirs) in tabs {
-        let Some((root, common)) = dirs.iter().find_map(|d| git_of(d)) else {
+    for tab in tabs {
+        let Some((root, common)) = tab.dirs.iter().find_map(|d| git_of(d)) else {
             continue;
         };
-        roots.insert(*tab, root.clone());
         if !repos.iter().any(|r| r.common == common) {
             repos.push(repo_landing(&root, &common, None, running));
             for target in targets_in(&common) {
                 repos.push(repo_landing(&root, &common, Some(&target), running));
             }
         }
-        // The queue the tab's worktree is in, whichever branch it lands on,
-        // else the default branch's.
-        let mine = repos.iter().filter(|r| r.common == common);
-        let at = mine
-            .clone()
-            .find(|r| {
-                r.holder.as_ref().is_some_and(|e| e.path == root)
-                    || r.waiting.iter().any(|e| e.path == root)
-            })
-            .or_else(|| mine.clone().next())
-            .expect("the repository's queues were read above");
-        let holder = at.holder.as_ref().map(|e| e.path.clone());
-        let queue: Vec<PathBuf> = at.waiting.iter().map(|e| e.path.clone()).collect();
-        if holder.as_deref() == Some(root.as_path()) {
-            places.insert(
-                *tab,
-                Place {
+        roots.insert(tab.id, root);
+    }
+    let mut places = HashMap::new();
+    for r in &mut repos {
+        if let Some(holder) = &mut r.holder {
+            holder.tab = tab_of(holder, tabs, &roots);
+            if let Some(tab) = holder.tab {
+                places.entry(tab).or_insert(Place {
                     landing: Landing {
                         holding: true,
                         line: 1,
                         method: Method::Direct,
                     },
                     waiter: None,
+                });
+            }
+        }
+        let ahead = if r.holder.is_some() { 2 } else { 1 };
+        let count = r.waiting.len();
+        for (at, entry) in r.waiting.iter_mut().enumerate() {
+            entry.tab = tab_of(entry, tabs, &roots);
+            let Some(tab) = entry.tab else {
+                continue;
+            };
+            places.entry(tab).or_insert(Place {
+                landing: Landing {
+                    holding: false,
+                    line: at as u32 + ahead,
+                    method: Method::Direct,
                 },
-            );
-        } else if let Some(at) = queue.iter().position(|p| *p == root) {
-            let line = at as u32 + if holder.is_some() { 2 } else { 1 };
-            places.insert(
-                *tab,
-                Place {
-                    landing: Landing {
-                        holding: false,
-                        line,
-                        method: Method::Direct,
-                    },
-                    waiter: Some(Waiter {
-                        root,
-                        first: at == 0,
-                        last: at + 1 == queue.len(),
-                    }),
-                },
-            );
+                waiter: Some(Waiter {
+                    root: entry.path.clone(),
+                    first: at == 0,
+                    last: at + 1 == count,
+                }),
+            });
         }
     }
-    Read {
-        places,
-        repos,
-        roots,
-    }
+    Read { places, repos }
 }
 
 /// "landing", or "3rd in line to land", for a tab's words.
@@ -373,8 +406,8 @@ fn header(id: &str, title: &str, count: usize) -> Item {
 }
 
 /// The Landing view's rows: for each repository with something landing, a
-/// section for its landing queue, the landing one first (the worktree's
-/// folder when no tab has it), and one for its merge queue, `queued` giving
+/// section for its landing queue, the landing one first, each named by the
+/// tab `landing_of` found its entry in (the worktree's folder when none), and one for its merge queue, `queued` giving
 /// a repository's merge queue rows (`queues::queue_items`) by its
 /// `owner/name`. Two clones of one repository show its merge queue once,
 /// with the first.
@@ -382,7 +415,6 @@ pub fn view_items(
     repos: &[RepoLanding],
     queued: &dyn Fn(&str) -> Vec<Item>,
     tabs: &[ViewTab],
-    roots: &HashMap<TabId, PathBuf>,
 ) -> Vec<Item> {
     let mut items = Vec::new();
     let mut shown: Vec<String> = Vec::new();
@@ -418,7 +450,7 @@ pub fn view_items(
             items.push(header(&id, &way, direct.len()));
             let ahead = usize::from(r.holder.is_some());
             for (i, (entry, holding)) in direct.iter().enumerate() {
-                let tab = tabs.iter().find(|t| roots.get(&t.id) == Some(&entry.path));
+                let tab = tabs.iter().find(|t| Some(t.id) == entry.tab);
                 let name = match tab {
                     Some(t) => t.name.clone(),
                     None => entry
@@ -486,6 +518,15 @@ mod tests {
     use super::*;
     use crate::tabs::git::tests::{Scratch, git, repo};
 
+    fn at(id: u32, dirs: Vec<PathBuf>) -> TabPlace {
+        TabPlace {
+            id: TabId(id),
+            dirs,
+            panes: Vec::new(),
+            sessions: Vec::new(),
+        }
+    }
+
     #[test]
     fn the_landing_one_first_then_the_queue_in_order_and_a_gone_waiter_leaves() {
         // lib/sidebar's "tabs landing on the default branch or waiting their
@@ -534,10 +575,10 @@ mod tests {
         .unwrap();
         fs::create_dir_all(two.join("sub")).unwrap();
         let tabs = vec![
-            (TabId(1), vec![scratch.0.clone()]),
-            (TabId(2), vec![two.join("sub")]),
-            (TabId(3), vec![one.clone()]),
-            (TabId(4), vec![three.clone()]),
+            at(1, vec![scratch.0.clone()]),
+            at(2, vec![two.join("sub")]),
+            at(3, vec![one.clone()]),
+            at(4, vec![three.clone()]),
         ];
         let running = running_sessions(&sessions);
         let read = landing_of(&tabs, &running);
@@ -562,7 +603,7 @@ mod tests {
         // Notes beside the landing tab and focused: the tab is found by the
         // first of its directories in a repository.
         let beside = landing_of(
-            &[(TabId(3), vec![scratch.0.join("nowhere"), one.clone()])],
+            &[at(3, vec![scratch.0.join("nowhere"), one.clone()])],
             &running,
         )
         .places;
@@ -589,11 +630,8 @@ mod tests {
                 waiting: true,
             },
         ];
-        let roots: HashMap<TabId, PathBuf> = [(TabId(3), one.clone()), (TabId(2), two.clone())]
-            .into_iter()
-            .collect();
         let none = |_: &str| Vec::new();
-        let items = view_items(&read.repos, &none, &view_tabs, &roots);
+        let items = view_items(&read.repos, &none, &view_tabs);
         let rows: Vec<(&str, &str, State)> = items
             .iter()
             .map(|i| (i.title.as_str(), i.detail.as_str(), i.state))
@@ -694,9 +732,9 @@ mod tests {
         fs::create_dir_all(common.join("land.mutex")).unwrap();
         fs::create_dir_all(common.join("land.mutex.team%2Fnext")).unwrap();
         let tabs = vec![
-            (TabId(1), vec![one.clone()]),
-            (TabId(2), vec![two.clone()]),
-            (TabId(3), vec![three.clone()]),
+            at(1, vec![one.clone()]),
+            at(2, vec![two.clone()]),
+            at(3, vec![three.clone()]),
         ];
         let read = landing_of(&tabs, &running_sessions(&sessions));
         let targets: Vec<Option<&str>> = read.repos.iter().map(|r| r.target.as_deref()).collect();
@@ -720,7 +758,7 @@ mod tests {
                 waiting: false,
             })
             .into();
-        let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs, &read.roots);
+        let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
         let titles: Vec<&str> = items.iter().map(|i| i.title.as_str()).collect();
         assert_eq!(
             titles,
@@ -763,7 +801,10 @@ mod tests {
         fs::create_dir_all(common.join("land.lock")).unwrap();
         let held_by = |entry: serde_json::Value| {
             fs::write(common.join("land.lock/holder"), entry.to_string()).unwrap();
-            let tabs = vec![(TabId(1), vec![one.clone()])];
+            let tabs = vec![TabPlace {
+                panes: vec![PaneId(4)],
+                ..at(1, vec![one.clone()])
+            }];
             let read = landing_of(&tabs, &running_sessions(&sessions));
             (
                 read.repos[0].holder.clone(),
@@ -792,6 +833,91 @@ mod tests {
             "path": one, "since": 1, "session": "ended",
         }));
         assert_eq!(holder, None, "a session that isn't running keeps nothing");
+    }
+
+    #[test]
+    fn tabs_sharing_a_directory_take_only_their_own_entry_s_place() {
+        let scratch = Scratch::new("landing-shared");
+        let main = scratch.0.join("repo");
+        if !repo(&main) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        // Two tabs in the main clone; the lock held from it.
+        let sessions = scratch.0.join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(
+            sessions.join("lander.json"),
+            serde_json::json!({ "sessionId": "lander", "cwd": main, "pid": std::process::id() })
+                .to_string(),
+        )
+        .unwrap();
+        let common = main.join(".git");
+        fs::create_dir_all(common.join("land.lock")).unwrap();
+        let main = main.canonicalize().unwrap();
+        let tabs = vec![
+            TabPlace {
+                panes: vec![PaneId(1)],
+                sessions: vec!["other".into()],
+                ..at(1, vec![main.clone()])
+            },
+            TabPlace {
+                panes: vec![PaneId(2), PaneId(3)],
+                sessions: vec!["lander".into()],
+                ..at(2, vec![main.clone()])
+            },
+        ];
+        let landing = |entry: serde_json::Value, tabs: &[TabPlace]| {
+            fs::write(common.join("land.lock/holder"), entry.to_string()).unwrap();
+            let read = landing_of(tabs, &running_sessions(&sessions));
+            let mut holding: Vec<u32> = read
+                .places
+                .iter()
+                .filter(|(_, p)| p.landing.holding)
+                .map(|(t, _)| t.0)
+                .collect();
+            holding.sort();
+            (holding, read)
+        };
+
+        let (holding, read) = landing(
+            serde_json::json!({ "path": main, "since": 1, "session": "lander", "pane": "%3" }),
+            &tabs,
+        );
+        assert_eq!(holding, [2], "the tab holding the entry's pane");
+        let view_tabs: Vec<ViewTab> = [(1, "design"), (2, "merge")]
+            .map(|(id, name)| ViewTab {
+                id: TabId(id),
+                index: id as usize,
+                name: name.into(),
+                phase: None,
+                waiting: false,
+            })
+            .into();
+        let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
+        assert_eq!(items[1].title, "1. merge", "the view names the entry's tab");
+
+        let (holding, _) = landing(
+            serde_json::json!({ "path": main, "since": 1, "session": "lander" }),
+            &tabs,
+        );
+        assert_eq!(
+            holding,
+            [2],
+            "the tab whose Claude runs the entry's session"
+        );
+
+        let (holding, read) = landing(serde_json::json!({ "path": main, "since": 1 }), &tabs);
+        assert_eq!(
+            holding,
+            Vec::<u32>::new(),
+            "an entry naming neither, with two tabs in its directory"
+        );
+        let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
+        assert_eq!(items[1].title, "1. repo", "named by its folder with no tab");
+
+        let (holding, _) = landing(serde_json::json!({ "path": main, "since": 1 }), &tabs[..1]);
+        assert_eq!(holding, [1], "an entry naming neither, with one tab there");
     }
 
     #[test]

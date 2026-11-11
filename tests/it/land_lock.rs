@@ -786,3 +786,45 @@ fn landing_says_how_a_repository_lands_from_repos_json_else_through_a_pr_with_gi
     let broken = landing(home, &repo, &[]);
     assert_eq!(code(&broken), 1, "a repos.json that can't be read stops it");
 }
+
+// Two tabs in one clone, the lock taken from a pane of the second: only that
+// tab is landing, not every tab in the directory.
+#[test]
+fn only_the_tab_whose_pane_took_the_lock_is_landing_among_tabs_in_its_directory() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let repo = repo(server.dir.path());
+    let dir = repo.to_str().unwrap();
+    server.ok(&["new-tab", "-d", "-c", dir, "-n", "design"]);
+    server.ok(&["new-tab", "-d", "-c", dir, "-n", "merge"]);
+    let tabs = || server.list()["sessions"][0]["tabs"].clone();
+    let pane = tabs()[2]["panes"][0]["id"].as_str().unwrap().to_string();
+    session(&server.home, "lander", &repo);
+    let took = land_lock(&server.home, &repo, &["take"])
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD_PANE", &pane)
+        .env("CLAUDE_CODE_SESSION_ID", "lander")
+        .output()
+        .unwrap();
+    assert_eq!(code(&took), 0, "{}", stdout(&took));
+
+    let deadline = common::deadline(Duration::from_secs(20));
+    let tabs = loop {
+        let tabs = tabs();
+        if !tabs[2]["facts"]["landing"].is_null() {
+            break tabs;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the tab never landed: {tabs}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(tabs[2]["facts"]["landing"]["holding"], true);
+    assert_eq!(
+        tabs[1]["facts"]["landing"],
+        serde_json::Value::Null,
+        "the other tab in the clone isn't landing"
+    );
+}
