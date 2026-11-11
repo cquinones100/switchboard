@@ -1743,7 +1743,7 @@ impl Out<'_> {
                 self.block += 1;
                 self.push(
                     first,
-                    vec![Span::new("--------", Style::fg(RULE))],
+                    vec![Span::new("─".repeat(width.max(1)), Style::fg(RULE))],
                     (self.block, 0, 1),
                 );
             }
@@ -1927,6 +1927,13 @@ mod tests {
         assert_eq!(shown[7], "  1. first");
         assert_eq!(shown[8], "  2. second");
         assert!(shown.iter().all(|l| width(l) <= 30));
+    }
+
+    #[test]
+    fn a_rule_is_drawn_across_the_width() {
+        let doc = Markdown::parse("Above\n\n---\n\nBelow", "").layout(40);
+        let shown = lines(&doc);
+        assert_eq!(shown[3], format!("  {}", "─".repeat(36)));
     }
 
     #[test]

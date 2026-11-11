@@ -476,11 +476,14 @@ impl Pager {
     }
 
     /// Whether the cursor stops on line `i`: a picture's first row, or a
-    /// line with something on it but a rule.
+    /// line with something on it but a rule and a quote's bar.
     fn is_stop(&self, i: usize) -> bool {
         self.doc.lines.get(i).is_some_and(|l| match l.picture {
             Some(p) => p.row == 0,
-            None => l.plain().chars().any(|c| !c.is_whitespace() && c != '─'),
+            None => l
+                .plain()
+                .chars()
+                .any(|c| !c.is_whitespace() && c != '─' && c != '│'),
         })
     }
 
@@ -1478,6 +1481,20 @@ mod tests {
         assert!(cursor_line(&pager).contains("p6w0"), "the search moves it");
         pager.resize(50, 20);
         assert!(cursor_line(&pager).contains("p6w0"), "kept on its line");
+    }
+
+    #[test]
+    fn j_and_k_pass_over_a_markdown_rule() {
+        let mut pager = Pager::new(markdown("Above\n\n---\n\nBelow"), 40, 10).with_cursor(true);
+        assert_eq!(cursor_line(&pager).trim(), "Above");
+        pager.key(key(KeyCode::Char('j')));
+        assert_eq!(cursor_line(&pager).trim(), "Below");
+        pager.key(key(KeyCode::Char('k')));
+        assert_eq!(cursor_line(&pager).trim(), "Above");
+        let mut quoted =
+            Pager::new(markdown("> Above\n>\n> ---\n\nBelow"), 40, 10).with_cursor(true);
+        quoted.key(key(KeyCode::Char('j')));
+        assert_eq!(cursor_line(&quoted).trim(), "Below", "a quoted rule too");
     }
 
     #[test]
