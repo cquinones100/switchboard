@@ -30,7 +30,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use regex::Regex;
 
-use super::views::{self, View, ViewId};
+use super::views::{self, Scope, View, ViewId};
 use super::{Focus, HitBox, Mission, Spot};
 use crate::items::{Item, State};
 use crate::sidebar::model::{self, Rules, TabModel, TabState};
@@ -1750,6 +1750,10 @@ fn list(
         }
         return;
     }
+    if snap.rules.ux2 && view.id == ViewId::WorkMap && !m.picker {
+        work_map_rows(view, cols, rows, m, top_row, lines, hits);
+        return;
+    }
     if snap.rules.ux2 && view.id == ViewId::Landing && cols >= STAGES_AT + 6 * STAGE_STEP {
         stage_rows(view, cols, rows, m, top_row, lines, hits);
         return;
@@ -1977,6 +1981,389 @@ fn list(
             .extend(table_row(&data.footer, &|_| bold(theme.text)));
         lines.push(row.line(cols, None));
     }
+}
+
+/// With UX 2.0, the Work map as the board draws it: the columns' heads once
+/// at the top over a dashed rule, each repository's heading (`▾ name`, where
+/// it is and how it lands, its worktrees and how many are open at the
+/// right), its rows in columns at fixed places (the worktree's column the
+/// first to give way on a narrow screen), its fold line of merged work, and,
+/// on a screen of `WORK_PANE_AT` rows or more, the chosen row's pane under
+/// the map: its path and tab, its last prompt and its branch counted.
+fn work_map_rows(
+    view: &View,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+    top_row: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+) {
+    let snap = &m.snap;
+    let theme = &snap.theme;
+    let items = &view.data.items;
+    let cursor = (m.cursor.max(0) as usize).min(items.len().saturating_sub(1));
+    let chosen_row = items.get(cursor).filter(|i| !views::is_header(i));
+    let pane = if rows >= WORK_PANE_AT {
+        chosen_row.map(|i| work_pane(i, m, cols))
+    } else {
+        None
+    };
+    // The rule, its two lines, and a window on its fields.
+    let pane_h = pane.as_ref().map_or(0, |_| 3 + WORK_PANE_BODY);
+    let budget = rows.saturating_sub(1 + lines.len());
+    let room = budget.saturating_sub(2 + pane_h).max(1);
+    let widths = work_widths(cols);
+    // The columns' heads.
+    let heads = [
+        "worktree",
+        "ticket",
+        "tab",
+        "PR",
+        "where it stands",
+        "checks",
+        "used",
+    ];
+    let mut head = vec![Span::raw("  ")];
+    for (c, h) in heads.iter().enumerate() {
+        if widths[c] == 0 {
+            continue;
+        }
+        head.push(Span::styled(
+            work_cell(h, widths[c], c == WORK_USED),
+            fg(theme.dim),
+        ));
+    }
+    lines.push(Line {
+        spans: kit::fit(head, cols, Style::new()),
+        fill: None,
+    });
+    lines.push(Line {
+        spans: vec![kit::head_rule(cols, theme)],
+        fill: None,
+    });
+    let first = (cursor + 1).saturating_sub(room);
+    for (index, item) in items.iter().enumerate().skip(first).take(room) {
+        let chosen = index == cursor && m.cursor >= 0;
+        let hovered = !chosen && m.hover == Some(Spot::Index(index as isize));
+        hits.push(HitBox {
+            y: (top_row + lines.len()) as u16,
+            x0: 0,
+            x1: cols.saturating_sub(1) as u16,
+            spot: Spot::Index(index as isize),
+        });
+        let spans = if views::is_repo_heading(item) {
+            work_heading(item, cols, theme)
+        } else if views::is_fold_line(item) {
+            let open = item.data["open"] == true;
+            let mut s = vec![Span::styled(format!("   {}", item.title), fg(theme.dim))];
+            if chosen && !open {
+                s.push(Span::styled(" · Enter shows them", fg(theme.faint)));
+            }
+            s
+        } else {
+            work_row(item, &widths, chosen, m)
+        };
+        lines.push(Line {
+            spans: kit::row(spans, cols, chosen, theme),
+            fill: hovered.then_some(theme.panel),
+        });
+    }
+    if let Some((head, body)) = pane {
+        while lines.len() + pane_h < rows.saturating_sub(1) {
+            lines.push(Row::default().line(cols, None));
+        }
+        lines.push(Line {
+            spans: vec![kit::rule(cols, theme)],
+            fill: None,
+        });
+        // Its fields scroll with J and K and the wheel over it, as a pane
+        // beside a board does.
+        let last = body.len().saturating_sub(WORK_PANE_BODY);
+        let top = m.side_top().min(last);
+        let shown: Vec<Vec<Span<'static>>> = head
+            .into_iter()
+            .chain(body.into_iter().skip(top).take(WORK_PANE_BODY))
+            .collect();
+        for l in shown {
+            hits.push(HitBox {
+                y: (top_row + lines.len()) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Side(last),
+            });
+            let mut spans = vec![Span::raw("  ")];
+            spans.extend(l);
+            lines.push(Line {
+                spans: kit::fit(spans, cols, Style::new()),
+                fill: None,
+            });
+        }
+    }
+}
+
+/// From what height the Work map shows the chosen row's pane under it, and
+/// how many lines of its fields it shows at once.
+const WORK_PANE_AT: usize = 30;
+const WORK_PANE_BODY: usize = 4;
+/// The Work map's columns: the worktree, the ticket, the tab, the PR, where
+/// it stands, its checks and when it was last used.
+const WORK_USED: usize = 6;
+
+/// Each of the Work map's columns' widths, a space after each included: the
+/// ticket's none with the linear setting off, the PR's and the checks' none
+/// with the github setting off; the worktree takes what is left, down to
+/// 12. On a narrower screen (one beside the sidebar), the others give way
+/// in steps until they fit: the tab's and the standing's narrower, the
+/// ticket left out (the worktree's branch names it), then the tab's name
+/// to a few letters, the rest to their shortest words, and last the checks
+/// and when it was used left out.
+fn work_widths(cols: usize) -> [usize; 7] {
+    let linear = crate::settings::is_on("linear");
+    let github = crate::settings::is_on("github");
+    let mut w = [
+        0,
+        if linear { 11 } else { 0 },
+        24,
+        if github { 8 } else { 0 },
+        26,
+        if github { 13 } else { 0 },
+        6,
+    ];
+    let rest = |w: &[usize; 7]| w[1..].iter().sum::<usize>();
+    let room = cols.saturating_sub(3);
+    let steps: [fn(&mut [usize; 7]); 6] = [
+        |w| {
+            w[2] = 16;
+            w[4] = 20;
+        },
+        |w| w[1] = 0,
+        |w| w[2] = 11,
+        |w| {
+            w[3] = w[3].min(7);
+            w[4] = 17;
+            w[5] = w[5].min(11);
+            w[6] = 5;
+        },
+        |w| w[5] = 0,
+        |w| w[6] = 0,
+    ];
+    for step in steps {
+        if room >= rest(&w) + 12 {
+            break;
+        }
+        step(&mut w);
+    }
+    w[0] = room.saturating_sub(rest(&w)).max(10);
+    w
+}
+
+#[cfg(test)]
+#[test]
+fn the_work_map_s_columns_fit_beside_the_sidebar_on_a_100_column_screen() {
+    // 100 columns less the sidebar's 34.
+    let w = work_widths(66);
+    assert!(2 + w.iter().sum::<usize>() <= 66, "{w:?}");
+    assert!(w[3] > 0 && w[5] > 0 && w[6] > 0, "{w:?}");
+    assert_eq!(work_widths(160)[2], 24, "a wide screen keeps them whole");
+    // The sidebar's narrowest window, 90 columns less its 35.
+    let w = work_widths(55);
+    assert!(2 + w.iter().sum::<usize>() <= 55, "{w:?}");
+}
+
+/// A cell's text cut or padded to `cols` with a space after it, or
+/// right-aligned with none (the last column).
+fn work_cell(text: &str, cols: usize, right: bool) -> String {
+    if right {
+        let t = text::cut(text, cols);
+        return format!("{}{t}", " ".repeat(cols.saturating_sub(width(&t))));
+    }
+    let inner = cols.saturating_sub(1);
+    format!("{} ", text::pad(&text::cut(text, inner), inner))
+}
+
+/// A tone by the name src/mission/views.rs gives it.
+fn tone_named(name: &str) -> Tone {
+    match name {
+        "needs" => Tone::Needs,
+        "working" => Tone::Working,
+        "landing" => Tone::Landing,
+        "done" => Tone::Done,
+        "failed" => Tone::Failed,
+        "dim" => Tone::Dim,
+        "text" => Tone::Text,
+        _ => Tone::Faint,
+    }
+}
+
+/// A repository's heading: `▾ name` bold, where it is and how it lands dim,
+/// its worktrees and how many are open at the right.
+fn work_heading(item: &Item, cols: usize, theme: &Theme) -> Vec<Span<'static>> {
+    let d = &item.data;
+    let about: Vec<&str> = [d["place"].as_str(), d["lands"].as_str()]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    let counts = d["counts"].as_str().unwrap_or("").to_string();
+    let mut left = vec![Span::styled(format!(" {}", item.title), bold(theme.bright))];
+    if !about.is_empty() {
+        left.push(Span::styled(
+            format!("   {}", about.join(" · ")),
+            fg(theme.dim),
+        ));
+    }
+    let right_at = cols.saturating_sub(width(&counts) + 3);
+    let mut out = kit::fit(left, right_at, Style::new());
+    out.push(Span::raw(" "));
+    out.push(Span::styled(counts, fg(theme.dim)));
+    out
+}
+
+/// A row of the Work map in its columns.
+fn work_row(item: &Item, widths: &[usize; 7], chosen: bool, m: &Mission) -> Vec<Span<'static>> {
+    let theme = &m.snap.theme;
+    let d = &item.data;
+    let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
+    let name = if chosen {
+        bold(theme.bright)
+    } else {
+        fg(theme.text)
+    };
+    let mut out = vec![Span::raw(" ")];
+    out.push(Span::styled(
+        work_cell(&s("worktree"), widths[0], false),
+        name,
+    ));
+    if widths[1] > 0 {
+        out.push(Span::styled(
+            work_cell(&s("ticket"), widths[1], false),
+            fg(theme.dim),
+        ));
+    }
+    let tab = match item.target {
+        crate::items::Target::Tab(id) => {
+            // Every tab, a filter typed or not.
+            let tabs = if m.snap.all_tabs.is_empty() {
+                &m.snap.tabs
+            } else {
+                &m.snap.all_tabs
+            };
+            tabs.iter().find(|t| t.id == id)
+        }
+        _ => None,
+    };
+    match tab {
+        Some(t) => {
+            let mark = kit::mark(
+                Mark::of_badge(model::badge_state(t, &m.snap.rules)),
+                m.snap.frame,
+                theme,
+            );
+            let number = format!(" {} ", t.index);
+            let color = t.color.map(Color::from).unwrap_or(theme.bright);
+            let left = widths[2].saturating_sub(1 + width(&number));
+            out.push(mark);
+            out.push(Span::styled(number, bold(color)));
+            out.push(Span::styled(
+                work_cell(&t.name, left, false),
+                fg(theme.text),
+            ));
+        }
+        None => out.push(Span::styled(
+            work_cell("no tab", widths[2], false),
+            fg(theme.faint),
+        )),
+    }
+    if widths[3] > 0 {
+        out.push(Span::styled(
+            work_cell(&s("pr"), widths[3], false),
+            fg(theme.text),
+        ));
+    }
+    out.push(Span::styled(
+        work_cell(&s("standing"), widths[4], false),
+        tone_named(&s("standingTone")).style(theme),
+    ));
+    if widths[5] > 0 {
+        out.push(Span::styled(
+            work_cell(&s("checks"), widths[5], false),
+            tone_named(&s("checksTone")).style(theme),
+        ));
+    }
+    out.push(Span::styled(
+        work_cell(&s("used"), widths[6], true),
+        fg(theme.dim),
+    ));
+    out
+}
+
+/// A pane's lines.
+type PaneLines = Vec<Vec<Span<'static>>>;
+
+/// The chosen row's pane under the Work map: its worktree's name and
+/// the tab it is open in, then its fields, each wrapped to the width:
+/// its path, its last prompt and its branch, with the commits ahead of the default
+/// branch and those to push once counted.
+fn work_pane(item: &Item, m: &Mission, cols: usize) -> (PaneLines, PaneLines) {
+    let theme = &m.snap.theme;
+    let d = &item.data;
+    let s = |k: &str| d[k].as_str().unwrap_or("").to_string();
+    let inner = cols.saturating_sub(4);
+    let tab = d["tab"]["index"]
+        .as_u64()
+        .map_or_else(|| "no tab".into(), |i| format!("open in tab {i}"));
+    let facts = vec![Span::styled(tab, fg(theme.dim))];
+    let mut head = kit::pane(&s("worktree"), facts, inner, theme);
+    head.pop();
+    let mut body = Vec::new();
+    let mut field = |name: &str, value: &str, tone: Color| {
+        for (at, l) in text::wrap(value, inner.saturating_sub(13).max(10))
+            .into_iter()
+            .enumerate()
+        {
+            let label = if at == 0 { name } else { "" };
+            body.push(vec![
+                Span::styled(text::pad(label, 13), fg(theme.dim)),
+                Span::styled(l, fg(tone)),
+            ]);
+        }
+    };
+    field("path", &s("place"), theme.text);
+    let prompt = s("prompt");
+    if prompt.trim().is_empty() {
+        field("last prompt", "none", theme.faint);
+    } else {
+        field("last prompt", &prompt.replace('\n', " "), theme.text);
+    }
+    field("branch", &work_branch(item), theme.text);
+    (head, body)
+}
+
+/// The pane's branch line: the branch, then, once counted, how far ahead of
+/// the default branch it is and what it has to push.
+pub(super) fn work_branch(item: &Item) -> String {
+    let d = &item.data;
+    let branch = d["branch"]
+        .as_str()
+        .or(d["worktree"].as_str())
+        .unwrap_or("")
+        .to_string();
+    let c = &d["counts"];
+    let Some(ahead) = c["ahead"].as_u64() else {
+        return branch;
+    };
+    let commits = |n: u64| format!("{n} commit{}", if n == 1 { "" } else { "s" });
+    let push = match c["toPush"].as_u64() {
+        Some(0) => "nothing to push".to_string(),
+        Some(n) => format!("{} to push", commits(n)),
+        None => "no upstream".to_string(),
+    };
+    format!(
+        "{branch} · {} ahead of {} · {push}",
+        commits(ahead),
+        c["default"].as_str().unwrap_or("")
+    )
 }
 
 /// UX 2.0's Landing view: where the stage cells start, how wide each is and
@@ -3236,9 +3623,30 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("↵", "what to do with it"),
         ]),
         ViewId::Plugin(_) => with(&[("jk", "move"), ("↵", "open"), ("r", "refresh")]),
-        _ if view.data.items.iter().any(|i| i.id == views::MERGED_HEADER) => {
-            with(&[("jk", "move"), ("↵", "actions, or show merged")])
-        }
+        // A scope set says so on its key, which clears it.
+        ViewId::WorkMap if m.snap.rules.ux2 && !m.picker => with(&[
+            ("↵", "go"),
+            (
+                "o",
+                if m.scope == Some(Scope::Tabs) {
+                    "show all"
+                } else {
+                    "only open"
+                },
+            ),
+            (
+                "n",
+                if m.scope == Some(Scope::Untabbed) {
+                    "show all"
+                } else {
+                    "only no tab"
+                },
+            ),
+            ("z", "fold"),
+            ("/", "filter"),
+            ("m", "menu"),
+        ]),
+        ViewId::WorkMap => with(&[("jk", "move"), ("↵", "actions, or fold"), ("/", "filter")]),
         _ => with(&[("jk", "move"), ("↵", "actions"), ("/", "filter")]),
     }
 }
@@ -3728,7 +4136,8 @@ pub fn drawn(
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             let pairs = hints(m, view, beside);
-            if snap.rules.ux2 && view.is_some_and(|v| v.id == ViewId::Ci) {
+            if snap.rules.ux2 && view.is_some_and(|v| matches!(v.id, ViewId::Ci | ViewId::WorkMap))
+            {
                 let y = rows.saturating_sub(1) as u16;
                 row.spans
                     .extend(key_footer(&pairs, m, theme, y, &mut keys_hit));
@@ -3805,6 +4214,93 @@ mod tests {
             .iter()
             .map(|l| l.text().trim_end().to_string())
             .collect()
+    }
+
+    #[test]
+    fn with_ux2_the_work_map_is_a_table_per_repository_with_the_chosen_row_s_pane_under_it() {
+        let tree = |path: &str, branch: &str, main| views::Worktree {
+            path: path.into(),
+            branch: Some(branch.into()),
+            main,
+            repo: "/r".into(),
+        };
+        let trees = vec![
+            tree("/r", "main", true),
+            tree("/r/wt/ab-1", "AB-1-fix", false),
+        ];
+        let revived = vec![views::Revived {
+            tree: "/r/wt/ab-1".into(),
+            repo: "/r".into(),
+            branch: "AB-1-fix".into(),
+            prompt: "fix the login".into(),
+            ..views::Revived::default()
+        }];
+        let facts = views::MapFacts {
+            landings: std::collections::HashMap::from([(
+                "/r".into(),
+                "lands straight on main".into(),
+            )]),
+            counts: std::collections::HashMap::from([(
+                "/r/wt/ab-1".into(),
+                views::Counts {
+                    head: "a b".into(),
+                    default: "main".into(),
+                    ahead: Some(3),
+                    to_push: Some(0),
+                    ..views::Counts::default()
+                },
+            )]),
+            now_secs: 0,
+        };
+        let items = views::work_map(&[], &trees, &revived, &|_| None, &facts);
+        let map = views::shown(
+            &list_view(ViewId::WorkMap, "Work map", items),
+            "",
+            None,
+            &views::Folds::default(),
+        );
+        let mut m = mission(Vec::new(), vec![map]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        let (lines, hits) = screen(&m, 140, 36);
+        let t = texts(&lines);
+        let heads: Vec<&String> = t
+            .iter()
+            .filter(|l| l.contains("worktree") && l.contains("where it stands"))
+            .collect();
+        assert_eq!(heads.len(), 1, "the heads once: {t:#?}");
+        let heading = t.iter().find(|l| l.contains("▾ r")).unwrap();
+        assert!(
+            heading.contains("/r · lands straight on main"),
+            "{heading:?}"
+        );
+        assert!(heading.ends_with("1 worktree · 0 open"), "{heading:?}");
+        let row = t.iter().find(|l| l.contains("AB-1-fix ")).unwrap();
+        assert!(row.contains("AB-1") && row.contains("no tab") && row.contains("no PR"));
+        for said in [
+            "path         /r/wt/ab-1",
+            "last prompt  fix the login",
+            "branch       AB-1-fix · 3 commits ahead of main · nothing to push",
+        ] {
+            assert!(t.iter().any(|l| l.contains(said)), "{said}: {t:#?}");
+        }
+        let z = hits
+            .iter()
+            .find(|h| h.spot == Spot::Key(crate::mux::input::Key::parse("z").unwrap()))
+            .expect("z on the footer is a click");
+        assert!(
+            hits.iter().any(|h| matches!(h.spot, Spot::Side(_))),
+            "the pane scrolls with J and K"
+        );
+        assert_eq!(
+            &t[z.y as usize]
+                .chars()
+                .skip(z.x0 as usize)
+                .take(1)
+                .collect::<String>(),
+            "z"
+        );
     }
 
     #[test]

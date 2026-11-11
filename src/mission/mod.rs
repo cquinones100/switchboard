@@ -211,8 +211,9 @@ pub struct Mission {
     /// going to the chosen row and Esc closing.
     pub scope: Option<Scope>,
     pub picker: bool,
-    /// The Work map's merged work shown under its header.
-    pub show_merged: bool,
+    /// Which of the Work map's repositories are folded, and which show
+    /// their merged work.
+    pub folds: views::Folds,
     /// What the last action did, in the footer until the next key.
     pub note: Option<String>,
     pub snap: Snapshot,
@@ -271,7 +272,7 @@ impl Mission {
             hover: None,
             scope: None,
             picker: false,
-            show_merged: false,
+            folds: views::Folds::default(),
             note: None,
             snap: Snapshot::default(),
             taken_at: None,
@@ -535,8 +536,10 @@ pub enum MissionEvent {
         note: String,
     },
     /// The worktrees of the tabs' repositories, as git lists them, by
-    /// repository.
-    Worktrees(HashMap<PathBuf, Vec<Worktree>>),
+    /// repository, and how each repository lands, in words.
+    Worktrees(HashMap<PathBuf, Vec<Worktree>>, HashMap<PathBuf, String>),
+    /// A worktree's branch counted for the Work map's chosen row.
+    Counted(PathBuf, views::Counts),
     /// The worktrees no tab is in, from wherever they are known; `None`
     /// when the look failed or took too long, so the rows had stay.
     Revived(Option<Vec<Revived>>),
@@ -564,6 +567,12 @@ pub struct MissionState {
     pub(crate) worktrees: HashMap<PathBuf, Vec<Worktree>>,
     pub(crate) worktrees_at: Option<Instant>,
     pub(crate) worktrees_busy: bool,
+    /// How each repository lands, in words, by its main checkout.
+    pub(crate) landings: HashMap<PathBuf, String>,
+    /// The Work map's chosen rows' branches counted, by worktree; one
+    /// count at a time (`counting`).
+    pub(crate) counts: HashMap<PathBuf, views::Counts>,
+    pub(crate) counting: Option<PathBuf>,
     /// The worktrees no tab is in, known elsewhere (`wt-revive --json`).
     pub revived: Vec<Revived>,
     pub(crate) revived_at: Option<Instant>,

@@ -389,6 +389,18 @@ fn repository_at(dir: &Path) -> Option<(Option<String>, PathBuf, String)> {
     Some((repo, top, key))
 }
 
+/// How the repository at `dir` lands as far as is known without asking
+/// anyone: what repos.json sets, else the last answer worked out, of any
+/// age; `None` when neither says. It runs git, so off the server's task.
+pub fn landing_known(dir: &Path) -> Option<String> {
+    let (_, _, key) = repository_at(dir)?;
+    let set = landing_entry(&read_safely(), &key)
+        .get("landing")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    set.or_else(|| cached_in(&cache_file(), &key).map(|c| c.landing))
+}
+
 /// How the repository at `dir` lands, as the module's comment says.
 pub fn landing_for(dir: &Path, refresh: bool) -> Result<Landing, String> {
     let ask = Ask {

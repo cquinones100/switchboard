@@ -405,6 +405,48 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
 }
 
 #[test]
+fn with_ux2_the_work_map_s_keys_scope_fold_and_go() {
+    let server = TestServer::start();
+    settings(&server, json!({ "ux2": true, "view_work_map": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    wait_list(&server, "two tabs named", |l| {
+        tabs(l).len() == 2
+            && tabs(l)
+                .iter()
+                .all(|t| t["name"].as_str().is_some_and(|n| !n.is_empty()))
+    });
+    open(&mut client);
+    client.type_text("vwork\r");
+    // The tabs in no repository under a heading of their own, the keys on
+    // the footer.
+    client.wait_text("▾ Other tabs");
+    client.wait_text("o only open");
+    // n shows only the work with no tab, which leaves nothing; again, all.
+    client.type_text("n");
+    client.wait_for("nothing without a tab", |s| {
+        !s.iter().any(|l| l.contains("Other tabs")) && s.iter().any(|l| l.contains("n show all"))
+    });
+    client.type_text("n");
+    client.wait_text("▾ Other tabs");
+    client.type_text("o");
+    client.wait_text("o show all");
+    client.type_text("o");
+    client.wait_text("o only open");
+    // Enter on the heading folds it, z on it opens it again.
+    client.type_text("\r");
+    client.wait_text("▸ Other tabs");
+    client.type_text("z");
+    client.wait_text("▾ Other tabs");
+    // Enter on a row goes to its tab, with no menu.
+    client.type_text("j\r");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+}
+
+#[test]
 fn tab_in_a_picker_goes_round_its_rows_and_stops_on_easy_modes_close_button() {
     let (server, mut client) = two_tabs(json!({}));
     wait_list(&server, "the tabs named", |l| {

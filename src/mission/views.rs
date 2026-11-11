@@ -11,9 +11,10 @@
 //! (`groups`): Work, Code, Day and System.
 //!
 //! Two are put together here. The Work map is every piece of work in the
-//! repositories the tabs are in, one row each: each worktree, and a main
-//! checkout a tab is in, with its ticket (from the branch), the tab it is
-//! open in or none, its PR and where that stands, and its directory. The
+//! repositories the tabs are in, one row each under its repository's
+//! heading: each worktree, and a main checkout a tab is in, with its ticket
+//! (from the branch), the tab it is open in or none, its PR and where that
+//! stands (the board's words, `standing` and `checks`), and its directory. The
 //! worktrees are read with git in the background (`worktrees`), and the
 //! worktrees no tab is in anywhere else come from a source of their own
 //! (`Revived`, what `wt-revive --json` prints), so work in flight isn't
@@ -22,10 +23,12 @@
 //!
 //! A view as a client sees it (`shown`) is narrowed by its `/` filter, which
 //! matches an item's title, detail and `search`, the boards excepted, and the
-//! Work map is scoped to open tabs or to work with no tab for M-j's and
-//! M-o's pickers, its merged work hidden under its header until Enter there
-//! shows it.
+//! Work map is scoped to open tabs or to work with no tab (M-j's and M-o's
+//! pickers, `o` and `n`), each repository folded by Enter on its heading
+//! or `z`, and its merged work hidden under a line of its own until Enter
+//! there shows it (`Folds`).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -276,53 +279,42 @@ pub fn search_text(item: &Item) -> String {
     format!("{} {} {search}", item.title, item.detail).to_lowercase()
 }
 
-/// A view as one client sees it: its `/` filter's text, the Work map's
-/// scope, and whether its merged work is shown.
-pub fn shown(view: &View, filter: &str, scope: Option<Scope>, show_merged: bool) -> View {
+/// A view as one client sees it: its `/` filter's text, and for the Work
+/// map its scope and which repositories are folded or show their merged
+/// work.
+pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> View {
     let text = filter.trim().to_lowercase();
     let work_map = view.id == ViewId::WorkMap;
     let scope = scope.filter(|_| work_map);
     if !work_map && (text.is_empty() || view.columns().is_some()) {
         return view.clone();
     }
-    let open_merged = show_merged || !text.is_empty();
-    let kept: Vec<Item> = view
-        .data
-        .items
-        .iter()
-        .filter(|i| !merged(i) || open_merged)
-        .filter(|i| {
-            let scoped = match scope {
-                None => true,
-                Some(Scope::Tabs) => matches!(i.target, Target::Tab(_)),
-                Some(Scope::Untabbed) => !matches!(i.target, Target::Tab(_)),
-            };
-            // A heading, which is no tab, stays with the work no tab has
-            // (the merged work's, under M-o), as views.js kept it.
-            scoped && (text.is_empty() || is_header(i) || search_text(i).contains(&text))
-        })
-        .cloned()
-        .map(|mut i| {
-            if i.id == MERGED_HEADER {
-                let mark = if open_merged { "▾" } else { "▸" };
-                i.title = format!("{mark} {}", i.title);
-            }
-            i
-        })
-        .collect();
-    // A filtered Settings or Keys view leaves out the headings with no
-    // match, but never the Autopilot view's summary, which heads it
-    // whatever matches.
-    let items = if grouped(&view.id) {
-        kept.iter()
-            .enumerate()
-            .filter(|(at, i)| {
-                !is_header(i) || is_summary(i) || kept.get(at + 1).is_some_and(|n| !is_header(n))
-            })
-            .map(|(_, i)| i.clone())
-            .collect()
+    let items = if work_map {
+        work_map_shown(&view.data.items, &text, scope, folds)
     } else {
-        kept
+        let kept: Vec<Item> = view
+            .data
+            .items
+            .iter()
+            .filter(|i| is_header(i) || search_text(i).contains(&text))
+            .cloned()
+            .collect();
+        // A filtered Settings or Keys view leaves out the headings with no
+        // match, but never the Autopilot view's summary, which heads it
+        // whatever matches.
+        if grouped(&view.id) {
+            kept.iter()
+                .enumerate()
+                .filter(|(at, i)| {
+                    !is_header(i)
+                        || is_summary(i)
+                        || kept.get(at + 1).is_some_and(|n| !is_header(n))
+                })
+                .map(|(_, i)| i.clone())
+                .collect()
+        } else {
+            kept
+        }
     };
     let title = match scope {
         Some(Scope::Tabs) => format!("{} · open tabs", view.title),
@@ -337,6 +329,74 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, show_merged: bool)
         },
         ..view.clone()
     }
+}
+
+/// The Work map's items as shown: each repository's rows that its scope
+/// and filter keep under its heading (marked `▾`, or `▸` folded, its rows
+/// left out), then its fold line saying how many merged worktrees it keeps
+/// and those, once Enter there opens it; a typed filter opens every fold. A
+/// heading or fold line with nothing kept under it is left out.
+fn work_map_shown(items: &[Item], text: &str, scope: Option<Scope>, folds: &Folds) -> Vec<Item> {
+    let keeps = |i: &Item| {
+        let scoped = match scope {
+            None => true,
+            Some(Scope::Tabs) => matches!(i.target, Target::Tab(_)),
+            Some(Scope::Untabbed) => !matches!(i.target, Target::Tab(_)),
+        };
+        scoped && (text.is_empty() || search_text(i).contains(text))
+    };
+    let filtering = !text.is_empty();
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < items.len() {
+        let heading = &items[at];
+        let end = items[at + 1..]
+            .iter()
+            .position(is_repo_heading)
+            .map_or(items.len(), |n| at + 1 + n);
+        let members = &items[at + 1..end];
+        at = end;
+        let key = repo_key(heading).unwrap_or("").to_string();
+        let rows: Vec<&Item> = members
+            .iter()
+            .filter(|i| !is_header(i) && !merged(i) && keeps(i))
+            .collect();
+        let merged_rows: Vec<&Item> = members
+            .iter()
+            .filter(|i| !is_header(i) && merged(i) && keeps(i))
+            .collect();
+        if rows.is_empty() && merged_rows.is_empty() {
+            continue;
+        }
+        let folded = !filtering && folds.folded.contains(&key);
+        let mut h = heading.clone();
+        h.title = format!("{} {}", if folded { "▸" } else { "▾" }, h.title);
+        out.push(h);
+        if folded {
+            continue;
+        }
+        out.extend(rows.into_iter().cloned());
+        if let Some(line) = members.iter().find(|i| is_fold_line(i))
+            && !merged_rows.is_empty()
+        {
+            let open = filtering || folds.merged_open.contains(&key);
+            let n = merged_rows.len();
+            let mut line = line.clone();
+            line.title = format!(
+                "{} {n} merged worktree{}{}",
+                if open { "▾" } else { "▸" },
+                if n == 1 { "" } else { "s" },
+                if open { "" } else { ", folded" },
+            );
+            line.data["count"] = json!(n);
+            line.data["open"] = json!(open);
+            out.push(line);
+            if open {
+                out.extend(merged_rows.into_iter().cloned());
+            }
+        }
+    }
+    out
 }
 
 fn merged(item: &Item) -> bool {
@@ -406,6 +466,8 @@ pub struct Worktree {
     pub branch: Option<String>,
     /// The repository's main checkout.
     pub main: bool,
+    /// Its repository, by the main checkout's path.
+    pub repo: PathBuf,
 }
 
 /// A worktree no tab has open, from wherever that is known (bin/wt-revive's
@@ -443,19 +505,100 @@ pub fn parse_worktrees(repo: &Path, porcelain: &str) -> Vec<Worktree> {
                 main: path == repo,
                 path,
                 branch,
+                repo: repo.to_path_buf(),
             })
         })
         .collect()
 }
 
+/// What the Work map knows besides the tabs and the worktrees: how each
+/// repository lands, in words, by its main checkout (read in the
+/// background, `MissionEvent::Worktrees`), the branches counted for the
+/// rows chosen (`Counts`, by worktree), and the time, for "last used".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapFacts {
+    pub landings: HashMap<PathBuf, String>,
+    pub counts: HashMap<PathBuf, Counts>,
+    pub now_secs: i64,
+}
+
+/// A worktree's branch counted, for the pane under the map: at which
+/// commits (`tabs::git::head_commit`), against which default branch, how
+/// many commits ahead of it (`None` when git couldn't count), how many its
+/// upstream doesn't have (`None` with no upstream), and what is watched for
+/// a push (the upstream's ref as git named it, else the repository's
+/// config, which a push setting one writes) and where it was.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub head: String,
+    pub default: String,
+    pub ahead: Option<u32>,
+    pub to_push: Option<u32>,
+    pub upstream: String,
+    pub upstream_at: String,
+}
+
+/// Whether the chosen row's branch needs counting: not yet, not at the
+/// commits it is at now (`tabs::git::head_commit`), or its upstream moved
+/// (`upstream_at` reads the commit a ref is at now).
+pub fn needs_count(
+    counts: &HashMap<PathBuf, Counts>,
+    tree: &Path,
+    head: &str,
+    upstream_at: &dyn Fn(&str) -> String,
+) -> bool {
+    counts
+        .get(tree)
+        .is_none_or(|c| c.head != head || upstream_at(&c.upstream) != c.upstream_at)
+}
+
+/// Which repositories one client's Work map folds, and which show their
+/// merged work, by the repository's key (an item's `data.repo`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Folds {
+    pub folded: HashSet<String>,
+    pub merged_open: HashSet<String>,
+}
+
+impl Folds {
+    /// Folds a repository, or opens it again.
+    pub fn fold(&mut self, repo: &str) {
+        if !self.folded.remove(repo) {
+            self.folded.insert(repo.to_string());
+        }
+    }
+
+    /// Shows a repository's merged work, or folds it again.
+    pub fn merged(&mut self, repo: &str) {
+        if !self.merged_open.remove(repo) {
+            self.merged_open.insert(repo.to_string());
+        }
+    }
+}
+
+/// The key of the open tabs in no repository, whose heading comes last.
+const OTHER: &str = "other";
+
+/// Whether an item is a repository's heading in the Work map.
+pub fn is_repo_heading(item: &Item) -> bool {
+    item.id.starts_with("repo:") && is_header(item)
+}
+
+/// Whether an item is the line a repository's merged work is folded under.
+pub fn is_fold_line(item: &Item) -> bool {
+    item.id.starts_with("merged:") && is_header(item)
+}
+
+/// The repository a Work map item is under, by its key.
+pub fn repo_key(item: &Item) -> Option<&str> {
+    item.data.get("repo").and_then(Value::as_str)
+}
+
 static TICKET: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^([a-z][a-z0-9]*-\d+)").expect("a regex"));
 
-/// The Merged header's id, which Enter opens and closes.
-pub const MERGED_HEADER: &str = "header:merged";
-
 /// Where a PR stands, in a few words: `#12 merged`, `#12 ✗2 failing`; none
-/// with the github setting off.
+/// with the github setting off. Without UX 2.0, the row's PR cell.
 fn pr_words(tab: &TabModel) -> String {
     if !settings::is_on("github") {
         return String::new();
@@ -478,6 +621,94 @@ fn pr_words(tab: &TabModel) -> String {
     format!("#{pr} {where_}")
 }
 
+/// Where a row's work stands, in the board's words, with the name of its
+/// tone (`kit::Tone`, as render's `tone_named` reads it): its place in the
+/// landing queue, failed tests, the PR's review or place in the merge
+/// queue, commits to push, else "no PR". The PR's words only with the
+/// github setting on.
+pub fn standing(facts: &TabModel, counts: Option<&Counts>) -> (String, &'static str) {
+    if facts
+        .phase
+        .as_deref()
+        .is_some_and(|p| p.starts_with("tests failed"))
+    {
+        return ("✕ tests failed".into(), "failed");
+    }
+    if let Some(l) = facts.landing {
+        return if l.holding {
+            ("Landing".into(), "landing")
+        } else {
+            (
+                format!(
+                    "{} in the landing queue",
+                    crate::sidebar::text::ordinal(l.line)
+                ),
+                "landing",
+            )
+        };
+    }
+    // Landed straight on a branch, with no PR (`@tab_landed`).
+    if let Some((hash, _)) = &facts.landed_on {
+        return (format!("Landed {hash}"), "done");
+    }
+    let github = settings::is_on("github");
+    if github && facts.pr.is_some() {
+        match facts.merge {
+            Some(MergeState::Merged) => return ("Merged".into(), "done"),
+            Some(MergeState::Queued) => {
+                return match facts.position {
+                    Some(p) if p > 0 => (
+                        format!("{} in the merge queue", crate::sidebar::text::ordinal(p)),
+                        "landing",
+                    ),
+                    _ => ("In the merge queue".into(), "landing"),
+                };
+            }
+            None => {}
+        }
+        if facts.pr_state == Some(PrState::Closed) {
+            return ("Closed".into(), "dim");
+        }
+        return match facts.review.as_deref() {
+            Some("APPROVED") => ("Approved".into(), "done"),
+            Some("CHANGES_REQUESTED") => ("Changes asked".into(), "needs"),
+            _ => ("In review".into(), "text"),
+        };
+    }
+    if let Some(n) = counts.and_then(|c| c.to_push).filter(|n| *n > 0) {
+        let s = if n == 1 { "" } else { "s" };
+        return (format!("{n} commit{s} to push"), "text");
+    }
+    if github {
+        ("no PR".into(), "faint")
+    } else {
+        (String::new(), "faint")
+    }
+}
+
+/// The PR's checks, in the board's words, with its tone's name: failing,
+/// how many of them have finished while some run, or passed; nothing for a
+/// merged PR, one with no checks, or with the github setting off.
+pub fn checks(facts: &TabModel) -> (String, &'static str) {
+    let merged = facts.merge == Some(MergeState::Merged);
+    let Some(c) = facts
+        .checks
+        .filter(|_| facts.pr.is_some() && !merged && settings::is_on("github"))
+    else {
+        return (String::new(), "faint");
+    };
+    let total = c.pass + c.fail + c.pending;
+    if c.fail > 0 {
+        (format!("✕ {} failing", c.fail), "failed")
+    } else if c.pending > 0 {
+        (format!("◌ {} of {total}", c.pass), "needs")
+    } else if c.pass > 0 {
+        ("✓ passed".into(), "done")
+    } else {
+        (String::new(), "faint")
+    }
+}
+
 /// A worktree no tab is in, as far as its PR goes: a tab of no number
 /// standing in for it, with what GitHub said of its branch's PR (views.js's
 /// `mergeOf`), for `pr_words` and `state_of`.
@@ -485,6 +716,8 @@ fn stand_in(pr: Option<&PrFacts>) -> TabModel {
     let mut t = TabModel::new(crate::mux::TabId(0), 0, "");
     if let Some(p) = pr {
         t.pr = Some(p.number);
+        t.pr_state = Some(p.state);
+        t.review = p.review_decision.clone();
         t.merge = match p.merge {
             Some(Merge::Merged) => Some(MergeState::Merged),
             Some(Merge::Queued { position }) => {
@@ -525,12 +758,7 @@ fn named(tab: Option<&TabModel>, w: &Worktree, ticket: Option<&str>) -> String {
     let name = match tab {
         Some(t) => t.name.clone(),
         None => {
-            let base = w.branch.clone().unwrap_or_else(|| {
-                w.path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            });
+            let base = w.branch.clone().unwrap_or_else(|| dir_name(&w.path));
             let rest = TICKET.replace(&base, "");
             rest.trim_start_matches(['-', '_'])
                 .split(['-', '_'])
@@ -551,6 +779,12 @@ fn named(tab: Option<&TabModel>, w: &Worktree, ticket: Option<&str>) -> String {
     }
 }
 
+fn dir_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// Needing you first, then work going on, open PRs, merged ones, and work
 /// no tab is in last, most recently used first.
 fn rank(item: &Item) -> u8 {
@@ -568,16 +802,44 @@ fn merged_pr(item: &Item) -> bool {
     item.data.get("merge").and_then(Value::as_str) == Some("merged")
 }
 
+/// "Last used": now for a tab at work, else how long since its last turn
+/// (ms) or the worktree's last use (seconds), shortly.
+fn last_used(tab: Option<&TabModel>, last: Option<&Revived>, now_secs: i64) -> String {
+    if let Some(t) = tab {
+        if t.state.busy() {
+            return "now".into();
+        }
+        let at = t.turn.as_ref().and_then(|turn| turn.at).map(|ms| ms / 1000);
+        return crate::sidebar::text::ago(at, now_secs);
+    }
+    last.map(|l| crate::sidebar::text::ago(Some(l.when), now_secs))
+        .unwrap_or_default()
+}
+
+/// One row of the Work map before it is grouped: the item, when it was
+/// last used (for the work no tab is in), its repository and whether it is
+/// the main checkout.
+struct Placed {
+    item: Item,
+    when: i64,
+    repo: Option<PathBuf>,
+    main: bool,
+}
+
 /// The Work map's rows, from the open tabs, the worktrees of their
 /// repositories, and the worktrees no tab is in that are known elsewhere,
-/// whose PRs `pr_of` gives by their branch. Every open tab is a row too, one
-/// in no repository included, so M-j, which lists the open tabs' rows,
-/// reaches them all.
+/// whose PRs `pr_of` gives by their branch, grouped by repository: each
+/// repository's heading (where it is, how it lands, its worktrees and how
+/// many are open), its main checkout, its other rows needing you first, and
+/// its merged work with no tab behind a fold line of its own. Every open tab
+/// is a row too, one in no repository under "Other tabs" last, so M-j,
+/// which lists the open tabs' rows, reaches them all.
 pub fn work_map(
     tabs: &[TabModel],
     worktrees: &[Worktree],
     revived: &[Revived],
     pr_of: &dyn Fn(&Path) -> Option<PrFacts>,
+    facts: &MapFacts,
 ) -> Vec<Item> {
     let mut all: Vec<Worktree> = worktrees.to_vec();
     for r in revived {
@@ -586,6 +848,7 @@ pub fn work_map(
                 path: r.tree.clone(),
                 branch: Some(r.branch.clone()).filter(|b| !b.is_empty()),
                 main: false,
+                repo: r.repo.clone(),
             });
         }
     }
@@ -599,7 +862,7 @@ pub fn work_map(
             .map(|(i, _)| i)
     };
     let linear = settings::is_on("linear");
-    let mut rows: Vec<(Item, i64)> = Vec::new();
+    let mut rows: Vec<Placed> = Vec::new();
     let mut taken: Vec<crate::mux::TabId> = Vec::new();
     for (i, w) in all.iter().enumerate() {
         let tab = tabs.iter().find(|t| owner_of(t) == Some(i));
@@ -628,11 +891,18 @@ pub fn work_map(
         // What the PR says, the tab's or the branch's for a worktree no
         // tab is in.
         let untabbed = stand_in(tab.is_none().then(|| pr_of(&w.path)).flatten().as_ref());
-        let facts = tab.unwrap_or(&untabbed);
-        let pr = pr_words(facts);
+        let facts_of = tab.unwrap_or(&untabbed);
+        let pr = pr_words(facts_of);
         let used = last.map(|l| format!("used {}", l.age)).unwrap_or_default();
         let place = paths::tilde(&w.path);
-        let prompt = last.map(|l| l.prompt.clone()).unwrap_or_default();
+        let prompt = match tab {
+            Some(t) => t
+                .turn
+                .as_ref()
+                .map(|t| t.prompt.clone())
+                .unwrap_or_default(),
+            None => last.map(|l| l.prompt.clone()).unwrap_or_default(),
+        };
         let detail: Vec<String> = [
             where_.clone(),
             pr.clone(),
@@ -643,11 +913,11 @@ pub fn work_map(
         .into_iter()
         .filter(|s| !s.is_empty())
         .collect();
-        let more: Vec<String> = [place, prompt]
+        let more: Vec<String> = [place.clone(), prompt.clone()]
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect();
-        let merge = facts.merge.map(|m| match m {
+        let merge = facts_of.merge.map(|m| match m {
             MergeState::Merged => "merged",
             MergeState::Queued => "queued",
         });
@@ -655,13 +925,36 @@ pub fn work_map(
             .as_ref()
             .map(|t| format!("{t}  "))
             .unwrap_or_default();
+        let counts = facts.counts.get(&w.path);
+        let (standing, standing_tone) = standing(facts_of, counts);
+        let (checks, checks_tone) = checks(facts_of);
+        let repo = (!w.repo.as_os_str().is_empty()).then(|| w.repo.clone());
         let mut item = Item::new(w.path.to_string_lossy(), format!("{lead}{title}"))
             .detail(detail.join(" · "))
-            .state(state_of(tab, facts))
+            .state(state_of(tab, facts_of))
             .data(json!({
                 "merge": merge,
                 "merged": tab.is_none() && merge == Some("merged"),
                 "branch": w.branch,
+                "tree": w.path,
+                "search": w.branch.clone().unwrap_or_default(),
+                "repo": repo.as_ref().map_or(OTHER.into(), |r| r.to_string_lossy().into_owned()),
+                "worktree": w.branch.clone().unwrap_or_else(|| dir_name(&w.path)),
+                "ticket": ticket.clone().unwrap_or_default(),
+                "pr": facts_of.pr.filter(|_| settings::is_on("github")).map(|n| format!("#{n}")),
+                "standing": standing,
+                "standingTone": standing_tone,
+                "checks": checks,
+                "checksTone": checks_tone,
+                "used": last_used(tab, last, facts.now_secs),
+                "tab": tab.map(|t| json!({ "index": t.index, "name": t.name })),
+                "place": place,
+                "prompt": prompt,
+                "counts": counts.map(|c| json!({
+                    "default": c.default,
+                    "ahead": c.ahead,
+                    "toPush": c.to_push,
+                })),
             }));
         item.cells = vec![ticket.unwrap_or_default(), title, where_, pr, used];
         item.more = vec![more.join(" · ")]
@@ -672,11 +965,22 @@ pub fn work_map(
             Some(t) => Target::Tab(t.id),
             None => Target::Dir(w.path.clone()),
         };
-        rows.push((item, last.map_or(0, |l| l.when)));
+        rows.push(Placed {
+            item,
+            when: last.map_or(0, |l| l.when),
+            repo,
+            main: w.main,
+        });
     }
     // The open tabs no worktree row took: in no repository, or a second
     // tab in the same worktree.
     for tab in tabs.iter().filter(|t| !taken.contains(&t.id)) {
+        // A second tab in a worktree takes the worktree's facts.
+        let owner = owner_of(tab).map(|i| &all[i]);
+        let repo = owner
+            .map(|w| w.repo.clone())
+            .filter(|r| !r.as_os_str().is_empty());
+        let counts = owner.and_then(|w| facts.counts.get(&w.path));
         let where_ = format!("tab {}", tab.index);
         let pr = if tab.pr.is_some() {
             pr_words(tab)
@@ -688,34 +992,137 @@ pub fn work_map(
             .into_iter()
             .filter(|s| !s.is_empty())
             .collect();
+        let (standing, standing_tone) =
+            if owner.is_some() || tab.pr.is_some() || tab.landing.is_some() {
+                standing(tab, counts)
+            } else {
+                (String::new(), "faint")
+            };
+        let (checks, checks_tone) = checks(tab);
         let mut item = Item::new(format!("tab:{}", tab.id), &tab.name)
             .detail(detail.join(" · "))
             .state(state_of(Some(tab), tab))
             .target(Target::Tab(tab.id))
-            .data(json!({ "merge": tab.merge.map(|m| match m {
-                MergeState::Merged => "merged",
-                MergeState::Queued => "queued",
-            }) }));
+            .data(json!({
+                "merge": tab.merge.map(|m| match m {
+                    MergeState::Merged => "merged",
+                    MergeState::Queued => "queued",
+                }),
+                "repo": repo.as_ref().map_or(OTHER.into(), |r| r.to_string_lossy().into_owned()),
+                "worktree": owner
+                    .map(|w| w.branch.clone().unwrap_or_else(|| dir_name(&w.path)))
+                    .or_else(|| tab.path.as_deref().map(dir_name))
+                    .unwrap_or_default(),
+                "branch": owner.and_then(|w| w.branch.clone()),
+                "tree": owner.map(|w| w.path.clone()),
+                "search": owner.and_then(|w| w.branch.clone()).unwrap_or_default(),
+                "counts": counts.map(|c| json!({
+                    "default": c.default,
+                    "ahead": c.ahead,
+                    "toPush": c.to_push,
+                })),
+                "ticket": "",
+                "pr": tab.pr.filter(|_| settings::is_on("github")).map(|n| format!("#{n}")),
+                "standing": standing,
+                "standingTone": standing_tone,
+                "checks": checks,
+                "checksTone": checks_tone,
+                "used": last_used(Some(tab), None, facts.now_secs),
+                "tab": { "index": tab.index, "name": tab.name },
+                "place": place,
+                "prompt": tab.turn.as_ref().map(|t| t.prompt.clone()).unwrap_or_default(),
+            }));
         item.cells = vec![String::new(), tab.name.clone(), where_, pr, String::new()];
         item.more = vec![place].into_iter().filter(|m| !m.is_empty()).collect();
-        rows.push((item, 0));
+        rows.push(Placed {
+            item,
+            when: 0,
+            repo,
+            main: false,
+        });
     }
-    rows.sort_by(|(a, wa), (b, wb)| {
-        rank(a).cmp(&rank(b)).then_with(|| {
-            if rank(a) == 4 {
-                wb.cmp(wa)
+    rows.sort_by(|a, b| {
+        let (ra, rb) = (rank(&a.item), rank(&b.item));
+        b.main.cmp(&a.main).then(ra.cmp(&rb)).then_with(|| {
+            if ra == 4 {
+                b.when.cmp(&a.when)
             } else {
                 std::cmp::Ordering::Equal
             }
         })
     });
-    let (merged_rows, rest): (Vec<_>, Vec<_>) = rows.into_iter().partition(|(i, _)| merged(i));
-    let mut out: Vec<Item> = rest.into_iter().map(|(i, _)| i).collect();
-    if !merged_rows.is_empty() {
-        let mut h = header("merged", "Merged, can be removed", merged_rows.len());
-        h.id = MERGED_HEADER.into();
-        out.push(h);
-        out.extend(merged_rows.into_iter().map(|(i, _)| i));
+    // The repositories, the one with the most pressing row first, then by
+    // name; the tabs in none last.
+    let mut repos: Vec<(u8, String, Option<PathBuf>)> = Vec::new();
+    for r in &rows {
+        let name = r.repo.as_deref().map(dir_name).unwrap_or_default();
+        match repos.iter_mut().find(|(_, _, p)| *p == r.repo) {
+            Some(found) => found.0 = found.0.min(rank(&r.item)),
+            None => repos.push((rank(&r.item), name, r.repo.clone())),
+        }
+    }
+    repos.sort_by(|a, b| {
+        a.2.is_none()
+            .cmp(&b.2.is_none())
+            .then(a.0.cmp(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    let mut out: Vec<Item> = Vec::new();
+    for (_, name, repo) in repos {
+        let key = repo
+            .as_ref()
+            .map_or(OTHER.to_string(), |r| r.to_string_lossy().into_owned());
+        let members: Vec<&Placed> = rows.iter().filter(|r| r.repo == repo).collect();
+        let (merged_rows, rest): (Vec<&Placed>, Vec<&Placed>) =
+            members.iter().partition(|r| merged(&r.item));
+        // A repository's worktrees open in a tab, a second tab in one not
+        // counted again; the tabs in none, each.
+        let open = members
+            .iter()
+            .filter(|r| matches!(r.item.target, Target::Tab(_)))
+            .filter(|r| repo.is_none() || !r.item.id.starts_with("tab:"))
+            .count();
+        let trees = members
+            .iter()
+            .filter(|r| !r.item.id.starts_with("tab:"))
+            .count();
+        let heading = match &repo {
+            Some(r) => {
+                let s = |n: usize| if n == 1 { "" } else { "s" };
+                let place = paths::tilde(r);
+                let lands = facts.landings.get(r).cloned().unwrap_or_default();
+                let mut h = header(&key, &name, members.len()).data(json!({
+                    "header": true,
+                    "count": members.len(),
+                    "repo": key,
+                    "place": place,
+                    "lands": lands,
+                    "counts": format!("{trees} worktree{} · {open} open", s(trees)),
+                    "search": format!("{name} {place}"),
+                }));
+                h.id = format!("repo:{key}");
+                h
+            }
+            None => {
+                let mut h = header(&key, "Other tabs", members.len()).data(json!({
+                    "header": true,
+                    "count": members.len(),
+                    "repo": key,
+                    "counts": format!("{open} open"),
+                }));
+                h.id = format!("repo:{key}");
+                h
+            }
+        };
+        out.push(heading);
+        out.extend(rest.into_iter().map(|r| r.item.clone()));
+        if !merged_rows.is_empty() {
+            let mut fold = header(&key, "merged worktrees", merged_rows.len());
+            fold.id = format!("merged:{key}");
+            fold.data["repo"] = json!(key);
+            out.push(fold);
+            out.extend(merged_rows.into_iter().map(|r| r.item.clone()));
+        }
     }
     out
 }
@@ -818,92 +1225,112 @@ mod tests {
         assert_eq!(w[2].branch, None);
     }
 
+    fn tree(path: &str, branch: &str, main: bool) -> Worktree {
+        Worktree {
+            path: path.into(),
+            branch: Some(branch.into()),
+            main,
+            repo: "/r".into(),
+        }
+    }
+
+    fn titles(items: &[Item]) -> Vec<&str> {
+        items.iter().map(|r| r.title.as_str()).collect()
+    }
+
+    fn map_view(items: Vec<Item>) -> View {
+        View {
+            id: ViewId::WorkMap,
+            title: "Work map".into(),
+            data: ViewData {
+                items,
+                ..ViewData::default()
+            },
+            loaded: true,
+        }
+    }
+
     #[test]
-    fn the_work_map_lists_each_worktree_with_its_tab_and_the_work_no_tab_has() {
+    fn the_work_map_lists_each_repository_s_worktrees_under_its_heading() {
         let trees = vec![
-            Worktree {
-                path: "/r".into(),
-                branch: Some("main".into()),
-                main: true,
-            },
-            Worktree {
-                path: "/r/.claude/worktrees/ab-1".into(),
-                branch: Some("AB-1-fix-the-login".into()),
-                main: false,
-            },
-            Worktree {
-                path: "/r/.claude/worktrees/ab-2".into(),
-                branch: Some("ab-2-old-work".into()),
-                main: false,
-            },
+            tree("/r", "main", true),
+            tree("/r/.claude/worktrees/ab-1", "AB-1-fix-the-login", false),
+            tree("/r/.claude/worktrees/ab-2", "ab-2-old-work", false),
         ];
         let mut waiting = tab(3, "AB-1: Fix the login", "/r/.claude/worktrees/ab-1/src");
         waiting.state = TabState::Waiting;
+        let main = tab(5, "Main work", "/r");
         let loose = tab(4, "Slack relay", "/tmp/elsewhere");
         let revived = vec![Revived {
             tree: "/other/wt".into(),
+            repo: "/other".into(),
             branch: "try-it".into(),
             when: 5,
             age: "2d".into(),
             prompt: "try it out".into(),
-            ..Revived::default()
         }];
-        let rows = work_map(&[waiting, loose], &trees, &revived, &|_| None);
-        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        let facts = MapFacts {
+            landings: HashMap::from([("/r".into(), "lands straight on main".into())]),
+            ..MapFacts::default()
+        };
+        let rows = work_map(&[waiting, loose, main], &trees, &revived, &|_| None, &facts);
         assert_eq!(
-            titles,
+            titles(&rows),
             [
+                "r",
+                "Main work",
                 "AB-1  Fix the login",
-                "Slack relay",
+                "AB-2  old work",
+                "other",
                 "try it",
-                "AB-2  old work"
+                "Other tabs",
+                "Slack relay",
             ],
-            "needing you first, then a tab, then work with no tab, the last used first"
+            "the main checkout first, then needing you; the tabs in no repository last"
         );
-        assert_eq!(rows[0].target, Target::Tab(TabId(3)));
-        assert_eq!(rows[0].state, State::Attention);
+        assert!(is_repo_heading(&rows[0]));
+        assert_eq!(rows[0].data["counts"], "3 worktrees · 2 open");
+        assert_eq!(rows[0].data["lands"], "lands straight on main");
+        assert_eq!(rows[0].data["place"], "/r");
+        assert_eq!(rows[2].target, Target::Tab(TabId(3)));
+        assert_eq!(rows[2].state, State::Attention);
+        assert_eq!(rows[2].data["ticket"], "AB-1");
+        assert_eq!(rows[2].data["worktree"], "AB-1-fix-the-login");
         assert_eq!(
             rows[3].target,
             Target::Dir("/r/.claude/worktrees/ab-2".into())
         );
-        assert_eq!(rows[2].cells[4], "used 2d");
-        assert!(rows[2].more[0].contains("try it out"));
-        let picker = View {
-            id: ViewId::WorkMap,
-            title: "Work map".into(),
-            data: ViewData {
-                items: rows,
-                ..ViewData::default()
-            },
-            loaded: true,
-        };
-        let open = shown(&picker, "", Some(Scope::Tabs), false);
+        assert_eq!(rows[5].cells[4], "used 2d");
+        assert_eq!(rows[5].data["prompt"], "try it out");
+        assert_eq!(rows[5].data["repo"], "/other");
+        let picker = map_view(rows);
+        let open = shown(&picker, "", Some(Scope::Tabs), &Folds::default());
         assert_eq!(open.title, "Work map · open tabs");
-        assert_eq!(open.data.items.len(), 2);
-        let untabbed = shown(&picker, "old", Some(Scope::Untabbed), false);
-        assert_eq!(untabbed.data.items.len(), 1);
+        assert_eq!(
+            titles(&open.data.items),
+            [
+                "▾ r",
+                "Main work",
+                "AB-1  Fix the login",
+                "▾ Other tabs",
+                "Slack relay"
+            ],
+            "a repository with no open tab is left out"
+        );
+        let untabbed = shown(&picker, "old", Some(Scope::Untabbed), &Folds::default());
+        assert_eq!(titles(&untabbed.data.items), ["▾ r", "AB-2  old work"]);
+        let mut folds = Folds::default();
+        folds.fold("/r");
+        let folded = shown(&picker, "", None, &folds);
+        assert_eq!(&titles(&folded.data.items)[..2], ["▸ r", "▾ other"]);
     }
 
     #[test]
-    fn a_worktree_no_tab_is_in_whose_branch_merged_waits_to_be_removed() {
-        // lib/sidebar's "the Work map shows merged work with no tab under
-        // Merged, can be removed", its PR asked for by its branch.
+    fn a_repository_s_merged_work_with_no_tab_is_folded_under_its_own_line() {
         let trees = vec![
-            Worktree {
-                path: "/r".into(),
-                branch: Some("main".into()),
-                main: true,
-            },
-            Worktree {
-                path: "/r/.claude/worktrees/ab-5".into(),
-                branch: Some("AB-5-done".into()),
-                main: false,
-            },
-            Worktree {
-                path: "/r/.claude/worktrees/ab-6".into(),
-                branch: Some("AB-6-going".into()),
-                main: false,
-            },
+            tree("/r", "main", true),
+            tree("/r/.claude/worktrees/ab-5", "AB-5-done", false),
+            tree("/r/.claude/worktrees/ab-6", "AB-6-going", false),
         ];
         let pr = |number, state| PrFacts {
             number,
@@ -921,36 +1348,139 @@ mod tests {
             Some("/r/.claude/worktrees/ab-6") => Some(pr(6, PrState::Open)),
             _ => None,
         };
-        let rows = work_map(&[], &trees, &[], &pr_of);
-        let titles: Vec<&str> = rows.iter().map(|r| r.title.as_str()).collect();
+        let rows = work_map(&[], &trees, &[], &pr_of, &MapFacts::default());
         assert_eq!(
-            titles,
-            ["AB-6  going", "Merged, can be removed", "AB-5  done"]
+            titles(&rows),
+            ["r", "AB-6  going", "merged worktrees", "AB-5  done"]
         );
-        assert_eq!(rows[2].data["merged"], true);
-        let picker = View {
-            id: ViewId::WorkMap,
-            title: "Work map".into(),
-            data: ViewData {
-                items: rows,
-                ..ViewData::default()
-            },
-            loaded: true,
+        assert!(is_fold_line(&rows[2]));
+        assert_eq!(rows[3].data["merged"], true);
+        let view = map_view(rows);
+        let none = Folds::default();
+        let shut = shown(&view, "", Some(Scope::Untabbed), &none);
+        assert_eq!(
+            titles(&shut.data.items),
+            ["▾ r", "AB-6  going", "▸ 1 merged worktree, folded"]
+        );
+        let mut folds = Folds::default();
+        folds.merged("/r");
+        let opened = shown(&view, "", None, &folds);
+        assert_eq!(
+            titles(&opened.data.items),
+            ["▾ r", "AB-6  going", "▾ 1 merged worktree", "AB-5  done"]
+        );
+        let found = shown(&view, "done", None, &none);
+        assert_eq!(
+            titles(&found.data.items),
+            ["▾ r", "▾ 1 merged worktree", "AB-5  done"],
+            "a filter opens the fold"
+        );
+        let open = shown(&view, "", Some(Scope::Tabs), &folds);
+        assert!(open.data.items.is_empty(), "no heading among the open tabs");
+    }
+
+    #[test]
+    fn where_a_row_stands_is_said_in_the_board_s_words() {
+        let with_pr = |f: &dyn Fn(&mut TabModel)| {
+            let mut t = TabModel::new(TabId(1), 1, "t");
+            t.pr = Some(12);
+            f(&mut t);
+            standing(&t, None).0
         };
-        // M-o's scope, work with no tab, keeps the header, which shows the
-        // merged work once Enter opens it.
-        let untabbed = shown(&picker, "", Some(Scope::Untabbed), false);
-        let titles: Vec<&str> = untabbed
-            .data
-            .items
-            .iter()
-            .map(|r| r.title.as_str())
-            .collect();
-        assert_eq!(titles, ["AB-6  going", "▸ Merged, can be removed"]);
-        let opened = shown(&picker, "", Some(Scope::Untabbed), true);
-        assert_eq!(opened.data.items.len(), 3);
-        let open = shown(&picker, "", Some(Scope::Tabs), true);
-        assert!(open.data.items.is_empty(), "no header among the open tabs");
+        assert_eq!(with_pr(&|_| {}), "In review");
+        assert_eq!(with_pr(&|t| t.review = Some("APPROVED".into())), "Approved");
+        assert_eq!(
+            with_pr(&|t| t.review = Some("CHANGES_REQUESTED".into())),
+            "Changes asked"
+        );
+        assert_eq!(
+            with_pr(&|t| {
+                t.merge = Some(MergeState::Queued);
+                t.position = Some(2);
+            }),
+            "2nd in the merge queue"
+        );
+        assert_eq!(
+            with_pr(&|t| {
+                t.landing = Some(crate::facts::Landing {
+                    holding: false,
+                    line: 3,
+                    method: crate::facts::Method::Direct,
+                })
+            }),
+            "3rd in the landing queue"
+        );
+        assert_eq!(
+            with_pr(&|t| t.phase = Some("tests failed: 2".into())),
+            "✕ tests failed"
+        );
+        let bare = TabModel::new(TabId(2), 2, "t");
+        let counted = Counts {
+            head: "a b".into(),
+            default: "main".into(),
+            ahead: Some(3),
+            to_push: Some(2),
+            ..Counts::default()
+        };
+        assert_eq!(standing(&bare, Some(&counted)).0, "2 commits to push");
+        assert_eq!(standing(&bare, None).0, "no PR");
+        let mut landed = bare.clone();
+        landed.landed_on = Some(("abc1234".into(), "main".into()));
+        landed.merge = Some(MergeState::Merged);
+        assert_eq!(standing(&landed, None), ("Landed abc1234".into(), "done"));
+        let mut checked = bare.clone();
+        checked.pr = Some(4);
+        checked.checks = Some(crate::facts::Checks {
+            pass: 3,
+            fail: 0,
+            pending: 2,
+        });
+        assert_eq!(checks(&checked), ("◌ 3 of 5".into(), "needs"));
+        checked.checks = Some(crate::facts::Checks {
+            pass: 3,
+            fail: 1,
+            pending: 0,
+        });
+        assert_eq!(checks(&checked), ("✕ 1 failing".into(), "failed"));
+    }
+
+    #[test]
+    fn a_row_is_counted_once_for_each_commit_it_is_at() {
+        let mut counts = HashMap::new();
+        let tree = Path::new("/r/wt");
+        let pushed_at = |at: &'static str| {
+            move |r: &str| {
+                if r == "refs/remotes/origin/topic" {
+                    at.to_string()
+                } else {
+                    String::new()
+                }
+            }
+        };
+        assert!(needs_count(&counts, tree, "a b", &pushed_at("p1")));
+        counts.insert(
+            tree.to_path_buf(),
+            Counts {
+                head: "a b".into(),
+                default: "main".into(),
+                ahead: Some(1),
+                to_push: Some(1),
+                upstream: "refs/remotes/origin/topic".into(),
+                upstream_at: "p1".into(),
+            },
+        );
+        assert!(
+            !needs_count(&counts, tree, "a b", &pushed_at("p1")),
+            "moving back counts none"
+        );
+        assert!(
+            needs_count(&counts, tree, "c b", &pushed_at("p1")),
+            "a new commit counts again"
+        );
+        assert!(
+            needs_count(&counts, tree, "a b", &pushed_at("p2")),
+            "a push to its upstream counts again"
+        );
     }
 
     #[test]
@@ -969,7 +1499,7 @@ mod tests {
             },
             loaded: true,
         };
-        let narrowed = shown(&view, "push notif", None, false);
+        let narrowed = shown(&view, "push notif", None, &Folds::default());
         let titles: Vec<&str> = narrowed
             .data
             .items
@@ -1030,7 +1560,7 @@ mod tests {
             },
             loaded: true,
         };
-        let narrowed = shown(&view, "board", None, false);
+        let narrowed = shown(&view, "board", None, &Folds::default());
         let titles: Vec<&str> = narrowed
             .data
             .items

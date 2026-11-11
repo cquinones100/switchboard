@@ -90,7 +90,14 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "↵",
         "what can be done with it (on a tab: go there first, so ↵↵ goes)",
     ),
-    ("↵ on Merged", "Work map: show or hide the merged worktrees"),
+    (
+        "↵ on a heading",
+        "Work map: fold or open a repository; on its merged line, show or hide its merged worktrees",
+    ),
+    (
+        "↵ o n z m",
+        "Work map with UX 2.0: go to the row's tab or open one there, only rows with a tab, only rows without, fold its repository, its menu",
+    ),
     (
         "l o M-r",
         "CI view, with UX 2.0: the chosen check's whole log beside, from its failing step; go to the PR's tab; the check in the browser",
@@ -306,6 +313,7 @@ impl Server {
             self.mission_prepare(client);
         }
         self.mission_diagrams(client);
+        self.work_map_count(client);
     }
 
     /// Asks, off the server's task, for the Mermaid diagrams of the
@@ -489,9 +497,26 @@ impl Server {
         let keep_autopilot =
             m.keep_autopilot || m.current().is_some_and(|v| v.id == ViewId::Autopilot);
         let all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot);
+        // A picker lists every repository's rows, whatever the map folds.
+        let folds = if m.picker {
+            views::Folds {
+                folded: Default::default(),
+                merged_open: m.folds.merged_open.clone(),
+            }
+        } else {
+            m.folds.clone()
+        };
         let views: Vec<View> = all
             .iter()
-            .map(|v| views::shown(v, &text, m.scope, m.show_merged))
+            .map(|v| views::shown(v, &text, m.scope, &folds))
+            .map(|mut v| {
+                // M-j's and M-o's pickers list rows to pick, with no
+                // repository's heading for Enter to land on.
+                if m.picker && v.id == ViewId::WorkMap {
+                    v.data.items.retain(|i| !views::is_repo_heading(i));
+                }
+                v
+            })
             .collect();
         // A view turned on or off before the one in front (or coming and
         // going, as Landing does) leaves it in front, where it now is, and
@@ -634,6 +659,7 @@ impl Server {
             ViewId::WorkMap => {
                 self.mission_worktrees(true);
                 self.mission_revived(true);
+                self.work_out_landing();
             }
             _ => {}
         }
@@ -684,7 +710,12 @@ impl Server {
             let trees: Vec<views::Worktree> =
                 self.mission.worktrees.values().flatten().cloned().collect();
             let pr_of = |p: &Path| self.sources.untabbed_pr(p).cloned();
-            let items = views::work_map(&tabs, &trees, &self.mission.revived, &pr_of);
+            let facts = views::MapFacts {
+                landings: self.mission.landings.clone(),
+                counts: self.mission.counts.clone(),
+                now_secs: util::now_ms() / 1000,
+            };
+            let items = views::work_map(&tabs, &trees, &self.mission.revived, &pr_of, &facts);
             let data = ViewData {
                 items,
                 at: Some(1),
@@ -841,8 +872,37 @@ impl Server {
         self.mission.worktrees_busy = true;
         self.mission.worktrees_at = Some(Instant::now());
         let tx = self.tx.clone();
+        let github = settings::is_on("github");
+        // Every repository the map heads: the tabs', and those only worktrees
+        // with no tab are known in.
+        let mut heads = mains.clone();
+        for r in &self.mission.revived {
+            if !r.repo.as_os_str().is_empty() && !heads.contains(&r.repo) {
+                heads.push(r.repo.clone());
+            }
+        }
         tokio::task::spawn_blocking(move || {
             let mut found = std::collections::HashMap::new();
+            let mut landings = std::collections::HashMap::new();
+            for main in heads {
+                // How it lands, as far as is known without asking: the
+                // Settings view and coming to the map work out the rest.
+                let lands = github
+                    .then(|| crate::repos::landing_known(&main))
+                    .flatten()
+                    .map(|method| match method.as_str() {
+                        "direct" => {
+                            let default = crate::tabs::git::locate(&main)
+                                .and_then(|p| crate::tabs::git::default_branch(&p.common_dir))
+                                .unwrap_or_else(|| "main".into());
+                            format!("lands straight on {default}")
+                        }
+                        _ => "lands through a PR".into(),
+                    });
+                if let Some(lands) = lands {
+                    landings.insert(main, lands);
+                }
+            }
             for main in mains {
                 let out = util::output_of(
                     std::process::Command::new("git")
@@ -861,7 +921,7 @@ impl Server {
                     found.insert(main.clone(), trees);
                 }
             }
-            let _ = tx.send(Event::Mission(MissionEvent::Worktrees(found)));
+            let _ = tx.send(Event::Mission(MissionEvent::Worktrees(found, landings)));
         });
     }
 
@@ -978,10 +1038,11 @@ impl Server {
                     self.mission_note(client, note);
                 }
             }
-            MissionEvent::Worktrees(found) => {
+            MissionEvent::Worktrees(found, landings) => {
                 self.mission.worktrees_busy = false;
-                if found != self.mission.worktrees {
+                if found != self.mission.worktrees || landings != self.mission.landings {
                     self.mission.worktrees = found;
+                    self.mission.landings = landings;
                     self.untabbed_prs();
                     self.mission_redraw();
                 }
@@ -994,6 +1055,11 @@ impl Server {
                 if self.mission.diagrams.got(&source, light, image) {
                     self.mission_redraw();
                 }
+            }
+            MissionEvent::Counted(tree, counts) => {
+                self.mission.counting = None;
+                self.mission.counts.insert(tree, counts);
+                self.mission_redraw();
             }
             MissionEvent::Revived(rows) => {
                 self.mission.revived_busy = false;
@@ -1248,6 +1314,9 @@ impl Server {
         let tab_focus = m.snap.tab_focus;
         let ctrl = k.mods == Mods::CTRL;
         let none = plain(&k);
+        if self.work_map_key(client, m, k) {
+            return;
+        }
         match k.code {
             KeyCode::Char('h') | KeyCode::Left if none => {
                 let to = side_step(m, -1);
@@ -1331,6 +1400,103 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// The Work map's own keys with UX 2.0, outside M-j's and M-o's
+    /// pickers: Enter on a row goes to its tab, or opens a tab in its
+    /// worktree resuming its Claude, with no menu; `o` shows only the rows
+    /// with a tab and `n` only those without, pressed again to show all;
+    /// `z` folds or opens the chosen row's repository; `m` opens the
+    /// row's menu, which Enter opens elsewhere. True when it took the key.
+    fn work_map_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+        let Some(view) = m
+            .current()
+            .filter(|v| v.id == ViewId::WorkMap && m.snap.rules.ux2 && !m.picker)
+            .cloned()
+        else {
+            return false;
+        };
+        if !plain(&k) && k.code != KeyCode::Enter {
+            return false;
+        }
+        let chosen = m.chosen_item().cloned();
+        let scope = |m: &mut Mission, s: Scope| {
+            m.scope = if m.scope == Some(s) { None } else { Some(s) };
+            m.cursor = 0;
+        };
+        match k.code {
+            KeyCode::Enter => {
+                let Some(item) = chosen.filter(|i| !views::is_header(i)) else {
+                    return false;
+                };
+                match item.target {
+                    Target::Tab(t) => self.mission_go(client, t),
+                    Target::Dir(dir) => self.mission_do(client, Do::OpenHere(dir), "Opening a tab"),
+                    Target::Url(_) | Target::None => return false,
+                }
+            }
+            KeyCode::Char('o') => scope(m, Scope::Tabs),
+            KeyCode::Char('n') => scope(m, Scope::Untabbed),
+            KeyCode::Char('z') => {
+                let Some(repo) = chosen.as_ref().and_then(views::repo_key) else {
+                    return true;
+                };
+                let heading = format!("repo:{repo}");
+                if let Some(at) = view.data.items.iter().position(|i| i.id == heading) {
+                    m.cursor = at as isize;
+                }
+                m.folds.fold(repo);
+            }
+            KeyCode::Char('m') => {
+                if let Some(item) = chosen.filter(|i| !views::is_header(i)) {
+                    self.item_menu(client, &view.id, item, &view.data.items);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Counts, in the background, the branch of the Work map's chosen row
+    /// against its default branch and its upstream, for the pane under the
+    /// map: only with UX 2.0, the map in front and the row a worktree, once
+    /// for each commit it is at (read from git's files, so moving back to
+    /// a row counted starts nothing), one count at a time, so the cursor
+    /// running down the rows counts the one it settles on.
+    fn work_map_count(&mut self, client: ClientId) {
+        if self.mission.counting.is_some() || tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let Some(m) = self
+            .clients
+            .get(&client)
+            .and_then(|c| c.overlays.find::<Mission>())
+        else {
+            return;
+        };
+        if !m.snap.rules.ux2 || m.current().is_none_or(|v| v.id != ViewId::WorkMap) {
+            return;
+        }
+        let Some(tree) = m
+            .chosen_item()
+            .filter(|i| !views::is_header(i))
+            .and_then(|i| i.data.get("tree")?.as_str().map(PathBuf::from))
+        else {
+            return;
+        };
+        let Some(head) = crate::tabs::git::head_commit(&tree) else {
+            return;
+        };
+        let upstream_at = |r: &str| watched_at(&tree, r);
+        if !views::needs_count(&self.mission.counts, &tree, &head, &upstream_at) {
+            return;
+        }
+        self.mission.counting = Some(tree.clone());
+        let tx = self.tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let counts = count_branch(&tree, head);
+            let _ = tx.send(Event::Mission(MissionEvent::Counted(tree, counts)));
+        });
     }
 
     /// Closes mission control from inside a key's handling, where its state
@@ -1531,8 +1697,16 @@ impl Server {
         let Some(item) = m.chosen_item().cloned() else {
             return;
         };
-        if item.id == views::MERGED_HEADER {
-            m.show_merged = !m.show_merged;
+        if views::is_fold_line(&item)
+            && let Some(repo) = views::repo_key(&item)
+        {
+            m.folds.merged(repo);
+            return;
+        }
+        if views::is_repo_heading(&item)
+            && let Some(repo) = views::repo_key(&item)
+        {
+            m.folds.fold(repo);
             return;
         }
         // Autopilot's view's heading opens the menu its line on the Tabs
@@ -2983,6 +3157,76 @@ enum Then {
     Prepare,
 }
 
+/// What a count with no upstream watches: the repository's config file.
+const CONFIG: &str = "config";
+
+/// Where what a count watches for a push is now: when the repository's
+/// config file last changed, which a push setting an upstream or a changed
+/// upstream writes, and the commit its upstream's ref is at, read from
+/// git's files (none for `CONFIG`, no upstream).
+fn watched_at(tree: &Path, watched: &str) -> String {
+    let config = crate::tabs::git::locate(tree)
+        .and_then(|p| std::fs::metadata(p.common_dir.join("config")).ok())
+        .and_then(|m| m.modified().ok())
+        .map(|t| format!("{t:?}"))
+        .unwrap_or_default();
+    let at = match watched {
+        "" | CONFIG => String::new(),
+        r => crate::tabs::git::ref_at(tree, r).unwrap_or_default(),
+    };
+    format!("{config} {at}")
+}
+
+/// A worktree's branch counted at `head`: commits ahead of the default
+/// branch (on origin when it is there) and not on its upstream, with git;
+/// what git can't count is `None`, kept as the answer for that commit.
+fn count_branch(tree: &Path, head: String) -> views::Counts {
+    let counted = count_with_git(tree);
+    let upstream = counted.as_ref().map(|c| c.3.clone()).unwrap_or_default();
+    views::Counts {
+        head,
+        default: counted.as_ref().map(|c| c.0.clone()).unwrap_or_default(),
+        ahead: counted.as_ref().map(|c| c.1),
+        to_push: counted.as_ref().and_then(|c| c.2),
+        upstream_at: watched_at(tree, &upstream),
+        upstream,
+    }
+}
+
+/// The default branch, the commits ahead of it, those not on the upstream
+/// (`None` with none), and what to watch for a push: the upstream's ref as
+/// git names it, however the config says it, else the repository's config
+/// (`CONFIG`), which a push setting one writes.
+fn count_with_git(tree: &Path) -> Option<(String, u32, Option<u32>, String)> {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = util::output_of(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(tree)
+                .args(args),
+        )
+        .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    let place = crate::tabs::git::locate(tree)?;
+    let default = crate::tabs::git::default_branch(&place.common_dir)?;
+    let against = [format!("origin/{default}"), default.clone()]
+        .into_iter()
+        .find(|r| git(&["rev-parse", "--verify", "--quiet", r]).is_some())?;
+    let right = |range: &str| -> Option<u32> {
+        let out = git(&["rev-list", "--left-right", "--count", range])?;
+        out.split_whitespace().nth(1)?.parse().ok()
+    };
+    let ahead = right(&format!("{against}...HEAD"))?;
+    // With no upstream, the repository's config alone is watched, which the
+    // push that sets one writes, whatever remote it goes to.
+    let upstream =
+        git(&["rev-parse", "--symbolic-full-name", "@{upstream}"]).unwrap_or_else(|| CONFIG.into());
+    Some((default, ahead, right("@{upstream}...HEAD"), upstream))
+}
+
 /// A mouse event on mission control, against where its parts were last
 /// drawn: the mouse moving lights what a click would press (not the chosen
 /// view or row, nor anything on the screen's edge, the way out of it); the
@@ -3044,6 +3288,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             let Some(spot) = hit else {
                 return Then::Nothing;
             };
+            // A key on the footer is pressed as typed, the focus kept for it.
+            if let Spot::Key(key) = spot {
+                m.hover = None;
+                return Then::Press(key);
+            }
             // A click puts away the focus ring Tab draws, and the light.
             m.focus = None;
             m.hover = None;

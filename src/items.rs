@@ -52,8 +52,7 @@ pub struct Item {
     pub time: Option<i64>,
     #[serde(default)]
     pub target: Target,
-    /// The heading it goes under (a board's column, a calendar's hour, a
-    /// work map's "Merged, can be removed").
+    /// The heading it goes under (a board's column, a calendar's hour).
     #[serde(default)]
     pub group: Option<String>,
     /// Its cells, for a view drawn as a table (the work map, Resources).

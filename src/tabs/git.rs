@@ -138,6 +138,74 @@ fn ref_exists(git_dir: &Path, common_dir: &Path, name: &str) -> bool {
     })
 }
 
+/// Where a checkout's branch is, from git's files: the branch `HEAD`
+/// names and the commit it is at, and the one the default branch is at
+/// (origin's, else the local one; empty with none), so a commit made or
+/// landed on the default branch changes it; `None` when `HEAD` can't be
+/// read. With the commit its upstream is at (`ref_at`), what a count of
+/// its commits is kept by (the Work map's chosen row).
+pub fn head_commit(dir: &Path) -> Option<String> {
+    let place = locate(dir)?;
+    let head = fs::read_to_string(place.git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    // The default branch as the count compares against it, origin's else
+    // the local one: the one origin/HEAD names, else main or master, read
+    // without listing every branch, since this runs as mission control draws.
+    let named = fs::read_to_string(place.common_dir.join("refs/remotes/origin/HEAD"))
+        .ok()
+        .and_then(|h| {
+            h.trim()
+                .strip_prefix("ref: refs/remotes/origin/")
+                .map(str::to_string)
+        });
+    let candidates = match named {
+        Some(d) => vec![d],
+        None => vec!["main".to_string(), "master".to_string()],
+    };
+    let landed = candidates
+        .iter()
+        .map(|d| {
+            [
+                format!("refs/remotes/origin/{d}"),
+                format!("refs/heads/{d}"),
+            ]
+            .iter()
+            .find_map(|r| ref_commit(&place.git_dir, &place.common_dir, r))
+            .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Some(target) = head.strip_prefix("ref:").map(str::trim) else {
+        return Some(format!("HEAD {head} {landed}"));
+    };
+    let at = ref_commit(&place.git_dir, &place.common_dir, target)?;
+    Some(format!("{target} {at} {landed}"))
+}
+
+/// The commit a ref (`refs/remotes/origin/topic`) of the repository `dir`
+/// names, from git's files; `None` when it has none.
+pub fn ref_at(dir: &Path, name: &str) -> Option<String> {
+    let place = locate(dir)?;
+    ref_commit(&place.git_dir, &place.common_dir, name)
+}
+
+// The commit a ref names: its own file, else its line of `packed-refs`.
+fn ref_commit(git_dir: &Path, common_dir: &Path, name: &str) -> Option<String> {
+    for dir in [git_dir, common_dir] {
+        if let Ok(text) = fs::read_to_string(dir.join(name)) {
+            return Some(text.trim().to_string());
+        }
+    }
+    let packed = fs::read_to_string(common_dir.join("packed-refs")).ok()?;
+    packed
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.starts_with('^'))
+        .find_map(|l| {
+            let (id, r) = l.split_once(' ')?;
+            (r.trim() == name).then(|| id.to_string())
+        })
+}
+
 /// The repository's local branches, by name, sorted: the files under
 /// `refs/heads/` in the shared directory, and `packed-refs`' lines for them.
 /// Reads files only, though a directory of many branches is read whole, so
