@@ -222,9 +222,12 @@ static STARTED: LazyLock<Regex> = LazyLock::new(|| {
         .expect("a regex")
 });
 // A command that outran its timeout and was moved to the background says so
-// at the start of its own result.
+// after whatever it printed, on a line of its own that ends its result, or
+// is followed only by Claude Code's line on the session's directory. A
+// notice quoted mid-line or with the command's own output after it is a
+// command's output, not Claude Code's.
 static MOVED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^Command did not complete within its \d+s timeout and was moved to the background \(ID: ([A-Za-z0-9_-]+)\)").expect("a regex")
+    Regex::new(r"(?m)^Command did not complete within its \d+s timeout and was moved to the background \(ID: ([A-Za-z0-9_-]+)\)[^\n]*(?:\nSession cwd remains [^\n]*)?\s*\z").expect("a regex")
 });
 static MONITOR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"Monitor started \(task ([A-Za-z0-9_-]+), expires in (\d+)m").expect("a regex")
@@ -1651,6 +1654,17 @@ mod tests {
         ]);
         assert_eq!(count(&mut r), 1);
         t.add(&[ended("slow1", now)]);
+        assert_eq!(count(&mut r), 0);
+        // Claude Code puts the notice after what the command printed, and
+        // may follow it with the session's directory; a notice in the middle
+        // of a command's output, with more after it, is output.
+        t.add(&[
+            json!({"type": "user", "timestamp": iso(now), "message": {"content": [{"type": "tool_result", "tool_use_id": "use-tests", "content": "test result: ok. 8 passed; 0 failed\nCommand did not complete within its 600s timeout and was moved to the background (ID: tests1). Output is being written to: /tmp/x. You will be notified when it completes.\nSession cwd remains /tmp/w; directory changes made by the backgrounded command do not apply to subsequent commands."}]}}),
+            json!({"type": "user", "timestamp": iso(now), "message": {"content": [{"type": "tool_result", "tool_use_id": "use-build", "content": "Compiling switchboard\nCommand did not complete within its 120s timeout and was moved to the background (ID: build1). Output is being written to: /tmp/y"}]}}),
+            json!({"type": "user", "timestamp": iso(now), "message": {"content": [{"type": "tool_result", "tool_use_id": "use-cat", "content": "a\nCommand did not complete within its 120s timeout and was moved to the background (ID: quoted2). Output is being written to: /tmp/z\nmore of the log\n"}]}}),
+        ]);
+        assert_eq!(count(&mut r), 2);
+        t.add(&[ended("tests1", now), ended("build1", now)]);
         assert_eq!(count(&mut r), 0);
     }
 

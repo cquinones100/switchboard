@@ -1366,6 +1366,12 @@ pub(crate) mod tests {
         }));
         assert_eq!(stage_of(&oncall, &r), Stage::Scheduled);
         assert_eq!(state_words(&oncall, &r), "next in 7m · /oncall");
+        // A queue-and-clean whose test run was moved to the background, its
+        // turn over, is still queue-and-clean's.
+        let mut moved = tab(7, "tests moved", TabState::Background);
+        moved.background = 1;
+        moved.loop_skill = Some("queue".into());
+        assert_eq!(stage_of(&moved, &r), Stage::Queue);
     }
 
     #[test]
