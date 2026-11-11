@@ -2385,7 +2385,7 @@ fn open_on_the_home_tab_opens_a_screen_for_exactly_that_tab_and_only_for_you() {
     assert_eq!(
         names,
         ["Message", "Skill", "Progress", "Rename", "Close"],
-        "no Stop for an idle tab, no thread it hasn't got"
+        "no Stop for an idle tab, and no thread before it starts"
     );
     // A screen drawn for an earlier process of this tab acts on nothing.
     let stale = press_from(
@@ -4044,4 +4044,54 @@ fn a_file_that_only_claims_to_be_a_video_gets_no_stills_and_you_are_told() {
         p.body
             .contains("couldn't take stills from bad.mp4, so the tab gets only its path")
     }));
+}
+
+#[test]
+fn opening_a_tabs_screen_starts_its_thread_and_links_it() {
+    let rig = Rig::new();
+    rig.cx.state.borrow_mut().dm.as_mut().unwrap().url = Some("https://example.slack.com/".into());
+    let (tab, _) = rig.claude_tab("work");
+    let pid = rig.pid_of(&tab);
+    let open = || {
+        rig.block_on(super::presses::handle_press(
+            &rig.cx,
+            super::slack::Press {
+                value: json!({ "a": "open", "w": tab, "p": pid }),
+                view: Some(super::slack::ViewRef {
+                    id: "VHOME".into(),
+                    ..Default::default()
+                }),
+                trigger_id: Some("TR0".into()),
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    };
+    let link = |screen: &Value| {
+        screen["blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["type"] == "actions")
+            .unwrap()["elements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["text"]["text"] == "Go to thread")
+            .map(|b| b["url"].as_str().unwrap().to_string())
+    };
+    open();
+    let posts = rig.posts();
+    assert_eq!(posts.len(), 1, "the thread's header");
+    assert!(posts[0].thread.is_none());
+    let ts = posts[0].ts.clone();
+    let redrawn = rig.calls("views.update");
+    assert_eq!(redrawn.len(), 1);
+    assert_eq!(redrawn[0]["view_id"], "V-opened");
+    let url = link(&redrawn[0]["view"]).expect("Go to thread");
+    assert!(url.contains(&format!("thread_ts={ts}")), "{url}");
+    open();
+    assert_eq!(rig.posts().len(), 1, "no second header");
+    assert_eq!(rig.calls("views.update").len(), 1, "no redraw needed");
+    assert_eq!(link(&rig.calls("views.open")[1]["view"]), Some(url));
 }

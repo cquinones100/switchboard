@@ -728,7 +728,16 @@ pub async fn handle_screen_press(cx: &Cx, press: &Press, thread: Option<&str>) -
                 json!({ "trigger_id": trigger, "view": tab_screen(cx, &tab, None) }),
             )
             .await?;
-        remember(cx, opened.pointer("/view/id").and_then(Value::as_str), &tab);
+        let view = opened.pointer("/view/id").and_then(Value::as_str);
+        remember(cx, view, &tab);
+        // Opened first, since Slack's trigger lasts only a few seconds; a
+        // tab with no thread yet gets one now, and its screen the link.
+        if let Some(view) = view
+            && home_thread(cx, &tab.id).is_none()
+            && thread_for(cx, &tab).await.is_some()
+        {
+            redraw(cx, view, &json!({ "w": tab.id, "p": tab.pid }), None).await;
+        }
         return Ok(());
     }
     let Some(tab) = tab else {

@@ -1637,7 +1637,7 @@ When it starts, the relay says so in the DM with buttons for what you would othe
 
 ### Threads and notices
 
-Each Claude tab's thread is started the first time there is something to say about it, and holds everything about that tab: its finished turns, its waits, its milestones, notes that it may be stuck, and the answers to what you sent. The thread starts with a header naming the tab, its state and since when (🔴 waiting on you, 🔵 working, ✅ finished, ⚪ idle), and Progress, Skill, Rename and Close buttons. The header is edited whenever the tab is renamed or its state changes, so Slack's list of threads shows how every tab stands. Once the tab closes, or starts another Claude session, the header says its session has ended and offers **Delete thread**. A thread belongs to its tab for as long as the tab is open, and a new tab gets a new one.
+Each Claude tab's thread is started the first time there is something to say about it, or when you open its screen from the Home tab, and holds everything about that tab: its finished turns, its waits, its milestones, notes that it may be stuck, and the answers to what you sent. The thread starts with a header naming the tab, its state and since when (🔴 waiting on you, 🔵 working, ✅ finished, ⚪ idle), and Progress, Skill, Rename and Close buttons. The header is edited whenever the tab is renamed or its state changes, so Slack's list of threads shows how every tab stands. Once the tab closes, or starts another Claude session, the header says its session has ended and offers **Delete thread**. A thread belongs to its tab for as long as the tab is open, and a new tab gets a new one.
 
 The main DM gets one-line notices for what needs you or went wrong: a tab waiting on you, a dialog, a tab that may be stuck, a failed commit, push or pull request. Each is posted in the tab's thread and also sent to the conversation, so tapping it opens the thread. A notice for a prompt carries the prompt's option buttons, so you can answer from the notice itself. A finished turn gets no notice, since it is already in the thread.
 
@@ -1703,7 +1703,7 @@ Then every Claude tab, in groups so what needs you is at the top on a phone: **N
 | --- | --- |
 | Message | a field whose text is typed into the tab, handled as a reply in its thread would be (asking first when its prompt holds an unsent draft); the answer goes in the thread |
 | Skill | the Skill form |
-| Go to thread | the tab's thread, once it has one |
+| Go to thread | the tab's thread, started when the screen opens if the tab has none yet |
 | Progress | `progress`, shown on the screen |
 | Rename | a field holding its name; cleared, the tab gets its own name back |
 | Stop | Escape, only while it works or waits |
