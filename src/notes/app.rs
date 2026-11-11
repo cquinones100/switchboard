@@ -707,6 +707,7 @@ impl App {
         if self.locked_by.is_some() {
             return;
         }
+        self.put_title_back();
         self.save();
         self.store.unlock();
         let gone = self.images.release_all();
@@ -928,6 +929,21 @@ impl App {
         } else {
             disk_body.clone()
         };
+        // A title the outside change or the merge lost is put back, and
+        // written with the next save, unless you are typing it again: in
+        // Insert mode on the first line with the title gone from the editor.
+        let base_body = id::body_of(&base);
+        let typing_title = self.editor.mode == Mode::Insert
+            && self.editor.doc.row == 0
+            && sync::keep_title(&base_body, &self.editor.doc.text.file_text()).is_some();
+        let kept = sync::keep_title(&base_body, &new).filter(|_| !typing_title);
+        let new = match kept {
+            Some(kept) => {
+                self.save_due = Some(Instant::now());
+                kept
+            }
+            None => new,
+        };
         let new_text = Text::from_file(&new);
         self.editor.change(|doc| doc.text = new_text);
         self.editor.clamp();
@@ -956,6 +972,12 @@ impl App {
     /// change made to its file from outside is brought in first, so it
     /// isn't written over.
     pub fn save(&mut self) {
+        self.save_with(true);
+    }
+
+    /// Saves as `save` does; with `keep_title` off, a first line that no
+    /// longer reads as the title is written as it is, for a rename asked for.
+    fn save_with(&mut self, keep_title: bool) {
         self.save_due = None;
         if self.open.is_none() || !self.check() {
             return;
@@ -970,10 +992,32 @@ impl App {
             self.editor.change(|doc| doc.text = kept);
             self.editor.clamp();
         }
+        // A title lost in the editor is always written to the file, so the
+        // note keeps it and its name. Typing a new title over the old one
+        // autosaves as it goes, the line empty for a moment: the editor gets
+        // it back only once that's done.
+        let typing_title = self.editor.mode == Mode::Insert && self.editor.doc.row == 0;
+        if keep_title && !typing_title {
+            self.put_title_back();
+        }
         let Some(open) = &self.open else { return };
+        let kept = open
+            .base
+            .as_deref()
+            .filter(|_| keep_title)
+            .and_then(|base| {
+                sync::keep_title(&id::body_of(base), &self.editor.doc.text.file_text())
+            });
+        // What is written, which is what counts as saved: a title being typed
+        // over stays unsaved in the editor, so a change from outside merges
+        // around it.
+        let written = match &kept {
+            Some(kept) => Text::from_file(kept),
+            None => self.editor.doc.text.clone(),
+        };
         let text = match &open.id {
-            Some(note_id) => id::file_of(&self.editor.doc.text.lines(), note_id),
-            None => self.editor.doc.text.file_text(),
+            Some(note_id) => id::file_of(&written.lines(), note_id),
+            None => written.file_text(),
         };
         // Written when typed in, or when the file lost its ID.
         if open.base.as_deref() != Some(text.as_str()) {
@@ -986,7 +1030,7 @@ impl App {
             }
             if let Some(o) = &mut self.open {
                 o.base = Some(text);
-                o.saved = self.editor.doc.text.clone();
+                o.saved = written;
             }
         }
         if self.store.in_trash(&path) {
@@ -998,7 +1042,12 @@ impl App {
         }
         // A new title renames the tabs linked to the note and named after
         // it, its file renamed or not.
-        let now = store::title_of(&self.editor.doc.text.file_text());
+        // Read from the file as written, which keeps a title the editor
+        // has emptied for a moment.
+        let now = match self.open.as_ref().and_then(|o| o.base.as_deref()) {
+            Some(written) => store::title_of(written),
+            None => store::title_of(&self.editor.doc.text.file_text()),
+        };
         let was = self
             .open
             .as_ref()
@@ -1016,6 +1065,31 @@ impl App {
             self.store.relink(&|_| None, Some(&retitled));
         }
         self.rebuild();
+    }
+
+    /// A title lost in the editor (its line emptied or deleted) put back from
+    /// the file as last read, so the note is never written without it, nor
+    /// renamed after its first item.
+    fn put_title_back(&mut self) {
+        let Some(base) = self.open.as_ref().and_then(|o| o.base.as_deref()) else {
+            return;
+        };
+        let Some(kept) = sync::keep_title(&id::body_of(base), &self.editor.doc.text.file_text())
+        else {
+            return;
+        };
+        // Not a step of its own to undo: undoing goes back past the edit
+        // that lost it, to the note as it was.
+        let was = self.editor.doc.text.lines();
+        self.editor.doc.text = Text::from_file(&kept);
+        // A title line put in above the cursor moves it down with its line.
+        let now = self.editor.doc.text.lines();
+        let put_in_at = was.iter().zip(&now).take_while(|(a, b)| a == b).count();
+        if now.len() > was.len() && self.editor.doc.row >= put_in_at {
+            self.editor.doc.row += now.len() - was.len();
+        }
+        self.editor.folds.follow(&was, &now);
+        self.editor.clamp();
     }
 
     /// A note moved or renamed: the open note follows, and so do the marks.
@@ -1108,7 +1182,7 @@ impl App {
             rewrite(&mut lines);
             let text = Text::from_lines(&lines);
             self.editor.change(|doc| doc.text = text);
-            self.save();
+            self.save_with(false);
             return self
                 .current_path()
                 .map(Path::to_path_buf)
@@ -1487,17 +1561,18 @@ impl App {
             return None;
         }
         self.leave_modes();
-        let line = self.editor.doc.row + 1;
-        let text = self.editor.doc.text.lines().join("\n");
-        if let Err(why) = crate::cmd::worktree_from_note::item_at(&text, line) {
-            self.say(format!("notes: that line {why}"));
-            return None;
-        }
-        // Saving can rename the note after its title, so its path is read
+        // Saving can rename the note after its title, and put a lost title
+        // back above the cursor, so its path and the item's line are read
         // after.
         self.save();
         let path = self.current_path()?.to_path_buf();
         if self.modified() {
+            return None;
+        }
+        let line = self.editor.doc.row + 1;
+        let text = self.editor.doc.text.lines().join("\n");
+        if let Err(why) = crate::cmd::worktree_from_note::item_at(&text, line) {
+            self.say(format!("notes: that line {why}"));
             return None;
         }
         let rel = self.store.relative(&path);

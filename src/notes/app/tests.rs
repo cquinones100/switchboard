@@ -337,6 +337,82 @@ fn a_note_changed_outside_while_open_shows_the_change_and_a_save_keeps_both() {
 }
 
 #[test]
+fn a_note_keeps_its_title_line_and_its_name_whatever_empties_it() {
+    let (dir, mut store) = temp("title-kept");
+    let path = store.create("", Some("Errands"));
+    write(&path, "# Errands\n\n- [ ] milk\n- [ ] eggs\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let body = |path: &Path| crate::notes::id::body_of(&fs::read_to_string(path).unwrap());
+    // Emptied in the editor: the save puts it back.
+    app.editor.change(|doc| doc.text.set_line(0, ""));
+    app.save();
+    assert_eq!(body(&path), "# Errands\n\n- [ ] milk\n- [ ] eggs\n");
+    assert_eq!(lines(&app)[0], "# Errands");
+    // Emptied by a write from outside, as the handoff left it: brought in
+    // with the title, written back, and the file keeps its name.
+    write(&path, "\n\n- [ ] milk\n- [ ] eggs\n");
+    app.check();
+    app.save();
+    assert_eq!(body(&path), "# Errands\n\n- [ ] milk\n- [ ] eggs\n");
+    assert!(!dir.path.join("- [ ] milk.md").exists());
+    assert_eq!(name(&app), "Errands.md");
+    // Emptied in Insert mode and saved there: the file keeps it, and the
+    // editor gets it back once Insert mode ends.
+    app.editor.change(|doc| doc.text.set_line(0, ""));
+    app.editor.doc.row = 0;
+    app.editor.mode = Mode::Insert;
+    app.save();
+    assert_eq!(lines(&app)[0], "", "left alone while it is typed over");
+    assert!(
+        app.modified(),
+        "and unsaved, so a change from outside merges around it"
+    );
+    assert_eq!(body(&path), "# Errands\n\n- [ ] milk\n- [ ] eggs\n");
+    assert_eq!(name(&app), "Errands.md");
+    app.editor.mode = Mode::Normal;
+    app.save();
+    assert_eq!(lines(&app)[0], "# Errands");
+    // Emptied from outside while the cursor waits in Insert mode on it.
+    app.editor.mode = Mode::Insert;
+    write(&path, "\n\n- [ ] milk\n- [ ] eggs\n");
+    app.check();
+    app.editor.mode = Mode::Normal;
+    app.save();
+    assert_eq!(body(&path), "# Errands\n\n- [ ] milk\n- [ ] eggs\n");
+    assert_eq!(name(&app), "Errands.md");
+    // Typed over in the editor: the new title is kept, and names the file.
+    app.editor.change(|doc| doc.text.set_line(0, "# Groceries"));
+    app.save();
+    assert_eq!(name(&app), "Groceries.md");
+    // Renamed to a heading its body has: the rename asked for is kept.
+    app.editor.change(|doc| doc.text.set_line(3, "# Shopping"));
+    app.save();
+    let renamed = app.retitle(&dir.path.join("Groceries.md"), "Shopping");
+    assert_eq!(app.store.relative(&renamed), "Shopping.md");
+    assert_eq!(lines(&app)[0], "# Shopping");
+    // Everything deleted: the title comes back, and undo still brings back
+    // the rest, the title's return no step of its own.
+    let whole = lines(&app);
+    app.editor.change(|doc| doc.text = Text::from_file(""));
+    app.save();
+    assert_eq!(lines(&app)[0], "# Shopping");
+    app.editor.undo();
+    assert_eq!(lines(&app), whole);
+    // Deleted with the cursor below: the cursor stays on its line.
+    app.editor.change(|doc| {
+        let rest: Vec<String> = doc.text.lines().into_iter().skip(1).collect();
+        doc.text = Text::from_lines(&rest);
+        doc.row = 2;
+    });
+    let on = lines(&app)[2].clone();
+    app.save();
+    assert_eq!(lines(&app)[0], "# Shopping");
+    assert_eq!(lines(&app)[app.editor.doc.row], on);
+}
+
+#[test]
 fn a_note_opened_from_outside_puts_the_lists_cursor_on_it() {
     let (_dir, mut store) = temp("reveal");
     store.create("", Some("Loose"));
