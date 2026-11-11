@@ -1126,6 +1126,10 @@ pub struct Turn {
     pub reply: Option<String>,
     pub tools: usize,
     pub pending: Option<String>,
+    /// The id of the call it is stopped on; empty with none.
+    pub pending_call: String,
+    /// How many of its calls are unanswered.
+    pub unanswered: usize,
     /// The question it is stopped on, when the call it is stopped on is
     /// one (AskUserQuestion), when it was asked (ms) and the call's id.
     pub asks: Option<(String, i64, String)>,
@@ -1258,6 +1262,9 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
     }
     let stopped_on = calls.values().rev().find(|(_, answered, _)| !answered);
     let pending = stopped_on.map(|(part, _, _)| tool_text(part));
+    let pending_call = stopped_on
+        .map(|(part, _, _)| str_of(part.get("id")).to_string())
+        .unwrap_or_default();
     let asks = stopped_on
         .filter(|(part, _, at)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
         .map(|(part, _, at)| (tool_text(part), *at, str_of(part.get("id")).to_string()));
@@ -1268,6 +1275,8 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         reply: said.pop(),
         tools: calls.len(),
         pending,
+        pending_call,
+        unanswered: calls.values().filter(|(_, answered, _)| !answered).count(),
         asks,
     })
 }

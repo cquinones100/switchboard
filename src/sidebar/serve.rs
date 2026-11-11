@@ -229,6 +229,16 @@ impl Server {
                 (at >= started).then_some((*p, question, at, call))
             })
             .collect();
+        // The call each pane's turn is stopped on, for a wait whose hook
+        // named no tool.
+        let pending: Vec<(PaneId, String, bool, String)> = reads
+            .iter()
+            .filter_map(|(p, r)| {
+                let turn = r.turn.as_ref()?;
+                let only = turn.unanswered == 1;
+                Some((*p, turn.pending_call.clone(), only, turn.pending.clone()?))
+            })
+            .collect();
         let changed = reads != self.sidebar.panes;
         self.sidebar.panes = reads;
         self.sidebar.stale = false;
@@ -240,6 +250,11 @@ impl Server {
         }
         for (pane, question, at, call) in asks {
             if self.agent_asked(pane, at, &call, &question) {
+                self.dirty_sidebars();
+            }
+        }
+        for (pane, call, only, words) in pending {
+            if self.agent_name_wait(pane, &call, only, &words) {
                 self.dirty_sidebars();
             }
         }

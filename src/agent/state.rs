@@ -24,6 +24,11 @@
 //! returning, a monitor firing), and a call ending ends the wait only when it
 //! is the one waited on, or when either hook names no call, as before waits
 //! had calls.
+//!
+//! In auto mode a permission request is work until it reaches you: the hook
+//! fires before auto mode decides, and a call it allows runs with nothing
+//! more said until it ends, so the request's words are kept aside and the
+//! pane waits only once the Notification of a prompt shown to you comes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -89,6 +94,15 @@ pub enum Waiter {
     Agent(String),
 }
 
+/// A permission request auto mode may still allow: its words, who asked
+/// and the call it is for, kept until a prompt shown to you makes it a wait.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Asked {
+    pub wait: String,
+    pub by: Waiter,
+    pub call: Option<String>,
+}
+
 /// One pane's Claude: its state and what goes with it. Serialized only to
 /// hand it to a new build with its pane (src/mux/upgrade.rs).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +139,9 @@ pub struct PaneAgent {
     /// The step a loop says it is at (queue-and-clean's landing), set by the
     /// loop and ended by a new prompt or session.
     pub phase: Option<String>,
+    /// A permission request made in auto mode while the pane works, until
+    /// its Notification says it reached you or the call goes on.
+    pub asked: Option<Asked>,
 }
 
 impl PaneAgent {
@@ -136,6 +153,7 @@ impl PaneAgent {
             && self.wait_call.is_none()
             && self.loop_name.is_none()
             && self.phase.is_none()
+            && self.asked.is_none()
     }
 
     /// The pane's record, as `switchboard list` shows it.
@@ -176,6 +194,8 @@ pub struct Hook {
     /// The tool call the hook fires for (`tool_use_id`); empty when it
     /// names none.
     pub call: String,
+    /// The session's permission mode (`default`, `auto`, ...).
+    pub permission_mode: String,
 }
 
 impl Hook {
@@ -266,6 +286,7 @@ impl Hook {
             session_id: text(payload, "session_id").unwrap_or_default(),
             agent: text(payload, "agent_id").unwrap_or_default(),
             call: text(payload, "tool_use_id").unwrap_or_default(),
+            permission_mode: text(payload, "permission_mode").unwrap_or_default(),
         }
     }
 
@@ -497,6 +518,21 @@ impl Agents {
             return false;
         }
         let agent = self.panes.entry(pane).or_default();
+        // A request auto mode may allow is work until a prompt reaches you.
+        // One made while the pane already waits on you leaves that wait.
+        if hook.event == "PermissionRequest" && hook.permission_mode == "auto" {
+            if agent.state == Some(State::Waiting) {
+                return false;
+            }
+            agent.asked = Some(Asked {
+                wait: hook.wait.clone(),
+                by: hook.waiter(),
+                call: (!hook.call.is_empty()).then(|| hook.call.clone()),
+            });
+            let changed = set_state(agent, Some(State::Working), now, front);
+            details(agent, Some(State::Working), hook);
+            return changed;
+        }
         if hook.event == "PostCompact" && hook.source == "manual" {
             state = None;
         }
@@ -521,11 +557,42 @@ impl Agents {
     /// its state changed.
     pub fn wait(&mut self, pane: PaneId, now: i64, front: bool) -> bool {
         let agent = self.panes.entry(pane).or_default();
+        let already = agent.state == Some(State::Waiting);
         let changed = set_state(agent, Some(State::Waiting), now, front);
+        // A request auto mode kept as work reached you after all, unless
+        // the pane already waited on something else.
+        if let Some(asked) = agent.asked.take()
+            && !already
+        {
+            agent.wait = Some(asked.wait);
+            agent.wait_by = Some(asked.by);
+            agent.wait_call = asked.call;
+        }
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
         changed
+    }
+
+    /// A pane waiting on a permission request whose hook named no tool
+    /// (`permission: ` alone) takes the words of the call `call` its
+    /// transcript shows unanswered, when the wait is the conversation's own
+    /// (a subagent's calls are in a transcript of their own) and on that
+    /// call, or on none named while `only` says it is the one call
+    /// unanswered. Gives whether its wait changed.
+    pub fn name_wait(&mut self, pane: PaneId, call: &str, only: bool, words: &str) -> bool {
+        let Some(agent) = self.panes.get_mut(&pane) else {
+            return false;
+        };
+        let unnamed = agent.state == Some(State::Waiting)
+            && agent.wait.as_deref().map(str::trim_end) == Some("permission:")
+            && agent.wait_by == Some(Waiter::Conversation)
+            && agent.wait_call.as_ref().map_or(only, |c| c == call);
+        if !unnamed || words.trim().is_empty() {
+            return false;
+        }
+        agent.wait = Some(one_line(&short(&format!("permission: {words}"), 80)));
+        true
     }
 
     /// The conversation itself ran `hook` at `at` (ms), kept while the
@@ -609,6 +676,7 @@ impl Agents {
         }
         agent.state = None;
         agent.since = 0;
+        agent.asked = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -643,6 +711,7 @@ impl Agents {
         agent.wait = None;
         agent.wait_by = None;
         agent.wait_call = None;
+        agent.asked = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -660,6 +729,7 @@ impl Agents {
         agent.since = 0;
         agent.wait_by = None;
         agent.wait_call = None;
+        agent.asked = None;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -785,6 +855,25 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
     if hook.begins_anew() {
         // A loop's step is set again by the loop as it goes on.
         agent.phase = None;
+    }
+    // A request kept aside ends with its call going on, or the turn.
+    let tool_event = matches!(
+        hook.event.as_str(),
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
+    );
+    let ends_asked = match &agent.asked {
+        Some(asked) if tool_event => {
+            asked.by == hook.waiter()
+                && (hook.call.is_empty() || asked.call.as_ref().is_none_or(|c| *c == hook.call))
+        }
+        Some(_) => matches!(
+            hook.event.as_str(),
+            "UserPromptSubmit" | "Stop" | "SessionStart" | "SessionEnd"
+        ),
+        None => false,
+    };
+    if ends_asked {
+        agent.asked = None;
     }
     match state {
         None | Some(State::Done) => {
@@ -1072,6 +1161,101 @@ mod tests {
             },
         );
         assert!(!c.asked(P, 150_000, "q", "Old?", 201, false));
+    }
+
+    #[test]
+    fn a_request_auto_mode_may_allow_is_work_until_it_reaches_you() {
+        let mut a = Agents::default();
+        let test = json!({"tool_name": "Bash", "tool_use_id": "b1", "permission_mode": "auto",
+            "tool_input": {"command": "cargo test", "description": "Run the tests"}});
+        on(&mut a, "PreToolUse", test.clone(), 100);
+        assert!(!on(&mut a, "PermissionRequest", test.clone(), 101));
+        let agent = a.get(P).unwrap();
+        assert_eq!(agent.state, Some(State::Working));
+        assert_eq!(agent.activity.as_deref(), Some("Run the tests"));
+        assert_eq!(agent.wait, None);
+        // The prompt reached you: its Notification makes it a wait.
+        assert!(a.wait(P, 107, false));
+        let agent = a.get(P).unwrap();
+        assert_eq!(agent.wait.as_deref(), Some("permission: Bash cargo test"));
+        assert_eq!(agent.wait_by, Some(Waiter::Conversation));
+        assert_eq!(agent.wait_call.as_deref(), Some("b1"));
+        assert_eq!(agent.asked, None);
+        on(&mut a, "PostToolUse", test.clone(), 120);
+        assert_eq!(a.state(P), Some(State::Working));
+
+        // Allowed: the call ends before any Notification, and what was asked
+        // goes with it.
+        on(&mut a, "PreToolUse", test.clone(), 130);
+        on(&mut a, "PermissionRequest", test.clone(), 131);
+        assert!(!on(&mut a, "PostToolUse", test.clone(), 140));
+        let agent = a.get(P).unwrap();
+        assert_eq!(agent.state, Some(State::Working));
+        assert_eq!(agent.asked, None);
+        // A compaction in the background keeps what was asked.
+        on(&mut a, "PermissionRequest", test.clone(), 141);
+        on(&mut a, "PreCompact", json!({"trigger": "auto"}), 142);
+        assert!(a.get(P).unwrap().asked.is_some());
+        on(&mut a, "PostToolUse", test.clone(), 143);
+        // A Notification after that is a wait as before, with no words.
+        assert!(a.wait(P, 150, false));
+        assert_eq!(a.get(P).unwrap().wait, None);
+
+        // One made while a question waits leaves the question's wait.
+        on(&mut a, "PreToolUse", ask("q1"), 160);
+        on(
+            &mut a,
+            "PermissionRequest",
+            json!({"agent_id": "s1", "tool_name": "Bash",
+            "permission_mode": "auto", "tool_input": {"command": "ls"}}),
+            161,
+        );
+        assert_eq!(a.get(P).unwrap().asked, None);
+        a.wait(P, 167, false);
+        assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("asks: Which?"));
+        assert_eq!(a.get(P).unwrap().wait_by, Some(Waiter::Conversation));
+
+        // Another mode waits at once.
+        let mut b = Agents::default();
+        let push = json!({"tool_name": "Bash", "permission_mode": "default",
+            "tool_input": {"command": "git push"}});
+        assert!(on(&mut b, "PermissionRequest", push, 100));
+        assert_eq!(b.state(P), Some(State::Waiting));
+        assert_eq!(
+            b.get(P).unwrap().wait.as_deref(),
+            Some("permission: Bash git push")
+        );
+    }
+
+    #[test]
+    fn a_permission_wait_with_no_tool_takes_the_transcripts_words() {
+        let mut a = Agents::default();
+        assert!(!a.name_wait(P, "", true, "Bash: ls"), "nothing waits");
+        // A subagent's, or one on another call, is left alone.
+        on(&mut a, "PermissionRequest", json!({"agent_id": "s1"}), 90);
+        assert!(!a.name_wait(P, "", true, "Bash: ls"));
+        on(
+            &mut a,
+            "PermissionRequest",
+            json!({"tool_use_id": "t1"}),
+            95,
+        );
+        assert!(!a.name_wait(P, "t2", true, "Bash: ls"));
+        on(&mut a, "PermissionRequest", json!({}), 100);
+        assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("permission: "));
+        assert!(
+            !a.name_wait(P, "", false, "Bash: ls"),
+            "one of several unanswered calls"
+        );
+        assert!(a.name_wait(P, "", true, "Bash: sleep 30"));
+        assert_eq!(
+            a.get(P).unwrap().wait.as_deref(),
+            Some("permission: Bash: sleep 30")
+        );
+        assert!(!a.name_wait(P, "", true, "Read: x"), "a named wait is kept");
+        on(&mut a, "PreToolUse", ask("q"), 110);
+        assert!(!a.name_wait(P, "", true, "Read: x"));
+        assert_eq!(a.get(P).unwrap().wait.as_deref(), Some("asks: Which?"));
     }
 
     #[test]

@@ -341,6 +341,81 @@ fn a_request_you_denied_hands_the_tab_back_as_idle_a_parked_claude_s_too() {
 }
 
 #[test]
+fn a_request_auto_mode_allows_keeps_the_tab_working_until_a_prompt_reaches_you() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "auto"}));
+    let test = json!({"tool_name": "Bash", "tool_use_id": "b1", "permission_mode": "auto",
+        "tool_input": {"command": "cargo test", "description": "Run the tests"}});
+    let state = |server: &TestServer| pane_of(&server.list(), &pane)["agent"].clone();
+
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "test it"}),
+    );
+    for event in ["PreToolUse", "PermissionRequest", "PostToolUse"] {
+        hook(&server, &pane, event, test.clone());
+        let agent = state(&server);
+        assert_eq!(agent["state"], "working", "after {event}");
+        assert_eq!(agent["wait"], Value::Null, "after {event}");
+    }
+
+    // A prompt that does reach you comes with its Notification.
+    hook(&server, &pane, "PreToolUse", test.clone());
+    hook(&server, &pane, "PermissionRequest", test.clone());
+    hook(
+        &server,
+        &pane,
+        "Notification",
+        json!({"notification_type": "permission_prompt", "message": "Claude needs your permission"}),
+    );
+    let agent = state(&server);
+    assert_eq!(agent["state"], "waiting");
+    assert_eq!(agent["wait"], "permission: Bash cargo test");
+}
+
+#[test]
+fn a_permission_request_with_no_tool_takes_the_transcripts_words() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(
+        &server.home,
+        pid,
+        json!({"sessionId": "unnamed", "cwd": "/work"}),
+    );
+    let dir = server.home.join(".claude/projects/-work");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("unnamed.jsonl");
+    say(
+        &file,
+        json!({"type": "user", "message": {"content": "wait a bit"}}),
+    );
+    say(
+        &file,
+        json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "sleep 30"}}]}}),
+    );
+    hook(
+        &server,
+        &pane,
+        "UserPromptSubmit",
+        json!({"prompt": "wait a bit"}),
+    );
+    hook(&server, &pane, "PermissionRequest", json!({}));
+    let list = wait_list(&server, "the wait named from the transcript", |l| {
+        pane_of(l, &pane)["agent"]["wait"] == "permission: Bash: sleep 30"
+    });
+    assert_eq!(pane_of(&list, &pane)["agent"]["state"], "waiting");
+}
+
+#[test]
 fn work_you_interrupted_hands_the_tab_back_as_idle_until_the_next_prompt() {
     let server = TestServer::start();
     settings(&server, json!({}));

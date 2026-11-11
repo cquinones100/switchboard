@@ -132,7 +132,8 @@ impl Server {
         let changed = if hook.event == "Notification" {
             // Permission prompts and questions are Claude waiting on you. The
             // PermissionRequest hook has usually said so already, since this
-            // one only comes once a prompt has waited about six seconds.
+            // one only comes once a prompt has waited about six seconds. In
+            // auto mode it is this one that makes the request a wait.
             let waits =
                 QUESTION_KINDS.contains(&hook.kind.as_str()) && self.agents.wait(pane, now, front);
             self.banner(tab, &hook.message);
@@ -635,6 +636,19 @@ impl Server {
             return false;
         }
         self.redraw_tab(tab);
+        true
+    }
+
+    /// A permission request whose hook named no tool takes the words of
+    /// the call the pane's transcript shows it stopped on (`Agents::name_wait`).
+    /// Gives whether it changed.
+    pub fn agent_name_wait(&mut self, pane: PaneId, call: &str, only: bool, words: &str) -> bool {
+        if !self.agents.name_wait(pane, call, only, words) {
+            return false;
+        }
+        if let Some(tab) = self.panes.get(&pane).map(|s| s.tab) {
+            self.redraw_tab(tab);
+        }
         true
     }
 
