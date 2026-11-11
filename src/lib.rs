@@ -67,9 +67,13 @@
 //! - `awake`: keeping the computer awake while tabs work or autopilot has
 //!   tabs open, or until you say.
 //!
+//! - `demo`: `switchboard demo`, a workspace of made-up data reaching no
+//!   service, with the strict stand-in services the tests share
+//!   (`demo::services`).
+//!
 //! And for the unit tests alone, the integration tests' strict stand-ins
-//! for the programs and services Switchboard reaches (tests/common), so
-//! each kind is written once: `stand_in` and `fake_http`.
+//! for the programs Switchboard runs (tests/common), so each kind is
+//! written once: `stand_in`, and `fake_http`, the demo's services.
 
 pub mod agent;
 pub mod autopilot;
@@ -77,6 +81,7 @@ pub mod awake;
 pub mod cmd;
 pub mod connector;
 pub mod day;
+pub mod demo;
 pub mod diff;
 pub mod extras;
 pub mod facts;
@@ -110,8 +115,7 @@ pub mod views;
 pub mod worktree;
 
 #[cfg(all(test, feature = "net"))]
-#[path = "../tests/common/http.rs"]
-pub(crate) mod fake_http;
+pub(crate) use demo::services as fake_http;
 #[cfg(test)]
 #[path = "../tests/common/stand_in.rs"]
 pub(crate) mod stand_in;

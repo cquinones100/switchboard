@@ -14,12 +14,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::vte::ansi::Processor;
 use switchboard::mux::proto::{self, ClientMsg, ServerMsg};
+use switchboard::ui::headless::Screen;
 
 pub mod http;
 pub mod stand_in;
@@ -505,26 +501,12 @@ impl Drop for TestServer {
     }
 }
 
-struct Size(usize, usize);
-
-impl Dimensions for Size {
-    fn total_lines(&self) -> usize {
-        self.1
-    }
-    fn screen_lines(&self) -> usize {
-        self.1
-    }
-    fn columns(&self) -> usize {
-        self.0
-    }
-}
-
-/// A client attached over the socket, keeping what it was sent as a screen.
+/// A client attached over the socket, keeping what it was sent as a screen
+/// (`switchboard::ui::headless::Screen`, the headless client's).
 pub struct TestClient {
     stream: UnixStream,
     rx: mpsc::Receiver<ServerMsg>,
-    term: Term<VoidListener>,
-    parser: Processor,
+    term: Screen,
     pub exit: Option<Option<String>>,
     /// Every byte of output, for tests that look for an escape sequence.
     pub raw: Vec<u8>,
@@ -576,16 +558,11 @@ impl TestClient {
                 }
             }
         });
-        let term = Term::new(
-            Config::default(),
-            &Size(cols as usize, rows as usize),
-            VoidListener,
-        );
+        let term = Screen::new(cols, rows);
         TestClient {
             stream,
             rx,
             term,
-            parser: Processor::new(),
             exit: None,
             raw: Vec::new(),
         }
@@ -612,7 +589,7 @@ impl TestClient {
 
     /// A resize from a terminal that says its window's size in pixels too.
     pub fn resize_pixels(&mut self, cols: u16, rows: u16, xpixel: u16, ypixel: u16) {
-        self.term.resize(Size(cols as usize, rows as usize));
+        self.term.resize(cols, rows);
         self.stream
             .write_all(&proto::encode_client(&ClientMsg::Resize {
                 cols,
@@ -640,7 +617,7 @@ impl TestClient {
             match msg {
                 ServerMsg::Output(bytes) => {
                     self.raw.extend_from_slice(&bytes);
-                    self.parser.advance(&mut self.term, &bytes);
+                    self.term.feed(&bytes);
                 }
                 ServerMsg::Exit { message } => self.exit = Some(message),
                 ServerMsg::Reply { .. } => {}
@@ -649,46 +626,34 @@ impl TestClient {
         }
     }
 
-    /// The screen as lines of text, trailing blanks trimmed.
+    /// The screen as lines of text, a character a cell, trailing blanks
+    /// trimmed.
     pub fn screen(&mut self) -> Vec<String> {
         self.pump(Duration::from_millis(50));
-        let grid = self.term.grid();
-        (0..grid.screen_lines())
-            .map(|y| {
-                let row = &grid[Line(y as i32)];
-                let line: String = (0..grid.columns()).map(|x| row[Column(x)].c).collect();
-                line.trim_end().to_string()
-            })
-            .collect()
+        self.term.lines()
     }
 
     /// The colour a cell's text is drawn in, when it is given as red, green
     /// and blue.
     pub fn fg_rgb(&mut self, line: usize, col: usize) -> Option<(u8, u8, u8)> {
         self.pump(Duration::from_millis(20));
-        let cell = &self.term.grid()[Line(line as i32)][Column(col)];
-        match cell.fg {
-            alacritty_terminal::vte::ansi::Color::Spec(c) => Some((c.r, c.g, c.b)),
-            _ => None,
-        }
+        self.term.fg_rgb(line, col)
     }
 
     /// The first cell on the screen holding `c`, as (line, column).
     pub fn find_cell(&mut self, c: char) -> Option<(usize, usize)> {
         self.pump(Duration::from_millis(20));
-        let grid = self.term.grid();
-        (0..grid.screen_lines()).find_map(|y| {
-            (0..grid.columns())
-                .find(|x| grid[Line(y as i32)][Column(*x)].c == c)
-                .map(|x| (y, x))
-        })
+        self.term.find_cell(c)
     }
 
     /// The combining marks a cell's character carries.
     pub fn marks(&mut self, line: usize, col: usize) -> Vec<char> {
         self.pump(Duration::from_millis(20));
-        let cell = &self.term.grid()[Line(line as i32)][Column(col)];
-        cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default()
+        self.term
+            .raw_cell(line, col)
+            .zerowidth()
+            .map(<[char]>::to_vec)
+            .unwrap_or_default()
     }
 
     /// Waits until the screen satisfies `pred`, failing with the screen after `timeout`.

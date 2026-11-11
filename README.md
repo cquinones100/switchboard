@@ -44,6 +44,14 @@ switchboard
 
 As a plugin, a Claude session outside Switchboard runs none of its hooks, so the Slack relay hears only of sessions in the workspace.
 
+## See it first
+
+```
+switchboard demo
+```
+
+runs the workspace on made-up data, in a home of its own under `/tmp` that links nothing of yours and reaches no service: three tabs whose stand-in Claude works, asks and finishes, made-up PRs, tickets, a calendar and Slack messages from stand-ins for GitHub, Linear and Slack on this computer, and a notes folder. It needs nothing set up, not even Claude Code. `switchboard demo --clean` ends it and removes its home; the [guide](docs/guide.md#the-demo) has the rest.
+
 ## First keys
 
 `M` is Alt (Option on a Mac), and a capital letter is with Shift: `M-N` is Alt+Shift+n.

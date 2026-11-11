@@ -212,8 +212,20 @@ fn is_program(file: &Path) -> bool {
     std::fs::metadata(file).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Chrome on this computer, if any.
+/// Chrome on this computer for the views, if any; none in `switchboard
+/// demo` (`SWITCHBOARD_DEMO`), whose views must reach no service, and a
+/// page drawn here loads its scripts from the web.
 pub fn find_chrome() -> Option<PathBuf> {
+    if std::env::var_os("SWITCHBOARD_DEMO").is_some_and(|d| !d.is_empty()) {
+        return None;
+    }
+    any_chrome()
+}
+
+/// Chrome on this computer, if any, past the demo's stand-ins on its PATH:
+/// for a page of the computer's own that loads nothing from the web (the
+/// headless client's picture of a screen, src/ui/headless.rs).
+pub fn any_chrome() -> Option<PathBuf> {
     let apps: Vec<PathBuf> = if cfg!(target_os = "macos") {
         APPS.iter()
             .flat_map(|a| [Path::new("/").join(a), crate::paths::home().join(a)])
@@ -221,7 +233,14 @@ pub fn find_chrome() -> Option<PathBuf> {
     } else {
         Vec::new()
     };
-    chrome_in(std::env::var_os("PATH").as_deref(), &apps)
+    let path = std::env::var_os("PATH").map(|path| {
+        let demo = std::env::var_os("SWITCHBOARD_DEMO").filter(|d| !d.is_empty());
+        let dirs = std::env::split_paths(&path)
+            .filter(|dir| demo.as_ref().is_none_or(|d| !dir.starts_with(d)))
+            .collect::<Vec<_>>();
+        std::env::join_paths(dirs).unwrap_or_default()
+    });
+    chrome_in(path.as_deref(), &apps)
 }
 
 // ── Pages ───────────────────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
-//! The tests' stand-ins themselves (tests/common/stand_in.rs and
-//! tests/common/http.rs): each takes the calls Switchboard makes of the real
+//! The tests' stand-ins themselves (tests/common/stand_in.rs and the
+//! services tests/common/http.rs takes from src/demo/services.rs), and the
+//! demo's stand-in programs (src/demo/stand_in.rs): each takes the calls Switchboard makes of the real
 //! program or service, word for word as the code makes them, and refuses a
 //! wrong one as the real one does (a name it doesn't answer to, an option it
 //! doesn't have or one missing its value, a missing argument, stdin it needs
@@ -1231,4 +1232,41 @@ fn slack_answers_only_its_bot_token_at_its_methods() {
         .0,
         404
     );
+}
+
+#[test]
+fn the_demos_claude_and_gh_refuse_what_they_dont_stand_in_for() {
+    let dir = TempDir::new("sbsi");
+    let demo = |args: &[&str]| {
+        Command::new(common::BIN)
+            .arg("demo-stand-in")
+            .args(args)
+            .env_clear()
+            .env("HOME", dir.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let token = demo(&["gh", "auth", "token"]);
+    assert!(token.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&token.stdout).trim(),
+        switchboard::demo::fixtures::GITHUB_TOKEN
+    );
+    let pr = demo(&["gh", "pr", "view", "12"]);
+    assert!(!pr.status.success());
+    assert!(String::from_utf8_lossy(&pr.stderr).contains("asked: pr view 12"));
+    for asked in [&["claude", "-p", "hi"][..], &["claude", "mcp", "get", "x"]] {
+        let out = demo(asked);
+        assert!(!out.status.success(), "{asked:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("reaches no model"));
+    }
+    let secret = demo(&[
+        "security",
+        "find-generic-password",
+        "-s",
+        "github-token",
+        "-w",
+    ]);
+    assert_eq!(secret.status.code(), Some(44), "no secrets.json, no secret");
 }

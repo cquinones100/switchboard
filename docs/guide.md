@@ -20,6 +20,7 @@ Every feature, key and command of Switchboard, as the `switchboard` binary has t
 - [Landing and reviewing](#landing-and-reviewing)
 - [The Slack relay](#the-slack-relay)
 - [Staying up to date](#staying-up-to-date)
+- [The demo](#the-demo)
 - [Your own files](#your-own-files)
 - [Every setting](#every-setting)
 - [Commands for scripts](#commands-for-scripts)
@@ -1872,6 +1873,29 @@ Building runs the PR's code (its `build.rs` and proc macros), so cargo builds in
 
 `--print` prints the command that attaches to it, sealed, for another terminal, and `--detached` starts its server with no client (a session made in it by Switchboard's own binary in a sandbox that reaches that socket alone) and prints the prefix that drives it, the try's binary in the sandbox. `--run <command>...` runs a command there from the worktree and exits with its status, the PR's tests for one (`--run cargo test`), with localhost (any service listening there, yours included) and the sockets in a folder under `/tmp` named as the tests name theirs allowed too. A `--run` again on the same worktree takes up the home the last one made, its crates and build kept, while its `Cargo.lock` is the same; otherwise the home is made again from nothing. `--clean` stops its server from the same small sandbox, removes its home (a link the try put in its place removed as a link) and its rules. It runs a worktree `wtpr --untrusted` made, one of your own, or one listed in `trusted-dirs`.
 
+## The demo
+
+`switchboard demo` runs the workspace on made-up data, to see what it does before setting anything up, to show it to someone, or to test a view without anyone's screen:
+
+```text
+switchboard demo               lay it out (the first time) and attach in this terminal
+switchboard demo --detached    start its server with no client and print the prefix
+                               that reaches it, for list, send-keys and headless
+switchboard demo --print       print the environment for another terminal:
+                               eval "$(switchboard demo --print)", then switchboard
+switchboard demo --reset       lay its data out again from nothing
+switchboard demo --clean       end its server and services and remove its home
+switchboard demo --tour <dir> [--size <cols>x<rows>]
+                               walk its boards with a headless client and save a
+                               picture of each in <dir>
+```
+
+Its home is `/tmp/sb-demo-<uid>`, made only you can read, and refused when something else is there (a link, or a folder that isn't yours). It links nothing of yours: no Keychain, gh sign-in, `~/.config`, Claude sign-in, dotfiles or `~/.local/share`, and its server runs with an environment made from nothing but your terminal's own variables, so no token or agent socket of yours comes along. It runs the binary you ran, building nothing.
+
+What it shows is made up: three repositories under `acme/`, each in `~/code` with a short history, an origin of its own in the home and a worktree for each open PR; three Claude tabs on those worktrees, a shell, and Notes on a notes folder with a checklist and its plan. GitHub, Linear and Slack are stand-ins on this computer (`switchboard demo-services`, beside the server), answering with the demo's PRs (in each of the PR board's columns, with checks passing, failing and running), tickets (`ABC-…`), Linear inbox and Slack's sign-in, as strict as the real ones about how they are asked, so a lookup the demo answers wrong is kept in its `~/.local/state/demo/refused.log`; a view whose lookup the demo has no answer for shows nothing. The calendar and Slack views read what `/today` and `/slack-updates` would have saved: today's meetings, one about to start, and a mention, a direct message and a thread.
+
+The programs the workspace runs by name are stand-ins on its PATH (`switchboard demo-stand-in`): a link or file opened goes to the demo's `~/.local/state/demo/desktop-log`, never your desktop, and what the workspace copies through the clipboard tools to its `clipboard` file (a copy you make yourself in the terminal attached to it, with `y` in copy mode, reaches that terminal's clipboard as it would in any program); `gh` answers `auth token` alone, `security` reads the demo's own `secrets.json` rather than your Keychain; and `claude` is a stand-in that plays a script in each tab, sending Switchboard's hooks as Claude Code does, so the sidebar shows one tab working, one waiting on your yes to a push, and one asking a question, which Enter answers. It reaches no model: `claude -p` is refused, and past its script it answers that it is a stand-in. The PR and ticket image views find no Chrome in the demo, since their page loads its scripts from the web; a page you open yourself in the link view is still fetched from where its link points. Its settings turn on UX 2.0 and leave off what would need a model or a connector (the Slack look, the standup, meeting and todo notes, the diff's story and questions) and the update check.
+
 ## Your own files
 
 Everything of your own is in `~/.config/switchboard/`, which nothing writes over but Settings, so an update leaves it be. Each file is read after Switchboard's defaults, so what it says wins, and Settings lists each setting in these files under the file's name.
@@ -2176,12 +2200,13 @@ switchboard capture-pane -t "$pane" -S 200
 
 A pane closes when its program ends, so a command given to `new-tab` or `split` takes its pane with it when it finishes; type it into the shell, as above, to keep what it printed. Each of these says how it is used with `--help` after its name.
 
-Five more commands are programs of their own:
+Six more commands are programs of their own:
 
 - `switchboard tabs` prints a line per pane of every tab, tab-separated: the tab's number, the pane's place (`main:@3.%12`), the tab's name as the tab bar shows it, Claude's state there (blank when idle), the program in front, and the directory; then, where the pane runs Claude, its session ID, its process ID, the name its row in Claude Code's `ListAgents` shows, and its address (`uds:` and its messaging socket), which `SendMessage` takes as its `to`, blank where it runs none. Claude reads it to see what the other tabs are doing and to reach another tab's Claude. `--json` prints the same as an array of objects (`tab`, `pane`, `name`, `state`, `program`, `dir`, `session`, `pid`, `agent`, `address`, a blank one null), for scripts.
 - `switchboard respawn [-t pane] [-c dir] <command> [args...]` replaces a pane's program with another in the same pane, which keeps its id, place and tab, and leaves a shell there when it ends. `wt`, `wtn`, `wtb` and `wtpr` run as the worktree commands' shell functions. The arguments are words of their own, never read by a shell. Skills use it to hand a tab over to the work it opens.
 - `switchboard landing [<dir>]` says how a repository lands its work, through a PR or straight on its default branch, and `switchboard apply-actions <repo> <from> <to>` prints what a landed change needs to take effect, and `switchboard apply install <repo>` or `switchboard apply relay` does Switchboard's part of it ("Landing: `/queue-and-clean`").
 - `switchboard setting <key>` prints one of Settings' values as it stands, `on` or `off`, or the choice (`switchboard setting update_check` prints `hourly`); `switchboard setting <key> <value>` changes it as Settings would, and `switchboard setting <key> --reset` gives it its default back.
+- `switchboard headless [--size <cols>x<rows>] [--session <name>]` attaches a client with no terminal and prints its id; `switchboard headless-keys <id> <key>...` types keys by name into it (`M-Space`, `]`, `j`, `Enter`) as a terminal sends them, and `switchboard headless-screen <id>` prints its whole screen, the panes, the sidebar, mission control and the boxes over them, as text, `--ansi` with its colors, or `--png <file>` as a picture drawn by headless Chrome. `switchboard headless --stop <id>` detaches it. It reaches the server the other commands do, so run it with a demo's or a try's prefix; the workspace you are in is refused unless `--yes` is given, since a second client there takes its screen's size and sees what you see.
 - `switchboard platform <what>` does what differs between macOS and Linux, for shell scripts: `name`, `secret <service> [-a account]`, `secret-set <service> [-a account]` (the secret read from stdin), `copy` (stdin to the clipboard), `paste`, `notify <title> <text>`, `presence` (idle milliseconds and whether the screen is locked), `open <file or link>`, `front-app` and `chrome-local-state`.
 
 `switchboard help` lists every command, and `switchboard --version` prints the version and the commit it was built from.

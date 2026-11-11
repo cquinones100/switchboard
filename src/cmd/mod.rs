@@ -15,6 +15,8 @@ pub mod claude_here;
 pub mod claude_plugin_dirs;
 pub mod claude_reply;
 pub mod codex_review;
+pub mod demo;
+pub mod headless;
 pub mod land_lock;
 pub mod landing;
 pub mod leak_check;
@@ -77,6 +79,36 @@ pub const COMMANDS: &[Command] = &[
         name: "try",
         run: try_::main,
         about: "Build a Switchboard worktree and run it under a home of its own (--detached, --print, --clean; --sealed for someone else's code, in a sandbox)",
+    },
+    Command {
+        name: "demo",
+        run: demo::main,
+        about: "The workspace on made-up data, in a home of its own that links nothing of yours and reaches no service (--detached, --print, --reset, --clean, --tour <dir>)",
+    },
+    Command {
+        name: "demo-services",
+        run: demo::services_main,
+        about: "The demo's stand-ins for GitHub, Linear and Slack (run by switchboard demo)",
+    },
+    Command {
+        name: "demo-stand-in",
+        run: crate::demo::stand_in::main,
+        about: "One of the demo's stand-in programs: claude, gh, the openers, the clipboard (run by the demo's scripts)",
+    },
+    Command {
+        name: "headless",
+        run: headless::main,
+        about: "Attach a client with no terminal and print its id, for headless-keys and headless-screen (--size, --session, --stop <id>)",
+    },
+    Command {
+        name: "headless-keys",
+        run: headless::keys_main,
+        about: "Type keys by name into a headless client, as a terminal would send them",
+    },
+    Command {
+        name: "headless-screen",
+        run: headless::screen_main,
+        about: "A headless client's whole screen, as text, --ansi with its colors, or --png <file>",
     },
     Command {
         name: "update",
@@ -315,6 +347,7 @@ pub const COMMANDS: &[Command] = &[
 /// `--help`; any other asked so says what it is (its line in `help`)
 /// rather than taking `--help` for a file, a link, a tab or a note.
 const OWN_HELP: &[&str] = &[
+    "demo",
     "respawn",
     "setting",
     "platform",

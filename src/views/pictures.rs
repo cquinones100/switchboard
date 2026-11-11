@@ -265,7 +265,7 @@ fn remove_dead_dirs(temp: &std::path::Path) {
 /// folder with a name no one can guess and only you can open, refusing one
 /// that is there already, so nothing another account made first is written
 /// through.
-fn private_dir(pid: u32) -> PathBuf {
+pub(crate) fn private_dir(pid: u32) -> PathBuf {
     use std::os::unix::fs::DirBuilderExt;
     let mut dir = std::env::temp_dir().join(format!("switchboard-view-{pid}"));
     for attempt in 0u32..16 {

@@ -29,6 +29,8 @@
 //! - `picker`: a filterable list, what fzf was, with nucleo-matcher.
 //! - `palette`: M-p, every command with a description (palette.sh).
 //! - `keylist`: the list of keys.
+//! - `headless`: a client with no terminal, for `switchboard headless`,
+//!   reading the whole screen through an emulator of its own.
 //! - `serve`: the server's side: opening them, input, timers, commands.
 //!
 //! The look follows the settings as they are when an overlay opens
@@ -51,6 +53,7 @@ use crate::settings;
 
 pub mod confirm;
 pub mod draw;
+pub mod headless;
 pub mod images;
 pub mod keylist;
 pub mod kit;

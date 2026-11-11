@@ -104,7 +104,7 @@ pub const TURNED_OFF: &[(&str, &str)] = &[
 /// folders and the paths Switchboard and Claude Code read ahead of `~`,
 /// which would send the try to your real ones, and those naming the
 /// workspace or tmux the command was run in.
-const LEFT_OUT: &[&str] = &[
+pub(crate) const LEFT_OUT: &[&str] = &[
     "SWITCHBOARD",
     "SWITCHBOARD_PANE",
     "SWITCHBOARD_STATE_DIR",
