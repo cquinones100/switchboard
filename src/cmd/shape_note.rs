@@ -400,7 +400,7 @@ impl Server {
                 };
                 let mut opened: Vec<TabId> = Vec::new();
                 for item in &items {
-                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item)), None, true)
+                    match server.new_tab(&session, Some(repo.clone()), Some(shape_tab(item)), None, crate::mux::server::Opened::Background)
                     {
                         Ok((tab, _)) => {
                             server.tab_to_end(tab);
@@ -412,11 +412,12 @@ impl Server {
                         }
                     }
                 }
+                server.front(client, &opened);
                 let n = opened.len();
                 server.say(
                     Some(client),
                     &format!(
-                        "Shaping {n} {} in {}, a tab each at the end",
+                        "Shaping {n} {} in {}, a tab each at the end, the first in front",
                         if n == 1 { "item" } else { "items" },
                         paths::tilde(&repo)
                     ),

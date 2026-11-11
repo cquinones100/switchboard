@@ -367,7 +367,7 @@ impl Server {
             Some(paths::home()),
             Some(command),
             Some(name.to_string()),
-            false,
+            crate::mux::server::Opened::Front,
         ) {
             self.say(Some(client), &format!("Couldn't open a tab for it: {e}"));
         }

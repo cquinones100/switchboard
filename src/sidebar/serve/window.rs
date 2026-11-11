@@ -111,15 +111,20 @@ impl Server {
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|| "switchboard".into());
         let command = vec![exe, "notifications".into()];
-        let (tab, pane) =
-            match self.new_tab(session, Some(paths::home()), Some(command), None, true) {
-                Ok(made) => made,
-                Err(e) => {
-                    let client = self.latest_client_of(session);
-                    self.say(client, &format!("Couldn't open the notifications: {e}"));
-                    return None;
-                }
-            };
+        let (tab, pane) = match self.new_tab(
+            session,
+            Some(paths::home()),
+            Some(command),
+            None,
+            crate::mux::server::Opened::Background,
+        ) {
+            Ok(made) => made,
+            Err(e) => {
+                let client = self.latest_client_of(session);
+                self.say(client, &format!("Couldn't open the notifications: {e}"));
+                return None;
+            }
+        };
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.insert(MARK.into(), "1".into());
             t.opts.insert("@tab_name".into(), "Notifications".into());

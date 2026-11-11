@@ -589,7 +589,13 @@ impl Server {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
-        if let Err(e) = self.start_loop_tab(&session, name, every, skill, false) {
+        if let Err(e) = self.start_loop_tab(
+            &session,
+            name,
+            every,
+            skill,
+            crate::mux::server::Opened::Front,
+        ) {
             self.say(Some(client), &format!("Couldn't open a {name} tab: {e}"));
         }
     }
@@ -678,7 +684,9 @@ impl Server {
             Some(0) => links::open_in_background(url),
             Some(_) => {
                 let command = worktree::tab_running("worktree-from-pr", "wtpr", &[url]);
-                if let Some(tab) = server.work_tab(client, &dir, command, true) {
+                if let Some(tab) =
+                    server.work_tab(client, &dir, command, crate::mux::server::Opened::Front)
+                {
                     server.front(client, &[tab]);
                 }
             }
@@ -771,7 +779,9 @@ impl Server {
                     return;
                 };
                 let command = worktree::tab_running("worktree-from-ticket", "wt", &[id]);
-                if let Some(tab) = server.work_tab(client, &repo, command, true) {
+                if let Some(tab) =
+                    server.work_tab(client, &repo, command, crate::mux::server::Opened::Front)
+                {
                     server.front(client, &[tab]);
                 }
             }

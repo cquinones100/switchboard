@@ -54,6 +54,19 @@ const HANG_UP_WAIT: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ClientId(pub u32);
 
+/// Where a new tab opens, by one rule: a tab that something you did opens
+/// (a key, a palette command, a menu's choice, a card's action, a command
+/// run without `-d`) comes to the front, so it is what you see; one the
+/// workspace opens on its own (autopilot's, the day's loop tabs, the
+/// Notifications window, the Slack relay's) stays behind the one in front.
+/// Several opened at once open behind and the first is fronted after
+/// (`Server::front`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Opened {
+    Front,
+    Background,
+}
+
 /// What the server task is told.
 pub enum Event {
     /// A terminal attached.
@@ -1458,15 +1471,15 @@ impl Server {
         Ok(())
     }
 
-    /// A new tab in a session, after its current one, made current unless
-    /// `background`; gives the tab and its pane.
+    /// A new tab in a session, after its current one, made current when
+    /// `opened` is `Opened::Front`; gives the tab and its pane.
     pub fn new_tab(
         &mut self,
         session: &str,
         cwd: Option<PathBuf>,
         command: Option<Vec<String>>,
         name: Option<String>,
-        background: bool,
+        opened: Opened,
     ) -> Result<(TabId, PaneId)> {
         let Some(s) = self.session(session) else {
             return Err(anyhow!("no session named {session}"));
@@ -1488,7 +1501,7 @@ impl Server {
             .map(|i| i + 1)
             .unwrap_or(s.tabs.len());
         s.tabs.insert(at, tab);
-        if !background {
+        if opened == Opened::Front {
             s.last = Some(s.current);
             s.current = tab;
         }
@@ -2415,7 +2428,7 @@ impl Server {
             }
             Action::NewTab => {
                 let cwd = pane.and_then(|p| self.pane_dir(p));
-                if let Err(e) = self.new_tab(&session, cwd, None, None, false) {
+                if let Err(e) = self.new_tab(&session, cwd, None, None, Opened::Front) {
                     self.say(Some(id), &format!("Couldn't open a tab: {e}"));
                 }
             }

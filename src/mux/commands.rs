@@ -67,7 +67,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use super::input::Key;
-use super::server::{Reply, Server};
+use super::server::{Opened, Reply, Server};
 use super::{Direction, PaneId, TabId};
 
 /// The commands the server runs, for the command table: `switchboard
@@ -586,7 +586,11 @@ impl Server {
                 Some(dir),
                 command,
                 a.value('n').map(str::to_string),
-                a.has('d'),
+                if a.has('d') {
+                    Opened::Background
+                } else {
+                    Opened::Front
+                },
             )
             .map_err(|e| format!("{e:#}"))?;
         if a.has('E') {

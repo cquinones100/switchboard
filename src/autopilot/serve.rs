@@ -1496,8 +1496,14 @@ impl Server {
         let Some(client) = self.latest_client() else {
             return;
         };
-        let Some(tab) = self.open_item_tab(client, &mode.repo, &mode.note, &item, &mode.target)
-        else {
+        let Some(tab) = self.open_item_tab(
+            client,
+            &mode.repo,
+            &mode.note,
+            &item,
+            &mode.target,
+            crate::mux::server::Opened::Background,
+        ) else {
             return;
         };
         if let Some(t) = self.tabs.get_mut(&tab) {

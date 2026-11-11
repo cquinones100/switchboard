@@ -479,7 +479,13 @@ impl Server {
             .filter(|p| p.is_dir())
             .unwrap_or_else(paths::home);
         let (tab, pane) = self
-            .new_tab(&session, Some(dir), None, closing.tab_name.clone(), false)
+            .new_tab(
+                &session,
+                Some(dir),
+                None,
+                closing.tab_name.clone(),
+                crate::mux::server::Opened::Front,
+            )
             .map_err(|e| format!("Couldn't open it: {e}"))?;
         if let Some(text) = super::closed::resume_line(closing.session.as_deref()) {
             self.send_later(TYPE_AFTER, Event::Usage(UsageEvent::Type { pane, text }));

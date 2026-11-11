@@ -66,6 +66,19 @@ fn splitting_tabs_and_closing() {
 }
 
 #[test]
+fn new_tab_comes_to_the_front_and_with_d_stays_behind() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let current = |i: usize| server.list()["sessions"][0]["tabs"][i]["current"] == true;
+    server.ok(&["new-tab", "-n", "asked"]);
+    assert!(current(1), "a tab you asked for is in front");
+    server.ok(&["new-tab", "-d", "-n", "behind"]);
+    assert_eq!(tabs(&server.list()), 3);
+    assert!(current(1), "-d leaves the tab in front where it is");
+}
+
+#[test]
 fn dragging_the_line_between_panes_resizes_them() {
     let server = TestServer::start();
     let mut client = server.attach(120, 30);

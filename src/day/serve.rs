@@ -723,7 +723,13 @@ impl Server {
             &dirs.state,
             &format!("{name}: out of date with no tab keeping it; opening one"),
         );
-        if let Err(e) = self.start_loop_tab(&session, name, every, skill, true) {
+        if let Err(e) = self.start_loop_tab(
+            &session,
+            name,
+            every,
+            skill,
+            crate::mux::server::Opened::Background,
+        ) {
             log(&dirs.state, &format!("{name}: couldn't open its tab: {e}"));
         }
     }
@@ -738,7 +744,7 @@ impl Server {
         name: &str,
         every: &str,
         skill: &str,
-        background: bool,
+        opened: crate::mux::server::Opened,
     ) -> anyhow::Result<crate::mux::TabId> {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
         let command = vec![
@@ -752,7 +758,7 @@ impl Server {
             Some(crate::paths::home()),
             Some(command),
             Some(name.into()),
-            background,
+            opened,
         )?;
         if let Some(t) = self.tabs.get_mut(&tab) {
             t.opts.insert("@loop_tab".into(), "1".into());

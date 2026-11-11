@@ -39,7 +39,7 @@ use regex::Regex;
 use crate::cmd::{work_recent, worktree_from_note};
 use crate::integrations::github;
 use crate::mux::keys::Action;
-use crate::mux::server::{ClientId, Event, Server};
+use crate::mux::server::{ClientId, Event, Opened, Server};
 use crate::mux::{PaneId, TabId};
 use crate::ui::picker::TYPED;
 use crate::ui::{Confirm, PickItem, Picker};
@@ -551,13 +551,13 @@ impl Server {
     }
 
     /// Opens a tab at the end of the client's session, in `dir`, running
-    /// `command`, in the background unless `front`. Says why when it can't.
+    /// `command`, in front or behind as `opened` says. Says why when it can't.
     pub(crate) fn work_tab(
         &mut self,
         client: ClientId,
         dir: &Path,
         command: Vec<String>,
-        front: bool,
+        opened: Opened,
     ) -> Option<TabId> {
         let session = self.clients.get(&client)?.session.clone();
         match self.new_tab(
@@ -565,7 +565,7 @@ impl Server {
             Some(dir.to_path_buf()),
             Some(command),
             None,
-            !front,
+            opened,
         ) {
             Ok((tab, _)) => {
                 self.tab_to_end(tab);
@@ -602,7 +602,7 @@ impl Server {
             return;
         }
         let command = worktree::tab_command("claude", "claude", &[]);
-        if let Some(tab) = self.work_tab(client, dir, command, true) {
+        if let Some(tab) = self.work_tab(client, dir, command, Opened::Front) {
             self.front(client, &[tab]);
             // Then what to call it, as new-tab.zsh ended in tab-name.zsh.
             if settings::is_on("name_new_tabs") {
@@ -645,7 +645,7 @@ impl Server {
                         "wt",
                         std::slice::from_ref(t),
                     );
-                    server.work_tab(client, &repo, command, false)
+                    server.work_tab(client, &repo, command, Opened::Background)
                 })
                 .collect();
             server.front(client, &tabs);
@@ -694,7 +694,7 @@ impl Server {
                         return;
                     }
                     let command = worktree::tab_running("worktree-from-branch", "wtb", &[name]);
-                    if let Some(tab) = server.work_tab(client, &repo, command, true) {
+                    if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) {
                         server.front(client, &[tab]);
                     }
                 });
@@ -725,7 +725,7 @@ impl Server {
                 Some(PrAsked::Url(url, _)) => {
                     let command = worktree::tab_running("worktree-from-pr", "wtpr", &[url]);
                     let here = found.here.clone();
-                    if let Some(tab) = server.work_tab(client, &here, command, true) {
+                    if let Some(tab) = server.work_tab(client, &here, command, Opened::Front) {
                         server.front(client, &[tab]);
                     }
                 }
@@ -740,7 +740,7 @@ impl Server {
                             "wtpr",
                             &[number.to_string()],
                         );
-                        if let Some(tab) = s.work_tab(c, &dir, command, true) {
+                        if let Some(tab) = s.work_tab(c, &dir, command, Opened::Front) {
                             s.front(c, &[tab]);
                         }
                     },
@@ -827,7 +827,7 @@ impl Server {
                         "claude",
                         &[format!("/review-pr {number}")],
                     );
-                    if let Some(tab) = server.work_tab(client, &repo, command, false)
+                    if let Some(tab) = server.work_tab(client, &repo, command, Opened::Front)
                         && let Some(t) = server.tabs.get_mut(&tab)
                     {
                         t.opts
@@ -980,7 +980,14 @@ impl Server {
                         let tabs: Vec<TabId> = chosen
                             .iter()
                             .filter_map(|item| {
-                                server.open_item_tab(client, &repo, &note, item, &target)
+                                server.open_item_tab(
+                                    client,
+                                    &repo,
+                                    &note,
+                                    item,
+                                    &target,
+                                    Opened::Background,
+                                )
                             })
                             .collect();
                         server.front(client, &tabs);
@@ -1108,9 +1115,14 @@ impl Server {
                                     at,
                                     move |server, client, target| {
                                         keep_note_repo(key, &repo);
-                                        if let Some(tab) = server
-                                            .open_item_tab(client, &repo, &note, &item, &target)
-                                        {
+                                        if let Some(tab) = server.open_item_tab(
+                                            client,
+                                            &repo,
+                                            &note,
+                                            &item,
+                                            &target,
+                                            Opened::Front,
+                                        ) {
                                             server.front(client, &[tab]);
                                         }
                                     },
@@ -1191,7 +1203,7 @@ impl Server {
             }
             let command =
                 worktree::tab_command("claude \"$@\"", "claude", &[format!("/plan-item {text}")]);
-            let Some(tab) = server.work_tab(client, &repo, command, true) else {
+            let Some(tab) = server.work_tab(client, &repo, command, Opened::Front) else {
                 return;
             };
             if let Some(t) = server.tabs.get_mut(&tab) {
@@ -1226,7 +1238,8 @@ impl Server {
         });
     }
 
-    /// A tab for one of a note's items, in the background, in the note's
+    /// A tab for one of a note's items, in front or behind as `opened` says
+    /// (autopilot's behind, one you start in front), in the note's
     /// repository: named after the item, cut short, its whole first line
     /// its full title, and linked to its note (`@tab_name`, `@tab_title`,
     /// `@tab_note`), running `wtn --item <line>` with the
@@ -1242,6 +1255,7 @@ impl Server {
         note: &str,
         item: &worktree_from_note::Item,
         target: &str,
+        opened: Opened,
     ) -> Option<TabId> {
         let mut command = vec!["env".to_string(), format!("WTN_NOTE={note}")];
         command.extend(worktree::tab_running(
@@ -1249,7 +1263,7 @@ impl Server {
             "wtn",
             &item_args(item.line, target),
         ));
-        let tab = self.work_tab(client, repo, command, false)?;
+        let tab = self.work_tab(client, repo, command, opened)?;
         // Named with the item cut short, for the tab bar and the second
         // status line, its whole first line kept as the tab's full title,
         // which M-T, the sidebar and mission control show.
@@ -1310,7 +1324,7 @@ impl Server {
                     .iter()
                     .filter_map(|t| {
                         let command = worktree::tab_command(&script, "shape", std::slice::from_ref(t));
-                        s.work_tab(c, &dir, command, false)
+                        s.work_tab(c, &dir, command, Opened::Background)
                     })
                     .collect();
                 s.front(c, &tabs);

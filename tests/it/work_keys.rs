@@ -304,6 +304,7 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
     wait("the item's tab", || tabs(&server).len() == before + 1);
     let tab = &tabs(&server)[before];
     assert_eq!(tab["options"]["@tab_name"], "Speed up the build");
+    assert_eq!(tab["current"], true, "in front, as a tab you asked for");
     assert_eq!(tab["options"]["@tab_note"], "Plan.md");
     wait("the note's repository kept", || {
         std::fs::read_to_string(server.state.join("work-recent.json"))
@@ -538,5 +539,5 @@ fn reviewing_a_contributors_pr_lists_forks_prs_and_starts_review_pr_in_the_main_
     assert_eq!(all.len(), before + 1);
     let tab = all.last().unwrap();
     assert_eq!(tab["options"]["@tab_name"], "Review PR #7");
-    assert_eq!(tab["current"], false, "in the background");
+    assert_eq!(tab["current"], true, "in front, as a tab you asked for");
 }

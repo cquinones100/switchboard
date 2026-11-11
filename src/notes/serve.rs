@@ -389,7 +389,7 @@ impl Server {
             Some(paths::home()),
             Some(notes_command(None)),
             None,
-            false,
+            crate::mux::server::Opened::Front,
         ) {
             Ok((tab, pane)) => {
                 // At the end, as notes-open.sh's new-window took the next

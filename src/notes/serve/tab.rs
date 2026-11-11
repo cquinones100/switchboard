@@ -161,7 +161,7 @@ impl Server {
             Some(dir.to_path_buf()),
             Some(command),
             None,
-            false,
+            crate::mux::server::Opened::Front,
         ) {
             Ok((tab, _)) => tab,
             Err(e) => {

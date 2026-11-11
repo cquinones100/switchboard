@@ -1905,7 +1905,12 @@ impl Server {
                     move |server, client, dir| {
                         let command =
                             crate::worktree::tab_command("claude \"$@\"", "claude", &[prompt]);
-                        if let Some(tab) = server.work_tab(client, &dir, command, true) {
+                        if let Some(tab) = server.work_tab(
+                            client,
+                            &dir,
+                            command,
+                            crate::mux::server::Opened::Front,
+                        ) {
                             if let Some(t) = server.tabs.get_mut(&tab) {
                                 t.opts.insert("@tab_name".into(), name);
                             }
@@ -2182,7 +2187,13 @@ impl Server {
         } else {
             paths::home()
         };
-        match self.new_tab(&session, Some(dir), command, name, false) {
+        match self.new_tab(
+            &session,
+            Some(dir),
+            command,
+            name,
+            crate::mux::server::Opened::Front,
+        ) {
             Ok((_, pane)) => Some(pane),
             Err(e) => {
                 self.say(Some(client), &format!("Couldn't open a tab: {e}"));
