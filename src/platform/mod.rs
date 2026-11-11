@@ -118,15 +118,26 @@ fn presence_said(said: &str) -> Option<Presence> {
 
 /// Keeps the computer from sleeping while it is held (`caffeinate -is` on
 /// macOS, a logind sleep inhibitor on Linux); dropped, it lets it sleep.
+/// Held by the Slack relay while it runs, and by the server while tabs work
+/// (src/awake).
 pub struct KeepAwake {
     #[allow(dead_code)]
-    inner: os::KeepAwake,
+    inner: Option<os::KeepAwake>,
+}
+
+impl KeepAwake {
+    /// One that holds nothing, for the unit tests.
+    #[cfg(test)]
+    pub fn stand_in() -> KeepAwake {
+        KeepAwake { inner: None }
+    }
 }
 
 /// Keeps the computer awake for as long as the value lives, or `None` when
-/// that can't be done here.
+/// that can't be done here. Blocking (it starts `caffeinate`, or asks
+/// logind): on the server, call it off its task.
 pub fn keep_awake(why: &str) -> Option<KeepAwake> {
-    os::keep_awake(why).map(|inner| KeepAwake { inner })
+    os::keep_awake(why).map(|inner| KeepAwake { inner: Some(inner) })
 }
 
 /// Claude Code's managed settings, the file an organization's policy puts

@@ -46,7 +46,7 @@ Shared by every part:
 | `settings` | The workspace's options: the schema in `assets/settings.json`, what you changed in `~/.config/switchboard/settings.json` |
 | `requests` | The request audit: every request to a service outside the computer counted as it is made |
 | `net` | HTTPS through one client per runtime (reqwest on rustls), each request counted |
-| `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, opening a file or link, and the sandbox a sealed try runs in (`sandbox`: its rules, as macOS's `sandbox-exec` reads them; Linux has none) |
+| `platform` | What differs between macOS and Linux: secrets, clipboard, notifications, presence, keeping the computer awake (`caffeinate`, a logind inhibitor; held by the Slack relay while it runs and by `awake` while tabs work), opening a file or link, and the sandbox a sealed try runs in (`sandbox`: its rules, as macOS's `sandbox-exec` reads them; Linux has none) |
 | `presence` | Whether you're at the computer |
 | `connector` | One call to a Claude connector through a headless Haiku |
 | `integrations` | GitHub and Linear over their APIs, refused while their setting is off but in a program you run yourself (`codex-review`, `wt`, `wtpr`, ...); a branch's PR looked for in the repository `gh repo set-default` names, else in origin and, in a fork's clone, the project its `upstream` remote names, in one query, origin's winning |
@@ -75,6 +75,7 @@ The workspace:
 | `diff` | `M-d`'s diff in a pane's place, from the merge base to the working tree, told as a story of its commits with what isn't committed in a last chapter, with questions about it answered, a commit or the working tree at a time; lazygit in a pane's place |
 | `notes` | The notes app, and Notes in the workspace |
 | `autopilot` | Working a note's checklist continuously: a tab opened for each item as the last lands, its line in mission control, and with UX 2.0 its board, whose side panel shows the chosen item's plan: the plan notes the note's items link are read with the note's queue, off the server's task (`worktree_from_note.rs`'s `plan_notes`), never as the board draws; `wtn` in such a tab starts Claude with the landing's one push allowed for the session (`worktree_from_note.rs`'s `push_rule`), which Claude Code's auto mode would otherwise judge |
+| `awake` | Keeping the computer awake while a tab's Claude works (background work and watches too) or autopilot has tabs open, or by hand until you say: counted on the server's tick from the sidebar's model and autopilot's counts, the hold taken and let go off the task, let go two minutes after everything is idle, and let go before an upgrade's exec, since `caffeinate -w` waits on the pid the new build keeps |
 | `relay` | The Slack relay, a program of its own reaching the tabs through the server |
 | `setup` | `switchboard setup`: Switchboard's plugin for Claude Code (its hooks, skills and instructions), or the same in `~/.claude` the old way, and which way (`way`); Claude Code's statusline and permissions; your CLAUDE.md; Option as Alt in a Mac's terminal; the tmux version's leftovers tidied; the optional parts reported; a new build's parts brought up to date |
 | `update` | `switchboard update`, and the server's look for a new release (and the pull of your rules' repository beside it) |

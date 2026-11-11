@@ -10,6 +10,7 @@ mod common;
 mod agent;
 mod apply_actions;
 mod autopilot;
+mod awake;
 mod batch_tabs;
 mod claude_here;
 mod claude_reply;

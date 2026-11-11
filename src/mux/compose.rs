@@ -900,6 +900,7 @@ mod tests {
             color: Some(green),
             button: true,
             health: Vec::new(),
+            awake: false,
         };
         let hits = draw_status(
             &mut frame.buf,

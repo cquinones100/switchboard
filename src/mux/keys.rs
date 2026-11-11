@@ -147,6 +147,9 @@ pub enum Action {
     /// server on it when it is new, keeping every pane, tab and terminal
     /// attached (src/mux/latest.rs, src/mux/upgrade.rs).
     Upgrade,
+    /// The computer kept awake whatever runs, until pressed again
+    /// (src/awake).
+    KeepAwake,
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::Command),
@@ -253,6 +256,7 @@ impl Action {
             "remind-tab" => Action::RemindTab,
             "tab-title" => Action::TabTitle,
             "upgrade" => Action::Upgrade,
+            "keep-awake" => Action::KeepAwake,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -329,6 +333,7 @@ impl Action {
             Action::StopSlackRelay => "stop-slack-relay".into(),
             Action::Update(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
+            Action::KeepAwake => "keep-awake".into(),
             Action::Notes(command) => command.name().into(),
             Action::Extra(command) => command.name(),
             Action::Autopilot(command) => command.name().into(),
@@ -423,6 +428,9 @@ impl Action {
             Action::StopSlackRelay => "Stop the Slack relay".into(),
             Action::Update(command) => command.about().into(),
             Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
+            Action::KeepAwake => {
+                "Keep the computer awake until I say, or back to only while tabs work".into()
+            }
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about().into(),
             Action::Autopilot(command) => command.about().into(),
@@ -577,6 +585,9 @@ impl Action {
             Action::Upgrade => {
                 "Builds the checkout the running binary came from, then the server runs the new build in its own process, handing it every pane, so nothing in a pane ends.".into()
             }
+            Action::KeepAwake => {
+                "Held whatever the tabs do, through a restart on a new build too, until chosen again, which goes back to Settings' \"Keep the computer awake while tabs work\" (keep_awake). A ☕ shows while it holds; the display still sleeps.".into()
+            }
             Action::Notes(command) => command.detail().into(),
             Action::Extra(command) => command.detail().into(),
             Action::Autopilot(command) => command.detail().into(),
@@ -635,6 +646,7 @@ impl Action {
             Action::SlackRelay | Action::StopSlackRelay => &["slack", "relay", "remote"],
             Action::Update(command) => command.tags(),
             Action::Upgrade => &["switchboard", "update", "restart", "upgrade"],
+            Action::KeepAwake => &["system", "sleep", "awake"],
             Action::Notes(command) => command.tags(),
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
@@ -705,6 +717,7 @@ impl Action {
             Action::RemindTab,
             Action::StopSlackRelay,
             Action::Upgrade,
+            Action::KeepAwake,
         ]
         .into_iter()
         .chain(views)
@@ -953,6 +966,7 @@ mod tests {
             Action::RemindTab,
             Action::TabTitle,
             Action::Upgrade,
+            Action::KeepAwake,
             Action::ShapeNote,
             Action::ShapeNewTicket,
             Action::PrImage,

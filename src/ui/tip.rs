@@ -109,6 +109,13 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
             "It runs again on its own. Mission".into(),
             "control (M-Space) shows when, under Loops.".into(),
         ],
+        "awake" => vec![
+            "☕ The computer stays awake while tabs".into(),
+            "work, and sleeps once they're idle.".into(),
+            String::new(),
+            "The display still sleeps, and so does".into(),
+            "a laptop closed with no display on it.".into(),
+        ],
         "updates" => vec![
             "Updates.".into(),
             String::new(),

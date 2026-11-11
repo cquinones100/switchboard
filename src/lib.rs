@@ -64,6 +64,8 @@
 //!   the AWS login, M-0 and `C-w` between panes.
 //! - `autopilot`: working a note's checklist continuously, a tab opened for
 //!   each item as the last lands.
+//! - `awake`: keeping the computer awake while tabs work or autopilot has
+//!   tabs open, or until you say.
 //!
 //! And for the unit tests alone, the integration tests' strict stand-ins
 //! for the programs and services Switchboard reaches (tests/common), so
@@ -71,6 +73,7 @@
 
 pub mod agent;
 pub mod autopilot;
+pub mod awake;
 pub mod cmd;
 pub mod connector;
 pub mod day;

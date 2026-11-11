@@ -115,6 +115,7 @@ impl Server {
             color: self.tab_color(s.current).map(Into::into),
             button: settings::is_on("palette_button"),
             health: self.status.health.clone(),
+            awake: self.awake.holding(),
         }
     }
 

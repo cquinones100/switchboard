@@ -146,6 +146,8 @@ pub enum Mark {
     Mention,
     Note,
     Comment,
+    /// The computer held awake while tabs work (src/awake).
+    Awake,
 }
 
 impl Mark {
@@ -186,6 +188,7 @@ impl Mark {
             Mark::Mention => ("@", Tone::Working),
             Mark::Note => ("✎", Tone::Landing),
             Mark::Comment => ("◇", Tone::Working),
+            Mark::Awake => ("☕", Tone::Dim),
         }
     }
 }
@@ -804,6 +807,7 @@ mod tests {
             Mark::Mention,
             Mark::Note,
             Mark::Comment,
+            Mark::Awake,
         ];
         let glyphs: Vec<&str> = marks.iter().map(|m| m.look().0).collect();
         let mut unique = glyphs.clone();

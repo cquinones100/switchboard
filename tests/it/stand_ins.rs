@@ -676,6 +676,50 @@ fn the_openers_open_what_is_there_and_refuse_the_rest() {
 }
 
 #[test]
+fn caffeinate_holds_while_the_process_it_watches_runs_and_refuses_the_rest() {
+    let dir = TempDir::new("si-caffeinate");
+    let bin = dir.path().join("bin");
+    let log = dir.path().join("log");
+    stand_in::desktop(&bin, &["caffeinate"], &log, &dir.path().join("clipboard"));
+    let caffeinate = bin.join("caffeinate");
+    // As src/platform/macos.rs's keep_awake calls it, watching a process
+    // that ends: it holds while that runs, then ends too.
+    let mut watched = Command::new("sleep").arg("1").spawn().unwrap();
+    let pid = watched.id().to_string();
+    // Reaped as it ends, since a process ended and not yet reaped is still
+    // there to be watched.
+    let reaped = std::thread::spawn(move || watched.wait());
+    let start = std::time::Instant::now();
+    took(&run(&caffeinate, &["-is", "-w", &pid], None, dir.path()));
+    reaped.join().unwrap().unwrap();
+    assert!(
+        start.elapsed() >= std::time::Duration::from_millis(900),
+        "it held while the process ran"
+    );
+    let said = std::fs::read_to_string(&log).unwrap();
+    let held_as = said
+        .strip_prefix(&format!("caffeinate -is -w {pid}\ncaffeinate is "))
+        .and_then(|rest| rest.trim().parse::<u32>().ok());
+    assert!(held_as.is_some(), "its call, then its pid: {said}");
+    refused(
+        &run(&caffeinate, &["-x"], None, dir.path()),
+        1,
+        "caffeinate: illegal option -- x",
+    );
+    refused(
+        &run(&caffeinate, &["-i", "-w"], None, dir.path()),
+        1,
+        "caffeinate: option requires an argument -- w",
+    );
+    assert_eq!(
+        stand_in::refusals(&bin)
+            .map(|r| r.lines().filter(|l| l.starts_with("caffeinate -")).count()),
+        Some(2),
+        "each refusal written down"
+    );
+}
+
+#[test]
 fn security_keeps_a_keychain_and_refuses_what_security_refuses() {
     let dir = TempDir::new("si-security");
     let keychain = dir.path().join("keychain");

@@ -62,14 +62,16 @@ pub fn deadline(base: Duration) -> Instant {
 /// The settings every test server starts with, under any a test gives: the
 /// day's notes and the Slack lookups off, since a server making the day's
 /// standup note on a Monday shows its "New note" in the sidebar, which a
-/// test reading the screen or counting notifications then trips on. A test
-/// of one of them turns it on.
+/// test reading the screen or counting notifications then trips on; and
+/// keeping the computer awake, which would start (a stand-in) caffeinate
+/// whenever a test's pane works. A test of one of them turns it on.
 pub const QUIET: &[(&str, bool)] = &[
     ("meeting_notes", false),
     ("standup_note", false),
     ("standup_summary", false),
     ("todo_note", false),
     ("slack_background", false),
+    ("keep_awake", false),
 ];
 
 /// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON
@@ -250,9 +252,10 @@ impl TestServer {
     /// in (a real Claude on a Mac signs in through the Keychain, not `~`, so
     /// its connector calls would reach the person's own services), and the
     /// desktop's clipboard and openers, which write to the test's home
-    /// rather than the person's clipboard and desktop. A test's own, written
-    /// over them, wins; lazygit is left out, since a test shows the key
-    /// saying it isn't installed.
+    /// rather than the person's clipboard and desktop, and caffeinate, which
+    /// would hold the person's Mac awake. A test's own, written over them,
+    /// wins; lazygit is left out, since a test shows the key saying it isn't
+    /// installed.
     fn stand_ins(&self) {
         let bin = self.home.join("bin");
         if !bin.join("claude").exists() {
@@ -265,7 +268,7 @@ impl TestServer {
             .iter()
             .chain(stand_in::CLIPBOARD)
             .chain(stand_in::CHROMES)
-            .chain(&["osascript"])
+            .chain(&["osascript", "caffeinate"])
             .copied()
             .filter(|tool| !bin.join(tool).exists())
             .collect();
@@ -350,6 +353,11 @@ impl TestServer {
             // The computer's own idle time isn't the test's: it goes by
             // what it typed.
             .env("SWITCHBOARD_PRESENCE", "unknown")
+            // Nor its logind, which keeping a Linux computer awake asks.
+            .env(
+                "DBUS_SYSTEM_BUS_ADDRESS",
+                "unix:path=/nonexistent/system_bus_socket",
+            )
             .env("SHELL", "/bin/sh")
             .env("ENV", "")
             .env("PS1", "$ ")

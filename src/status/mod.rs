@@ -82,6 +82,8 @@ pub struct Left {
     pub button: bool,
     /// What the health light names, empty while all is well.
     pub health: Vec<String>,
+    /// The computer held awake while tabs work, or by hand (src/awake).
+    pub awake: bool,
 }
 
 /// What a click on the status line can land on.
@@ -126,7 +128,8 @@ pub fn session_style(left: &Left, p: &Palette) -> Style {
 
 /// Draws what follows the counts from column `x`: a space on the status
 /// line's own background, the ⌘ Commands button in `@button_style` and a
-/// space after it, then the health light in red when something is wrong.
+/// space after it, the health light in red when something is wrong, then a
+/// ☕ while the computer is held awake.
 /// Gives the column after it and where the button went.
 pub fn draw_left(
     buf: &mut Buffer,
@@ -159,6 +162,9 @@ pub fn draw_left(
             base.fg(theme::RED).add_modifier(Modifier::BOLD),
         );
     }
+    if left.awake {
+        x = put(buf, x, area, " ☕ ", base);
+    }
     (x, button)
 }
 
@@ -179,6 +185,7 @@ mod tests {
             color: None,
             button: true,
             health: vec!["relay down".into(), "Slack not connected".into()],
+            awake: false,
         };
         let (x, button) = draw_left(&mut buf, 3, Rect::new(0, 0, 60, 1), &left, &Palette::DARK);
         let line = row(&buf);
@@ -195,6 +202,22 @@ mod tests {
             x,
             dot + 1 + " relay down, Slack not connected ".len() as u16
         );
+    }
+
+    #[test]
+    fn a_cup_follows_the_health_light_while_the_computer_is_held_awake() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+        let left = Left {
+            health: vec!["relay down".into()],
+            awake: true,
+            ..Left::default()
+        };
+        let (x, _) = draw_left(&mut buf, 0, Rect::new(0, 0, 40, 1), &left, &Palette::DARK);
+        let line = row(&buf);
+        assert!(line.starts_with("  ● relay down  ☕"), "{line:?}");
+        // The space, the health light's 14 columns, and the cup's two
+        // between spaces.
+        assert_eq!(x, 1 + 14 + 4);
     }
 
     #[test]

@@ -660,6 +660,7 @@ impl Server {
             top: side.filter(|x| x.focused).and_then(|x| x.top),
             keep: side.and_then(|x| x.keep),
             hover: self.sidebar.hover.get(&client),
+            awake: self.awake.holding(),
         };
         let out = render::sidebar_lines(
             &tabs,

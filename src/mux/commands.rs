@@ -537,7 +537,14 @@ impl Server {
         // does (src/presence.rs); since the server started, and `typed`
         // false, until one has been.
         let idle_ms = u64::try_from(self.last_input.elapsed().as_millis()).unwrap_or(u64::MAX);
-        json!({ "sessions": sessions, "clients": clients, "idle_ms": idle_ms, "typed": self.typed })
+        json!({
+            "sessions": sessions,
+            "clients": clients,
+            "idle_ms": idle_ms,
+            "typed": self.typed,
+            // Whether the computer is held awake, and what holds it (src/awake).
+            "awake": self.awake_json(),
+        })
     }
 
     fn cmd_new_tab(

@@ -140,6 +140,13 @@
     "default": true
   },
   {
+    "key": "keep_awake",
+    "category": "Sessions",
+    "label": "Keep the computer awake while tabs work",
+    "description": "While a tab's Claude works (background work and watches too, not a /loop between its runs) or autopilot, on and not paused, has tabs open, the computer doesn't sleep when idle (caffeinate on macOS, a logind inhibitor on Linux), shown by a ☕ on the status line, or with UX 2.0 at the top of the sidebar; it lets go two minutes after everything is idle, the display still sleeps, and a laptop closed with no display on it sleeps anyway. M-p's 'Keep the computer awake until I say' holds it whatever runs. Off, the computer sleeps on its own schedule unless held from M-p",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",

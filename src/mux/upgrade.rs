@@ -148,6 +148,9 @@ pub struct Handover {
     /// The links in what you sent each pane's Claude (src/views/given.rs).
     #[serde(default)]
     pub given: Vec<(PaneId, Vec<String>)>,
+    /// The computer held awake by hand, until you say (src/awake).
+    #[serde(default)]
+    pub awake_by_hand: bool,
 }
 
 /// An attached terminal handed over: its connection by descriptor, where it
@@ -583,6 +586,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
         images: server.sixel.hand_over(),
         asked_cell: server.terminal.asked_cell,
         given: server.views.given.records(),
+        awake_by_hand: server.awake.by_hand,
         clients: held
             .iter()
             .filter_map(|(id, held)| {
@@ -619,6 +623,8 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
                 handover.panes.len(),
                 handover.clients.len()
             );
+            // `caffeinate -w` would wait on this pid for the new build too.
+            server.awake_hand_over();
             let opened = fds.iter().all(|fd| pty::set_cloexec(*fd, false).is_ok());
             let failed = if opened {
                 exec(&binary, &file)
@@ -751,6 +757,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
             server.views.given.put(id, links);
         }
     }
+    server.awake.by_hand = handover.awake_by_hand;
     // The one used longest ago first, so the one used last sizes its
     // session, as it did.
     let mut clients = handover.clients;
@@ -932,6 +939,7 @@ mod tests {
             )],
             asked_cell: Some((10, 20)),
             given: vec![(PaneId(4), vec!["https://a.example/1".into()])],
+            awake_by_hand: true,
         }
     }
 
@@ -962,6 +970,7 @@ mod tests {
         assert_eq!(read.cell, Some((9, 18)));
         assert_eq!(read.images, sample().images);
         assert_eq!(read.asked_cell, Some((10, 20)));
+        assert!(read.awake_by_hand);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -971,9 +980,11 @@ mod tests {
         let fields = json.as_object_mut().unwrap();
         fields.remove("images");
         fields.remove("asked_cell");
+        fields.remove("awake_by_hand");
         let read: Handover = serde_json::from_value(json).unwrap();
         assert!(read.images.is_empty());
         assert_eq!(read.asked_cell, None);
+        assert!(!read.awake_by_hand, "nothing held by hand");
     }
 
     #[test]

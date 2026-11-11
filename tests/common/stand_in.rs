@@ -1318,6 +1318,46 @@ act() {
   :
 }"#
         }
+        // macOS's: it holds the computer awake while the process -w names
+        // runs, or for -t's seconds, or until it is ended.
+        "caffeinate" => {
+            r#"usage() {
+  printf 'usage: caffeinate [-disu] [-t timeout] [-w Process ID] [command arguments...]\n' >&2
+  exit 1
+}
+check() {
+  watched= timeout=
+  OPTIND=1
+  while getopts ':dimsut:w:' opt; do
+    case $opt in
+      d | i | m | s | u) ;;
+      t) timeout=$OPTARG ;;
+      w) watched=$OPTARG ;;
+      :)
+        printf 'caffeinate: option requires an argument -- %s\n' "$OPTARG" >&2
+        usage ;;
+      *)
+        printf 'caffeinate: illegal option -- %s\n' "$OPTARG" >&2
+        usage ;;
+    esac
+  done
+  shift $((OPTIND - 1))
+  if [ $# -gt 0 ]; then
+    printf 'caffeinate (a stand-in): it runs no command\n' >&2
+    exit 1
+  fi
+}
+act() {
+  printf 'caffeinate is %s\n' "$$" >> "$log"
+  if [ -n "$watched" ]; then
+    while kill -0 "$watched" 2>/dev/null; do sleep 1; done
+  elif [ -n "$timeout" ]; then
+    sleep "$timeout"
+  else
+    while :; do sleep 1; done
+  fi
+}"#
+        }
         other => panic!("no stand-in for {other}"),
     }
 }
@@ -1337,9 +1377,11 @@ act
 "#;
 
 /// Stand-ins for the desktop's tools in `tools` (names from `CLIPBOARD`,
-/// `OPENERS`, `CHROMES`, or `osascript`), in `bin`: each writes each call
-/// it takes to `log`, a line of its name and arguments, and keeps what is
-/// copied in `clipboard`, which pasting reads.
+/// `OPENERS`, `CHROMES`, `osascript` or `caffeinate`), in `bin`: each
+/// writes each call it takes to `log`, a line of its name and arguments,
+/// and keeps what is copied in `clipboard`, which pasting reads;
+/// `caffeinate` writes `caffeinate is <pid>` after its call, and holds
+/// until ended, as the real one does.
 pub fn desktop(bin: &Path, tools: &[&str], log: &Path, clipboard: &Path) {
     let programs: Vec<(PathBuf, String)> = tools
         .iter()

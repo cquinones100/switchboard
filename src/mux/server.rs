@@ -130,6 +130,8 @@ pub enum Event {
     /// A picture's file looked at, or a piece of it drawn as sixel, off
     /// the task (src/mux/sixel).
     Sixel(super::sixel::SixelEvent),
+    /// The hold keeping the computer awake taken, off the task (src/awake).
+    Awake(crate::awake::serve::AwakeEvent),
     Tick,
     Quit,
 }
@@ -393,6 +395,8 @@ pub struct Server {
     pub extras: crate::extras::Extras,
     /// Autopilot (src/autopilot).
     pub autopilot: crate::autopilot::Autopilot,
+    /// The computer kept awake while tabs work (src/awake).
+    pub awake: crate::awake::Awake,
     /// What the terminal attached last says of itself: its cell's size
     /// (src/mux/terminal.rs).
     pub terminal: super::terminal::Terminal,
@@ -1013,6 +1017,7 @@ impl Server {
             extras: Default::default(),
             terminal: Default::default(),
             autopilot: Default::default(),
+            awake: Default::default(),
             history: Default::default(),
             upgrade: Default::default(),
             sixel: super::sixel::Sixel::new(),
@@ -1097,6 +1102,7 @@ impl Server {
             Event::Photos(event) => self.photos_event(event),
             Event::History(event) => self.history_event(event),
             Event::Sixel(event) => self.sixel_event(event),
+            Event::Awake(event) => self.awake_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.sixel_tick();
@@ -1113,6 +1119,7 @@ impl Server {
                 self.diff_tick();
                 self.update_tick();
                 self.autopilot_tick();
+                self.awake_check();
                 self.history_tick();
             }
             Event::Quit => self.quit = true,
@@ -2523,6 +2530,7 @@ impl Server {
             Action::StopSlackRelay => self.slack_relay(false),
             Action::Update(command) => self.update_command(id, command),
             Action::Upgrade => self.latest_asked(id),
+            Action::KeepAwake => self.awake_by_hand(id),
             Action::Notes(command) => self.notes_command(id, command, pane),
             Action::Extra(command) => self.extras_command(id, command, pane),
             Action::Autopilot(command) => self.autopilot_command(id, command, pane),

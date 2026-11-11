@@ -124,6 +124,9 @@ pub struct View<'a> {
     pub keep: Option<usize>,
     /// What the mouse is over.
     pub hover: Option<&'a Owner>,
+    /// The computer held awake (src/awake): a ☕ after the tab count with
+    /// UX 2.0, which has no status line to show it.
+    pub awake: bool,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -364,14 +367,22 @@ pub fn sidebar_lines(
             .add_modifier(Modifier::BOLD),
     };
     if r.ux2 {
-        // The count, and on the right how to filter; the groups' own
-        // headings say how many need you or work.
+        // The count, a ☕ while the computer is held awake, and on the
+        // right how to filter; the groups' own headings say how many need
+        // you or work.
         let n = tabs.len();
         let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
         pill_row
             .put(" ", Style::new())
             .put(said.clone(), fg(theme.dim));
-        let gap = cols.saturating_sub(width(&said) + 1 + width("/ filter") + 1);
+        let mut used = width(&said) + 1;
+        if view.awake {
+            let cup = kit::mark(Mark::Awake, 0, theme);
+            used += 2 + width(&cup.content);
+            pill_row.put("  ", Style::new());
+            pill_row.spans.push(cup);
+        }
+        let gap = cols.saturating_sub(used + width("/ filter") + 1);
         if gap > 0 {
             pill_row
                 .put(" ".repeat(gap), Style::new())
@@ -948,6 +959,7 @@ mod tests {
             top: None,
             keep: None,
             hover: None,
+            awake: false,
         }
     }
 
@@ -1220,6 +1232,30 @@ mod tests {
         assert_eq!(at(&long(None)), " ● Landed the stable note IDs and the …");
         assert_eq!(text[4], "");
         assert!(text[0].ends_with("/ filter"), "{:?}", text[0]);
+        // A ☕ after the count while the computer is held awake, the
+        // filter's hint still at the right edge.
+        let awake = texts(&sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            &[],
+            "s",
+            40,
+            20,
+            &View {
+                awake: true,
+                ..view(1)
+            },
+            &r,
+            &Theme::DARK,
+        ));
+        assert!(awake[0].starts_with(" 1 tab  ☕ "), "{:?}", awake[0]);
+        assert!(awake[0].ends_with("/ filter"), "{:?}", awake[0]);
+        assert_eq!(
+            crate::ui::draw::width(&awake[0]),
+            crate::ui::draw::width(&text[0]),
+            "the hint where it was"
+        );
         // The group's heading with its count at the right edge, then the
         // tab: the cursor's bar, its mark with no pill, its number, its name.
         assert!(text[5].ends_with(" 1"), "{:?}", text[5]);
