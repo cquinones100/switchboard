@@ -36,7 +36,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use image::RgbaImage;
 
@@ -66,6 +66,9 @@ const DECODE_LIMIT: u64 = 128 * 1024 * 1024;
 /// stays its text.
 const LONGEST: u32 = 2048;
 const HELD: usize = 256 * 1024 * 1024;
+/// How long after a photo failed to load the view asks for it again, as
+/// the server's Photos does (src/photos/serve.rs's `RETRY_MS`).
+const PHOTO_RETRY: Duration = Duration::from_secs(15 * 60);
 
 /// Whether the views draw pictures here: the terminal can and the setting
 /// is on, and not in a pane while Switchboard draws pictures as sixels,
@@ -436,6 +439,9 @@ pub struct Pictures {
     /// The bytes the pictures hold together, kept and on their way.
     held: Held,
     asked: HashSet<String>,
+    /// Each photo that failed to load and when, asked for again once
+    /// `PHOTO_RETRY` has passed, while the view stays open.
+    failed: HashMap<String, Instant>,
     sent: ImageCache,
     tx: Sender<Got>,
     /// Whether pictures are fetched: not for a file of yours or a note,
@@ -469,6 +475,7 @@ impl Pictures {
             images: HashMap::new(),
             held: Held::default(),
             asked: HashSet::new(),
+            failed: HashMap::new(),
             sent: ImageCache::default(),
             tx,
             fetch,
@@ -544,7 +551,8 @@ impl Pictures {
     }
 
     /// A picture had: kept to draw, its bytes reserved already, or, when it
-    /// couldn't be had or was past `HELD`, its text left in its place.
+    /// couldn't be had or was past `HELD`, its text left in its place, a
+    /// photo's asked for again after `PHOTO_RETRY` (`retry_failed`).
     /// Whether the layout changes.
     pub fn got(&mut self, (key, got): Got) -> bool {
         match got {
@@ -552,8 +560,28 @@ impl Pictures {
                 self.images.insert(key, Arc::new(img));
                 true
             }
-            Err(_) => false,
+            Err(_) => {
+                if key.starts_with(PHOTO) {
+                    self.failed.insert(key, Instant::now());
+                }
+                false
+            }
         }
+    }
+
+    /// Forgets having asked for each photo that failed `PHOTO_RETRY` before
+    /// `now` or longer, so the next `ask` asks for it again. Whether any was.
+    pub fn retry_failed(&mut self, now: Instant) -> bool {
+        let before = self.failed.len();
+        let asked = &mut self.asked;
+        self.failed.retain(|key, at| {
+            let due = now.saturating_duration_since(*at) >= PHOTO_RETRY;
+            if due {
+                asked.remove(key);
+            }
+            !due
+        });
+        self.failed.len() != before
     }
 
     /// What the layout draws as pictures, in a pane `rows` tall.
@@ -654,6 +682,51 @@ impl Pictures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A view's pictures with nothing spawned and nothing read from home.
+    fn bare() -> Pictures {
+        Pictures {
+            pid: 1,
+            cell: (10, 20),
+            tones: Tones::now(),
+            light: false,
+            renderer: Renderer {
+                chrome: None,
+                work: PathBuf::from("/nonexistent"),
+                cache: None,
+            },
+            images: HashMap::new(),
+            held: Held::default(),
+            asked: HashSet::new(),
+            failed: HashMap::new(),
+            sent: ImageCache::default(),
+            tx: std::sync::mpsc::channel().0,
+            fetch: false,
+            queue: Arc::new(Mutex::new(Queue::default())),
+        }
+    }
+
+    #[test]
+    fn a_photo_that_failed_is_asked_for_again_once_the_retry_has_passed() {
+        let mut p = bare();
+        let photo = format!("{PHOTO}github:someone");
+        let picture = "https://x/a.png".to_string();
+        p.asked.insert(photo.clone());
+        p.asked.insert(picture.clone());
+        assert!(!p.got((photo.clone(), Err("offline".into()))));
+        assert!(!p.got((picture.clone(), Err("offline".into()))));
+        let failed_at = p.failed[&photo];
+        assert!(!p.failed.contains_key(&picture), "only photos are retried");
+
+        assert!(!p.retry_failed(failed_at + PHOTO_RETRY / 2));
+        assert!(p.asked.contains(&photo), "not before the retry is due");
+
+        assert!(p.retry_failed(failed_at + PHOTO_RETRY));
+        assert!(!p.asked.contains(&photo), "the next ask asks for it again");
+        assert!(p.asked.contains(&picture));
+        assert!(p.failed.is_empty());
+        assert!(!p.retry_failed(failed_at + PHOTO_RETRY * 2));
+    }
 
     #[test]
     fn the_views_keep_their_text_where_switchboard_draws_sixels() {

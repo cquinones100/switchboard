@@ -44,7 +44,7 @@
 use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -1115,6 +1115,11 @@ fn run_with(
         }
         while let Ok(got) = pictures.try_recv() {
             redraw |= pager.picture(got);
+        }
+        if let Some(p) = &mut pager.pictures
+            && p.retry_failed(Instant::now())
+        {
+            pager.ask_pictures();
         }
         let act = match event::poll(Duration::from_millis(100)) {
             Ok(true) => match event::read() {
