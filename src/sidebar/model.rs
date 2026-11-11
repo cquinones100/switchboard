@@ -797,11 +797,20 @@ fn state_only(tab: &TabModel, r: &Rules) -> String {
             };
             and(joined([waiting, opt(&tab.wait)]))
         }
-        TabState::Done => and(if since.is_empty() {
-            "finished".to_string()
-        } else {
-            format!("finished {since} ago")
-        }),
+        TabState::Done => {
+            let finished = if since.is_empty() {
+                "finished".to_string()
+            } else {
+                format!("finished {since} ago")
+            };
+            // The watches it left running, named as Monitoring names them.
+            let watching = if tab.monitors.is_empty() {
+                String::new()
+            } else {
+                joined(std::iter::once("monitoring".to_string()).chain(tab.monitors.clone()))
+            };
+            and(joined([finished, watching]))
+        }
         TabState::Working => {
             let working = if since.is_empty() {
                 "working".to_string()
@@ -1303,6 +1312,18 @@ pub(crate) mod tests {
         watcher.monitors = vec!["CI on #12".into()];
         assert_eq!(stage_of(&watcher, &r), Stage::Monitoring);
         assert_eq!(state_words(&watcher, &r), "monitoring · CI on #12");
+        // A turn that ended over its watches, not yet seen: Needs you, the
+        // watches named.
+        let finished = TabModel {
+            state: TabState::Done,
+            ..watcher.clone()
+        };
+        assert_eq!(stage_of(&finished, &r), Stage::Needs);
+        assert_eq!(badge_state(&finished, &r), Badge::Done);
+        assert_eq!(
+            state_words(&finished, &r),
+            "finished · monitoring · CI on #12"
+        );
         watcher.background = 2;
         assert_eq!(stage_of(&watcher, &r), Stage::Working, "other work as well");
         let mut looped = bg.clone();

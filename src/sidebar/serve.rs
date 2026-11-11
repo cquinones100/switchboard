@@ -405,8 +405,18 @@ impl Server {
             };
         }
         let stopped = work.api_error.clone();
+        // A turn that ends while only watches run is Done, under Needs you,
+        // until you see it (the hook state goes Idle), as a question is
+        // Waiting whatever runs behind it; then Monitoring.
+        let finished_over_watches = base == TabState::Done
+            && work.count > 0
+            && work.monitors.len() == work.count
+            && work.loop_run.is_none()
+            && work.scheduled.is_none();
         let state = if stopped.is_some() {
             TabState::Waiting
+        } else if finished_over_watches {
+            base
         } else if work.count > 0 || work.scheduled.is_some() {
             TabState::Background
         } else {

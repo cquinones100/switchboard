@@ -275,6 +275,51 @@ fn a_question_keeps_its_tab_under_needs_you_while_a_background_agent_returns() {
 }
 
 #[test]
+fn a_turn_that_ends_over_its_watches_is_under_needs_you_until_seen_then_monitoring() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    let first = tabs(&server.list())[0]["id"].as_str().unwrap().to_string();
+    server.ok(&["new-tab", "-n", "other"]);
+    client.wait_text("2:other");
+    // Its turn starts a Monitor watch and ends while the watch runs.
+    let project = server.home.join(".claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let at = jiff::Timestamp::now().to_string();
+    let lines = [
+        json!({"type": "user", "timestamp": at, "message": {"content": "watch CI"}}),
+        json!({"type": "assistant", "timestamp": at, "message": {"content": [
+            {"type": "tool_use", "id": "w1", "name": "Monitor", "input": {"description": "CI on #12", "command": "gh pr checks 12"}}
+        ]}}),
+        json!({"type": "user", "timestamp": at, "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "w1", "content": "Monitor started (task m1, expires in 30m unless the source ends first)"}
+        ]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join("s-1.jsonl"), text).unwrap();
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    hook(&server, &pane, "Stop", json!({}));
+    let screen = client.wait_for("Needs you, its watch named", |s| {
+        s.iter().any(|l| left(l, 34).contains("NEEDS YOU 1"))
+            && s.iter().any(|l| left(l, 34).contains("monitoring"))
+    });
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("MONITORING")),
+        "{}",
+        screen.join("\n")
+    );
+    // Seen: under Monitoring.
+    server.ok(&["select-tab", "-t", &first]);
+    client.wait_for("Monitoring once seen", |s| {
+        s.iter().any(|l| left(l, 34).contains("MONITORING 1"))
+            && !s.iter().any(|l| left(l, 34).contains("NEEDS YOU"))
+    });
+}
+
+#[test]
 fn m_s_and_its_keys_move_between_tabs() {
     let server = TestServer::start();
     settings(&server, json!({}));
