@@ -9,7 +9,7 @@ use crate::common;
 use std::process::{Command, Output, Stdio};
 
 use common::{BIN, TempDir};
-use switchboard::cmd::leak_check::{hits, hits_in, is_test};
+use switchboard::cmd::leak_check::{Hit, hits, hits_in, is_test, leave_out};
 
 struct World {
     dir: TempDir,
@@ -370,11 +370,214 @@ fn a_listed_word_is_found_whole_in_any_case() {
 fn added_lines_are_read_with_their_file_and_line_and_messages_without_claudes_trailer() {
     let diff = "diff --git a/lib/x.js b/lib/x.js\n--- a/lib/x.js\n+++ b/lib/x.js\n@@ -1,0 +1,2 @@\n+one\n+// Fixed in ENG-123\n-// removed ENG-9\ndiff --git a/gone.md b/gone.md\n--- a/gone.md\n+++ /dev/null\n@@ -1 +0,0 @@\n-ENG-8\n";
     let log = "abc1234\0Fix ENG-77\n\nCo-Authored-By: Claude Opus <noreply@anthropic.com>\n\0\ndef5678\0Plain\n\0";
+    let shown: Vec<String> = hits(diff, log, &[]).into_iter().map(|h| h.shown).collect();
     assert_eq!(
-        hits(diff, log, &[]),
+        shown,
         [
             "lib/x.js:2: ticket ID: ENG-123",
             "commit abc1234: ticket ID: ENG-77"
         ]
     );
+}
+
+fn hit(shown: &str, file: Option<&str>, whole: &str) -> Hit {
+    Hit {
+        shown: shown.to_string(),
+        file: file.map(str::to_string),
+        kind: "ticket ID",
+        whole: whole.to_string(),
+    }
+}
+
+#[test]
+fn a_hit_the_bases_copy_of_its_file_has_is_left_out_and_any_other_kept() {
+    let found = vec![
+        hit("src/a.rs:9: ticket ID: AB-1", Some("src/a.rs"), "AB-1"),
+        hit("src/a.rs:10: ticket ID: AB-7", Some("src/a.rs"), "AB-7"),
+        hit("src/new.rs:1: ticket ID: AB-1", Some("src/new.rs"), "AB-1"),
+        hit("src/b.rs:1: ticket ID: AB-2", Some("src/b.rs"), "AB-2"),
+        hit("src/a.rs:11: ticket ID: AB-12", Some("src/a.rs"), "AB-12"),
+        hit("commit abc1234: ticket ID: AB-1", None, "AB-1"),
+    ];
+    let mut asked = Vec::new();
+    let (kept, left) = leave_out(found, &[], |file| {
+        asked.push(file.to_string());
+        match file {
+            "src/a.rs" => Some("let id = \"AB-1\"; // AB-123\n".to_string()),
+            "src/b.rs" => Some("AB-1 lives in a.rs\n".to_string()),
+            _ => None,
+        }
+    });
+    let shown = |hits: Vec<Hit>| hits.into_iter().map(|h| h.shown).collect::<Vec<_>>();
+    assert_eq!(
+        shown(kept),
+        [
+            "src/a.rs:10: ticket ID: AB-7",
+            "src/new.rs:1: ticket ID: AB-1",
+            "src/b.rs:1: ticket ID: AB-2",
+            "src/a.rs:11: ticket ID: AB-12",
+            "commit abc1234: ticket ID: AB-1",
+        ],
+        "one new to the file, a new file's, one the base has in another file, one the base has only within a longer ID, a message's"
+    );
+    assert_eq!(shown(left), ["src/a.rs:9: ticket ID: AB-1"]);
+    assert_eq!(
+        asked,
+        ["src/a.rs", "src/new.rs", "src/b.rs"],
+        "each file read once"
+    );
+}
+
+#[test]
+fn a_rewritten_line_whose_id_the_base_has_passes_and_a_new_id_does_not() {
+    let w = World::new();
+    std::fs::create_dir_all(w.repo().join("src")).unwrap();
+    std::fs::write(w.repo().join("src/a.rs"), "one\nlet id = \"AB-1\";\ntwo\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add a"]);
+    let base = w.git(&["rev-parse", "HEAD"]);
+
+    std::fs::write(
+        w.repo().join("src/a.rs"),
+        "one\nlet ids = [\"AB-1\"];\ntwo\n",
+    )
+    .unwrap();
+    w.git(&["commit", "-q", "-am", "Rewrite it"]);
+    let run = w.leak_check(&[&format!("{base}..HEAD")]);
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr).trim(),
+        format!("leak-check: 1 already on {} left out", &base[..8])
+    );
+    let all = w.leak_check(&["--all", &format!("{base}..HEAD")]);
+    assert_eq!(all.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&all.stdout).trim(),
+        format!("src/a.rs:2: ticket ID: AB-1 (on {})", &base[..8])
+    );
+
+    std::fs::write(w.repo().join("src/a.rs"), "let id = \"AB-7\";\none\ntwo\n").unwrap();
+    w.git(&["commit", "-q", "-am", "Change it"]);
+    let run = w.leak_check(&[&format!("{base}..HEAD")]);
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "src/a.rs:1: ticket ID: AB-7"
+    );
+}
+
+#[test]
+fn a_new_token_beside_one_the_base_has_is_kept() {
+    let old = format!("ghp_{}", "a1B2".repeat(8));
+    let new = format!("ghp_{}", "a1B2".repeat(7) + "zzzz");
+    let diff = format!(
+        "diff --git a/k.md b/k.md\n--- a/k.md\n+++ b/k.md\n@@ -1 +1 @@\n+keys {old} {new}\n"
+    );
+    let found = hits(&diff, "", &[]);
+    assert_eq!(found.len(), 2, "two tokens shown alike are both kept");
+    let (kept, _) = leave_out(found, &[], |_| Some(format!("key {old}\n")));
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].whole, new);
+}
+
+#[test]
+fn a_listed_word_the_base_has_in_another_case_is_left_out_but_not_one_inside_a_longer_word() {
+    let words = vec!["AcmeCorp".to_string()];
+    let diff = "diff --git a/n.md b/n.md\n--- a/n.md\n+++ b/n.md\n@@ -1 +1 @@\n+for acmecorp\n";
+    let (kept, left) = leave_out(hits(diff, "", &words), &words, |_| {
+        Some("Built for AcmeCorp\n".to_string())
+    });
+    assert!(kept.is_empty() && left.len() == 1);
+    let (kept, _) = leave_out(hits(diff, "", &words), &words, |_| {
+        Some("not acmecorporation\n".to_string())
+    });
+    assert_eq!(kept.len(), 1);
+}
+
+#[test]
+fn a_file_whose_name_git_ends_with_a_tab_or_quotes_is_named_as_it_is() {
+    let diff = "diff --git a/release notes.md b/release notes.md\n--- a/release notes.md\t\n+++ b/release notes.md\t\n@@ -1 +1 @@\n+AB-1\ndiff --git \"a/x\\\"y.md\" \"b/x\\\"y.md\"\n+++ \"b/x\\\"y.md\"\n@@ -1 +1 @@\n+AB-2\n";
+    let files: Vec<Option<String>> = hits(diff, "", &[]).into_iter().map(|h| h.file).collect();
+    assert_eq!(
+        files,
+        [
+            Some("release notes.md".to_string()),
+            Some("x\"y.md".to_string())
+        ]
+    );
+}
+
+#[test]
+fn an_added_line_that_looks_like_a_file_header_is_read_as_a_line() {
+    let diff = "diff --git a/new.md b/new.md\n--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,2 @@\n+++ b/src/a.rs\n+AB-1\n";
+    let found = hits(diff, "", &[]);
+    let shown: Vec<&str> = found.iter().map(|h| h.shown.as_str()).collect();
+    assert_eq!(shown, ["new.md:2: ticket ID: AB-1"]);
+    let (kept, _) = leave_out(found, &[], |file| {
+        (file == "src/a.rs").then(|| "AB-1\n".to_string())
+    });
+    assert_eq!(
+        kept.len(),
+        1,
+        "src/a.rs's base copy leaves out nothing in new.md"
+    );
+}
+
+#[test]
+fn a_file_is_named_from_the_diffs_own_prefixes_whatever_git_is_set_to() {
+    let w = World::new();
+    w.git(&["config", "diff.noprefix", "true"]);
+    std::fs::write(w.repo().join("example.md"), "AB-7\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add example"]);
+    let base = w.git(&["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(w.repo().join("b")).unwrap();
+    std::fs::write(w.repo().join("b/example.md"), "AB-7\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add b/example"]);
+    let run = w.leak_check(&[&format!("{base}..HEAD")]);
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "b/example.md:1: ticket ID: AB-7"
+    );
+}
+
+#[test]
+fn a_file_is_named_from_the_repositorys_top_whatever_git_is_set_to() {
+    let w = World::new();
+    w.git(&["config", "diff.relative", "true"]);
+    std::fs::write(w.repo().join("example.md"), "AB-7\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add example"]);
+    let base = w.git(&["rev-parse", "HEAD"]);
+    std::fs::create_dir_all(w.repo().join("src")).unwrap();
+    std::fs::write(w.repo().join("src/example.md"), "AB-7\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add src/example"]);
+    let run = w
+        .command(BIN)
+        .current_dir(w.repo().join("src"))
+        .args(["leak-check", &format!("{base}..HEAD")])
+        .output()
+        .unwrap();
+    assert_eq!(run.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "src/example.md:1: ticket ID: AB-7"
+    );
+}
+
+#[test]
+fn a_single_revision_leaves_nothing_out() {
+    let w = World::new();
+    std::fs::write(w.repo().join("k.md"), "AB-7\n").unwrap();
+    w.git(&["add", "-A"]);
+    w.git(&["commit", "-q", "-m", "Add k"]);
+    std::fs::write(w.repo().join("k.md"), "AB-7 again\n").unwrap();
+    w.git(&["commit", "-q", "-am", "Change k"]);
+    let run = w.leak_check(&["HEAD"]);
+    assert_eq!(run.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&run.stderr).is_empty());
 }

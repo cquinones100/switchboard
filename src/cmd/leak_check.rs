@@ -18,8 +18,19 @@
 //! - home directory paths (/Users/<name>), email addresses (but noreply and
 //!   example ones), and token shapes (GitHub's, OpenAI-style sk-, Slack's).
 //!
+//! A hit in a file's added line is left out when the range's base (the
+//! merge base of an `a..b` range's two ends) already has its text in its
+//! copy of that file, so a line a change moves or
+//! rewrites doesn't count as new while one it brings into a file, or a new
+//! file, still does; a commit message's hits always count. The push makes
+//! public only what the base doesn't already have. A single revision, which
+//! `git log` reads with every commit before it, has no base, so nothing is
+//! left out.
+//!
 //! It prints each hit as `<file>:<line>: <kind>: <text>`, or `commit
-//! <hash>: <kind>: <text>` for a message, and exits 1 on any, 0 on none,
+//! <hash>: <kind>: <text>` for a message, then on stderr how many it left
+//! out (`--all` prints those too, marked `(on <base>)`), and exits 1 on
+//! any hit kept, 0 on none,
 //! and 2 when it can't look: a word list that is there but can't be read
 //! stops it, so a landing asks rather than pushing unchecked.
 //! queue-and-clean runs it before a direct landing asks to push, and a
@@ -30,7 +41,7 @@
 //! checks of `bounded`, tried again one character on wherever one fails,
 //! as a backtracking search would.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::LazyLock;
@@ -162,6 +173,15 @@ pub fn is_test(file: &str) -> bool {
 /// What one line holds, `test` whether it is in a test's file: each hit's
 /// kind and text.
 pub fn hits_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, String)> {
+    found_in(text, test, words)
+        .into_iter()
+        .map(|(kind, shown, _)| (kind, shown))
+        .collect()
+}
+
+/// Each hit's kind, the text shown and the whole match (a token's shown
+/// cut short).
+fn found_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, String, String)> {
     let mut hits = Vec::new();
     for w in words {
         let Ok(re) = Regex::new(&format!("(?i){}", regex::escape(w))) else {
@@ -171,7 +191,7 @@ pub fn hits_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, S
             !b.is_some_and(word) && !a.is_some_and(word)
         });
         if let Some(m) = found.first() {
-            hits.push(("listed word", m[0].to_string()));
+            hits.push(("listed word", m[0].to_string(), m[0].to_string()));
         }
     }
     if !test {
@@ -180,7 +200,7 @@ pub fn hits_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, S
         };
         for m in bounded(&TICKET, text, ticket) {
             if !NOT_TICKETS.contains(&&m[1]) {
-                hits.push(("ticket ID", m[0].to_string()));
+                hits.push(("ticket ID", m[0].to_string(), m[0].to_string()));
             }
         }
         let pr = |b: Option<char>, a: Option<char>| {
@@ -191,13 +211,13 @@ pub fn hits_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, S
             let number = whole.as_str();
             let color = COLOR.is_match(number) && COLOR_BEFORE.is_match(&text[..whole.start()]);
             if !["#123", "#12345"].contains(&number) && !color {
-                hits.push(("PR number", number.to_string()));
+                hits.push(("PR number", number.to_string(), number.to_string()));
             }
         }
     }
     for m in HOME_PATH.captures_iter(text) {
         if !PLACEHOLDER_USERS.contains(&m[1].to_lowercase().as_str()) {
-            hits.push(("home path", m[0].to_string()));
+            hits.push(("home path", m[0].to_string(), m[0].to_string()));
         }
     }
     let email = |b: Option<char>, a: Option<char>| {
@@ -207,38 +227,89 @@ pub fn hits_in(text: &str, test: bool, words: &[String]) -> Vec<(&'static str, S
     for m in bounded(&EMAIL, text, email) {
         let address = &m[0];
         if !OK_EMAIL.is_match(address) && !(test && OK_TEST_EMAIL.is_match(address)) {
-            hits.push(("email address", address.to_string()));
+            hits.push(("email address", address.to_string(), address.to_string()));
         }
     }
     let token = |b: Option<char>, _: Option<char>| !b.is_some_and(|c| word(c) || c == '-');
     for m in bounded(&TOKEN, text, token) {
         let shown: String = m[0].chars().take(8).collect();
-        hits.push(("token", format!("{shown}…")));
+        hits.push(("token", format!("{shown}…"), m[0].to_string()));
     }
     hits
 }
 
+/// One hit: the line printed for it, the file it is in (none for a commit
+/// message's), its kind and the whole text it matched.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hit {
+    pub shown: String,
+    pub file: Option<String>,
+    pub kind: &'static str,
+    pub whole: String,
+}
+
+/// What makes two hits the same: their kind and whole text, a listed word's
+/// in any case, as it is found.
+fn same(kind: &'static str, whole: &str) -> (&'static str, String) {
+    if kind == "listed word" {
+        (kind, whole.to_lowercase())
+    } else {
+        (kind, whole.to_string())
+    }
+}
+
+/// A path as a diff's `+++` header gives it: the tab git ends a name
+/// holding a space with taken off, and a name git quotes (one holding a
+/// quote, a backslash or a control character) unquoted.
+fn header_path(name: &str) -> String {
+    let name = name.strip_suffix('\t').unwrap_or(name);
+    let Some(quoted) = name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) else {
+        return name.to_string();
+    };
+    let mut out = String::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        out.push(match chars.next() {
+            Some('t') => '\t',
+            Some('n') => '\n',
+            Some(other) => other,
+            None => break,
+        });
+    }
+    out
+}
+
 /// Every hit in `git log -p -m`'s added lines and in the commit messages
 /// `--format=%h%x00%B%x00` printed, each once, in the order found.
-pub fn hits(diff: &str, log: &str, words: &[String]) -> Vec<String> {
-    let mut found: Vec<String> = Vec::new();
+pub fn hits(diff: &str, log: &str, words: &[String]) -> Vec<Hit> {
+    let mut found: Vec<Hit> = Vec::new();
     let mut file = String::new();
     let mut line = 0usize;
+    // A file's headers come before its first hunk; in a hunk, a row that
+    // starts `+++ ` is an added line that starts `++ `.
+    let mut in_hunk = false;
     for row in diff.split('\n') {
         if row.starts_with("diff --git ") {
             file.clear();
+            in_hunk = false;
             continue;
         }
-        if let Some(name) = row.strip_prefix("+++ ") {
+        if let Some(name) = row.strip_prefix("+++ ").filter(|_| !in_hunk) {
             file = if name == "/dev/null" {
                 String::new()
             } else {
-                name.strip_prefix("b/").unwrap_or(name).to_string()
+                let name = header_path(name);
+                name.strip_prefix("b/").unwrap_or(&name).to_string()
             };
             continue;
         }
         if let Some(m) = HUNK.captures(row) {
             line = m[1].parse().unwrap_or(0);
+            in_hunk = true;
             continue;
         }
         let Some(added) = row.strip_prefix('+') else {
@@ -247,8 +318,13 @@ pub fn hits(diff: &str, log: &str, words: &[String]) -> Vec<String> {
         if file.is_empty() {
             continue;
         }
-        for (kind, text) in hits_in(added, is_test(&file), words) {
-            found.push(format!("{file}:{line}: {kind}: {text}"));
+        for (kind, text, whole) in found_in(added, is_test(&file), words) {
+            found.push(Hit {
+                shown: format!("{file}:{line}: {kind}: {text}"),
+                file: Some(file.clone()),
+                kind,
+                whole,
+            });
         }
         line += 1;
     }
@@ -263,13 +339,63 @@ pub fn hits(diff: &str, log: &str, words: &[String]) -> Vec<String> {
             .split('\n')
             .filter(|l| !CLAUDE_TRAILER.is_match(l))
             .collect();
-        for (kind, text) in hits_in(&message.join("\n"), false, words) {
-            found.push(format!("commit {hash}: {kind}: {text}"));
+        for (kind, text, whole) in found_in(&message.join("\n"), false, words) {
+            found.push(Hit {
+                shown: format!("commit {hash}: {kind}: {text}"),
+                file: None,
+                kind,
+                whole,
+            });
         }
     }
     let mut seen = HashSet::new();
-    found.retain(|hit| seen.insert(hit.clone()));
+    // A token is shown cut short, so two on a line differ only whole.
+    found.retain(|hit| seen.insert((hit.shown.clone(), hit.whole.clone())));
     found
+}
+
+/// The hits to report and those the base already has: a file's hit is left
+/// out when the same hit, found by the same rules, is in `base_copy` (the
+/// base's copy of the file, none when it has none), so `ABC-123` there
+/// leaves out no `ABC-12`; a commit message's never is.
+pub fn leave_out(
+    found: Vec<Hit>,
+    words: &[String],
+    mut base_copy: impl FnMut(&str) -> Option<String>,
+) -> (Vec<Hit>, Vec<Hit>) {
+    let mut on_base: HashMap<String, HashSet<(&'static str, String)>> = HashMap::new();
+    found.into_iter().partition(|hit| {
+        let Some(file) = &hit.file else {
+            return true;
+        };
+        let had = on_base.entry(file.clone()).or_insert_with(|| {
+            let copy = base_copy(file).unwrap_or_default();
+            copy.lines()
+                .flat_map(|line| found_in(line, is_test(file), words))
+                .map(|(kind, _, whole)| same(kind, &whole))
+                .collect()
+        });
+        !had.contains(&same(hit.kind, &hit.whole))
+    })
+}
+
+/// The commit an `a..b` range starts from, the merge base of its ends;
+/// none for a single revision, whose log reads all that came before it, or
+/// when there is none.
+fn base_of(range: &str) -> Option<String> {
+    let end = |s: &str| {
+        if s.is_empty() {
+            "HEAD".to_string()
+        } else {
+            s.to_string()
+        }
+    };
+    let (a, b) = range.split_once("..")?;
+    let b = b.strip_prefix('.').unwrap_or(b);
+    git(&["merge-base", &end(a), &end(b)])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn git(args: &[&str]) -> Result<String, String> {
@@ -285,10 +411,13 @@ fn git(args: &[&str]) -> Result<String, String> {
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
-    let [range] = args.as_slice() else {
-        eprintln!("usage: leak-check <range>");
+    let all = args.iter().any(|a| a == "--all");
+    let rest: Vec<&String> = args.iter().filter(|a| *a != "--all").collect();
+    let [range] = rest.as_slice() else {
+        eprintln!("usage: leak-check [--all] <range>");
         return ExitCode::from(2);
     };
+    let range = range.as_str();
     let words = match read_words(&words_file()) {
         Ok(w) => w,
         Err(e) => {
@@ -297,6 +426,8 @@ pub fn main(args: Vec<String>) -> ExitCode {
         }
     };
     let looked = git(&[
+        "-c",
+        "core.quotePath=false",
         "log",
         "--no-color",
         "--no-ext-diff",
@@ -304,6 +435,9 @@ pub fn main(args: Vec<String>) -> ExitCode {
         "--text",
         "--unified=0",
         "--no-renames",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--no-relative",
         "-p",
         "-m",
         "--format=",
@@ -328,9 +462,22 @@ pub fn main(args: Vec<String>) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let found = hits(&diff, &log, &words);
-    for hit in &found {
-        println!("{hit}");
+    let base = base_of(range);
+    let (kept, left) = leave_out(hits(&diff, &log, &words), &words, |file| {
+        let base = base.as_deref()?;
+        git(&["show", "--no-textconv", &format!("{base}:{file}")]).ok()
+    });
+    for hit in &kept {
+        println!("{}", hit.shown);
     }
-    ExitCode::from(if found.is_empty() { 0 } else { 1 })
+    if !left.is_empty() {
+        let short: String = base.as_deref().unwrap_or("").chars().take(8).collect();
+        if all {
+            for hit in &left {
+                println!("{} (on {short})", hit.shown);
+            }
+        }
+        eprintln!("leak-check: {} already on {short} left out", left.len());
+    }
+    ExitCode::from(if kept.is_empty() { 0 } else { 1 })
 }
