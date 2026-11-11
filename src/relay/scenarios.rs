@@ -1606,6 +1606,43 @@ fn a_waiting_tabs_alert_has_its_options_as_buttons_and_a_press_answers_only_that
 }
 
 #[test]
+fn a_press_on_a_prompt_with_a_countdown_answers_it_while_the_countdown_runs() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let asking = |left: &str| {
+        format!(
+            "Dangerous rm operation\n⚠️ Claude Code will automatically block this request in {left}, to avoid holding up an unattended session\n❯ 1. Yes\n  2. No\n"
+        )
+    };
+    rig.set_screen(&tab, &asking("1:03"));
+    rig.set_state(&tab, "waiting", "1791500200");
+    let tabs_now = tabs::claude_tabs(&rig.cx);
+    rig.block_on(alerts::alert_tabs(&rig.cx, &tabs_now, &[]));
+    let sent = rig
+        .posts()
+        .iter()
+        .find(|p| p.body.contains("is **waiting on you**. Reply here"))
+        .unwrap()
+        .clone();
+    let yes: Value = serde_json::from_str(sent.buttons[0]["value"].as_str().unwrap()).unwrap();
+    rig.set_screen(&tab, &asking("0:51"));
+    rig.block_on(super::presses::handle_press(
+        &rig.cx,
+        super::slack::Press {
+            value: yes,
+            message: Some(super::slack::Pressed {
+                ts: sent.ts.clone(),
+                thread_ts: sent.thread.clone(),
+                text: sent.body.clone(),
+            }),
+            ..Default::default()
+        },
+    ))
+    .unwrap();
+    assert!(rig.screen(&tab).ends_with("\n1"));
+}
+
+#[test]
 fn a_button_made_for_one_tab_answers_that_tab_even_in_a_thread_linked_to_another() {
     let rig = Rig::new();
     let (mine, _) = rig.claude_tab("mine");

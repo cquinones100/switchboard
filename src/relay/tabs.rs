@@ -840,10 +840,18 @@ pub fn prompt_text(found: &Prompt) -> String {
     out
 }
 
+/// The time left in the countdown Claude Code adds to a question in an
+/// unattended session ("Claude Code will automatically block this request
+/// in 1:03, ..."), which changes every second.
+static COUNTDOWN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(block\s+this\s+request\s+in)\s+\d+:\d{2}").unwrap());
+
 /// A short fingerprint of a prompt or dialog: its question and every
 /// option. A button records the one it was made for, so a press only ever
-/// answers that same prompt.
+/// answers that same prompt. The countdown's time is left out, so a press
+/// stays good while it runs down.
 pub fn prompt_hash(question: &str, options: &[PromptOption]) -> String {
+    let question = COUNTDOWN.replace_all(question, "$1");
     let text = format!(
         "{question}\n{}",
         options
@@ -1039,6 +1047,35 @@ pub async fn screen_after(cx: &Cx, id: &str, before: &str, wait: Duration) -> St
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_prompts_hash_leaves_out_the_countdown_and_nothing_else() {
+        let options = [
+            PromptOption {
+                n: 1,
+                label: "Yes".into(),
+                checked: None,
+            },
+            PromptOption {
+                n: 2,
+                label: "No".into(),
+                checked: None,
+            },
+        ];
+        let asking = |rest: &str| {
+            format!(
+                "Dangerous rm operation\n⚠️ Claude Code will automatically block this request {rest}, to avoid holding up an unattended session"
+            )
+        };
+        let first = prompt_hash(&asking("in 1:03"), &options);
+        assert_eq!(first, prompt_hash(&asking("in 0:51"), &options));
+        assert_eq!(first, prompt_hash(&asking("in\n10:00"), &options));
+        assert_ne!(first, prompt_hash(&asking("soon, in 1:03"), &options));
+        assert_ne!(
+            first,
+            prompt_hash(&asking("in 1:03").replace("rm", "mv"), &options)
+        );
+    }
 
     const BOX: &str =
         "⏺ Done.\n\n────────\n{}\n────────\n  Opus 5.5 | Context: 10.0% used\n  -- INSERT --";
