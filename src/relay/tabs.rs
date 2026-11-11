@@ -734,6 +734,67 @@ pub fn screen_of(captured: &str) -> String {
     lines[lines.len().saturating_sub(SCREEN_LINES)..].join("\n")
 }
 
+/// What is typed and unsent in Claude Code's prompt box, if anything, from
+/// a pane's screen (`capture`) and the same screen with what is dimmed left
+/// blank (`capture_typed`), line for line: the box is the lines from the
+/// last rule with the prompt mark at the line's start under it (`❯`, or
+/// `>` in older versions, which also drew sides) to the screen's last
+/// rule. A draft's own lines are indented, so a rule or a `>` in one isn't
+/// taken for the box's. The text is
+/// read from the second, since Claude Code shows its placeholder and a
+/// suggested next prompt dimmed in an empty box.
+pub fn draft_in(screen: &str, typed: &str) -> Option<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let typed: Vec<&str> = typed.lines().collect();
+    let rule = |l: &&str| {
+        let t = l.trim();
+        t.chars().count() >= 3 && t.chars().all(|c| ('\u{2500}'..='\u{257F}').contains(&c))
+    };
+    let marked = |i: usize| {
+        let line = lines[i + 1];
+        let line = line.strip_prefix('│').unwrap_or(line);
+        line.strip_prefix(' ')
+            .unwrap_or(line)
+            .starts_with(['❯', '>'])
+    };
+    let bottom = lines.iter().rposition(rule)?;
+    let top = (0..bottom.saturating_sub(1))
+        .rev()
+        .find(|&i| rule(&lines[i]) && marked(i))?;
+    // Only a box drawn with sides has them taken off its lines.
+    let sided = lines[top].trim_start().starts_with('╭');
+    let unboxed = |l: &str| {
+        let l = l.trim();
+        let l = if sided {
+            let l = l.strip_prefix('│').unwrap_or(l);
+            l.strip_suffix('│').unwrap_or(l)
+        } else {
+            l
+        };
+        l.trim().to_string()
+    };
+    let text: Vec<String> = (top + 1..bottom)
+        .map(|i| {
+            let line = unboxed(typed.get(i).unwrap_or(&""));
+            if i == top + 1 {
+                line.strip_prefix(['❯', '>'])
+                    .unwrap_or(&line)
+                    .trim()
+                    .to_string()
+            } else {
+                line
+            }
+        })
+        .collect();
+    let text = text.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+/// What is typed and unsent in a pane's prompt box (`draft_in`).
+pub fn draft(cx: &Relay, pane: &str) -> Option<String> {
+    draft_in(&cx.mux.capture(pane, 0)?, &cx.mux.capture_typed(pane)?)
+}
+
 /// What a prompt shows, as Markdown: its question, its options (ticked or
 /// not), and how to answer it from Slack.
 pub fn prompt_text(found: &Prompt) -> String {
@@ -972,6 +1033,61 @@ pub async fn screen_after(cx: &Cx, id: &str, before: &str, wait: Duration) -> St
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const BOX: &str =
+        "⏺ Done.\n\n────────\n{}\n────────\n  Opus 5.5 | Context: 10.0% used\n  -- INSERT --";
+
+    fn boxed(lines: &str) -> String {
+        BOX.replace("{}", lines)
+    }
+
+    #[test]
+    fn the_prompt_box_gives_what_is_typed_in_it() {
+        let bare = boxed("❯");
+        assert_eq!(draft_in(&bare, &bare), None);
+        let ruled = boxed("❯ explain this\n  ────────\n  example");
+        assert_eq!(
+            draft_in(&ruled, &ruled).as_deref(),
+            Some("explain this\n────────\nexample")
+        );
+        let nested = boxed("❯ explain this\n  ────────\n  >");
+        assert_eq!(
+            draft_in(&nested, &nested).as_deref(),
+            Some("explain this\n────────\n>")
+        );
+        let bar = boxed("❯ │");
+        assert_eq!(draft_in(&bar, &bar).as_deref(), Some("│"));
+        let quoted = boxed("❯ >");
+        assert_eq!(draft_in(&quoted, &quoted).as_deref(), Some(">"));
+        let typed = boxed("❯ send that to #stream");
+        assert_eq!(
+            draft_in(&typed, &typed).as_deref(),
+            Some("send that to #stream")
+        );
+        let two = boxed("❯ first line\n  second line");
+        assert_eq!(
+            draft_in(&two, &two).as_deref(),
+            Some("first line\nsecond line")
+        );
+        let sided = "╭────╮\n│ > go on   │\n╰────╯\n  ? for shortcuts";
+        assert_eq!(draft_in(sided, sided).as_deref(), Some("go on"));
+    }
+
+    #[test]
+    fn a_dimmed_placeholder_or_suggestion_isnt_a_draft() {
+        let shown = boxed("❯ Try \"fix lint errors\"");
+        let typed = boxed("❯                     ");
+        assert_eq!(draft_in(&shown, &typed), None);
+    }
+
+    #[test]
+    fn a_question_or_a_screen_without_the_box_has_no_draft() {
+        let question = "Do you want to proceed?\n❯ 1. Yes\n  2. No\n\nEsc to cancel";
+        assert_eq!(draft_in(question, question), None);
+        let asked = "────────\n Allow rm?\n❯ 1. Yes\n  2. No\n────────";
+        assert_eq!(draft_in(asked, asked), None);
+        assert_eq!(draft_in("$ ls\nfile", "$ ls\nfile"), None);
+    }
 
     fn write(dir: &Path, name: &str, entries: &[Value]) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();

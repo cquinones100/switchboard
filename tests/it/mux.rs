@@ -192,6 +192,19 @@ fn send_keys_and_capture_pane() {
     client.wait_text("captured-text");
     let text = server.ok(&["capture-pane", "-t", &pane]);
     assert!(text.contains("captured-text"), "{text}");
+    // With -D, what is drawn dimmed is left blank.
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        "-l",
+        "printf 'typed-%s \\033[2mhinted-%s\\033[0m\\n' x y",
+    ]);
+    server.ok(&["send-keys", "-t", &pane, "Enter"]);
+    client.wait_text("typed-x hinted-y");
+    let typed = server.ok(&["capture-pane", "-D", "-t", &pane]);
+    assert!(typed.contains("typed-x"), "{typed}");
+    assert!(!typed.contains("hinted-y"), "{typed}");
 }
 
 #[test]

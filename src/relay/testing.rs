@@ -121,11 +121,28 @@ impl Transport for Rc<FakeSlack> {
 }
 
 /// A pane of the test's own: what its screen shows, which typing adds to
-/// as `cat` echoed it.
+/// as `cat` echoed it. Text between ⟨ and ⟩ is drawn dimmed.
 #[derive(Clone, Debug, Default)]
 pub struct FakePane {
     pub info: PaneInfo,
     pub screen: String,
+}
+
+/// A screen with the text on Claude Code's prompt line, the last starting
+/// `❯`, taken out, and the lines of a draft under it up to the box's rule.
+fn cleared(screen: &str) -> String {
+    let lines: Vec<&str> = screen.split('\n').collect();
+    let Some(at) = lines.iter().rposition(|l| l.trim_start().starts_with('❯')) else {
+        return screen.to_string();
+    };
+    let end = lines[at + 1..]
+        .iter()
+        .position(|l| l.starts_with('─'))
+        .map_or(lines.len(), |n| at + 1 + n);
+    let mut out: Vec<&str> = lines[..at].to_vec();
+    out.push("❯");
+    out.extend(&lines[end..]);
+    out.join("\n")
 }
 
 /// The tabs' stand-in.
@@ -202,6 +219,12 @@ impl Mux for Rc<FakeMux> {
                 "Escape" => "^[".to_string(),
                 "Up" => "^[[A".to_string(),
                 "Down" => "^[[B".to_string(),
+                // Claude Code's prompt line emptied, as Ctrl-U empties it.
+                "C-u" => {
+                    self.with_pane(pane, |p| p.screen = cleared(&p.screen))
+                        .ok_or_else(|| anyhow!("no pane {pane}"))?;
+                    continue;
+                }
                 other => format!("<{other}>"),
             };
             self.with_pane(pane, |p| p.screen.push_str(&echoed))
@@ -223,7 +246,23 @@ impl Mux for Rc<FakeMux> {
     }
 
     fn capture(&self, pane: &str, _back: usize) -> Option<String> {
-        self.with_pane(pane, |p| p.screen.clone())
+        self.with_pane(pane, |p| p.screen.replace(['⟨', '⟩'], ""))
+    }
+
+    fn capture_typed(&self, pane: &str) -> Option<String> {
+        self.with_pane(pane, |p| {
+            let mut out = String::new();
+            let mut dimmed = false;
+            for c in p.screen.chars() {
+                match c {
+                    '⟨' => dimmed = true,
+                    '⟩' => dimmed = false,
+                    _ if dimmed && c != '\n' => out.push(' '),
+                    _ => out.push(c),
+                }
+            }
+            out
+        })
     }
 
     fn new_tab(

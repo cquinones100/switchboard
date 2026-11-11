@@ -8,16 +8,19 @@
 //! numbered choices gets just the keys for your answer, a dialog before a
 //! session starts is answered with the arrow keys, and while either is up
 //! anything that isn't one of its options is refused, since Enter after it
-//! would accept whichever option is selected.
+//! would accept whichever option is selected. A tab whose prompt box holds
+//! text typed and left unsent is asked about first: typed after it, your
+//! message and the draft would go as one prompt.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::Result;
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use super::buttons::{Pick, dialog_buttons, option_buttons, picker_buttons};
+use super::buttons::{Pick, dialog_buttons, option_buttons, picker_buttons, short_id};
 use super::cleanup::{cleanup_button, closed_threads};
 use super::homes::{home_of, home_thread, thread_link};
 use super::post::{Button, PostOpts, offer_choice, post, react, settle_choice};
@@ -567,6 +570,36 @@ pub async fn interrupt(cx: &Cx, tab: &Tab, reply: &Reply) -> Result<Option<Strin
     Ok(ts)
 }
 
+/// The setting that turns off asking about a draft.
+pub const DRAFT_CHECK: &str = "relay_draft_check";
+
+/// What to do with text left unsent in a tab's prompt box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum OverDraft {
+    /// Ask first, with buttons for the others.
+    Ask,
+    /// Type the message after it, so both go as one prompt.
+    After,
+    /// Clear it, then type the message.
+    Replace,
+}
+
+/// A message held while you're asked about a tab's draft, under the id its
+/// buttons carry.
+#[derive(Clone, Debug)]
+pub struct Waiting {
+    pub id: String,
+    pub thread: Option<String>,
+    pub request: Option<String>,
+    pub text: String,
+    pub reply: Reply,
+    pub broadcast: bool,
+}
+
+/// The message waiting on each tab's draft, by tab: a second one for the
+/// same tab takes the first's place.
+pub type Drafts = HashMap<String, Waiting>;
+
 /// Types your message (or answer) into a tab. `request` is your message,
 /// which gets 👀 once the tab's Claude takes it (see followups.rs).
 pub async fn to_tab(
@@ -578,16 +611,157 @@ pub async fn to_tab(
     reply: &Reply,
     broadcast: bool,
 ) -> Result<Option<String>> {
+    send_to_tab(
+        cx,
+        thread,
+        request,
+        tab,
+        text,
+        reply,
+        broadcast,
+        OverDraft::Ask,
+    )
+    .await
+}
+
+/// A message that waited on a tab's draft, sent as the button pressed says;
+/// with the draft gone by then (sent or cleared at the keyboard), typed as
+/// it is, and said so.
+pub async fn send_waiting(
+    cx: &Cx,
+    tab: &Tab,
+    waiting: Waiting,
+    over: OverDraft,
+) -> Result<Option<String>> {
+    // A choice the tab shows now came after the message was held, so the
+    // message is never taken as its answer.
+    if showing_choice(cx, tab, &tabs::screen(cx, &tab.id)) {
+        return say(cx, &waiting.reply, &choice_now(tab), vec![]).await;
+    }
+    let gone = tabs::claude_pane(cx, &tab.id)
+        .ok()
+        .and_then(|p| tabs::draft(cx, &p))
+        .is_none();
+    // Nothing is awaited between the check above and the typing, so a
+    // choice can't come up in between; the note on the draft comes after.
+    let sent = send_to_tab(
+        cx,
+        waiting.thread.as_deref(),
+        waiting.request.as_deref(),
+        tab,
+        &waiting.text,
+        &waiting.reply,
+        waiting.broadcast,
+        over,
+    )
+    .await?;
+    // Typing posts nothing, so a post means it said why it didn't type.
+    if gone && sent.is_none() {
+        let name = label(tab.index, &tab.name);
+        say(
+            cx,
+            &waiting.reply,
+            &format!("The draft in {name} was gone, so I typed your message."),
+            vec![],
+        )
+        .await?;
+    }
+    Ok(sent)
+}
+
+/// Whether a tab shows a choice: numbered options while it waits on you,
+/// or a dialog before its session starts.
+fn showing_choice(cx: &Cx, tab: &Tab, screen: &str) -> bool {
+    let waiting_on_you = tabs::tab(cx, &tab.id).is_some_and(|t| t.state == "waiting");
+    (waiting_on_you && tabs::options_in(screen).is_some()) || tabs::dialog_in(screen).is_some()
+}
+
+fn choice_now(tab: &Tab) -> String {
+    format!(
+        "{} is showing a choice now, so I didn't type your message. Send it again once that's answered.",
+        label(tab.index, &tab.name)
+    )
+}
+
+/// Asks what to do with the draft in a tab's prompt box, holding the
+/// message until a button says.
+async fn ask_about_draft(
+    cx: &Cx,
+    tab: &Tab,
+    draft: &str,
+    waiting: Waiting,
+) -> Result<Option<String>> {
+    let name = label(tab.index, &tab.name);
+    let shown: String = draft.chars().take(300).collect();
+    let quoted = shown
+        .lines()
+        .map(|l| format!("> {l}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = format!(
+        "**{name}** has text typed and unsent in its prompt:\n{quoted}\nWhat do I do with your message? Sent after it, the two go as one prompt."
+    );
+    let button = |label: &str, c: &str| {
+        Button::new(
+            label,
+            json!({ "a": "draft", "c": c, "w": tab.id, "p": waiting.id }),
+        )
+    };
+    let buttons = vec![
+        button("Replace it", "replace").style("danger"),
+        button("Send after it", "after"),
+        button("Keep it", "keep"),
+    ];
+    cx.log(&format!("✋ {name} has a draft; asked before typing"));
+    let reply = waiting.reply.clone();
+    cx.mem.borrow_mut().drafts.insert(tab.id.clone(), waiting);
+    say(cx, &reply, &body, buttons).await
+}
+
+/// Clears a prompt box's draft with Ctrl-U, once a line and once more, `i`
+/// first in vim's Normal mode, giving whether it is gone.
+async fn clear_draft(cx: &Cx, pane: &str, draft: &str) -> bool {
+    let screen = cx.mux.capture(pane, 0).unwrap_or_default();
+    if crate::mission::answer::normal_mode(&screen) {
+        let _ = cx.mux.type_text(pane, "i");
+    }
+    for _ in 0..=draft.lines().count() {
+        let _ = cx.mux.send_keys(pane, &["C-u"]);
+    }
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    while tabs::draft(cx, pane).is_some() {
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_to_tab(
+    cx: &Cx,
+    thread: Option<&str>,
+    request: Option<&str>,
+    tab: &Tab,
+    text: &str,
+    reply: &Reply,
+    broadcast: bool,
+    over: OverDraft,
+) -> Result<Option<String>> {
     let name = label(tab.index, &tab.name);
     if text == "?" || text.is_empty() {
         let turn = tabs::last_turn(cx, &tab.id, None);
         return say(cx, reply, &format!("Last turn in {name}:\n{turn}"), vec![]).await;
     }
+    // A newer message for the tab takes the place of one waiting on its
+    // draft, whether or not it is asked about in turn.
+    cx.mem.borrow_mut().drafts.remove(&tab.id);
     let pane = match tabs::claude_pane(cx, &tab.id) {
         Ok(p) => p,
         Err(e) => return say(cx, reply, &e, vec![]).await,
     };
-    let before = tabs::screen(cx, &tab.id);
+    let mut before = tabs::screen(cx, &tab.id);
     let current = tabs::tab(cx, &tab.id);
     let aimed = target(tab, thread);
     // A tab showing numbered choices gets just the keys for your answer: an
@@ -738,6 +912,43 @@ pub async fn to_tab(
             offer_choice(cx, &tab.id, kind, ts, &format!("🤖 {body}"));
         }
         return Ok(ts);
+    }
+    // Text typed in the prompt box and left unsent would go with the
+    // message as one prompt, so you're asked first.
+    match (over, tabs::draft(cx, &pane)) {
+        (OverDraft::Ask, Some(draft)) if !cx.setting_off(DRAFT_CHECK) => {
+            let waiting = Waiting {
+                id: short_id(),
+                thread: thread.map(str::to_string),
+                request: request.map(str::to_string),
+                text: text.to_string(),
+                reply: reply.clone(),
+                broadcast,
+            };
+            // The thread belongs to the tab already, so a reply while you
+            // decide reaches it, taking the waiting message's place.
+            if let Some(t) = thread {
+                cx.state
+                    .borrow_mut()
+                    .alerts
+                    .insert(t.to_string(), aimed.clone());
+            }
+            return ask_about_draft(cx, tab, &draft, waiting).await;
+        }
+        (OverDraft::Replace, Some(draft)) => {
+            if !clear_draft(cx, &pane, &draft).await {
+                let body =
+                    format!("I couldn't clear the draft in {name}, so I didn't type your message.");
+                return say(cx, reply, &body, vec![]).await;
+            }
+            // A choice that came up while the draft was cleared would take
+            // the message as its answer.
+            before = tabs::screen(cx, &tab.id);
+            if showing_choice(cx, tab, &before) {
+                return say(cx, reply, &choice_now(tab), vec![]).await;
+            }
+        }
+        _ => {}
     }
     // Typed while Claude is mid-turn, the message waits in Claude Code's
     // queue until the turn ends.

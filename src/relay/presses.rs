@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::Cx;
 use super::buttons::{WELCOME_COMMANDS, still_showing};
 use super::cleanup::{cleanup_note, closed_threads, delete_threads};
-use super::commands::{Reply, close_tab, for_tab, handle, interrupt};
+use super::commands::{OverDraft, Reply, close_tab, for_tab, handle, interrupt, send_waiting};
 use super::dashboard::{Refresh, refresh_dashboard};
 use super::post::{PostOpts, post, settle_choice, update};
 use super::quickreplies::still_asking;
@@ -261,6 +261,53 @@ pub async fn handle_press(cx: &Cx, press: Press) -> Result<()> {
                 &pick.text,
             )
             .await?;
+        }
+        // What to do with a draft in the tab's prompt box, for the message
+        // that waits on it: only the latest asked about for that tab.
+        "draft" => {
+            let waiting = cx
+                .mem
+                .borrow()
+                .drafts
+                .get(&w)
+                .filter(|d| d.id == text("p"))
+                .cloned();
+            let Some(waiting) = waiting else {
+                say("🤖 I no longer have that message. Send it again, as a reply in the tab's thread.").await?;
+                return Ok(());
+            };
+            let Some(tab) = tab else {
+                say("🤖 That tab is closed.").await?;
+                return Ok(());
+            };
+            cx.mem.borrow_mut().drafts.remove(&w);
+            let (chose, over) = match text("c").as_str() {
+                "replace" => ("Replace it", Some(OverDraft::Replace)),
+                "after" => ("Send after it", Some(OverDraft::After)),
+                _ => ("Keep it", None),
+            };
+            if let Err(e) = update(
+                cx,
+                &message.ts,
+                &format!("{}\n\n_Chose **{chose}**._", message.text),
+                &[],
+            )
+            .await
+            {
+                cx.log(&format!("couldn't update the pressed message: {e}"));
+            }
+            match over {
+                Some(over) => {
+                    send_waiting(cx, &tab, waiting, over).await?;
+                }
+                None => {
+                    let body = format!(
+                        "Kept the draft in {}, and didn't type your message.",
+                        label(tab.index, &tab.name)
+                    );
+                    super::commands::say(cx, &waiting.reply, &body, vec![]).await?;
+                }
+            }
         }
         _ => {}
     }

@@ -884,5 +884,12 @@
     "label": "Haiku summaries",
     "description": "One line on what each tab is doing in the relay's Home tab and progress, each a paid Haiku call",
     "default": true
+  },
+  {
+    "key": "relay_draft_check",
+    "category": "Slack relay",
+    "label": "Ask before typing over a draft",
+    "description": "A message sent to a tab from Slack while text is typed and unsent in its prompt waits, and the thread asks whether to replace the draft, send after it or keep it. Off, the message is typed after whatever is there and sent, as before",
+    "default": true
   }
 ]

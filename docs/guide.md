@@ -1668,6 +1668,8 @@ Anything else at the top level is not acted on, so a typo never starts work: the
 
 When the relay types your message into a tab, it posts nothing. Your message's reaction says where it is: ⏳ while it waits behind a turn already running, 👀 once the tab's Claude takes it, ✅ once the answer is posted. Meanwhile a "Working on it" message with **Progress** and **Stop** sits where you asked, and is deleted once the answer is posted. If a tab that isn't busy hasn't taken your message after 30 seconds, the relay posts the tab's screen, since a dialog is usually what is in the way. It knows a tab has answered from the events Claude Code's hooks append while the relay runs, so it posts the turn within a couple of seconds; a session started before the hooks were set up is taken as done once its screen has stayed still for 20 seconds.
 
+**An unsent draft.** Text typed in a tab's prompt box and not sent would go with your message as one prompt, so before typing a message the relay reads the prompt box, and when it holds a draft, it types nothing and asks in the thread, quoting the draft, with three buttons: **Replace it** clears the draft (Ctrl-U) and sends your message, **Send after it** types your message where the prompt's cursor is, after the draft unless you moved the cursor back into it, and sends both, and **Keep it** leaves the draft and drops your message. Only what is typed counts: Claude Code's dimmed placeholder and suggested next prompt don't. A second message for the same tab while one waits takes its place and asks again, and the buttons of the first then do nothing. A button pressed once the draft has gone (sent or cleared at the computer) sends your message as it is and says so. The message waits only while the relay runs. Settings' "Ask before typing over a draft" (`relay_draft_check`) off types the message after whatever is there, as before.
+
 **Prompts and questions.** When a tab waits on a permission prompt or a question, the alert shows it and its numbered options, read from the screen, with a button for each. Tap one, or reply with its number or the start of an option. Only the number is pressed, with no Enter after it, since an Enter could accept a second prompt that follows. Anything else is refused while the choice is showing, rather than typed, since it would end with Enter and accept whichever option is selected; the refusal carries the option buttons. A button answers only the prompt it was made for, while that same wait is on, and is replaced by what was chosen once pressed. Answering a prompt anywhere (a button, a typed reply, or at the computer) clears the buttons from every other message showing it. A dialog before a session starts is answered the same way, the relay moving to your option with the arrow keys and pressing Enter.
 
 A question Claude asks you itself (AskUserQuestion) works the same, with more to it. When it asks several at once, Claude Code shows them one at a time in the same wait, so after each answer the relay looks at the screen again and posts the next question, and then the review of your answers, each with its buttons. A question that takes several answers shows its options ticked ☑ or not ☐: a tap or a number ticks or unticks one, `1 3` does two, and **Submit choices** (or `submit`) moves on. Any other reply to a question Claude asked is typed in as its "Type something" option, your own answer.
@@ -1686,7 +1688,7 @@ Then every Claude tab, in groups so what needs you is at the top on a phone: **N
 
 | Button | Does |
 | --- | --- |
-| Message | a field whose text is typed into the tab, handled as a reply in its thread would be; the answer goes in the thread |
+| Message | a field whose text is typed into the tab, handled as a reply in its thread would be (asking first when its prompt holds an unsent draft); the answer goes in the thread |
 | Skill | the Skill form |
 | Go to thread | the tab's thread, once it has one |
 | Progress | `progress`, shown on the screen |
@@ -2059,9 +2061,10 @@ switchboard send-keys [-t pane] [-l|-p] key...
                                          keys by name (Enter, C-c, M-x), a word
                                          that isn't one typed as text; -l types
                                          them all as text, -p pastes them
-switchboard capture-pane [-t pane] [-S lines]
+switchboard capture-pane [-t pane] [-S lines] [-D]
                                          the pane's screen, with that many lines
-                                         of history above it
+                                         of history above it; -D leaves what is
+                                         drawn dimmed blank, as hints are
 switchboard select-pane [-t pane] [-L|-R|-U|-D]
                                          focus a pane, or the one beside it on
                                          that side (the sidebar past the left

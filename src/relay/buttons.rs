@@ -219,7 +219,7 @@ pub fn picker_buttons(cx: &Relay, tabs: &[Tab], pick: Pick) -> Vec<Button> {
 }
 
 /// Eight hex characters no other pick has had in this run.
-fn short_id() -> String {
+pub fn short_id() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);

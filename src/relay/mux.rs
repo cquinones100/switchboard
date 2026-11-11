@@ -86,6 +86,9 @@ pub trait Mux {
     fn paste(&self, pane: &str, text: &str) -> Result<()>;
     /// The screen and `back` lines of history, or `None` for a pane gone.
     fn capture(&self, pane: &str, back: usize) -> Option<String>;
+    /// The screen as `capture` gives it, with what is drawn dimmed left
+    /// blank (`capture-pane -D`), line for line.
+    fn capture_typed(&self, pane: &str) -> Option<String>;
     /// A new tab in the background: its id and its pane's.
     fn new_tab(
         &self,
@@ -197,6 +200,10 @@ impl Mux for Server {
     fn capture(&self, pane: &str, back: usize) -> Option<String> {
         self.ask(&["capture-pane", "-t", pane, "-S", &format!("-{back}")])
             .ok()
+    }
+
+    fn capture_typed(&self, pane: &str) -> Option<String> {
+        self.ask(&["capture-pane", "-D", "-t", pane]).ok()
     }
 
     fn new_tab(

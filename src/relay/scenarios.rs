@@ -165,6 +165,220 @@ fn a_message_to_a_prompt_in_vim_s_normal_mode_presses_i_first() {
     );
 }
 
+const DRAFTED: &str =
+    "⏺ Done.\n────────\n❯ send that to #stream\n────────\n  Opus 5.5 | Context: 10.0% used\n";
+
+/// A reply sent to a tab whose prompt holds a draft, giving the question
+/// the relay posted and a press of one of its buttons.
+fn asked_about_draft(rig: &Rig, tab: &str) -> (super::testing::Post, Vec<Value>) {
+    let thread = alert(rig, tab, rig.index_of(tab), "work");
+    rig.set_screen(tab, DRAFTED);
+    rig.block_on(handle(&rig.cx, message(&now_ts(2), "go on", Some(&thread))))
+        .unwrap();
+    let asked = rig.posts().last().unwrap().clone();
+    let values = asked
+        .buttons
+        .iter()
+        .map(|b| serde_json::from_str(b["value"].as_str().unwrap()).unwrap())
+        .collect();
+    (asked, values)
+}
+
+fn press_on(rig: &Rig, asked: &super::testing::Post, value: Value) {
+    let press = super::slack::Press {
+        value,
+        message: Some(super::slack::Pressed {
+            ts: asked.ts.clone(),
+            thread_ts: asked.thread.clone(),
+            text: asked.body.clone(),
+        }),
+        ..Default::default()
+    };
+    rig.block_on(super::presses::handle_press(&rig.cx, press))
+        .unwrap();
+}
+
+#[test]
+fn a_message_to_a_tab_with_an_unsent_draft_asks_first_and_types_nothing() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let (asked, _) = asked_about_draft(&rig, &tab);
+    assert!(rig.mux.sent.borrow().is_empty(), "nothing typed");
+    assert!(
+        asked.body.contains("> send that to #stream"),
+        "{}",
+        asked.body
+    );
+    let names: Vec<&str> = asked
+        .buttons
+        .iter()
+        .map(|b| b["text"]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Replace it", "Send after it", "Keep it"]);
+    let thread = asked.thread.clone().unwrap();
+    assert_eq!(
+        rig.cx.state.borrow().alerts[&thread].window,
+        tab,
+        "the thread leads to the tab while you decide"
+    );
+}
+
+#[test]
+fn send_after_it_types_the_message_after_the_draft() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    press_on(&rig, &asked, values[1].clone());
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste go on"), format!("{pane} key Enter")]
+    );
+    assert!(
+        rig.cx.state.borrow().following.contains_key(&tab),
+        "followed as any message typed in"
+    );
+}
+
+#[test]
+fn replace_it_clears_the_draft_then_types_the_message() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    press_on(&rig, &asked, values[0].clone());
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [
+            format!("{pane} key C-u"),
+            format!("{pane} key C-u"),
+            format!("{pane} paste go on"),
+            format!("{pane} key Enter")
+        ]
+    );
+    assert!(!rig.screen(&tab).contains("send that"));
+}
+
+#[test]
+fn keep_it_types_nothing_and_says_so() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    press_on(&rig, &asked, values[2].clone());
+    assert!(rig.mux.sent.borrow().is_empty());
+    assert!(
+        rig.posts()
+            .last()
+            .unwrap()
+            .body
+            .contains("Kept the draft in tab")
+    );
+    // Pressed again, the message is no longer held.
+    press_on(&rig, &asked, values[1].clone());
+    assert!(rig.mux.sent.borrow().is_empty());
+    assert!(
+        rig.posts()
+            .last()
+            .unwrap()
+            .body
+            .contains("I no longer have that message")
+    );
+}
+
+#[test]
+fn a_press_once_the_draft_is_gone_types_the_message_and_says_so() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    rig.set_screen(&tab, &DRAFTED.replace("❯ send that to #stream", "❯"));
+    press_on(&rig, &asked, values[0].clone());
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste go on"), format!("{pane} key Enter")],
+        "no Ctrl-U with nothing to clear"
+    );
+    assert!(rig.posts().iter().any(|p| p.body.contains("was gone")));
+}
+
+#[test]
+fn a_newer_message_typed_at_once_drops_the_one_waiting_on_a_draft() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    rig.set_screen(&tab, &DRAFTED.replace("❯ send that to #stream", "❯"));
+    let thread = asked.thread.clone().unwrap_or(asked.ts.clone());
+    rig.block_on(handle(&rig.cx, message(&now_ts(3), "newer", Some(&thread))))
+        .unwrap();
+    press_on(&rig, &asked, values[1].clone());
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste newer"), format!("{pane} key Enter")],
+        "the older message isn't typed after the newer one"
+    );
+}
+
+#[test]
+fn a_held_message_is_never_taken_as_the_answer_to_a_later_choice() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    rig.set_screen(&tab, "Allow rm -rf build?\n❯ 1. Yes\n  2. No\n");
+    rig.set_state(&tab, "waiting", "1791500200");
+    press_on(&rig, &asked, values[1].clone());
+    assert!(rig.mux.sent.borrow().is_empty(), "nothing pressed");
+    assert!(
+        rig.posts()
+            .last()
+            .unwrap()
+            .body
+            .contains("is showing a choice now")
+    );
+}
+
+#[test]
+fn a_numbered_list_in_an_idle_tabs_answer_doesnt_stop_a_held_message() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let (asked, values) = asked_about_draft(&rig, &tab);
+    rig.set_screen(&tab, &format!("❯ 1. First\n  2. Second\n{DRAFTED}"));
+    press_on(&rig, &asked, values[1].clone());
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste go on"), format!("{pane} key Enter")]
+    );
+}
+
+#[test]
+fn a_dimmed_suggestion_in_the_prompt_isnt_a_draft() {
+    let rig = Rig::new();
+    let (tab, pane) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    rig.set_screen(
+        &tab,
+        &DRAFTED.replace("❯ send that to #stream", "❯ ⟨Try \"fix lint\"⟩"),
+    );
+    rig.block_on(handle(&rig.cx, message(&now_ts(2), "go on", Some(&thread))))
+        .unwrap();
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste go on"), format!("{pane} key Enter")]
+    );
+}
+
+#[test]
+fn with_the_draft_check_off_the_message_is_typed_after_the_draft() {
+    let mut rig = Rig::new();
+    std::rc::Rc::get_mut(&mut rig.cx).unwrap().settings =
+        Box::new(|k| (k == "relay_draft_check").then_some(json!(false)));
+    let (tab, pane) = rig.claude_tab("work");
+    let thread = alert(&rig, &tab, rig.index_of(&tab), "work");
+    rig.set_screen(&tab, DRAFTED);
+    rig.block_on(handle(&rig.cx, message(&now_ts(2), "go on", Some(&thread))))
+        .unwrap();
+    assert_eq!(
+        rig.mux.sent.borrow().clone(),
+        [format!("{pane} paste go on"), format!("{pane} key Enter")]
+    );
+}
+
 #[test]
 fn unrecognised_messages_ones_naming_a_tab_and_old_ones_are_not_typed_anywhere() {
     let rig = Rig::new();

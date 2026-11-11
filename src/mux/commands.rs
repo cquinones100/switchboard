@@ -25,7 +25,8 @@
 //!                                        with -p, text pasted (bracketed
 //!                                        when the pane asks), as tmux's
 //!                                        paste-buffer -p
-//! capture-pane [-t pane] [-S lines]      the screen (and that much history)
+//! capture-pane [-t pane] [-S lines] [-D] the screen (and that much history),
+//!                                        with -D what is dimmed left blank
 //! select-pane [-t pane] [-L|-R|-U|-D]   that pane; with a side, the pane
 //!                                        beside it there (the sidebar past
 //!                                        the left edge), as an app moving
@@ -124,7 +125,7 @@ pub const USAGE: &[(&str, &str)] = &[
     ),
     (
         "capture-pane",
-        "capture-pane [-t pane] [-S lines]: the screen, and that much history",
+        "capture-pane [-t pane] [-S lines] [-D]: the screen, and that much history; -D leaves what is dimmed blank",
     ),
     (
         "select-pane",
@@ -689,7 +690,12 @@ impl Server {
                 .map_err(|_| format!("-S {s} isn't a number of lines"))?,
             None => 0,
         };
-        let mut text = slot.pane.text(rows as usize + back);
+        let lines = rows as usize + back;
+        let mut text = if a.has('D') {
+            slot.pane.typed_text(lines)
+        } else {
+            slot.pane.text(lines)
+        };
         if !text.is_empty() && !text.ends_with('\n') {
             text.push('\n');
         }

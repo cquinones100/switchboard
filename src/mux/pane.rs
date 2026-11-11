@@ -1191,10 +1191,22 @@ impl Pane {
         self.text_and_links(lines).0
     }
 
+    /// As `text`, with what is drawn dimmed made blanks: what a program
+    /// shows greyed is a hint rather than something typed, as Claude Code
+    /// shows its prompt's placeholder and suggested next prompt
+    /// (`capture-pane -D`, for the relay's check for an unsent draft).
+    pub fn typed_text(&self, lines: usize) -> String {
+        self.lines_and_links(lines, false).0
+    }
+
     /// As `text`, with the hyperlinks (OSC 8) in it: each run of text a
     /// program made a link, by its bytes in the text, and its address, as
     /// tmux's `capture-pane -e` kept them for link-view.sh to read.
     pub fn text_and_links(&self, lines: usize) -> (String, Vec<(Range<usize>, String)>) {
+        self.lines_and_links(lines, true)
+    }
+
+    fn lines_and_links(&self, lines: usize, dimmed: bool) -> (String, Vec<(Range<usize>, String)>) {
         let grid = self.term.grid();
         let cols = self.term.columns();
         let history = grid.history_size().min(lines);
@@ -1215,6 +1227,10 @@ impl Pane {
                     continue;
                 }
                 let start = current.len();
+                if !dimmed && cell.flags.contains(Flags::DIM) {
+                    current.push(' ');
+                    continue;
+                }
                 current.push(if cell.c == '\t' { ' ' } else { cell.c });
                 if let Some(marks) = cell.zerowidth() {
                     current.extend(marks);
@@ -1884,6 +1900,15 @@ mod tests {
         assert_eq!(lines[1][0].content, "ok");
         assert_eq!(lines[1][0].style.fg, Some(Color::Indexed(2)));
         assert!(lines[1][0].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn typed_text_leaves_what_is_dimmed_blank() {
+        let mut run = idle(20, 2);
+        run.pane
+            .process("> \x1b[2mTry this\x1b[0m\r\n> fix it \x1b[2mhint\x1b[0m".as_bytes());
+        assert_eq!(run.pane.text(2), "> Try this\n> fix it hint");
+        assert_eq!(run.pane.typed_text(2), ">\n> fix it");
     }
 
     #[test]

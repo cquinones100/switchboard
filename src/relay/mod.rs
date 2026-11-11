@@ -147,6 +147,7 @@ pub struct Memory {
     pub milestones: milestones::Memory,
     pub screens: screens::Memory,
     pub picks: buttons::Picks,
+    pub drafts: commands::Drafts,
     /// The welcome message's words, for editing it when the app's ID comes.
     pub welcome: String,
 }
