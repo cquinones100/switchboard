@@ -889,7 +889,7 @@
     "key": "build_before_restart",
     "category": "Updates",
     "label": "Build before restarting",
-    "description": "M-p's \"Restart Switchboard on the latest build on disk\" first builds the checkout a build from a clone came from (cargo build --release --locked) and puts it in place of the binary the server runs, restarting only when that is new; off, it restarts on the binary on disk as it is, when that is new",
+    "description": "M-p's \"Restart Switchboard on the latest build on disk\" first builds the checkout a build from a clone came from (cargo build --release --locked) and puts it in place of the binary the server runs, restarting only when that is new (from a cargo target directory, which other worktrees write over, the build goes to ~/.local/bin/switchboard, else a copy in ~/.cache/switchboard/build, and the restart runs from there); off, it restarts on the binary on disk as it is, when that is new",
     "default": true
   },
   {

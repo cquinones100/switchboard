@@ -1076,7 +1076,7 @@ impl Server {
             } => {
                 // Answered once the build it restarts on has taken over.
                 if super::upgrade::asks_upgrade(&args) {
-                    self.upgrade_asked(Some(reply), None);
+                    self.upgrade_asked(Some(reply), None, None);
                     return;
                 }
                 let answer = self.command(&args, &cwd, pane.as_deref(), stdin.as_deref());

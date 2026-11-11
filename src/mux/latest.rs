@@ -20,6 +20,24 @@
 //! (a build of another worktree installed) is restarted on as it is, with
 //! nothing built over it.
 //!
+//! A server running from a cargo target directory (`target/debug`, or one
+//! `CARGO_TARGET_DIR` shares between worktrees) never restarts on that
+//! path: any worktree's build or `cargo test` writes over it, so a file
+//! found there may be another branch's build, and one put there would be
+//! written over again. The build goes instead to the installed build
+//! (`~/.local/bin/switchboard`, where install.sh puts it) when there is
+//! one, else to a copy of the server's own in `~/.cache/switchboard/build`,
+//! and the restart runs from there, whether or not the build changed
+//! anything, so the server leaves the target directory on the first press,
+//! unless a build was installed there since the server started, which is
+//! restarted on as it is.
+//! The link `switchboard try` makes at the first into the worktree's target
+//! directory is pointed at the second, which the next try links back. With
+//! nothing to build it restarts on the installed build as it is, unless
+//! that is a link into a target directory; with none, it says there is
+//! nothing new while its own file is unchanged, and refuses once another
+//! build has written over it.
+//!
 //! `SWITCHBOARD_CHECKOUT` in the server's environment names another
 //! checkout to build (with cargo's own target directory), or, empty, none;
 //! the tests use it so that nothing they do builds this repository.
@@ -69,7 +87,12 @@ static LAST_BUILT: Mutex<Option<Stamp>> = Mutex::new(None);
 /// one has taken its place.
 pub fn remember(binary: &Path) {
     let _ = STARTED.set(Stamp::of(binary));
+    let _ = INSTALLED.set(Stamp::of(&installed_path(&paths::home())));
 }
+
+/// The installed build as the server started, to tell one put in place
+/// since.
+static INSTALLED: OnceLock<Option<Stamp>> = OnceLock::new();
 
 /// Whether the file at `binary` is no longer the one the server started
 /// from (or that isn't known).
@@ -191,24 +214,144 @@ pub fn install(built: &Path, binary: &Path) -> Result<(), String> {
         .map_err(|e| format!("{e:#}"))
 }
 
+/// Whether `binary` is in a cargo target directory: its real path has an
+/// ancestor holding cargo's `CACHEDIR.TAG` (as build.rs finds one), or lies
+/// under the target directory this build was made in.
+pub fn in_target_dir(binary: &Path) -> bool {
+    let real = std::fs::canonicalize(binary).unwrap_or_else(|_| binary.to_path_buf());
+    let tagged = |dir: &Path| {
+        std::fs::read_to_string(dir.join("CACHEDIR.TAG")).is_ok_and(|tag| tag.contains("cargo"))
+    };
+    let built_in = checkout().and_then(|(_, target)| target);
+    real.ancestors().skip(1).any(tagged)
+        || built_in.is_some_and(|target| {
+            let target = std::fs::canonicalize(&target).unwrap_or(target);
+            real.starts_with(target)
+        })
+}
+
+/// install.sh's place for the installed build, and where `switchboard
+/// try` links its home's to the worktree's build.
+fn installed_path(home: &Path) -> PathBuf {
+    home.join(".local/bin/switchboard")
+}
+
+/// The installed build, when there is one to restart on as it is: not a
+/// link into a cargo target directory (as a try's is).
+fn installed(home: &Path) -> Option<PathBuf> {
+    let path = installed_path(home);
+    (path.exists() && !in_target_dir(&path)).then_some(path)
+}
+
+/// The path M-p's restart execs: the server's own `binary`, unless that is
+/// in a cargo target directory, which other worktrees' builds and tests
+/// write over; then the installed build's path when there is one (a link
+/// into a target directory included, which the build replaces), else a
+/// copy of the server's own in the cache.
+pub fn restart_on(home: &Path, binary: &Path) -> PathBuf {
+    if !in_target_dir(binary) {
+        return binary.to_path_buf();
+    }
+    let path = installed_path(home);
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return path;
+    }
+    cache_copy(home)
+}
+
+/// The copy of the server's own in the cache, for a restart off a target
+/// directory with no installed build.
+fn cache_copy(home: &Path) -> PathBuf {
+    home.join(".cache/switchboard/build/switchboard")
+}
+
+/// Puts `built` at `on`, the restart's path off a target directory. A link
+/// there into a target directory (a try's) is pointed at the cache's copy,
+/// the build put there, so the commands on the PATH and the server run the
+/// same file outside it, and the next `switchboard try` can link it again.
+fn put(home: &Path, built: &Path, on: &Path) -> Result<(), String> {
+    let is_link = std::fs::symlink_metadata(on).is_ok_and(|m| m.file_type().is_symlink());
+    let relink = is_link && in_target_dir(on);
+    let to = if relink {
+        cache_copy(home)
+    } else {
+        on.to_path_buf()
+    };
+    if let Some(folder) = to.parent() {
+        std::fs::create_dir_all(folder)
+            .map_err(|e| format!("{} couldn't be made ({e})", paths::tilde(folder)))?;
+    }
+    install(built, &to)?;
+    if !relink {
+        return Ok(());
+    }
+    let folder = on.parent().unwrap_or(Path::new("."));
+    let new = folder.join(format!(".switchboard.link-{}", std::process::id()));
+    let _ = std::fs::remove_file(&new);
+    std::os::unix::fs::symlink(&to, &new)
+        .and_then(|()| std::fs::rename(&new, on))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&new);
+            format!(
+                "{} couldn't be pointed at the build ({e})",
+                paths::tilde(on)
+            )
+        })
+}
+
 /// Builds and installs as the module's comment says (unless `build` is
-/// off), and gives whether the binary at the server's path is now a new
-/// one. A binary already put there since the server started (a build of
-/// another checkout installed by hand) is the latest one, so nothing is
-/// built over it.
-pub fn bring_up_to_date(binary: &Path, build_first: bool) -> Result<bool, String> {
+/// off), and gives the binary to restart on, or `None` when there is
+/// nothing new. A binary already put at the server's path since it started
+/// (a build of another checkout installed by hand) is the latest one, so
+/// nothing is built over it, unless that path is in a cargo target
+/// directory, where the restart moves to `restart_on` as the module's
+/// comment says.
+pub fn bring_up_to_date(
+    home: &Path,
+    binary: &Path,
+    build_first: bool,
+) -> Result<Option<PathBuf>, String> {
+    let to_build = checkout().filter(|_| build_first);
+    if in_target_dir(binary) {
+        let Some((dir, target)) = to_build else {
+            return match installed(home) {
+                Some(installed) => Ok(Some(installed)),
+                None if !is_new(binary) => Ok(None),
+                None => Err(
+                    "Switchboard runs from a cargo target directory, which other worktrees' builds write over, and has no checkout to build; install a build (install.sh) to restart on it"
+                        .to_string(),
+                ),
+            };
+        };
+        let mut last_built = LAST_BUILT.lock().unwrap_or_else(|e| e.into_inner());
+        // A build installed since the server started (another worktree's,
+        // as this repository's CLAUDE.md installs one before M-p) is the
+        // latest: restarted on as it is, with nothing built over it.
+        if let Some(installed) = installed(home) {
+            let now = Stamp::of(&installed);
+            let since_start = INSTALLED.get().is_some_and(|started| *started != now);
+            if since_start && *last_built != now {
+                return Ok(Some(installed));
+            }
+        }
+        let on = restart_on(home, binary);
+        let built = build(&dir, target.as_deref())?;
+        put(home, &built, &on)?;
+        *last_built = Stamp::of(&on);
+        return Ok(Some(on));
+    }
     let mut last_built = LAST_BUILT.lock().unwrap_or_else(|e| e.into_inner());
     let now = Stamp::of(binary);
     let installed_by_hand = now.is_some() && is_new(binary) && *last_built != now;
     if installed_by_hand {
-        return Ok(true);
+        return Ok(Some(binary.to_path_buf()));
     }
-    if build_first && let Some((dir, target)) = checkout() {
+    if let Some((dir, target)) = to_build {
         let built = build(&dir, target.as_deref())?;
         install(&built, binary)?;
         *last_built = Stamp::of(binary);
     }
-    Ok(is_new(binary))
+    Ok(is_new(binary).then(|| binary.to_path_buf()))
 }
 
 #[cfg(test)]
@@ -254,6 +397,75 @@ mod tests {
         std::fs::remove_file(&file).unwrap();
         std::fs::write(&file, "two!").unwrap();
         assert_ne!(Stamp::of(&file), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A temporary folder of the test's own, emptied first.
+    fn fresh(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("sb-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    const CARGO_TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# This file is a cache directory tag created by cargo.\n";
+
+    #[test]
+    fn a_binary_under_a_cachedir_tag_is_in_a_target_directory() {
+        let dir = fresh("target-dir");
+        std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("target/CACHEDIR.TAG"), CARGO_TAG).unwrap();
+        std::fs::write(dir.join("target/debug/switchboard"), "").unwrap();
+        std::fs::write(dir.join("bin/switchboard"), "").unwrap();
+        assert!(in_target_dir(&dir.join("target/debug/switchboard")));
+        assert!(!in_target_dir(&dir.join("bin/switchboard")));
+        // Another program's cache tag isn't cargo's.
+        std::fs::write(
+            dir.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55\n",
+        )
+        .unwrap();
+        assert!(!in_target_dir(&dir.join("bin/switchboard")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_restart_from_a_target_directory_lands_on_the_installed_build_else_a_copy() {
+        let dir = fresh("restart-on");
+        let home = dir.join("home");
+        std::fs::create_dir_all(dir.join("target/debug")).unwrap();
+        std::fs::write(dir.join("target/CACHEDIR.TAG"), CARGO_TAG).unwrap();
+        let binary = dir.join("target/debug/switchboard");
+        std::fs::write(&binary, "").unwrap();
+        assert_eq!(
+            restart_on(&home, &binary),
+            home.join(".cache/switchboard/build/switchboard")
+        );
+        // The link `switchboard try` makes into a target directory is
+        // pointed at the cache's copy, the build put there, not written
+        // through.
+        let link = home.join(".local/bin/switchboard");
+        std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+        std::os::unix::fs::symlink(&binary, &link).unwrap();
+        assert_eq!(restart_on(&home, &binary), link);
+        let built = dir.join("built");
+        let new = "#!/bin/sh\necho 'switchboard 0.0.1 (x)'\n";
+        std::fs::write(&built, new).unwrap();
+        put(&home, &built, &link).unwrap();
+        let copy = home.join(".cache/switchboard/build/switchboard");
+        assert_eq!(std::fs::read_link(&link).unwrap(), copy);
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), new);
+        assert_eq!(std::fs::read_to_string(&binary).unwrap(), "");
+        std::fs::remove_file(&link).unwrap();
+        std::fs::write(home.join(".local/bin/switchboard"), "").unwrap();
+        assert_eq!(
+            restart_on(&home, &binary),
+            home.join(".local/bin/switchboard")
+        );
+        let elsewhere = dir.join("switchboard");
+        std::fs::write(&elsewhere, "").unwrap();
+        assert_eq!(restart_on(&home, &elsewhere), elsewhere);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

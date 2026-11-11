@@ -72,8 +72,10 @@ use crate::{paths, settings};
 pub const VERSION: u32 = 1;
 /// The file, in the state directory.
 pub const FILE: &str = "handover.json";
-/// How long the new binary has to say its version.
-const CHECK_WAIT: Duration = Duration::from_secs(5);
+/// How long the new binary has to say its version: the first run of a
+/// file just written can take seconds (a security agent looking at it, or
+/// a busy disk paging it in), so this only stops a build that hangs.
+const CHECK_WAIT: Duration = Duration::from_secs(30);
 /// How long the panes have to pause and the commands under way to be
 /// answered before the handover goes ahead without them.
 const SETTLE: Duration = Duration::from_secs(1);
@@ -309,15 +311,17 @@ struct Pending {
     client: Option<ClientId>,
     /// The new binary said it can take over.
     checked: bool,
+    /// The binary the restart execs.
+    on: PathBuf,
 }
 
 /// What the check off the server's task found.
 #[derive(Debug)]
 pub enum UpgradeEvent {
     Checked(Result<(), String>),
-    /// M-p's build for the terminal that asked: whether there is a new
-    /// binary to restart on, or why the build failed.
-    Built(ClientId, Result<bool, String>),
+    /// M-p's build for the terminal that asked: the binary to restart on,
+    /// `None` when there is nothing new, or why the build failed.
+    Built(ClientId, Result<Option<PathBuf>, String>),
 }
 
 /// Whether a command's arguments ask for an upgrade (and not its usage).
@@ -328,23 +332,27 @@ pub fn asks_upgrade(args: &[String]) -> bool {
 
 impl Server {
     /// An upgrade asked for, by `switchboard upgrade` (answered on `asker`)
-    /// or a key on `client`: the new binary is checked off the server's
-    /// task, and the handover runs from the server's loop once it passes.
+    /// or a key on `client`: the new binary (`on`, else the path the
+    /// server started from) is checked off the server's task, and the
+    /// handover runs from the server's loop once it passes.
     pub fn upgrade_asked(
         &mut self,
         asker: Option<oneshot::Sender<Answer>>,
         client: Option<ClientId>,
+        on: Option<PathBuf>,
     ) {
+        let on = on.or_else(binary);
         let pending = Pending {
             asker,
             client,
             checked: false,
+            on: on.clone().unwrap_or_default(),
         };
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
             self.upgrade_refused(pending, "it is restarting on the new build already");
             return;
         }
-        let Some(binary) = binary() else {
+        let Some(binary) = on else {
             self.upgrade_refused(pending, "the binary it was started from isn't known");
             return;
         };
@@ -391,7 +399,7 @@ impl Server {
         self.upgrade.building = true;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let result = super::latest::bring_up_to_date(&binary, build_first);
+            let result = super::latest::bring_up_to_date(&paths::home(), &binary, build_first);
             let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
         });
     }
@@ -402,8 +410,8 @@ impl Server {
             UpgradeEvent::Built(client, result) => {
                 self.upgrade.building = false;
                 match result {
-                    Ok(true) => self.upgrade_asked(None, Some(client)),
-                    Ok(false) => self.say(Some(client), "Already on the latest build."),
+                    Ok(Some(on)) => self.upgrade_asked(None, Some(client), Some(on)),
+                    Ok(None) => self.say(Some(client), "Already on the latest build."),
                     Err(why) => self.say(
                         Some(client),
                         &format!("The build failed: {why}. Switchboard goes on as it was."),
@@ -523,10 +531,7 @@ pub(super) async fn hand_over(server: &mut Server, lp: &mut Loop<'_>) {
     let Some(pending) = server.upgrade.pending.take() else {
         return;
     };
-    let Some(binary) = binary() else {
-        server.upgrade_refused(pending, "the binary it was started from isn't known");
-        return;
-    };
+    let binary = pending.on.clone();
     server.upgrade.handing = true;
     let client = pending.client;
     let asker = match pending.asker {
