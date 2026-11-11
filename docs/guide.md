@@ -866,7 +866,7 @@ Switchboard talks to GitHub and Linear over their own APIs, so nothing else has 
 - **GitHub**: `GH_TOKEN`, `GITHUB_TOKEN`, the token of the `gh` command when it is installed and signed in, else the stored secret `github-token`.
 - **Linear**: `LINEAR_API_KEY`, the stored secret `linear-api-key`, else `linearApiKey` in `~/.config/switchboard/linear.json`. Make a key in Linear under Settings, Security & access, Personal API keys.
 
-A credential from `gh`, a secret or the file is kept for ten minutes and forgotten as soon as the service refuses it, so a new one is used on the next request. To store a secret, run the command and paste it, then press `Ctrl-d`:
+A credential from `gh`, a secret or the file is kept for ten minutes and forgotten as soon as the service refuses it, so a new one is used on the next request. GitHub's is looked for once at a time, and a look that finds nothing (a `gh` signed out, or too slow on a busy computer) is made again only after a minute, the token found before still used meanwhile. To store a secret, run the command and paste it, then press `Ctrl-d`:
 
 ```
 switchboard platform secret-set github-token

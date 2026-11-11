@@ -83,6 +83,13 @@ impl Remembered {
             .map(|(credential, _)| credential.clone())
     }
 
+    /// The credential found last, however long ago: for when a look finds
+    /// nothing, which needn't mean the one before stopped working.
+    pub fn last(&self) -> Option<Credential> {
+        let found = self.found.lock().unwrap_or_else(|e| e.into_inner());
+        found.as_ref().map(|(credential, _)| credential.clone())
+    }
+
     pub fn set(&self, credential: &Credential) {
         *self.found.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((credential.clone(), util::now_ms()));

@@ -10,6 +10,10 @@
 //! token` when gh happens to be installed and signed in, else the stored
 //! secret `github-token`. What gh or the secret gave is kept ten minutes,
 //! since each look is a process, and forgotten as soon as GitHub refuses it.
+//! One look runs at a time, the others waiting on its answer, and a look
+//! that found nothing (a gh signed out, or too slow on a busy computer) isn't
+//! made again for a minute, the token found before still used meanwhile, so
+//! a stuck gh is one process a minute rather than one each lookup.
 //!
 //! Every call refuses while the `github` setting is off (but in a program
 //! you run yourself, `super::run_by_you`), and is counted in
@@ -18,6 +22,7 @@
 use std::fmt;
 use std::path::Path;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -48,6 +53,16 @@ pub fn graphql_url() -> String {
 
 static REMEMBERED: Remembered = Remembered::new();
 
+// The look under way, which the others wait on rather than run gh too.
+static LOOKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+// When a look last found nothing, in ms; 0 once one finds a token or the
+// token is forgotten.
+static FOUND_NOTHING_AT: AtomicI64 = AtomicI64::new(0);
+
+/// How long a look that found nothing stands before the next one.
+const LOOK_AGAIN_MS: i64 = 60 * 1000;
+
 /// How long `gh auth token` may take. It only reads gh's own config or the
 /// keyring, so a gh that takes longer is stuck, and the secret is tried.
 const GH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -69,6 +84,15 @@ async fn credential() -> Result<Credential> {
     if let Some(known) = REMEMBERED.get() {
         return Ok(known);
     }
+    let _one_look = LOOKING.lock().await;
+    if let Some(known) = REMEMBERED.get() {
+        return Ok(known);
+    }
+    let found_nothing_lately =
+        util::now_ms() - FOUND_NOTHING_AT.load(Ordering::Relaxed) < LOOK_AGAIN_MS;
+    if found_nothing_lately {
+        return REMEMBERED.last().ok_or_else(no_token);
+    }
     let found = match from_gh().await {
         Some(value) => Some(Credential {
             value,
@@ -81,18 +105,26 @@ async fn credential() -> Result<Credential> {
     };
     match found {
         Some(credential) => {
+            FOUND_NOTHING_AT.store(0, Ordering::Relaxed);
             REMEMBERED.set(&credential);
             Ok(credential)
         }
-        None => Err(ServiceError::new(
-            ErrorKind::NoCredentials,
-            SERVICE,
-            "No GitHub token: set GH_TOKEN, sign in with `gh auth login` if you use gh, or \
-             store a token with `switchboard platform secret-set github-token` (it reads the \
-             token from stdin).",
-        )
-        .into()),
+        None => {
+            FOUND_NOTHING_AT.store(util::now_ms(), Ordering::Relaxed);
+            REMEMBERED.last().ok_or_else(no_token)
+        }
     }
+}
+
+fn no_token() -> anyhow::Error {
+    ServiceError::new(
+        ErrorKind::NoCredentials,
+        SERVICE,
+        "No GitHub token: set GH_TOKEN, sign in with `gh auth login` if you use gh, or \
+         store a token with `switchboard platform secret-set github-token` (it reads the \
+         token from stdin).",
+    )
+    .into()
 }
 
 // gh's own token, when gh is there and signed in. Its absence, or a gh that
@@ -106,10 +138,11 @@ async fn from_gh() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// Forgets the token gh or the secret gave, so the next request looks again:
-/// for after the person signs in anew.
+/// Forgets the token gh or the secret gave, so the next request looks again
+/// at once: for after the person signs in anew.
 pub fn forget_token() {
     REMEMBERED.forget();
+    FOUND_NOTHING_AT.store(0, Ordering::Relaxed);
 }
 
 // ── Requests ────────────────────────────────────────────────────────────────

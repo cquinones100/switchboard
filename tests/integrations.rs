@@ -403,11 +403,55 @@ fn without_a_token_it_says_how_to_store_one() {
         json!({ "linearApiKey": "lin_api_file" }).to_string(),
     )
     .unwrap();
+    // A look that found nothing stands a minute; forgetting looks again now.
+    github::forget_token();
     assert_eq!(util::block_on(github::token()).unwrap(), "from-file");
     assert_eq!(util::block_on(linear::api_key()).unwrap(), "lin_api_file");
     // The variables come first.
     set("GH_TOKEN", "from-env");
     assert_eq!(util::block_on(github::token()).unwrap(), "from-env");
+    stand_in::assert_none_refused(&env.home.join("bin"));
+}
+
+/// A stand-in gh in the test's PATH that writes a line to `runs` each time
+/// `gh auth token` runs, then does `then` (sh).
+fn gh_counting(env: &Env, then: &str) -> PathBuf {
+    let runs = env.home.join("gh-runs");
+    stand_in::Gh::new()
+        .answer(&format!(
+            "printf 'run\\n' >> {}\n{then}",
+            stand_in::sh_quote(&runs.to_string_lossy())
+        ))
+        .install(&env.home.join("bin"));
+    runs
+}
+
+fn lines_in(file: &Path) -> usize {
+    std::fs::read_to_string(file).map_or(0, |t| t.lines().count())
+}
+
+#[test]
+fn lookups_at_once_run_gh_once() {
+    let env = Env::new("gh-once");
+    let runs = gh_counting(&env, "printf 'gho_once\\n'");
+    let tokens =
+        util::block_on(async { tokio::join!(github::token(), github::token(), github::token()) });
+    for token in [tokens.0, tokens.1, tokens.2] {
+        assert_eq!(token.unwrap(), "gho_once");
+    }
+    assert_eq!(lines_in(&runs), 1);
+    stand_in::assert_none_refused(&env.home.join("bin"));
+}
+
+#[test]
+fn a_gh_that_gives_nothing_is_asked_again_only_after_a_minute() {
+    let env = Env::new("gh-backoff");
+    let runs = gh_counting(&env, "exit 1");
+    for _ in 0..3 {
+        let err = util::block_on(github::token()).unwrap_err();
+        assert_eq!(kind(&err), ErrorKind::NoCredentials);
+    }
+    assert_eq!(lines_in(&runs), 1);
     stand_in::assert_none_refused(&env.home.join("bin"));
 }
 
