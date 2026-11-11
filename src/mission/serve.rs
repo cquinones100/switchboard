@@ -193,14 +193,12 @@ pub enum Opening {
     Picker(Scope),
 }
 
-/// The shades mission control is drawn in: the light ones when the theme
-/// is light (src/status/theme.rs), as the sidebar's.
-fn theme() -> Theme {
-    if crate::status::theme::light() {
-        Theme::LIGHT
-    } else {
-        Theme::DARK
-    }
+/// The shades mission control is drawn in for a client: the light ones
+/// when the theme is light, the canvas's when its terminal draws truecolor
+/// (src/status/theme.rs), as the sidebar's. Asked of the client itself,
+/// since its snapshot is also made outside a draw (opening it, a key).
+fn theme_for(truecolor: bool) -> Theme {
+    crate::status::theme::drawing_for(truecolor, crate::status::theme::theme)
 }
 
 /// The lines a notch of the wheel over the pane beside a board scrolls it.
@@ -714,7 +712,11 @@ impl Server {
             all_tabs,
             views,
             rules: Rules::now(),
-            theme: theme(),
+            theme: theme_for(
+                self.clients
+                    .get(&client)
+                    .is_some_and(crate::mux::server::Client::truecolor),
+            ),
             card: (
                 self.sidebar.config.card_width,
                 self.sidebar.config.card_height,

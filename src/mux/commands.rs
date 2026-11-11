@@ -363,9 +363,7 @@ impl Server {
                         .collect();
                     for id in gone {
                         if let Some(c) = self.clients.remove(&id) {
-                            let _ = c.tx.send(super::proto::ServerMsg::Exit {
-                                message: Some("[detached]".into()),
-                            });
+                            c.exit("[detached]".into());
                             self.client_left(&c.session);
                         }
                     }

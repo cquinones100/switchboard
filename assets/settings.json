@@ -721,7 +721,7 @@
     "key": "theme",
     "category": "Appearance",
     "label": "Theme",
-    "description": "The status line's, the pane borders' and the boxes' colors; system follows the terminal's own background, which it is asked for as it attaches",
+    "description": "The status line's, the pane borders' and the boxes' colors, dark drawn in the UX 2.0 canvas's colors on a terminal that shows truecolor and in the 256-color palette elsewhere; system follows the terminal's own background, which it is asked for as it attaches",
     "choices": [
       {
         "value": "dark",
@@ -737,6 +737,13 @@
       }
     ],
     "default": "dark"
+  },
+  {
+    "key": "terminal_colors",
+    "category": "Appearance",
+    "label": "Set the terminal's colors",
+    "description": "While Switchboard is attached, sets your terminal's background and text colors to the dark theme's, so the padding around the window matches; puts the terminal's own back when you detach. Off, the terminal keeps its own colors.",
+    "default": false
   },
   {
     "key": "image_protocol",

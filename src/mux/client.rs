@@ -164,11 +164,13 @@ pub fn attach(session: Option<String>) -> Result<ExitCode> {
         Signals::install().context("couldn't set up the signal handlers")?;
     let size = measure(libc::STDOUT_FILENO);
     // What the terminal is, by `TERM` and `TERM_PROGRAM` both, since Ghostty
-    // run with `TERM=xterm-256color` names itself only in the second.
+    // run with `TERM=xterm-256color` names itself only in the second, and
+    // `COLORTERM`, which says whether it draws truecolor.
     let term = format!(
-        "{} {}",
+        "{} {} {}",
         std::env::var("TERM").unwrap_or_default(),
-        std::env::var("TERM_PROGRAM").unwrap_or_default()
+        std::env::var("TERM_PROGRAM").unwrap_or_default(),
+        std::env::var("COLORTERM").unwrap_or_default()
     )
     .trim()
     .to_string();

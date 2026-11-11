@@ -57,7 +57,7 @@ impl Server {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
-        c.overlays.look = Look::read();
+        c.overlays.look = Look::read_for(c.truecolor());
         c.overlays.layers.push(Layer { overlay, then });
         self.overlays_changed(client);
     }

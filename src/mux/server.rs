@@ -80,7 +80,7 @@ pub enum Event {
         session: Option<String>,
         cols: u16,
         rows: u16,
-        /// What the terminal says it is (its `TERM` and `TERM_PROGRAM`).
+        /// What the terminal says it is (its `TERM`, `TERM_PROGRAM` and `COLORTERM`).
         term: String,
         /// Where the terminal's `switchboard` ran: a session made for it
         /// starts there.
@@ -312,8 +312,8 @@ pub struct Client {
     pub session: String,
     pub cols: u16,
     pub rows: u16,
-    /// What its terminal says it is, as it attached (`TERM` and
-    /// `TERM_PROGRAM`).
+    /// What its terminal says it is, as it attached (`TERM`,
+    /// `TERM_PROGRAM` and `COLORTERM`).
     pub term: String,
     parser: Parser,
     prefix: bool,
@@ -334,6 +334,9 @@ pub struct Client {
     /// with the one that took an option are dropped rather than reaching
     /// what is in front next (the daemon's `optionsTaken`).
     pub options_taken: u32,
+    /// Whether the server has set its terminal's own colors to the dark
+    /// theme's (the `terminal_colors` setting), to be put back as it goes.
+    pub terminal_colors: bool,
 }
 
 impl Client {
@@ -342,6 +345,24 @@ impl Client {
     /// the `server_images` setting on.
     pub fn graphics(&self) -> bool {
         crate::ui::images::speaks_kitty(&self.term) && crate::settings::is_on("server_images")
+    }
+
+    /// Whether its terminal draws truecolor, so the dark theme is drawn in
+    /// the canvas's colors for it (src/status/theme.rs).
+    pub fn truecolor(&self) -> bool {
+        crate::status::theme::draws_truecolor(&self.term)
+    }
+
+    /// Tells its terminal's client to end with `message`, putting the
+    /// terminal's own colors back first where the server set them.
+    pub fn exit(&self, message: String) {
+        if self.terminal_colors {
+            let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
+            let _ = self.tx.send(ServerMsg::Output(put_back));
+        }
+        let _ = self.tx.send(ServerMsg::Exit {
+            message: Some(message),
+        });
     }
 }
 
@@ -1204,8 +1225,10 @@ impl Server {
         let first = self.settings_seen.is_none() && seen.is_some();
         self.settings_seen = seen;
         crate::settings::reload_settings();
-        // Your PRs' news follows its setting at once.
+        // Your PRs' news follows its setting at once, and the terminals'
+        // own colors theirs.
         self.pr_notices();
+        self.terminal_colors_sync();
         if !first {
             for c in self.clients.values_mut() {
                 c.dirty = true;
@@ -1305,9 +1328,7 @@ impl Server {
     pub fn shutdown(&mut self) {
         super::persist::shutdown(self);
         for client in self.clients.values() {
-            let _ = client.tx.send(ServerMsg::Exit {
-                message: Some("[the server ended]".into()),
-            });
+            client.exit("[the server ended]".into());
         }
         for slot in self.panes.values_mut() {
             slot.pane.kill();
@@ -1445,7 +1466,7 @@ impl Server {
         if let Some(cell) = self.terminal.cell {
             pane.set_cell(cell);
         }
-        pane.set_colors(self.terminal.colors);
+        pane.set_colors(self.pane_colors());
         Ok(pane)
     }
 
@@ -1745,11 +1766,7 @@ impl Server {
                     client.screen.invalidate();
                     client.dirty = true;
                 }
-                None => {
-                    let _ = client.tx.send(ServerMsg::Exit {
-                        message: Some("[exited]".into()),
-                    });
-                }
+                None => client.exit("[exited]".into()),
             }
         }
         if other.is_none() {
@@ -1925,11 +1942,13 @@ impl Server {
             overlays: Default::default(),
             activity: Instant::now(),
             options_taken: 0,
+            terminal_colors: false,
         };
         // Its colours, for the panes' programs that ask (src/mux/terminal.rs),
         // the background's for the `system` theme too (src/status).
         Server::ask_background(&client.tx);
         self.clients.insert(id, client);
+        self.terminal_colors_sync();
         self.size_session_to(id);
         if let Some(tab) = self.session(&name).map(|s| s.current) {
             self.agent_focus(tab);
@@ -1980,6 +1999,13 @@ impl Server {
         // Whatever the build before asked of the terminal for hover is
         // asked off again, as a client new to this server has it.
         let _ = otx.send(ServerMsg::Output(b"\x1b[?1003l\x1b[?1002h".to_vec()));
+        // The colors the build before may have set (`terminal_colors`) are
+        // put back before the terminal is asked for its own, which the
+        // `system` theme reads; they are set again once it is attached.
+        if crate::status::theme::terminal_colors_on() {
+            let put_back = crate::status::theme::PUT_COLORS_BACK.to_vec();
+            let _ = otx.send(ServerMsg::Output(put_back));
+        }
         Server::ask_background(&otx);
         let client = Client {
             id,
@@ -2003,8 +2029,10 @@ impl Server {
                 .checked_sub(idle)
                 .unwrap_or_else(Instant::now),
             options_taken: 0,
+            terminal_colors: false,
         };
         self.clients.insert(id, client);
+        self.terminal_colors_sync();
         self.size_session_to(id);
         Ok(())
     }
@@ -2521,9 +2549,7 @@ impl Server {
             }
             Action::Detach => {
                 if let Some(c) = self.clients.remove(&id) {
-                    let _ = c.tx.send(ServerMsg::Exit {
-                        message: Some(format!("[detached (from session {session})]")),
-                    });
+                    c.exit(format!("[detached (from session {session})]"));
                     self.client_left(&c.session);
                 }
             }
@@ -3084,7 +3110,14 @@ impl Server {
         }
     }
 
+    /// Draws a client, in the canvas's colors when its terminal draws
+    /// truecolor (src/status/theme.rs's `drawing_for`).
     fn draw(&mut self, id: ClientId) {
+        let truecolor = self.clients.get(&id).is_some_and(Client::truecolor);
+        crate::status::theme::drawing_for(truecolor, || self.draw_now(id));
+    }
+
+    fn draw_now(&mut self, id: ClientId) {
         self.mission_before_draw(id);
         self.history_before_draw(id);
         self.pictures_before_draw(id);

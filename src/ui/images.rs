@@ -196,11 +196,7 @@ pub struct Tones {
 
 impl Tones {
     pub fn now() -> Tones {
-        let theme = if crate::status::theme::light() {
-            super::Theme::LIGHT
-        } else {
-            super::Theme::DARK
-        };
+        let theme = crate::status::theme::theme();
         Tones {
             rule: theme.faint,
             sunken: theme.panel,

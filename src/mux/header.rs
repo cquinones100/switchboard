@@ -210,6 +210,8 @@ pub fn draw(
     buf.set_style(first, band);
     let theme = if *p == Palette::LIGHT {
         Theme::LIGHT
+    } else if *p == Palette::DARK_TRUE {
+        Theme::DARK_TRUE
     } else {
         Theme::DARK
     };

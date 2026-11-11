@@ -46,8 +46,8 @@ pub enum ClientMsg {
         session: Option<String>,
         cols: u16,
         rows: u16,
-        /// `TERM` and `TERM_PROGRAM`, a space between (`TERM` alone from
-        /// a client a version behind).
+        /// `TERM`, `TERM_PROGRAM` and `COLORTERM`, a space between each
+        /// (`TERM` alone, or without `COLORTERM`, from an older client).
         term: String,
         #[serde(default)]
         xpixel: u16,

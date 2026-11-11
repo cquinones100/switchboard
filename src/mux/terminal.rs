@@ -273,11 +273,32 @@ impl Server {
         }
         if colors != self.terminal.colors {
             self.terminal.colors = colors;
+            let colors = self.pane_colors();
             for slot in self.panes.values_mut() {
                 slot.pane.set_colors(colors);
             }
         }
         true
+    }
+
+    /// The colors a pane's program is told the terminal draws in: the
+    /// terminal's own, with the text and background `terminal_colors`
+    /// sets while it sets them (src/status/theme.rs).
+    pub fn pane_colors(&self) -> Colors {
+        let mut colors = self.terminal.colors;
+        if crate::status::theme::sets_terminal_colors() {
+            colors.fg = Some(Rgb {
+                r: 0xc9,
+                g: 0xcd,
+                b: 0xd9,
+            });
+            colors.bg = Some(Rgb {
+                r: 0x15,
+                g: 0x16,
+                b: 0x1e,
+            });
+        }
+        colors
     }
 }
 

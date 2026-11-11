@@ -94,6 +94,16 @@ impl Theme {
         highlight: Color::Indexed(238),
         panel: Color::Indexed(236),
     };
+    /// The dark shades as the UX 2.0 canvas's tokens give them, for a
+    /// terminal that draws truecolor (src/status/theme.rs's `truecolor`).
+    pub const DARK_TRUE: Theme = Theme {
+        text: Color::Rgb(0xc9, 0xcd, 0xd9),
+        dim: Color::Rgb(0x8d, 0x93, 0xa8),
+        faint: Color::Rgb(0x56, 0x5b, 0x6e),
+        bright: Color::Rgb(0xff, 0xff, 0xff),
+        highlight: Color::Rgb(0x26, 0x2b, 0x40),
+        panel: Color::Rgb(0x1b, 0x1e, 0x29),
+    };
     pub const LIGHT: Theme = Theme {
         text: Color::Indexed(236),
         dim: Color::Indexed(242),
@@ -139,6 +149,16 @@ impl Look {
     /// The look the settings give now. The theme is light when the theme
     /// setting says light, or says system on a terminal whose background is
     /// light (src/status/theme.rs).
+    /// The dark theme in the canvas's colors for a terminal that draws
+    /// truecolor (`truecolor`), else as `read`.
+    pub fn read_for(truecolor: bool) -> Look {
+        let mut look = Look::read();
+        if truecolor && look.theme == Theme::DARK {
+            look.theme = Theme::DARK_TRUE;
+        }
+        look
+    }
+
     pub fn read() -> Look {
         let all = settings::read_settings();
         let on = |key: &str| {

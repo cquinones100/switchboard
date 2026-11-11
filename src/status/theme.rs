@@ -12,10 +12,20 @@
 //! colours were. The answer is kept for the whole server, as tmux kept one
 //! theme for every client: the latest terminal to answer says which.
 //!
+//! Dark is drawn in the UX 2.0 canvas's own colors (`Palette::DARK_TRUE`,
+//! `ui::Theme::DARK_TRUE`) for a terminal that draws truecolor, by what it
+//! attached as (`draws_truecolor`), and in the 256-color palette for one
+//! that doesn't: the server draws each client inside `drawing_for`, so
+//! `palette` and `theme` answer for the client being drawn.
+//!
 //! theme.sh also switched Ghostty's own theme and wrote the mode to
 //! `.theme-mode` for the scripts to read; the server is the only reader now,
-//! and the terminal's theme is the terminal's business.
+//! and the terminal's theme is the terminal's business, but for the
+//! `terminal_colors` setting, which sets an attached terminal's own
+//! background and text to the dark theme's and puts its own back as it
+//! leaves (`SET_COLORS`, `PUT_COLORS_BACK`).
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use ratatui::style::Color;
@@ -73,6 +83,20 @@ impl Palette {
         button_bg: Color::Indexed(250),
         button_fg: Color::Indexed(232),
     };
+    /// The dark mode in the UX 2.0 canvas's own colors, for a terminal that
+    /// draws truecolor (`truecolor`).
+    pub const DARK_TRUE: Palette = Palette {
+        status_bg: Color::Rgb(0x20, 0x24, 0x3a),
+        status_fg: Color::Rgb(0xc9, 0xcd, 0xd9),
+        tab_fg: Color::Rgb(0x8d, 0x93, 0xa8),
+        current_bg: Color::Rgb(0x26, 0x2b, 0x40),
+        bright: Color::Rgb(0xff, 0xff, 0xff),
+        dim: Color::Rgb(0x8d, 0x93, 0xa8),
+        border: Color::Rgb(0x3a, 0x3f, 0x52),
+        inactive_bg: Color::Rgb(0x1b, 0x1e, 0x29),
+        button_bg: Color::Rgb(0x26, 0x2b, 0x40),
+        button_fg: Color::Rgb(0xff, 0xff, 0xff),
+    };
 }
 
 /// The session badge's background before the current tab's color is known
@@ -100,6 +124,24 @@ const LIGHT: u8 = 2;
 /// `ESC ] 11 ; rgb:RRRR/GGGG/BBBB` and the same terminator.
 pub const QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 
+/// What the server writes to set an attached terminal's own background and
+/// text to the dark theme's base (OSC 11 and OSC 10), with the
+/// `terminal_colors` setting on, so the padding a terminal leaves around its
+/// grid matches; and what puts the terminal's own back (OSC 111 and 110).
+pub const SET_COLORS: &[u8] = b"\x1b]11;#15161e\x1b\\\x1b]10;#c9cdd9\x1b\\";
+pub const PUT_COLORS_BACK: &[u8] = b"\x1b]111\x1b\\\x1b]110\x1b\\";
+
+/// Whether the terminals' own colors are set to the dark theme's now: the
+/// `terminal_colors` setting on and the workspace drawn dark.
+pub fn sets_terminal_colors() -> bool {
+    terminal_colors_on() && !light()
+}
+
+/// Whether the `terminal_colors` setting is on.
+pub fn terminal_colors_on() -> bool {
+    settings::cached("terminal_colors") == Some(Value::Bool(true))
+}
+
 /// Whether a value of the `theme` setting, as it stands, is light: `light`,
 /// or `system` on a terminal that said it is light.
 pub fn light_for(value: &Value) -> bool {
@@ -115,13 +157,58 @@ pub fn light() -> bool {
     settings::cached("theme").is_some_and(|v| light_for(&v))
 }
 
-/// The palette to draw in now.
+/// The palette to draw in now: the canvas's colors when dark for a
+/// terminal that draws truecolor.
 pub fn palette() -> &'static Palette {
     if light() {
         &Palette::LIGHT
+    } else if truecolor() {
+        &Palette::DARK_TRUE
     } else {
         &Palette::DARK
     }
+}
+
+/// The shades the boxes, the sidebar and mission control are drawn in now,
+/// chosen as `palette` is.
+pub fn theme() -> crate::ui::Theme {
+    if light() {
+        crate::ui::Theme::LIGHT
+    } else if truecolor() {
+        crate::ui::Theme::DARK_TRUE
+    } else {
+        crate::ui::Theme::DARK
+    }
+}
+
+thread_local! {
+    /// Whether the client being drawn for draws truecolor, set around one
+    /// client's draw on the server's task (`drawing_for`).
+    static TRUECOLOR: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a terminal, by what it attached as (`TERM`, `TERM_PROGRAM` and
+/// `COLORTERM`), draws truecolor: it says `truecolor` or `24bit`, or it is
+/// Ghostty or kitty, which always do.
+pub fn draws_truecolor(term: &str) -> bool {
+    let term = term.to_lowercase();
+    ["truecolor", "24bit", "ghostty", "kitty"]
+        .iter()
+        .any(|w| term.contains(w))
+}
+
+/// Whether what is drawn now is for a terminal that draws truecolor.
+pub fn truecolor() -> bool {
+    TRUECOLOR.with(Cell::get)
+}
+
+/// Runs `draw` with `truecolor` saying whether the client it draws for
+/// draws truecolor, so the palette and the theme follow that client.
+pub fn drawing_for<R>(truecolor: bool, draw: impl FnOnce() -> R) -> R {
+    let was = TRUECOLOR.with(|t| t.replace(truecolor));
+    let out = draw();
+    TRUECOLOR.with(|t| t.set(was));
+    out
 }
 
 /// Keeps what a terminal said its background is; gives whether that
@@ -143,6 +230,12 @@ pub fn toggled() -> &'static str {
 /// scaled by its own width as xterm's `rgb:` form is; light is a perceived
 /// brightness over half.
 pub fn read_reply(raw: &[u8]) -> Option<bool> {
+    let (r, g, b) = reply_channels(raw)?;
+    Some(0.299 * r + 0.587 * g + 0.114 * b > 0.5)
+}
+
+/// An answer to `QUERY`'s channels, each from 0 to 1.
+fn reply_channels(raw: &[u8]) -> Option<(f64, f64, f64)> {
     let text = std::str::from_utf8(raw).ok()?;
     let body = text.strip_prefix("\x1b]11;")?;
     let body = body
@@ -159,8 +252,7 @@ pub fn read_reply(raw: &[u8]) -> Option<bool> {
         let max = (1u32 << (4 * hex.len() as u32)) - 1;
         Some(f64::from(value) / f64::from(max))
     });
-    let (r, g, b) = (parts.next()??, parts.next()??, parts.next()??);
-    Some(0.299 * r + 0.587 * g + 0.114 * b > 0.5)
+    Some((parts.next()??, parts.next()??, parts.next()??))
 }
 
 #[cfg(test)]
@@ -201,5 +293,27 @@ mod tests {
         assert_eq!(Palette::LIGHT.button_bg, Color::Indexed(250));
         assert_eq!(Palette::DARK.inactive_bg, Color::Indexed(236));
         assert_eq!(Palette::DARK.button_fg, Color::Indexed(255));
+    }
+
+    #[test]
+    fn a_truecolor_terminal_is_told_by_its_names() {
+        assert!(draws_truecolor("xterm-256color  truecolor"));
+        assert!(draws_truecolor("xterm-256color  24bit"));
+        assert!(draws_truecolor("xterm-ghostty"));
+        assert!(draws_truecolor("xterm-kitty"));
+        assert!(!draws_truecolor("xterm-256color Apple_Terminal"));
+        assert!(!draws_truecolor(""));
+    }
+
+    #[test]
+    fn the_palette_follows_the_client_drawn_for() {
+        if light() {
+            return;
+        }
+        assert_eq!(palette(), &Palette::DARK);
+        assert_eq!(drawing_for(true, palette), &Palette::DARK_TRUE);
+        assert_eq!(drawing_for(true, theme), crate::ui::Theme::DARK_TRUE);
+        assert_eq!(palette(), &Palette::DARK, "put back after the draw");
+        assert_eq!(Palette::DARK_TRUE.status_fg, Color::Rgb(0xc9, 0xcd, 0xd9));
     }
 }

@@ -384,3 +384,51 @@ fn the_palette_in_ghostty_casts_its_shadow_as_an_image_under_the_text() {
         screen.join("\n")
     );
 }
+
+#[test]
+fn a_truecolor_terminal_gets_the_dark_theme_in_the_canvas_s_colors() {
+    let server = TestServer::start();
+    let mut canvas = server.attach_as("xterm-256color  truecolor", 100, 30);
+    canvas.wait_text("$");
+    canvas.wait_sent("the status line in the canvas's text", b"38;2;201;205;217");
+    let mut plain = server.attach(100, 30);
+    plain.wait_text("$");
+    plain.wait_sent("the status line in the 256 colors", b"38;5;248");
+    assert!(
+        !sent(&plain.raw, b"38;2;201;205;217"),
+        "a terminal that doesn't say truecolor keeps the 256 colors"
+    );
+}
+
+#[test]
+fn the_light_theme_is_the_same_on_a_truecolor_terminal() {
+    let server = TestServer::start_with_settings(r#"{"theme": "light"}"#);
+    for term in ["xterm-256color  truecolor", "xterm-256color"] {
+        let mut client = server.attach_as(term, 100, 30);
+        client.wait_text("$");
+        client.wait_sent("the light status line", b"38;5;234");
+        assert!(!sent(&client.raw, b"38;2;201;205;217"), "{term}");
+        client.detach();
+    }
+}
+
+#[test]
+fn terminal_colors_sets_the_terminal_s_own_and_puts_them_back_on_detaching() {
+    let set: &[u8] = b"\x1b]11;#15161e\x1b\\\x1b]10;#c9cdd9\x1b\\";
+    let back: &[u8] = b"\x1b]111\x1b\\\x1b]110\x1b\\";
+    let server = TestServer::start_with_settings(r#"{"terminal_colors": true}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_sent("the terminal's colors set", set);
+    server.ok(&["detach"]);
+    client.wait_exit();
+    client.wait_sent("the terminal's own put back", back);
+    drop(server);
+
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["detach"]);
+    client.wait_exit();
+    assert!(!sent(&client.raw, b"\x1b]11;#"), "off, never set");
+    assert!(!sent(&client.raw, b"\x1b]111"), "off, nothing put back");
+}

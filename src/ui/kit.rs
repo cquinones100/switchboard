@@ -53,8 +53,29 @@ fn light(theme: &Theme) -> bool {
     *theme == Theme::LIGHT
 }
 
-fn ix(dark: u8, lightc: u8, theme: &Theme) -> Color {
-    Color::Indexed(if light(theme) { lightc } else { dark })
+/// A color by the theme: the light one, the canvas's truecolor one (as
+/// `0xRRGGBB`) for `Theme::DARK_TRUE`, else the dark one.
+fn ix(dark: u8, lightc: u8, canvas: u32, theme: &Theme) -> Color {
+    if *theme == Theme::DARK_TRUE {
+        let [_, r, g, b] = canvas.to_be_bytes();
+        Color::Rgb(r, g, b)
+    } else {
+        Color::Indexed(if light(theme) { lightc } else { dark })
+    }
+}
+
+/// The accent, the canvas's for `Theme::DARK_TRUE`.
+fn accent(theme: &Theme) -> Color {
+    if *theme == Theme::DARK_TRUE {
+        Color::Rgb(0x5f, 0xd7, 0xff)
+    } else {
+        ACCENT
+    }
+}
+
+/// Dark text on a tone's color (a lit key, a lit group's name).
+fn on_color(theme: &Theme) -> Color {
+    ix(232, 232, 0x11131a, theme)
 }
 
 /// What a piece of text says by its color.
@@ -78,12 +99,12 @@ impl Tone {
             Tone::Text => theme.text,
             Tone::Dim => theme.dim,
             Tone::Faint => theme.faint,
-            Tone::Accent => ACCENT,
-            Tone::Needs => ix(220, 136, theme),
-            Tone::Working => ix(111, 25, theme),
-            Tone::Landing => ix(179, 130, theme),
-            Tone::Done => ix(114, 28, theme),
-            Tone::Failed => ix(160, 160, theme),
+            Tone::Accent => accent(theme),
+            Tone::Needs => ix(220, 136, 0xf2c56b, theme),
+            Tone::Working => ix(111, 25, 0x82aaff, theme),
+            Tone::Landing => ix(179, 130, 0xc49bff, theme),
+            Tone::Done => ix(114, 28, 0x7fd18b, theme),
+            Tone::Failed => ix(160, 160, 0xff8a94, theme),
         }
     }
 
@@ -91,12 +112,12 @@ impl Tone {
     /// neutral one for the greys.
     pub fn tint(self, theme: &Theme) -> Color {
         match self {
-            Tone::Text | Tone::Dim | Tone::Faint | Tone::Accent => ix(237, 254, theme),
-            Tone::Needs => ix(58, 230, theme),
-            Tone::Working => ix(24, 153, theme),
-            Tone::Landing => ix(94, 223, theme),
-            Tone::Done => ix(22, 194, theme),
-            Tone::Failed => ix(52, 224, theme),
+            Tone::Text | Tone::Dim | Tone::Faint | Tone::Accent => ix(237, 254, 0x2a2e3d, theme),
+            Tone::Needs => ix(58, 230, 0x3a3220, theme),
+            Tone::Working => ix(24, 153, 0x20304f, theme),
+            Tone::Landing => ix(94, 223, 0x2a2440, theme),
+            Tone::Done => ix(22, 194, 0x1d3a2a, theme),
+            Tone::Failed => ix(52, 224, 0x3a1d24, theme),
         }
     }
 
@@ -126,9 +147,9 @@ impl Surface {
     pub fn color(self, theme: &Theme) -> Color {
         match self {
             Surface::Base => Color::Reset,
-            Surface::Sunken => ix(234, 255, theme),
-            Surface::Panel => ix(235, 254, theme),
-            Surface::Raised => ix(236, 253, theme),
+            Surface::Sunken => ix(234, 255, 0x11121a, theme),
+            Surface::Panel => ix(235, 254, 0x20243a, theme),
+            Surface::Raised => ix(236, 253, 0x1f2232, theme),
             Surface::Chosen => theme.highlight,
         }
     }
@@ -136,7 +157,7 @@ impl Surface {
 
 /// The color of the lines between regions.
 pub fn border(theme: &Theme) -> Color {
-    ix(238, 248, theme)
+    ix(238, 248, 0x3a3f52, theme)
 }
 
 /// A state, which has one mark wherever it is shown.
@@ -582,7 +603,7 @@ pub fn keycap(key: &str, what: &str, lit: bool, caps: bool, theme: &Theme) -> Ve
             key.to_string(),
             Style::new()
                 .bg(accent)
-                .fg(Color::Indexed(232))
+                .fg(on_color(theme))
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -630,9 +651,9 @@ pub fn bar_name(
     }
     let (fill, style) = match row {
         BarRow::Groups => (
-            ACCENT,
+            accent(theme),
             Style::new()
-                .fg(Color::Indexed(232))
+                .fg(on_color(theme))
                 .add_modifier(Modifier::BOLD),
         ),
         BarRow::Views => (
@@ -913,6 +934,39 @@ mod tests {
 
     fn stretch(weight: usize, min: usize, max: Option<usize>) -> Col {
         Col::Stretch { weight, min, max }
+    }
+
+    #[test]
+    fn the_tones_are_the_canvas_s_in_truecolor_and_indexed_otherwise() {
+        let tones = [
+            Tone::Accent,
+            Tone::Needs,
+            Tone::Working,
+            Tone::Landing,
+            Tone::Done,
+            Tone::Failed,
+        ];
+        for tone in tones {
+            for theme in [Theme::DARK, Theme::LIGHT] {
+                assert!(matches!(tone.fg(&theme), Color::Indexed(_)), "{tone:?}");
+                assert!(matches!(tone.tint(&theme), Color::Indexed(_)), "{tone:?}");
+            }
+            assert!(
+                matches!(tone.fg(&Theme::DARK_TRUE), Color::Rgb(..)),
+                "{tone:?}"
+            );
+            assert!(
+                matches!(tone.tint(&Theme::DARK_TRUE), Color::Rgb(..)),
+                "{tone:?}"
+            );
+        }
+        let canvas = Theme::DARK_TRUE;
+        assert_eq!(Tone::Needs.fg(&canvas), Color::Rgb(0xf2, 0xc5, 0x6b));
+        assert_eq!(Tone::Accent.fg(&canvas), Color::Rgb(0x5f, 0xd7, 0xff));
+        assert_eq!(Tone::Done.tint(&canvas), Color::Rgb(0x1d, 0x3a, 0x2a));
+        assert_eq!(Surface::Raised.color(&canvas), Color::Rgb(0x1f, 0x22, 0x32));
+        assert_eq!(border(&canvas), Color::Rgb(0x3a, 0x3f, 0x52));
+        assert_eq!(Surface::Base.color(&canvas), Color::Reset);
     }
 
     #[test]
