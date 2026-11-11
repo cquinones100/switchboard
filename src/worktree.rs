@@ -160,26 +160,36 @@ pub fn session_title(session: &Value) -> String {
 /// naming its working directory; a file whose process is gone is left over
 /// from a session that ended without cleaning up, and is ignored.
 pub fn live_sessions_in(worktree: &Path) -> Vec<Value> {
-    let dir = paths::claude_dir().join("sessions");
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
     let root = worktree.to_string_lossy().into_owned();
-    entries
+    live_sessions()
+        .filter(|s| {
+            let cwd = s.get("cwd").and_then(Value::as_str).unwrap_or("");
+            !cwd.is_empty() && (cwd == root || cwd.starts_with(&format!("{root}/")))
+        })
+        .collect()
+}
+
+/// Whether the Claude session with this id is running, wherever it works.
+pub fn session_runs(session_id: &str) -> bool {
+    live_sessions().any(|s| s.get("sessionId").and_then(Value::as_str) == Some(session_id))
+}
+
+// The session files in `~/.claude/sessions` that name a session and whose
+// process is alive.
+fn live_sessions() -> impl Iterator<Item = Value> {
+    let dir = paths::claude_dir().join("sessions");
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
         .flatten()
         .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
         .filter_map(|e| util::read_json(e.path()))
         .filter(|s| {
-            let has_id = s.get("sessionId").is_some_and(util::truthy);
-            let cwd = s.get("cwd").and_then(Value::as_str).unwrap_or("");
-            let inside = !cwd.is_empty() && (cwd == root || cwd.starts_with(&format!("{root}/")));
-            let alive = s
-                .get("pid")
-                .and_then(Value::as_i64)
-                .is_some_and(util::is_alive);
-            has_id && inside && alive
+            s.get("sessionId").is_some_and(util::truthy)
+                && s.get("pid")
+                    .and_then(Value::as_i64)
+                    .is_some_and(util::is_alive)
         })
-        .collect()
 }
 
 /// The tab a process runs in, as `<session>:<number> <name>`, from the

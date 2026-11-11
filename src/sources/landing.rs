@@ -20,12 +20,15 @@
 //! landing and those waiting, and "<repo> · merge queue" with every PR in
 //! it.
 //!
-//! A holder or waiter counts while its worktree is there and a Claude
-//! session runs in it, as land-lock.js's `gone()` has it, so a landing that
+//! A holder or waiter counts while its worktree is there and the Claude
+//! session that wrote its entry runs, wherever it works, or any session
+//! runs in the worktree, as `land-lock`'s `gone()` has it, so a landing that
 //! ended without a word leaves the group before the script next reads the
-//! queue. The sessions come from Claude Code's session files and a signal 0
-//! to each one's process. A session in a worktree nested inside another
-//! (the main clone's `.claude/worktrees`) is that one's, not the outer one's.
+//! queue. An entry from before entries named their session counts by its
+//! worktree alone. The sessions come from Claude Code's session files and a
+//! signal 0 to each one's process. A session in a worktree nested inside
+//! another (the main clone's `.claude/worktrees`) is that one's, not the
+//! outer one's.
 //!
 //! The server runs this off its task on every tick, since it reads a few
 //! files per repository and every session file.
@@ -41,12 +44,22 @@ use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::util;
 
-/// A worktree holding the landing lock or waiting for it, and since when
-/// (ms).
+/// A worktree holding the landing lock or waiting for it, since when (ms),
+/// and the Claude session and pane that took it or joined, which an entry
+/// from an older build doesn't name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub path: PathBuf,
     pub since: i64,
+    pub session: Option<String>,
+    pub pane: Option<String>,
+}
+
+/// A running Claude session: its id and its working directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunningSession {
+    pub session_id: String,
+    pub cwd: PathBuf,
 }
 
 /// A repository a tab is in, and what lands there straight on one branch:
@@ -120,9 +133,9 @@ pub fn git_of(dir: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-/// The working directories of the running Claude sessions, from the session
-/// files in `dir` (`~/.claude/sessions`) whose process is still there.
-pub fn running_sessions(dir: &Path) -> Vec<PathBuf> {
+/// The running Claude sessions, from the session files in `dir`
+/// (`~/.claude/sessions`) whose process is still there.
+pub fn running_sessions(dir: &Path) -> Vec<RunningSession> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -135,25 +148,51 @@ pub fn running_sessions(dir: &Path) -> Vec<PathBuf> {
                 .and_then(Value::as_i64)
                 .is_some_and(util::is_alive)
         })
-        .filter_map(|s| s.get("cwd").and_then(Value::as_str).map(PathBuf::from))
+        .filter_map(|s| {
+            Some(RunningSession {
+                session_id: s
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                cwd: PathBuf::from(s.get("cwd").and_then(Value::as_str)?),
+            })
+        })
         .collect()
 }
 
-// Whether a worktree is there and a session runs in it (not in a worktree
-// nested inside it).
-fn live_in(root: &Path, running: &[PathBuf]) -> bool {
+// Whether a landing is still there: its worktree is, and the session that
+// wrote its entry runs, wherever it works, or a session runs in the
+// worktree (not in a worktree nested inside it).
+fn live_in(entry: &Entry, running: &[RunningSession]) -> bool {
+    let root = entry.path.as_path();
+    let its_session_runs = entry
+        .session
+        .as_deref()
+        .is_some_and(|id| running.iter().any(|s| s.session_id == id));
     root.exists()
-        && running
-            .iter()
-            .any(|cwd| cwd.starts_with(root) && git_of(cwd).is_some_and(|(at, _)| at == root))
+        && (its_session_runs
+            || running.iter().any(|s| {
+                s.cwd.starts_with(root) && git_of(&s.cwd).is_some_and(|(at, _)| at == root)
+            }))
 }
 
-// An entry of the lock's files: its worktree and since when.
+// An entry of the lock's files: its worktree, since when, and the session
+// and pane that wrote it.
 fn entry_of(value: &Value) -> Option<Entry> {
     let path = value.get("path").and_then(Value::as_str)?;
+    let text = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
     Some(Entry {
         path: PathBuf::from(path),
         since: value.get("since").and_then(Value::as_f64).unwrap_or(0.0) as i64,
+        session: text("session"),
+        pane: text("pane"),
     })
 }
 
@@ -185,13 +224,13 @@ fn repo_landing(
     root: &Path,
     common: &Path,
     target: Option<&str>,
-    running: &[PathBuf],
+    running: &[RunningSession],
 ) -> RepoLanding {
     let named = |base: &str| match target {
         Some(t) => format!("{base}.{}", crate::cmd::land_lock::file_suffix(t)),
         None => base.to_string(),
     };
-    let live = |e: &Entry| live_in(&e.path, running);
+    let live = |e: &Entry| live_in(e, running);
     let holder = util::read_json(common.join(named("land.lock")).join("holder"))
         .as_ref()
         .and_then(entry_of)
@@ -233,10 +272,10 @@ fn repo_landing(
 }
 
 /// Each tab's place in its repository's landing queue, from the first of
-/// its directories in a git repository, given the running sessions'
-/// directories, and each repository the tabs are in with what lands there.
+/// its directories in a git repository, given the running sessions, and
+/// each repository the tabs are in with what lands there.
 /// Each repository's files are read once.
-pub fn landing_of(tabs: &[(TabId, Vec<PathBuf>)], running: &[PathBuf]) -> Read {
+pub fn landing_of(tabs: &[(TabId, Vec<PathBuf>)], running: &[RunningSession]) -> Read {
     let mut repos: Vec<RepoLanding> = Vec::new();
     let mut places = HashMap::new();
     let mut roots = HashMap::new();
@@ -673,6 +712,64 @@ mod tests {
         );
         assert_eq!(items[4].data["landing"]["target"], "team/next");
         assert_eq!(items[4].data["landing"]["place"], 1);
+    }
+
+    #[test]
+    fn a_holder_counts_while_its_session_runs_wherever_it_works() {
+        let scratch = Scratch::new("landing-session");
+        let main = scratch.0.join("repo");
+        if !repo(&main) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        let one = scratch.0.join("one");
+        assert!(git(
+            &main,
+            &["worktree", "add", "-q", "-b", "one", one.to_str().unwrap()]
+        ));
+        // The landing's Claude started in the main clone and went into the
+        // worktree to land it, so its session file names the clone.
+        let sessions = scratch.0.join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(
+            sessions.join("lander.json"),
+            serde_json::json!({ "sessionId": "lander", "cwd": main, "pid": std::process::id() })
+                .to_string(),
+        )
+        .unwrap();
+        let common = main.join(".git");
+        fs::create_dir_all(common.join("land.lock")).unwrap();
+        let held_by = |entry: serde_json::Value| {
+            fs::write(common.join("land.lock/holder"), entry.to_string()).unwrap();
+            let tabs = vec![(TabId(1), vec![one.clone()])];
+            let read = landing_of(&tabs, &running_sessions(&sessions));
+            (
+                read.repos[0].holder.clone(),
+                read.places.get(&TabId(1)).cloned(),
+            )
+        };
+
+        let (holder, place) = held_by(serde_json::json!({
+            "path": one, "since": 1, "session": "lander", "pane": "%4",
+        }));
+        let holder = holder.expect("its session runs, in the main clone");
+        assert_eq!(
+            (holder.session.as_deref(), holder.pane.as_deref()),
+            (Some("lander"), Some("%4"))
+        );
+        assert!(place.is_some_and(|p| p.landing.holding));
+
+        let (holder, place) = held_by(serde_json::json!({ "path": one, "since": 1 }));
+        assert_eq!(
+            (holder, place),
+            (None, None),
+            "an entry from before names no session, and none runs in its worktree"
+        );
+
+        let (holder, _) = held_by(serde_json::json!({
+            "path": one, "since": 1, "session": "ended",
+        }));
+        assert_eq!(holder, None, "a session that isn't running keeps nothing");
     }
 
     #[test]

@@ -67,8 +67,11 @@ fn session(home: &Path, name: &str, dir: &Path) {
     .unwrap();
 }
 
-fn lock(home: &Path, cwd: &Path, args: &[&str]) -> Output {
-    Command::new(BIN)
+/// `land-lock` run in `cwd` outside any pane or Claude session, as a
+/// command to add to.
+fn land_lock(home: &Path, cwd: &Path, args: &[&str]) -> Command {
+    let mut command = Command::new(BIN);
+    command
         .arg("land-lock")
         .args(args)
         .current_dir(cwd)
@@ -77,9 +80,13 @@ fn lock(home: &Path, cwd: &Path, args: &[&str]) -> Output {
         .env("LAND_LOCK_POLL", "0.1")
         .env_remove("SWITCHBOARD")
         .env_remove("SWITCHBOARD_PANE")
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .stdin(Stdio::null());
+    command
+}
+
+fn lock(home: &Path, cwd: &Path, args: &[&str]) -> Output {
+    land_lock(home, cwd, args).output().unwrap()
 }
 
 fn code(out: &Output) -> i32 {
@@ -159,6 +166,120 @@ fn one_worktree_at_a_time_the_second_taking_it_once_the_first_lets_go_and_a_dead
         code(&lock(home, &two, &["take"])),
         0,
         "so does one whose worktree is gone"
+    );
+}
+
+#[test]
+fn a_landing_keeps_the_lock_while_the_session_that_took_it_runs_wherever_it_started() {
+    let tmp = TempDir::new("land-lock-session");
+    let home = tmp.path();
+    let repo = repo(home);
+    let one = home.join("one");
+    git(
+        &repo,
+        &["worktree", "add", "-q", "-b", "one", one.to_str().unwrap()],
+    );
+    let two = worktree(home, &repo, home, "two");
+    // The landing's Claude started in the main clone and went into the
+    // worktree to land it: no session file names the worktree.
+    session(home, "lander", &repo);
+    let in_session = |args: &[&str]| {
+        land_lock(home, &one, args)
+            .env("CLAUDE_CODE_SESSION_ID", "lander")
+            .env("SWITCHBOARD_PANE", "%7")
+            .output()
+            .unwrap()
+    };
+    let holder_file = repo.join(".git/land.lock/holder");
+    let queue = || stdout(&lock(home, &repo, &["queue"]));
+
+    let read = |file: &Path| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
+    };
+
+    assert_eq!(code(&in_session(&["take"])), 0);
+    let holder = read(&holder_file);
+    assert_eq!(
+        (&holder["session"], &holder["pane"]),
+        (&json!("lander"), &json!("%7")),
+        "the holder names the session and pane that took it"
+    );
+    let held = lock(home, &two, &["take"]);
+    assert_eq!(code(&held), 3, "its session keeps it, working elsewhere");
+    assert!(
+        stdout(&held).contains(&format!("held by {} since ", one.display())),
+        "{}",
+        stdout(&held)
+    );
+
+    // Taken up again by another session once the one that took it ended:
+    // the holder names the new one, since kept.
+    std::fs::write(
+        &holder_file,
+        json!({ "path": one, "since": 5, "session": "ended" }).to_string(),
+    )
+    .unwrap();
+    assert_eq!(code(&in_session(&["take"])), 0);
+    let holder = read(&holder_file);
+    assert_eq!(
+        (&holder["session"], &holder["since"]),
+        (&json!("lander"), &json!(5))
+    );
+    assert_eq!(
+        code(&lock(home, &two, &["take"])),
+        3,
+        "and keeps it while that one runs"
+    );
+
+    // Written by a build from before, with no session: read by its worktree
+    // alone, as before.
+    std::fs::write(&holder_file, json!({ "path": one, "since": 0 }).to_string()).unwrap();
+    assert_eq!(code(&lock(home, &two, &["take"])), 0);
+
+    // A place in the queue whose session ended, taken up by another
+    // session, names it, the place ahead of the main clone's and since
+    // kept.
+    let queue_file = repo.join(".git/land.queue");
+    std::fs::write(
+        &queue_file,
+        json!([
+            { "path": one, "since": 3, "session": "ended" },
+            { "path": repo, "since": 4 },
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(code(&in_session(&["take"])), 3);
+    let queued = read(&queue_file);
+    assert_eq!(
+        (
+            &queued[0]["session"],
+            &queued[0]["since"],
+            &queued[1]["path"]
+        ),
+        (&json!("lander"), &json!(3), &json!(repo))
+    );
+    assert!(
+        queue().contains(&format!("2nd\t{}\t", one.display())),
+        "a waiter whose session works elsewhere stays in the queue: {}",
+        queue()
+    );
+    std::fs::remove_file(home.join(".claude/sessions/lander.json")).unwrap();
+    assert!(
+        !queue().contains(&one.display().to_string()),
+        "and leaves once its session ends: {}",
+        queue()
+    );
+
+    std::fs::write(
+        &holder_file,
+        json!({ "path": one, "since": 0, "session": "lander" }).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        code(&lock(home, &two, &["take"])),
+        0,
+        "a holder whose session ended has its lock taken over"
     );
 }
 
@@ -352,15 +473,7 @@ fn waiters_take_it_in_the_queue_s_order_which_a_take_cant_jump_and_move_reorders
 
     // A waiter taken out of the queue from elsewhere (mission control's
     // Landing view) stops waiting rather than joining again.
-    let waiting = Command::new(BIN)
-        .args(["land-lock", "wait"])
-        .current_dir(&two)
-        .env("HOME", home)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("LAND_LOCK_POLL", "0.1")
-        .env_remove("SWITCHBOARD")
-        .env_remove("SWITCHBOARD_PANE")
-        .stdin(Stdio::null())
+    let waiting = land_lock(home, &two, &["wait"])
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();

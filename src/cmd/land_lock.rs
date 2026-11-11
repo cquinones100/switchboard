@@ -62,8 +62,21 @@
 //! longer matches its review reviews again and asks again while holding it,
 //! which can wait on you for as long as you like, so the lock never expires
 //! with time: it is taken over only from a landing that is gone, its
-//! worktree removed or no Claude session running in it. A waiter gone the
-//! same way is dropped from the queue as it is read.
+//! worktree removed, or neither the Claude session that took it nor any
+//! other running in it. A waiter gone the same way is dropped from the
+//! queue as it is read.
+//!
+//! Each entry, the holder's and every waiter's, names the worktree and since
+//! when, and the Claude session that wrote it (`CLAUDE_CODE_SESSION_ID`,
+//! which Claude Code sets in every command it runs) and its pane
+//! (`SWITCHBOARD_PANE`) when there is one. The session keeps the landing
+//! alive wherever it works: one started in the main clone that went into
+//! the worktree to land it has the clone as its directory, so by its
+//! directory alone it read as gone and its lock was taken over mid-landing.
+//! A take from the worktree that holds it or waits, run by another session
+//! than its entry names, names that one in its place, so a landing a new
+//! session takes up is kept while that one runs. An entry without one,
+//! written by a build from before, is read by its worktree alone.
 //!
 //! The Node version appended to the sidebar daemon's nudge file after every
 //! change, so the sidebar looked again. The server reads `land.lock` and
@@ -355,11 +368,8 @@ impl Lock {
     }
 
     fn hold(&self) -> io::Result<()> {
-        let holder = json!({
-            "path": self.here.to_string_lossy(),
-            "since": util::js_number(util::now_ms() as f64),
-        });
-        fs::write(&self.holder_file, util::json_compact(&holder))
+        let holder = new_entry(&self.here.to_string_lossy());
+        util::write_atomic(&self.holder_file, util::json_compact(&holder))
     }
 
     /// Changes the queue under its mutex, so two worktrees joining at once
@@ -372,6 +382,19 @@ impl Lock {
         &self,
         change: impl FnOnce(Vec<Value>) -> (Option<Vec<Value>>, T),
     ) -> io::Result<T> {
+        self.change_queue(false, change)
+    }
+
+    /// `with_queue`, with this worktree's own place, when `taking_up` (a
+    /// take), named for the session this runs in before the gone waiters
+    /// are dropped, so a waiter whose session ended and that another took
+    /// up keeps its place.
+    fn change_queue<T>(
+        &self,
+        taking_up: bool,
+        change: impl FnOnce(Vec<Value>) -> (Option<Vec<Value>>, T),
+    ) -> io::Result<T> {
+        let here = self.here.to_string_lossy().into_owned();
         let mut tries = 0;
         loop {
             match fs::create_dir(&self.queue_mutex) {
@@ -401,6 +424,14 @@ impl Lock {
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
+                .map(|entry| {
+                    let mine = taking_up && entry_path(&entry) == Some(here.as_str());
+                    if mine {
+                        renamed(&entry).unwrap_or(entry)
+                    } else {
+                        entry
+                    }
+                })
                 .filter(|entry| entry_path(entry).is_some() && !gone(Some(entry)))
                 .collect();
             let (next, answer) = change(queue.clone());
@@ -430,11 +461,17 @@ impl Lock {
     /// the queue: 0 taken, 3 not, this worktree then in the queue.
     fn take(&self, quiet: bool) -> io::Result<u8> {
         let here = self.here.to_string_lossy().into_owned();
-        self.with_queue(|queue| {
+        self.change_queue(true, |queue| {
             let current = self.holder();
             let held = self.dir.exists();
             if held && current.as_ref().and_then(holder_path).as_deref() == Some(here.as_str()) {
-                return (Some(without(queue, &self.here)), Ok(0));
+                let named = match current.as_ref().and_then(renamed) {
+                    Some(holder) => {
+                        util::write_atomic(&self.holder_file, util::json_compact(&holder))
+                    }
+                    None => Ok(()),
+                };
+                return (Some(without(queue, &self.here)), named.map(|()| 0));
             }
             let mine = queue
                 .iter()
@@ -468,16 +505,10 @@ impl Lock {
                     .collect();
                 println!("{}", said.join("; "));
             }
-            let joined = if mine.is_some() {
-                queue
-            } else {
-                let mut queue = queue;
-                queue.push(json!({
-                    "path": here,
-                    "since": util::js_number(util::now_ms() as f64),
-                }));
-                queue
-            };
+            let mut joined = queue;
+            if mine.is_none() {
+                joined.push(new_entry(&here));
+            }
             (Some(joined), Ok(3))
         })?
     }
@@ -574,12 +605,55 @@ pub fn branch_of_suffix(suffix: &str) -> String {
     suffix.replace("%2F", "/").replace("%25", "%")
 }
 
+/// An entry for the worktree at `path`, taken or joined now, naming the
+/// Claude session and the pane this runs in when it runs in one.
+fn new_entry(path: &str) -> Value {
+    let mut entry = json!({
+        "path": path,
+        "since": util::js_number(util::now_ms() as f64),
+    });
+    for (key, variable) in [
+        ("session", "CLAUDE_CODE_SESSION_ID"),
+        ("pane", "SWITCHBOARD_PANE"),
+    ] {
+        if let Some(value) = std::env::var(variable).ok().filter(|v| !v.is_empty()) {
+            entry[key] = Value::String(value);
+        }
+    }
+    entry
+}
+
+/// An entry of this worktree's, named for the session and pane this runs in
+/// when it names others (a session that ended and another that took the
+/// landing up, or a build from before that named none), its place and since
+/// when kept; `None` when it names them already, or this runs in no session.
+fn renamed(entry: &Value) -> Option<Value> {
+    let mut now = new_entry(entry_path(entry)?);
+    let session = now.get("session")?;
+    if entry.get("session") == Some(session) && entry.get("pane") == now.get("pane") {
+        return None;
+    }
+    if let Some(since) = entry.get("since") {
+        now["since"] = since.clone();
+    }
+    Some(now)
+}
+
 /// An entry's or holder's worktree.
 fn entry_path(entry: &Value) -> Option<&str> {
     entry
         .get("path")
         .and_then(Value::as_str)
         .filter(|p| !p.is_empty())
+}
+
+/// The Claude session that wrote an entry, `None` in one written outside
+/// Claude or by a build from before.
+fn entry_session(entry: &Value) -> Option<&str> {
+    entry
+        .get("session")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 fn holder_path(holder: &Value) -> Option<String> {
@@ -612,14 +686,21 @@ fn worktree_of(dir: &Path) -> Option<PathBuf> {
 }
 
 /// Whether a landing (the holder, or a waiter) is gone: none, its worktree
-/// removed, or no running Claude session in it.
+/// removed, or neither the session that wrote it running, wherever it
+/// works, nor any running in its worktree.
 fn gone(current: Option<&Value>) -> bool {
-    let Some(path) = current.and_then(entry_path) else {
+    let Some(entry) = current else {
+        return true;
+    };
+    let Some(path) = entry_path(entry) else {
         return true;
     };
     let path = Path::new(path);
     if !path.exists() {
         return true;
+    }
+    if entry_session(entry).is_some_and(worktree::session_runs) {
+        return false;
     }
     !worktree::live_sessions_in(path).iter().any(|session| {
         session
@@ -685,5 +766,12 @@ mod tests {
         assert!(gone(None));
         assert!(gone(Some(&json!({ "path": "/no/such/worktree" }))));
         assert!(gone(Some(&json!({ "since": 1 }))));
+    }
+
+    #[test]
+    fn an_entry_names_its_session_when_it_has_one() {
+        assert_eq!(entry_session(&json!({ "session": "s1" })), Some("s1"));
+        assert_eq!(entry_session(&json!({ "session": "" })), None);
+        assert_eq!(entry_session(&json!({ "path": "/w" })), None);
     }
 }
