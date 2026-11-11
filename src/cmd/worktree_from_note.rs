@@ -754,11 +754,13 @@ fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
 }
 
 /// The commit an item's branch starts from when it lands on `target`, a
-/// local branch (made from origin's when only origin has it): that branch
-/// as it is here, after bringing in what its
-/// remote branch has, when it tracks one, so the work starts where the
-/// landing will rebase it onto. A fetch that fails is said and passed over,
-/// since the landing fetches again.
+/// local branch (made from origin's when only origin has it): the remote
+/// branch it tracks as it is now, fetched first, since the landing rebases
+/// onto that and pushes there, so the work starts where it will land; the
+/// local branch itself when it tracks none. A local branch with commits its
+/// remote branch lacks is refused, since the landing would never push them
+/// and couldn't fast-forward it. A fetch that fails is said and the local
+/// branch used, since the landing fetches again.
 fn target_start(root: &Path, target: &str) -> Result<String, String> {
     let local = format!("refs/heads/{target}");
     let exists = |r: &str| worktree::git_ok(root, &["rev-parse", "--verify", "--quiet", r]);
@@ -785,12 +787,32 @@ fn target_start(root: &Path, target: &str) -> Result<String, String> {
             "no branch {target} here or on origin, which autopilot lands this item on"
         ));
     }
-    if let Some((remote, branch)) = tracked(root, target)
-        && !worktree::fetch_branch(root, &remote, &branch, "wtn: fetch the target")
-    {
+    let Some((remote, branch)) = tracked(root, target) else {
+        return Ok(local);
+    };
+    if !worktree::fetch_branch(root, &remote, &branch, "wtn: fetch the target") {
         eprintln!("Couldn't fetch {remote}/{branch}; starting from {target} as it is here");
+        return Ok(local);
     }
-    Ok(local)
+    let fetched = format!("refs/remotes/{remote}/{branch}");
+    let ahead = worktree::git_at(
+        root,
+        &["rev-list", "--count", &format!("{fetched}..{local}")],
+    )
+    .map_err(|e| e.to_string())?;
+    if ahead != "0" {
+        let commits = if ahead == "1" { "commit" } else { "commits" };
+        let refspec = if branch == target {
+            target.to_string()
+        } else {
+            format!("{target}:{branch}")
+        };
+        return Err(format!(
+            "{target} has {ahead} {commits} {remote}/{branch} doesn't, which the landing wouldn't push; \
+             push them (`git push {remote} {refspec}`) or move {target} back, then start the item again"
+        ));
+    }
+    Ok(fetched)
 }
 
 /// The remote branch a local branch tracks, by its remote and its name

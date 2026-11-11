@@ -1886,9 +1886,11 @@ fn wt_s_claude_function_takes_the_plugin_as_the_setting_says_at_each_launch() {
 }
 
 // Autopilot's target: `wtn --target` cuts the item's branch from that
-// branch rather than the default one, a branch only origin has made a local
-// one tracking it, and records it, which `switchboard landing` names with
-// the remote branch it tracks, or none for a local-only one.
+// branch rather than the default one, from the remote branch it tracks as
+// fetched (refusing a local one ahead of it, whose commits the landing would
+// never push), a branch only origin has made a local one tracking it, and
+// records it, which `switchboard landing` names with the remote branch it
+// tracks, or none for a local-only one.
 #[test]
 fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_tracks() {
     let w = World::new("wtn-target");
@@ -1896,7 +1898,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
         notes.join("Work.md"),
-        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n",
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n- [ ] Fourth thing\n- [ ] Fifth thing\n",
     )
     .unwrap();
     let (origin, repo) = w.origin_and_clone();
@@ -1954,6 +1956,51 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     assert_eq!(
         landing_target(&second),
         serde_json::json!({ "branch": "shared", "remote": "origin", "remoteBranch": "shared" })
+    );
+
+    // Origin's shared moved on and the local one didn't: the item starts
+    // from what origin has.
+    w.git(
+        &dev,
+        &["commit", "-q", "--allow-empty", "-m", "on origin's shared"],
+    );
+    w.git(&dev, &["push", "-q", "origin", "local-dev:shared"]);
+    let origin_tip = w.git(&dev, &["rev-parse", "HEAD"]);
+    let moved = wtn("6", "shared");
+    assert_eq!(w.git(&moved, &["rev-parse", "HEAD"]), origin_tip);
+
+    // The local shared with a commit origin lacks: refused, since the
+    // landing would never push it.
+    let local_only = w.git(
+        &repo,
+        &[
+            "commit-tree",
+            "-p",
+            &dev_tip,
+            "-m",
+            "local only",
+            &format!("{dev_tip}^{{tree}}"),
+        ],
+    );
+    w.git(&repo, &["update-ref", "refs/heads/shared", &local_only]);
+    let ahead = w.run(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--note",
+            "Work",
+            "--item",
+            "7",
+            "--target",
+            "shared",
+        ],
+    );
+    assert!(!ahead.status.success());
+    assert!(
+        stderr(&ahead).contains("shared has 1 commit origin/shared doesn't"),
+        "{}",
+        stderr(&ahead)
     );
 
     // None given: the default branch, and no target for landing.
