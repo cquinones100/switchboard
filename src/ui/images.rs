@@ -987,23 +987,27 @@ pub fn shadow(frame: &mut Frame, name: &str, area: Rect) {
 }
 
 /// The shadow under a box as text: half blocks down its right and along its
-/// bottom in a near-black shade, for a terminal that draws no images, and
-/// for the apps in panes, which draw into a buffer of their own.
+/// bottom in a near-black shade, meeting at the corner in a quadrant (the
+/// right edge's left half and the bottom's top half), for a terminal that
+/// draws no images, and for the apps in panes, which draw into a buffer of
+/// their own.
 pub fn shadow_cells(buf: &mut Buffer, area: Rect) {
     let screen = buf.area;
     let shade = Style::new().fg(Color::Indexed(233));
     let right = area.right();
+    let below = area.bottom();
     if right < screen.right() {
-        for y in area.top() + 1..area.bottom().min(screen.bottom()) + 1 {
-            if y < screen.bottom() {
-                buf[(right, y)].set_symbol("▌").set_style(shade);
-            }
+        for y in area.top() + 1..below.min(screen.bottom()) {
+            buf[(right, y)].set_symbol("▌").set_style(shade);
         }
     }
-    let below = area.bottom();
     if below < screen.bottom() {
         for x in area.left() + 1..right.min(screen.right()) {
             buf[(x, below)].set_symbol("▀").set_style(shade);
+        }
+        // The corner a quadrant, so it ends where both edges do.
+        if right < screen.right() {
+            buf[(right, below)].set_symbol("▘").set_style(shade);
         }
     }
 }
@@ -1317,6 +1321,37 @@ mod tests {
         let mut f = Frame::new(cols, rows);
         f.graphics = Some(CELL);
         f
+    }
+
+    #[test]
+    fn a_text_shadow_meets_at_its_corner_and_stops_at_the_screen() {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 8));
+        let area = Rect::new(2, 1, 4, 3);
+        shadow_cells(&mut buf, area);
+        for y in 2..4 {
+            assert_eq!(buf[(6, y)].symbol(), "▌", "row {y}");
+        }
+        assert_eq!(buf[(6, 1)].symbol(), " ");
+        for x in 3..6 {
+            assert_eq!(buf[(x, 4)].symbol(), "▀", "column {x}");
+        }
+        assert_eq!(buf[(2, 4)].symbol(), " ");
+        assert_eq!(buf[(6, 4)].symbol(), "▘");
+        assert_eq!(buf[(7, 4)].symbol(), " ");
+        assert_eq!(buf[(6, 5)].symbol(), " ");
+
+        // At the screen's right and bottom edges, nothing past them.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+        shadow_cells(&mut buf, area);
+        assert!(
+            buf.content.iter().all(|c| c.symbol() == " "),
+            "{:?}",
+            buf.content
+        );
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 4));
+        shadow_cells(&mut buf, area);
+        assert_eq!(buf[(6, 3)].symbol(), "▌");
+        assert!((0..10).all(|x| buf[(x, 3)].symbol() != "▀"));
     }
 
     fn text(out: &[u8]) -> String {

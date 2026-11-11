@@ -551,6 +551,7 @@ mod tests {
         // With no graphics, half blocks down its right and along its bottom.
         assert_eq!(f.buf[(13, 3)].symbol(), "▌");
         assert_eq!(f.buf[(7, 5)].symbol(), "▀");
+        assert_eq!(f.buf[(13, 5)].symbol(), "▘");
         assert!(f.images.is_empty());
     }
 

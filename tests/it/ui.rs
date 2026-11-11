@@ -369,3 +369,18 @@ fn a_picture_shows_full_size_over_its_pane_and_esc_goes_back() {
         "the x never reached the shell: {screen}"
     );
 }
+
+#[test]
+fn the_palette_in_ghostty_casts_its_shadow_as_an_image_under_the_text() {
+    let server = TestServer::start();
+    let mut client = server.attach_as("xterm-ghostty ghostty", 100, 30);
+    client.wait_text("$");
+    server.ok(&["press", "palette"]);
+    client.wait_sent("the shadow placed under the text", b"z=-1,C=1");
+    let screen = client.wait_for("the palette", |s| s.iter().any(|l| l.contains('╭')));
+    assert!(
+        !screen.iter().any(|l| l.contains('▘') || l.contains('▀')),
+        "no text shadow beside the image:\n{}",
+        screen.join("\n")
+    );
+}
