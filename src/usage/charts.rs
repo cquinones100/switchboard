@@ -574,6 +574,12 @@ pub fn is_still(item: &Item) -> bool {
     item.data.get("still").and_then(Value::as_bool) == Some(true)
 }
 
+/// Whether a row of the Usage view is a service with requests this week but
+/// none today, which today's board leaves out and the cursor passes over.
+pub fn is_week_only(item: &Item) -> bool {
+    item.data.get("week_only").and_then(Value::as_bool) == Some(true)
+}
+
 /// The model the board draws, carried by the view's first row.
 pub fn model_of(items: &[Item]) -> Option<Model> {
     let first = items.first()?;
@@ -591,13 +597,19 @@ pub fn items(base: Vec<Item>, model: &Model) -> Vec<Item> {
         .map(|(today, week)| {
             week.services
                 .iter()
-                .filter(|s| !today.services.iter().any(|t| t.service == s.service))
+                .filter(|s| {
+                    !today
+                        .services
+                        .iter()
+                        .any(|t| t.service.eq_ignore_ascii_case(&s.service))
+                })
                 .map(|s| {
                     Item::new(
                         format!("requests:{}", s.service),
                         format!("  {} 0", s.service),
                     )
                     .detail(format!("none today, {} this week", s.total))
+                    .data(serde_json::json!({ "week_only": true }))
                 })
                 .collect()
         })
@@ -827,6 +839,34 @@ mod tests {
         ];
         let ids: Vec<String> = items(base, &model).into_iter().map(|i| i.id).collect();
         assert_eq!(ids, ["spent", "limit:five_hour", "tab:tab:1", "requests"]);
+    }
+
+    #[test]
+    fn a_service_named_in_another_case_this_week_is_not_listed_twice() {
+        let service = |name: &str| crate::requests::ServiceCount {
+            service: name.into(),
+            total: 2,
+            protocols: Default::default(),
+            by_time: vec![0; 24],
+            sources: Default::default(),
+        };
+        let day = |name: &str| crate::requests::Tally {
+            total: 2,
+            services: vec![service(name)],
+            ..Default::default()
+        };
+        let model = Model {
+            requests: Some((day("github"), day("GitHub"))),
+            ..Model::default()
+        };
+        let mut base = vec![Item::new("spent", "Spent today $1.00")];
+        base.extend(crate::usage::sessions::request_items(&day("github")));
+        let ids: Vec<String> = items(base, &model)
+            .into_iter()
+            .map(|i| i.id)
+            .filter(|id| id.starts_with("requests:") && id != "requests:uncounted")
+            .collect();
+        assert_eq!(ids, ["requests:github"]);
     }
 
     #[test]

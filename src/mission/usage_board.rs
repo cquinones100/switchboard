@@ -25,21 +25,30 @@ use crate::sidebar::text::{cut, width};
 use crate::status::theme::RED;
 use crate::ui::Theme;
 use crate::ui::images::{Bar, Marks};
-use crate::ui::kit::{self, Tone};
+use crate::ui::kit::{self, Col, Tone};
 use crate::usage::charts::{Limit, Model, SpanSpend, TabSpend};
 
 /// How wide the screen must be for the board; narrower, the plain list.
 pub const BOARD_AT: usize = 136;
-/// The tabs' column beside the chart.
+/// The tabs' column beside the chart at 160 columns, its share of a
+/// screen of any width (board 45), and the least it takes.
 const SIDE_W: usize = 54;
+const SIDE_MIN: usize = 34;
 /// The chart's rows.
 const CHART_ROWS: usize = 8;
 /// The amounts left of the chart.
 const AXIS_W: usize = 8;
-/// A limit's meter.
-const LIMIT_W: usize = 60;
-/// A service's share of the busiest one.
-const SHARE_W: usize = 20;
+
+/// The tabs' column on a screen `cols` wide, which keeps its share.
+fn side_w(cols: usize) -> usize {
+    kit::beside(cols, SIDE_W, SIDE_MIN, 0)
+}
+
+/// Where bar `b` of `bins` starts in a chart `chart_w` wide: the bars
+/// share its width, so they reach the tabs whatever the screen.
+fn bar_x(b: usize, bins: usize, chart_w: usize) -> usize {
+    b * chart_w / bins.max(1)
+}
 
 /// Spans put together left to right, each at a column of its own.
 #[derive(Default)]
@@ -185,7 +194,7 @@ fn service_item(service: &str) -> String {
 /// merged, their time and each tab's part added up, so the bars, the
 /// labels under them and the clicks on them agree.
 fn fitted(span: &SpanSpend, cols: usize) -> SpanSpend {
-    let room = cols.saturating_sub(SIDE_W + AXIS_W + 4).max(1);
+    let room = cols.saturating_sub(side_w(cols) + AXIS_W + 4).max(1);
     let n = span.bins.len();
     if n <= room {
         return span.clone();
@@ -289,8 +298,7 @@ pub fn board(
             .filter(|h| h.spot == Spot::Index(c as isize))
             .map(|h| h.y as usize)
             .max()?;
-        let under = chosen_id.is_some_and(|id| id.starts_with("requests:")) as usize;
-        Some((y + under).min(lines.len().saturating_sub(1)))
+        Some(y.min(lines.len().saturating_sub(1)))
     });
     if let Some(bottom) = chosen_bottom
         && bottom > last
@@ -356,11 +364,10 @@ fn chart_and_tabs(
 ) {
     let theme = &m.snap.theme;
     let tz = &m.snap.tz;
-    let side_x = cols.saturating_sub(SIDE_W);
-    let room = side_x.saturating_sub(AXIS_W + 4);
+    let side_cols = side_w(cols);
+    let side_x = cols.saturating_sub(side_cols);
     let bins = span.bins.len().max(1);
-    let per = (room / bins).clamp(1, 6);
-    let chart_w = (bins * per).min(room.max(1));
+    let chart_w = side_x.saturating_sub(AXIS_W + 4).max(1);
     let chart_x = 1 + AXIS_W;
     let top = lines.len();
     let busiest = span
@@ -420,7 +427,7 @@ fn chart_and_tabs(
                     .add_modifier(Modifier::BOLD),
             )
             .put(" ", Style::new());
-            let name_w = SIDE_W.saturating_sub(4 + 2 + 9 + 5 + 2);
+            let name_w = side_cols.saturating_sub(4 + 2 + 9 + 5 + 2);
             row.put(
                 cut(&t.name, name_w),
                 if chosen {
@@ -429,10 +436,10 @@ fn chart_and_tabs(
                     Tone::Text.style(theme)
                 },
             );
-            row.right(dollars(t.spent), SIDE_W - 9, Tone::Text.style(theme))
+            row.right(dollars(t.spent), side_cols - 9, Tone::Text.style(theme))
                 .right(
                     format!("{}%", (t.share * 100.0).round() as i64),
-                    SIDE_W - 3,
+                    side_cols - 3,
                     Tone::Dim.style(theme),
                 );
             (
@@ -441,7 +448,7 @@ fn chart_and_tabs(
                     let lit =
                         !chosen && index.is_some_and(|i| m.hover == Some(Spot::Index(i as isize)));
                     under_mouse(
-                        kit::row(row.spans(SIDE_W - 2), SIDE_W - 1, chosen, theme),
+                        kit::row(row.spans(side_cols - 2), side_cols - 1, chosen, theme),
                         lit,
                         theme,
                     )
@@ -469,12 +476,12 @@ fn chart_and_tabs(
         )
         .put(format!("${rate:.2} an hour"), Tone::Text.bold(theme));
         side.push((Vec::new(), None));
-        side.push((row.spans(SIDE_W - 1), None));
+        side.push((row.spans(side_cols - 1), None));
     }
     if tabs.is_empty() {
         let mut row = Placer::default();
         row.put("  nothing spent yet", Tone::Faint.style(theme));
-        side.push((row.spans(SIDE_W - 1), None));
+        side.push((row.spans(side_cols - 1), None));
     }
 
     let body = CHART_ROWS.max(side.len().saturating_sub(1));
@@ -495,7 +502,7 @@ fn chart_and_tabs(
                 p.right(label, chart_x - 1, Tone::Faint.style(theme));
             }
         } else if r == CHART_ROWS {
-            axis(span, week, chart_x, per, chart_w, tz, theme, &mut p);
+            axis(span, week, chart_x, chart_w, tz, theme, &mut p);
         }
         p.to(side_x);
         if let Some((spans, index)) = side.get(r) {
@@ -508,7 +515,7 @@ fn chart_and_tabs(
                 });
             }
             p.spans.extend(spans.clone());
-            p.at += SIDE_W;
+            p.at += side_cols;
         }
         lines.push(p.line(cols));
     }
@@ -528,8 +535,8 @@ fn chart_and_tabs(
         for r in 0..CHART_ROWS {
             hits.push(HitBox {
                 y: (top + 1 + r) as u16,
-                x0: (chart_x + b * per) as u16,
-                x1: (chart_x + (b + 1) * per).saturating_sub(1) as u16,
+                x0: (chart_x + bar_x(b, bins, chart_w)) as u16,
+                x1: (chart_x + bar_x(b + 1, bins, chart_w)).saturating_sub(1) as u16,
                 spot: Spot::Index(index as isize),
             });
         }
@@ -575,7 +582,6 @@ fn axis(
     span: &SpanSpend,
     week: bool,
     chart_x: usize,
-    per: usize,
     chart_w: usize,
     tz: &jiff::tz::TimeZone,
     theme: &Theme,
@@ -595,7 +601,7 @@ fn axis(
             }
             clock(at, tz, "%-I%P")
         };
-        let x = chart_x + b * per;
+        let x = chart_x + bar_x(b, span.bins.len(), chart_w);
         if x < p.at + 1 && p.at > chart_x || x + width(&label) > chart_x + chart_w + 2 {
             continue;
         }
@@ -631,16 +637,80 @@ fn limits(
     }
     lines.push(p.line(cols));
     let now = now_ms.div_euclid(1000);
-    for limit in &model.limits {
-        lines.push(limit_row(limit, cols, theme, now, lines.len(), images));
+    let details: Vec<String> = model.limits.iter().map(|l| limit_detail(l, now)).collect();
+    let at = limit_columns(
+        kit::natural(model.limits.iter().map(|l| l.name.as_str())),
+        kit::natural(details.iter().map(String::as_str)),
+        cols,
+    );
+    for (limit, detail) in model.limits.iter().zip(&details) {
+        lines.push(limit_row(
+            limit,
+            detail,
+            &at,
+            cols,
+            theme,
+            lines.len(),
+            images,
+        ));
     }
+}
+
+/// A limit row's columns from x 2: its name, the meter stretching into
+/// what the rest leave, its percentage, and when it resets; on a narrow
+/// screen the reset goes first.
+fn limit_columns(name: usize, detail: usize, cols: usize) -> Vec<Option<(usize, usize)>> {
+    kit::columns(
+        &[
+            Col::Fixed {
+                min: 4,
+                natural: name,
+                cap: 20,
+            },
+            Col::Stretch {
+                weight: 1,
+                min: 10,
+                max: None,
+            },
+            Col::Fixed {
+                min: 4,
+                natural: 4,
+                cap: 4,
+            },
+            Col::Fixed {
+                min: 0,
+                natural: detail,
+                cap: 70,
+            },
+        ],
+        cols.saturating_sub(3),
+        2,
+        &[3],
+    )
+    .into_iter()
+    .map(|c| c.map(|(x, w)| (x + 2, w)))
+    .collect()
+}
+
+/// When a limit resets, its own words, and where the pace takes it.
+fn limit_detail(limit: &Limit, now: i64) -> String {
+    let mut detail = Vec::new();
+    if let Some(d) = &limit.detail {
+        detail.push(d.clone());
+    }
+    detail.push(crate::usage::sessions::resets(limit.resets_at, now));
+    if let Some(pace) = limit.pace {
+        detail.push(format!("at this pace, {}% by then", pace.round() as i64));
+    }
+    detail.join(" · ")
 }
 
 fn limit_row(
     limit: &Limit,
+    detail: &str,
+    at: &[Option<(usize, usize)>],
     cols: usize,
     theme: &Theme,
-    now: i64,
     y: usize,
     images: &mut Vec<Image>,
 ) -> Line {
@@ -651,39 +721,53 @@ fn limit_row(
     } else {
         Tone::Done
     };
-    let meter_x = 12;
-    images.push(Image {
-        name: format!("usage/limit/{}", limit.key),
-        x: meter_x as u16,
-        y: y as u16,
-        width: LIMIT_W as u16,
-        height: 1,
-        shape: Shape::Meter {
-            frac: (limit.used / 100.0) as f32,
-            color: tone.fg(theme),
-            tick: (limit.key == "five_hour")
-                .then_some(limit.pace)
-                .flatten()
-                .map(|p| (p / 100.0) as f32),
-        },
-    });
-    let mut detail = Vec::new();
-    if let Some(d) = &limit.detail {
-        detail.push(d.clone());
+    let mut spans = Vec::new();
+    if let Some(name) = at[0] {
+        kit::place(
+            &mut spans,
+            vec![Span::styled(limit.name.clone(), Tone::Text.style(theme))],
+            name,
+        );
     }
-    detail.push(crate::usage::sessions::resets(limit.resets_at, now));
-    if let Some(pace) = limit.pace {
-        detail.push(format!("at this pace, {}% by then", pace.round() as i64));
+    if let Some((x, w)) = at[1] {
+        images.push(Image {
+            name: format!("usage/limit/{}", limit.key),
+            x: x as u16,
+            y: y as u16,
+            width: w as u16,
+            height: 1,
+            shape: Shape::Meter {
+                frac: (limit.used / 100.0) as f32,
+                color: tone.fg(theme),
+                tick: (limit.key == "five_hour")
+                    .then_some(limit.pace)
+                    .flatten()
+                    .map(|p| (p / 100.0) as f32),
+            },
+        });
+        kit::place(&mut spans, Vec::new(), (x, w));
     }
-    let mut p = Placer::default();
-    p.put(format!("  {}", limit.name), Tone::Text.style(theme))
-        .to(meter_x + LIMIT_W + 2)
-        .put(
-            format!("{:>3}%", limit.used.round() as i64),
-            tone.bold(theme),
-        )
-        .put(format!("   {}", detail.join(" · ")), Tone::Dim.style(theme));
-    p.line(cols)
+    if let Some(pct) = at[2] {
+        kit::place(
+            &mut spans,
+            vec![Span::styled(
+                format!("{:>3}%", limit.used.round() as i64),
+                tone.bold(theme),
+            )],
+            pct,
+        );
+    }
+    if let Some(d) = at[3] {
+        kit::place(
+            &mut spans,
+            vec![Span::styled(detail.to_string(), Tone::Dim.style(theme))],
+            d,
+        );
+    }
+    Line {
+        spans: kit::fit(spans, cols, Style::new()),
+        fill: None,
+    }
 }
 
 /// The request audit: the counts by protocol, then a row a service, its
@@ -737,17 +821,23 @@ fn requests(
     }
     let busiest = tally.services.first().map_or(1, |s| s.total.max(1));
     // The services in the view's order, which is the cursor's; one with
-    // nothing in the span (a service of the week, today) at none.
+    // nothing today left out of today's board, and in the week's drawn at
+    // none.
     let shown: Vec<ServiceCount> = items
         .iter()
+        .filter(|i| week || !crate::usage::charts::is_week_only(i))
         .filter_map(|i| i.id.strip_prefix("requests:"))
         .filter(|name| *name != "uncounted")
         .map(|name| {
             tally
                 .services
                 .iter()
-                .find(|s| s.service == name)
-                .cloned()
+                // A day's tally may name it in another case than the week's.
+                .find(|s| s.service.eq_ignore_ascii_case(name))
+                .map(|s| ServiceCount {
+                    service: name.to_string(),
+                    ..s.clone()
+                })
                 .unwrap_or_else(|| ServiceCount {
                     service: name.to_string(),
                     total: 0,
@@ -757,21 +847,113 @@ fn requests(
                 })
         })
         .collect();
+    // The protocols' column is as wide as the line under it needs too, what
+    // made the requests, so that line isn't cut under a short name.
+    let name_w = kit::natural(shown.iter().map(|s| s.service.as_str()));
+    let protocols_w = shown
+        .iter()
+        .map(|s| width(&protocols_of(s)).max(width(&made_by(s)).saturating_sub(name_w + 2)))
+        .max()
+        .unwrap_or(0);
+    let at = service_columns(name_w, protocols_w, cols);
+    if !shown.is_empty() {
+        let mut spans = Vec::new();
+        let over = [
+            (at[2], if week { "by day" } else { "by hour" }),
+            (
+                at[3],
+                if week {
+                    "share of the week"
+                } else {
+                    "share of today"
+                },
+            ),
+        ];
+        for (col, text) in over {
+            if let Some(col) = col {
+                kit::place(
+                    &mut spans,
+                    vec![Span::styled(text, Tone::Faint.style(theme))],
+                    col,
+                );
+            }
+        }
+        lines.push(Line {
+            spans: kit::fit(spans, cols, Style::new()),
+            fill: None,
+        });
+    }
     for s in &shown {
         let index = index_of(items, &service_item(&s.service));
         let chosen = index.is_some() && chosen_id == Some(service_item(&s.service).as_str());
         let lit = !chosen && index.is_some_and(|i| m.hover == Some(Spot::Index(i as isize)));
         service_row(
-            s, busiest, week, chosen, lit, index, cols, theme, lines, hits, images,
+            s, busiest, &at, chosen, lit, index, cols, theme, lines, hits, images,
         );
     }
 }
 
+/// What made a service's requests, `made by PR board 20 · CI 10`.
+fn made_by(s: &ServiceCount) -> String {
+    if s.sources.is_empty() {
+        String::new()
+    } else {
+        format!("made by {}", by_count(&s.sources))
+    }
+}
+
+/// A service's protocols, `GraphQL · REST`.
+fn protocols_of(s: &ServiceCount) -> String {
+    s.protocols.keys().cloned().collect::<Vec<_>>().join(" · ")
+}
+
+/// A service row's columns from x 1, as board 45 lays them out: its name
+/// and protocols at their natural widths, the sparkline and the share
+/// meter stretching into the rest by their widths at 160 (24 and 20), and
+/// the count at the right edge; on a narrow screen the protocols go first,
+/// then the meter.
+fn service_columns(name: usize, protocols: usize, cols: usize) -> Vec<Option<(usize, usize)>> {
+    kit::columns(
+        &[
+            Col::Fixed {
+                min: 4,
+                natural: name,
+                cap: 20,
+            },
+            Col::Fixed {
+                min: 0,
+                natural: protocols,
+                cap: 36,
+            },
+            Col::Stretch {
+                weight: 24,
+                min: 24,
+                max: None,
+            },
+            Col::Stretch {
+                weight: 20,
+                min: 20,
+                max: None,
+            },
+            Col::Right { natural: 7, cap: 7 },
+        ],
+        cols.saturating_sub(2),
+        2,
+        &[1, 3],
+    )
+    .into_iter()
+    .map(|c| c.map(|(x, w)| (x + 1, w)))
+    .collect()
+}
+
+/// A service's two lines: its name, protocols, meter and count, then what
+/// made its requests (with its protocols when their column is dropped),
+/// its sparkline two rows tall beside both.
 #[allow(clippy::too_many_arguments)]
 fn service_row(
     s: &ServiceCount,
     busiest: usize,
-    week: bool,
+    at: &[Option<(usize, usize)>],
     chosen: bool,
     lit: bool,
     index: Option<usize>,
@@ -781,79 +963,136 @@ fn service_row(
     hits: &mut Vec<HitBox>,
     images: &mut Vec<Image>,
 ) {
-    const NAME_W: usize = 16;
-    const PROTO_W: usize = 34;
-    let spark_x = 1 + NAME_W + PROTO_W;
-    let spark_w = if week { 14 } else { 24 };
-    let share_x = spark_x + spark_w + 3;
     let y = lines.len();
     let accent = if chosen { Tone::Accent } else { Tone::Faint };
     let peak = s.by_time.iter().copied().max().unwrap_or(0).max(1);
-    images.push(Image {
-        name: format!("usage/spark/{}", s.service),
-        x: spark_x as u16,
-        y: y as u16,
-        width: spark_w as u16,
-        height: 1,
-        shape: Shape::Series {
-            bars: s
-                .by_time
-                .iter()
-                .map(|n| vec![(*n as f32, accent.fg(theme))])
-                .collect(),
-            max: peak as f32,
-            over: None,
-            marks: Marks::default(),
-        },
-    });
-    images.push(Image {
-        name: format!("usage/share/{}", s.service),
-        x: share_x as u16,
-        y: y as u16,
-        width: SHARE_W as u16,
-        height: 1,
-        shape: Shape::Meter {
-            frac: s.total as f32 / busiest as f32,
-            color: accent.fg(theme),
-            tick: None,
-        },
-    });
-    let mut p = Placer::default();
-    p.put(
-        cut(&s.service, NAME_W - 1),
-        if chosen {
-            Tone::Text.bold(theme)
-        } else {
-            Tone::Text.style(theme)
-        },
-    )
-    .to(1 + NAME_W)
-    .put(
-        cut(
-            &s.protocols.keys().cloned().collect::<Vec<_>>().join(" · "),
-            PROTO_W - 2,
-        ),
-        Tone::Dim.style(theme),
-    )
-    .to(share_x + SHARE_W + 2)
-    .put(format!("{:>7}", count(s.total)), Tone::Text.style(theme));
-    let spans = under_mouse(kit::row(p.spans(cols - 1), cols, chosen, theme), lit, theme);
-    if let Some(index) = index {
-        hits.push(HitBox {
+    if let Some((x, w)) = at[2] {
+        images.push(Image {
+            name: format!("usage/spark/{}", s.service),
+            x: x as u16,
             y: y as u16,
-            x0: 0,
-            x1: cols.saturating_sub(1) as u16,
-            spot: Spot::Index(index as isize),
+            width: w as u16,
+            height: 2,
+            shape: Shape::Series {
+                bars: s
+                    .by_time
+                    .iter()
+                    .map(|n| vec![(*n as f32, accent.fg(theme))])
+                    .collect(),
+                max: peak as f32,
+                over: None,
+                marks: Marks::default(),
+            },
         });
     }
-    lines.push(Line { spans, fill: None });
-    if chosen && !s.sources.is_empty() {
-        let mut p = Placer::default();
-        p.to(1 + NAME_W).put(
-            format!("made by {}", by_count(&s.sources)),
-            Tone::Dim.style(theme),
+    if let Some((x, w)) = at[3] {
+        images.push(Image {
+            name: format!("usage/share/{}", s.service),
+            x: x as u16,
+            y: y as u16,
+            width: w as u16,
+            height: 1,
+            shape: Shape::Meter {
+                frac: s.total as f32 / busiest as f32,
+                // An unchosen meter's fill in the dim text color, which
+                // stands out from its track as the faint one doesn't.
+                color: if chosen { Tone::Accent } else { Tone::Dim }.fg(theme),
+                tick: None,
+            },
+        });
+    }
+    let name_style = if chosen {
+        Tone::Text.bold(theme)
+    } else {
+        Tone::Text.style(theme)
+    };
+    let mut first = vec![Span::raw(" ")];
+    let second = vec![Span::raw(" ")];
+    if let Some(col) = at[0] {
+        kit::place(
+            &mut first,
+            vec![Span::styled(s.service.clone(), name_style)],
+            col,
         );
-        lines.push(p.line(cols));
+    }
+    if let Some(col) = at[1] {
+        kit::place(
+            &mut first,
+            vec![Span::styled(protocols_of(s), Tone::Dim.style(theme))],
+            col,
+        );
+    }
+    for col in [at[2], at[3]].into_iter().flatten() {
+        kit::place(&mut first, Vec::new(), col);
+    }
+    if let Some(col) = at[4] {
+        kit::place(
+            &mut first,
+            vec![Span::styled(
+                format!("{:>7}", count(s.total)),
+                Tone::Text.style(theme),
+            )],
+            col,
+        );
+    }
+    // What made them, under the name and protocols.
+    let mut made = Vec::new();
+    if at[1].is_none() && !s.protocols.is_empty() {
+        made.push(protocols_of(s));
+    }
+    if !s.sources.is_empty() {
+        made.push(made_by(s));
+    }
+    let made = made.join(" · ");
+    let mut rows = vec![first, second];
+    if let Some((x, _)) = at[0] {
+        let end = at[2].map_or(cols.saturating_sub(1), |(sx, _)| sx.saturating_sub(2));
+        let room = end.saturating_sub(x);
+        kit::place(
+            &mut rows[1],
+            vec![Span::styled(made.clone(), Tone::Faint.style(theme))],
+            (x, room),
+        );
+        // Chosen, what made them in full under the row, wrapped at its
+        // parts across the row, when it doesn't fit beside the sparkline.
+        if chosen && width(&made) > room {
+            let across = cols.saturating_sub(x + 1);
+            let mut wrapped: Vec<String> = Vec::new();
+            for part in made.split(" · ") {
+                match wrapped.last_mut() {
+                    Some(line) if width(line) + 3 + width(part) <= across => {
+                        line.push_str(" · ");
+                        line.push_str(part);
+                    }
+                    _ => wrapped.push(part.to_string()),
+                }
+            }
+            for text in wrapped {
+                let mut row = vec![Span::raw(" ")];
+                kit::place(
+                    &mut row,
+                    vec![Span::styled(text, Tone::Dim.style(theme))],
+                    (x, across),
+                );
+                rows.push(row);
+            }
+        }
+    }
+    for (dy, spans) in rows.into_iter().enumerate() {
+        let spans = under_mouse(
+            kit::row(kit::fit(spans, cols - 1, Style::new()), cols, chosen, theme),
+            lit,
+            theme,
+        );
+        if let Some(index) = index {
+            hits.push(HitBox {
+                y: (y + dy) as u16,
+                x0: 0,
+                x1: cols.saturating_sub(1) as u16,
+                spot: Spot::Index(index as isize),
+            });
+        }
+        lines.push(Line { spans, fill: None });
     }
 }
 
@@ -870,12 +1109,78 @@ mod tests {
             bins: vec![vec![1.0]; 73],
             tabs: vec![TabSpend::default()],
         };
-        // At 136 columns the chart has 70.
-        let fitted = fitted(&span, BOARD_AT);
+        // At 100 columns the chart has 54.
+        let fitted = fitted(&span, 100);
         assert_eq!(fitted.bins.len(), 37);
         assert_eq!(fitted.bin_ms, 1_800_000);
         assert_eq!(fitted.bins[0], vec![2.0]);
         assert_eq!(fitted.bins[36], vec![1.0]);
         assert_eq!(super::fitted(&span, 200).bins.len(), 73);
+    }
+
+    #[test]
+    fn below_the_board_width_the_protocols_go_first_then_the_meter() {
+        let at = service_columns(10, 30, 160);
+        assert!(at.iter().all(Option::is_some), "{at:?}");
+        // The count flush with the right edge.
+        assert_eq!(at[4].map(|(x, w)| x + w), Some(159));
+        let at = service_columns(10, 30, 90);
+        assert!(at[1].is_none() && at[3].is_some(), "{at:?}");
+        let at = service_columns(10, 30, 60);
+        assert!(
+            at[1].is_none() && at[3].is_none() && at[2].is_some(),
+            "{at:?}"
+        );
+    }
+
+    #[test]
+    fn the_tabs_column_keeps_its_share_of_a_wide_screen() {
+        assert_eq!(side_w(160), SIDE_W);
+        assert_eq!(side_w(240), 81);
+        assert_eq!(side_w(80), SIDE_MIN);
+    }
+
+    #[test]
+    fn a_chosen_service_shows_every_source_when_they_dont_fit_beside_its_sparkline() {
+        let sources: indexmap::IndexMap<String, usize> = (1..=8)
+            .map(|n| (format!("a source named {n}"), n))
+            .collect();
+        let s = ServiceCount {
+            service: "GitHub".into(),
+            total: 36,
+            protocols: [("REST".to_string(), 36)].into_iter().collect(),
+            by_time: vec![1; 24],
+            sources,
+        };
+        let at = service_columns(6, 4, 160);
+        let draw = |chosen: bool| {
+            let (mut lines, mut hits, mut images) = (Vec::new(), Vec::new(), Vec::new());
+            service_row(
+                &s,
+                36,
+                &at,
+                chosen,
+                false,
+                Some(3),
+                160,
+                &Theme::DARK,
+                &mut lines,
+                &mut hits,
+                &mut images,
+            );
+            let text: Vec<String> = lines.iter().map(|l| l.text()).collect();
+            (text, hits.len())
+        };
+        let (text, hits) = draw(false);
+        assert_eq!(text.len(), 2, "{text:?}");
+        assert_eq!(hits, 2);
+        let (text, hits) = draw(true);
+        assert_eq!(text.len(), 4, "{text:?}");
+        assert_eq!(hits, 4);
+        let all = text[2..].join(" ");
+        for n in 1..=8 {
+            assert!(all.contains(&format!("a source named {n} {n}")), "{text:?}");
+        }
+        assert!(!all.contains('…'), "{text:?}");
     }
 }

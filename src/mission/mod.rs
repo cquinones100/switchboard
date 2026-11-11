@@ -440,6 +440,13 @@ impl Mission {
     }
 
     /// The view in front, after the tabs; `None` on the tabs.
+    /// Whether the Usage view's services with no requests today are left
+    /// out, as today's board leaves them (the week's board and the plain
+    /// list show them).
+    pub fn week_only_hidden(&self) -> bool {
+        !self.usage_week && self.snap.rules.ux2 && self.size.0 as usize >= usage_board::BOARD_AT
+    }
+
     pub fn current(&self) -> Option<&View> {
         self.view
             .checked_sub(1)

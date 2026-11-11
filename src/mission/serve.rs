@@ -1667,6 +1667,7 @@ impl Server {
             }
             KeyCode::Char('w') if none && m.current().is_some_and(|v| v.id == ViewId::Usage) => {
                 m.usage_week = !m.usage_week;
+                settle(m);
             }
             KeyCode::Char('r') if none => {
                 if let Some(ViewId::Plugin(name)) = m.current().map(|v| v.id.clone()) {
@@ -4257,12 +4258,13 @@ fn settle(m: &mut Mission) {
     };
     let items = &view.data.items;
     let at = m.cursor.max(0) as usize;
+    let over = |i: &Item| views::passed_over(i, m.week_only_hidden());
     // The next row to rest on, else the one before (End on a last row
     // passed over).
-    if items.get(at).is_some_and(views::passed_over)
+    if items.get(at).is_some_and(over)
         && let Some(next) = (at..items.len())
-            .find(|i| !views::passed_over(&items[*i]))
-            .or_else(|| (0..at).rev().find(|i| !views::passed_over(&items[*i])))
+            .find(|i| !over(&items[*i]))
+            .or_else(|| (0..at).rev().find(|i| !over(&items[*i])))
     {
         m.cursor = next as isize;
     }
@@ -4296,7 +4298,11 @@ fn row_step(m: &Mission, by: isize) -> isize {
         // when only headings are left that way.
         if let Some(view) = m.current().filter(|v| views::grouped(&v.id)) {
             let items = &view.data.items;
-            while to >= 0 && items.get(to as usize).is_some_and(views::passed_over) {
+            while to >= 0
+                && items
+                    .get(to as usize)
+                    .is_some_and(|i| views::passed_over(i, m.week_only_hidden()))
+            {
                 to += by;
             }
             if to < 0 || to as usize >= items.len() {
@@ -4557,7 +4563,8 @@ fn move_focus(m: &mut Mission, by: isize) {
             let item = v.data.items.get(i as usize);
             (views::grouped(&v.id)
                 && item.is_some_and(|it| views::is_header(it) && !views::is_summary(it)))
-                || (v.id == ViewId::Usage && item.is_some_and(views::passed_over))
+                || (v.id == ViewId::Usage
+                    && item.is_some_and(|i| views::passed_over(i, m.week_only_hidden())))
         })
     };
     stops.extend(

@@ -26,7 +26,7 @@ use crate::mux::TabId;
 use crate::sidebar::render::Line;
 use crate::sidebar::text::width;
 use crate::ui::Theme;
-use crate::ui::kit::{self, Surface, Tone};
+use crate::ui::kit::{self, Col, Surface, Tone};
 use crate::usage::resources::{CPU_HEAVY, MEMORY_HEAVY, bytes};
 
 /// The board needs this many columns; under it `list` draws the table.
@@ -61,12 +61,43 @@ impl Sort {
 
 /// The widest a tab's sparkline is; it holds the last two minutes.
 const SPARK_W: usize = 20;
-/// The whole computer's CPU sparkline.
-const TOP_SPARK_W: usize = 40;
-const TOP_METER_W: usize = 30;
-/// Where the top's sparkline and its memory start.
-const TOP_SPARK_AT: usize = 24;
-const TOP_MEMORY_AT: usize = TOP_SPARK_AT + TOP_SPARK_W + 6;
+
+/// The whole computer's line from x 1, as board 45 lays it out: the CPU's
+/// words, its sparkline, the memory's words and its meter, the sparkline
+/// and the meter stretching into the rest by their widths at 160 (40 and
+/// 30); on a narrow screen the meter goes.
+fn top_columns(cols: usize, cpu: usize, memory: usize) -> Vec<Option<(usize, usize)>> {
+    kit::columns(
+        &[
+            Col::Fixed {
+                min: 0,
+                natural: cpu,
+                cap: 24,
+            },
+            Col::Stretch {
+                weight: 40,
+                min: 40,
+                max: None,
+            },
+            Col::Fixed {
+                min: 0,
+                natural: memory,
+                cap: 40,
+            },
+            Col::Stretch {
+                weight: 30,
+                min: 30,
+                max: None,
+            },
+        ],
+        cols.saturating_sub(2),
+        2,
+        &[3],
+    )
+    .into_iter()
+    .map(|c| c.map(|(x, w)| (x + 1, w)))
+    .collect()
+}
 /// The figures' columns.
 const CPU_W: usize = 6;
 const MEMORY_W: usize = 9;
@@ -221,8 +252,7 @@ pub fn board(
         let top = lines.len();
         let cpu = head["cpu"].as_f64();
         let cores = head["cores"].as_u64().unwrap_or(1);
-        let mut first = vec![
-            Span::raw(" "),
+        let cpu_words = vec![
             Span::styled("CPU ", Tone::Text.bold(theme)),
             Span::styled(
                 cpu.map_or("…".into(), |c| format!("{c:.0}%")),
@@ -233,7 +263,6 @@ pub fn board(
                 Tone::Dim.style(theme),
             ),
         ];
-        first = kit::fit(first, TOP_MEMORY_AT, Style::new());
         let used = f(head, "memoryUsed");
         let total = f(head, "memoryTotal");
         let memory_words = vec![
@@ -244,19 +273,35 @@ pub fn board(
                 Tone::Dim.style(theme),
             ),
         ];
-        let memory_w = 32;
-        first.extend(kit::fit(memory_words, memory_w, Style::new()));
-        let mut second = kit::fit(vec![Span::raw("")], TOP_MEMORY_AT, Style::new());
-        second.push(Span::styled(
-            format!(
-                "Switchboard itself: {} CPU, {}",
-                percent(f(head, "ownCpu")),
-                bytes(f(head, "ownMemory") as u64)
-            ),
-            Tone::Dim.style(theme),
-        ));
-        let mut third = vec![Span::raw(" ".repeat(TOP_SPARK_AT))];
-        third.push(Span::styled("the last 2 minutes", Tone::Faint.style(theme)));
+        let own = format!(
+            "Switchboard itself: {} CPU, {}",
+            percent(f(head, "ownCpu")),
+            bytes(f(head, "ownMemory") as u64)
+        );
+        let words_w = |spans: &[Span]| spans.iter().map(|s| width(&s.content)).sum::<usize>();
+        let at = top_columns(
+            cols,
+            words_w(&cpu_words),
+            words_w(&memory_words).max(width(&own)),
+        );
+        let (spark, words) = (at[1].unwrap_or((23, 40)), at[2].unwrap_or((69, 32)));
+        let mut first = vec![Span::raw(" ")];
+        if let Some(col) = at[0] {
+            kit::place(&mut first, cpu_words, col);
+        }
+        kit::place(&mut first, memory_words, words);
+        let mut second = Vec::new();
+        kit::place(
+            &mut second,
+            vec![Span::styled(own, Tone::Dim.style(theme))],
+            words,
+        );
+        let mut third = Vec::new();
+        kit::place(
+            &mut third,
+            vec![Span::styled("the last 2 minutes", Tone::Faint.style(theme))],
+            spark,
+        );
         lines.push(line(first));
         lines.push(line(second));
         lines.push(line(third));
@@ -270,9 +315,9 @@ pub fn board(
             .unwrap_or_default();
         images.push(Image {
             name: "resources/cpu".into(),
-            x: TOP_SPARK_AT as u16,
+            x: spark.0 as u16,
             y: top as u16,
-            width: TOP_SPARK_W as u16,
+            width: spark.1 as u16,
             height: 2,
             shape: Shape::Series {
                 bars,
@@ -281,7 +326,9 @@ pub fn board(
                 marks: Default::default(),
             },
         });
-        if total > 0.0 && cols >= TOP_MEMORY_AT + memory_w + TOP_METER_W {
+        if total > 0.0
+            && let Some((x, w)) = at[3]
+        {
             let frac = (used / total) as f32;
             let tone = if frac >= 0.9 {
                 Tone::Failed
@@ -292,9 +339,9 @@ pub fn board(
             };
             images.push(Image {
                 name: "resources/memory".into(),
-                x: (TOP_MEMORY_AT + memory_w) as u16,
+                x: x as u16,
                 y: top as u16,
-                width: TOP_METER_W as u16,
+                width: w as u16,
                 height: 1,
                 shape: Shape::Meter {
                     frac,

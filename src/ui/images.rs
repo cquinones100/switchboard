@@ -988,8 +988,8 @@ const STEPS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"
 /// `marks`; one row tall it is a sparkline. As text, `▁`…`█` per value,
 /// by its total: one row tall in its top part's color, taller each cell in
 /// the color of the part at its height (the outlined part's bold), a value
-/// a column, or as many columns each as fit when there are
-/// fewer values than columns, the grid a dashed line where no bar reaches.
+/// a column, or with fewer values than columns the width shared out
+/// among them, so the bars reach the right edge, the grid a dashed line where no bar reaches.
 pub fn series(
     frame: &mut Frame,
     name: &str,
@@ -1041,7 +1041,10 @@ pub fn series(
     if shown.is_empty() {
         return;
     }
-    let each = (area.width as usize / shown.len()).max(1);
+    // Bar i takes the columns from i·w/n up to (i+1)·w/n, so they fill the
+    // width; `shown` is never wider than it, so each gets one at least.
+    let (w, n) = (area.width as usize, shown.len());
+    let from = |i: usize| i * w / n;
     let eighths = area.height as f32 * 8.0;
     let grid_rows: Vec<u16> = marks
         .grid
@@ -1111,8 +1114,8 @@ pub fn series(
             let top = (k as u16 * 8 + here).saturating_sub(1);
             column.push((r, here, style_at(top)));
         }
-        for dx in 0..each {
-            let x = area.x as usize + i * each + dx;
+        for dx in 0..from(i + 1) - from(i) {
+            let x = area.x as usize + from(i) + dx;
             if x >= area.right() as usize {
                 break;
             }

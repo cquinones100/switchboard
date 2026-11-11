@@ -37,10 +37,11 @@ use crate::ui::kit::{self, Mark, Tone};
 /// The narrowest pane the panel is drawn beside the column in.
 pub const PANEL_MIN: usize = 100;
 
-/// The panel's width in a pane `cols` wide: about a third, as the board
-/// draws it.
+/// The panel's width in a pane `cols` wide: its share of the board's 160
+/// columns (48), kept on a screen of any width as board 45 says, never
+/// under 36.
 pub fn panel_width(cols: usize) -> usize {
-    (cols * 3 / 10).clamp(36, 52)
+    kit::beside(cols, 48, 36, 0)
 }
 
 /// The PR or the ticket, as its board lays it out.
@@ -644,6 +645,13 @@ pub fn hints(keys: &[(String, String)], look: &Look) -> Line {
 mod tests {
     use super::*;
     use crate::photos::Service;
+
+    #[test]
+    fn the_panel_keeps_its_share_of_a_wide_pane() {
+        assert_eq!(panel_width(100), 36);
+        assert_eq!(panel_width(160), 48);
+        assert_eq!(panel_width(240), 72);
+    }
 
     fn plain(doc: &Doc) -> Vec<String> {
         doc.lines

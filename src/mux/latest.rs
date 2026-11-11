@@ -263,7 +263,7 @@ fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
     let note = match fetch {
         false => Some("(origin not fetched: GitHub is turned off in Settings)".to_string()),
         true => {
-            crate::requests::count("github", "git", "restart");
+            crate::requests::count("GitHub", "git", "restart");
             // Into origin/<default> by name, whatever origin's refspec fetches.
             let refspec = format!("+refs/heads/{default}:refs/remotes/origin/{default}");
             let fetch = git(&["fetch", "-q", "origin", &refspec])

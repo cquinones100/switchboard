@@ -140,9 +140,11 @@ impl Counting {
             let source = if source.is_empty() { "unknown" } else { source };
             self.total += 1;
             let buckets = self.buckets;
+            // One service whatever its case (an older build counted git's
+            // fetches as "github"), named as written with a capital.
             let entry = self
                 .services
-                .entry(service.to_string())
+                .entry(service.to_lowercase())
                 .or_insert_with(|| ServiceCount {
                     service: service.to_string(),
                     total: 0,
@@ -150,6 +152,9 @@ impl Counting {
                     by_time: vec![0; buckets],
                     sources: IndexMap::new(),
                 });
+            if entry.service == entry.service.to_lowercase() {
+                entry.service = service.to_string();
+            }
             entry.total += 1;
             *entry.protocols.entry(protocol.to_string()).or_insert(0) += 1;
             *entry.sources.entry(source.to_string()).or_insert(0) += 1;
@@ -279,6 +284,18 @@ mod tests {
         assert_eq!(github.sources["PR board"], 2);
         assert_eq!(github.sources["CI"], 1);
         assert_eq!(day.services[1].by_time[14], 1);
+    }
+
+    #[test]
+    fn a_service_counted_in_two_cases_is_one() {
+        let text = "1\tgithub\tgit\trestart\n2\tGitHub\tREST\tCI\n3\tgithub\tgit\trestart\n";
+        let mut counting = Counting::new(24);
+        counting.take(text, |_| 0);
+        let day = counting.done();
+        assert_eq!(day.services.len(), 1);
+        assert_eq!(day.services[0].service, "GitHub");
+        assert_eq!(day.services[0].total, 3);
+        assert_eq!(day.services[0].protocols["git"], 2);
     }
 
     #[test]

@@ -39,7 +39,7 @@ use crate::sidebar::model::{self, Rules, TabModel, TabState};
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, SPINNER, width};
 use crate::ui::Theme;
-use crate::ui::kit::{self, Mark, Tone};
+use crate::ui::kit::{self, Col, Mark, Tone};
 use crate::views::markdown::{Images, PictureRow};
 
 /// A box's border takes a column each side.
@@ -941,7 +941,7 @@ fn board_cards(
             .collect()
     };
     let week_items = week.first().map(|w| in_group(w)).unwrap_or_default();
-    let side_w = if cols >= SIDE_AT { SIDE_W } else { 0 };
+    let side_w = beside_w(cols, SIDE_AT, SIDE_W);
     let chosen_item = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| view.data.items.get(c));
@@ -1399,11 +1399,23 @@ fn ready_diagrams(m: &Mission) -> Option<Images> {
 }
 
 /// How wide a screen shows the chosen item's description beside the board,
-/// and how many columns it takes there.
+/// and how many columns it takes there at 160, its share of a screen of
+/// any width (board 45).
 const SIDE_AT: usize = 140;
 const SIDE_W: usize = 50;
-/// The columns the description is laid out in there.
+/// The columns a diagram in the description is drawn for: the pane's at
+/// 160, which a wider pane shows as drawn.
 pub const ABOUT_COLS: usize = SIDE_W - 3;
+
+/// The pane beside a board on a screen `cols` wide: none under `at`, else
+/// its share `share` of 160 scaled to the screen, never under 34.
+fn beside_w(cols: usize, at: usize, share: usize) -> usize {
+    if cols < at {
+        0
+    } else {
+        kit::beside(cols, share, 34, 0)
+    }
+}
 
 /// A diagram the pane beside a board places as an image once its lines are
 /// drawn (`ui::images::picture_cut`): its key among the snapshot's
@@ -2401,6 +2413,30 @@ const STAGES_AT: usize = 40;
 const STAGE_WIDTH: usize = 15;
 const STAGE_STEP: usize = 16;
 const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
+
+/// A Landing row's columns from x 2, as board 45 lays them out: the
+/// worktree's name at its width on the board, then a cell for each of
+/// `stages` stretching into the rest, one column apart.
+fn stage_columns(cols: usize, stages: usize) -> Vec<(usize, usize)> {
+    let mut wanted = vec![Col::Fixed {
+        min: STAGES_AT - 2 - 1,
+        natural: STAGES_AT - 2 - 1,
+        cap: STAGES_AT - 2 - 1,
+    }];
+    wanted.extend(std::iter::repeat_n(
+        Col::Stretch {
+            weight: 1,
+            min: STAGE_WIDTH,
+            max: None,
+        },
+        stages,
+    ));
+    kit::columns(&wanted, cols.saturating_sub(3), 1, &[])
+        .into_iter()
+        .map(|c| c.map_or((0, 0), |(x, w)| (x + 2, w)))
+        .collect()
+}
+
 /// A merge queue's stages, as its rows are drawn.
 const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
 
@@ -2660,14 +2696,19 @@ fn stage_rows(
                 } else {
                     " pull request"
                 };
-                let mut heads = Row::default();
-                heads.put(text::pad(first, STAGES_AT), fg(theme.dim));
-                for name in names {
-                    heads
-                        .put(centered(name, STAGE_WIDTH), fg(theme.dim))
-                        .put(" ", Style::new());
+                let at = stage_columns(cols, names.len());
+                let mut heads = vec![Span::styled(first, fg(theme.dim))];
+                for (name, &col) in names.iter().zip(&at[1..]) {
+                    kit::place(
+                        &mut heads,
+                        vec![Span::styled(centered(name, col.1), fg(theme.dim))],
+                        col,
+                    );
                 }
-                lines.push(heads.line(cols, None));
+                lines.push(Line {
+                    spans: fit(heads, cols, Style::new()),
+                    fill: None,
+                });
                 lines.push(Line {
                     spans: vec![kit::head_rule(cols, theme)],
                     fill: None,
@@ -2700,20 +2741,14 @@ fn stage_rows(
             .split_once(". ")
             .map_or(item.title.as_str(), |(_, n)| n);
         hit(lines);
+        let at = stage_columns(cols, stages.len());
         let mut top = Row::default();
-        top.put(pointer, fg(ACCENT)).put(" ", Style::new()).put(
-            text::pad(&text::cut(name, name_w), STAGES_AT - 2),
-            bold(theme.bright),
-        );
-        for (stage, label) in stages {
-            top.spans.extend(kit::cell(
-                &label,
-                STAGE_WIDTH,
-                stage.tone(),
-                m.snap.caps,
-                theme,
-            ));
-            top.put(" ", Style::new());
+        top.put(pointer, fg(ACCENT))
+            .put(" ", Style::new())
+            .put(text::cut(name, name_w), bold(theme.bright));
+        for ((stage, label), &col) in stages.iter().zip(&at[1..]) {
+            let cell = kit::cell(label, col.1, stage.tone(), m.snap.caps, theme);
+            kit::place(&mut top.spans, cell, col);
         }
         lines.push(top.line(cols, fill));
         hit(lines);
@@ -2941,11 +2976,7 @@ fn pilot_board(
         lines.push(Row::default().line(cols, None));
     }
     let body = rows.saturating_sub(1 + lines.len());
-    let side_w = if cols >= PILOT_SIDE_AT {
-        PILOT_SIDE_W
-    } else {
-        0
-    };
+    let side_w = beside_w(cols, PILOT_SIDE_AT, PILOT_SIDE_W);
     let about = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| items.get(c))
@@ -5664,6 +5695,27 @@ mod tests {
             (texts(&l), h)
         };
         assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+        // On a wide screen the pane keeps its share of it: 50 of 160 is 75
+        // of 240, its rule at the board's right.
+        let mut l = Vec::new();
+        let mut h = Vec::new();
+        board_cards(view, columns, 240, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
+        let wide = texts(&l);
+        assert_eq!(
+            wide[0].chars().position(|c| c == '│'),
+            Some(240 - 75),
+            "{}",
+            wide[0]
+        );
+    }
+
+    #[test]
+    fn a_pane_beside_a_board_keeps_its_share_of_any_screen() {
+        assert_eq!(beside_w(120, SIDE_AT, SIDE_W), 0);
+        assert_eq!(beside_w(160, SIDE_AT, SIDE_W), 50);
+        assert_eq!(beside_w(240, SIDE_AT, SIDE_W), 75);
+        assert_eq!(beside_w(160, PILOT_SIDE_AT, PILOT_SIDE_W), 44);
+        assert_eq!(beside_w(240, PILOT_SIDE_AT, PILOT_SIDE_W), 66);
     }
 
     #[test]
@@ -6045,6 +6097,17 @@ mod tests {
                 .and_then(|i| i.frac()),
             Some(21.0 / 32.0)
         );
+        // At any width the computer's memory meter ends at the right edge,
+        // its CPU sparkline stretching too.
+        for cols in [136, 160, 240] {
+            m.size = (cols as u16, 30);
+            let (_, _, images, _) = drawn(&m, cols, 30);
+            let image = |n: &str| images.iter().find(|i| i.name == n).unwrap();
+            let meter = image("resources/memory");
+            assert_eq!((meter.x + meter.width) as usize, cols - 1, "at {cols}");
+            assert!(image("resources/cpu").width >= 40, "at {cols}");
+        }
+        m.size = (160, 30);
         // Narrower, the table.
         let (lines, _) = screen(&m, 120, 30);
         assert!(texts(&lines).iter().any(|l| l.contains("% CPU")));
@@ -6469,6 +6532,21 @@ mod tests {
             .find(|s| s.content.contains("pushing…"))
             .unwrap();
         assert_eq!(pushing.style.bg, Some(Tone::Working.tint(&Theme::DARK)));
+        // At any width the cells stretch so the last one ends at the right
+        // edge, its head centered over it.
+        for cols in [140, 160, 240] {
+            let (lines, _) = screen(&m, cols, 20);
+            let holder = &lines[at + 3];
+            let tinted = holder
+                .spans
+                .iter()
+                .fold((0, 0), |(x, end), s| {
+                    let next = x + width(&s.content);
+                    (next, if s.style.bg.is_some() { next } else { end })
+                })
+                .1;
+            assert_eq!(tinted, cols - 1, "at {cols}: {}", holder.text());
+        }
         // A failed stage is a red cell with ✕ and the phase's words.
         let failing = Item::new("land:/w/x", "1. note-full-titles").data(serde_json::json!({
             "landing": { "holding": true, "phase": "tests failed 2 of 401" },
@@ -6795,7 +6873,19 @@ mod tests {
         assert_eq!(ticks, 1);
         let named = |prefix: &str| images.iter().filter(|i| i.name.starts_with(prefix)).count();
         assert_eq!(named("usage/limit/"), 2);
-        assert_eq!(named("usage/spark/"), 3);
+        // Slack, with requests this week and none today, has no row today.
+        assert_eq!(named("usage/spark/"), 2);
+        assert!(!text.contains("Slack"), "{text}");
+        // An unchosen service's meter is filled in the dim text color.
+        let meter = images
+            .iter()
+            .find(|i| i.name == "usage/share/Linear")
+            .unwrap();
+        assert!(
+            matches!(meter.shape, Shape::Meter { color, .. } if color == m.snap.theme.dim),
+            "{:?}",
+            meter.shape
+        );
         assert!(
             hits.iter()
                 .any(|h| h.spot == Spot::Index(first_tab as isize))
@@ -6811,7 +6901,8 @@ mod tests {
                 .any(|s| s.content.contains("docs") && s.style.bg == Some(m.snap.theme.panel))
         );
         m.hover = None;
-        // The chosen service shows what made its requests under it.
+        // Each service shows what made its requests on its second line,
+        // under headings over its sparkline and meter.
         let service = items
             .iter()
             .position(|i| i.id == "requests:GitHub")
@@ -6819,7 +6910,37 @@ mod tests {
         m.cursor = service as isize;
         let text = texts(&drawn(&m, 160, 40).0).join("\n");
         assert!(text.contains("made by PR board 20 · CI 10"), "{text}");
-        assert!(!text.contains("ticket view"), "{text}");
+        assert!(text.contains("made by ticket view 10"), "{text}");
+        assert!(text.contains("by hour"), "{text}");
+        assert!(text.contains("share of today"), "{text}");
+        // At any width the chart reaches By tab, whose share ends at the
+        // right edge, and a service's sparkline and meter fill its row up
+        // to the count at the right edge.
+        for cols in [136, 160, 240] {
+            m.size = (cols as u16, 40);
+            let (lines, _, images, _) = drawn(&m, cols, 40);
+            let image = |name: &str| images.iter().find(|i| i.name == name).unwrap();
+            let chart = image("usage/chart");
+            let heading = lines
+                .iter()
+                .map(|l| l.text())
+                .find(|t| t.contains("BY TAB"))
+                .unwrap();
+            let by_tab = heading.find("BY TAB").unwrap();
+            let chart_end = (chart.x + chart.width) as usize;
+            assert!(
+                by_tab - chart_end <= 6,
+                "at {cols}: chart ends {chart_end}, By tab at {by_tab}"
+            );
+            assert_eq!(width(heading.trim_end()), cols - 2, "at {cols}: {heading}");
+            let spark = image("usage/spark/GitHub");
+            let meter = image("usage/share/GitHub");
+            assert_eq!(spark.height, 2);
+            let meter_end = (meter.x + meter.width) as usize;
+            assert!(cols - meter_end <= 11, "at {cols}: meter ends {meter_end}");
+            assert!(spark.width >= 24 && meter.width >= 20, "at {cols}");
+        }
+        m.size = (160, 40);
         // A tab of the week alone is drawn today at none, and can be chosen.
         let notes = items.iter().position(|i| i.id == "tab:tab:9").unwrap();
         m.cursor = notes as isize;
@@ -6827,24 +6948,29 @@ mod tests {
         let text = texts(&lines).join("\n");
         assert!(text.contains(" 9 notes"), "{text}");
         assert!(hits.iter().any(|h| h.spot == Spot::Index(notes as isize)));
-        // A service of the week alone can be chosen, and is drawn at none
-        // today; on a short screen the board scrolls to it.
+        // A service of the week alone is passed over today, and in the
+        // week's board can be chosen; on a short screen the board scrolls
+        // to it.
         let slack = items.iter().position(|i| i.id == "requests:Slack").unwrap();
+        assert!(m.week_only_hidden());
+        // The plain list shows it, so a narrow screen lets the cursor reach it.
+        m.size = (120, 40);
+        assert!(!m.week_only_hidden());
+        m.size = (160, 40);
+        assert!(crate::mission::views::passed_over(&items[slack], true));
+        assert!(!crate::mission::views::passed_over(&items[slack], false));
         m.cursor = slack as isize;
         m.size = (160, 24);
+        m.usage_week = true;
         let (lines, hits, images, _) = drawn(&m, 160, 24);
         let text = texts(&lines).join("\n");
-        assert!(!text.contains("made by relay 4"), "{text}");
-        assert!(text.contains("Slack"), "{text}");
+        assert!(text.contains("made by relay 4"), "{text}");
         assert!(hits.iter().any(|h| h.spot == Spot::Index(slack as isize)));
         assert!(images.iter().all(|i| ((i.y + i.height) as usize) < 24));
         assert!(
-            !text.contains("Today $4.00"),
+            !text.contains("This week $"),
             "scrolled past the heading: {text}"
         );
-        m.usage_week = true;
-        let text = texts(&drawn(&m, 160, 24).0).join("\n");
-        assert!(text.contains("made by relay 4"), "{text}");
         m.usage_week = false;
         m.size = (160, 40);
         // Too narrow for the board: the list.

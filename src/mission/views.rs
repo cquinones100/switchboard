@@ -188,10 +188,13 @@ pub fn is_header(item: &Item) -> bool {
     item.data.get("header").and_then(Value::as_bool) == Some(true)
 }
 
-/// Whether the cursor passes over an item: a heading, or a row of the Usage
-/// view that is neither a tab nor a service.
-pub fn passed_over(item: &Item) -> bool {
-    is_header(item) || crate::usage::charts::is_still(item)
+/// Whether the cursor passes over an item: a heading, a row of the Usage
+/// view that is neither a tab nor a service, or, while today's board is
+/// drawn (`hide_week_only`, `Mission::week_only_hidden`), a service with no
+/// requests today, which it leaves out.
+pub fn passed_over(item: &Item, hide_week_only: bool) -> bool {
+    use crate::usage::charts::{is_still, is_week_only};
+    is_header(item) || is_still(item) || (hide_week_only && is_week_only(item))
 }
 
 /// Whether an item is a view's summary (the Autopilot view's heading).
