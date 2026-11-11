@@ -440,6 +440,39 @@ fn a_pane_not_running_claude_keeps_no_state() {
 }
 
 #[test]
+fn a_shell_holding_a_dead_claude_s_pid_drops_its_state() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let (pane, pid) = first_pane(&server);
+    session_file(&server.home, pid, json!({"sessionId": "s-1"}));
+    hook(&server, &pane, "UserPromptSubmit", json!({}));
+    assert_eq!(pane_of(&server.list(), &pane)["agent"]["state"], "working");
+
+    // The file now dates from before the shell started: a Claude that had
+    // the pid before it ended without saying so, and the shell got its pid.
+    let file = server.home.join(format!(".claude/sessions/{pid}.json"));
+    let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(hour_ago)
+        .unwrap();
+    let start = Instant::now();
+    wait_list(&server, "the working state dropped", |l| {
+        pane_of(l, &pane)["agent"].is_null()
+    });
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        start.elapsed()
+    );
+    assert!(file.exists());
+}
+
+#[test]
 fn a_headless_claudes_hooks_mark_nothing() {
     let server = TestServer::start();
     settings(&server, json!({}));

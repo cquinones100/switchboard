@@ -68,6 +68,15 @@ pub fn group_of(pid: u32) -> Option<u32> {
     imp::group_of(pid).filter(|&g| g > 0)
 }
 
+/// When a process started: what tells a process from an earlier one that
+/// had its pid, since the kernel hands an ended process's pid out again.
+pub fn started_at(pid: u32) -> Option<std::time::SystemTime> {
+    if pid == 0 {
+        return None;
+    }
+    imp::started_at(pid)
+}
+
 /// One process as the Resources view counts it: its parent, its name, the
 /// CPU time it has used so far and the memory it holds now.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -107,6 +116,25 @@ fn parse_stat_usage(stat: &str) -> Option<(String, u32, u64, u64)> {
     let utime = fields.get(11)?.parse().ok()?;
     let stime = fields.get(12)?.parse().ok()?;
     Some((name, ppid, utime, stime))
+}
+
+/// When a process started, in clock ticks since the computer booted:
+/// `/proc/<pid>/stat`'s field 22, counting from one.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_stat_start(stat: &str) -> Option<u64> {
+    let close = stat.rfind(')')?;
+    stat[close + 1..].split_whitespace().nth(19)?.parse().ok()
+}
+
+/// When the computer booted, in seconds since the epoch: `/proc/stat`'s
+/// `btime` line.
+#[cfg(any(test, target_os = "linux"))]
+fn parse_boot_time(stat: &str) -> Option<u64> {
+    stat.lines()
+        .find_map(|line| line.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// The resident pages in `/proc/<pid>/statm`, its second field.
@@ -221,6 +249,17 @@ mod imp {
     pub fn group_of(pid: u32) -> Option<u32> {
         let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
         super::parse_stat(&stat).map(|(_, pgrp)| pgrp)
+    }
+
+    pub fn started_at(pid: u32) -> Option<std::time::SystemTime> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let ticks = super::parse_stat_start(&stat)?;
+        let boot = super::parse_boot_time(&fs::read_to_string("/proc/stat").ok()?)?;
+        // SAFETY: sysconf only reads the system's configuration.
+        let tick = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+        let tick = if tick > 0 { tick as u64 } else { 100 };
+        let since_boot = std::time::Duration::from_nanos(ticks * (1_000_000_000 / tick));
+        Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(boot) + since_boot)
     }
 
     pub fn all_usage() -> Vec<super::ProcUsage> {
@@ -413,6 +452,12 @@ mod imp {
         bsd_info(pid).map(|info| info.pbi_pgid)
     }
 
+    pub fn started_at(pid: u32) -> Option<std::time::SystemTime> {
+        let info = bsd_info(pid)?;
+        let micros = u32::try_from(info.pbi_start_tvusec).unwrap_or(0);
+        Some(std::time::UNIX_EPOCH + std::time::Duration::new(info.pbi_start_tvsec, micros * 1000))
+    }
+
     /// The task's resident memory and CPU time, which the kernel gives only
     /// for our own processes.
     fn task_info(pid: u32) -> Option<libc::proc_taskinfo> {
@@ -560,6 +605,9 @@ mod imp {
     pub fn group_of(_pid: u32) -> Option<u32> {
         None
     }
+    pub fn started_at(_pid: u32) -> Option<std::time::SystemTime> {
+        None
+    }
     pub fn all_usage() -> Vec<super::ProcUsage> {
         Vec::new()
     }
@@ -576,6 +624,28 @@ mod tests {
         assert_eq!(parse_stat("1 (init) S 0 1 1"), Some((0, 1)));
         assert_eq!(parse_stat("garbage"), None);
         assert_eq!(parse_stat("1 (x) S"), None);
+    }
+
+    #[test]
+    fn a_process_s_start_is_read_from_stat_and_the_boot_time() {
+        let stat = "4242 (my (odd) name) S 17 4240 17 34816 4240 4194304 120 0 3 0 250 50 0 0 20 0 1 0 98765 1000 10";
+        assert_eq!(parse_stat_start(stat), Some(98765));
+        assert_eq!(parse_stat_start("1 (x) S 0 1"), None);
+        assert_eq!(
+            parse_boot_time("cpu  1 2 3\nintr 5\nbtime 1762750000\nprocesses 9\n"),
+            Some(1762750000)
+        );
+        assert_eq!(parse_boot_time("cpu 1\n"), None);
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn this_process_started_in_the_past() {
+        let started = started_at(std::process::id()).unwrap();
+        let age = std::time::SystemTime::now()
+            .duration_since(started)
+            .unwrap();
+        assert!(age < std::time::Duration::from_secs(3600), "{age:?}");
     }
 
     #[test]
@@ -638,6 +708,8 @@ mod tests {
         assert!(children_of(0).is_empty());
         assert_eq!(group_of(0), None);
         assert_eq!(group_of(u32::MAX - 1), None);
+        assert_eq!(started_at(0), None);
+        assert_eq!(started_at(u32::MAX - 1), None);
         // Past any pid the kernel hands out (Linux's limit is 2^22).
         assert_eq!(cwd_of(u32::MAX - 1), None);
         assert_eq!(command_of(u32::MAX - 1), None);

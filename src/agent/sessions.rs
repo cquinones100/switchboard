@@ -21,6 +21,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde_json::Value;
 
@@ -120,12 +121,39 @@ pub fn parked_chain(sessions: &[SessionFile], session_id: &str) -> Vec<u32> {
 }
 
 /// Whether any of these processes (a pane's foreground) has a session file
-/// in `dir`: certainly Claude, since only Claude Code writes there, and the
-/// one way to tell Claude started from a Node script, which runs as its
-/// child and reads as `node`.
+/// of its own in `dir`: certainly Claude, since only Claude Code writes
+/// there, and the one way to tell Claude started from a Node script, which
+/// runs as its child and reads as `node`.
+///
+/// Nothing removes a session file when its Claude ends without saying so,
+/// and the kernel hands its pid out again (thousands of processes start an
+/// hour under autopilot), so a shell that gets a dead Claude's pid back
+/// would pass as Claude and keep the state it left, Working included. A
+/// file counts only when it was written after its process started.
 pub fn runs_claude(dir: &Path, pids: &[u32]) -> bool {
-    pids.iter()
-        .any(|pid| dir.join(format!("{pid}.json")).is_file())
+    runs_claude_by(dir, pids, crate::mux::procinfo::started_at)
+}
+
+fn runs_claude_by(
+    dir: &Path,
+    pids: &[u32],
+    started_at: impl Fn(u32) -> Option<SystemTime>,
+) -> bool {
+    pids.iter().any(|&pid| {
+        let Ok(modified) = fs::metadata(dir.join(format!("{pid}.json"))).and_then(|m| m.modified())
+        else {
+            return false;
+        };
+        written_since(modified, started_at(pid))
+    })
+}
+
+/// Whether a session file modified at `modified` was written by the
+/// process that started at `started`, or by one before it that had its
+/// pid. A second's grace covers clocks kept to the second; a start that
+/// can't be read leaves the file counted, as before.
+fn written_since(modified: SystemTime, started: Option<SystemTime>) -> bool {
+    started.is_none_or(|started| modified + Duration::from_secs(1) >= started)
 }
 
 /// Whether a pane runs Claude: its program in front is named as Claude
@@ -284,6 +312,18 @@ mod tests {
     }
 
     #[test]
+    fn a_session_file_counts_only_when_written_after_its_process_started() {
+        let at = |s| SystemTime::UNIX_EPOCH + Duration::from_secs(s);
+        assert!(written_since(at(100), Some(at(90))));
+        assert!(written_since(at(100), Some(at(100))));
+        // Clocks kept to the second: the same second, or one off, counts.
+        assert!(written_since(at(100), Some(at(101))));
+        assert!(!written_since(at(100), Some(at(102))));
+        assert!(!written_since(at(100), Some(at(5000))));
+        assert!(written_since(at(100), None));
+    }
+
+    #[test]
     fn session_files_are_read_and_found_by_pid() {
         let dir = std::env::temp_dir().join(format!("sb-sessions-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -298,9 +338,14 @@ mod tests {
         let all = read_all(&dir);
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].session_id, "s1");
-        assert!(runs_claude(&dir, &[7, 41]));
-        assert!(!runs_claude(&dir, &[7]));
-        assert!(!runs_claude(&dir, &[]));
+        let long_ago = |_| Some(SystemTime::UNIX_EPOCH);
+        assert!(runs_claude_by(&dir, &[7, 41], long_ago));
+        assert!(!runs_claude_by(&dir, &[7], long_ago));
+        assert!(!runs_claude_by(&dir, &[], long_ago));
+        // Pid 41 handed to a process that started after the file was
+        // written: a dead Claude's file, not this process's.
+        let later = |_| Some(SystemTime::now() + Duration::from_secs(60));
+        assert!(!runs_claude_by(&dir, &[41], later));
         assert!(read_all(&dir.join("missing")).is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
