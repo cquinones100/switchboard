@@ -1,8 +1,7 @@
 ---
 name: plan-item
-description: Add a checklist item to the tab's note and write its plan note in the plans folder beside it, after checking the item isn't there already and looking into the code it touches, in the shape `/wtn` and autopilot build from. For work kept in a note in any repository.
+description: Add a checklist item to the tab's note and write its plan note in the plans folder beside it, after checking the item isn't there already and looking into the code it touches, in the shape `/wtn` and autopilot build from, its first line a bug ("BUG:") or a feature ("FEAT:"). Use when the user asks to add something to their note's checklist, plan an item, or log a bug or a feature for later work; not for a Linear ticket (`/shape`) or for working an item now (`/wtn`).
 argument-hint: "<what the item is about, in your words>"
-disable-model-invocation: true
 ---
 
 # plan-item
@@ -60,9 +59,11 @@ Add one item to the tab's note: the item as a checklist line in the note, and a 
    - The plan follows the repository's `CLAUDE.md` and the user's. In Switchboard's own repository that means: a new feature gets a setting (in `assets/settings.json`, on by default unless it sends something of yours somewhere, or "No setting" and why), a new key an `Action` in `src/mux/keys.rs` or a part's `Command` with `about()` and its tags (so `M-p` lists it), anything that takes a choice a click and a Tab stop, what it says goes through `Server::say`, nothing on the drawing path starts a process or waits on the network, and the docs are `README.md`, `docs/guide.md`, `ARCHITECTURE.md` and `CLAUDE.md`, whichever the change reaches.
    - Write it as the user's rules say: changes as instructions, current behavior only under `## Today`, no rejected alternatives, no future notes, and no self-corrections or thinking aloud. Write each step as decided.
 
-6. **The item**, only once its plan note is written, since autopilot can take an item as soon as it is in the note. One `- [ ]` line, its first line the item's outcome: what the user notices once it is done, in one sentence under 90 characters, in the user's words where they fit.
-   - It leads with the words that tell it from the note's other items, since `/wtn` names the branch and the worktree from it and the tab's name and the board show about its first 50 characters. Its first six words differ from every other item's in the note, ticked ones included: the first line is the item's key, and `/wtn` refuses one that slugs the same as another.
-   - A leading tag is kept as given (`board 18:`, `High:`), and keys and commands go in backticks.
+6. **The item**, only once its plan note is written, since autopilot can take an item as soon as it is in the note. One `- [ ]` line, its first line the item's title, a bug or a feature, in one sentence under 90 characters, in the user's words where they fit:
+   - A bug starts `BUG: ` and says what is broken now, in the present tense: `BUG: A tab shows Working when it is idle`.
+   - A feature starts `FEAT: ` and says what to build, as a task starting with a verb: `FEAT: Add a view to mission control that lists the day's landings`. Only a bug is in the present tense.
+   - After its prefix, it leads with the words that tell it from the note's other items, since `/wtn` names the branch and the worktree from it and the tab's name and the board show about its first 50 characters. Its first six words differ from every other item's in the note, ticked ones included: the first line is the item's key, and `/wtn` refuses one that slugs the same as another.
+   - A leading tag is kept as given, after the prefix (`FEAT: board 18: …`), and keys and commands go in backticks.
    - No file paths, line numbers, dates or screenshots, no `[` or `]` (a `[[…]]` there would be read as the item's plan link), and no period at the end.
    - The cause, the evidence and the pointers go under it and in the plan's `## Today`, and the request's longer wording nowhere else: the plan's `Item:` quotes the first line as written.
 

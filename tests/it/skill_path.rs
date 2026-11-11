@@ -313,8 +313,8 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
     let all = skills();
     let (_, text) = all.iter().find(|(name, _)| name == "plan-item").unwrap();
     assert!(
-        text.lines().any(|l| l == "disable-model-invocation: true"),
-        "it reads your note, so only you start it"
+        !text.lines().any(|l| l == "disable-model-invocation: true"),
+        "Claude starts it when you ask for an item in your own words"
     );
     for option in [
         "**Top of the list**",
@@ -342,7 +342,9 @@ fn plan_item_asks_where_the_item_goes_the_top_in_order_of_difficulty_or_the_bott
             .join("\n")
     };
     for rule in [
-        "its first line the item's outcome",
+        "its first line the item's title, a bug or a feature",
+        "A bug starts `BUG: ` and says what is broken now, in the present tense",
+        "A feature starts `FEAT: ` and says what to build, as a task starting with a verb",
         "under 90 characters",
         "Its first six words differ from every other item's",
         "No file paths, line numbers, dates or screenshots",
