@@ -68,6 +68,17 @@ fn wait_panes(server: &TestServer, n: usize) -> Vec<Value> {
     }
 }
 
+/// Closes the message box saying `text` with x, and waits until it has
+/// gone: a command sent next reaches the server by another way than the
+/// client's keys, and could otherwise open its list first, taking the x as
+/// what is typed into it.
+fn close_message(client: &mut common::TestClient, text: &str) {
+    client.type_text("x");
+    client.wait_for("the message closed", |s| {
+        !s.iter().any(|l| l.contains(text))
+    });
+}
+
 #[cfg(feature = "net")]
 mod with_github {
     use super::*;
@@ -472,7 +483,7 @@ fn the_link_commands_list_what_the_pane_shows_and_copy_read_or_open_it() {
         raw.contains("\x1b]52;c;aHR0cDovLzEyNy4wLjAuMTo5L2RvY3M="),
         "to the terminal's clipboard"
     );
-    client.type_text("x");
+    close_message(&mut client, "Copied");
 
     // Open, with Ctrl-O: read beside the pane instead.
     server.ok(&["press", "open-link"]);
@@ -578,13 +589,13 @@ fn the_link_commands_list_the_links_you_gave_the_panes_claude() {
     client.wait_text("you gave it  http://127.0.0.1:9/pasted");
     client.type_text("\r");
     client.wait_text("Copied http://127.0.0.1:9/pasted");
-    client.type_text("x");
+    close_message(&mut client, "Copied");
 
     // A fresh session starts with none.
     hook(&server, &pane, "SessionStart", json!({"source": "clear"}));
     server.ok(&["press", "copy-link"]);
     client.wait_text("No links in this pane");
-    client.type_text("x");
+    close_message(&mut client, "No links in this pane");
 
     // One the pane shows too is listed once, as the pane's.
     hook(
