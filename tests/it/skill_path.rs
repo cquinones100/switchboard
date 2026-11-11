@@ -583,3 +583,29 @@ fn a_clean_rebase_is_checked_with_after_rebase_and_a_failing_default_branch_is_w
     }
     assert!(queue.contains("`afterRebase`, a command step 9 runs"));
 }
+
+#[test]
+fn queue_and_clean_pins_the_tabs_name_before_anything_moves() {
+    let all = skills();
+    let (_, queue) = all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap();
+    let pin =
+        "switchboard set @tab_name \"$(switchboard show @tab_label | sed -E 's/^#[0-9]+ //')\"";
+    let keeping = queue
+        .split("## Keeping the tab's name")
+        .nth(1)
+        .and_then(|rest| rest.split("\n## ").next())
+        .expect("the section");
+    assert!(keeping.contains(pin), "{keeping}");
+    assert!(keeping.contains("When `switchboard show @tab_name` prints nothing"));
+    let keeping_at = queue.find("## Keeping the tab's name").unwrap();
+    assert!(keeping_at < queue.find("## Before watching").unwrap());
+    assert!(keeping_at < queue.find("## No PR").unwrap());
+    let back = queue
+        .split("## Back to the repository")
+        .nth(1)
+        .expect("the section");
+    assert!(!back.contains("@tab_name"), "{back}");
+}

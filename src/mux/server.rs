@@ -2210,13 +2210,20 @@ impl Server {
     /// started in. Never a directory that no longer exists (a worktree
     /// removed under it), its nearest ancestor that does taking its place.
     pub fn pane_dir(&self, pane: PaneId) -> Option<PathBuf> {
+        crate::util::nearest_existing(&self.pane_dir_as_said(pane)?)
+    }
+
+    /// The directory a pane is in as its Claude or its program has it, which
+    /// may no longer exist (a worktree removed under it): `pane_dir` before
+    /// it climbs to the nearest ancestor that does.
+    pub fn pane_dir_as_said(&self, pane: PaneId) -> Option<PathBuf> {
         let slot = self.panes.get(&pane)?;
         let said = slot
             .pane
             .foreground_pgid()
             .and_then(|group| self.agents.dir(pane, group))
             .map(std::path::Path::to_path_buf);
-        crate::util::nearest_existing(&said.or_else(|| slot.pane.cwd())?)
+        said.or_else(|| slot.pane.cwd())
     }
 
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {

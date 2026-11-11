@@ -15,6 +15,16 @@ When the work is done, the final message is either `queue-and-clean: success` or
 
 Arguments: a PR number, if one was given. Otherwise use the current branch's PR; when the branch has none, follow "No PR" instead.
 
+## Keeping the tab's name
+
+First of all, before "Before watching" or "No PR", and only when `$SWITCHBOARD_PANE` is set: pin the tab's title as its name, while it still comes from the worktree's branch (its ticket and PR). Once the worktree is gone and the pane restarts in the main clone, on its default branch, the title would change to the repository's name; a name of its own wins over the branch. When `switchboard show @tab_name` prints nothing, run:
+
+```
+switchboard set @tab_name "$(switchboard show @tab_label | sed -E 's/^#[0-9]+ //')"
+```
+
+The `sed` takes off the `#<PR> ` the label starts with when the branch has a PR, which the tab puts in front of its name itself, so it isn't shown twice. Skip it when `@tab_label` is empty. A tab with a name of its own already (`/wtn`'s, autopilot's, one you gave it) keeps it, and a full title it keeps in `@tab_title` is left as it is.
+
 ## Before watching
 
 1. Read the PR and the repo:
@@ -272,14 +282,7 @@ Once the worktree is gone, this session runs in a directory that no longer exist
 Only when `$SWITCHBOARD_PANE` and `$CLAUDE_CODE_SESSION_ID` are set and this session was running in the worktree just removed. Otherwise, reply with the final line as usual and stop here.
 
 1. If the main clone's path contains a single quote, reply with the final line and stop: it goes into the command below between single quotes.
-2. Keep the tab's title. It comes from the worktree's branch (its ticket and PR), so in the main clone, on its default branch, it would change to the repository's name. Pin the title it has now as the tab's name, which wins over the branch:
-
-   ```
-   switchboard set @tab_name "$(switchboard show @tab_label)"
-   ```
-
-   Skip this if `@tab_label` is empty. A full title the tab keeps in `@tab_title` (a note item's whole first line, which the tab bar has cut short) is left as it is, since the name pinned is still that item cut short.
-3. Write the final line, `queue-and-clean: success (…)` as above, as your reply's text, and in the same reply, as its final action, on its own and not chained to anything:
+2. Write the final line, `queue-and-clean: success (…)` as above, as your reply's text, and in the same reply, as its final action, on its own and not chained to anything:
 
    ```
    switchboard respawn -c '<main-clone>' claude --resume "$CLAUDE_CODE_SESSION_ID"

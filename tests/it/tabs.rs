@@ -145,6 +145,55 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
 }
 
 #[test]
+fn a_tab_keeps_its_name_after_its_worktree_is_removed_until_it_moves() {
+    let server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let main = server.dir.path().join("app");
+    repo(&main, "main");
+    let worktree = main.join(".claude/worktrees/fix-login");
+    git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "fix-login",
+            worktree.to_str().unwrap(),
+        ],
+    );
+
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", worktree.display()));
+    let named = wait_tab(&server, "the worktree's name", |t| {
+        t["path"] == worktree.to_string_lossy().as_ref()
+    });
+    assert!(
+        named["label"].as_str().unwrap().contains("fix-login"),
+        "{named}"
+    );
+
+    // Removed under the pane, as queue-and-clean's cleanup does before the
+    // pane restarts in the main clone: the tab reads as it did, not as the
+    // main clone it climbs to.
+    git(
+        &main,
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    std::thread::sleep(Duration::from_millis(2_500) * common::patience());
+    let kept = first_tab(&server);
+    assert_eq!(kept["label"], named["label"]);
+    assert_eq!(kept["color"], named["color"]);
+    let left = worktree.parent().unwrap();
+    assert_eq!(kept["path"], left.to_string_lossy().as_ref());
+
+    // In a directory that exists again, the name follows it.
+    client.type_text(&format!("cd {}\r", main.display()));
+    wait_tab(&server, "the main clone's name", |t| t["label"] == "app");
+}
+
+#[test]
 fn m_shift_t_shows_the_tabs_whole_title_and_its_branch_and_copies_it() {
     let server = TestServer::start();
     settings(&server, json!({"github": false, "linear": false}));

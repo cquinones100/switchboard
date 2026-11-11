@@ -80,12 +80,26 @@ impl Server {
                 (kind, *p == tab.active)
             })
             .collect();
-        let dir = label::naming_pane(&kinds).and_then(|i| self.pane_dir(panes[i]));
+        let said = label::naming_pane(&kinds).and_then(|i| self.pane_dir_as_said(panes[i]));
         // A directory that can't be read (the pane's program just ended)
-        // leaves the tab as it was.
-        let Some(dir) = dir else {
+        // leaves the tab as it was, and so does one removed under the pane
+        // once the tab was named from it (a worktree queue-and-clean cleaned
+        // up, before the pane restarts in the main clone): the tab reads as
+        // it did, its color and PR too, rather than as the ancestor left,
+        // while its path (`@tab_path`, which the diff and others work in)
+        // becomes that ancestor, a directory that exists.
+        let Some(said) = said else {
             return;
         };
+        let Some(dir) = util::nearest_existing(&said) else {
+            return;
+        };
+        if dir != said
+            && let Some(shown) = self.tab_names.shown.get_mut(&tab_id)
+        {
+            shown.path = Some(dir);
+            return;
+        }
         let (facts, asks) = self.tab_names.names.facts(&dir, Instant::now());
         for ask in asks {
             self.start_lookup(ask);
