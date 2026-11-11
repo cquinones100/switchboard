@@ -133,6 +133,13 @@
     "default": true
   },
   {
+    "key": "main_ci_watch",
+    "category": "Sessions",
+    "label": "Watch the default branch's CI",
+    "description": "While autopilot works on a repository, or a tab waits to land on it, and its landings test in CI, Switchboard looks at its default branch's CI every two minutes and tells you when it fails, naming the commit and the line of the log that says why. Off, nothing looks, and you hear of a failing default branch only from the next landing",
+    "default": true
+  },
+  {
     "key": "sidebar_notifications",
     "category": "Sidebar",
     "label": "Notifications",

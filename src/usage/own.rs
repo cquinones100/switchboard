@@ -738,6 +738,21 @@ pub fn landing_rows(
             },
             json!(steps.before_push),
         ));
+        items.push(row(
+            "afterRebase",
+            "  After a clean rebase".into(),
+            if steps.after_rebase.is_empty() {
+                "the tests".into()
+            } else {
+                steps.after_rebase.clone()
+            },
+            if steps.after_rebase.is_empty() {
+                "Run in place of the tests after the last rebase when it had no conflict and the default branch's CI isn't failing; none set, the tests run again".into()
+            } else {
+                format!("Run in place of the tests after a clean last rebase: {}", steps.after_rebase)
+            },
+            json!(steps.after_rebase),
+        ));
     }
     items
 }
@@ -873,6 +888,7 @@ mod tests {
                 ("  Squash", "off"),
                 ("  Review", "review-loop"),
                 ("  Before push", "none"),
+                ("  After a clean rebase", "the tests"),
                 ("acme/new", "auto: ?"),
             ],
             "each repository once, its steps only when it lands straight"

@@ -19,6 +19,9 @@
 //! - `prboard`, `ciboard`, `queues`, `tickets`, `inbox`: mission control's
 //!   PRs and CI views, the merge queues the Landing view shows, and the
 //!   Tickets and Inbox views, as `ViewData`.
+//! - `mainci`: the default branch's CI, for each repository whose landings
+//!   test in CI while autopilot works on it or a tab waits to land on it: a
+//!   failing tip as an item of the CI view and a notification.
 //! - `setup`: what a view says when GitHub or Linear isn't set up
 //!   (lib/sidebar/setup-help.js).
 //! - `serve`: the server's side: starting the lookups on its tick, taking
@@ -32,6 +35,7 @@
 pub mod ciboard;
 pub mod inbox;
 pub mod landing;
+pub mod mainci;
 pub mod prboard;
 pub mod prs;
 pub mod queues;
@@ -138,6 +142,13 @@ pub struct Sources {
     landing: landing::Read,
     board: prboard::Board,
     queues: queues::Queues,
+    /// The watched default branches failing at their last look
+    /// (`mainci`), and your PRs' failing checks, which the CI view lists
+    /// after them.
+    main_ci: Vec<Item>,
+    checks: Vec<Item>,
+    /// The failing tips whose notification you dismissed, by their item's id.
+    main_ci_dismissed: HashSet<String>,
     views: BTreeMap<&'static str, ViewData>,
     /// When a view was last asked for by going to it, for asking at most so
     /// often (the daemon's `cameTo`).
@@ -184,6 +195,12 @@ impl Sources {
             .get(path)?
             .iter()
             .find_map(|key| self.known.get(key))
+    }
+
+    /// What the Autopilot line says while a watched default branch fails;
+    /// empty while none does.
+    pub fn main_failing(&self) -> String {
+        mainci::failing_line(&self.main_ci)
     }
 
     /// Takes a notification off the Inbox at once, once its menu has marked

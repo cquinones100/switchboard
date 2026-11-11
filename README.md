@@ -97,7 +97,7 @@ Everything of your own is in `~/.config/switchboard/`, which nothing writes over
 | `slack-relay.json` | Your Slack member ID, the one person the relay listens to |
 | `oncall.json`, `oncall-rules.md` | The channels `/oncall` watches, and your team's rules |
 | `sidebar.json`, `sidebar-plugins/` | The sidebar's and mission control's sizes, and the plugins that add views |
-| `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests and where they run (here or in CI), squash, review and command before the push, and what a change landed there needs to take effect |
+| `repos.json` | Each repository's own settings by its origin's `owner/name`: how its work lands, through a PR or straight on its default branch, a direct landing's tests and where they run (here or in CI), squash, review, command before the push and check after a clean rebase (`afterRebase`), and what a change landed there needs to take effect |
 | `leak-check.txt` | Your organization's and company's names, usernames and internal hosts, one a line, which `switchboard leak-check` finds in what a landing would push to a public repository |
 | `trusted-dirs` | The directories whose own scripts may run |
 | `secrets.json` | On Linux with no keyring, the secrets `switchboard platform secret-set` stores, readable only by you |

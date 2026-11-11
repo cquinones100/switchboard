@@ -12,7 +12,17 @@
 //! timeout                             nothing settled within --timeout minutes
 //!
 //! wait-ci --repo <owner/name> --sha <commit> [--timeout 45] [--grace 3]
+//! wait-ci --now --repo <owner/name> --sha <commit>
 //! ```
+//!
+//! `--now` asks once and says what that one look sees, with no waiting:
+//! `passed <sha>`, `failed <sha> <run id> <job names>`, `running <sha>` or
+//! `none`. queue-and-clean asks it whether the default branch's CI is
+//! failing before it checks a clean rebase with repos.json's `afterRebase`
+//! rather than testing it again, and a pass there needs one look, since a
+//! job still to come only delays a pass rather than turning it into one.
+//! The look (`look`) is the server's too, for the default branch's CI it
+//! watches (src/sources/mainci.rs).
 //!
 //! It asks GitHub for the commit's check runs, which GitHub Actions makes
 //! one per job, and its commit statuses, which some other CIs report
@@ -45,19 +55,25 @@ use crate::util;
 
 const POLL: Duration = Duration::from_secs(30);
 const SOURCE: &str = "wait-ci";
-const USAGE: &str = "usage: wait-ci --repo <owner/name> --sha <commit> [--timeout 45] [--grace 3]";
+const USAGE: &str =
+    "usage: wait-ci [--now] --repo <owner/name> --sha <commit> [--timeout 45] [--grace 3]";
 
 /// What a commit's check runs say at one look.
-#[derive(Debug, PartialEq, Eq)]
-enum Seen {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Seen {
     /// No check run yet, or none that ran anything: all skipped or neutral.
     Nothing,
     /// Some still run, none has failed.
     Running,
     /// Every one has finished, none failing and one at least succeeding.
     Passed,
-    /// One has finished failing: its run's id, and the failed ones' names.
-    Failed { run: String, names: Vec<String> },
+    /// One has finished failing: its run's id, the failed ones' names, and
+    /// the first one's GitHub Actions job, for its log.
+    Failed {
+        run: String,
+        names: Vec<String>,
+        job: Option<String>,
+    },
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -84,6 +100,39 @@ fn as_check_run(status: &Value) -> Value {
     })
 }
 
+/// The id of the GitHub Actions job a check run is, from its link.
+fn job_of(check_run: &Value) -> Option<String> {
+    let (_, rest) = text(check_run, "details_url").split_once("/job/")?;
+    let id: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (!id.is_empty() && run_of(check_run).is_some()).then_some(id)
+}
+
+/// A commit's check runs and commit statuses at one look, the statuses
+/// read as check runs, with the commit `at` names (a hash, or a branch,
+/// for its tip). A request that fails, or one GitHub refuses, is an error
+/// (`refused` tells them apart).
+pub async fn look(repo: &str, at: &str, source: &str) -> anyhow::Result<(String, Seen)> {
+    let checks = format!("repos/{repo}/commits/{at}/check-runs?per_page=100");
+    let statuses = format!("repos/{repo}/commits/{at}/status?per_page=100");
+    let checks = github::rest("GET", &checks, None, source).await?;
+    let statuses = github::rest("GET", &statuses, None, source).await?;
+    let list = |answer: &Value, key: &str| {
+        answer
+            .get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let mut all = list(&checks, "check_runs");
+    all.extend(list(&statuses, "statuses").iter().map(as_check_run));
+    let sha = statuses
+        .get("sha")
+        .and_then(Value::as_str)
+        .unwrap_or(at)
+        .to_string();
+    Ok((sha, seen(&all)))
+}
+
 fn seen(check_runs: &[Value]) -> Seen {
     let failed: Vec<&Value> = check_runs
         .iter()
@@ -96,6 +145,7 @@ fn seen(check_runs: &[Value]) -> Seen {
         return Seen::Failed {
             run: run_of(first).unwrap_or_else(|| "-".into()),
             names: failed.iter().map(|c| text(c, "name").to_string()).collect(),
+            job: failed.iter().find_map(|c| job_of(c)),
         };
     }
     if check_runs.iter().any(|c| text(c, "status") != "completed") {
@@ -141,30 +191,36 @@ pub fn main(args: Vec<String>) -> ExitCode {
     let poll = number(std::env::var("WAIT_CI_POLL_SECS").ok())
         .map(Duration::from_secs_f64)
         .unwrap_or(POLL);
-    let checks = format!("repos/{repo}/commits/{sha}/check-runs?per_page=100");
-    let statuses = format!("repos/{repo}/commits/{sha}/status?per_page=100");
+    let failed = |run: &str, names: &[String]| format!("failed {sha} {run} {}", names.join(", "));
+    if args.iter().any(|a| a == "--now") {
+        return match util::block_on(look(&repo, &sha, SOURCE)) {
+            Ok((_, now)) => {
+                println!(
+                    "{}",
+                    match now {
+                        Seen::Failed { run, names, .. } => failed(&run, &names),
+                        Seen::Passed => format!("passed {sha}"),
+                        Seen::Running => format!("running {sha}"),
+                        Seen::Nothing => "none".to_string(),
+                    }
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("wait-ci: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let started = Instant::now();
     let mut passed_before = false;
     loop {
-        let looked = util::block_on(async {
-            let checks = github::rest("GET", &checks, None, SOURCE).await?;
-            let statuses = github::rest("GET", &statuses, None, SOURCE).await?;
-            let list = |answer: &Value, key: &str| {
-                answer
-                    .get(key)
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            let mut all = list(&checks, "check_runs");
-            all.extend(list(&statuses, "statuses").iter().map(as_check_run));
-            anyhow::Ok(all)
-        });
-        let now = match &looked {
-            Ok(all) => Some(seen(all)),
+        let looked = util::block_on(look(&repo, &sha, SOURCE));
+        let now = match looked {
+            Ok((_, seen)) => Some(seen),
             // No token, or one GitHub refuses, won't mend by waiting, so
             // it is said at once rather than spending the whole timeout.
-            Err(e) if refused(e) => {
+            Err(e) if refused(&e) => {
                 eprintln!("wait-ci: {e}");
                 return ExitCode::FAILURE;
             }
@@ -172,9 +228,7 @@ pub fn main(args: Vec<String>) -> ExitCode {
             Err(_) => None,
         };
         let answer = match &now {
-            Some(Seen::Failed { run, names }) => {
-                Some(format!("failed {sha} {run} {}", names.join(", ")))
-            }
+            Some(Seen::Failed { run, names, .. }) => Some(failed(run, names)),
             Some(Seen::Passed) if passed_before => Some(format!("passed {sha}")),
             Some(Seen::Nothing) if started.elapsed() > grace => Some("none".to_string()),
             _ if started.elapsed() > timeout => Some("timeout".to_string()),
@@ -234,6 +288,7 @@ mod tests {
             Seen::Failed {
                 run: "77".into(),
                 names: vec!["Formatting".into(), "Build".into()],
+                job: Some("5".into()),
             },
             "said while the others still run, a canceled one failing too"
         );
@@ -252,6 +307,7 @@ mod tests {
             Seen::Failed {
                 run: "-".into(),
                 names: vec!["ci/tests".into()],
+                job: None,
             }
         );
         let elsewhere = json!({ "name": "other-ci", "status": "completed",
@@ -261,6 +317,7 @@ mod tests {
             Seen::Failed {
                 run: "-".into(),
                 names: vec!["other-ci".into()],
+                job: None,
             },
             "a check run of another CI has no run of GitHub's"
         );

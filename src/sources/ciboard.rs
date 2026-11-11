@@ -6,7 +6,8 @@
 //! failing GitHub Actions job, read once (a finished job's log doesn't
 //! change) and kept in `ci-logs/<job>.log` in the state directory for "Read
 //! the failing log"; at most `MAX_LOGS` are read a look, and the logs of
-//! jobs no longer failing go.
+//! jobs no longer failing go, but those of the default branch's failing CI
+//! (src/sources/mainci.rs), which lists its items here too.
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -165,7 +166,7 @@ pub fn item_of(pr: &Value, failing: &[Failing], why: Option<&str>) -> Option<Ite
 }
 
 // A job's log, from the file kept of it, else from GitHub, kept then.
-async fn read_log(repo: &str, job: &str) -> Option<String> {
+pub(crate) async fn read_log(repo: &str, job: &str) -> Option<String> {
     let file = log_file(job);
     if let Ok(log) = tokio::fs::read_to_string(&file).await {
         return Some(log);
@@ -191,7 +192,7 @@ async fn read_log(repo: &str, job: &str) -> Option<String> {
 }
 
 /// Looks for your failing PRs in the repositories, and why each fails.
-pub async fn fetch(repos: Vec<String>) -> anyhow::Result<Vec<Item>> {
+pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result<Vec<Item>> {
     let query = format!(
         "query($q: String!) {{ search(query: $q, type: ISSUE, first: 50) {{ nodes {{ {FIELDS} }} }} }}"
     );
@@ -229,6 +230,7 @@ pub async fn fetch(repos: Vec<String>) -> anyhow::Result<Vec<Item>> {
     let keep: Vec<String> = items
         .iter()
         .filter_map(|i| i.data.pointer("/ci/job").and_then(Value::as_str))
+        .chain(also_kept.iter().map(String::as_str))
         .map(|job| format!("{job}.log"))
         .collect();
     if let Ok(mut entries) = tokio::fs::read_dir(paths::state_dir().join("ci-logs")).await {

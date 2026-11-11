@@ -2035,7 +2035,8 @@ impl Stage {
 /// check are done (queue-and-clean takes the lock after them), so those are
 /// done; a waiter is queued for the lock at its place; the one holding it
 /// is at the step its phase names, a failure included (`tests failed …`,
-/// `review blocked …`, the words after it shown in the cell). Neither the
+/// `review blocked …`, the words after it shown in the cell), the check
+/// after a clean rebase (`checking …`, `check failed`) in the tests' cell. Neither the
 /// phase nor the landing's files hold a test count or the review's rounds,
 /// so a done cell says only "passed" or "clean".
 fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
@@ -2072,10 +2073,14 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
     };
     if let Some(rest) = phase.strip_prefix("tests failed") {
         out[0] = failed(rest, "failed");
+    } else if phase.starts_with("check failed") {
+        out[0] = failed("", "check failed");
     } else if let Some(rest) = phase.strip_prefix("review blocked") {
         out[1] = failed(rest, "blocked");
     } else if phase.contains("testing") {
         out[0] = running("testing…");
+    } else if phase.starts_with("checking") {
+        out[0] = running("checking…");
     } else if phase.starts_with("reviewing") {
         out[1] = running("reviewing…");
     } else if phase.starts_with("pushing") {
@@ -3272,6 +3277,18 @@ mod tests {
     use crate::sidebar::model::tests::rules;
     use crate::sidebar::model::{MergeState, TabLoop};
 
+    #[test]
+    fn the_check_after_a_clean_rebase_shows_in_the_tests_cell() {
+        let at = |phase: &str| {
+            landing_stages(&serde_json::json!({ "holding": true, "phase": phase }))[0]
+                .1
+                .clone()
+        };
+        assert_eq!(at("checking after the rebase"), "checking…");
+        assert_eq!(at("check failed"), "✕ check failed");
+        assert_eq!(at("rebasing and testing again"), "testing…");
+    }
+
     fn tab(n: u32, name: &str) -> TabModel {
         let mut t = TabModel::new(TabId(n), n as usize, name);
         t.claude = Some(SessionRef {
@@ -3591,6 +3608,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
         });
         m.cursor = -1;
         let (lines, hits) = screen(&m, 120, 30);
@@ -4223,6 +4241,7 @@ mod tests {
         crate::autopilot::Summary {
             target: String::new(),
             drained: false,
+            failing: String::new(),
             note: "Switchboard".into(),
             busy: 1,
             open: 2,

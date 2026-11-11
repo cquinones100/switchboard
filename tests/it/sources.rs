@@ -525,3 +525,152 @@ fn j_and_k_scroll_the_description_beside_the_pr_board() {
         !s.iter().any(|l| l.contains("Line 30")) && s.iter().any(first_line)
     });
 }
+
+/// A GitHub whose default branch's tip, `abc1234def`, fails its tests
+/// while `failing`, else passes, each request's path kept in `asked`.
+fn fake_main_ci(failing: Arc<AtomicBool>, asked: Arc<std::sync::Mutex<Vec<String>>>) -> Fake {
+    Fake::github("test-token", move |request| {
+        asked.lock().unwrap().push(request.target.clone());
+        if request.path() == "/graphql" {
+            return Some(Reply::json(200, json!({"data": {}})));
+        }
+        let conclusion = if failing.load(Ordering::SeqCst) {
+            "failure"
+        } else {
+            "success"
+        };
+        Some(match request.target.as_str() {
+            "/repos/acme/widgets/commits/main/check-runs?per_page=100" => Reply::json(
+                200,
+                json!({"total_count": 1, "check_runs": [{
+                    "name": "Tests", "status": "completed", "conclusion": conclusion,
+                    "details_url": "https://github.com/acme/widgets/actions/runs/77/job/5",
+                }]}),
+            ),
+            "/repos/acme/widgets/commits/main/status?per_page=100" => Reply::json(
+                200,
+                json!({"state": "pending", "sha": "abc1234def", "statuses": []}),
+            ),
+            "/repos/acme/widgets/actions/jobs/5/logs" => Reply::bytes(
+                200,
+                "text/plain",
+                "2026-11-11T10:00:00.0000000Z FAIL views::links\n",
+            ),
+            _ => Reply::json(404, json!({"message": "Not Found"})),
+        })
+    })
+}
+
+#[test]
+fn a_failing_default_branch_landing_in_ci_is_in_the_ci_view_and_said_once_until_it_passes() {
+    let failing = Arc::new(AtomicBool::new(true));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let fake = fake_main_ci(failing.clone(), asked.clone());
+    let server = TestServer::start_with_env(&[
+        ("GH_TOKEN", "test-token"),
+        ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+        ("SWITCHBOARD_GITHUB_API", &fake.url),
+    ]);
+    let settings = json!({"linear": false, "pause_when_away": false});
+    common::write_settings(&server.home, settings.clone());
+    let repos = server.home.join(".config/switchboard/repos.json");
+    let lands_in = |test_in: &str| {
+        let entry = json!({"acme/widgets": {"landing": "direct", "testIn": test_in}});
+        std::fs::write(&repos, entry.to_string()).unwrap();
+    };
+    lands_in("ci");
+    let work = server.dir.path().join("widgets");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&work, &["init", "-q", "-b", "main"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(
+        &work,
+        &["remote", "add", "origin", "git@github.com:acme/widgets.git"],
+    );
+    git(&work, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(
+        &work,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+
+    let mut client = server.attach(140, 30);
+    client.wait_text("$");
+    client.type_text(&format!("cd {}\r", work.display()));
+    // A landing let the lock go to wait for the default branch to pass,
+    // its phase on its pane, as `land-lock phase` sets it.
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&[
+        "set",
+        "-t",
+        &pane,
+        "@agent_phase",
+        "waiting for main to pass",
+    ]);
+
+    let sources = || serde_json::from_str::<Value>(&server.ok(&["sources"])).unwrap();
+    let ci_items = || sources()["views"]["ci"]["items"].clone();
+    let items = wait(
+        "the failing default branch in the CI view",
+        || {
+            let _ = server.ok(&["sources", "refresh", "ci"]);
+            ci_items()
+        },
+        |i| i[0]["title"].is_string(),
+    );
+    assert_eq!(items[0]["title"], "main failing at abc1234: Tests");
+    assert_eq!(
+        items[0]["detail"],
+        "acme/widgets ✗ Tests · FAIL views::links"
+    );
+    client.wait_text("main failing at abc1234");
+
+    // It passes: the CI view and the notification clear.
+    failing.store(false, Ordering::SeqCst);
+    wait(
+        "the CI view to clear",
+        || {
+            let _ = server.ok(&["sources", "refresh", "ci"]);
+            ci_items()
+        },
+        |i| i.as_array().is_some_and(Vec::is_empty),
+    );
+    let deadline = common::deadline(Duration::from_secs(10));
+    while client.screen().join("\n").contains("main failing") {
+        assert!(Instant::now() < deadline, "the notification stays");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Nothing looks with the setting off, nor for a repository whose
+    // landings test here.
+    let looks = || {
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|p| p.contains("/commits/main/"))
+            .count()
+    };
+    // Once a look still under way has answered and the server's tick, every
+    // two seconds, has read the settings again.
+    let none_after_a_refresh = |why: &str| {
+        std::thread::sleep(Duration::from_secs(3) * common::patience());
+        let before = looks();
+        server.ok(&["sources", "refresh", "ci"]);
+        std::thread::sleep(Duration::from_secs(2) * common::patience());
+        assert_eq!(looks(), before, "{why}");
+    };
+    let mut off = settings.clone();
+    off["main_ci_watch"] = json!(false);
+    common::write_settings(&server.home, off);
+    none_after_a_refresh("main_ci_watch off");
+    common::write_settings(&server.home, settings);
+    lands_in("here");
+    none_after_a_refresh("no repository landing in CI");
+}

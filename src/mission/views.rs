@@ -894,6 +894,7 @@ mod tests {
             lands_alone: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
             hands_free: false,
         };
         let row = crate::autopilot::view::Row {

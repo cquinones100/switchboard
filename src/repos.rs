@@ -4,6 +4,7 @@
 //! ```json
 //! { "owner/name": { "landing": "direct", "test": "npm test", "squash": true,
 //!                   "testIn": "here", "review": "review-loop", "beforePush": "",
+//!                   "afterRebase": "cargo clippy --all-targets",
 //!                   "apply": [{ "paths": ["db/**"], "label": "Reload the dev server", "command": "make reload" }] } }
 //! ```
 //!
@@ -13,8 +14,12 @@
 //! and again after the last rebase (empty, none; not set, what the
 //! repository's CLAUDE.md names), `testIn` where they run, `here` (in the
 //! worktree) or `ci` (the repository's CI, on a branch of the landing's own
-//! pushed for it), `squash` whether the branch lands as one commit, `review` `review-loop` or `none`, and `beforePush` a command
-//! that must pass before the push (empty, none). `apply` is what a change
+//! pushed for it), `squash` whether the branch lands as one commit, `review` `review-loop` or `none`, `beforePush` a command
+//! that must pass before the push (empty, none), and `afterRebase` a command
+//! run after the last rebase in place of the tests, when that rebase had no
+//! conflict and the default branch's CI isn't failing (empty or not set, the
+//! tests run again), since a clean rebase changes nothing the tests haven't
+//! seen pass on each side. `apply` is what a change
 //! landed there needs to take effect, which `switchboard apply-actions`
 //! lists in place of what it would work out by itself. The file is yours
 //! and never in this repository; Settings changes it (`set_repo`), never
@@ -148,6 +153,8 @@ pub struct Steps {
     pub squash: bool,
     pub review: String,
     pub before_push: String,
+    /// Run after a clean rebase in place of the tests; empty, the tests.
+    pub after_rebase: String,
 }
 
 impl Default for Steps {
@@ -158,6 +165,7 @@ impl Default for Steps {
             squash: true,
             review: "review-loop".into(),
             before_push: String::new(),
+            after_rebase: String::new(),
         }
     }
 }
@@ -171,6 +179,7 @@ impl Steps {
             "squash": self.squash,
             "review": self.review,
             "beforePush": self.before_push,
+            "afterRebase": self.after_rebase,
         })
     }
 }
@@ -181,7 +190,7 @@ fn valid(key: &str, value: &Value) -> bool {
         "landing" => value.as_str().is_some_and(|v| METHODS.contains(&v)),
         "review" => value.as_str().is_some_and(|v| REVIEWS.contains(&v)),
         "testIn" => value.as_str().is_some_and(|v| TEST_IN.contains(&v)),
-        "test" | "beforePush" => value.is_string(),
+        "test" | "beforePush" | "afterRebase" => value.is_string(),
         "squash" => value.is_boolean(),
         _ => false,
     }
@@ -208,6 +217,7 @@ pub fn steps_of(entry: &Map<String, Value>) -> Steps {
             .unwrap_or(d.squash),
         review: text("review").unwrap_or(d.review),
         before_push: text("beforePush").unwrap_or(d.before_push),
+        after_rebase: text("afterRebase").unwrap_or(d.after_rebase),
     }
 }
 
@@ -231,6 +241,7 @@ pub fn set_repo_in(path: &Path, repo: &str, key: &str, value: Value) -> Result<(
                 "squash",
                 "review",
                 "beforePush",
+                "afterRebase",
             ]
             .contains(&key)
             {
@@ -781,6 +792,7 @@ mod tests {
                 squash: false,
                 review: "review-loop".into(),
                 before_push: String::new(),
+                after_rebase: String::new(),
             },
             "what the entry leaves out takes the defaults"
         );
@@ -988,6 +1000,17 @@ mod tests {
             read_file(&path).unwrap()["acme/direct"]["testIn"],
             json!("ci")
         );
+        assert!(
+            set_repo_in(&path, "acme/direct", "afterRebase", json!(true))
+                .unwrap_err()
+                .contains("not a value for afterRebase")
+        );
+        set_repo_in(&path, "acme/direct", "afterRebase", json!("make lint")).unwrap();
+        let written = read_file(&path).unwrap();
+        assert_eq!(written["acme/direct"]["afterRebase"], json!("make lint"));
+        let steps = steps_of(&landing_entry(&written, "acme/direct"));
+        assert_eq!(steps.after_rebase, "make lint");
+        assert_eq!(steps.json()["afterRebase"], "make lint");
         std::fs::write(&path, "{ not json").unwrap();
         assert!(
             set_repo_in(&path, "acme/direct", "landing", json!("pr"))

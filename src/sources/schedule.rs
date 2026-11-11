@@ -41,7 +41,7 @@ pub struct Lookup {
 
 /// The daemon's lookups, with their intervals (each file's `_POLL_MS` and
 /// `_SLOW_MS`) and first asks.
-pub const LOOKUPS: [Lookup; 6] = [
+pub const LOOKUPS: [Lookup; 7] = [
     Lookup {
         name: "merges",
         fast: FAST,
@@ -77,6 +77,14 @@ pub const LOOKUPS: [Lookup; 6] = [
         fast: FAST,
         slow: Duration::from_secs(120),
         first: Duration::from_secs(8),
+    },
+    // The default branch's CI (mainci.rs): every two minutes, poll_fast or
+    // not, since a run takes minutes to say anything new.
+    Lookup {
+        name: "mainCi",
+        fast: Duration::from_secs(120),
+        slow: Duration::from_secs(120),
+        first: Duration::from_secs(9),
     },
 ];
 

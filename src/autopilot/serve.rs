@@ -792,8 +792,10 @@ impl Server {
     /// view of its own (src/autopilot/view.rs) to say it in instead.
     pub fn autopilot_summary(&self) -> Option<Summary> {
         let mode = &self.autopilot.mode;
-        (settings::is_on("autopilot") && mode.on && !super::has_view())
-            .then(|| self.autopilot.pilot.summary(mode, self.away_now()))
+        (settings::is_on("autopilot") && mode.on && !super::has_view()).then(|| Summary {
+            failing: self.sources.main_failing(),
+            ..self.autopilot.pilot.summary(mode, self.away_now())
+        })
     }
 
     /// Its own view in mission control (`view`), with UX 2.0 and the
@@ -887,7 +889,10 @@ impl Server {
                 in_note: true,
             });
         }
-        let summary = self.autopilot.pilot.summary(mode, self.away_now());
+        let summary = Summary {
+            failing: self.sources.main_failing(),
+            ..self.autopilot.pilot.summary(mode, self.away_now())
+        };
         let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
         Some(super::view::items(
             &summary,

@@ -149,10 +149,14 @@ pub fn stages(r: &Row) -> [Cell; 8] {
         out[5] = done("held");
         if let Some(rest) = phase.strip_prefix("tests failed") {
             out[2] = failed(rest, "failed");
+        } else if phase.starts_with("check failed") {
+            out[2] = failed("", "check failed");
         } else if let Some(rest) = phase.strip_prefix("review blocked") {
             out[3] = failed(rest, "blocked");
         } else if phase.contains("testing") {
             out[2] = ("running", "testing…".into());
+        } else if phase.starts_with("checking") {
+            out[2] = ("running", "checking…".into());
         } else if phase.starts_with("reviewing") {
             out[3] = ("running", "reviewing…".into());
         } else if phase.starts_with("pushing") {
@@ -287,6 +291,10 @@ pub fn items(
     plans: &HashMap<String, PlanNote>,
 ) -> Vec<Item> {
     let mut facts = Vec::new();
+    // A default branch its tabs land on failing its CI (src/sources/mainci.rs).
+    if !s.failing.is_empty() {
+        facts.push(s.failing.clone());
+    }
     // Where its tabs land, when not the repository's default branch.
     if !s.target.is_empty() {
         facts.push(format!("→ {}", s.target));
@@ -511,6 +519,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
         };
         let mut other = row(TabState::Working);
         other.tab = TabId(5);
@@ -562,6 +571,7 @@ mod tests {
             hands_free: false,
             target: "team/next".into(),
             drained: false,
+            failing: "main failing at ebde129".into(),
         };
         let items = items(
             &s,
@@ -574,7 +584,7 @@ mod tests {
         assert_eq!(items[0].title, "Work");
         assert_eq!(
             items[0].detail,
-            "→ team/next · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
+            "main failing at ebde129 · → team/next · 2 of 2 working · 3 of 5 open · lands without asking · paused by you"
         );
         assert_eq!(items[0].id, HEADING);
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
@@ -643,6 +653,7 @@ mod tests {
             lands_alone: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
             hands_free: false,
         };
         let items = items(
@@ -727,6 +738,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
         };
         let items = items(&summary, "", &[open, closed], &[], &[], &HashMap::new());
         let landed: Vec<&Item> = items
@@ -764,6 +776,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: true,
+            failing: String::new(),
         };
         let items = items(
             &s,

@@ -1415,6 +1415,18 @@ mod tests {
             "meeting" => Item::new("m1", "Standup in 5m").data(json!({ "kind": "meeting",
                 "event": { "title": "Standup", "join": "https://meet.example/x",
                     "link": "https://calendar.example/e" } })),
+            "ci" => {
+                let w = crate::sources::mainci::Watched {
+                    repo: "acme/widgets".into(),
+                    branch: "main".into(),
+                };
+                let failed = crate::cmd::wait_ci::Seen::Failed {
+                    run: "77".into(),
+                    names: vec!["Tests".into()],
+                    job: Some("5".into()),
+                };
+                crate::sources::mainci::item_of(&w, "abc1234def", &failed, Some("FAIL x")).unwrap()
+            }
             other => panic!("{other} names a view: give this test an item of its kind"),
         };
         let mut with_a_view = 0;
@@ -1445,7 +1457,7 @@ mod tests {
             assert_eq!(notice_choices(&notice, &c), in_its_view, "{source}");
             assert!(dismisses(&notice).is_some(), "{source} is put away after");
         }
-        assert_eq!(with_a_view, 3);
+        assert_eq!(with_a_view, 4);
         // A kind no view lists leads somewhere of its own and can be put away.
         let said = Item::new("autopilot\tsaid", "Nothing left to open");
         let choices = notice_choices(&said, &c);

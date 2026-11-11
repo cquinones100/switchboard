@@ -25,7 +25,7 @@ use super::landing::{self, Read};
 use super::repo::{self, PrKey};
 use super::schedule::GITHUB_LOOKUPS;
 use super::{
-    CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, pr_repos_of,
+    CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, mainci, pr_repos_of,
     prboard, prs, queues, repos_of, setup, tickets,
 };
 use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
@@ -47,6 +47,7 @@ pub enum Answer {
         result: anyhow::Result<(Vec<Value>, Option<Vec<Value>>)>,
     },
     Checks(anyhow::Result<Vec<Item>>),
+    MainCi(anyhow::Result<Vec<mainci::Looked>>),
     Queues {
         repos: Vec<String>,
         result: anyhow::Result<(Value, HashSet<String>)>,
@@ -175,10 +176,21 @@ impl Server {
                 let view = self.sources.views.entry(CI).or_default();
                 match result {
                     Ok(items) => {
-                        view.items = items;
+                        self.sources.checks = items;
                         setup::answered(view);
                     }
                     Err(e) => setup::failed(view, &e, "your pull requests' checks"),
+                }
+                self.ci_view_items();
+            }
+            Answer::MainCi(result) => {
+                self.sources.schedule.done("mainCi");
+                match result {
+                    Ok(looked) => {
+                        let items = mainci::merged(&self.sources.main_ci, looked);
+                        self.take_main_ci(items);
+                    }
+                    Err(e) => eprintln!("the default branch's CI: {e}"),
                 }
             }
             Answer::Queues { repos, result } => {
@@ -240,6 +252,54 @@ impl Server {
         self.set_notices("inbox", items);
     }
 
+    /// The default branches failing at the last look: the CI view's first
+    /// items, and their notifications.
+    fn take_main_ci(&mut self, items: Vec<Item>) {
+        let failing: HashSet<&String> = items.iter().map(|i| &i.id).collect();
+        self.sources
+            .main_ci_dismissed
+            .retain(|id| failing.contains(id));
+        self.sources.main_ci = items;
+        self.ci_view_items();
+        self.main_ci_notices();
+    }
+
+    // The CI view's items: the failing default branches, then your PRs'.
+    fn ci_view_items(&mut self) {
+        let items: Vec<Item> = self
+            .sources
+            .main_ci
+            .iter()
+            .chain(&self.sources.checks)
+            .cloned()
+            .collect();
+        let view = self.sources.views.entry(CI).or_default();
+        if view.items != items {
+            view.items = items;
+            self.redraw_everywhere();
+        }
+    }
+
+    /// The failing default branches as notifications (the `ci` kind), those
+    /// dismissed left out, each said once per failing commit.
+    pub(crate) fn main_ci_notices(&mut self) {
+        let items: Vec<Item> = self
+            .sources
+            .main_ci
+            .iter()
+            .filter(|i| !self.sources.main_ci_dismissed.contains(&i.id))
+            .cloned()
+            .collect();
+        self.set_notices("ci", items);
+    }
+
+    /// Dismisses a failing default branch's notification until it fails at
+    /// another commit; it stays in the CI view while it fails.
+    pub fn main_ci_dismiss(&mut self, item: &Item) {
+        self.sources.main_ci_dismissed.insert(item.id.clone());
+        self.main_ci_notices();
+    }
+
     /// Dismisses an Inbox item from the notifications, here alone: it stays
     /// in the Inbox view and unread in Linear.
     pub fn inbox_dismiss(&mut self, item: &Item) {
@@ -276,12 +336,14 @@ impl Server {
     /// is still waiting on its last answer.
     pub fn refresh_sources(&mut self, view: Option<&str>) {
         let tabs = self.source_tabs();
+        // The CI view lists the default branches' CI too (mainci.rs).
         let names: Vec<&'static str> = match view {
+            Some(CI) => vec!["checks", "mainCi"],
             Some(view) => lookup_of(view).into_iter().collect(),
             None => VIEWS
                 .iter()
                 .filter_map(|v| lookup_of(v))
-                .chain(["merges"])
+                .chain(["merges", "mainCi"])
                 .collect(),
         };
         for name in names {
@@ -536,7 +598,30 @@ impl Server {
                     setup::no_repos(self.sources.views.entry(CI).or_default());
                     return false;
                 }
-                tokio::spawn(async move { send(Answer::Checks(ciboard::fetch(repos).await)) });
+                let kept: Vec<String> = self
+                    .sources
+                    .main_ci
+                    .iter()
+                    .filter_map(|i| i.data.pointer("/ci/job").and_then(Value::as_str))
+                    .map(str::to_string)
+                    .collect();
+                tokio::spawn(
+                    async move { send(Answer::Checks(ciboard::fetch(repos, kept).await)) },
+                );
+            }
+            "mainCi" => {
+                let watched = if settings::is_on("main_ci_watch") && settings::is_on("github") {
+                    self.main_ci_watched(tabs)
+                } else {
+                    Vec::new()
+                };
+                if watched.is_empty() {
+                    if !self.sources.main_ci.is_empty() {
+                        self.take_main_ci(Vec::new());
+                    }
+                    return false;
+                }
+                tokio::spawn(async move { send(Answer::MainCi(mainci::fetch(watched).await)) });
             }
             "mergeQueues" => {
                 if !enabled(LANDING) || !settings::is_on("github") {
@@ -571,6 +656,54 @@ impl Server {
             _ => return false,
         }
         true
+    }
+
+    // The default branches to watch (mainci.rs): the repositories the tabs
+    // are in, as the landing queues' last read found them, that autopilot
+    // works on (a tab it opened is in one), where a tab holds or waits for
+    // the default branch's landing lock, or where a landing let the lock go
+    // to wait for the default branch to pass (queue-and-clean's phase
+    // "waiting for <branch> to pass"), and whose landings test in CI.
+    fn main_ci_watched(&self, tabs: &[TabInfo]) -> Vec<mainci::Watched> {
+        // A tab's phase is its Claude's (`@agent_phase`, which `land-lock
+        // phase` sets on its pane).
+        let waiting = |tab: &crate::mux::server::Tab| {
+            tab.layout.panes().iter().any(|p| {
+                self.agents
+                    .get(*p)
+                    .and_then(|a| a.phase.as_deref())
+                    .is_some_and(|p| p.starts_with("waiting for ") && p.ends_with(" to pass"))
+            })
+        };
+        let busy_tabs: Vec<String> = tabs
+            .iter()
+            .filter(|t| {
+                self.tabs.get(&t.id).is_some_and(|tab| {
+                    tab.opts.contains_key(crate::autopilot::OPENED) || waiting(tab)
+                })
+            })
+            .filter_map(|t| t.repo.as_ref().map(ToString::to_string))
+            .collect();
+        let busy: Vec<(String, String)> = self
+            .sources
+            .landing
+            .repos
+            .iter()
+            .filter(|r| r.target.is_none())
+            .filter_map(|r| {
+                let repo = r.repo.clone()?;
+                let queued = r.holder.is_some() || !r.waiting.is_empty();
+                let worked_on = busy_tabs.iter().any(|a| a.eq_ignore_ascii_case(&repo));
+                (queued || worked_on).then_some((repo, r.branch.clone()?))
+            })
+            .collect();
+        if busy.is_empty() {
+            return Vec::new();
+        }
+        let cache = crate::repos::cache_file();
+        mainci::watched(&busy, &crate::repos::read_safely(), &|repo| {
+            crate::repos::cached_in(&cache, repo).map(|c| c.landing)
+        })
     }
 
     // Reads the landing queues on a blocking thread, unless a read is still

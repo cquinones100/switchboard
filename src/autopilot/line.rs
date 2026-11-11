@@ -50,6 +50,9 @@ pub struct Summary {
     /// The note had nothing more to start at the last look, while its tabs
     /// still work.
     pub drained: bool,
+    /// What fails on the default branches it lands on, as "main failing at
+    /// abc1234" (src/sources/mainci.rs); empty while none does.
+    pub failing: String,
 }
 
 impl Summary {
@@ -66,6 +69,9 @@ impl Summary {
             )
         };
         let mut facts = Vec::new();
+        if !self.failing.is_empty() {
+            facts.push(self.failing.clone());
+        }
         if !self.target.is_empty() {
             facts.push(format!("→ {}", self.target));
         }
@@ -424,6 +430,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
         }
     }
 
@@ -457,6 +464,16 @@ mod tests {
             line(&targeted, 160, false, false, &Theme::DARK)
                 .text()
                 .starts_with(" AUTO Work  → team/next · 2 of 3 working")
+        );
+        let failing = Summary {
+            failing: "main failing at ebde129".into(),
+            ..summary()
+        };
+        assert!(
+            line(&failing, 160, false, false, &Theme::DARK)
+                .text()
+                .starts_with(" AUTO Work  main failing at ebde129 · 2 of 3 working"),
+            "a failing default branch leads the line"
         );
         let paused = Summary {
             paused: true,

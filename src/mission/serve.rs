@@ -1680,6 +1680,7 @@ impl Server {
     pub(crate) fn notice_dismiss(&mut self, source: &str, item: &Item) {
         match source {
             "inbox" => self.inbox_dismiss(item),
+            "ci" => self.main_ci_dismiss(item),
             "autopilot" => self.autopilot_dismiss(),
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
@@ -2630,10 +2631,10 @@ impl Server {
                 m.note = Some(said);
             }
             field => {
-                let title = if field == "test" {
-                    format!("{name}: the tests")
-                } else {
-                    format!("{name}: the command before the push")
+                let title = match field {
+                    "test" => format!("{name}: the tests"),
+                    "afterRebase" => format!("{name}: the check after a clean rebase"),
+                    _ => format!("{name}: the command before the push"),
                 };
                 let ask = Ask::new(
                     title,
@@ -3669,6 +3670,7 @@ mod tests {
             hands_free: false,
             target: String::new(),
             drained: false,
+            failing: String::new(),
         });
         m.cursor = 1;
         let to = row_step(&m, -1);

@@ -542,3 +542,44 @@ fn switchboard_s_own_copy_is_printed_whatever_is_installed() {
     assert!(text.contains("When queue-and-clean runs this"), "{text}");
     assert_eq!(run("no-such-skill").status.code(), Some(1));
 }
+
+#[test]
+fn a_clean_rebase_is_checked_with_after_rebase_and_a_failing_default_branch_is_waited_out() {
+    let all = skills();
+    let (_, queue) = all
+        .iter()
+        .find(|(name, _)| name == "queue-and-clean")
+        .unwrap();
+    let step = |start: &str| {
+        queue
+            .lines()
+            .find(|l| l.starts_with(start))
+            .unwrap_or_else(|| panic!("no {start}"))
+    };
+    let nine = step("9. **Onto the default branch as it is now, again**");
+    for said in [
+        "when `afterRebase` is set, the rebase had no conflict",
+        "`switchboard wait-ci --now --repo <owner/name> --sha \"$(git rev-parse origin/<name>)\"`",
+        "`<lock> phase checking after the rebase`",
+        "`<lock> phase testing again`",
+        "`<lock> phase check failed`",
+    ] {
+        assert!(nine.contains(said), "step 9 says {said}");
+    }
+    let section = queue
+        .split("**The tests in CI.**")
+        .nth(1)
+        .and_then(|rest| rest.split("\n1. **The note.**").next())
+        .expect("the section");
+    for said in [
+        "`switchboard wait-ci --now --repo <owner/name> --sha \"$(git rev-parse origin/<name>)\"`",
+        "`<lock> phase waiting for <name> to pass`",
+        "go back to step 3, fixing nothing",
+    ] {
+        assert!(
+            section.contains(said),
+            "a failing CI run asks whether the default branch fails the same way: {said}"
+        );
+    }
+    assert!(queue.contains("`afterRebase`, a command step 9 runs"));
+}

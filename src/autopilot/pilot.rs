@@ -830,6 +830,7 @@ impl Pilot {
             hands_free: mode.hands_free,
             target: mode.target.clone(),
             drained: (self.empty.is_some() || read_empty) && self.counts.1 > 0,
+            failing: String::new(),
         }
     }
 }

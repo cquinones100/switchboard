@@ -253,3 +253,48 @@ fn nothing_settling_in_time_is_a_timeout_and_a_failed_request_is_never_none() {
     let usage = wait_ci(&fake, &["--repo", "o/r"]);
     assert_eq!(usage.status.code(), Some(2), "a commit is needed");
 }
+
+#[test]
+fn now_says_what_one_look_sees_passed_failed_running_or_none() {
+    let fake = Fake::start(|path, _| match path {
+        STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            check("Formatting", "completed", json!("success")),
+            check("Tests", "completed", json!("success")),
+        ]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    let now = |fake: &Fake| wait_ci(fake, &["--now", "--repo", "o/r", "--sha", "abc123"]);
+    let out = now(&fake);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(said(&out), "passed abc123\n", "a pass at one look");
+    assert_eq!(fake.seen.lock().unwrap().len(), 2, "one look, no waiting");
+
+    let fake = Fake::start(|path, _| match path {
+        STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![
+            check("Clippy and tests (macOS)", "completed", json!("failure")),
+            check("Clippy and tests (Linux)", "in_progress", Value::Null),
+        ]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(
+        said(&now(&fake)),
+        "failed abc123 77 Clippy and tests (macOS)\n"
+    );
+
+    let fake = Fake::start(|path, _| match path {
+        STATUSES => no_statuses(),
+        CHECK_RUNS => runs(vec![check("Tests", "queued", Value::Null)]),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(said(&now(&fake)), "running abc123\n");
+
+    let fake = Fake::start(|path, _| match path {
+        STATUSES => no_statuses(),
+        CHECK_RUNS => runs(Vec::new()),
+        _ => (404, json!({ "message": "Not Found" })),
+    });
+    assert_eq!(said(&now(&fake)), "none\n");
+    assert_eq!(fake.seen.lock().unwrap().len(), 2);
+}

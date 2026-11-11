@@ -37,16 +37,17 @@ pub const MARK: &str = "@notices_window";
 /// The kinds of notification by the source that gives them, in the order
 /// they are shown (daemon.js's `notices`): the meeting about to start,
 /// Slack's new messages, what changed on today's calendar, notes written
-/// for you, the Linear inbox, the landings its tabs made without asking,
+/// for you, the Linear inbox, a default branch whose CI fails, the landings its tabs made without asking,
 /// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 9] = [
+pub const ORDER: [&str; 10] = [
     "meeting",
     "slack",
     "calendar",
     "new-notes",
     "inbox",
+    "ci",
     "autolanded",
     "autopilot",
     "landed",
@@ -55,7 +56,8 @@ pub const ORDER: [&str; 9] = [
 
 /// The view a kind of notification is an item of, by its source: a Slack
 /// message is the Slack view's, an Inbox notification the Inbox's, the
-/// meeting about to start an event of the Calendar's. Its menu is that
+/// meeting about to start an event of the Calendar's, a failing default
+/// branch the CI view's. Its menu is that
 /// item's menu there (`mission::choices::notice_choices`), so a new kind
 /// that a view lists names its view here and lists no choices of its own.
 /// The kinds no view lists as an item are `NO_VIEW`'s.
@@ -64,6 +66,7 @@ pub fn view_of(source: &str) -> Option<ViewId> {
         "slack" => Some(ViewId::Slack),
         "inbox" => Some(ViewId::Inbox),
         "meeting" => Some(ViewId::Calendar),
+        "ci" => Some(ViewId::Ci),
         _ => None,
     }
 }
@@ -446,6 +449,11 @@ mod tests {
         assert_eq!(
             summary("habits", &[change("Turn off the Slack view")]).0,
             "Suggestion: Turn off the Slack view"
+        );
+        assert_eq!(
+            view_of("ci"),
+            Some(ViewId::Ci),
+            "a failing default branch is the CI view's"
         );
         // Every kind says whose item it is, or that it is no view's.
         for source in ORDER {
