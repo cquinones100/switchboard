@@ -100,14 +100,20 @@ net = ["dep:reqwest", "dep:tokio-tungstenite"]
 
 [dev-dependencies]
 
-# Debug builds keep only line tables, and the crates none: every integration
-# test is a binary of its own linking all of them, and full debug info made
-# the target directory tens of gigabytes. Backtraces still name lines.
+# Debug builds keep only line tables, and the crates none: each test binary
+# (tests/it and the three apart from it) links all of them, and full debug
+# info made the target directory tens of gigabytes. Backtraces still name
+# lines.
 [profile.dev]
 debug = "line-tables-only"
 
+# The dependencies build at opt-level 1: every test draws through
+# alacritty_terminal and ratatui, which run several times faster so. "*"
+# leaves the crate's own code at 0, so its incremental builds stay quick;
+# the dependencies are compiled once per target directory.
 [profile.dev.package."*"]
 debug = false
+opt-level = 1
 
 [profile.release]
 # Small and quick to start, since Claude Code's hooks run it before and

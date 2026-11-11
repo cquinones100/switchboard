@@ -5,7 +5,8 @@
 //! counted in the request audit, which lands in a temporary HOME.
 //!
 //! The environment is the process's, so every test holds `ENV` for its whole
-//! run.
+//! run, and the file is a binary of its own, apart from tests/it, whose other
+//! tests' threads a change to the environment would race.
 
 #![cfg(feature = "net")]
 

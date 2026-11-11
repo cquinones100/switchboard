@@ -28,6 +28,37 @@ pub const BIN: &str = env!("CARGO_BIN_EXE_switchboard");
 
 static NEXT: AtomicU32 = AtomicU32::new(0);
 
+/// How many times longer than on an idle machine the tests wait for
+/// anything: the one-minute load average over the cores, rounded up, at
+/// least 1 and at most 8, read at each wait, since a run raises the load it
+/// starts at, so a busy machine makes a test slower rather than failed.
+/// `SWITCHBOARD_TEST_PATIENCE=<n>` sets it by hand.
+pub fn patience() -> u32 {
+    let mut load = [0f64; 3];
+    // SAFETY: getloadavg writes at most the 3 samples asked for.
+    let read = unsafe { libc::getloadavg(load.as_mut_ptr(), 3) };
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    patience_from(
+        std::env::var("SWITCHBOARD_TEST_PATIENCE").ok().as_deref(),
+        if read > 0 { load[0] } else { 0.0 },
+        cores,
+    )
+}
+
+/// `patience` from what it reads: the variable when it is a number, else the
+/// load over the cores, either held to 1 to 8.
+pub fn patience_from(given: Option<&str>, load: f64, cores: usize) -> u32 {
+    if let Some(n) = given.and_then(|g| g.trim().parse::<u32>().ok()) {
+        return n.clamp(1, 8);
+    }
+    ((load / cores.max(1) as f64).ceil() as u32).clamp(1, 8)
+}
+
+/// `base` from now, times `patience`.
+pub fn deadline(base: Duration) -> Instant {
+    Instant::now() + base * patience()
+}
+
 /// The settings every test server starts with, under any a test gives: the
 /// day's notes and the Slack lookups off, since a server making the day's
 /// standup note on a Monday shows its "New note" in the sidebar, which a
@@ -274,7 +305,7 @@ impl TestServer {
         Self::env(&mut cmd, &self.home, &self.state);
         cmd.envs(self.extra_env.iter().map(|(k, v)| (k, v)));
         self.child = Some(cmd.spawn().expect("the server starts"));
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = deadline(Duration::from_secs(10));
         while UnixStream::connect(self.socket()).is_err() {
             assert!(
                 Instant::now() < deadline,
@@ -296,7 +327,10 @@ impl TestServer {
                     stdin: None,
                 }))
             });
-            let deadline = Instant::now() + Duration::from_secs(3);
+            // Waits for it to end, killing it only past the deadline, so a
+            // slow exit on a busy machine isn't a server left dying on the
+            // socket the next start uses.
+            let deadline = deadline(Duration::from_secs(3));
             while Instant::now() < deadline && child.try_wait().ok().flatten().is_none() {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -434,7 +468,7 @@ impl TestServer {
 
     /// Waits for the server to end by itself.
     pub fn wait_exit(&mut self, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
+        let deadline = deadline(timeout);
         while Instant::now() < deadline {
             if !self.running() {
                 return true;
@@ -645,7 +679,7 @@ impl TestClient {
 
     /// Waits until the screen satisfies `pred`, failing with the screen after `timeout`.
     pub fn wait_for(&mut self, what: &str, pred: impl Fn(&[String]) -> bool) -> Vec<String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = deadline(Duration::from_secs(10));
         loop {
             let screen = self.screen();
             if pred(&screen) {
@@ -669,7 +703,7 @@ impl TestClient {
 
     /// Waits for the server to tell this client to end.
     pub fn wait_exit(&mut self) -> Option<String> {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = deadline(Duration::from_secs(10));
         while self.exit.is_none() {
             assert!(Instant::now() < deadline, "the client wasn't told to end");
             self.pump(Duration::from_millis(50));
@@ -680,7 +714,7 @@ impl TestClient {
     /// Waits until what the client was sent holds `needle`, failing with
     /// `what` after ten seconds.
     pub fn wait_sent(&mut self, what: &str, needle: &[u8]) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = deadline(Duration::from_secs(10));
         while !self.raw.windows(needle.len()).any(|w| w == needle) {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             self.pump(Duration::from_millis(50));

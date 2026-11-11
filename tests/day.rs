@@ -7,7 +7,8 @@
 //! test/tmux-sidebar.test.js.
 //!
 //! The environment is the process's, so every test holds `ENV` for its whole
-//! run.
+//! run, and the file is a binary of its own, apart from tests/it, whose other
+//! tests' threads a change to the environment would race.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

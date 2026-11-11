@@ -5,6 +5,10 @@
 //! refused with the old binary left, the server's box on attaching and its
 //! hourly look's timing, and install.sh, with `uname` stubbed for each
 //! platform and run whole against the same stand-in.
+//!
+//! It sets `SWITCHBOARD_STATE_DIR` in the process's environment, so the file
+//! is a binary of its own, apart from tests/it, whose other tests' threads a
+//! change to the environment would race.
 
 #![cfg(feature = "net")]
 
@@ -372,7 +376,7 @@ fn a_download_whose_checksum_is_wrong_changes_nothing() {
 }
 
 fn wait_until(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + timeout;
+    let deadline = common::deadline(timeout);
     while !done() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
         thread::sleep(Duration::from_millis(50));
