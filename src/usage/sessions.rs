@@ -662,6 +662,8 @@ mod tests {
                     service: service.into(),
                     total: 1,
                     protocols: [(protocol.to_string(), 1)].into_iter().collect(),
+                    by_time: vec![0; 24],
+                    sources: Default::default(),
                 }),
             }
         };

@@ -188,6 +188,12 @@ pub fn is_header(item: &Item) -> bool {
     item.data.get("header").and_then(Value::as_bool) == Some(true)
 }
 
+/// Whether the cursor passes over an item: a heading, or a row of the Usage
+/// view that is neither a tab nor a service.
+pub fn passed_over(item: &Item) -> bool {
+    is_header(item) || crate::usage::charts::is_still(item)
+}
+
 /// Whether an item is a view's summary (the Autopilot view's heading).
 pub fn is_summary(item: &Item) -> bool {
     item.data.get("summary").and_then(Value::as_bool) == Some(true)
@@ -211,6 +217,7 @@ pub fn grouped(id: &ViewId) -> bool {
             | ViewId::Autopilot
             | ViewId::Ci
             | ViewId::Notifications
+            | ViewId::Usage
     )
 }
 
@@ -301,7 +308,7 @@ pub fn shown(view: &View, filter: &str, scope: Option<Scope>, folds: &Folds) -> 
             .data
             .items
             .iter()
-            .filter(|i| is_header(i) || search_text(i).contains(&text))
+            .filter(|i| is_header(i) || is_summary(i) || search_text(i).contains(&text))
             .cloned()
             .collect();
         // A filtered Settings or Keys view leaves out the headings with no

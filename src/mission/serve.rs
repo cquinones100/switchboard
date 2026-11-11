@@ -583,11 +583,16 @@ impl Server {
         // Tab's focus on a view's name on that view.
         let was = m.current().map(|v| v.id.clone());
         // The Autopilot view orders its items by how far along they are, and
-        // CI by whether their checks fail, run or pass, and Resources by
-        // each tab's CPU or memory, so a stage, a check or a reading
-        // changing moves them: the cursor follows the chosen one.
-        let follows =
-            |id: &ViewId| matches!(id, ViewId::Autopilot | ViewId::Ci | ViewId::Resources);
+        // CI by whether their checks fail, run or pass, Resources by each
+        // tab's CPU or memory, and Usage its tabs by their spend, so a
+        // stage, a check or a reading changing moves them: the cursor
+        // follows the chosen one.
+        let follows = |id: &ViewId| {
+            matches!(
+                id,
+                ViewId::Autopilot | ViewId::Ci | ViewId::Resources | ViewId::Usage
+            )
+        };
         let followed = m.current().map(|v| v.id.clone()).filter(follows);
         let pilot_chosen = followed
             .as_ref()
@@ -1476,6 +1481,9 @@ impl Server {
                 }
             }
             KeyCode::Char('v') if none => m.jump = Some(Jump::default()),
+            KeyCode::Char('w') if none && m.current().is_some_and(|v| v.id == ViewId::Usage) => {
+                m.usage_week = !m.usage_week;
+            }
             KeyCode::Char('r') if none => {
                 if let Some(ViewId::Plugin(name)) = m.current().map(|v| v.id.clone()) {
                     if let Some(p) = self.usage.plugins.iter_mut().find(|p| p.name == name) {
@@ -1828,6 +1836,15 @@ impl Server {
             return;
         }
         if views::is_header(&item) {
+            return;
+        }
+        if view.id == ViewId::Usage {
+            if item.data.get("tab_key").is_some() {
+                match item.target {
+                    Target::Tab(t) if self.tabs.contains_key(&t) => self.mission_go(client, t),
+                    _ => self.say(Some(client), "That tab has closed."),
+                }
+            }
             return;
         }
         if let Some(key) = item.data.get("setting").and_then(Value::as_str) {
@@ -3825,8 +3842,12 @@ fn settle(m: &mut Mission) {
     };
     let items = &view.data.items;
     let at = m.cursor.max(0) as usize;
-    if items.get(at).is_some_and(views::is_header)
-        && let Some(next) = (at..items.len()).find(|i| !views::is_header(&items[*i]))
+    // The next row to rest on, else the one before (End on a last row
+    // passed over).
+    if items.get(at).is_some_and(views::passed_over)
+        && let Some(next) = (at..items.len())
+            .find(|i| !views::passed_over(&items[*i]))
+            .or_else(|| (0..at).rev().find(|i| !views::passed_over(&items[*i])))
     {
         m.cursor = next as isize;
     }
@@ -3860,7 +3881,7 @@ fn row_step(m: &Mission, by: isize) -> isize {
         // when only headings are left that way.
         if let Some(view) = m.current().filter(|v| views::grouped(&v.id)) {
             let items = &view.data.items;
-            while to >= 0 && items.get(to as usize).is_some_and(views::is_header) {
+            while to >= 0 && items.get(to as usize).is_some_and(views::passed_over) {
                 to += by;
             }
             if to < 0 || to as usize >= items.len() {
@@ -4115,14 +4136,14 @@ fn move_focus(m: &mut Mission, by: isize) {
         stops.push(Stop::Filter);
     }
     // A grouped view's headings are no stop, the cursor never resting on
-    // one, or Shift-Tab would land on it and be put back where it was.
+    // one, or Shift-Tab would land on it and be put back where it was; nor
+    // are the Usage view's rows that are neither a tab nor a service.
     let heading = |i: isize| {
         m.current().is_some_and(|v| {
-            views::grouped(&v.id)
-                && v.data
-                    .items
-                    .get(i as usize)
-                    .is_some_and(|it| views::is_header(it) && !views::is_summary(it))
+            let item = v.data.items.get(i as usize);
+            (views::grouped(&v.id)
+                && item.is_some_and(|it| views::is_header(it) && !views::is_summary(it)))
+                || (v.id == ViewId::Usage && item.is_some_and(views::passed_over))
         })
     };
     stops.extend(
@@ -4445,6 +4466,38 @@ mod tests {
         assert_eq!(m.cursor, 1);
         move_focus(&mut m, 1);
         assert_eq!(m.focus, Some(Focus::View(0)), "round to the first");
+    }
+
+    #[test]
+    fn shift_tab_passes_over_the_usage_rows_the_cursor_does() {
+        let still = |id: &str| Item::new(id, id).data(serde_json::json!({ "still": true }));
+        let usage = View {
+            id: ViewId::Usage,
+            title: "Usage".into(),
+            data: ViewData {
+                items: vec![
+                    still("spent"),
+                    Item::new("tab:tab:1", "1 api").data(serde_json::json!({ "tab_key": "tab:1" })),
+                    still("limit:five_hour"),
+                    Item::new("requests:GitHub", "GitHub"),
+                    still("requests:uncounted"),
+                ],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(1, vec![usage]);
+        m.view = 1;
+        m.cursor = 3;
+        m.focus = Some(Focus::Item);
+        move_focus(&mut m, -1);
+        assert_eq!((m.focus, m.cursor), (Some(Focus::Item), 1));
+        move_focus(&mut m, -1);
+        assert_eq!(m.focus, Some(Focus::Filter), "past the total to the filter");
+        // End on the last row, passed over, rests on the one before.
+        m.cursor = 4;
+        fit_cursor(&mut m);
+        assert_eq!(m.cursor, 3);
     }
 
     fn view(id: ViewId, title: &str) -> View {

@@ -2740,7 +2740,8 @@ pub struct Image {
 
 /// What an image atom draws: a meter (`images::meter`) how full, in what
 /// color, with a tick; or a series of bars (`images::series`) scaled to
-/// `max`, what is past `over` red, which one row tall is a sparkline.
+/// `max`, what is past `over` red, with its `marks` (a chart's outlined
+/// part, grid and "now" edge), which one row tall is a sparkline.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
     Meter {
@@ -2752,6 +2753,7 @@ pub enum Shape {
         bars: Vec<crate::ui::images::Bar>,
         max: f32,
         over: Option<f32>,
+        marks: crate::ui::images::Marks,
     },
 }
 
@@ -3658,6 +3660,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
         ViewId::Keys => with(&[("jk", "move"), ("↵", "press it"), ("/", "filter")]),
         ViewId::Calendar => with(&[("jk", "event"), ("hl", "beside"), ("↵", "actions")]),
+        ViewId::Usage if m.snap.rules.ux2 && m.size.0 as usize >= super::usage_board::BOARD_AT => {
+            with(&[
+                ("jk", "tab or service"),
+                ("↵", "go to the tab"),
+                ("w", if m.usage_week { "today" } else { "this week" }),
+                ("/", "filter"),
+            ])
+        }
         ViewId::Autopilot if m.snap.rules.ux2 && m.size.0 as usize >= PILOT_BOARD_AT => with(&[
             ("hl", "column"),
             ("jk", "move"),
@@ -4155,7 +4165,8 @@ pub fn screen(m: &Mission, cols: usize, rows: usize) -> (Vec<Line>, Vec<HitBox>)
 }
 
 /// The screen as `screen` draws it, with what is placed over it as images:
-/// the meters and sparklines (the Autopilot and Resources boards') and the pictures (the diagrams of the
+/// the meters, charts and sparklines (the Autopilot, Resources and Usage
+/// boards') and the pictures (the diagrams of the
 /// description beside the PR and ticket boards, and of the plan beside the
 /// Autopilot board).
 pub fn drawn(
@@ -4387,6 +4398,11 @@ pub fn drawn(
                         board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
                     }
                 }
+            } else if snap.rules.ux2
+                && v.id == ViewId::Usage
+                && cols >= super::usage_board::BOARD_AT
+                && super::usage_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters)
+            {
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
                     cols,
@@ -4423,6 +4439,7 @@ pub fn drawn(
             if snap.rules.ux2
                 && view.is_some_and(|v| {
                     matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
+                        || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
                 })
             {
                 let y = rows.saturating_sub(1) as u16;
@@ -4437,7 +4454,7 @@ pub fn drawn(
     lines.push(foot.line(cols, None));
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
     hits.extend(keys_hit);
-    meters.retain(|meter| (meter.y as usize) < rows.saturating_sub(1));
+    meters.retain(|image| (image.y + image.height) as usize <= rows.saturating_sub(1));
     (lines, hits, meters, pictures)
 }
 
@@ -6425,5 +6442,198 @@ mod tests {
             (5, 0, 3)
         );
         assert!(about.window(15, 5).pictures.is_empty(), "scrolled past it");
+    }
+
+    #[test]
+    fn with_ux2_the_usage_view_is_a_board_of_charts_tabs_limits_and_requests() {
+        use crate::requests::{ServiceCount, Tally};
+        use crate::usage::charts::{self, Limit, Model, SpanSpend, TabSpend};
+        let now = rules().now_secs();
+        let start = now * 1000 - 2 * charts::QUARTER_MS;
+        let tab = |key: &str, index: usize, name: &str, spent: f64, share: f64| TabSpend {
+            key: key.into(),
+            tab: Some(index as u32),
+            index,
+            name: name.into(),
+            color: Some("23ef59".into()),
+            spent,
+            share,
+            first_ms: Some(start),
+            rate: Some(1.21),
+        };
+        let span = SpanSpend {
+            total: 4.0,
+            start_ms: start,
+            bin_ms: charts::QUARTER_MS,
+            bins: vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![2.0, 0.0]],
+            tabs: vec![
+                tab("tab:7", 7, "api", 3.0, 0.75),
+                tab("tab:3", 3, "docs", 1.0, 0.25),
+            ],
+        };
+        let github = ServiceCount {
+            service: "GitHub".into(),
+            total: 30,
+            protocols: [("GraphQL".to_string(), 30)].into_iter().collect(),
+            by_time: vec![1; 24],
+            sources: [("PR board".to_string(), 20), ("CI".to_string(), 10)]
+                .into_iter()
+                .collect(),
+        };
+        let linear = ServiceCount {
+            service: "Linear".into(),
+            total: 10,
+            protocols: [("GraphQL".to_string(), 10)].into_iter().collect(),
+            by_time: vec![0; 24],
+            sources: [("ticket view".to_string(), 10)].into_iter().collect(),
+        };
+        let day = Tally {
+            total: 40,
+            services: vec![github, linear],
+            protocols: [("GraphQL".to_string(), 40)].into_iter().collect(),
+        };
+        let model = Model {
+            today: span.clone(),
+            week: {
+                // A tab that spent yesterday, nothing today.
+                let mut week = span;
+                week.tabs.push(tab("tab:9", 9, "notes", 2.0, 0.33));
+                week.bins = week
+                    .bins
+                    .iter()
+                    .map(|b| [b.clone(), vec![0.0]].concat())
+                    .collect();
+                week
+            },
+            limits: vec![
+                Limit {
+                    key: "five_hour".into(),
+                    name: "5-hour".into(),
+                    used: 29.0,
+                    resets_at: now + 3 * 3600,
+                    pace: Some(58.0),
+                    detail: None,
+                },
+                Limit {
+                    key: "seven_day".into(),
+                    name: "Week".into(),
+                    used: 40.0,
+                    resets_at: now + 86400,
+                    pace: None,
+                    detail: None,
+                },
+            ],
+            limits_at: Some(now * 1000 - 12_000),
+            requests: Some((day.clone(), {
+                // Slack had requests this week, none today.
+                let mut week = day.clone();
+                week.services.push(ServiceCount {
+                    service: "Slack".into(),
+                    total: 4,
+                    protocols: [("REST".to_string(), 4)].into_iter().collect(),
+                    by_time: vec![0, 0, 0, 0, 4, 0, 0],
+                    sources: [("relay".to_string(), 4)].into_iter().collect(),
+                });
+                week
+            })),
+            requests_file: "requests/today.tsv".into(),
+        };
+        let mut base = vec![Item::new("spent", "Spent today $4.00")];
+        base.extend(crate::usage::sessions::request_items(&day));
+        let items = charts::items(base, &model);
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Usage, "Usage", items.clone())],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (160, 40);
+        // The cursor on the first tab's row.
+        let first_tab = items.iter().position(|i| i.id == "tab:tab:7").unwrap();
+        m.cursor = first_tab as isize;
+        let (lines, hits, images, _) = drawn(&m, 160, 40);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("Today $4.00"), "{text}");
+        assert!(text.contains(" 7 api"), "{text}");
+        assert!(text.contains("75%"), "{text}");
+        assert!(text.contains("tab 7 since"), "{text}");
+        assert!(text.contains("$1.21 an hour"), "{text}");
+        assert!(text.contains("at this pace, 58% by then"), "{text}");
+        assert!(text.contains("12s ago"), "{text}");
+        assert!(text.contains("40 today to 2 services"), "{text}");
+        assert!(text.contains("jk tab or service"), "{text}");
+        // One chart, with the chosen tab outlined; a meter a limit, the
+        // 5-hour one with its pace as a tick; a sparkline a service.
+        let charts: Vec<&Image> = images.iter().filter(|i| i.name == "usage/chart").collect();
+        assert_eq!(charts.len(), 1);
+        match &charts[0].shape {
+            Shape::Series { marks, bars, .. } => {
+                assert_eq!(marks.outline, Some(0));
+                assert_eq!(bars.len(), 3);
+            }
+            other => panic!("{other:?}"),
+        }
+        let ticks = images
+            .iter()
+            .filter(|i| matches!(i.shape, Shape::Meter { tick: Some(_), .. }))
+            .count();
+        assert_eq!(ticks, 1);
+        let named = |prefix: &str| images.iter().filter(|i| i.name.starts_with(prefix)).count();
+        assert_eq!(named("usage/limit/"), 2);
+        assert_eq!(named("usage/spark/"), 3);
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Index(first_tab as isize))
+        );
+        // A tab's row lights under the mouse.
+        let docs = items.iter().position(|i| i.id == "tab:tab:3").unwrap();
+        m.hover = Some(Spot::Index(docs as isize));
+        let (lines, _, _, _) = drawn(&m, 160, 40);
+        let row = lines.iter().find(|l| l.text().contains(" 3 docs")).unwrap();
+        assert!(
+            row.spans
+                .iter()
+                .any(|s| s.content.contains("docs") && s.style.bg == Some(m.snap.theme.panel))
+        );
+        m.hover = None;
+        // The chosen service shows what made its requests under it.
+        let service = items
+            .iter()
+            .position(|i| i.id == "requests:GitHub")
+            .unwrap();
+        m.cursor = service as isize;
+        let text = texts(&drawn(&m, 160, 40).0).join("\n");
+        assert!(text.contains("made by PR board 20 · CI 10"), "{text}");
+        assert!(!text.contains("ticket view"), "{text}");
+        // A tab of the week alone is drawn today at none, and can be chosen.
+        let notes = items.iter().position(|i| i.id == "tab:tab:9").unwrap();
+        m.cursor = notes as isize;
+        let (lines, hits, _, _) = drawn(&m, 160, 40);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains(" 9 notes"), "{text}");
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(notes as isize)));
+        // A service of the week alone can be chosen, and is drawn at none
+        // today; on a short screen the board scrolls to it.
+        let slack = items.iter().position(|i| i.id == "requests:Slack").unwrap();
+        m.cursor = slack as isize;
+        m.size = (160, 24);
+        let (lines, hits, images, _) = drawn(&m, 160, 24);
+        let text = texts(&lines).join("\n");
+        assert!(!text.contains("made by relay 4"), "{text}");
+        assert!(text.contains("Slack"), "{text}");
+        assert!(hits.iter().any(|h| h.spot == Spot::Index(slack as isize)));
+        assert!(images.iter().all(|i| ((i.y + i.height) as usize) < 24));
+        assert!(
+            !text.contains("Today $4.00"),
+            "scrolled past the heading: {text}"
+        );
+        m.usage_week = true;
+        let text = texts(&drawn(&m, 160, 24).0).join("\n");
+        assert!(text.contains("made by relay 4"), "{text}");
+        m.usage_week = false;
+        m.size = (160, 40);
+        // Too narrow for the board: the list.
+        let text = texts(&drawn(&m, 120, 40).0).join("\n");
+        assert!(!text.contains("SPEND BY QUARTER HOUR"), "{text}");
     }
 }

@@ -209,6 +209,9 @@ pub fn keep(payload: &Value, state: &Path, today: &str) {
     let new = next_spend(&old, today, &cost, &pid);
     if new != old {
         write_changed(&spend_file, &new);
+        if let Some(more) = crate::usage::charts::added(&old, &new, today) {
+            crate::usage::charts::log_spent(state, today, &session, more, util::now_secs());
+        }
     }
     let cost_kept = old
         .lines()

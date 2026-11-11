@@ -385,20 +385,52 @@ pub fn raster_meter(
 /// its color (one part for a plain value).
 pub type Bar = Vec<(f32, Color)>;
 
+/// What a series draws besides its bars: the part of every bar at
+/// `outline` (a stacked bar's nth part, from the bottom) outlined in the
+/// light tone, a dashed line across at each of `grid`'s heights (in the
+/// values' units), and a line down its right edge in `now`'s color, where
+/// the last bar is the time it is now.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Marks {
+    pub outline: Option<usize>,
+    pub grid: Vec<f32>,
+    pub now: Option<Color>,
+}
+
 /// A series as bars at pixel resolution, each 76% of its slot with a
 /// 1.5 px corner, stacked when a value has parts; what of a value is past
-/// `over` is in the failed tone. One row tall it is a sparkline.
+/// `over` is in the failed tone; with its `marks` over and under them.
+/// One row tall it is a sparkline.
+#[allow(clippy::too_many_arguments)]
 pub fn raster_series(
     cols: u16,
     rows: u16,
     bars: &[Bar],
     max: f32,
     over: Option<f32>,
+    marks: &Marks,
     cell: Cell,
     tones: &Tones,
 ) -> Pixmap {
     let (w, h) = (cols as f32 * cell.0 as f32, rows as f32 * cell.1 as f32);
     let mut pm = canvas(w as u32, h as u32);
+    if max > 0.0 {
+        for &at in &marks.grid {
+            let y = (h - (at / max).clamp(0.0, 1.0) * h).clamp(0.0, h - 1.0);
+            let mut x = 0.0;
+            while x < w {
+                if let Some(r) = SkRect::from_xywh(x, y, 3.0f32.min(w - x), 1.0) {
+                    pm.fill_rect(r, &paint(rgb(tones.rule), 1.0), Transform::identity(), None);
+                }
+                x += 6.0;
+            }
+        }
+    }
+    if let Some(color) = marks.now
+        && let Some(r) = SkRect::from_xywh((w - 2.0).max(0.0), 0.0, 2.0f32.min(w), h)
+    {
+        pm.fill_rect(r, &paint(rgb(color), 1.0), Transform::identity(), None);
+    }
     if bars.is_empty() || max <= 0.0 {
         return pm;
     }
@@ -408,8 +440,13 @@ pub fn raster_series(
     for (i, bar) in bars.iter().enumerate() {
         let x = i as f32 * slot + (slot - bw) / 2.0;
         let mut below = 0.0f32;
-        for &(v, color) in bar {
+        for (at, &(v, color)) in bar.iter().enumerate() {
             let v = v.max(0.0);
+            if marks.outline == Some(at) && v > 0.0 {
+                let (y0, y1) = (h - px(below + v), h - px(below));
+                let ring = round_rect(x - 1.5, y0 - 1.5, bw + 3.0, y1 - y0 + 3.0, 2.5);
+                fill(&mut pm, ring, rgb(tones.light), 1.0);
+            }
             let (from, to) = (below, below + v);
             let mut part = |a: f32, b: f32, c: Color| {
                 let (y0, y1) = (h - px(b), h - px(a));
@@ -858,9 +895,12 @@ pub fn meter(
 const STEPS: [&str; 8] = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// A series in `area`, a bar per value scaled to `max`, stacked where a
-/// value has parts, what is past `over` in the failed tone; one row tall
-/// it is a sparkline. As text, `▁`…`█` per value, by its total, in its top
-/// part's color, one value a column.
+/// value has parts, what is past `over` in the failed tone, with its
+/// `marks`; one row tall it is a sparkline. As text, `▁`…`█` per value,
+/// by its total: one row tall in its top part's color, taller each cell in
+/// the color of the part at its height (the outlined part's bold), a value
+/// a column, or as many columns each as fit when there are
+/// fewer values than columns, the grid a dashed line where no bar reaches.
 pub fn series(
     frame: &mut Frame,
     name: &str,
@@ -868,6 +908,7 @@ pub fn series(
     bars: &[Bar],
     max: f32,
     over: Option<f32>,
+    marks: &Marks,
 ) {
     let area = area.intersection(frame.buf.area);
     let tones = Tones::now();
@@ -887,15 +928,19 @@ pub fn series(
             shape,
             max.to_bits(),
             over.map(f32::to_bits),
+            marks.outline,
+            marks.grid.iter().map(|g| g.to_bits()).collect::<Vec<_>>(),
+            marks.now,
         ));
         let bars = bars.to_vec();
+        let marks = marks.clone();
         let (cols, rows) = (area.width, area.height);
         place(
             frame,
             name,
             area,
             key,
-            Box::new(move || raster_series(cols, rows, &bars, max, over, cell, &tones)),
+            Box::new(move || raster_series(cols, rows, &bars, max, over, &marks, cell, &tones)),
         );
         return;
     }
@@ -904,30 +949,105 @@ pub fn series(
     }
     frame.links.clear_area(area);
     let shown = &bars[bars.len().saturating_sub(area.width as usize)..];
+    if shown.is_empty() {
+        return;
+    }
+    let each = (area.width as usize / shown.len()).max(1);
     let eighths = area.height as f32 * 8.0;
+    let grid_rows: Vec<u16> = marks
+        .grid
+        .iter()
+        .map(|&g| {
+            let from_top = ((1.0 - (g / max).clamp(0.0, 1.0)) * area.height as f32) as u16;
+            from_top.min(area.height - 1)
+        })
+        .collect();
     for (i, bar) in shown.iter().enumerate() {
         let total: f32 = bar.iter().map(|(v, _)| v.max(0.0)).sum();
         let color = match over {
             Some(o) if total > o => tones.failed,
-            _ => bar.last().map(|&(_, c)| c).unwrap_or(tones.rule),
+            _ => bar
+                .iter()
+                .rev()
+                .find(|(v, _)| *v > 0.0)
+                .or(bar.last())
+                .map(|&(_, c)| c)
+                .unwrap_or(tones.rule),
+        };
+        let outlined = marks
+            .outline
+            .and_then(|at| bar.get(at))
+            .is_some_and(|(v, _)| *v > 0.0);
+        let style = if outlined {
+            Style::new()
+                .fg(color)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::new().fg(color)
         };
         let mut left = ((total / max).clamp(0.0, 1.0) * eighths).round() as u16;
         if total > 0.0 {
             left = left.max(1);
         }
-        let x = area.x + i as u16;
-        for r in (0..area.height).rev() {
-            let y = area.y + r;
+        // Each cell in the color of the part at the top of what it fills,
+        // so a stacked bar keeps its parts as text too, the outlined part's
+        // cells bold.
+        let style_at = |eighth: u16| -> Style {
+            if area.height == 1 {
+                return style;
+            }
+            let value = (eighth as f32 + 0.5) / eighths * max;
+            let mut below = 0.0f32;
+            for (at, &(v, c)) in bar.iter().enumerate() {
+                below += v.max(0.0);
+                if v > 0.0 && value <= below {
+                    let c = match over {
+                        Some(o) if value > o => tones.failed,
+                        _ => c,
+                    };
+                    let s = Style::new().fg(c);
+                    return if marks.outline == Some(at) {
+                        s.add_modifier(ratatui::style::Modifier::BOLD)
+                    } else {
+                        s
+                    };
+                }
+            }
+            style
+        };
+        let mut column = Vec::new();
+        for (k, r) in (0..area.height).rev().enumerate() {
             let here = left.min(8);
             left -= here;
-            let symbol = if here == 0 {
-                " "
-            } else {
-                STEPS[here as usize - 1]
-            };
-            frame.buf[(x, y)]
-                .set_symbol(symbol)
-                .set_style(Style::new().fg(color));
+            let top = (k as u16 * 8 + here).saturating_sub(1);
+            column.push((r, here, style_at(top)));
+        }
+        for dx in 0..each {
+            let x = area.x as usize + i * each + dx;
+            if x >= area.right() as usize {
+                break;
+            }
+            // The "now" edge down the last column, where no bar reaches.
+            let now_here = marks
+                .now
+                .filter(|_| x + 1 == area.right() as usize && area.height > 1);
+            for &(r, here, style) in &column {
+                let y = area.y + r;
+                let cell = &mut frame.buf[(x as u16, y)];
+                if here == 0
+                    && let Some(red) = now_here
+                {
+                    cell.set_symbol("│").set_style(Style::new().fg(red));
+                } else if here == 0 {
+                    if grid_rows.contains(&r) {
+                        cell.set_symbol("┄").set_style(Style::new().fg(tones.rule));
+                    } else {
+                        cell.set_symbol(" ").set_style(Style::new());
+                    }
+                } else {
+                    cell.set_symbol(STEPS[here as usize - 1]).set_style(style);
+                }
+            }
         }
     }
 }
@@ -1426,6 +1546,11 @@ mod tests {
                     ],
                     3.0,
                     Some(2.5),
+                    &Marks {
+                        outline: Some(1),
+                        grid: vec![1.5],
+                        now: Some(red()),
+                    },
                     CELL,
                     &tones,
                 ),
@@ -1569,9 +1694,46 @@ mod tests {
             &[vec![(0.0, red())], vec![(4.0, red())], vec![(8.0, red())]],
             8.0,
             None,
+            &Marks::default(),
         );
         assert_eq!(f.buf[(1, 2)].symbol(), "▄");
         assert_eq!(f.buf[(2, 2)].symbol(), "█");
+        // Two rows tall, a bar of two parts keeps each part's color.
+        let green = Color::Indexed(41);
+        series(
+            &mut f,
+            "t",
+            Rect::new(5, 0, 1, 2),
+            &[vec![(1.0, red()), (1.0, green)]],
+            2.0,
+            None,
+            &Marks {
+                outline: Some(1),
+                ..Marks::default()
+            },
+        );
+        assert_eq!(f.buf[(5, 1)].fg, red());
+        assert_eq!(f.buf[(5, 0)].fg, green);
+        assert!(
+            f.buf[(5, 0)]
+                .modifier
+                .contains(ratatui::style::Modifier::BOLD)
+        );
+        // The "now" edge down the last column, above its bar.
+        series(
+            &mut f,
+            "n",
+            Rect::new(6, 0, 1, 2),
+            &[vec![(1.0, red())]],
+            2.0,
+            None,
+            &Marks {
+                now: Some(green),
+                ..Marks::default()
+            },
+        );
+        assert_eq!((f.buf[(6, 0)].symbol(), f.buf[(6, 0)].fg), ("│", green));
+        assert_eq!(f.buf[(6, 1)].symbol(), "█");
         picture(&mut f, "p", Rect::new(0, 3, 20, 2), "shot.png", &photo);
         assert_eq!(f.buf[(0, 3)].symbol(), "s");
         shadow(&mut f, "b", Rect::new(10, 0, 4, 2));

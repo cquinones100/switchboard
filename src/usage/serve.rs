@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use indexmap::IndexMap;
 use serde_json::Value;
 
+use super::charts;
 use super::closed::{OpenTab, TabNow};
 use super::habits::{self, Count, Outcome};
 use super::report;
@@ -327,11 +328,20 @@ impl Server {
             }
             ViewKind::Usage => {
                 let audit = settings::is_on("request_audit");
+                let open = self.usage_tabs_seen();
                 tokio::task::spawn_blocking(move || {
-                    let tally = audit.then(crate::requests::tally);
                     let now = util::now_ms();
+                    let local = util::local_at_ms(now);
+                    let requests = audit.then(|| {
+                        (
+                            crate::requests::tally_on(&local),
+                            crate::requests::tally_week(&local),
+                        )
+                    });
+                    let base = sessions::usage_items(&state, now, requests.as_ref().map(|r| &r.0));
+                    let model = charts::model(&state, now, &open, requests);
                     let data = ViewData {
-                        items: sessions::usage_items(&state, now, tally.as_ref()),
+                        items: charts::items(base, &model),
                         at: Some(now),
                         ..ViewData::default()
                     };
@@ -340,6 +350,27 @@ impl Server {
             }
             ViewKind::Closed => {}
         }
+    }
+
+    /// Every open tab, with its number, name and color and the Claude
+    /// session it runs (empty with none running), for the Usage board: a
+    /// tab whose Claude has ended is still open for the sessions it ran.
+    fn usage_tabs_seen(&self) -> Vec<charts::TabSeen> {
+        self.sidebar_all_tabs()
+            .into_iter()
+            .map(|t| charts::TabSeen {
+                session: t
+                    .claude
+                    .as_ref()
+                    .map(|c| c.session_id.clone())
+                    .unwrap_or_default(),
+                tab: Some(t.id.0),
+                server: std::process::id(),
+                index: t.index,
+                name: t.name.clone(),
+                color: t.color.map(|c| c.hex()),
+            })
+            .collect()
     }
 
     /// Each tab's number in its session, its label and its panes' own
@@ -445,7 +476,12 @@ impl Server {
             .filter_map(|(id, slot)| Some((*id, slot.pane.foreground_pgid()?)))
             .collect();
         let tx = self.tx.clone();
+        let seen = settings::is_on("usage").then(|| self.usage_tabs_seen());
+        let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
+            if let Some(seen) = seen {
+                charts::keep_tabs(&state, util::now_ms(), &seen);
+            }
             let found = sessions::claudes(&panes, &agent::sessions::sessions_dir());
             let _ = tx.send(Event::Usage(UsageEvent::Claudes(found)));
         });

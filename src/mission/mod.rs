@@ -51,6 +51,7 @@ pub mod remind;
 pub mod render;
 pub mod resources_board;
 mod serve;
+pub mod usage_board;
 pub mod views;
 
 use std::collections::{HashMap, HashSet};
@@ -228,6 +229,8 @@ pub struct Mission {
     /// Which of the Work map's repositories are folded, and which show
     /// their merged work.
     pub folds: views::Folds,
+    /// The Usage board shows this week rather than today (`w`).
+    pub usage_week: bool,
     /// What the last action did, in the footer until the next key.
     pub note: Option<String>,
     pub snap: Snapshot,
@@ -294,6 +297,7 @@ impl Mission {
             scope: None,
             picker: false,
             folds: views::Folds::default(),
+            usage_week: false,
             note: None,
             snap: Snapshot::default(),
             taken_at: None,
@@ -449,7 +453,7 @@ impl Overlay for Mission {
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
         self.forget_side_elsewhere();
-        let (lines, hits, meters, pictures) =
+        let (lines, hits, images, pictures) =
             render::drawn(self, area.width as usize, area.height as usize);
         self.hits = hits;
         self.pictures = pictures
@@ -460,7 +464,7 @@ impl Overlay for Mission {
                 ..picture
             })
             .collect();
-        self.meters = meters
+        self.meters = images
             .into_iter()
             .map(|meter| render::Image {
                 x: meter.x + area.x,
@@ -479,9 +483,12 @@ impl Overlay for Mission {
                 render::Shape::Meter { frac, color, tick } => {
                     crate::ui::images::meter(frame, &image.name, area, *frac, *color, *tick)
                 }
-                render::Shape::Series { bars, max, over } => {
-                    crate::ui::images::series(frame, &image.name, area, bars, *max, *over)
-                }
+                render::Shape::Series {
+                    bars,
+                    max,
+                    over,
+                    marks,
+                } => crate::ui::images::series(frame, &image.name, area, bars, *max, *over, marks),
             }
         }
         for picture in &self.pictures {

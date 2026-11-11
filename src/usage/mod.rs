@@ -1,7 +1,8 @@
 //! What Switchboard knows of how it is used, on this computer alone: the
 //! keys and commands you use (`habits`, and the `report` of them), what each
 //! tab costs the computer (`resources`), each Claude session's context and
-//! the day's spend and requests (`sessions`), the tabs that closed
+//! the day's spend and requests (`sessions`, and what UX 2.0's Usage board
+//! draws, `charts`), the tabs that closed
 //! (`closed`), the settings kept in your own files (`own`), and the views
 //! plugins bring in (`plugins`, with the built-in `github_plugin`).
 //!
@@ -14,6 +15,7 @@
 //! plugins on their intervals, and keeping each view's `ViewData` for
 //! mission control to draw.
 
+pub mod charts;
 pub mod closed;
 pub mod github_plugin;
 pub mod habits;

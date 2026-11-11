@@ -278,6 +278,7 @@ pub fn board(
                 bars,
                 max: 100.0,
                 over: None,
+                marks: Default::default(),
             },
         });
         if total > 0.0 && cols >= TOP_MEMORY_AT + memory_w + TOP_METER_W {
@@ -465,6 +466,7 @@ pub fn board(
                     bars: series("cpuHistory", Tone::Working),
                     max: CPU_MAX,
                     over: Some(CPU_HEAVY as f32),
+                    marks: Default::default(),
                 },
             });
             images.push(Image {
@@ -477,6 +479,7 @@ pub fn board(
                     bars: series("memoryHistory", Tone::Landing),
                     max: MEMORY_MAX,
                     over: Some(MEMORY_HEAVY as f32),
+                    marks: Default::default(),
                 },
             });
         }
