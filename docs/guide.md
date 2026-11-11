@@ -357,6 +357,7 @@ These are in `M-p` alone, with no key unless you give them one in `keys.json`:
 - **Open the branch's Linear project in the browser**: the project the ticket in the branch (or the tab's name) is in, as Linear says, or a box saying why there is none. Needs Linear.
 - **Copy the branch's ticket ID**, **ticket URL**, **PR number** and **PR URL**: copied, and a box saying what was. The ticket's link is the workspace's in `linear.json` when it names one, else the one Linear gives. Each needs its service.
 - **Keep the computer awake until I say, or back to only while tabs work**: the computer held awake whatever the tabs do, a restart on a new build included, until you choose it again, which goes back to Settings' "Keep the computer awake while tabs work" ([Keeping the computer awake](#keeping-the-computer-awake)). A box says which it is now.
+- **Filter the sidebar to a repository** and **Show every repository's tabs in the sidebar**: the sidebar's tabs of one repository in their groups, every other one's under Other repos, and the filter cleared ([Filtered to a repository](#filtered-to-a-repository)).
 - **Log in to AWS (aws sso login) in your Chrome profile**: `switchboard aws-login` in a pane beside yours, which logs in to the one `[sso-session]` in `~/.aws/config` and opens AWS's login page in the Chrome profile `browser.json` gives `awsapps.com` (else its default profile, else the one Chrome picks itself, while Settings' `chrome_profiles` is on), whatever host the page is on. The pane stays until the login is done and a key is pressed, so its code and any error can be read. It needs the AWS CLI (`aws`), which Switchboard doesn't install.
 
 ### Messages
@@ -404,6 +405,10 @@ At its top are the session's name, in a pill of the current tab's color, and its
 
 On a screen too short for every tab, the session's line at the top and the notifications at the bottom stay put and only the groups and tabs scroll: the line under the session's says how many tabs are above (`▲ 3 more`) while no filter is typed there, and the list's last row how many are cut below (`▼ 2 more`). The list holds still as you go from tab to tab: it stays where it was while the tab in front is in sight there, else at the top while the tab is in sight there, else it scrolls to the heading of the tab's group.
 
+### Filtered to a repository
+
+`M-p`'s "Filter the sidebar to a repository" picks one of the repositories the session's tabs are in, each with how many tabs it has, "Every repository" first and the one filtered to now marked `now`; a worktree counts as its main clone, so every worktree of one repository is in it. Every other repository's tabs go under Other repos at the bottom, whatever they are doing, and a box says "Sidebar: switchboard only". Other repos is folded to one line of its tabs' marks, so one waiting on you still shows, their count and their repositories by name; `Enter`, `l` or a click on that line unfolds it, listing its tabs ordered by the group each would otherwise be in, and a click on its heading folds it again. `M-a` and `M-A` pass those tabs by, and their notifications are as before. The top line shows the filter as a chip, "switchboard ×", and how many of the tabs are its ("7 of 9"); a click on it clears the filter, as "Show every repository's tabs in the sidebar" in `M-p` does. The filter and whether Other repos is unfolded are kept with the layout, through a restart and an upgrade, until cleared. `switchboard sidebar-repo <dir>` filters to the repository a directory is in from a script, and `--all` clears it. Settings' "Sidebar repository filter" (`sidebar_repo_filter`) off takes the commands away and puts every tab in its own group.
+
 ### Groups
 
 Each tab is in one group, the same as its stage in mission control's Tabs view, and the groups come in this order:
@@ -425,6 +430,7 @@ Each tab is in one group, the same as its stage in mission control's Tabs view, 
 | Idle | A Claude session with nothing to do. |
 | Reminders | A reminder still to come, ahead of Build failing, while Claude isn't working there. |
 | Other | No Claude in it: Notes, the Slack relay, a shell. A Claude parked behind the diff, lazygit or a view in its pane's place keeps its tab in its own stage. |
+| Other repos | While the sidebar is filtered to a repository, a tab of any other, whatever it is doing (see [Filtered to a repository](#filtered-to-a-repository)). |
 
 Needs you always wins: a tab whose Claude waits on you stays there even while its pull request is queued. After it, the landing queue and the pull request's place win over what Claude is doing, so a tab whose PR is queued stays under Landing while `/queue-and-clean` watches it; then a reminder still to come, while Claude isn't working there, so a tab you set one on waits whatever its checks say (its row still shows the failing checks in red); then a failing build, unless `/ci-loop` is at work on it; then the loop running; then the work running. A tab's pull request, its checks and whether it is queued or merged come from one GitHub query for every tab's PR (see "How often mission control looks"), so a group can lag GitHub by that long. A tab whose worktree has been removed, as `/queue-and-clean` leaves it once its PR merges, is found by the worktree's branch and keeps its PR (in a fork's clone, a PR from your fork's branch in the project `upstream` names counts, one in your fork winning).
 
@@ -483,7 +489,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | `j` `k` (arrows, `C-n` `C-p`) | the next or previous tab, brought to the front |
 | `g` `G` | the first or last tab |
 | `C-d` `C-u` | the list half a screen down or up, the cursor onto the tab there, stopping at the first and last tab, as in Vim (Settings' "Half-page scrolling", `sidebar_half_page`; off, they run in the chosen tab) |
-| `Enter` `l` | into the chosen tab's pane; on a notification, into the Notifications window (with it off, what the notification leads to) |
+| `Enter` `l` | into the chosen tab's pane; on a folded Other repos, unfolds it; on a notification, into the Notifications window (with it off, what the notification leads to) |
 | `h` `q` `Esc` `C-c` | back out to your pane (`Esc` clears a kept filter first) |
 | `1`–`9` | the cursor onto that tab, brought to the front |
 | `/` | find a tab by name: typing narrows the list, the arrows move, Enter goes, Esc clears |
@@ -1914,6 +1920,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 |---|---|---|
 | Sidebar (`sidebar`) | on | The sidebar on the left of every window; M-s still hides or shows it for now |
 | Half-page scrolling (`sidebar_half_page`) | on | C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do |
+| Sidebar repository filter (`sidebar_repo_filter`) | on | M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group |
 | Reminders (`reminders`) | on | M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due; off, reminders are neither set nor shown |
 | Build failing (`build_failing`) | on | A Build failing group in the sidebar and mission control for the tabs whose open PR has a failing check, asked of GitHub every minute, an idle one wearing a red ✗; off, they stay in Working or Idle with the failing count in their words #github |
 | Show the landing queue (`landing_queue`) | on | Tabs landing on the default branch with queue-and-clean, or waiting their turn, get a Landing group in the sidebar and mission control, in the landing queue's order, which a waiting tab's menu changes; off, they show as Working, and the queue still orders the landings |
@@ -2134,6 +2141,9 @@ switchboard press <action> [arg]         run an action as its key would, by its
                                          M-p, the note; plan-item, M-Enter in
                                          Notes' Add an item, the note and the
                                          item)
+switchboard sidebar-repo [-s session] <dir> | --all
+                                         filter the sidebar to the repository
+                                         dir is in, or clear the filter
 switchboard sources [refresh [view]]     mission control's GitHub and Linear
                                          data as JSON, or looked up again now
 switchboard list-keys                    every key and what it does

@@ -158,6 +158,13 @@ pub struct TabModel {
     /// Its directory's GitHub repository, origin's `owner/name`, as the
     /// lookups last read it; `None` outside one or before it is read.
     pub repo: Option<String>,
+    /// The repository its directory is in, by its main clone's directory
+    /// (`tabs::git::main_clone`), every worktree of one sharing it.
+    pub repo_dir: Option<PathBuf>,
+    /// In another repository than the one the sidebar is filtered to
+    /// (`Side::repo`), so under Other repos whatever it is doing; only the
+    /// sidebar's own model sets it, never mission control's.
+    pub elsewhere: bool,
     pub color: Option<Rgb>,
     pub state: TabState,
     /// Pinned by hand (M-f) as needing you, until unpinned.
@@ -236,6 +243,8 @@ impl TabModel {
             pr: None,
             pr_repo: None,
             repo: None,
+            repo_dir: None,
+            elsewhere: false,
             color: None,
             state: TabState::Idle,
             pinned: false,
@@ -408,10 +417,12 @@ pub enum Stage {
     Idle,
     Later,
     Other,
+    /// The tabs of every repository but the one the sidebar is filtered to.
+    OtherRepos,
 }
 
 impl Stage {
-    pub const ALL: [Stage; 15] = [
+    pub const ALL: [Stage; 16] = [
         Stage::Needs,
         Stage::Failing,
         Stage::Working,
@@ -427,6 +438,7 @@ impl Stage {
         Stage::Idle,
         Stage::Later,
         Stage::Other,
+        Stage::OtherRepos,
     ];
 
     pub fn key(self) -> &'static str {
@@ -446,6 +458,7 @@ impl Stage {
             Stage::Idle => "idle",
             Stage::Later => "later",
             Stage::Other => "other",
+            Stage::OtherRepos => "other-repos",
         }
     }
 
@@ -466,6 +479,7 @@ impl Stage {
             Stage::Idle => "Idle",
             Stage::Later => "Reminders",
             Stage::Other => "Other",
+            Stage::OtherRepos => "Other repos",
         }
     }
 
@@ -484,7 +498,7 @@ impl Stage {
             Stage::Landing => Badge::Landing,
             Stage::Deploy => Badge::Deploy,
             Stage::Merged => Badge::Merged,
-            Stage::Idle | Stage::Other => Badge::Idle,
+            Stage::Idle | Stage::Other | Stage::OtherRepos => Badge::Idle,
             Stage::Later => Badge::Later,
         }
     }
@@ -495,6 +509,12 @@ impl Stage {
             Stage::Queued => queue_order(a, b),
             Stage::Landing => landing_order(a, b),
             Stage::Later => a.remind_at.cmp(&b.remind_at),
+            // By the stage each would have had, then as that stage orders.
+            Stage::OtherRepos => {
+                let (sa, sb) = (own_stage(a, r), own_stage(b, r));
+                let rank = |s: Stage| Stage::ALL.iter().position(|x| *x == s);
+                rank(sa).cmp(&rank(sb)).then_with(|| sa.order(a, b, r))
+            }
             _ => by_need(a, b),
         }
     }
@@ -511,10 +531,19 @@ impl Stage {
     }
 }
 
-/// The one stage a tab is in: Needs you first, then its PR's place, then
-/// the loop it is running, then its state, so a queue-and-clean watching a
-/// queued PR shows the PR's place.
+/// The one stage a tab is in: Other repos for one of another repository
+/// than the sidebar's filter, whatever it is doing; else its own.
 pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
+    if tab.elsewhere {
+        return Stage::OtherRepos;
+    }
+    own_stage(tab, r)
+}
+
+/// The stage a tab is in by what it is doing: Needs you first, then its
+/// PR's place, then the loop it is running, then its state, so a
+/// queue-and-clean watching a queued PR shows the PR's place.
+fn own_stage(tab: &TabModel, r: &Rules) -> Stage {
     if needs_tab(tab, r) {
         return Stage::Needs;
     }
@@ -1082,6 +1111,53 @@ pub(crate) mod tests {
             .map(|t| t.index)
             .collect();
         assert_eq!(order, vec![5, 3, 2, 1, 4]);
+    }
+
+    #[test]
+    fn filtered_to_a_repository_the_others_tabs_are_under_other_repos_last() {
+        let r = rules();
+        let mut waiting_elsewhere = tab(1, "api waiting", TabState::Waiting);
+        waiting_elsewhere.elsewhere = true;
+        let mut idle_elsewhere = tab(2, "web idle", TabState::Idle);
+        idle_elsewhere.elsewhere = true;
+        let mine = tab(3, "mine working", TabState::Working);
+        let mut other = tab(4, "my shell", TabState::Idle);
+        other.claude = None;
+        let tabs = vec![idle_elsewhere, waiting_elsewhere, mine, other];
+        // After Other, ordered by the stage each would have had.
+        assert_eq!(
+            names(&grouped(&tabs, None, &r)),
+            vec![
+                ("Working", vec!["mine working".to_string()]),
+                ("Other", vec!["my shell".to_string()]),
+                (
+                    "Other repos",
+                    vec!["api waiting".to_string(), "web idle".to_string()]
+                ),
+            ]
+        );
+        // M-a and M-A pass them by.
+        assert!(needs_you(&tabs, &r).is_empty());
+        assert!(idle_tabs(&tabs, &r).is_empty());
+
+        // Without the filter, every tab is where it was.
+        let unfiltered: Vec<TabModel> = tabs
+            .into_iter()
+            .map(|mut t| {
+                t.elsewhere = false;
+                t
+            })
+            .collect();
+        assert_eq!(
+            names(&grouped(&unfiltered, None, &r)),
+            vec![
+                ("Needs you", vec!["api waiting".to_string()]),
+                ("Working", vec!["mine working".to_string()]),
+                ("Idle", vec!["web idle".to_string()]),
+                ("Other", vec!["my shell".to_string()]),
+            ]
+        );
+        assert_eq!(needs_you(&unfiltered, &r).len(), 1);
     }
 
     #[test]

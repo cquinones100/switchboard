@@ -76,6 +76,22 @@ pub fn locate(dir: &Path) -> Option<GitPlace> {
     })
 }
 
+/// The repository a directory belongs to, as the sidebar's repository
+/// filter tells them apart: the main clone's directory, which every
+/// worktree of it shares (the directory holding the `.git` all of them
+/// name, or the shared directory itself for a bare one); a directory
+/// outside git is its own.
+pub fn main_clone(dir: &Path) -> PathBuf {
+    match locate(dir) {
+        Some(place) if place.common_dir.file_name().is_some_and(|n| n == ".git") => place
+            .common_dir
+            .parent()
+            .map_or_else(|| place.common_dir.clone(), Path::to_path_buf),
+        Some(place) => place.common_dir,
+        None => dir.to_path_buf(),
+    }
+}
+
 // The repository directory for `dir`: the nearest `.git` above it, a
 // directory as a clone has, or a file saying `gitdir: <path>`, as a worktree
 // or a submodule has, its path taken from the file's own directory.
@@ -352,6 +368,9 @@ pub(crate) mod tests {
         assert_eq!(place.common_dir, main.join(".git"));
         assert_eq!(place.git_dir, main.join(".git/worktrees/app-wt"));
         assert_eq!(place.worktree().as_deref(), Some("app-wt"));
+        // A worktree and its main clone are one repository.
+        assert_eq!(main_clone(&wt), main);
+        assert_eq!(main_clone(&main.join("src/deep")), main);
 
         // Packed refs count as much as loose ones.
         assert!(git(&main, &["pack-refs", "--all"]));
@@ -387,6 +406,7 @@ pub(crate) mod tests {
         let outside = scratch.0.join("plain");
         fs::create_dir_all(&outside).unwrap();
         assert_eq!(locate(&outside), None);
+        assert_eq!(main_clone(&outside), outside);
     }
 
     #[test]

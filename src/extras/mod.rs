@@ -216,10 +216,14 @@ pub enum Command {
     AwsLogin,
     /// M-/: mission control's Keys view, every key.
     Keys,
+    /// "Filter the sidebar to a repository".
+    SidebarRepo,
+    /// "Show every repository's tabs in the sidebar".
+    SidebarAll,
 }
 
 impl Command {
-    pub const ALL: [Command; 27] = [
+    pub const ALL: [Command; 29] = [
         Command::RenameTab,
         Command::GoToTab,
         Command::PaneNav,
@@ -247,6 +251,8 @@ impl Command {
         Command::OpenTicketId,
         Command::AwsLogin,
         Command::Keys,
+        Command::SidebarRepo,
+        Command::SidebarAll,
     ];
 
     /// Its name in keys.json.
@@ -268,6 +274,8 @@ impl Command {
             Command::OpenTicketId => "open-ticket-id".into(),
             Command::AwsLogin => "aws-login".into(),
             Command::Keys => "keys-view".into(),
+            Command::SidebarRepo => "sidebar-repo".into(),
+            Command::SidebarAll => "sidebar-all".into(),
         }
     }
 
@@ -313,6 +321,8 @@ impl Command {
             Command::OpenTicketId => "Open a Linear ticket in the browser by ID, number or URL",
             Command::AwsLogin => "Log in to AWS (aws sso login) in your Chrome profile",
             Command::Keys => "Every key, by what it is about, with / to filter",
+            Command::SidebarRepo => "Filter the sidebar to a repository",
+            Command::SidebarAll => "Show every repository's tabs in the sidebar",
         }
     }
 
@@ -362,6 +372,12 @@ impl Command {
             Command::AwsLogin => {
                 "Runs switchboard aws-login in a pane beside yours, logging in to the one [sso-session] in ~/.aws/config; the pane stays until a key, so its code can be read. Needs the AWS CLI."
             }
+            Command::SidebarRepo => {
+                "Picks one of the repositories your tabs are in, a worktree counting as its main clone. Every other repository's tabs go under Other repos at the bottom, folded to one line of their marks until Enter or a click opens it, and M-a and M-A pass them by. Kept across restarts. Settings' \"Sidebar repository filter\" (sidebar_repo_filter)."
+            }
+            Command::SidebarAll => {
+                "Clears the sidebar's repository filter, every tab back in the group of what it is doing, as a click on the filter's chip does."
+            }
             Command::Keys => {
                 "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes'. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
@@ -387,6 +403,7 @@ impl Command {
             Command::OpenTicketId => &["linear", "ticket", "browser"],
             Command::AwsLogin => &["aws", "login", "sso"],
             Command::Keys => &["help", "keys"],
+            Command::SidebarRepo | Command::SidebarAll => &["sidebar", "tabs"],
         }
     }
 
@@ -403,7 +420,13 @@ impl Command {
     /// Whether the palette lists it: `C-w` had no description in tmux.conf,
     /// since it does nothing alone.
     pub fn in_palette(self) -> bool {
-        self != Command::PaneNav
+        match self {
+            Command::PaneNav => false,
+            Command::SidebarRepo | Command::SidebarAll => {
+                crate::settings::is_on("sidebar_repo_filter")
+            }
+            _ => true,
+        }
     }
 }
 

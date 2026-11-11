@@ -220,6 +220,19 @@ impl Server {
                 self.key_back_to_pane(client, &Action::Extra(command));
             }
             Command::Keys => self.open_mission(client, Opening::View("keys".into())),
+            Command::SidebarRepo | Command::SidebarAll if is_off("sidebar_repo_filter") => {
+                self.say(
+                    Some(client),
+                    "The sidebar repository filter is off in Settings (sidebar_repo_filter).",
+                );
+            }
+            Command::SidebarRepo => self.sidebar_pick_repo(client),
+            Command::SidebarAll => {
+                if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
+                    self.sidebar_set_repo(&session, None);
+                    self.say(Some(client), "Sidebar: every repository");
+                }
+            }
         }
     }
 

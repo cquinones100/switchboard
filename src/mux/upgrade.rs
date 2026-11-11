@@ -931,6 +931,8 @@ mod tests {
                     rows: 30,
                     current: TabId(1),
                     last: None,
+                    sidebar_repo: None,
+                    sidebar_repo_open: false,
                     tabs: vec![SavedTab {
                         id: TabId(1),
                         name: String::new(),

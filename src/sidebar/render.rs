@@ -34,13 +34,18 @@ const YELLOW: Color = Color::Indexed(220);
 
 /// What a line of the sidebar belongs to: a tab, or a notification (its
 /// source and its item's id), for the cursor and a click; or the row saying
-/// how many tabs are out of sight above or below, which a click scrolls.
+/// how many tabs are out of sight above or below, which a click scrolls;
+/// or, while the sidebar is filtered to a repository, its chip on the top
+/// line, which a click clears, and Other repos, which a click or Enter on
+/// its folded line unfolds and a click on its heading folds again.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
     Notice { source: String, id: String },
     ScrollUp,
     ScrollDown,
+    RepoChip,
+    OtherRepos,
 }
 
 impl Owner {
@@ -127,6 +132,12 @@ pub struct View<'a> {
     /// The computer held awake (src/awake): a ☕ after the tab count with
     /// UX 2.0, which has no status line to show it.
     pub awake: bool,
+    /// The repository the tabs are filtered to, by its folder's name, its
+    /// chip on the top line; every other one's tabs are under Other repos.
+    pub repo: Option<&'a str>,
+    /// Other repos folded to one line: its tabs' marks, their count and
+    /// their repositories.
+    pub folded: bool,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -340,7 +351,7 @@ pub fn sidebar_lines(
     // the bottom; only the groups and tabs between them scroll.
     let mut head: Vec<Line> = Vec::new();
     let mut lines: Vec<Line> = Vec::new();
-    let mut owners: Vec<Option<TabId>> = Vec::new();
+    let mut owners: Vec<Option<Owner>> = Vec::new();
     let mut headings: Vec<usize> = Vec::new();
     let mut spins = false;
     let mut cursor_at = 0;
@@ -366,16 +377,31 @@ pub fn sidebar_lines(
             .fg(theme.bright)
             .add_modifier(Modifier::BOLD),
     };
+    // The repository filter's chip, and how many of the tabs are its.
+    let repo_chip = |row: &mut Row| -> usize {
+        let Some(repo) = view.repo else {
+            return 0;
+        };
+        let chip = kit::chip(&format!("{repo} ×"), Tone::Accent, false, theme);
+        let mine = tabs.iter().filter(|t| !t.elsewhere).count();
+        let said = format!("{mine} of {}", tabs.len());
+        let used: usize = chip.iter().map(|s| width(&s.content)).sum::<usize>() + width(&said);
+        row.spans.extend(chip);
+        row.put(said, fg(theme.dim));
+        used
+    };
     if r.ux2 {
         // The count, a ☕ while the computer is held awake, and on the
         // right how to filter; the groups' own headings say how many need
-        // you or work.
+        // you or work. Filtered to a repository, its chip in its place.
         let n = tabs.len();
         let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
-        pill_row
-            .put(" ", Style::new())
-            .put(said.clone(), fg(theme.dim));
-        let mut used = width(&said) + 1;
+        pill_row.put(" ", Style::new());
+        let mut used = 1 + repo_chip(&mut pill_row);
+        if view.repo.is_none() {
+            pill_row.put(said.clone(), fg(theme.dim));
+            used += width(&said);
+        }
         if view.awake {
             let cup = kit::mark(Mark::Awake, 0, theme);
             used += 2 + width(&cup.content);
@@ -393,9 +419,15 @@ pub fn sidebar_lines(
             .put(" ", Style::new())
             .put(format!(" {session} "), pill)
             .put("  ", Style::new());
+        if repo_chip(&mut pill_row) > 0 {
+            pill_row.put("  ", Style::new());
+        }
         counts(&mut pill_row, tabs, r, theme);
     }
-    head.push(pill_row.fit(cols, None));
+    // The filter's chip clears it on a click, so its line lights under
+    // the mouse as a tab does.
+    let chip_lit = view.repo.is_some() && view.hover == Some(&Owner::RepoChip);
+    head.push(pill_row.fit(cols, chip_lit.then_some(theme.panel)));
     // A / filter being typed, or kept, in the line under it.
     match view.filter {
         Some(f) => {
@@ -438,8 +470,73 @@ pub fn sidebar_lines(
         if !r.ux2 {
             heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
         }
-        lines.push(heading.fit(cols, None));
-        owners.push(None);
+        let other_repos = group.stage == Stage::OtherRepos;
+        // Other repos' heading folds or unfolds it on a click, so it lights
+        // under the mouse.
+        let heading_lit = other_repos && view.hover == Some(&Owner::OtherRepos);
+        lines.push(heading.fit(cols, heading_lit.then_some(theme.panel)));
+        owners.push(other_repos.then_some(Owner::OtherRepos));
+        if other_repos && view.folded {
+            // Folded: one line of its tabs' marks, so a waiting one still
+            // shows, their count and their repositories by name.
+            let chosen = view.focused && view.cursor == Some(&Owner::OtherRepos);
+            let fill = if chosen {
+                Some(theme.highlight)
+            } else if view.hover == Some(&Owner::OtherRepos) {
+                Some(theme.panel)
+            } else {
+                None
+            };
+            let mut names: Vec<String> = Vec::new();
+            for t in &group.tabs {
+                let name = t
+                    .repo_dir
+                    .as_deref()
+                    .and_then(|d| d.file_name())
+                    .map(|n| n.to_string_lossy().into_owned());
+                if let Some(name) = name.filter(|n| !names.contains(n)) {
+                    names.push(name);
+                }
+            }
+            let mut row = Row::default();
+            row.put(if r.ux2 { "" } else { " " }, Style::new());
+            row.put("▸ ", fg(theme.dim));
+            for t in &group.tabs {
+                let state = model::badge_state(t, r);
+                spins |= kit::spins(state, true);
+                row.spans
+                    .push(kit::mark(Mark::of_badge(state), view.frame, theme));
+            }
+            let n = group.tabs.len();
+            let mut said = format!("  {n} {}", if n == 1 { "tab" } else { "tabs" });
+            if !names.is_empty() {
+                said.push_str(" · ");
+                said.push_str(&names.join(", "));
+            }
+            row.put(said, fg(theme.dim));
+            if chosen {
+                cursor_at = lines.len();
+                cursor_end = lines.len();
+            }
+            let line = if r.ux2 {
+                Line {
+                    spans: kit::row(
+                        row.fit(cols.saturating_sub(1), None).spans,
+                        cols,
+                        chosen,
+                        theme,
+                    ),
+                    fill,
+                }
+            } else {
+                row.fit(cols, fill)
+            };
+            lines.push(line);
+            owners.push(Some(Owner::OtherRepos));
+            lines.push(Line::blank(cols));
+            owners.push(None);
+            continue;
+        }
         let last = group.tabs.len().saturating_sub(1);
         for (i, tab) in group.tabs.iter().enumerate() {
             let chosen = selected == Some(tab.id);
@@ -489,7 +586,7 @@ pub fn sidebar_lines(
                     fill,
                 };
                 lines.push(kit_row(first));
-                owners.push(Some(tab.id));
+                owners.push(Some(Owner::Tab(tab.id)));
                 let mut doing: Vec<String> = model::state_words(tab, r)
                     .split(" · ")
                     .filter(|p| !p.is_empty())
@@ -508,7 +605,7 @@ pub fn sidebar_lines(
                         fg(theme.dim),
                     );
                     lines.push(kit_row(second));
-                    owners.push(Some(tab.id));
+                    owners.push(Some(Owner::Tab(tab.id)));
                 }
                 if chosen {
                     cursor_end = lines.len() - 1;
@@ -634,7 +731,7 @@ pub fn sidebar_lines(
             }
             for line in tab_lines {
                 lines.push(line);
-                owners.push(Some(tab.id));
+                owners.push(Some(Owner::Tab(tab.id)));
             }
             if chosen {
                 cursor_end = lines.len() - 1;
@@ -829,9 +926,13 @@ pub fn sidebar_lines(
     let end = if whole { length } else { top + room };
     let tabs_in = |from: usize, to: usize| -> Vec<TabId> {
         let mut seen: Vec<TabId> = Vec::new();
-        for t in owners[from.min(length)..to.min(length)].iter().flatten() {
-            if !seen.contains(t) {
-                seen.push(*t);
+        for t in owners[from.min(length)..to.min(length)]
+            .iter()
+            .flatten()
+            .filter_map(Owner::tab)
+        {
+            if !seen.contains(&t) {
+                seen.push(t);
             }
         }
         seen
@@ -852,6 +953,9 @@ pub fn sidebar_lines(
     };
     let mut head_owners: Vec<Option<Owner>> = vec![None; head.len() - top_owners.len()];
     head_owners.extend(top_owners);
+    if view.repo.is_some() {
+        head_owners[0] = Some(Owner::RepoChip);
+    }
     if top > 0 && view.filter.is_none() {
         // A tab cut at the top counts as above.
         head[1] = more("▲", &Owner::ScrollUp, tabs_in(0, top).len());
@@ -862,13 +966,16 @@ pub fn sidebar_lines(
         let shown = tabs_in(top, end);
         tabs_in(end, length)
             .into_iter()
-            .filter(|t| !shown.contains(t) || owners.get(end) == Some(&Some(*t)))
+            .filter(|t| {
+                !shown.contains(t)
+                    || owners.get(end).cloned().flatten().and_then(|o| o.tab()) == Some(*t)
+            })
             .count()
     });
     let mut shown: Vec<Line> = head;
     let mut shown_owners: Vec<Option<Owner>> = head_owners;
     shown.extend(lines.into_iter().skip(top).take(end - top));
-    shown_owners.extend(owners[top..end].iter().map(|o| o.map(Owner::Tab)));
+    shown_owners.extend(owners[top..end].iter().cloned());
     if let Some(n) = below {
         shown.push(more("▼", &Owner::ScrollDown, n));
         shown_owners.push(Some(Owner::ScrollDown));
@@ -889,7 +996,10 @@ pub fn sidebar_lines(
             top,
             room: space,
             length,
-            owners,
+            owners: owners
+                .iter()
+                .map(|o| o.as_ref().and_then(Owner::tab))
+                .collect(),
             cursor_at,
         },
         spins,
@@ -960,6 +1070,8 @@ mod tests {
             keep: None,
             hover: None,
             awake: false,
+            repo: None,
+            folded: false,
         }
     }
 

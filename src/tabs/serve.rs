@@ -42,6 +42,9 @@ pub struct Shown {
     /// The color it wears: its project's, or gray with the `accent_colors`
     /// setting off.
     pub color: Option<Rgb>,
+    /// The repository its directory is in, by its main clone's directory
+    /// (`git::main_clone`), for the sidebar's repository filter.
+    pub repo_dir: Option<PathBuf>,
 }
 
 impl Server {
@@ -105,7 +108,6 @@ impl Server {
             self.start_lookup(ask);
         }
         let shown = Shown {
-            path: Some(dir),
             label: facts.label,
             pr: facts.pr,
             pr_repo: facts.pr_repo,
@@ -114,6 +116,8 @@ impl Server {
             } else {
                 color::GRAY
             }),
+            repo_dir: Some(crate::tabs::git::main_clone(&dir)),
+            path: Some(dir),
         };
         let tab = self.tabs.get_mut(&tab_id).expect("checked above");
         tab.auto_name = shown.label.clone();

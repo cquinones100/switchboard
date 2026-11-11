@@ -98,6 +98,7 @@ pub const NAMES: &[&str] = &[
     "picture",
     "tip",
     "press",
+    "sidebar-repo",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -181,6 +182,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "press",
         "press <action> [arg]: an action run as its key would be, by its name in keys.json",
+    ),
+    (
+        "sidebar-repo",
+        "sidebar-repo [-s session] <dir> | --all: the sidebar filtered to the repository dir is in (its main clone), every other one's tabs under Other repos; --all clears it",
     ),
 ];
 
@@ -375,6 +380,7 @@ impl Server {
             "picture" => Ok(self.cmd_picture(rest, caller)),
             "tip" => Ok(self.cmd_tip(rest, caller)),
             "press" => Ok(self.cmd_press(rest, caller)),
+            "sidebar-repo" => self.cmd_sidebar_repo(rest, cwd, caller),
             "save" => super::persist::save_now(self)
                 .map(|file| Reply::ok(format!("{}\n", file.display())))
                 .map_err(|e| format!("{e:#}")),
@@ -533,7 +539,13 @@ impl Server {
                     "name": s.name,
                     "cols": s.cols,
                     "rows": s.rows,
-                    "sidebar": { "columns": s.sidebar, "focused": self.sidebar.focused(&s.name) },
+                    "sidebar": {
+                        "columns": s.sidebar,
+                        "focused": self.sidebar.focused(&s.name),
+                        // The repository it is filtered to, and Other repos unfolded.
+                        "repo": self.sidebar_repo(&s.name),
+                        "repo_open": self.sidebar.sides.get(&s.name).is_some_and(|x| x.repo_open),
+                    },
                     "tabs": tabs,
                 })
             })
@@ -581,6 +593,54 @@ impl Server {
                 })
             })
             .collect()
+    }
+
+    /// `sidebar-repo`: the caller's session's sidebar (`-s`'s, else the
+    /// one used last) filtered to the repository a directory is in, or
+    /// cleared with `--all`.
+    fn cmd_sidebar_repo(
+        &mut self,
+        rest: &[String],
+        cwd: &Path,
+        caller: Option<PaneId>,
+    ) -> Result<Reply, String> {
+        if !crate::settings::is_on("sidebar_repo_filter") {
+            return Err(
+                "the sidebar repository filter is off in Settings (sidebar_repo_filter)".into(),
+            );
+        }
+        // --all is this command's own, which Args takes for a mistake.
+        let all = rest.iter().any(|r| r == "--all");
+        let rest: Vec<String> = rest.iter().filter(|r| *r != "--all").cloned().collect();
+        let a = Args::parse(&rest, "s")?;
+        let session = match a.value('s') {
+            Some(s) => s.to_string(),
+            None => caller
+                .and_then(|p| self.session_of_tab(self.panes[&p].tab))
+                .or_else(|| {
+                    self.latest_client()
+                        .and_then(|c| self.session(&self.clients[&c].session))
+                })
+                .or_else(|| self.sessions.first())
+                .map(|s| s.name.clone())
+                .ok_or("no session")?,
+        };
+        if self.session(&session).is_none() {
+            return Err(format!("no session {session}"));
+        }
+        let repo = match a.rest.as_slice() {
+            [] if all => None,
+            [dir] if !all => {
+                let dir = cwd.join(dir);
+                let dir = dir
+                    .canonicalize()
+                    .map_err(|e| format!("{}: {e}", dir.display()))?;
+                Some(crate::tabs::git::main_clone(&dir))
+            }
+            _ => return Err("usage: switchboard sidebar-repo [-s session] <dir> | --all".into()),
+        };
+        self.sidebar_set_repo(&session, repo);
+        Ok(Reply::ok(""))
     }
 
     fn cmd_new_tab(

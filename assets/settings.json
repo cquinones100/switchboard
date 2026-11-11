@@ -66,6 +66,13 @@
     "default": true
   },
   {
+    "key": "sidebar_repo_filter",
+    "category": "Sidebar",
+    "label": "Sidebar repository filter",
+    "description": "M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group",
+    "default": true
+  },
+  {
     "key": "reminders",
     "category": "Sidebar",
     "label": "Reminders",

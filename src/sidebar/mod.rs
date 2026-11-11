@@ -79,7 +79,9 @@ pub struct PaneRead {
 /// its cursor, the layout held still while you browse, a / filter, where
 /// its list was scrolled to while it has the focus, and where its list was
 /// last shown, which the next tab in front holds to while it is in sight
-/// there (render.rs's `View::keep`).
+/// there (render.rs's `View::keep`); and the repository it is filtered
+/// to, every other one's tabs under Other repos, and whether that group
+/// was unfolded, both kept with the layout until cleared.
 #[derive(Clone, Debug, Default)]
 pub struct Side {
     pub focused: bool,
@@ -88,6 +90,10 @@ pub struct Side {
     pub filter: Option<Filter>,
     pub top: Option<usize>,
     pub keep: Option<usize>,
+    /// The main clone's directory the tabs are filtered to.
+    pub repo: Option<PathBuf>,
+    /// Other repos unfolded, its tabs listed one by one.
+    pub repo_open: bool,
 }
 
 /// Where a client's sidebar was last drawn, for the mouse and C-d.

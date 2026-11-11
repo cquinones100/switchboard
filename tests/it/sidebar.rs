@@ -1010,3 +1010,138 @@ fn list_gives_each_tab_its_stage_as_the_sidebar_groups_it() {
     );
     assert!(later["rank"].as_u64() > first["rank"].as_u64(), "{list}");
 }
+
+// `sidebar-repo` filters the sidebar to one repository: the other's tab
+// folded into one Other repos line with its mark, count and repository,
+// unfolded with Enter there; the top line's chip names the clone and a click
+// on it clears the filter, as M-p's "Show every repository's tabs" does; the
+// filter outlives an upgrade; and with the setting off there is none.
+#[test]
+fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let alpha = server.dir.path().join("alpha");
+    let beta = server.dir.path().join("beta");
+    for dir in [&alpha, &beta] {
+        std::fs::create_dir_all(dir).unwrap();
+        git(dir, &["init", "-q"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", "start"]);
+    }
+    let alpha = alpha.canonicalize().unwrap();
+    let beta = beta.canonicalize().unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    cd(&server, &mut client, &alpha);
+    server.ok(&["new-tab", "-d", "-c", &beta.to_string_lossy(), "-n", "bee"]);
+    row_of(&mut client, "bee");
+
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    let repo = |l: &Value| l["sessions"][0]["sidebar"]["repo"].clone();
+    wait_list(&server, "the filter set", |l| {
+        repo(l) == json!(alpha.to_string_lossy())
+    });
+    let fold = row_of(&mut client, "1 tab · beta");
+    assert!(row_of(&mut client, "OTHER REPOS 1") < fold);
+    let screen = client.screen();
+    assert!(left(&screen[0], 34).contains("alpha ×"), "{:?}", screen[0]);
+    assert!(left(&screen[0], 34).contains("1 of 2"), "{:?}", screen[0]);
+    assert!(
+        !screen.iter().any(|l| left(l, 34).contains("bee")),
+        "{screen:?}"
+    );
+
+    // Into the sidebar, down onto the folded line, and Enter unfolds it.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    client.type_text("\r");
+    wait_list(&server, "Other repos unfolded", |l| {
+        l["sessions"][0]["sidebar"]["repo_open"] == true
+    });
+    // Its tab, now under the cursor, comes to the front.
+    wait_list(&server, "the unfolded tab in front", |l| {
+        tabs(l)[1]["current"] == true && focused(l)
+    });
+    row_of(&mut client, "bee");
+    client.type_text("q");
+    wait_list(&server, "back out", |l| !focused(l));
+
+    // A click on the chip clears the filter.
+    client.send(b"\x1b[<0;4;1M\x1b[<0;4;1m");
+    wait_list(&server, "the filter cleared", |l| repo(l).is_null());
+    client.wait_for("Other repos gone", |s| {
+        !s.iter().any(|l| left(l, 34).contains("OTHER REPOS"))
+    });
+
+    // M-p's "Show every repository's tabs" clears it too.
+    server.ok(&["sidebar-repo", &beta.to_string_lossy()]);
+    row_of(&mut client, "beta ×");
+    server.ok(&["press", "sidebar-all"]);
+    wait_list(&server, "cleared again", |l| repo(l).is_null());
+
+    // Kept through an upgrade.
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
+    wait_list(&server, "the filter kept", |l| {
+        repo(l) == json!(alpha.to_string_lossy())
+    });
+
+    // A / search reaches a tab folded under Other repos.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("/bee");
+    row_of(&mut client, "bee");
+    client.type_text("\r");
+    wait_list(&server, "the search's tab in front", |l| {
+        tabs(l)[1]["current"] == true
+            && !focused(l)
+            && l["sessions"][0]["sidebar"]["repo_open"] == true
+    });
+
+    // A click on the folded line unfolds it and brings its tab to the front.
+    server.ok(&[
+        "select-tab",
+        "-t",
+        tabs(&server.list())[0]["id"].as_str().unwrap(),
+    ]);
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    let fold = row_of(&mut client, "1 tab · beta");
+    client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", fold + 1, fold + 1).as_bytes());
+    wait_list(&server, "unfolded by a click, its tab in front", |l| {
+        tabs(l)[1]["current"] == true && l["sessions"][0]["sidebar"]["repo_open"] == true
+    });
+
+    // A digit for a folded tab unfolds it, the cursor there in the sidebar.
+    server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
+    server.ok(&[
+        "select-tab",
+        "-t",
+        tabs(&server.list())[0]["id"].as_str().unwrap(),
+    ]);
+    wait_list(&server, "folded again, the sidebar focused", |l| {
+        l["sessions"][0]["sidebar"]["repo_open"] == false && focused(l)
+    });
+    client.type_text("2");
+    wait_list(
+        &server,
+        "the digit's tab in front, still in the sidebar",
+        |l| {
+            tabs(l)[1]["current"] == true
+                && focused(l)
+                && l["sessions"][0]["sidebar"]["repo_open"] == true
+        },
+    );
+
+    client.type_text("q");
+    wait_list(&server, "out of the sidebar", |l| !focused(l));
+
+    // With the setting off, the sidebar is as before and the command fails.
+    settings(&server, json!({"sidebar_repo_filter": false}));
+    client.wait_for("Other repos gone with the setting off", |s| {
+        !s.iter().any(|l| left(l, 34).contains("OTHER REPOS"))
+    });
+    let (code, _, err) = server.run(&["sidebar-repo", "--all"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("sidebar_repo_filter"), "{err}");
+}

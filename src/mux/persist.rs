@@ -110,6 +110,12 @@ pub struct SavedSession {
     #[serde(default)]
     pub last: Option<TabId>,
     pub tabs: Vec<SavedTab>,
+    /// The repository its sidebar is filtered to (src/sidebar's
+    /// `Side::repo`), and whether its Other repos was unfolded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidebar_repo: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sidebar_repo_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -606,6 +612,7 @@ impl Persist {
                     panes,
                 });
             }
+            let side = server.sidebar.sides.get(&s.name);
             sessions.push(SavedSession {
                 name: s.name.clone(),
                 cols: s.cols,
@@ -613,6 +620,8 @@ impl Persist {
                 current: s.current,
                 last: s.last,
                 tabs,
+                sidebar_repo: side.and_then(|x| x.repo.clone()),
+                sidebar_repo_open: side.is_some_and(|x| x.repo.is_some() && x.repo_open),
             });
         }
         Saved {
@@ -745,6 +754,9 @@ impl Persist {
             };
             let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
             let sidebar = server.sidebar_columns(cols);
+            let side = server.sidebar.side(&ss.name);
+            side.repo = ss.sidebar_repo;
+            side.repo_open = ss.sidebar_repo_open;
             server.sessions.push(Session {
                 name: ss.name,
                 tabs: tabs.clone(),
@@ -880,6 +892,16 @@ pub fn layout_now(server: &Server) -> Saved {
             rows: s.rows,
             current: s.current,
             last: s.last,
+            sidebar_repo: server
+                .sidebar
+                .sides
+                .get(&s.name)
+                .and_then(|x| x.repo.clone()),
+            sidebar_repo_open: server
+                .sidebar
+                .sides
+                .get(&s.name)
+                .is_some_and(|x| x.repo.is_some() && x.repo_open),
             tabs: s
                 .tabs
                 .iter()
@@ -997,6 +1019,9 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
         };
         let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
         let sidebar = server.sidebar_columns(cols);
+        let side = server.sidebar.side(&ss.name);
+        side.repo = ss.sidebar_repo;
+        side.repo_open = ss.sidebar_repo_open;
         server.sessions.push(Session {
             name: ss.name,
             tabs,
@@ -1068,6 +1093,8 @@ mod tests {
                 rows: 40,
                 current: TabId(2),
                 last: Some(TabId(1)),
+                sidebar_repo: None,
+                sidebar_repo_open: false,
                 tabs: vec![
                     SavedTab {
                         id: TabId(1),
