@@ -212,10 +212,10 @@ impl Server {
         else {
             return;
         };
-        let Some(pane) = self.history_pane(tab) else {
+        let Some(pane) = self.history_pane(tab).or_else(|| self.history_seed(tab)) else {
             self.say(
                 Some(client),
-                "This tab's Claude hasn't said anything since the server started, so it has no history yet",
+                "This tab has no Claude session, so it has no history yet",
             );
             return;
         };
@@ -266,6 +266,32 @@ impl Server {
             .copied()
             .filter(|p| self.history.get(*p).is_some())
             .max_by_key(|p| Some(*p) == active)
+    }
+
+    /// A history for the tab's Claude pane from the session the sidebar's
+    /// read knows for it, when its Claude has run no hook since the server
+    /// started (one restarted on a new build): its lanes come from the
+    /// transcript, its screen is kept from now on.
+    fn history_seed(&mut self, tab: TabId) -> Option<PaneId> {
+        let active = self.tabs.get(&tab).map(|t| t.active);
+        let (pane, session, transcript) = self
+            .tab_panes(tab)
+            .into_iter()
+            .filter_map(|p| {
+                let read = self.sidebar.panes.get(&p)?;
+                let session = read.session.as_ref()?.session_id.clone();
+                Some((p, session, read.transcript.clone()))
+            })
+            .max_by_key(|(p, _, _)| Some(*p) == active)?;
+        let now = util::now_secs();
+        self.history.session(pane, &session, transcript, false, now);
+        let agent = self.agents.get(pane);
+        let state = agent.and_then(|a| a.state);
+        let since = agent.map(|a| a.since).filter(|s| *s > 0 && state.is_some());
+        self.history
+            .state(pane, state, since.unwrap_or(now).min(now));
+        self.history.marked(pane);
+        self.history.get(pane).map(|_| pane)
     }
 
     /// Keeps a client's history view on its tab's place, with its model and

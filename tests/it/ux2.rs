@@ -364,6 +364,71 @@ fn with_ux2_m_h_shows_the_tabs_history_under_its_screen_and_moves_through_time()
     });
 }
 
+/// Waits until the first pane's `claude.session` in `list` is `session`.
+fn wait_session(server: &TestServer, session: &str) {
+    let deadline = common::deadline(std::time::Duration::from_secs(10));
+    while server.list()["sessions"][0]["tabs"][0]["panes"][0]["claude"]["session"] != session {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the sidebar never read the session"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn with_ux2_m_h_opens_the_history_of_a_claude_that_has_run_no_hook() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 40);
+    client.wait_for("the header", |s| s[2].contains("M-h  History"));
+    let pane = &server.list()["sessions"][0]["tabs"][0]["panes"][0];
+    let pid = pane["pid"].as_u64().unwrap();
+    // A session Claude Code wrote for the pane's program, as one restarted
+    // on a new build finds it, and its transcript: a turn, then a commit.
+    let now = jiff::Timestamp::now().as_second();
+    let at = |ago: i64| jiff::Timestamp::from_second(now - ago).unwrap().to_string();
+    let project = server.home.join(".claude/projects/p");
+    std::fs::create_dir_all(&project).unwrap();
+    let lines = [
+        json!({"type": "user", "timestamp": at(1200), "message": {"content": "fix it"}}),
+        json!({"type": "assistant", "timestamp": at(600), "message": {
+            "content": [{"type": "tool_use", "id": "c1", "name": "Bash", "input": {"command": "git commit -m x"}}]}}),
+        json!({"type": "user", "timestamp": at(590), "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "c1", "content": "[main a1c3e52] x"}]}}),
+    ];
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(project.join("s1.jsonl"), text).unwrap();
+    let sessions = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let file = json!({"pid": pid, "sessionId": "s1", "entrypoint": "cli"});
+    std::fs::write(sessions.join(format!("{pid}.json")), file.to_string()).unwrap();
+    wait_session(&server, "s1");
+    client.send(b"\x1bh");
+    let screen = client.wait_for("the timeline", |s| {
+        s.iter().any(|l| l.contains("• a1c3e52"))
+    });
+    assert!(screen.iter().any(|l| l.contains("h/l move in time")));
+    // A moment before the history opened kept no screen.
+    client.send(b"[");
+    client.wait_for("no screen from then", |s| {
+        s.iter().any(|l| l.contains("No screen was kept from then"))
+    });
+}
+
+#[test]
+fn with_ux2_m_h_says_a_tab_with_no_claude_session_has_no_history() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 40);
+    client.wait_for("the header", |s| s[2].contains("M-h  History"));
+    client.send(b"\x1bh");
+    client.wait_for("the message", |s| {
+        s.iter()
+            .any(|l| l.contains("This tab has no Claude session"))
+    });
+}
+
 #[test]
 fn with_ux2_m_h_brings_a_claude_parked_behind_a_tool_back_beside_it() {
     let server = TestServer::start();

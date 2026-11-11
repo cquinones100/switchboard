@@ -240,6 +240,20 @@ mod tests {
     }
 
     #[test]
+    fn a_record_seeded_without_a_hook_starts_at_the_transcripts_first_entry() {
+        let mut h = Histories::default();
+        let p = PaneId(1);
+        h.session(p, "s1", Some(PathBuf::from("/t.jsonl")), false, 1000);
+        h.state(p, Some(State::Working), 1000);
+        assert_eq!(h.get(p).unwrap().start(), 1000);
+        h.get_mut(p).unwrap().lanes.first = Some(400);
+        assert_eq!(h.get(p).unwrap().start(), 400);
+        // The hooks that follow keep it.
+        h.session(p, "s1", Some(PathBuf::from("/t.jsonl")), false, 1100);
+        assert_eq!(h.get(p).unwrap().start(), 400);
+    }
+
+    #[test]
     fn a_change_seen_late_is_kept_in_order() {
         let mut h = Histories::default();
         let p = PaneId(1);
