@@ -19,7 +19,11 @@
 //! written since a resume counts only its growth) with `usage/limits` (the
 //! account's `rate_limits`, the same for every session). Each is written only when it
 //! changes, and only its owner can read it, as the script's `umask 077` had
-//! it.
+//! it. The limits are written only by a session whose cost grew past the one
+//! its spend file kept, one a request just answered: a session's
+//! `rate_limits` are those of its own last request, so an idle one redrawing
+//! (a resize, a focus change) would write a week the account has since moved
+//! past, such as 100% used after an early reset, over a fresh one.
 //!
 //! The day's share is kept across days and restarts. Within one process the
 //! cost the statusline is given dips and recovers, so a lower cost from the
@@ -206,9 +210,15 @@ pub fn keep(payload: &Value, state: &Path, today: &str) {
     if new != old {
         write_changed(&spend_file, &new);
     }
+    let cost_kept = old
+        .lines()
+        .last()
+        .and_then(|record| record.split('\t').nth(2))
+        .and_then(awk_number);
+    let just_answered = cost_kept.is_none_or(|kept| awk_number(&cost).unwrap_or(0.0) > kept);
     if let Some(limits) = payload
         .get("rate_limits")
-        .filter(|l| !matches!(l, Value::Null | Value::Bool(false)))
+        .filter(|l| just_answered && !matches!(l, Value::Null | Value::Bool(false)))
     {
         write_changed(&usage.join("limits"), &util::json_compact(limits));
     }

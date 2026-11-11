@@ -15,7 +15,7 @@
 //! so far>\t<pid>\t2`), and `usage/limits` the account's `rate_limits` as Claude
 //! Code gives them. The cost is Claude Code's estimate at API prices, for
 //! interactive sessions only (`claude -p` has no statusline), and the limits
-//! are as the last session to draw saw them. Below them, with the
+//! are as the session a request last answered saw them. Below them, with the
 //! request_audit setting on, today's requests to services outside this
 //! computer, as `requests::tally` counts them: the total by protocol, then
 //! each service with its own protocols, busiest first.

@@ -1960,6 +1960,36 @@ fn the_statusline_keeps_each_session_s_context_and_spend_for_the_views() {
         read(&state.join("usage/spend-sess-1")),
         format!("{today}\t2.0000\t2\t4242\t2")
     );
+
+    // Only a session a request just answered writes the limits: an idle
+    // one's redraw at the same cost, still holding a week since reset,
+    // leaves a fresher session's figure alone.
+    let limits =
+        |used: u32| json!({ "seven_day": { "used_percentage": used, "resets_at": 1900000000 } });
+    let mut fresh = payload.clone();
+    fresh["session_id"] = json!("sess-2");
+    fresh["cost"]["total_cost_usd"] = json!(0.5);
+    fresh["rate_limits"] = limits(11);
+    statusline(&h, &fresh, true);
+    let fresh_limits = r#"{"seven_day":{"used_percentage":11,"resets_at":1900000000}}"#;
+    assert_eq!(read(&state.join("usage/limits")), fresh_limits);
+    let mut stale = later.clone();
+    stale["rate_limits"] = limits(100);
+    statusline(&h, &stale, true);
+    assert_eq!(
+        read(&state.join("usage/limits")),
+        fresh_limits,
+        "an idle session's redraw"
+    );
+    stale["cost"]["total_cost_usd"] = json!(2.5);
+    stale["rate_limits"] = limits(12);
+    statusline(&h, &stale, true);
+    assert_eq!(
+        read(&state.join("usage/limits")),
+        r#"{"seven_day":{"used_percentage":12,"resets_at":1900000000}}"#,
+        "the same session, once a request answers it"
+    );
+
     let mut odd = payload.clone();
     odd["session_id"] = json!("../x");
     statusline(&h, &odd, true);
