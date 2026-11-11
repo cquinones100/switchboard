@@ -10,6 +10,14 @@
 //! (the key in the accent, what it does dim, two spaces between), and a
 //! log's line that says why it failed, `marked`.
 //!
+//! A row's parts are laid out by `columns` (board 45, "Layout: how a view
+//! fills a screen of any size"): fixed columns at their natural width up
+//! to a cap, stretching ones sharing the rest by weight (wrapped text no
+//! wider than `WRAP_MAX`), right-edge ones flush right, and below what
+//! they need, columns dropped in the order the view names; `beside` scales
+//! a pane beside a board with the screen, and `place` puts spans in a
+//! column.
+//!
 //! Objects are rounded and structure is square: a chip, a cell, a keycap
 //! and an input end in half circles (U+E0B6 and U+E0B4) where the terminal
 //! draws them itself (Ghostty, `caps`), and in a space of their fill
@@ -236,6 +244,172 @@ pub fn fit(spans: Vec<Span<'static>>, cols: usize, pad: Style) -> Vec<Span<'stat
         out.push(Span::styled(" ".repeat(cols - used), pad));
     }
     out
+}
+
+/// A row's column, as board 45 ("Layout: how a view fills a screen of any
+/// size") sorts them: one at its natural width up to a cap, one stretching
+/// into what the fixed ones leave by its weight, or one flush right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Col {
+    Fixed {
+        min: usize,
+        natural: usize,
+        cap: usize,
+    },
+    /// A wrapped-text column's `max` is `WRAP_MAX`.
+    Stretch {
+        weight: usize,
+        min: usize,
+        max: Option<usize>,
+    },
+    Right {
+        natural: usize,
+        cap: usize,
+    },
+}
+
+/// The widest wrapped text reads well at.
+pub const WRAP_MAX: usize = 100;
+
+impl Col {
+    fn least(&self) -> usize {
+        match *self {
+            Col::Fixed { min, natural, cap } => natural.min(cap).max(min),
+            Col::Right { natural, cap } => natural.min(cap),
+            Col::Stretch { min, .. } => min,
+        }
+    }
+}
+
+/// Each column's x and width in a row `width` wide, `gap` columns between
+/// two, `None` for one dropped: fixed and right-edge columns take their
+/// natural width up to their cap, stretching ones share what is left by
+/// weight, each within its least and most, and right-edge ones sit flush
+/// right. When the fixed columns and the stretching ones' least don't fit,
+/// columns are dropped in `drop`'s order (indexes into `cols`) until they do.
+pub fn columns(
+    cols: &[Col],
+    width: usize,
+    gap: usize,
+    drop: &[usize],
+) -> Vec<Option<(usize, usize)>> {
+    let mut live = vec![true; cols.len()];
+    let needed = |live: &[bool]| {
+        let kept: Vec<&Col> = cols
+            .iter()
+            .zip(live)
+            .filter(|(_, l)| **l)
+            .map(|(c, _)| c)
+            .collect();
+        kept.iter().map(|c| c.least()).sum::<usize>() + gap * kept.len().saturating_sub(1)
+    };
+    for &i in drop {
+        if needed(&live) <= width {
+            break;
+        }
+        if let Some(l) = live.get_mut(i) {
+            *l = false;
+        }
+    }
+
+    let mut widths: Vec<usize> = cols.iter().map(Col::least).collect();
+    let mut left = width.saturating_sub(needed(&live));
+    let mut growing: Vec<usize> = (0..cols.len())
+        .filter(|&i| live[i] && matches!(cols[i], Col::Stretch { weight, .. } if weight > 0))
+        .collect();
+    // Share what is left by weight; a column its share takes past its most
+    // stops there, and the rest is shared again among the others.
+    while left > 0 && !growing.is_empty() {
+        let total: usize = growing
+            .iter()
+            .map(|&i| match cols[i] {
+                Col::Stretch { weight, .. } => weight,
+                _ => 0,
+            })
+            .sum();
+        let rooms: Vec<usize> = growing
+            .iter()
+            .map(|&i| match cols[i] {
+                Col::Stretch { max: Some(max), .. } => max.saturating_sub(widths[i]),
+                _ => usize::MAX,
+            })
+            .collect();
+        let shares: Vec<usize> = growing
+            .iter()
+            .map(|&i| match cols[i] {
+                Col::Stretch { weight, .. } => left * weight / total,
+                _ => 0,
+            })
+            .collect();
+        let full: Vec<usize> = (0..growing.len())
+            .filter(|&g| shares[g] >= rooms[g])
+            .collect();
+        if full.is_empty() {
+            let given: usize = shares.iter().sum();
+            for (g, &i) in growing.iter().enumerate() {
+                widths[i] += shares[g];
+            }
+            // What rounding left over goes a cell each to those that can
+            // still grow, the last first, within their most.
+            let mut over = left - given;
+            for g in (0..growing.len()).rev() {
+                let more = over.min(rooms[g] - shares[g]).min(1);
+                widths[growing[g]] += more;
+                over -= more;
+            }
+            break;
+        }
+        for &g in full.iter().rev() {
+            left -= rooms[g];
+            widths[growing[g]] += rooms[g];
+            growing.remove(g);
+        }
+    }
+
+    let mut out = vec![None; cols.len()];
+    let mut x = 0;
+    for i in (0..cols.len()).filter(|&i| live[i] && !matches!(cols[i], Col::Right { .. })) {
+        out[i] = Some((x, widths[i]));
+        x += widths[i] + gap;
+    }
+    let mut right = width;
+    for i in (0..cols.len())
+        .rev()
+        .filter(|&i| live[i] && matches!(cols[i], Col::Right { .. }))
+    {
+        right = right.saturating_sub(widths[i]);
+        out[i] = Some((right, widths[i]));
+        right = right.saturating_sub(gap);
+    }
+    out
+}
+
+/// The widest of a column's texts, its natural width.
+pub fn natural<'a>(texts: impl IntoIterator<Item = &'a str>) -> usize {
+    texts.into_iter().map(width).max().unwrap_or(0)
+}
+
+/// The width of a pane beside a board on a screen `width` wide, whose
+/// share at 160 columns is `share`: scaled with the screen, never under
+/// `min`, and 0 (dropped) when what it leaves the board would be under
+/// `board_min`.
+pub fn beside(width: usize, share: usize, min: usize, board_min: usize) -> usize {
+    let pane = (width * share / 160).max(min);
+    if width.saturating_sub(pane) < board_min {
+        0
+    } else {
+        pane
+    }
+}
+
+/// `spans` put on `line` at a column from `columns`: `line` padded to its x,
+/// then the spans cut with … or padded to its width.
+pub fn place(line: &mut Vec<Span<'static>>, spans: Vec<Span<'static>>, (x, w): (usize, usize)) {
+    let used = spans_width(line);
+    if used < x {
+        line.push(Span::raw(" ".repeat(x - used)));
+    }
+    line.extend(fit(spans, w, Style::default()));
 }
 
 /// A section's name in capitals, bold, in its tone, with its count (when
@@ -728,6 +902,133 @@ mod tests {
     }
 
     const T: Theme = Theme::DARK;
+
+    fn fixed(natural: usize, cap: usize) -> Col {
+        Col::Fixed {
+            min: 0,
+            natural,
+            cap,
+        }
+    }
+
+    fn stretch(weight: usize, min: usize, max: Option<usize>) -> Col {
+        Col::Stretch { weight, min, max }
+    }
+
+    #[test]
+    fn fixed_columns_take_their_natural_width_up_to_their_cap() {
+        let cols = [
+            fixed(10, 16),
+            fixed(30, 16),
+            Col::Fixed {
+                min: 8,
+                natural: 3,
+                cap: 16,
+            },
+        ];
+        assert_eq!(
+            columns(&cols, 200, 1, &[]),
+            vec![Some((0, 10)), Some((11, 16)), Some((28, 8))]
+        );
+    }
+
+    #[test]
+    fn stretching_columns_share_what_is_left_by_weight() {
+        let cols = [stretch(2, 0, None), stretch(1, 0, None)];
+        assert_eq!(
+            columns(&cols, 90, 0, &[]),
+            vec![Some((0, 60)), Some((60, 30))]
+        );
+    }
+
+    #[test]
+    fn what_rounding_leaves_goes_to_columns_that_can_still_grow() {
+        let cols = [
+            stretch(1, 0, None),
+            stretch(1, 0, None),
+            stretch(1, 0, Some(53)),
+        ];
+        assert_eq!(
+            columns(&cols, 160, 1, &[]),
+            vec![Some((0, 52)), Some((53, 53)), Some((107, 53))]
+        );
+    }
+
+    #[test]
+    fn a_right_edge_column_sits_flush_right_at_any_width() {
+        let cols = [
+            fixed(16, 16),
+            stretch(1, 10, None),
+            Col::Right {
+                natural: 8,
+                cap: 20,
+            },
+        ];
+        for width in [120, 160, 240] {
+            let out = columns(&cols, width, 2, &[]);
+            assert_eq!(out[2], Some((width - 8, 8)));
+            assert_eq!(out[1], Some((18, width - 16 - 8 - 4)));
+        }
+    }
+
+    #[test]
+    fn a_wrapped_text_column_stops_at_100_and_the_rest_goes_to_another() {
+        let cols = [stretch(3, 0, Some(WRAP_MAX)), stretch(1, 0, None)];
+        assert_eq!(
+            columns(&cols, 240, 0, &[]),
+            vec![Some((0, 100)), Some((100, 140))]
+        );
+        assert_eq!(
+            columns(&cols, 80, 0, &[]),
+            vec![Some((0, 60)), Some((60, 20))]
+        );
+    }
+
+    #[test]
+    fn columns_are_dropped_in_the_given_order_until_the_rest_fits() {
+        let cols = [
+            fixed(16, 16),
+            fixed(34, 34),
+            stretch(1, 24, None),
+            fixed(20, 20),
+        ];
+        let drop = [3, 1, 0];
+        assert_eq!(
+            columns(&cols, 100, 1, &drop),
+            vec![
+                Some((0, 16)),
+                Some((17, 34)),
+                Some((52, 27)),
+                Some((80, 20))
+            ]
+        );
+        assert_eq!(
+            columns(&cols, 80, 1, &drop),
+            vec![Some((0, 16)), Some((17, 34)), Some((52, 28)), None]
+        );
+        assert_eq!(
+            columns(&cols, 50, 1, &drop),
+            vec![Some((0, 16)), None, Some((17, 33)), None]
+        );
+    }
+
+    #[test]
+    fn a_pane_beside_scales_with_the_screen_and_never_goes_under_its_least() {
+        assert_eq!(beside(160, 50, 34, 60), 50);
+        assert_eq!(beside(240, 50, 34, 60), 75);
+        assert_eq!(beside(100, 50, 34, 60), 34);
+        assert_eq!(beside(90, 50, 34, 60), 0);
+    }
+
+    #[test]
+    fn natural_is_the_widest_text_and_place_cuts_to_the_column() {
+        assert_eq!(natural(["ab", "日本語", "abcd"]), 6);
+        let mut line = vec![Span::raw("ab")];
+        place(&mut line, vec![Span::raw("hello world")], (4, 6));
+        assert_eq!(text(&line), "ab  hello…");
+        place(&mut line, vec![Span::raw("x")], (12, 3));
+        assert_eq!(text(&line), "ab  hello…  x  ");
+    }
 
     #[test]
     fn a_marked_line_fills_its_width_in_the_failed_tint() {
