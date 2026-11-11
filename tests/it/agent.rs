@@ -540,6 +540,12 @@ fn a_second_claude_in_a_tab_gets_a_tab_of_its_own() {
     client.wait_text("$");
     let (first, first_pid) = first_pane(&server);
     let second = server.ok(&["split", "-t", &first]).trim().to_string();
+    // Its shell at its prompt, so the shell is what is in front: while a
+    // login profile runs a command (as a Linux computer's /etc/profile.d
+    // may), that command is, and has no session file.
+    client.wait_for("the second shell's prompt", |_| {
+        server.ok(&["capture-pane", "-t", &second]).contains('$')
+    });
     let second_pid = pane_of(&server.list(), &second)["pid"].as_u64().unwrap();
     session_file(&server.home, first_pid, json!({"sessionId": "a"}));
     session_file(&server.home, second_pid, json!({"sessionId": "b"}));
