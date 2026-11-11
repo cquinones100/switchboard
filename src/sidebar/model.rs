@@ -304,7 +304,8 @@ pub fn reminder_due(tab: &TabModel, r: &Rules) -> bool {
 }
 
 /// A reminder still to come: the tab waits under Reminders, with the time
-/// left, only while nothing else places it.
+/// left, while it isn't working, ahead of a failing build, since you set
+/// the reminder to leave it until then.
 pub fn reminder_later(tab: &TabModel, r: &Rules) -> bool {
     r.reminders && tab.remind_at.is_some_and(|at| at * 1000 > r.now_ms)
 }
@@ -524,6 +525,10 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
         Some(MergeState::Merged) => return Stage::Merged,
         None => {}
     }
+    // A reminder you set wins over what its checks say until it comes due.
+    if !tab.state.busy() && reminder_later(tab, r) {
+        return Stage::Later;
+    }
     // A CI loop at work is the fix for a failing build, so it keeps its own
     // stage; once it stops, the tab is Build failing again.
     let ci_at_work = tab.state.busy()
@@ -548,8 +553,6 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
     }
     if tab.state.busy() {
         Stage::Working
-    } else if reminder_later(tab, r) {
-        Stage::Later
     } else if tab.claude.is_some() {
         Stage::Idle
     } else {
@@ -645,8 +648,8 @@ pub fn frozen_from(tabs: &[TabModel], r: &Rules) -> Frozen {
 /// is doing; a reminder come due; else Claude's waiting or done; else its
 /// landing, deploy test or merged PR (its work is over, and a tab can be
 /// left marked working by a hook that came after its turn ended); for an
-/// idle tab its PR's place or a failing build; else its watch or loop; else
-/// a reminder still to come; else its state.
+/// idle tab its PR's place; else a reminder still to come; else a failing
+/// build; else its watch or loop; else its state.
 pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
     let needs = matches!(tab.state, TabState::Waiting | TabState::Done);
     let loop_badge = |kind: &str| Badge::of_loop(kind).unwrap_or(Badge::Working);
@@ -668,6 +671,8 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         Badge::Merged
     } else if tab.state == TabState::Idle && tab.merge == Some(MergeState::Queued) {
         Badge::Queued
+    } else if !tab.state.busy() && reminder_later(tab, r) {
+        Badge::Later
     } else if tab.state == TabState::Idle && build_failing(tab, r) {
         Badge::Failing
     } else if monitoring_only(tab) {
@@ -680,8 +685,6 @@ pub fn badge_state(tab: &TabModel, r: &Rules) -> Badge {
         loop_badge(l.kind())
     } else if let Some(skill) = tab.loop_skill.as_deref().filter(|_| tab.state.busy()) {
         loop_badge(skill)
-    } else if !tab.state.busy() && reminder_later(tab, r) {
-        Badge::Later
     } else {
         match tab.state {
             TabState::Working => Badge::Working,
@@ -1477,6 +1480,41 @@ pub(crate) mod tests {
             ..r
         };
         assert_eq!(stage_of(&due, &off), Stage::Other);
+    }
+
+    #[test]
+    fn a_reminder_to_come_wins_over_a_failing_build_until_due() {
+        let r = rules();
+        let now = r.now_secs();
+        let mut t = tab(1, "x", TabState::Idle);
+        t.pr_state = Some(PrState::Open);
+        t.checks = Some(Checks {
+            pass: 0,
+            fail: 1,
+            pending: 0,
+        });
+        assert_eq!(stage_of(&t, &r), Stage::Failing);
+        t.remind_at = Some(now + 60 * 60);
+        assert_eq!(stage_of(&t, &r), Stage::Later);
+        assert_eq!(badge_state(&t, &r), Badge::Later);
+        let mut due = t.clone();
+        due.remind_at = Some(now - 5);
+        assert_eq!(stage_of(&due, &r), Stage::Needs);
+        assert_eq!(badge_state(&due, &r), Badge::Reminder);
+        let busy = TabModel {
+            state: TabState::Working,
+            ..t.clone()
+        };
+        assert_eq!(stage_of(&busy, &r), Stage::Failing);
+        let mut fixing = busy.clone();
+        fixing.loop_skill = Some("ci".into());
+        assert_eq!(stage_of(&fixing, &r), Stage::Ci);
+        let off = Rules {
+            reminders: false,
+            ..r
+        };
+        assert_eq!(stage_of(&t, &off), Stage::Failing);
+        assert_eq!(badge_state(&t, &off), Badge::Failing);
     }
 
     #[test]
