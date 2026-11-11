@@ -147,6 +147,10 @@ mod tests {
         // rather than adding it.
         assert!(PART.chars().count() < 10_000);
         assert!(PART.contains("switchboard tabs"));
+        // Another tab's Claude is reached by the address `tabs` prints, not
+        // by a row's directory, which `ListAgents` doesn't show.
+        assert!(PART.contains("`uds:<socket>`"));
+        assert!(!PART.contains("row's directory"));
         assert!(!PART.contains("tmux"));
     }
 

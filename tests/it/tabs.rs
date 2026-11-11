@@ -319,3 +319,44 @@ mod from_the_services {
         client.wait_for("the name after the PR", |s| s[29].ends_with("1:#12 Login"));
     }
 }
+
+#[test]
+fn the_tabs_command_names_each_panes_claude_and_its_address() {
+    let server = TestServer::start();
+    settings(&server, json!({"github": false, "linear": false}));
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "plain"]);
+    // The first tab's shell stands in for Claude: a session file by its pid,
+    // as Claude Code writes one, with the name `ListAgents` shows.
+    let pid = first_tab(&server)["panes"][0]["pid"].as_u64().unwrap();
+    let sessions = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    let socket = format!("/tmp/cc-socks/{pid}.sock");
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        json!({"pid": pid, "sessionId": "s-1", "entrypoint": "cli", "name": "work-81",
+               "nameSource": "derived", "messagingSocketPath": socket})
+        .to_string(),
+    )
+    .unwrap();
+    wait_tab(&server, "the session read", |t| {
+        t["panes"][0]["claude"]["session"] == "s-1"
+    });
+
+    let list = server.list();
+    let lines = switchboard::cmd::tabs::lines(&list);
+    let rows: Vec<Vec<&str>> = lines.lines().map(|l| l.split('\t').collect()).collect();
+    assert_eq!(rows.len(), 2, "{lines}");
+    assert_eq!(
+        rows[0][6..],
+        ["s-1", &pid.to_string(), "work-81", &format!("uds:{socket}")],
+        "{lines}"
+    );
+    assert_eq!(rows[1][6..], ["", "", "", ""], "no Claude, blank: {lines}");
+
+    let objects = switchboard::cmd::tabs::objects(&list);
+    assert_eq!(objects[0]["session"], "s-1");
+    assert_eq!(objects[0]["address"], format!("uds:{socket}"));
+    assert_eq!(objects[1]["agent"], Value::Null);
+}

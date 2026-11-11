@@ -45,6 +45,9 @@ pub struct SessionInfo {
     /// When Claude Code said the session went idle (`status` `idle`, at its
     /// `statusUpdatedAt`, ms), while it says so.
     pub idle_since: Option<i64>,
+    /// The socket other sessions reach it on (`messagingSocketPath`), which
+    /// `SendMessage` takes as `uds:<socket>`.
+    pub socket: Option<String>,
 }
 
 impl SessionInfo {
@@ -69,6 +72,7 @@ impl SessionInfo {
                 .then(|| v.get("statusUpdatedAt").and_then(Value::as_f64))
                 .flatten()
                 .map(|n| n as i64),
+            socket: text("messagingSocketPath"),
         }
     }
 
@@ -91,6 +95,14 @@ pub struct SessionRef {
     /// When Claude Code said the session it is now went idle (ms), while
     /// it says so.
     pub idle_since: Option<i64>,
+    /// The Claude process in front: its own session (not a parked job's,
+    /// which `session_id` follows), its pid, its name whether given or
+    /// derived (what `ListAgents` names its row) and its messaging socket,
+    /// all of the one process another session reaches.
+    pub peer_session: String,
+    pub pid: Option<u32>,
+    pub peer_name: Option<String>,
+    pub socket: Option<String>,
 }
 
 /// The session shown for a pane, from the sessions whose processes are in
@@ -130,6 +142,10 @@ pub fn session_of(all: &[SessionInfo], front: &[&SessionInfo]) -> Option<Session
         name: named,
         started_at: current.started_at.or(session.started_at),
         idle_since: current.idle_since,
+        peer_session: session.session_id.clone(),
+        pid: session.pid,
+        peer_name: session.name.clone(),
+        socket: session.socket.clone(),
     })
 }
 
@@ -2257,7 +2273,7 @@ mod tests {
         assert_eq!(session_of(&all, &[&parked]).unwrap().session_id, "tab");
         // A name given, not derived, is shown.
         let named = SessionInfo::from_json(
-            &json!({"pid": 111, "sessionId": "s1", "cwd": "/work", "name": "Login retry", "nameSource": "user", "startedAt": 1_700_000_000_000_i64}),
+            &json!({"pid": 111, "sessionId": "s1", "cwd": "/work", "name": "Login retry", "nameSource": "user", "startedAt": 1_700_000_000_000_i64, "messagingSocketPath": "/tmp/cc-socks/111.sock"}),
         );
         assert_eq!(
             session_of(std::slice::from_ref(&named), &[&named]),
@@ -2267,8 +2283,18 @@ mod tests {
                 name: Some("Login retry".into()),
                 started_at: Some(1_700_000_000_000),
                 idle_since: None,
+                peer_session: "s1".into(),
+                pid: Some(111),
+                peer_name: Some("Login retry".into()),
+                socket: Some("/tmp/cc-socks/111.sock".into()),
             })
         );
+        // A derived name isn't shown, but is the name other sessions see.
+        let derived = SessionInfo::from_json(
+            &json!({"pid": 112, "sessionId": "s2", "name": "work-81", "nameSource": "derived"}),
+        );
+        let s = session_of(std::slice::from_ref(&derived), &[&derived]).unwrap();
+        assert_eq!((s.name, s.peer_name), (None, Some("work-81".into())));
         // When Claude Code says it went idle, while it says so.
         let status = |status: &str| {
             SessionInfo::from_json(

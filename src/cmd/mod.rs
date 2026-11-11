@@ -96,7 +96,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "tabs",
         run: tabs::main,
-        about: "A line per pane of every tab: its number, place, name, Claude's state, program and directory",
+        about: "A line per pane of every tab: its number, place, name, Claude's state, program and directory, then its Claude's session, pid, name and address (--json for objects)",
     },
     Command {
         name: "respawn",

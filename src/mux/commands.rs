@@ -489,12 +489,21 @@ impl Server {
                                     // sidebar last read it.
                                     "runs_claude": self.sidebar.panes.get(&p).is_some_and(|r| r.claude),
                                     // The Claude session in front on it, as
-                                    // the sidebar last read it (the relay's).
+                                    // the sidebar last read it (the relay's),
+                                    // and what another session reaches it by.
                                     "claude": self.sidebar.panes.get(&p).and_then(|r| {
                                         let s = r.session.as_ref()?;
                                         Some(json!({
                                             "session": s.session_id,
                                             "transcript": r.transcript,
+                                            // The process in front, not a
+                                            // parked job `session` follows.
+                                            "peer": {
+                                                "session": s.peer_session,
+                                                "pid": s.pid,
+                                                "name": s.peer_name,
+                                                "socket": s.socket,
+                                            },
                                         }))
                                     }),
                                 }))

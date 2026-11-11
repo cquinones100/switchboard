@@ -33,7 +33,7 @@ Arguments: optional, the project's name, a Linear project link, or a ticket ID o
    switchboard tabs
    ```
 
-   (a line per pane: the tab's number, its place, its name, Claude's state there, the program and the directory)
+   (a line per pane: the tab's number, its place, its name, Claude's state there, the program and the directory, then its Claude's session, process, name and address)
    and match the project's ticket IDs in each tab's label or worktree path: those are being worked on now, and a tab whose state is `waiting` waits on the user.
 
 4. **Read Slack.** With the Slack connector, read-only, over the last 14 days:
