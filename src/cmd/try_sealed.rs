@@ -141,16 +141,45 @@ fn client_profile_file(home: &Path) -> PathBuf {
     sealed_dir().join(format!("{}-client.sb", name_of(home)))
 }
 
+/// What the crates in a `--run`'s home were fetched for: its worktree's
+/// `Cargo.lock`, by its digest, so a later `--run` reuses the home only
+/// while the lock is the same.
+fn crates_file(home: &Path) -> PathBuf {
+    sealed_dir().join(format!("{}.crates", name_of(home)))
+}
+
+fn lock_digest(wt: &Path) -> Option<String> {
+    use sha1::{Digest, Sha1};
+    let lock = fs::read(wt.join("Cargo.lock")).ok()?;
+    Some(
+        Sha1::digest(lock)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    )
+}
+
+/// Whether `home` is where a sealed try's home goes: the rules in your
+/// cache are named by the home's name alone, so they belong to a home in
+/// the tries' root and nowhere else, and a folder of the same name
+/// elsewhere (a test's) never reaches them.
+fn in_root(home: &Path) -> bool {
+    home.parent() == Some(Path::new(try_::ROOT))
+}
+
 /// Whether the try in `home` was made with `--sealed`, by its rules' file
 /// in your cache rather than anything in the home, which its code can
 /// change.
 pub fn is_sealed(home: &Path) -> bool {
-    profile_file(home).exists()
+    in_root(home) && profile_file(home).exists()
 }
 
 /// The homes your sealed tries have under `root`, by their rules' files,
 /// whether or not they are still there.
 pub fn homes(root: &Path) -> Vec<PathBuf> {
+    if root != Path::new(try_::ROOT) {
+        return Vec::new();
+    }
     let mut found: Vec<PathBuf> = fs::read_dir(sealed_dir())
         .map(|d| {
             d.flatten()
@@ -1038,15 +1067,27 @@ pub(crate) fn start(
     }
     let sealed = Sealed::new(real, home.clone(), wt.clone())?;
     let running = sealed.running();
-    if !running {
+    let digest = lock_digest(&wt);
+    // A `--run` again on the same worktree takes up the home the last one
+    // made, its crates fetched for the same lock, rather than fetching and
+    // building them all again.
+    let reusable = !run.is_empty()
+        && crate::setup::exists(&home)
+        && is_sealed(&home)
+        && digest.is_some()
+        && util::read_text(crates_file(&home)) == digest;
+    if running || reusable {
+        sealed.write_rules()?;
+    } else {
         if crate::setup::exists(&home) || is_sealed(&home) {
             clean(&home)?;
         }
         sealed.write_rules()?;
         eprintln!("Setting up {} from nothing, sealed…", home.display());
         sealed.make_home(fetch)?;
-    } else {
-        sealed.write_rules()?;
+        if let Some(digest) = &digest {
+            util::write_atomic(crates_file(&home), digest)?;
+        }
     }
     if let Some((program, args)) = run.split_first() {
         let mut command = sealed.command(&run_profile_file(&home), Path::new(program))?;
@@ -1156,6 +1197,7 @@ pub fn clean(home: &Path) -> Result<()> {
         profile_file(home),
         run_profile_file(home),
         client_profile_file(home),
+        crates_file(home),
     ] {
         let _ = fs::remove_file(file);
     }
@@ -1263,5 +1305,16 @@ mod tests {
         assert_eq!(staging(home), PathBuf::from("/tmp/sb-0123abcd.new"));
         assert!(profile_file(home).ends_with("sealed/sb-0123abcd.sb"));
         assert!(run_profile_file(home).ends_with("sealed/sb-0123abcd-run.sb"));
+    }
+
+    /// The rules are named by the home's name alone, so a folder of that
+    /// name outside the tries' root (a test's) is never taken for a sealed
+    /// home, and cleaning it never removes a real try's rules.
+    #[test]
+    fn only_a_home_in_the_tries_root_has_rules() {
+        assert!(in_root(Path::new("/tmp/sb-0123abcd")));
+        assert!(!in_root(Path::new("/var/folders/x/sb-0123abcd")));
+        assert!(!is_sealed(Path::new("/var/folders/x/sb-0123abcd")));
+        assert!(homes(Path::new("/var/folders/x")).is_empty());
     }
 }
