@@ -512,16 +512,18 @@ pub fn draw_status(
     // Each tab in its project's color, as window-names.sh's
     // window-status-format and update-colors.sh's current one drew it: the
     // current tab bold on colour238, the rest on the status line's own.
+    let light = *p == Palette::LIGHT;
     let labels: Vec<Vec<(String, Style)>> = tabs
         .iter()
         .map(|tab| {
+            let color = tab.color.map(|c| crate::tabs::color::as_words(c, light));
             let style = if tab.current {
                 Style::new()
                     .bg(p.current_bg)
-                    .fg(tab.color.unwrap_or(colors::ACCENT))
+                    .fg(color.unwrap_or(colors::ACCENT))
                     .add_modifier(Modifier::BOLD)
             } else {
-                base.fg(tab.color.unwrap_or(p.tab_fg))
+                base.fg(color.unwrap_or(p.tab_fg))
             };
             let mut pieces = vec![(format!(" {}:", tab.index), style)];
             if let Some(state) = tab.agent {

@@ -49,7 +49,7 @@ use std::process::ExitCode;
 use serde_json::Value;
 
 use crate::agent::sessions;
-use crate::tabs::{self, git};
+use crate::tabs::{self, Shade, git};
 use crate::usage::sessions::{context_dir, safe_id, usage_dir};
 use crate::{paths, util};
 
@@ -69,7 +69,11 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     let hide_context = !crate::settings::is_on("statusline_context")
         && crate::settings::is_on("ux2")
         && crate::settings::is_on("view_sessions");
-    let line = line(&payload, in_workspace, hide_context);
+    let light = crate::settings::setting("theme")
+        .as_ref()
+        .and_then(Value::as_str)
+        == Some("light");
+    let line = line(&payload, in_workspace, hide_context, Shade::read(), light);
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
@@ -91,7 +95,15 @@ fn or_empty(v: &Value) -> Option<String> {
 }
 
 /// What the statusline prints.
-pub fn line(payload: &Value, in_workspace: bool, hide_context: bool) -> String {
+/// `light`: Settings' `theme` is light, where the color is drawn darker
+/// (`Rgb::darker`) so it shows on the pale background.
+pub fn line(
+    payload: &Value,
+    in_workspace: bool,
+    hide_context: bool,
+    shade: Shade,
+    light: bool,
+) -> String {
     let model = raw(&payload["model"]["display_name"]);
     let raw_cwd = match &payload["workspace"]["current_dir"] {
         Value::String(s) => s.clone(),
@@ -99,10 +111,11 @@ pub fn line(payload: &Value, in_workspace: bool, hide_context: bool) -> String {
     };
     let dir = PathBuf::from(&raw_cwd);
     let place = git::locate(&dir);
-    let color = tabs::statusline_color(&tabs::color::color_key(
-        &tabs::color::dir_name(&dir),
-        place.as_ref(),
-    ));
+    let color = tabs::statusline_color(
+        &tabs::color::color_key(&tabs::color::dir_name(&dir), place.as_ref()),
+        shade,
+    );
+    let color = if light { color.darker() } else { color };
     let accent = format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b);
 
     let mut output = format!("{accent}{model}{RESET}");
@@ -373,27 +386,38 @@ mod tests {
             "workspace": { "current_dir": "/nowhere/at-all" },
             "context_window": { "used_percentage": 42.34 }
         });
-        let color = tabs::statusline_color("at-all");
+        let color = tabs::statusline_color("at-all", Shade::Soft);
         let accent = format!("\x1b[38;2;{};{};{}m", color.r, color.g, color.b);
-        assert_eq!(line(&payload, true, true), format!("{accent}Opus{RESET}"));
         assert_eq!(
-            line(&payload, true, false),
+            line(&payload, true, true, Shade::Soft, false),
+            format!("{accent}Opus{RESET}")
+        );
+        assert_eq!(
+            line(&payload, true, false, Shade::Soft, false),
             format!("{accent}Opus{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}")
         );
         for hide_context in [true, false] {
             assert_eq!(
-                line(&payload, false, hide_context),
+                line(&payload, false, hide_context, Shade::Soft, false),
                 format!(
                     "{accent}Opus{RESET} | {accent}/nowhere/at-all{RESET} | Context: \x1b[38;5;178m42.3% used{RESET}"
                 )
             );
         }
+        // With the light theme, the same hue darker.
+        let dark = color.darker();
+        assert_eq!(
+            line(&payload, true, true, Shade::Soft, true),
+            format!("\x1b[38;2;{};{};{}mOpus{RESET}", dark.r, dark.g, dark.b)
+        );
         let bare =
             json!({ "model": { "display_name": "Haiku" }, "workspace": { "current_dir": "/x" } });
         for (in_workspace, hide_context) in
             [(true, true), (true, false), (false, true), (false, false)]
         {
-            assert!(!line(&bare, in_workspace, hide_context).contains("Context"));
+            assert!(
+                !line(&bare, in_workspace, hide_context, Shade::Vivid, false).contains("Context")
+            );
         }
     }
 

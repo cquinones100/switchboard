@@ -659,6 +659,23 @@
     "default": true
   },
   {
+    "key": "tab_colors",
+    "category": "Tabs and status bar",
+    "label": "Tab colors",
+    "description": "The colors tabs take from their project, in the tab bar, the sidebar, the header and Claude's statusline: soft pastels, as the UX 2.0 canvas draws them, or the stronger colors from before. Each project keeps its own hue either way",
+    "choices": [
+      {
+        "value": "soft",
+        "label": "soft"
+      },
+      {
+        "value": "vivid",
+        "label": "vivid"
+      }
+    ],
+    "default": "soft"
+  },
+  {
     "key": "health_light",
     "category": "Tabs and status bar",
     "label": "Health light",

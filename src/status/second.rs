@@ -116,7 +116,10 @@ pub fn pieces(s: &Second, p: &Palette, now: i64) -> Vec<(String, Style)> {
         out.push(("  ".into(), Style::new()));
         out.push((
             command.to_string(),
-            Style::new().fg(s.color.unwrap_or(p.status_fg)),
+            Style::new().fg(s
+                .color
+                .map(|c| crate::tabs::color::as_words(c, *p == Palette::LIGHT))
+                .unwrap_or(p.status_fg)),
         ));
     }
     if let Some((state, since)) = s.state {

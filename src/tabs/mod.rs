@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use crate::mux::TabId;
 
 pub use color::{
-    GRAY, Rgb, accent_color, accent_color_of, color_key, color_key_of, statusline_color,
+    GRAY, Rgb, Shade, accent_color, accent_color_of, color_key, color_key_of, statusline_color,
 };
 pub use names::{Answer, Names};
 pub use serve::Shown;

@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
-use super::color::{self, Rgb};
+use super::color::{self, Rgb, Shade};
 use super::git::{self, GitPlace};
 use super::label;
 use crate::integrations::github::{self, Repo};
@@ -74,6 +74,8 @@ pub struct Switches {
     pub lookups: bool,
     /// `accent_colors`: a color per project, else gray.
     pub colors: bool,
+    /// `tab_colors`: how a project's hue is drawn.
+    pub shade: Shade,
 }
 
 impl Default for Switches {
@@ -83,6 +85,7 @@ impl Default for Switches {
             linear: true,
             lookups: true,
             colors: true,
+            shade: Shade::Soft,
         }
     }
 }
@@ -98,6 +101,7 @@ impl Switches {
             linear: on("linear"),
             lookups: on("tab_lookups"),
             colors: on("accent_colors"),
+            shade: Shade::of(all.iter().find(|o| o.key == "tab_colors").map(|o| &o.value)),
         }
     }
 
@@ -308,7 +312,7 @@ impl Names {
         asks: &mut Vec<Ask>,
     ) -> Facts {
         let name = color::dir_name(dir);
-        let color = color::accent_color(&color::color_key(&name, place));
+        let color = color::accent_color(&color::color_key(&name, place), switches.shade);
         let window = color::window_name(&name, place);
 
         // Matches any team key; a branch that only looks like a ticket is
@@ -657,7 +661,7 @@ mod tests {
         assert_eq!(facts.pr, None);
         assert_eq!(
             facts.color,
-            color::accent_color("app | branch:eng-42-fix-login")
+            color::accent_color("app | branch:eng-42-fix-login", Shade::Soft)
         );
         let repo_dir = dir.join(".git");
         assert_eq!(

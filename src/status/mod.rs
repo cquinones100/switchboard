@@ -117,12 +117,17 @@ impl Hits {
     }
 }
 
-/// The session badge's style: bold in the bright text on the current tab's
-/// color, as update-colors.sh rewrote `status-left`.
+/// The session badge's style: bold on the current tab's color, as
+/// update-colors.sh rewrote `status-left`: light words on a dark color, dark
+/// on a light one, whatever the theme; the theme's bright text with no color.
 pub fn session_style(left: &Left, p: &Palette) -> Style {
+    let words = match left.color {
+        Some(color) => crate::tabs::color::words_on(color),
+        None => p.bright,
+    };
     Style::new()
         .bg(left.color.unwrap_or(theme::SESSION_BG))
-        .fg(p.bright)
+        .fg(words)
         .add_modifier(Modifier::BOLD)
 }
 

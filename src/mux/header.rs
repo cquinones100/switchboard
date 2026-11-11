@@ -179,9 +179,6 @@ const COMMANDS: (&str, &str) = ("⌘", "Commands");
 /// The tab's history's key and what it shows.
 const HISTORY: (&str, &str) = ("M-h", "History");
 
-/// The words on the tab's color.
-const ON_COLOR: Color = Color::Indexed(232);
-
 /// Draws the header into `area` (its full width, `ROWS` high), and gives
 /// where each key and the button went.
 /// What is under the mouse, with hover_highlight on, is lit. `caps`: the
@@ -200,10 +197,13 @@ pub fn draw(
     if area.height == 0 || area.width == 0 {
         return keys;
     }
-    // Dark words on the tab's color; a tab with none yet keeps the plain
-    // band, the name bright and the rest dim.
+    // Dark words on the tab's color, bright on a dark one; a tab with none
+    // yet keeps the plain band, the name bright and the rest dim.
     let (band, name_fg, words_fg) = match h.color {
-        Some(color) => (Style::new().bg(color).fg(ON_COLOR), ON_COLOR, ON_COLOR),
+        Some(color) => {
+            let on = crate::tabs::color::words_on(color);
+            (Style::new().bg(color).fg(on), on, on)
+        }
         None => (Style::new().bg(p.status_bg), p.bright, p.dim),
     };
     let first = Rect::new(area.x, area.y, area.width, 1);
@@ -345,6 +345,9 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The dark words on a light tab color.
+    const ON_COLOR: Color = Color::Indexed(232);
 
     fn text(buf: &Buffer, y: u16) -> String {
         (0..buf.area.width)
@@ -525,6 +528,28 @@ mod tests {
         assert_eq!(buf[(15, 0)].fg, ON_COLOR, "where it works");
         assert!(!buf[(15, 0)].modifier.contains(Modifier::BOLD));
         assert!(!text(&buf, 0).contains("ctx"));
+    }
+
+    #[test]
+    fn words_are_light_on_a_dark_vivid_color() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        // A soft color takes the dark words, a dark vivid one light ones.
+        for (color, words) in [
+            (Color::Rgb(0xa2, 0xb0, 0xeb), ON_COLOR),
+            (Color::Rgb(0x6f, 0x3f, 0xff), Color::Indexed(255)),
+        ] {
+            // Whatever the theme.
+            for palette in [Palette::DARK, Palette::LIGHT] {
+                let mut buf = Buffer::empty(area);
+                let h = Header {
+                    color: Some(color),
+                    ..header(Shown::Claude)
+                };
+                draw(&mut buf, area, &h, None, &palette, false, false);
+                assert_eq!(buf[(3, 0)].fg, words, "{color:?}");
+                assert_eq!(buf[(15, 0)].fg, words, "{color:?}");
+            }
+        }
     }
 
     #[test]

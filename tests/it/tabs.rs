@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use common::TestServer;
 use serde_json::{Value, json};
-use switchboard::tabs;
+use switchboard::tabs::{self, Shade};
 
 /// Settings for the tests: no desktop notifications, and these.
 fn settings(server: &TestServer, extra: Value) {
@@ -85,8 +85,11 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     });
 
     // Drawn in the project's color, the same one accent-color.sh gave.
-    let expected = tabs::accent_color_of(&work);
-    assert_eq!(expected, tabs::accent_color("shop | branch:feature-x"));
+    let expected = tabs::accent_color_of(&work, Shade::Soft);
+    assert_eq!(
+        expected,
+        tabs::accent_color("shop | branch:feature-x", Shade::Soft)
+    );
     let col = screen[29].find("shop:feature-x").unwrap();
     assert_eq!(
         client.fg_rgb(29, col),
@@ -133,8 +136,17 @@ fn a_tab_in_a_repository_wears_its_name_and_color_and_a_given_name_wins() {
     server.ok(&["set", "-t", &id, "-u", "@tab_name"]);
     git(&work, &["checkout", "-q", "-b", "main"]);
     client.wait_for("the trunk's tab", |s| s[29].ends_with("1:shop"));
-    let main = tabs::accent_color("shop | branch:main");
+    let main = tabs::accent_color("shop | branch:main", Shade::Soft);
     wait_tab(&server, "the trunk's color", |t| t["color"] == main.hex());
+
+    // With tab colors vivid, the stronger color from before.
+    settings(
+        &server,
+        json!({"github": false, "linear": false, "tab_colors": "vivid"}),
+    );
+    let vivid = tabs::accent_color("shop | branch:main", Shade::Vivid);
+    assert_ne!(vivid, main);
+    wait_tab(&server, "the vivid color", |t| t["color"] == vivid.hex());
 
     // With project colors off, every tab is gray.
     settings(

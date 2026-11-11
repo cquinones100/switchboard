@@ -370,7 +370,7 @@ pub fn sidebar_lines(
     let pill = match here.and_then(|t| t.color) {
         Some(c) => Style::new()
             .bg(c.into())
-            .fg(Color::Indexed(232))
+            .fg(crate::tabs::color::words_on(c.into()))
             .add_modifier(Modifier::BOLD),
         None => Style::new()
             .bg(theme.highlight)
@@ -572,7 +572,10 @@ pub fn sidebar_lines(
                     .put(" ", Style::new())
                     .put(
                         number,
-                        fg(tab.color.map(Color::from).unwrap_or(theme.faint)),
+                        fg(tab
+                            .color
+                            .map(|c| crate::tabs::color::as_words(c.into(), *theme == Theme::LIGHT))
+                            .unwrap_or(theme.faint)),
                     )
                     .put(" ", Style::new())
                     .put(text::cut(&tab.name, room), name_style);

@@ -11,11 +11,14 @@
 //! The hash is SHA-256, as `shasum -a 256` gave it, written out here since
 //! the color needs only this one use of it: the first eight hex digits of
 //! the key's hash, as a number, picks the hue from those whose color doesn't
-//! read as red (the scripts took any of the 360), turned into a color
-//! at about 80% saturation and 45% lightness in the same integer steps the
-//! shell's arithmetic took. The tab's color is then lifted to a perceived
-//! luminance of at least 100, for reading on a dark status line; the
-//! statusline's isn't, as it never was.
+//! read as red (the scripts took any of the 360). Settings' `tab_colors`
+//! picks how that hue is drawn, never the key or the hue: soft, a pastel at
+//! about 65% saturation and 78% lightness as the UX 2.0 canvas draws its
+//! tabs, the same for the tab and the statusline; or vivid, the scripts'
+//! color at about 80% saturation and 45% lightness in the same integer steps
+//! the shell's arithmetic took, the tab's then lifted to a perceived
+//! luminance of at least 100 for reading on a dark status line, the
+//! statusline's not, as it never was.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -35,15 +38,79 @@ impl Rgb {
         Rgb { r, g, b }
     }
 
+    /// Its perceived luminance, 0 to 255.
+    pub fn luminance(self) -> u8 {
+        let (r, g, b) = (self.r as u32, self.g as u32, self.b as u32);
+        ((299 * r + 587 * g + 114 * b) / 1000) as u8
+    }
+
+    /// The same hue at 55% of each channel, for words on a light background.
+    pub fn darker(self) -> Rgb {
+        let dim = |c: u8| (c as u16 * 55 / 100) as u8;
+        Rgb::new(dim(self.r), dim(self.g), dim(self.b))
+    }
+
+    /// Light enough that words on it are drawn dark rather than bright:
+    /// every soft color, and the lightest vivid ones.
+    pub fn takes_dark_words(self) -> bool {
+        self.luminance() > 140
+    }
+
     /// `23ef59`, as accent-color.sh printed it.
     pub fn hex(self) -> String {
         format!("{:02x}{:02x}{:02x}", self.r, self.g, self.b)
     }
 }
 
+/// The color of words on a fill of a tab's color, whatever the theme: dark
+/// on a light color (every soft one), light on a dark vivid one; a color
+/// that isn't RGB keeps the dark words.
+pub fn words_on(fill: ratatui::style::Color) -> ratatui::style::Color {
+    let light = match fill {
+        ratatui::style::Color::Rgb(r, g, b) => !Rgb::new(r, g, b).takes_dark_words(),
+        _ => false,
+    };
+    ratatui::style::Color::Indexed(if light { 255 } else { 232 })
+}
+
+/// A tab's color as words on the light theme's pale backgrounds, where a
+/// soft color (or a light vivid one) would barely show: the same hue at 55%
+/// of each channel. Any other color, or on the dark theme, as it is.
+pub fn as_words(color: ratatui::style::Color, light: bool) -> ratatui::style::Color {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) if light => Rgb::new(r, g, b).darker().into(),
+        other => other,
+    }
+}
+
 impl From<Rgb> for ratatui::style::Color {
     fn from(c: Rgb) -> Self {
         ratatui::style::Color::Rgb(c.r, c.g, c.b)
+    }
+}
+
+/// How a project's hue is drawn: Settings' `tab_colors`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Shade {
+    /// A pastel, as the UX 2.0 canvas draws its tabs.
+    #[default]
+    Soft,
+    /// The stronger colors from before.
+    Vivid,
+}
+
+impl Shade {
+    /// The shade a `tab_colors` value names: soft unless it says vivid.
+    pub fn of(value: Option<&serde_json::Value>) -> Shade {
+        match value.and_then(|v| v.as_str()) {
+            Some("vivid") => Shade::Vivid,
+            _ => Shade::Soft,
+        }
+    }
+
+    /// The shade the settings file names now.
+    pub fn read() -> Shade {
+        Shade::of(crate::settings::setting("tab_colors").as_ref())
     }
 }
 
@@ -115,8 +182,30 @@ fn hue(key: &str) -> i64 {
 }
 
 /// The color a key hashes to, as the Claude statusline draws it.
-pub fn statusline_color(key: &str) -> Rgb {
-    hue_color(hue(key))
+pub fn statusline_color(key: &str, shade: Shade) -> Rgb {
+    match shade {
+        Shade::Soft => soft_color(hue(key)),
+        Shade::Vivid => hue_color(hue(key)),
+    }
+}
+
+/// A hue made a pastel at about 65% saturation and 78% lightness, in the
+/// same integer steps as `hue_color`.
+fn soft_color(hue: i64) -> Rgb {
+    let segment = hue / 60;
+    let frac = (hue % 60) * 255 / 60;
+    let c: i64 = 73;
+    let x = c * (255 - (frac * 2 - 255).abs()) / 255;
+    let m: i64 = 162;
+    let (r, g, b) = match segment {
+        0 => (c + m, x + m, m),
+        1 => (x + m, c + m, m),
+        2 => (m, c + m, x + m),
+        3 => (m, x + m, c + m),
+        4 => (x + m, m, c + m),
+        _ => (c + m, m, x + m),
+    };
+    Rgb::new(channel(r), channel(g), channel(b))
 }
 
 /// A hue made a color at about 80% saturation and 45% lightness, in the
@@ -138,22 +227,24 @@ fn hue_color(hue: i64) -> Rgb {
     Rgb::new(channel(r), channel(g), channel(b))
 }
 
-/// The color a key hashes to, as the tab wears it: the statusline's, lifted
-/// to a perceived luminance of at least 100.
-pub fn accent_color(key: &str) -> Rgb {
-    let Rgb { r, g, b } = statusline_color(key);
-    let (r, g, b) = (r as i64, g as i64, b as i64);
-    let lum = (299 * r + 587 * g + 114 * b) / 1000;
+/// The color a key hashes to, as the tab wears it: the statusline's, a
+/// vivid one lifted to a perceived luminance of at least 100 (a soft one is
+/// far above it).
+pub fn accent_color(key: &str, shade: Shade) -> Rgb {
+    let color = statusline_color(key, shade);
+    let lum = color.luminance() as i64;
     if lum >= 100 {
-        return Rgb::new(r as u8, g as u8, b as u8);
+        return color;
     }
     let boost = 100 - lum;
+    let Rgb { r, g, b } = color;
+    let (r, g, b) = (r as i64, g as i64, b as i64);
     Rgb::new(channel(r + boost), channel(g + boost), channel(b + boost))
 }
 
 /// The tab's color for a directory, read from its git files.
-pub fn accent_color_of(dir: &Path) -> Rgb {
-    accent_color(&color_key_of(dir))
+pub fn accent_color_of(dir: &Path, shade: Shade) -> Rgb {
+    accent_color(&color_key_of(dir), shade)
 }
 
 fn channel(v: i64) -> u8 {
@@ -311,8 +402,8 @@ mod tests {
         let hues: std::collections::HashSet<i64> = (0..5000)
             .map(|i| {
                 let key = format!("project-{i} | branch:eng-{i}-fix");
-                assert!(!reads_as_red(statusline_color(&key)), "{key}");
-                assert!(!reads_as_red(accent_color(&key)), "{key}");
+                assert!(!reads_as_red(statusline_color(&key, Shade::Vivid)), "{key}");
+                assert!(!reads_as_red(accent_color(&key, Shade::Vivid)), "{key}");
                 hue(&key)
             })
             .collect();
@@ -324,13 +415,58 @@ mod tests {
         // The steps of tmux/accent-color.sh, over the hues that aren't red,
         // so a change to the hash or the steps shows up here.
         for (key, hex) in PINNED {
-            assert_eq!(accent_color(key).hex(), *hex, "{key}");
+            assert_eq!(accent_color(key, Shade::Vivid).hex(), *hex, "{key}");
         }
         // Lifting never lowers a channel; a light color is left alone.
         for (key, _) in PINNED {
-            let (s, a) = (statusline_color(key), accent_color(key));
+            let (s, a) = (
+                statusline_color(key, Shade::Vivid),
+                accent_color(key, Shade::Vivid),
+            );
             assert!(a.r >= s.r && a.g >= s.g && a.b >= s.b);
         }
+    }
+
+    #[test]
+    fn soft_colors_are_the_canvas_pastels() {
+        // Every hue, in steps of 15, a pastel in the canvas's range.
+        for h in (0..360).step_by(15) {
+            let Rgb { r, g, b } = soft_color(h);
+            let (max, min) = (r.max(g).max(b) as f64, r.min(g).min(b) as f64);
+            let lightness = (max + min) / 2.0 / 255.0;
+            let saturation = (max - min) / 255.0 / (1.0 - (2.0 * lightness - 1.0).abs());
+            assert!((0.70..=0.85).contains(&lightness), "{h}°: {lightness}");
+            assert!((0.50..=0.85).contains(&saturation), "{h}°: {saturation}");
+            assert!(soft_color(h).takes_dark_words(), "{h}°");
+        }
+        // The same key keeps its hue under both shades: the soft color's
+        // strongest channel is the vivid one's.
+        for (key, _) in PINNED {
+            let (soft, vivid) = (
+                statusline_color(key, Shade::Soft),
+                statusline_color(key, Shade::Vivid),
+            );
+            let strongest = |c: Rgb| {
+                let channels = [c.r, c.g, c.b];
+                (0..3).max_by_key(|i| channels[*i]).unwrap()
+            };
+            assert_eq!(strongest(soft), strongest(vivid), "{key}");
+            // The tab and the statusline agree under soft.
+            assert_eq!(accent_color(key, Shade::Soft), soft, "{key}");
+        }
+        // As words on the light theme, darker in the same hue; elsewhere
+        // as it is.
+        use ratatui::style::Color;
+        let soft = Color::from(statusline_color("a", Shade::Soft));
+        assert_eq!(as_words(soft, false), soft);
+        let Color::Rgb(r, g, b) = as_words(soft, true) else {
+            panic!("not RGB")
+        };
+        assert!(Rgb::new(r, g, b).luminance() < 110, "{r} {g} {b}");
+        assert_eq!(as_words(Color::Indexed(3), true), Color::Indexed(3));
+        assert_eq!(Shade::of(None), Shade::Soft);
+        assert_eq!(Shade::of(Some(&serde_json::json!("vivid"))), Shade::Vivid);
+        assert_eq!(Shade::of(Some(&serde_json::json!("soft"))), Shade::Soft);
     }
 
     // Some lifted for a dark status line (a), some not.
@@ -390,7 +526,7 @@ mod tests {
         ] {
             assert_eq!(color_key_of(dir), key, "{}", dir.display());
             if let Some((_, hex)) = PINNED.iter().find(|(k, _)| *k == key) {
-                assert_eq!(accent_color_of(dir).hex(), *hex, "{key}");
+                assert_eq!(accent_color_of(dir, Shade::Vivid).hex(), *hex, "{key}");
             }
             let place = super::super::git::locate(dir);
             assert_eq!(window_name(&dir_name(dir), place.as_ref()), name, "{key}");
