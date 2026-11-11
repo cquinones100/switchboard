@@ -9,7 +9,10 @@
 //! is offline. A tab's line is written again when its transcript or state
 //! has changed and `DOING_EVERY_MS` have passed since the last one, so
 //! Haiku is asked no more than once a minute a tab, and the lines are kept
-//! in the state file, so a restart doesn't write them all again.
+//! in the state file, so a restart doesn't write them all again. A tab
+//! under the sidebar's Reminders is left out, with no line written for it,
+//! until its reminder comes due (the relay_home_reminders setting lists
+//! them), and the check-in line says how many are.
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -122,8 +125,9 @@ fn flat(text: &str) -> String {
 /// The Home tab, in Block Kit: a heading, when the computer checked in, and
 /// a section per tab. Sections take Slack's older mrkdwn. With
 /// `stopped_at`, it says the relay has stopped, so what is below is not
-/// current.
-pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
+/// current. `reminded` is how many tabs were left out for waiting on a
+/// reminder.
+pub fn dashboard_view(cx: &Cx, rows: &[Row], reminded: usize, stopped_at: Option<i64>) -> Value {
     let time = |ms: i64| super::lifecycle::clock(ms);
     let section = |r: &Row| {
         let mut text = format!(
@@ -187,7 +191,7 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
             "text": match stopped_at {
                 Some(at) => format!("⚪ The relay stopped at {}, so this is out of date until it starts again.", time(at)),
                 None => format!("🟢 Your computer checked in <!date^{}^{{ago}}|at {}>.", now / 1000, time(now)),
-            },
+            } + &reminded_words(reminded),
         },
     });
     if stopped_at.is_none() {
@@ -214,7 +218,12 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
     }
     blocks.push(json!({ "type": "divider" }));
     if rows.is_empty() {
-        blocks.push(json!({ "type": "section", "text": { "type": "mrkdwn", "text": "No Claude tabs are open." } }));
+        let none = if reminded > 0 {
+            "Every Claude tab is waiting on a reminder."
+        } else {
+            "No Claude tabs are open."
+        };
+        blocks.push(json!({ "type": "section", "text": { "type": "mrkdwn", "text": none } }));
     } else {
         for (g, (title, members)) in grouped(rows).into_iter().enumerate() {
             if g > 0 {
@@ -245,6 +254,14 @@ pub fn dashboard_view(cx: &Cx, rows: &[Row], stopped_at: Option<i64>) -> Value {
     json!({ "type": "home", "blocks": blocks })
 }
 
+fn reminded_words(reminded: usize) -> String {
+    match reminded {
+        0 => String::new(),
+        1 => " · 1 tab waiting on a reminder".into(),
+        n => format!(" · {n} tabs waiting on a reminder"),
+    }
+}
+
 /// The options of a prompt a tab is waiting on, or of a dialog before its
 /// session starts, as Home tab buttons.
 fn home_choices(cx: &Cx, tab: &Tab) -> Vec<Button> {
@@ -273,10 +290,17 @@ fn home_choices(cx: &Cx, tab: &Tab) -> Vec<Button> {
         .collect()
 }
 
-/// Every tab's row. `quick` leaves the one-line summaries out, so the
-/// first start isn't held up.
-pub async fn dashboard_rows(cx: &Cx, quick: bool) -> Vec<Row> {
-    let tabs = tabs::claude_tabs(cx);
+/// Every tab's row, and how many tabs under Reminders were left out.
+/// `quick` leaves the one-line summaries out, so the first start isn't
+/// held up.
+pub async fn dashboard_rows(cx: &Cx, quick: bool) -> (Vec<Row>, usize) {
+    let mut tabs = tabs::claude_tabs(cx);
+    let lists_reminders = (cx.settings)("relay_home_reminders") == Some(Value::Bool(true));
+    let all = tabs.len();
+    if !lists_reminders {
+        tabs.retain(|t| t.stage.as_ref().is_none_or(|s| s.key != "later"));
+    }
+    let reminded = all - tabs.len();
     // Lines for tabs that have closed, or whose tab now holds another
     // session.
     cx.state
@@ -369,7 +393,7 @@ pub async fn dashboard_rows(cx: &Cx, quick: bool) -> Vec<Row> {
             tab,
         });
     }
-    rows
+    (rows, reminded)
 }
 
 /// When to publish: `quick` without the summaries; `opened` because you
@@ -412,8 +436,8 @@ pub async fn refresh_dashboard(cx: &Cx, how: Refresh) -> Result<()> {
         cx.state.borrow_mut().dashboard = None;
         cx.save();
     }
-    let rows = dashboard_rows(cx, how.quick).await;
-    let view = dashboard_view(cx, &rows, how.stopped.then(util::now_ms));
+    let (rows, reminded) = dashboard_rows(cx, how.quick).await;
+    let view = dashboard_view(cx, &rows, reminded, how.stopped.then(util::now_ms));
     // The check-in time changes every minute; nothing else may have.
     let body = util::json_compact(
         &view["blocks"]

@@ -933,5 +933,12 @@
     "label": "Ask before typing over a draft",
     "description": "A message sent to a tab from Slack while text is typed and unsent in its prompt waits, and the thread asks whether to replace the draft, send after it or keep it. Off, the message is typed after whatever is there and sent, as before",
     "default": true
+  },
+  {
+    "key": "relay_home_reminders",
+    "category": "Slack relay",
+    "label": "Reminder tabs on the Slack Home",
+    "description": "Lists the tabs under the sidebar's Reminders on the Slack app's Home too, each saying when it reminds you. Off, they are left out until their reminder comes due, and the Home says how many",
+    "default": false
   }
 ]

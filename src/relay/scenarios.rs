@@ -1198,7 +1198,7 @@ fn the_home_tab_puts_what_needs_you_first() {
         row(6, "waiting", 350),
         row(7, "working", 150),
     ];
-    let view = super::dashboard::dashboard_view(&rig.cx, &rows, None);
+    let view = super::dashboard::dashboard_view(&rig.cx, &rows, 0, None);
     let order: Vec<String> = view["blocks"]
         .as_array()
         .unwrap()
@@ -1229,7 +1229,7 @@ fn the_home_tab_puts_what_needs_you_first() {
         ]
     );
     // A stopped relay marks it out of date, with nothing to refresh.
-    let stopped = super::dashboard::dashboard_view(&rig.cx, &rows, Some(util::now_ms()));
+    let stopped = super::dashboard::dashboard_view(&rig.cx, &rows, 0, Some(util::now_ms()));
     let checkin = stopped["blocks"]
         .as_array()
         .unwrap()
@@ -1294,7 +1294,7 @@ fn the_home_tab_groups_as_the_sidebar_does() {
         row(5, ("merged", "Merged", 11, 0)),
         row(6, ("idle", "Idle", 12, 1)),
     ];
-    let view = super::dashboard::dashboard_view(&rig.cx, &rows, None);
+    let view = super::dashboard::dashboard_view(&rig.cx, &rows, 0, None);
     assert_eq!(
         home_order(&view),
         [
@@ -1314,8 +1314,59 @@ fn the_home_tab_groups_as_the_sidebar_does() {
 }
 
 #[test]
-fn a_published_home_lists_a_reminder_tab_under_reminders_after_idle() {
+fn a_published_home_leaves_out_the_tabs_waiting_on_a_reminder() {
     let rig = Rig::new();
+    let (working, _) = rig.claude_tab("working");
+    rig.set_stage(&working, "working", "Working", 5, 0);
+    let mut later = Vec::new();
+    for name in ["later1", "later2"] {
+        let (tab, _) = rig.claude_tab(name);
+        rig.set_stage(&tab, "later", "Reminders", 13, later.len() as u64);
+        rig.set_state(&tab, "done", &(util::now_secs() - 60).to_string());
+        rig.transcript(&tab, name, &[json!({ "type": "user", "timestamp": jiff::Timestamp::now().to_string(), "message": { "content": "write it" } })]);
+        later.push(tab);
+    }
+    *rig.haiku.answer.borrow_mut() = Some("Done.".into());
+    let beat = Refresh {
+        heartbeat: true,
+        ..Refresh::default()
+    };
+    rig.block_on(refresh_dashboard(&rig.cx, beat)).unwrap();
+    assert_eq!(
+        rig.haiku.given.borrow().len(),
+        0,
+        "no line for a reminder tab"
+    );
+    assert!(rig.cx.state.borrow().doing.is_empty());
+    let view = rig.calls("views.publish").last().unwrap()["view"].clone();
+    assert_eq!(
+        home_order(&view),
+        [
+            "Claude tabs".to_string(),
+            "Working (1)".into(),
+            rig.index_of(&working).to_string()
+        ]
+    );
+    let checkin = view["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["block_id"] == "checkin")
+        .unwrap();
+    assert!(
+        checkin["text"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(" · 2 tabs waiting on a reminder"),
+        "{checkin}"
+    );
+}
+
+#[test]
+fn a_published_home_lists_a_reminder_tab_under_reminders_after_idle() {
+    let mut rig = Rig::new();
+    std::rc::Rc::get_mut(&mut rig.cx).unwrap().settings =
+        Box::new(|k| (k == "relay_home_reminders").then_some(json!(true)));
     let (idle, _) = rig.claude_tab("idle");
     let (later, _) = rig.claude_tab("later");
     rig.set_stage(&idle, "idle", "Idle", 12, 0);
