@@ -96,16 +96,68 @@ const stripActive = (html) => html.replace(/<script[\s\S]*?<\/script>/gi, '').re
 const isGrid = (source) => /white-space\s*:\s*pre\s*[;}"']/.test(source);
 
 // A board as a page: its helmet's fonts and styles, and its template filled in, with no script. For the site, `page` gives
-// its title and where each board's link (`<Name>.dc.html` on the canvas) goes.
-function toHtml(source, values = renderValues(source), page = { title: '', links: null }) {
+// its title, where each board's link (`<Name>.dc.html` on the canvas) goes, and the sidebar it is shown beside (`nav`).
+function toHtml(source, values = renderValues(source), page = { title: '', links: null, nav: null }) {
   const dc = source.match(/<x-dc>([\s\S]*)<\/x-dc>/);
   if (!dc) throw new Error('no <x-dc> template');
   const helmet = withoutActive((dc[1].match(/<helmet>([\s\S]*?)<\/helmet>/) || ['', ''])[1]);
   const template = dc[1].replace(/<helmet>[\s\S]*?<\/helmet>/, '');
   let body = withoutActive(expand(isGrid(source) ? template.trim().replace(/>\s+</g, '><') : template, values));
+  // On the site the sidebar lists every board, so a board's own link back to the canvas's Index goes.
+  if (page.nav) body = body.replace(/<a\b[^>]*\bhref="Index\.dc\.html"[^>]*>[\s\S]*?<\/a>/g, '');
   if (page.links) body = body.replace(/\bhref="([\w.-]+\.dc\.html)"/g, (_, file) => `href="${page.links[file] || 'index.html'}"`);
   const head = page.title ? `<title>${escapeHtml(page.title)}</title><style>html{background:#0b0c12}</style>` : '';
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">${head}${helmet}</head><body>${body}</body></html>`;
+  if (page.nav) body = shell(body, page.nav);
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${CSP}">${head}${helmet}${page.nav ? SHELL_STYLE : ''}</head><body>${body}</body></html>`;
+}
+
+// ─── The site's shell ──────────────────────────────────────────────────────────
+// Every page of the site shows its board beside a sidebar of every board, grouped as the canvas's Index groups them, the
+// page's own marked with the kit's highlight and its yellow `›`, and a bar over the board stepping to the boards before and
+// after it in the Index's order. It works with no script, which the CSP runs none of: each group is a `<details>` that folds,
+// the page's own group open, and every link is a Tab stop. Its classes start `sb-` and its rules name them, so a board's
+// own CSS (the Index's `a{...}`) never reaches it, and the board keeps its own size in a frame that scrolls when the window
+// is narrower.
+const SHELL_STYLE = `<style>
+body{margin:0}
+.sb-shell{display:flex;align-items:flex-start;min-height:100vh;background:#0b0c12;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;line-height:17px}
+.sb-shell .sb-nav{position:sticky;top:0;flex:none;width:300px;height:100vh;overflow-y:auto;box-sizing:border-box;padding:16px 10px 24px;background:#11121a;border-right:1px solid #262b40;color:#c9cdd9}
+.sb-shell .sb-home{display:block;padding:2px 8px 12px;color:#c9cdd9;font-weight:700;text-decoration:none}
+.sb-shell .sb-group{margin:0 0 6px}
+.sb-shell .sb-group>summary{cursor:pointer;list-style:none;padding:4px 8px;color:#8d93a8;font-weight:700;border-radius:4px}
+.sb-shell .sb-group>summary::-webkit-details-marker{display:none}
+.sb-shell .sb-group>summary::before{content:'▸ ';color:#565b6e}
+.sb-shell .sb-group[open]>summary::before{content:'▾ '}
+.sb-shell .sb-item{display:flex;gap:8px;padding:2px 8px;border-radius:4px;color:#c9cdd9;text-decoration:none;background:none;box-shadow:none}
+.sb-shell .sb-mark{flex:none;width:1ch;color:#f2c56b}
+.sb-shell .sb-num{flex:none;width:3ch;text-align:right;color:#8d93a8}
+.sb-shell .sb-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-shell .sb-item:hover,.sb-shell .sb-group>summary:hover,.sb-shell .sb-home:hover{background:#1c1e2a;color:#ffffff}
+.sb-shell .sb-item:focus-visible,.sb-shell .sb-group>summary:focus-visible,.sb-shell .sb-home:focus-visible,.sb-shell .sb-step:focus-visible{outline:none;background:#262b40;color:#ffffff;box-shadow:inset 3px 0 0 #5fd7ff}
+.sb-shell .sb-item.sb-on{background:#262b40;color:#ffffff}
+.sb-shell .sb-main{flex:1;min-width:0;padding:12px 16px 24px}
+.sb-shell .sb-bar{display:flex;align-items:baseline;gap:16px;margin:0 0 10px;color:#8d93a8}
+.sb-shell .sb-here{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c9cdd9;font-weight:700}
+.sb-shell .sb-step{flex:none;color:#5fd7ff;text-decoration:none;padding:1px 6px;border-radius:4px}
+.sb-shell .sb-step:hover{background:#1c1e2a}
+.sb-shell .sb-step.sb-none{color:#565b6e}
+.sb-shell .sb-board{overflow:auto;max-width:100%;width:max-content}
+</style>`;
+
+function shell(board, nav) {
+  const label = (b) => `${b.number ? b.number + '. ' : ''}${b.title}`;
+  const item = (b) => {
+    const on = b.page === nav.current;
+    return `<a class="sb-item${on ? ' sb-on' : ''}" href="${escapeHtml(b.page)}"${on ? ' aria-current="page"' : ''} title="${escapeHtml(label(b))}"><span class="sb-mark">${on ? '›' : ''}</span><span class="sb-num">${escapeHtml(b.number)}</span><span class="sb-title">${escapeHtml(b.title)}</span></a>`;
+  };
+  const groups = nav.groups.map((g) => `<details class="sb-group"${g.boards.some((b) => b.page === nav.current) ? ' open' : ''}><summary>${escapeHtml(g.label)}</summary>${g.boards.map(item).join('')}</details>`).join('');
+  const order = nav.groups.flatMap((g) => g.boards);
+  const at = order.findIndex((b) => b.page === nav.current);
+  const before = at > 0 ? order[at - 1] : null;
+  const after = at >= 0 ? order[at + 1] : order[0];
+  const step = (b, text) => (b ? `<a class="sb-step" href="${escapeHtml(b.page)}" title="${escapeHtml(label(b))}">${text}</a>` : `<span class="sb-step sb-none">${text}</span>`);
+  const here = at >= 0 ? label(order[at]) : '';
+  return `<div class="sb-shell"><nav class="sb-nav" aria-label="Boards"><a class="sb-home" href="index.html">UX 2.0 · every board</a>${groups}</nav><main class="sb-main"><div class="sb-bar"><span class="sb-here">${escapeHtml(here)}</span>${step(before, '‹ previous')}${step(after, 'next ›')}</div><div class="sb-board">${board}</div></main></div>`;
 }
 
 // The text a board's page holds, for the made-up-data check: what it shows (the template's text and every value filled into
@@ -235,18 +287,23 @@ function sync(projectDir, docsDir) {
     return { file, number, title: b.title.replace(/^\w+\. /, ''), page: `${number ? number + '-' : ''}${slugOf(file)}.html` };
   });
   const sources = Object.fromEntries(boards.map((b) => [b.file, fs.readFileSync(path.join(projectDir, b.file), 'utf8')]));
-  const links = Object.fromEntries(boards.map((b) => [b.file, b.page]));
 
   const words = ownWords();
   // Each board is expanded once, and the page that passed the check is the one written, since its script could answer
   // differently a second time.
   const values = Object.fromEntries(boards.map((b) => [b.file, renderValues(sources[b.file])]));
-  const pages = Object.fromEntries(boards.map((b) => [b.file, toHtml(sources[b.file], values[b.file], { title: `${b.number ? b.number + '. ' : ''}${b.title}`, links })]));
+  // The site is the boards the sidebar lists, grouped as the Index groups them: the Index board itself, which the sidebar
+  // replaces, isn't a page, and the first board listed (the kit's first) is the site's front page, `index.html`.
+  const groups = grouped(boards, values);
+  const shown = groups.flatMap((g) => g.boards);
+  if (shown.length) shown[0].page = 'index.html';
+  const links = Object.fromEntries(shown.map((b) => [b.file, b.page]));
+  const pages = Object.fromEntries(shown.map((b) => [b.file, toHtml(sources[b.file], values[b.file], { title: `${b.number ? b.number + '. ' : ''}${b.title}`, links, nav: { groups, current: b.page } })]));
   // The README is public too, made of the canvas's title, the boards' titles and the Index's groups, so it is checked with
   // the pages, before anything is written.
   const next = readme(canvas, boards, values, version);
   const found = [
-    ...boards.flatMap((b) => leaks(boardText(pages[b.file]), words).map((text) => `${b.file}: ${text}`)),
+    ...shown.flatMap((b) => leaks(boardText(pages[b.file]), words).map((text) => `${b.file}: ${text}`)),
     ...leaks(next.split(SITE).join(''), words).map((text) => `README.md: ${text}`),
   ];
   if (found.length) {
@@ -256,7 +313,7 @@ function sync(projectDir, docsDir) {
 
   fs.mkdirSync(docsDir, { recursive: true });
   let changed = 0;
-  for (const b of boards) {
+  for (const b of shown) {
     const file = path.join(docsDir, b.page);
     if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === pages[b.file]) continue;
     fs.writeFileSync(file, pages[b.file]);
@@ -265,7 +322,7 @@ function sync(projectDir, docsDir) {
   }
   // What the folder holds is this script's output alone, so a page no board writes now goes, with the pictures and their
   // manifest from when the boards were PNGs.
-  const kept = new Set(boards.map((b) => b.page));
+  const kept = new Set(shown.map((b) => b.page));
   for (const old of fs.readdirSync(docsDir)) {
     if (kept.has(old) || !(/\.(?:html|png)$/.test(old) || old === 'boards.json')) continue;
     fs.rmSync(path.join(docsDir, old), { force: true });
@@ -279,24 +336,29 @@ function sync(projectDir, docsDir) {
   if (!unchanged) fs.writeFileSync(readmePath, next);
 }
 
-// The README: the site's address, then the boards grouped as the canvas's Index groups them, each its number and title linking
-// to its page there, any board the Index leaves out under "Other boards".
-function readme(canvas, boards, values, version) {
+// The boards grouped as the canvas's Index groups them, any board it leaves out (the Index itself aside) under "Other
+// boards", for the README and the site's sidebar.
+function grouped(boards, values) {
   const index = boards.find((b) => b.file === 'Index.dc.html');
-  const groups = index ? values[index.file].groups || [] : [];
   const byFile = Object.fromEntries(boards.map((b) => [b.file, b]));
   const listed = new Set(index ? [index.file] : []);
-  const entry = (b) => `- [${b.number ? b.number + '. ' : ''}${b.title.replace(/[\\[\]]/g, '\\$&')}](${SITE}${b.page})\n`;
-  const sections = groups.map((group) => {
+  const groups = (index ? values[index.file].groups || [] : []).map((group) => {
     const members = group.boards.map((gb) => byFile[gb.file]).filter(Boolean);
     members.forEach((b) => listed.add(b.file));
-    const heading = group.label.charAt(0) + group.label.slice(1).toLowerCase();
-    return `## ${heading}\n\n${group.about ? group.about.charAt(0).toUpperCase() + group.about.slice(1) + '.\n\n' : ''}${members.map(entry).join('')}`;
+    return { label: group.label.charAt(0) + group.label.slice(1).toLowerCase(), about: group.about, boards: members };
   });
   const others = boards.filter((b) => !listed.has(b.file));
-  if (others.length) sections.push(`## Other boards\n\n${others.map(entry).join('')}`);
+  if (others.length) groups.push({ label: 'Other boards', about: '', boards: others });
+  return groups;
+}
+
+// The README: the site's address, then the boards grouped as the sidebar groups them, each its number and title linking to its
+// page there.
+function readme(canvas, boards, values, version) {
+  const entry = (b) => `- [${b.number ? b.number + '. ' : ''}${b.title.replace(/[\\[\]]/g, '\\$&')}](${SITE}${b.page})\n`;
+  const sections = grouped(boards, values).map((group) => `## ${group.label}\n\n${group.about ? group.about.charAt(0).toUpperCase() + group.about.slice(1) + '.\n\n' : ''}${group.boards.map(entry).join('')}`);
   const today = new Date().toISOString().slice(0, 10);
-  return `# The design of UX 2.0\n\nThe boards of the UX 2.0 design canvas, "${canvas.title}", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at ${SITE}${index ? `, starting from [the index](${SITE}${index.page}), where every board links back to it` : ''}. Taken from the canvas's version ${version} on ${today} by the \`design-docs\` project skill (\`.claude/skills/design-docs/\`), which writes every page again; don't edit these files by hand.\n\n${sections.join('\n')}`;
+  return `# The design of UX 2.0\n\nThe boards of the UX 2.0 design canvas, "${canvas.title}", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at ${SITE}, starting from the kit's first board, every page beside a sidebar of them all. Taken from the canvas's version ${version} on ${today} by the \`design-docs\` project skill (\`.claude/skills/design-docs/\`), which writes every page again; don't edit these files by hand.\n\n${sections.join('\n')}`;
 }
 
 // ─── leak-check's findings in the pages ────────────────────────────────────────
@@ -332,6 +394,10 @@ function selfTest() {
   };
   const fixtures = path.join(__dirname, 'fixtures');
   const grid = toHtml(fs.readFileSync(path.join(fixtures, 'grid.dc.html'), 'utf8'));
+  // The grid board as the site shows it, beside the sidebar, which must not move its rows off its meters either.
+  const fixtureBoards = [{ number: '1', title: 'Grid', page: '1-grid.html' }, { number: '2', title: 'Slack', page: '2-slack.html' }];
+  const gridInSite = toHtml(fs.readFileSync(path.join(fixtures, 'grid.dc.html'), 'utf8'), undefined, { title: '1. Grid', links: {}, nav: { groups: [{ label: 'Fixtures', about: '', boards: fixtureBoards }], current: '1-grid.html' } });
+  check(gridInSite.includes('class="sb-item sb-on" href="1-grid.html" aria-current="page"') && /href="2-slack.html"[^>]*>next ›/.test(gridInSite), 'site page: the sidebar marks its own board, and next leads to the one after');
   const slack = toHtml(fs.readFileSync(path.join(fixtures, 'slack.dc.html'), 'utf8'));
   check(!/>\s*\n\s*</.test(grid.slice(grid.indexOf('<body>'))), 'grid page: no line breaks between its tags');
   check(/<\/b> 9:40 AM/.test(slack), 'slack page: its spaces between tags kept');
@@ -344,17 +410,17 @@ function selfTest() {
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'design-docs-test-'));
   try {
-    for (const [file, html, width, height] of [['grid.dc.html', grid, 1280, 800], ['slack.dc.html', slack, 420, 880]]) {
+    for (const [file, html, width, height] of [['grid.dc.html', grid, 1280, 800], ['slack.dc.html', slack, 420, 880], ['grid.dc.html in the site', gridInSite, 1640, 880]]) {
       const out = path.join(dir, file + '.png');
       draw(html, out, width, height);
       const facts = pngFacts(out);
       check(facts.width === width && facts.height === height && !facts.blank, `${file}: ${facts.width}×${facts.height}${facts.blank ? ', blank' : ''}`);
-      if (file !== 'grid.dc.html') continue;
+      if (!file.startsWith('grid.dc.html')) continue;
       // The fixture's fourth row is "meter:" on #ff00ff with its meter, #00ff00, placed on that row: a row's shift moves the
       // text off the meter.
       const text = rowsWithColor(out, [0xff, 0x00, 0xff]);
       const meter = rowsWithColor(out, [0x00, 0xff, 0x00]);
-      check(text.length > 0 && meter.length > 0 && text[0] === meter[0] && text.at(-1) === meter.at(-1), `grid meter on its text's row: text ${text[0]}–${text.at(-1)}, meter ${meter[0]}–${meter.at(-1)}`);
+      check(text.length > 0 && meter.length > 0 && text[0] === meter[0] && text.at(-1) === meter.at(-1), `${file}: meter on its text's row: text ${text[0]}–${text.at(-1)}, meter ${meter[0]}–${meter.at(-1)}`);
     }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

@@ -1,10 +1,10 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design canvas, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from [the index](https://cquinones100.github.io/switchboard/design/index.html), where every board links back to it. Taken from the canvas's version 1794518443-8f76 on 2026-11-12 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again; don't edit these files by hand.
+The boards of the UX 2.0 design canvas, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Taken from the canvas's version 1794518443-8f76 on 2026-11-12 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again; don't edit these files by hand.
 
 ## The kit and the index
 
-- [0. The kit: the atoms every board is drawn with](https://cquinones100.github.io/switchboard/design/0-kit.html)
+- [0. The kit: the atoms every board is drawn with](https://cquinones100.github.io/switchboard/design/index.html)
 - [0c. The kit's board: columns of cards, one look for PRs, Tickets and Autopilot](https://cquinones100.github.io/switchboard/design/0c-kit-board.html)
 - [0d. The kit: a person, one avatar for Slack, Linear and GitHub, Large beside their words and Small inline](https://cquinones100.github.io/switchboard/design/0d-kit-person.html)
 - [45. Layout: how a view fills a screen of any size, every board being 160 × 45](https://cquinones100.github.io/switchboard/design/45-layout.html)

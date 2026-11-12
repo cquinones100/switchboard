@@ -45,12 +45,20 @@ fn the_renderer_keeps_a_grid_boards_text_on_its_meters_and_finds_names_not_made_
         stdout.contains("ok slack page: its spaces between tags kept"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("ok site page: the sidebar marks its own board"),
+        "{stdout}"
+    );
     if !drew {
         return eprintln!("{stdout}");
     }
     assert!(stdout.contains("ok grid.dc.html: 1280×800"), "{stdout}");
     assert!(
-        stdout.contains("ok grid meter on its text's row"),
+        stdout.contains("ok grid.dc.html: meter on its text's row"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("ok grid.dc.html in the site: meter on its text's row"),
         "{stdout}"
     );
     assert!(stdout.contains("ok slack.dc.html: 420×880"), "{stdout}");
