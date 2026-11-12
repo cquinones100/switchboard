@@ -91,6 +91,18 @@ impl Server {
         }
     }
 
+    /// A source's notifications kept in the history as dismissed without the
+    /// sidebar ever showing them (what a setting keeps quiet), and none of
+    /// the source's left in the sidebar.
+    pub(crate) fn notices_put_away(&mut self, source: &str, items: Vec<crate::items::Item>) {
+        let ids: Vec<String> = items.iter().map(|i| i.id.clone()).collect();
+        self.set_notices(source, items);
+        for id in ids {
+            self.notice_history_mark(source, &id, Sidebar::Dismissed, false);
+        }
+        self.set_notices(source, Vec::new());
+    }
+
     /// What a notification led to, in a few words ("you went to tab 5"):
     /// the occurrence that came at `occurrence` when given, else its
     /// latest.

@@ -615,7 +615,7 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     let server = TestServer::start();
     common::write_settings(
         &server.home,
-        json!({ "tips": false, "notifications": false, "notice_list": false }),
+        json!({ "tips": false, "notifications": false, "notice_list": false, "autopilot_landing_notices": true }),
     );
     let mut client = server.attach(140, 36);
     client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
@@ -701,6 +701,85 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     });
     let left = std::fs::read_to_string(server.state.join("autolanded.json")).unwrap();
     assert_eq!(left.trim(), "[]");
+}
+
+// With "Notify when autopilot lands" off, as it starts, a landing made
+// without asking still marks its tab, but goes straight into the
+// notifications' history as dismissed and never shows in the sidebar.
+#[test]
+fn a_landing_without_asking_stays_out_of_the_sidebar_with_its_notifications_off() {
+    let server = TestServer::start();
+    common::write_settings(
+        &server.home,
+        json!({ "tips": false, "notifications": false, "notice_list": false }),
+    );
+    let mut client = server.attach(140, 36);
+    client.wait_for("a prompt", |s| s.iter().any(|l| l.contains('$')));
+    let list = server.list();
+    let tab = list["sessions"][0]["tabs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pane = list["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let said = Command::new(BIN)
+        .args(["land-lock", "autolanded", "abc1234", "Make", "the", "thing"])
+        .current_dir(server.dir.path())
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", &pane)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        said.status.success(),
+        "{}",
+        String::from_utf8_lossy(&said.stderr)
+    );
+    assert_eq!(
+        server
+            .ok(&["show", "-t", &tab, "@autopilot_autoland"])
+            .trim(),
+        "abc1234",
+        "its tab marked"
+    );
+    let history = server.state.join("notifications");
+    let dismissed = || {
+        std::fs::read_dir(&history)
+            .ok()
+            .into_iter()
+            .flatten()
+            .any(|day| {
+                let Ok(text) = std::fs::read_to_string(day.unwrap().path()) else {
+                    return false;
+                };
+                let entries: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                entries.as_array().into_iter().flatten().any(|e| {
+                    e["source"] == "autolanded"
+                        && e["id"] == "abc1234"
+                        && e["sidebar"] == "dismissed"
+                })
+            })
+    };
+    let deadline = common::deadline(Duration::from_secs(20));
+    while !dismissed() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the landing kept in the history as dismissed"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let left = std::fs::read_to_string(server.state.join("autolanded.json")).unwrap();
+    assert_eq!(left.trim(), "[]", "put away");
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("Landed abc1234")),
+        "not in the sidebar: {}",
+        screen.join("\n")
+    );
 }
 
 /// `switchboard landing`, as queue-and-clean asks it how a repository lands.

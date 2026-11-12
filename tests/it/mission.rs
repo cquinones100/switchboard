@@ -992,7 +992,7 @@ fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
 #[test]
 fn a_notification_no_view_lists_is_whole_above_its_choices() {
     let server = TestServer::start();
-    settings(&server, json!({}));
+    settings(&server, json!({ "autopilot_landing_notices": true }));
     let mut client = server.attach(140, 36);
     client.wait_text("$");
     let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]

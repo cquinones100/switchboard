@@ -22,7 +22,10 @@
 //! closed as the setting says: once seen and left, or half an hour after it
 //! landed (when seen); as soon as it lands (at once); or five minutes after
 //! (after 5 minutes). One closed unseen leaves a notification, "Closed
-//! <item>: landed <short hash>", kept in `autopilot.json`'s `closed`. Those are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
+//! <item>: landed <short hash>", kept in `autopilot.json`'s `closed`, with
+//! the autopilot_landing_notices setting on; off, as it starts, it goes
+//! straight into the notifications' history as dismissed and out of that
+//! list. Those are tab options, which `src/mux/persist.rs` saves with the rest of a tab,
 //! so they come back after a restart, as tmux/window-options.sh carried
 //! them under tmux.
 //!
@@ -48,7 +51,9 @@
 //! such a landing, `switchboard land-lock autolanded` marks the tab
 //! `@autopilot_autoland`, shown "landed without asking" in the sidebar once
 //! it has landed, and adds "Landed <hash>: <item>" to the notifications
-//! (`landed`, the "autolanded" source), whose menu goes to its tab. Both are
+//! (`landed`, the "autolanded" source), whose menu goes to its tab, with
+//! the autopilot_landing_notices setting on, and otherwise to their history
+//! alone, as dismissed. Both are
 //! tab options too, kept across a restart.
 //!
 //! Its menu's "Hands-free", after a yes naming what it decides and what

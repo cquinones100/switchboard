@@ -1628,9 +1628,13 @@ impl Server {
     /// Its notifications, while the autopilot setting is on: what it said,
     /// and each landed tab it closed without your seeing it; and each
     /// landing its tabs made without asking, until dismissed, whatever the
-    /// setting says now.
+    /// setting says now. With `autopilot_landing_notices` off, the closed
+    /// tabs and the landings go straight into the history as dismissed and
+    /// out of their files, never shown in the sidebar: the Autopilot view's
+    /// Landed column keeps them from its own list.
     fn autopilot_notices(&mut self, mode: &Mode) {
         let on = settings::is_on("autopilot");
+        let quiet = !settings::is_on("autopilot_landing_notices");
         let items = if on && !mode.said.is_empty() {
             vec![crate::items::Item::new("said", &mode.said).detail("autopilot")]
         } else {
@@ -1653,8 +1657,15 @@ impl Server {
         } else {
             Vec::new()
         };
-        self.set_notices("landed", closed);
-        let autolanded = super::landed::read(&paths::state_dir())
+        if quiet && !closed.is_empty() {
+            self.notices_put_away("landed", closed);
+            if let Err(e) = Mode::update(&paths::state_dir(), |m| m.closed.clear()) {
+                eprintln!("autopilot: couldn't put the closed tabs away: {e}");
+            }
+        } else {
+            self.set_notices("landed", closed);
+        }
+        let autolanded: Vec<_> = super::landed::read(&paths::state_dir())
             .iter()
             .map(|l| {
                 let mut item = crate::items::Item::new(&l.hash, l.title())
@@ -1668,7 +1679,14 @@ impl Server {
                 item
             })
             .collect();
-        self.set_notices("autolanded", autolanded);
+        if quiet && !autolanded.is_empty() {
+            self.notices_put_away("autolanded", autolanded);
+            if let Err(e) = super::landed::dismiss(&paths::state_dir(), None) {
+                eprintln!("autopilot: couldn't put the landings away: {e}");
+            }
+        } else {
+            self.set_notices("autolanded", autolanded);
+        }
     }
 
     /// The landings made without asking put away: the one with this hash,

@@ -532,6 +532,64 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
     );
 }
 
+// With "Notify when autopilot lands" off, as it starts, a landed tab closed
+// before you saw it is kept in the notifications' history as dismissed, out
+// of autopilot.json's closed ones and never in the sidebar.
+#[test]
+fn a_landed_tab_closed_unseen_stays_out_of_the_sidebar_with_its_notifications_off() {
+    let (_notes, _note, server, mut client, repo) =
+        set_up(json!({ "ux2": true, "autopilot_close": "now" }));
+    client.wait_text("Waiting on you");
+    let first = |server: &TestServer| {
+        opened(server)
+            .into_iter()
+            .find(|t| t["options"]["@autopilot_item"] == "First thing")
+    };
+    wait("the first item's tab in its worktree", &server, || {
+        first(&server).is_some_and(|t| t["options"]["@autopilot_in"] == "1")
+    });
+    let pane = first(&server).unwrap()["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&[
+        "respawn-pane",
+        "-k",
+        "-t",
+        &pane,
+        "-c",
+        repo.to_str().unwrap(),
+    ]);
+    wait("the landed tab closed", &server, || {
+        first(&server).is_none()
+    });
+    let history = server.state.join("notifications");
+    let dismissed = || {
+        std::fs::read_dir(&history)
+            .ok()
+            .into_iter()
+            .flatten()
+            .any(|day| {
+                let Ok(text) = std::fs::read_to_string(day.unwrap().path()) else {
+                    return false;
+                };
+                let entries: Value = serde_json::from_str(&text).unwrap_or_default();
+                entries
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|e| e["source"] == "landed" && e["sidebar"] == "dismissed")
+            })
+    };
+    wait("the closed tab kept as dismissed", &server, dismissed);
+    assert_eq!(mode(&server)["closed"], json!([]), "put away");
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("Closed First thing")),
+        "{screen:#?}"
+    );
+}
+
 /// Its menu opened with `m` on the board, the option starting with
 /// `label` chosen by moving down to it.
 fn choose(client: &mut TestClient, label: &str) {
