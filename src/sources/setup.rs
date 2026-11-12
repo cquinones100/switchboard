@@ -1,9 +1,8 @@
 //! What a mission control view says when what it reads from isn't set up
 //! yet: what is missing and how to set it up, so a view that is on is always
 //! there to go to and never just empty or a bare error, as
-//! lib/sidebar/setup-help.js said it. Its words for gh (not installed, not
-//! signed in) are gone with gh: GitHub is asked over its API with a token,
-//! and the integrations' own errors say where one is looked for.
+//! lib/sidebar/setup-help.js said it. GitHub is asked over its API with
+//! gh's token, so its words are gh's: install it and sign in.
 //!
 //! A failed look is set on its view here: a missing or refused token is a
 //! setup, drawn whole in place of the items; anything else (the network, a
@@ -14,7 +13,7 @@ use crate::items::ViewData;
 use crate::net::{ErrorKind, ServiceError};
 use crate::util;
 
-pub const GITHUB: &str = "GitHub isn't set up: this needs a GitHub token. Set GH_TOKEN, or sign in with gh auth login if you use GitHub's CLI, or make a token on GitHub (Settings, Developer settings, Personal access tokens) and store it: run switchboard platform secret-set github-token in a terminal and paste the token. Mission control picks it up within two minutes.";
+pub const GITHUB: &str = "GitHub isn't set up: Switchboard signs in to GitHub as GitHub's CLI does. Install gh (https://cli.github.com) and run gh auth login in a terminal. Mission control picks it up within two minutes.";
 
 pub const LINEAR: &str = "Linear isn't set up: this needs a Linear API key. In Linear, open Settings, Security & access, and make a personal API key, then store it: run switchboard platform secret-set linear-api-key in a terminal and paste the key. Mission control picks it up within two minutes.";
 

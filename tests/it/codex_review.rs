@@ -12,7 +12,7 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 
-use common::stand_in::{Claude, sh_quote};
+use common::stand_in::{self, Claude, sh_quote};
 use common::{BIN, TempDir};
 
 fn env(cmd: &mut Command, home: &Path) {
@@ -22,6 +22,7 @@ fn env(cmd: &mut Command, home: &Path) {
         .env("GIT_AUTHOR_EMAIL", "t@e")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@e")
+        .env("PATH", stand_in::path_with_gh(&home.join("bin")))
         .env("GH_TOKEN", "not-a-token")
         .env("SWITCHBOARD_GITHUB_GRAPHQL", "http://127.0.0.1:9/graphql")
         .env("SWITCHBOARD_GITHUB_API", "http://127.0.0.1:9")

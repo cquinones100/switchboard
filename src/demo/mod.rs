@@ -20,8 +20,8 @@
 //!   its own, beside the server, which reaches them through
 //!   `SWITCHBOARD_GITHUB_API`, `SWITCHBOARD_GITHUB_GRAPHQL`,
 //!   `SWITCHBOARD_LINEAR_API` and `SWITCHBOARD_SLACK_API`, with made-up
-//!   tokens in `GH_TOKEN` and `LINEAR_API_KEY` and in its own
-//!   `secrets.json`.
+//!   tokens: GitHub's from its `gh auth token`, the others in
+//!   `LINEAR_API_KEY` and in its own `secrets.json`.
 //! - `stand_in`: the programs on its PATH in place of `claude`, `gh`, the
 //!   openers, the clipboard, Chrome, `osascript` and `security`, each a
 //!   script running `switchboard demo-stand-in <name>`: a link, a file or
@@ -213,7 +213,6 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
         format!("{}\n", util::json_pretty(&Value::Object(settings))),
     )?;
     let secrets = json!({
-        "github-token": fixtures::GITHUB_TOKEN,
         "linear-api-key": fixtures::LINEAR_KEY,
         "slack-relay-bot-token": fixtures::SLACK_TOKEN,
     });
@@ -552,7 +551,6 @@ pub fn env(home: &Path, services: &Services) -> Vec<(String, String)> {
             "NOTES_DIR",
             home.join("Notes").to_string_lossy().into_owned(),
         ),
-        ("GH_TOKEN", fixtures::GITHUB_TOKEN.into()),
         ("LINEAR_API_KEY", fixtures::LINEAR_KEY.into()),
         ("SWITCHBOARD_GITHUB_API", services.github.clone()),
         (

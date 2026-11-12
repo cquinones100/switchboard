@@ -19,6 +19,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,21 +43,47 @@ type Routes = Arc<Mutex<HashMap<String, (u16, Vec<u8>)>>>;
 /// A stand-in for GitHub, as strict as GitHub's API is for a public
 /// repository (tests/common/http.rs: a User-Agent, GET, no token needed and
 /// a wrong one refused): each path's answer, changeable while it runs, the
-/// release's files served from it too, and how many times each path was
-/// asked for.
+/// release's files served from it too, and what each path was asked.
 struct Fake {
     url: String,
     routes: Routes,
+    /// Whether the token's account has spent its rate limit, so a request
+    /// carrying it is answered 403 as GitHub answers one.
+    spent: Arc<AtomicBool>,
     http: http::Fake,
 }
 
 impl Fake {
     fn start() -> Fake {
+        Fake::start_knowing(None)
+    }
+
+    /// One that takes `token` as well as no token, refusing any other.
+    fn start_knowing(token: Option<&str>) -> Fake {
         let routes: Routes = Arc::default();
         let r = routes.clone();
-        let http = http::Fake::start(Service::GitHubPublic { token: None }, move |request| {
+        let spent = Arc::new(AtomicBool::new(false));
+        let s = spent.clone();
+        let service = Service::GitHubPublic {
+            token: token.map(str::to_string),
+        };
+        let http = http::Fake::start(service, move |request| {
             if request.method != "GET" {
                 return None;
+            }
+            if s.load(Ordering::Relaxed) && request.header("authorization").is_some() {
+                let reset = (std::time::SystemTime::now() + Duration::from_secs(600))
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                return Some(
+                    Reply::json(
+                        403,
+                        json!({ "message": "API rate limit exceeded for user ID 1." }),
+                    )
+                    .header("x-ratelimit-remaining", "0")
+                    .header("x-ratelimit-reset", reset.to_string()),
+                );
             }
             let kind = if request.path().starts_with("/dl/") {
                 "application/octet-stream"
@@ -71,6 +98,7 @@ impl Fake {
         Fake {
             url: http.url.clone(),
             routes,
+            spent,
             http,
         }
     }
@@ -84,6 +112,16 @@ impl Fake {
 
     fn asked(&self, path: &str) -> usize {
         self.http.seen().iter().filter(|r| r.path() == path).count()
+    }
+
+    /// The `Authorization` each ask of `path` carried, in order.
+    fn signed(&self, path: &str) -> Vec<Option<String>> {
+        self.http
+            .seen()
+            .iter()
+            .filter(|r| r.path() == path)
+            .map(|r| r.header("authorization").map(str::to_string))
+            .collect()
     }
 
     /// A release `tag` whose archive for every target holds `binary`, each
@@ -224,6 +262,7 @@ fn command(program: &Path, fake: &Fake, home: &Path) -> Command {
         .env("SWITCHBOARD_STATE_DIR", home.join("state"))
         .env("SWITCHBOARD_GITHUB_API", &fake.url)
         .env("SB_MARK", home.join("mark"))
+        .env("PATH", stand_in::path_with_gh(&home.join("stand-ins")))
         .env_remove("GH_TOKEN")
         .env_remove("GITHUB_TOKEN")
         .env_remove("SWITCHBOARD")
@@ -449,6 +488,83 @@ fn the_server_offers_a_release_hourly_until_answered_and_again_for_a_newer_one()
     std::fs::write(&checked, format!("{hour_ago}\n")).unwrap();
     client.wait_text("Update now, to 9.9.10");
     assert_eq!(fake.asked(&list), 3);
+}
+
+/// A gh in `home`'s stand-ins signed in as `gho_stand_in`, writing a line
+/// to the file it gives each time it is asked for its token.
+fn gh_signed_in(home: &Path) -> PathBuf {
+    let runs = home.join("gh-runs");
+    stand_in::Gh::new()
+        .answer(&format!(
+            "printf 'run\\n' >> {}\nprintf 'gho_stand_in\\n'",
+            stand_in::sh_quote(&runs.to_string_lossy())
+        ))
+        .install(&home.join("stand-ins"));
+    runs
+}
+
+#[test]
+fn the_releases_are_read_with_ghs_token_and_without_it_when_refused_spent_or_off() {
+    let check = |fake: &Fake, home: &Path| {
+        let out = command(&own_copy(home), fake, home)
+            .args(["update", "--check"])
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(
+            out.status.success(),
+            "{said}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(said.contains("Switchboard 9.9.9 is out"), "{said}");
+    };
+    let list = Fake::list_path();
+    let bearer = Some("Bearer gho_stand_in".to_string());
+
+    // gh signed in: the look signs in as gh, so it counts against your own
+    // rate limit rather than the 60 an hour your address shares.
+    let fake = Fake::start_knowing(Some("gho_stand_in"));
+    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    let home = TempDir::new("sbu-gh");
+    gh_signed_in(home.path());
+    check(&fake, home.path());
+    assert_eq!(fake.signed(&list), vec![bearer.clone()]);
+
+    // A token GitHub refuses is no reason to miss a public release: asked
+    // again at once without it.
+    let mut fake = Fake::start_knowing(None);
+    fake.http.expect_refusals();
+    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    let home = TempDir::new("sbu-refused");
+    gh_signed_in(home.path());
+    check(&fake, home.path());
+    assert_eq!(fake.signed(&list), vec![bearer.clone(), None]);
+
+    // Nor is your account's rate limit, spent by gh elsewhere: the address's
+    // requests are asked, as they were before gh's token was sent.
+    let fake = Fake::start_knowing(Some("gho_stand_in"));
+    fake.spent.store(true, Ordering::Relaxed);
+    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    let home = TempDir::new("sbu-spent");
+    gh_signed_in(home.path());
+    check(&fake, home.path());
+    assert_eq!(fake.signed(&list), vec![bearer, None]);
+
+    // With the github setting off, gh isn't asked and no token goes.
+    let fake = Fake::start_knowing(Some("gho_stand_in"));
+    fake.publish("v9.9.9", &stub("9.9.9"), false);
+    let home = TempDir::new("sbu-off");
+    let runs = gh_signed_in(home.path());
+    let settings = home.path().join("settings.json");
+    common::write_settings_to(&settings, json!({ "github": false }));
+    let out = command(&own_copy(home.path()), &fake, home.path())
+        .env("SWITCHBOARD_SETTINGS", &settings)
+        .args(["update", "--check"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(fake.signed(&list), vec![None]);
+    assert!(!runs.exists(), "gh was asked for its token");
 }
 
 #[test]

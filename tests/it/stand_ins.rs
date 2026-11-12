@@ -28,6 +28,10 @@ fn run(program: &Path, args: &[&str], input: Option<&str>, dir: &Path) -> Output
         .args(args)
         .current_dir(dir)
         .env("TMPDIR", dir)
+        // gh's stand-in says a token in these as gh does, so one in the
+        // environment of whoever runs the tests would answer for it.
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .stdin(if input.is_some() {
             Stdio::piped()
         } else {

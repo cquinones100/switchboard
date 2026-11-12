@@ -1,23 +1,26 @@
-//! GitHub, over its own API rather than the `gh` command, so nothing has to
-//! be installed: GraphQL and REST calls with a token, the repository a
+//! GitHub, over its own API with gh's sign-in rather than through gh's own
+//! commands: GraphQL and REST calls with a token, the repository a
 //! directory belongs to, and the pull request for its branch, as
 //! `tmux/window-pr.sh` found it with `gh pr list` and `gh pr view`, looked
 //! for in origin and, in a fork's clone, the project its `upstream` remote
 //! names (`branch_pr`).
 //!
-//! The token is the one the person already has, first that answers:
-//! `GH_TOKEN`, `GITHUB_TOKEN` (the variables `gh` itself reads), `gh auth
-//! token` when gh happens to be installed and signed in, else the stored
-//! secret `github-token`. What gh or the secret gave is kept ten minutes,
-//! since each look is a process, and forgotten as soon as GitHub refuses it.
-//! One look runs at a time, the others waiting on its answer, and a look
-//! that found nothing (a gh signed out, or too slow on a busy computer) isn't
-//! made again for a minute, the token found before still used meanwhile, so
-//! a stuck gh is one process a minute rather than one each lookup.
+//! The token is gh's, from `gh auth token`, and from nowhere else: every
+//! call to GitHub's API, the update check's among them (`get_public`), signs
+//! in as the account `gh auth login` signed gh in to, so Switchboard and gh
+//! always agree on who you are and share one rate limit. gh decides which
+//! token that is, its own variables (`GH_TOKEN`) included. What gh gave is
+//! kept ten minutes, since each look is a process, and forgotten as soon as
+//! GitHub refuses it. One look runs at a time, the others waiting on its
+//! answer, and a look that found nothing (a gh signed out, or too slow on a
+//! busy computer) isn't made again for a minute, the token found before still
+//! used meanwhile, so a stuck gh is one process a minute rather than one each
+//! lookup.
 //!
-//! Every call refuses while the `github` setting is off (but in a program
-//! you run yourself, `super::run_by_you`), and is counted in
-//! the request audit under GitHub, as "GraphQL" or "REST".
+//! Every call but `get_public` refuses while the `github` setting is off (but
+//! in a program you run yourself, `super::run_by_you`); `get_public` goes
+//! without a token then. Every call is counted in the request audit under
+//! GitHub, as "GraphQL" or "REST".
 
 use std::fmt;
 use std::path::Path;
@@ -30,7 +33,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Credential, Remembered, ensure_on, env_value, stored_secret};
+use super::{Credential, Remembered, ensure_on};
 use crate::net::{self, Audit, ErrorKind, Response, ServiceError};
 use crate::util;
 
@@ -64,23 +67,15 @@ static FOUND_NOTHING_AT: AtomicI64 = AtomicI64::new(0);
 const LOOK_AGAIN_MS: i64 = 60 * 1000;
 
 /// How long `gh auth token` may take. It only reads gh's own config or the
-/// keyring, so a gh that takes longer is stuck, and the secret is tried.
+/// keyring, so a gh that takes longer is stuck, and counts as finding none.
 const GH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The token to send, as the module's comment says where it is looked for.
+/// gh's token, as the module's comment says.
 pub async fn token() -> Result<String> {
     Ok(credential().await?.value)
 }
 
 async fn credential() -> Result<Credential> {
-    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Some(value) = env_value(var) {
-            return Ok(Credential {
-                value,
-                from: var.to_string(),
-            });
-        }
-    }
     if let Some(known) = REMEMBERED.get() {
         return Ok(known);
     }
@@ -93,16 +88,10 @@ async fn credential() -> Result<Credential> {
     if found_nothing_lately {
         return REMEMBERED.last().ok_or_else(no_token);
     }
-    let found = match from_gh().await {
-        Some(value) => Some(Credential {
-            value,
-            from: "gh".to_string(),
-        }),
-        None => stored_secret("github-token").await.map(|value| Credential {
-            value,
-            from: "the stored secret github-token".to_string(),
-        }),
-    };
+    let found = from_gh().await.map(|value| Credential {
+        value,
+        from: "gh".to_string(),
+    });
     match found {
         Some(credential) => {
             FOUND_NOTHING_AT.store(0, Ordering::Relaxed);
@@ -120,15 +109,14 @@ fn no_token() -> anyhow::Error {
     ServiceError::new(
         ErrorKind::NoCredentials,
         SERVICE,
-        "No GitHub token: set GH_TOKEN, sign in with `gh auth login` if you use gh, or \
-         store a token with `switchboard platform secret-set github-token` (it reads the \
-         token from stdin).",
+        "No GitHub token: Switchboard signs in to GitHub as GitHub's CLI does, so install \
+         gh (https://cli.github.com) and sign in with `gh auth login`.",
     )
     .into()
 }
 
-// gh's own token, when gh is there and signed in. Its absence, or a gh that
-// isn't signed in, is no error: the secret is looked at next.
+// gh's own token, when gh is there and signed in; `None` for a gh that isn't
+// installed, isn't signed in or doesn't answer in time.
 async fn from_gh() -> Option<String> {
     util::which("gh")?;
     let mut cmd = tokio::process::Command::new("gh");
@@ -138,8 +126,8 @@ async fn from_gh() -> Option<String> {
     (!token.is_empty()).then_some(token)
 }
 
-/// Forgets the token gh or the secret gave, so the next request looks again
-/// at once: for after the person signs in anew.
+/// Forgets the token gh gave, so the next request looks again at once: for
+/// after the person signs in anew.
 pub fn forget_token() {
     REMEMBERED.forget();
     FOUND_NOTHING_AT.store(0, Ordering::Relaxed);
@@ -175,19 +163,81 @@ async fn send_accepting(
 ) -> Result<(Response, Credential)> {
     ensure_on("github", SERVICE)?;
     let credential = credential().await?;
-    let auth = format!("Bearer {}", credential.value);
-    let headers = [
-        ("Authorization", auth.as_str()),
-        ("Accept", accept),
-        ("X-GitHub-Api-Version", "2022-11-28"),
-    ];
+    let response = request(
+        method,
+        url,
+        body,
+        protocol,
+        source,
+        accept,
+        Some(&credential),
+    )
+    .await?;
+    Ok((response, credential))
+}
+
+// One request to GitHub's API, with what every one carries: the token, when
+// there is one, what to answer in, and the API's version.
+async fn request(
+    method: &str,
+    url: &str,
+    body: Option<&Value>,
+    protocol: &str,
+    source: &str,
+    accept: &str,
+    credential: Option<&Credential>,
+) -> Result<Response> {
+    let auth = credential.map(|c| format!("Bearer {}", c.value));
+    let mut headers = vec![("Accept", accept), ("X-GitHub-Api-Version", "2022-11-28")];
+    if let Some(auth) = &auth {
+        headers.push(("Authorization", auth.as_str()));
+    }
     let audit = Audit {
         service: SERVICE,
         protocol,
         source,
     };
-    let response = net::request_json(method, url, &headers, body, audit).await?;
-    Ok((response, credential))
+    net::request_json(method, url, &headers, body, audit).await
+}
+
+/// A REST GET of what anyone may read (a public repository's releases),
+/// which GitHub answers without a token too, but then from the 60 requests an
+/// hour shared by every program behind the same address, which others spend.
+/// So it carries gh's token when gh has one, and counts against your own
+/// 5,000 an hour; it goes without one when gh has none, and while the
+/// `github` setting is off, which keeps your account out of what the
+/// workspace does by itself. When GitHub refuses gh's token, or answers that
+/// your account's limit is spent (the token kept, since it is still good),
+/// it asks again at once without it, as it would have before gh's token was
+/// sent. The answer whatever its status, for the caller to read.
+pub async fn get_public(path: &str, source: &str) -> Result<Response> {
+    let url = format!("{}/{}", api_url(), path.trim_start_matches('/'));
+    let credential = match ensure_on("github", SERVICE) {
+        Ok(()) => credential().await.ok(),
+        Err(_) => None,
+    };
+    let accept = "application/vnd.github+json";
+    let response = request(
+        "GET",
+        &url,
+        None,
+        "REST",
+        source,
+        accept,
+        credential.as_ref(),
+    )
+    .await?;
+    if credential.is_none() {
+        return Ok(response);
+    }
+    let refused = response.status == 401;
+    if refused {
+        forget_token();
+    }
+    if refused || is_rate_limited(&response, &message_of(&response)) {
+        return request("GET", &url, None, "REST", source, accept, None).await;
+    }
+    Ok(response)
 }
 
 /// A GraphQL query's `data`. GitHub's errors in the answer (a repository it
@@ -416,6 +466,15 @@ fn rate_limited(response: &Response, message: &str) -> ServiceError {
     )
 }
 
+// Whether a 403 or 429 is GitHub's rate limit, its primary or a secondary
+// one, rather than a refusal of what was asked.
+fn is_rate_limited(response: &Response, message: &str) -> bool {
+    matches!(response.status, 403 | 429)
+        && (response.header("x-ratelimit-remaining") == Some("0")
+            || response.header("retry-after").is_some()
+            || message.to_lowercase().contains("rate limit"))
+}
+
 fn check_status(response: &Response, credential: &Credential) -> Result<()> {
     if response.ok() {
         return Ok(());
@@ -430,20 +489,13 @@ fn check_status(response: &Response, credential: &Credential) -> Result<()> {
                 SERVICE,
                 format!(
                     "GitHub refused the token from {} ({}): sign in again with `gh auth \
-                     login`, or store a new one with `switchboard platform secret-set \
-                     github-token`.",
+                     login`.",
                     credential.from,
                     if message.is_empty() { "401" } else { &message }
                 ),
             )
         }
-        403 | 429
-            if response.header("x-ratelimit-remaining") == Some("0")
-                || response.header("retry-after").is_some()
-                || message.to_lowercase().contains("rate limit") =>
-        {
-            rate_limited(response, &message)
-        }
+        403 | 429 if is_rate_limited(response, &message) => rate_limited(response, &message),
         404 => ServiceError::new(
             ErrorKind::NotFound,
             SERVICE,
