@@ -15,14 +15,18 @@
 //! "channel": "C…", "where": "#general", "user": "U…", "from": "Ada",
 //! "text": "…", "ts": "1761660000.000100", "thread": "…", "link":
 //! "https://….slack.com/archives/…" }], "replied": [{ "channel": "C…",
-//! "ts": "…", "thread": "…" }] }`, replied being what you wrote yourself.
+//! "ts": "…", "thread": "…" }], "threads": [{ "channel": "C…", "thread":
+//! "…", "text": "…" }] }`, replied being what you wrote yourself and threads
+//! the threads read, each `text` the read-thread tool's answer as it came,
+//! kept for the Slack board while Settings' `slack_threads` and `ux2` are on
+//! (`day::slack_thread::save_found`).
 
 use std::io::Read;
 use std::process::ExitCode;
 
 use serde_json::Value;
 
-use crate::day::{Dirs, ical, slack};
+use crate::day::{Dirs, ical, slack, slack_thread};
 use crate::util;
 
 pub fn main(args: Vec<String>) -> ExitCode {
@@ -50,7 +54,23 @@ pub fn main(args: Vec<String>) -> ExitCode {
     };
     match slack::save(&dirs.state, &dirs.relay, &found, now) {
         Ok(said) => {
-            println!("{said}");
+            // The threads read are kept, and those whose messages the save
+            // let go are let go, whether any were read or not.
+            let none = Vec::new();
+            let threads = found
+                .get("threads")
+                .and_then(Value::as_array)
+                .unwrap_or(&none);
+            let board = crate::settings::is_on("slack_threads") && crate::settings::is_on("ux2");
+            if !board {
+                println!("{said}");
+                return ExitCode::SUCCESS;
+            }
+            match slack_thread::save_found(&dirs.state, threads, now) {
+                Ok(0) => println!("{said}"),
+                Ok(n) => println!("{said} Kept {n} threads."),
+                Err(e) => println!("{said} Couldn't keep the threads: {e}"),
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {

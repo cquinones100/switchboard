@@ -174,6 +174,17 @@ pub fn page_of(answer: &str) -> (String, Option<String>) {
     (text, cursor)
 }
 
+/// A message's text as the view shows it: `<@U1|ada>` as `@ada`, a link
+/// `<https://…|words>` as its words.
+pub fn plain(text: &str) -> String {
+    static MENTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<@\w+\|([^>]+)>").unwrap());
+    static LINKED: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
+    LINKED
+        .replace_all(&MENTION.replace_all(text, "@$1"), "$2")
+        .into_owned()
+}
+
 /// Sorts what the search found, as the module's comment says: the items to
 /// save and what you wrote. Threads you start are added to `mine`.
 pub fn sort_look(
@@ -184,9 +195,6 @@ pub fn sort_look(
 ) -> (Vec<Value>, Vec<Value>) {
     static DM_NAME: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)^(DM|Group DM|Multi-party DM)\b").unwrap());
-    static MENTION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<@\w+\|([^>]+)>").unwrap());
-    static LINKED: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"<(https?:[^|>]+)\|([^>]+)>").unwrap());
     let mut items = Vec::new();
     let mut replied = Vec::new();
     for m in messages {
@@ -229,9 +237,7 @@ pub fn sort_look(
         } else {
             m.r#where.clone()
         };
-        let text = LINKED
-            .replace_all(&MENTION.replace_all(&m.text, "@$1"), "$2")
-            .into_owned();
+        let text = plain(&m.text);
         let mut item = json!({
             "kind": kind, "channel": m.channel, "where": place, "user": m.user,
             "from": m.from, "text": text, "ts": m.ts,

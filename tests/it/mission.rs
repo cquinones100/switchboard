@@ -825,6 +825,66 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
 
+// With UX 2.0 the Slack view is board 21: the chosen message's thread,
+// read through the connector once when it isn't kept, beside the list.
+#[test]
+fn choosing_a_slack_message_reads_its_thread_once_and_draws_it_beside() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let secs = switchboard::util::now_ms() / 1000;
+    let first = format!("{}.000100", secs - 600);
+    let reply = format!("{}.000100", secs - 60);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": secs * 1000, "items": [{
+            "kind": "thread", "channel": "C1", "from": "Lin", "user": "ULIN",
+            "where": "#dev", "text": "an answer", "ts": reply, "thread": first,
+            "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    let thread = format!(
+        "=== THREAD PARENT MESSAGE ===\nFrom: Me (UME)\nMessage TS: {first}\nmy first question\n\n=== THREAD REPLIES (1 total) ===\n\n--- Reply 1 of 1 ---\nFrom: Lin (ULIN)\nMessage TS: {reply}\nan answer\n"
+    );
+    let read = json!({ "type": "assistant", "message": { "content": [{
+        "type": "tool_use", "id": "t1", "name": "mcp__claude_ai_Slack__slack_read_thread", "input": {},
+    }] } });
+    let result = json!({ "type": "user", "message": { "content": [{
+        "type": "tool_result", "tool_use_id": "t1",
+        "content": [{ "type": "text", "text": json!({ "messages": thread }).to_string() }],
+    }] } });
+    let calls = server.home.join("thread-reads");
+    Claude::new()
+        .answer(&format!(
+            "echo read >> {}\nprintf '%s\\n' {} {}",
+            common::stand_in::sh_quote(&calls.to_string_lossy()),
+            common::stand_in::sh_quote(&read.to_string()),
+            common::stand_in::sh_quote(&result.to_string()),
+        ))
+        .install(&server.home.join("bin"));
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_threads": true, "slack_background": false, "photos": false }),
+    );
+    let mut client = server.attach(180, 40);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    let screen = client.wait_text("my first question");
+    let all = screen.join("\n");
+    assert!(all.contains("YOUR THREADS"), "{all}");
+    assert!(all.contains("thread · 1 reply"), "{all}");
+    let kept = std::fs::read_to_string(server.state.join("slack-threads.json")).unwrap();
+    assert!(kept.contains(&format!("C1:{first}")), "{kept}");
+    // Moving and coming back reads nothing again: it is kept.
+    client.type_text("k");
+    client.type_text("j");
+    client.wait_text("my first question");
+    let reads = std::fs::read_to_string(&calls).unwrap();
+    assert_eq!(reads.lines().count(), 1, "read once");
+}
+
 // A notification no view lists as an item is shown whole above its choices
 // in the Notifications view, as the Notifications window shows it: a landing
 // made without asking says what it was, then leads to its tab.

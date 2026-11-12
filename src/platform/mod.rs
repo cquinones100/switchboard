@@ -200,6 +200,14 @@ pub fn preview(file: &std::path::Path) -> Result<()> {
     os::preview(file)
 }
 
+/// Writes a video's first frame to `out` as a PNG no larger than `size`
+/// pixels either way, for the Slack view's videos: Quick Look's thumbnail
+/// (`qlmanage -t`) on macOS; Linux has no tool it can count on, so none.
+/// Whether it wrote one.
+pub fn video_frame(video: &std::path::Path, out: &std::path::Path, size: u32) -> bool {
+    os::video_frame(video, out, size)
+}
+
 /// A terminal app whose own preferences can make Option act as Alt, which
 /// every `M-` key needs on a Mac.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

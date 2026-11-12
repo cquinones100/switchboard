@@ -34,7 +34,8 @@
 //! - `tour`: the steps `switchboard demo --tour` walks with a headless
 //!   client, saving a picture of each.
 //!
-//! The connectors' kept answers (`calendar.json`, `slack.json`) are written
+//! The connectors' kept answers (`calendar.json`, `slack.json`,
+//! `slack-threads.json`) are written
 //! as `/today` and `/slack-updates` save them, and the Slack look that would
 //! ask a headless Claude again is off in its settings. Every name, person,
 //! repository, ticket and message is made up (`acme/`, `ABC-…`, people by
@@ -418,6 +419,7 @@ fn notes(home: &Path) -> Result<()> {
 fn day(home: &Path, meetings: jiff::Zoned, since: i64) -> Result<()> {
     let state = home.join(".local/state/switchboard");
     let _ = fs::remove_file(state.join("slack.json"));
+    let _ = fs::remove_file(crate::day::slack_thread::file(&state));
     let calendar = fixtures::calendar(meetings);
     crate::day::calendar::save_today(&state, &calendar.to_string()).map_err(|e| anyhow!(e))?;
     crate::day::slack::save(
@@ -426,6 +428,9 @@ fn day(home: &Path, meetings: jiff::Zoned, since: i64) -> Result<()> {
         &fixtures::slack_updates(since),
         util::now_ms(),
     )?;
+    if let Some(threads) = fixtures::slack_threads(since).as_array() {
+        crate::day::slack_thread::save_found(&state, threads, util::now_ms())?;
+    }
     let now = util::now_ms();
     util::write_atomic(
         state.join("connectors.json"),

@@ -157,6 +157,34 @@ pub fn paste_image(file: &std::path::Path) -> bool {
         && file.is_file()
 }
 
+/// Quick Look's thumbnail of a video, written into a folder of its own
+/// beside `out` (it names the PNG after the video) and moved to `out`.
+pub fn video_frame(video: &std::path::Path, out: &std::path::Path, size: u32) -> bool {
+    let Some(name) = video.file_name() else {
+        return false;
+    };
+    let dir = out.with_extension("frame-tmp");
+    let _ = std::fs::remove_dir_all(&dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let made = Command::new("qlmanage")
+        .arg("-t")
+        .args(["-s", &size.to_string(), "-o"])
+        .arg(&dir)
+        .arg(video)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    let mut png = name.to_os_string();
+    png.push(".png");
+    let moved = made && std::fs::rename(dir.join(png), out).is_ok();
+    let _ = std::fs::remove_dir_all(&dir);
+    moved
+}
+
 /// Quick Look, without leaving the terminal for an app.
 pub fn preview(file: &std::path::Path) -> Result<()> {
     Command::new("qlmanage")

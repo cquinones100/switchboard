@@ -82,7 +82,7 @@ impl Message {
 
     // Its thread: its channel and the thread's ts, or its own ts when it
     // starts or is in none, so a reply to it lands in the same one.
-    fn thread_key(&self) -> String {
+    pub fn thread_key(&self) -> String {
         format!(
             "{}:{}",
             self.channel,
@@ -102,7 +102,7 @@ pub struct Saved {
     pub items: Vec<Message>,
     /// The newest ts you wrote in each conversation and thread.
     pub replied: Map<String, Value>,
-    has_replied: bool,
+    pub(crate) has_replied: bool,
 }
 
 /// `slack.json`, or `None` before anything is saved.
@@ -247,12 +247,18 @@ pub struct Look<'a> {
     /// Why the connector is down, when it is.
     pub down: Option<String>,
     pub now: i64,
+    /// The threads kept (`slack_thread`), for each message's reply count,
+    /// as the server last read them off its task.
+    pub threads: &'a std::collections::BTreeMap<String, super::slack_thread::Thread>,
 }
 
 /// The Slack view: always there, saying, before anything is saved, that a
 /// look is coming. Each item's `lines` are the message as written (for
 /// drawing as Slack does), its `detail` the same on one line, its `data`
-/// `{ kind, old, message: { channel, thread, ts } }`; seen ones below the
+/// `{ kind, old, message: { channel, thread, ts }, user, from, where, ts,
+/// thread, answered, replies }` (`thread` its thread's key, `answered` when
+/// you wrote after it there, `replies` its thread's reply count once read,
+/// `slack_thread`); seen ones below the
 /// new, faded (`State::Idle`), with "· seen" after the title. With nothing to
 /// list, `at` says when it last looked (`empty_words`).
 pub fn slack_view(look: &Look) -> ViewData {
@@ -275,6 +281,7 @@ pub fn slack_view(look: &Look) -> ViewData {
     let seen = seen_through(look.state);
     let acted = util::read_json_object(seen_items_file(look.state));
     let gone = util::read_json_object(dismissed_file(look.state));
+    let threads = look.threads;
     let replied_after = |k: &str, ts: f64| {
         data.replied
             .get(k)
@@ -319,6 +326,13 @@ pub fn slack_view(look: &Look) -> ViewData {
                 "kind": m.kind,
                 "old": old,
                 "message": Ref { channel: m.channel.clone(), thread: m.thread.clone(), ts: m.ts.clone() },
+                "user": m.user,
+                "from": m.from,
+                "where": m.r#where,
+                "ts": m.ts,
+                "thread": m.thread_key(),
+                "answered": answered,
+                "replies": threads.get(&m.thread_key()).map(|t| t.replies),
             }));
             item.lines = m.text.split('\n').map(str::to_string).collect();
             if let Some(link) = &m.link {
@@ -348,6 +362,8 @@ pub fn slack_view(look: &Look) -> ViewData {
         items: items.into_iter().map(|(_, _, i)| i).collect(),
         error,
         at: Some(data.checked),
+        // Since when replies are new, for the thread beside the list.
+        head: json!({ "seen": seen }),
         ..ViewData::default()
     }
 }
@@ -569,6 +585,7 @@ mod tests {
             background: true,
             looping: false,
             down: None,
+            threads: &Default::default(),
             now,
         })
         .items
@@ -590,6 +607,7 @@ mod tests {
             background: true,
             looping: false,
             down: None,
+            threads: &Default::default(),
             now,
         });
         assert_eq!(
@@ -618,6 +636,7 @@ mod tests {
             background: true,
             looping: false,
             down: None,
+            threads: &Default::default(),
             now,
         });
         let got: Vec<(&str, Option<&Target>)> = view
@@ -698,6 +717,7 @@ mod tests {
             background: true,
             looping: false,
             down: None,
+            threads: &Default::default(),
             now: reply_at + 3_600_000,
         });
         assert_eq!(

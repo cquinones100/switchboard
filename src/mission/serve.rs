@@ -102,6 +102,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "o y n m",
         "Calendar: join the chosen event's call; answer it going, not going, maybe",
     ),
+    (
+        "↵ m x p i",
+        "Slack with UX 2.0: open the message in Slack, its menu, dismiss it until its thread gets a reply, play its video or show its picture, show its thread on a narrow screen",
+    ),
     ("g G", "first, last"),
     (
         "J K",
@@ -561,6 +565,32 @@ impl Server {
         }
     }
 
+    /// What the Slack board in front draws beyond its items: the chosen
+    /// message's thread and its pictures (`Server::slack_extras`), and the
+    /// photos of the people it shows.
+    fn slack_board_extras(&mut self, m: &mut Mission) {
+        let Some(view) = m
+            .current()
+            .filter(|v| super::render::slack_board_shown(m, v))
+            .cloned()
+        else {
+            m.slack_thread_open = false;
+            return;
+        };
+        let extras = self.slack_extras(m.chosen_item());
+        let (thread, pictures) = (extras.thread, extras.pictures);
+        m.snap.slack_thread_failed = extras.failed;
+        m.snap.slack_files_failed = extras.unread;
+        m.snap.slack_files_kept = extras.kept;
+        for who in super::slack_board::people(&view, thread.as_ref()) {
+            if let Some(photo) = self.photo(&who) {
+                m.snap.photos.insert(who, photo);
+            }
+        }
+        m.snap.slack_thread = thread;
+        m.snap.slack_pictures = pictures;
+    }
+
     /// Reads, off the task, the note items that name an event or what it
     /// names, one read at a time; local alone, never sent.
     fn read_calendar_notes(&mut self, id: String, event: &crate::day::calendar::CalEvent) {
@@ -815,6 +845,17 @@ impl Server {
             },
         };
         let mut all = self.mission_views(m.scope.is_some(), keep_landing, keep_autopilot, &look);
+        // What the Slack board's From your work reads: today's Calendar and
+        // the Tickets as they are, whatever day the Calendar shows or the
+        // filter leaves.
+        let slack_work: Vec<View> = if ux2 && m.current().is_some_and(|v| v.id == ViewId::Slack) {
+            all.iter()
+                .filter(|v| matches!(v.id, ViewId::Calendar | ViewId::Tickets))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         // The Calendar on another day than today, from the feed's days.
         if let Some(date) = m.calendar_day.clone() {
             let now_z = util::local_now();
@@ -848,6 +889,11 @@ impl Server {
                 }
                 if v.id == ViewId::Resources {
                     m.resources_sort.sort(&mut v.data.items);
+                }
+                // The Slack board lists its messages by group, so j and k
+                // walk them in the order they are drawn.
+                if ux2 && v.id == ViewId::Slack {
+                    super::slack_board::in_groups(&mut v.data.items);
                 }
                 v
             })
@@ -940,6 +986,12 @@ impl Server {
             calendar_notes: Vec::new(),
             inbox_ticket: None,
             inbox_links: Default::default(),
+            slack_thread: None,
+            slack_pictures: Default::default(),
+            slack_work,
+            slack_thread_failed: None,
+            slack_files_failed: Default::default(),
+            slack_files_kept: Default::default(),
         };
         m.size = (cols - left, rows);
         m.left = left;
@@ -966,6 +1018,7 @@ impl Server {
         }
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
+        self.slack_board_extras(&mut m);
         m.taken_at = Some(self.mission.changes);
         // The view brought to the front: counted, and its source told.
         let now_view = m.current().map(|v| (v.id.clone(), base_title(v)));
@@ -1769,6 +1822,9 @@ impl Server {
         if keys_board_key(m, k) || self.inbox_key(client, m, k) {
             return;
         }
+        if self.slack_board_key(client, m, k) {
+            return;
+        }
         match calendar_key(m, k) {
             Some(CalendarKey::Day(by)) => {
                 self.calendar_day_step(client, m, by);
@@ -1979,6 +2035,102 @@ impl Server {
     /// `h` and `l` in the Calendar: the day before or after the one shown,
     /// from the feed's days; past them, or with /today's day alone, says
     /// why not.
+    /// The Slack board's own keys: Enter opens the chosen message in Slack
+    /// (seen, as acting on it is), `m` its menu, `x` dismisses it until
+    /// its thread gets a reply, `p` plays its video or shows its picture,
+    /// and `i` (or Esc) shows or hides the thread in the list's place on a
+    /// screen too narrow for both. True when it took the key.
+    fn slack_board_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+        let shown = m
+            .current()
+            .is_some_and(|v| super::render::slack_board_shown(m, v));
+        if !shown || !(plain(&k) || k.code == KeyCode::Enter) {
+            return false;
+        }
+        let item = m.chosen_item().cloned();
+        let clicked = m.slack_clicked.take();
+        match k.code {
+            KeyCode::Char('i') if !super::slack_board::beside(m.size.0 as usize) => {
+                m.slack_thread_open = !m.slack_thread_open;
+                m.side = None;
+                true
+            }
+            KeyCode::Esc if m.slack_thread_open && m.filter.is_none() => {
+                m.slack_thread_open = false;
+                true
+            }
+            KeyCode::Enter => {
+                let Some(item) = item else {
+                    return true;
+                };
+                match &item.target {
+                    crate::items::Target::Url(url) => {
+                        let url = url.clone();
+                        self.slack_item_acted(&item);
+                        self.mission_do(client, Do::Open(url), "Opening it in Slack");
+                    }
+                    _ => self.mission_enter(client, m),
+                }
+                true
+            }
+            KeyCode::Char('m') => {
+                self.mission_enter(client, m);
+                true
+            }
+            KeyCode::Char('x') => {
+                if let Some(item) = item.filter(|i| i.data.get("message").is_some()) {
+                    self.slack_dismiss(std::slice::from_ref(&item));
+                    m.note = Some("Dismissed until its thread gets a reply.".into());
+                }
+                true
+            }
+            // Threads and pictures turned off in Settings show nothing.
+            KeyCode::Char('p') if settings::is_on("slack_threads") => {
+                let Some(item) = item else {
+                    return true;
+                };
+                let (files, clicked) = self.slack_playable(&item, clicked);
+                if files.is_empty() {
+                    self.say(
+                        Some(client),
+                        "No picture or video of it is on this computer yet: they are read once its thread is.",
+                    );
+                    return true;
+                }
+                // A click shows its picture; p again steps to the next of
+                // the thread's, so each is reached from the keyboard too.
+                let at = match (&clicked, &m.slack_shown) {
+                    (Some(id), _) => files.iter().position(|f| f.0 == *id),
+                    (None, Some((shown_on, id))) if *shown_on == item.id => files
+                        .iter()
+                        .position(|f| f.0 == *id)
+                        .map(|i| (i + 1) % files.len()),
+                    _ => None,
+                }
+                .unwrap_or(0);
+                let (id, name, file, video) = files[at].clone();
+                m.slack_shown = Some((item.id.clone(), id));
+                // Quick Look alone, never `open`: the file is whatever a
+                // message's sender uploaded.
+                tokio::task::spawn_blocking(move || {
+                    let _ = crate::platform::preview(&file);
+                });
+                let doing = if video { "Playing" } else { "Showing" };
+                m.note = Some(if files.len() > 1 {
+                    format!(
+                        "{doing} {name} ({} of {}): p for the next.",
+                        at + 1,
+                        files.len()
+                    )
+                } else {
+                    format!("{doing} {name}.")
+                });
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn calendar_day_step(&mut self, client: ClientId, m: &mut Mission, by: i64) {
         let now = util::local_now();
         match calendar_step(&self.day.feed, m.calendar_day.as_deref(), by, &now) {
@@ -4212,6 +4364,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     }
                     Then::Prepare
                 }
+                // A filter being typed ends first, so p reaches the board.
+                Spot::Picture(n) => {
+                    if let Some(f) = m.filter.as_mut() {
+                        f.typing = false;
+                    }
+                    m.slack_clicked = Some(n);
+                    Then::Press(Key::new(KeyCode::Char('p'), Mods::NONE))
+                }
             }
         }
         _ => Then::Nothing,
@@ -4509,8 +4669,11 @@ fn only_moves(m: &Mission, key: Key) -> bool {
         return false;
     }
     // The Calendar's chosen event brings its photos and notes, and h and
-    // l move a day, so it takes its snapshot again.
-    if m.current().is_some_and(|v| v.id == ViewId::Calendar) {
+    // l move a day, and the Slack board's chosen message its thread, so
+    // each takes its snapshot again.
+    if m.current()
+        .is_some_and(|v| v.id == ViewId::Calendar || super::render::slack_board_shown(m, v))
+    {
         return false;
     }
     // So does the Inbox's chosen notification, with its ticket.

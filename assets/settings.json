@@ -589,6 +589,13 @@
     "default": true
   },
   {
+    "key": "slack_threads",
+    "category": "Mission control",
+    "label": "Slack threads and pictures",
+    "description": "With UX 2.0, the Slack view shows the chosen message's whole thread beside it, with its pictures and videos, which each look reads through Claude's Slack connector (a few more headless Haiku calls a look) and keeps on this computer; off, the view lists the messages alone and reads no threads or files",
+    "default": true
+  },
+  {
     "key": "pause_when_away",
     "category": "Mission control",
     "label": "Pause lookups while away",

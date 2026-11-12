@@ -460,10 +460,7 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
         return Err(not_connected(&service_of(tool)));
     };
     let text = match result.get("content") {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|c| c.get("text").and_then(Value::as_str).unwrap_or(""))
-            .collect::<String>(),
+        Some(Value::Array(items)) => items.iter().map(block_text).collect::<String>(),
         Some(Value::Null) | None => String::new(),
         Some(other) => util::js_string(other),
     };
@@ -476,10 +473,7 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
         let _ = std::fs::remove_file(&saved[1]);
         if &saved[2] == "json" {
             if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(&raw) {
-                return Ok(blocks
-                    .iter()
-                    .map(|c| c.get("text").and_then(Value::as_str).unwrap_or(""))
-                    .collect());
+                return Ok(blocks.iter().map(block_text).collect());
             }
         } else {
             return Ok(raw);
@@ -499,6 +493,27 @@ async fn call(tool: &str, input: &Value, timeout: Duration) -> Result<String, Co
         });
     }
     Ok(text)
+}
+
+/// A result's content block as text: its text, or an image (as
+/// `slack_read_file` gives a picture) as a `data:` URI on a line of its own,
+/// for the caller to decode.
+fn block_text(block: &Value) -> String {
+    if block.get("type").and_then(Value::as_str) == Some("image")
+        && let Some(source) = block.get("source")
+        && let Some(data) = source.get("data").and_then(Value::as_str)
+    {
+        let media = source
+            .get("media_type")
+            .and_then(Value::as_str)
+            .unwrap_or("application/octet-stream");
+        return format!("\ndata:{media};base64,{data}\n");
+    }
+    block
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
 }
 
 /// The input a connector tool is called with, from pairs: `input([("id", url)])`.

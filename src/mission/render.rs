@@ -2781,6 +2781,12 @@ const PILOT_SIDE_W: usize = 44;
 /// properly (`Markdown::parse`).
 const PLAN_PLACE: &str = "its plan note in Notes";
 
+/// Whether the Slack view is drawn as its board: with UX 2.0 on, once
+/// something is saved.
+pub fn slack_board_shown(m: &Mission, v: &View) -> bool {
+    m.snap.rules.ux2 && v.id == ViewId::Slack && v.loaded && v.data.at.is_some()
+}
+
 /// Whether the Settings view is drawn as its board: with UX 2.0 on and the
 /// screen wide enough.
 pub fn settings_board_shown(m: &Mission) -> bool {
@@ -2833,6 +2839,11 @@ pub enum Shape {
         label: String,
         color: Color,
     },
+    /// A Slack file's picture (`images::picture_shared`), from the
+    /// snapshot's `slack_pictures` by its file ID.
+    Picture {
+        key: String,
+    },
 }
 
 impl Image {
@@ -2859,7 +2870,8 @@ impl Image {
             Shape::Series { .. }
             | Shape::Switch { .. }
             | Shape::Keyboard { .. }
-            | Shape::Avatar { .. } => None,
+            | Shape::Avatar { .. }
+            | Shape::Picture { .. } => None,
         }
     }
 }
@@ -3765,6 +3777,23 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             out.extend(pairs(&[("esc", "close")]));
             out
         }
+        ViewId::Slack if slack_board_shown(m, view) => {
+            let mut keys = vec![
+                ("jk", "move"),
+                ("↵", "open in Slack"),
+                ("m", "menu"),
+                ("x", "dismiss"),
+            ];
+            let threads = crate::settings::is_on("slack_threads");
+            if threads {
+                keys.push(("p", "play"));
+            }
+            if threads && !super::slack_board::beside(m.size.0 as usize) {
+                keys.push(("i", "thread"));
+            }
+            keys.push(("/", "filter"));
+            with(&keys)
+        }
         ViewId::Calendar => with(&[
             ("jk", "events"),
             ("hl", "day"),
@@ -4544,6 +4573,40 @@ pub fn drawn(
                 super::inbox_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
             } else if keys_board_shown(m, v, cols) {
                 super::keys_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+            } else if slack_board_shown(m, v) {
+                let look = super::slack_board::Look {
+                    cols,
+                    rows: rows.saturating_sub(1 + lines.len()),
+                    top_row: lines.len(),
+                    cursor: usize::try_from(m.cursor).ok(),
+                    theme,
+                    caps: snap.caps,
+                    now_ms: snap.now_secs * 1000,
+                    tz: &snap.tz,
+                    thread: snap.slack_thread.as_ref(),
+                    threads_on: crate::settings::is_on("slack_threads"),
+                    pictures: &snap.slack_pictures,
+                    graphics: snap.cell.is_some(),
+                    work: &snap.slack_work,
+                    tabs: if snap.all_tabs.is_empty() {
+                        &snap.tabs
+                    } else {
+                        &snap.all_tabs
+                    },
+                    side_top: m.side_top(),
+                    thread_open: m.slack_thread_open,
+                    failed: snap.slack_thread_failed.as_deref(),
+                    files_failed: &snap.slack_files_failed,
+                    files_kept: &snap.slack_files_kept,
+                    hover: match m.hover {
+                        Some(Spot::Index(i)) => usize::try_from(i).ok(),
+                        _ => None,
+                    },
+                };
+                let (board, at, images) = super::slack_board::board(v, &look);
+                lines.extend(board);
+                hits.extend(at);
+                meters.extend(images);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let lit = match (m.hover, m.focus) {
                     (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => Some(k),
@@ -4596,6 +4659,7 @@ pub fn drawn(
                         || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
                         || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
                         || keys_board_shown(m, v, cols)
+                        || slack_board_shown(m, v)
                 })
             {
                 let y = rows.saturating_sub(1) as u16;
@@ -4671,6 +4735,12 @@ mod tests {
             calendar_notes: Vec::new(),
             inbox_ticket: None,
             inbox_links: Default::default(),
+            slack_thread: None,
+            slack_pictures: Default::default(),
+            slack_work: Vec::new(),
+            slack_thread_failed: None,
+            slack_files_failed: Default::default(),
+            slack_files_kept: Default::default(),
         };
         m
     }

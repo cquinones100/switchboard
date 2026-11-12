@@ -32,6 +32,8 @@
 //! - `find_key`: the Find a key box `?` opens on the Keys view: a key
 //!   pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
+//! - `slack_board`: the Slack view as UX 2.0's board, the chosen message's
+//!   thread beside the list.
 //! - `calendar`: the Calendar view drawn as a day, hours down the side,
 //!   the chosen event beside it with who is going as photos.
 //! - `history`: the Notifications view as a history by day.
@@ -69,6 +71,7 @@ pub mod render;
 pub mod resources_board;
 mod serve;
 pub mod settings_board;
+pub mod slack_board;
 pub mod usage_board;
 pub mod views;
 
@@ -135,6 +138,9 @@ pub enum Spot {
     /// A row chosen by a click elsewhere (a group in the Keys board's
     /// panel, a key of its keyboard), which a second click never presses.
     Choose(isize),
+    /// A picture or video in the Slack board's thread, by its place among
+    /// the thread's files, which a click shows as `p` does.
+    Picture(usize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -208,6 +214,19 @@ pub struct Snapshot {
     pub inbox_ticket: Option<serde_json::Value>,
     /// The newest commit naming each of the Inbox's tickets.
     pub inbox_links: HashMap<String, crate::sources::inbox::Commit>,
+    /// The Slack view's chosen message's thread, once read.
+    pub slack_thread: Option<crate::day::slack_thread::Thread>,
+    /// The Slack files' pictures read and decoded, by file ID.
+    pub slack_pictures: HashMap<String, diagrams::Ready>,
+    /// Today's Calendar and the Tickets, unfiltered, for the Slack board's
+    /// From your work.
+    pub slack_work: Vec<views::View>,
+    /// Why the chosen Slack thread couldn't be read, when it couldn't.
+    pub slack_thread_failed: Option<String>,
+    /// Its files that couldn't be read, by ID.
+    pub slack_files_failed: HashMap<String, String>,
+    /// Its files kept on this computer, by ID.
+    pub slack_files_kept: std::collections::HashSet<String>,
 }
 
 impl Default for Snapshot {
@@ -240,6 +259,12 @@ impl Default for Snapshot {
             calendar_notes: Vec::new(),
             inbox_ticket: None,
             inbox_links: HashMap::new(),
+            slack_thread: None,
+            slack_pictures: HashMap::new(),
+            slack_work: Vec::new(),
+            slack_thread_failed: None,
+            slack_files_failed: Default::default(),
+            slack_files_kept: Default::default(),
         }
     }
 }
@@ -337,6 +362,14 @@ pub struct Mission {
     /// On a screen too narrow for the Inbox's ticket beside its list, `i`
     /// shows it in the list's place until `i` or Esc.
     pub inbox_pane: bool,
+    /// `i` has the Slack view's thread in the list's place, on a screen
+    /// too narrow for both.
+    pub slack_thread_open: bool,
+    /// The Slack thread's picture a click chose, for the `p` it presses.
+    pub slack_clicked: Option<usize>,
+    /// The Slack file `p` last showed, by the message's item ID and the
+    /// file's ID, for the next `p` to step past.
+    pub slack_shown: Option<(String, String)>,
 }
 
 impl Mission {
@@ -373,6 +406,9 @@ impl Mission {
             calendar_day: None,
             keycap_for: None,
             inbox_pane: false,
+            slack_thread_open: false,
+            slack_clicked: None,
+            slack_shown: None,
         }
     }
 
@@ -574,6 +610,18 @@ impl Overlay for Mission {
                         *color,
                         photo.map(|p| p.as_ref()),
                     )
+                }
+                render::Shape::Picture { key } => {
+                    if let Some(p) = self.snap.slack_pictures.get(key) {
+                        crate::ui::images::picture_shared(
+                            frame,
+                            &image.name,
+                            area,
+                            key,
+                            &p.image,
+                            p.content,
+                        );
+                    }
                 }
             }
         }

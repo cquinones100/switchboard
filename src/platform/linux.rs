@@ -464,6 +464,11 @@ fn png_from(command: &mut Command) -> Option<Vec<u8>> {
     (out.status.success() && out.stdout.starts_with(b"\x89PNG")).then_some(out.stdout)
 }
 
+/// No tool every Linux desktop has makes a video's thumbnail.
+pub fn video_frame(_video: &std::path::Path, _out: &std::path::Path, _size: u32) -> bool {
+    false
+}
+
 /// Linux has no Quick Look: the file opens in what the desktop opens it with.
 pub fn preview(file: &std::path::Path) -> Result<()> {
     open(&file.to_string_lossy())

@@ -718,6 +718,45 @@ pub fn slack_updates(now_ms: i64) -> Value {
     ], "replied": [] })
 }
 
+/// The threads of those messages, as `/slack-updates` passes them to its
+/// save (`day::slack_thread::save_found`): the read-thread tool's text.
+pub fn slack_threads(now_ms: i64) -> Value {
+    let ts = |minutes: i64| format!("{}.000100", (now_ms / 1000) - minutes * 60);
+    let thread = |parent: (&str, &str, &str, i64), replies: &[(&str, &str, &str, i64)]| {
+        let block = |(from, user, text, at): (&str, &str, &str, i64)| {
+            format!("From: {from} ({user})\nMessage TS: {}\n{text}\n", ts(at))
+        };
+        let mut out = format!("=== THREAD PARENT MESSAGE ===\n{}", block(parent));
+        out.push_str(&format!(
+            "\n=== THREAD REPLIES ({} total) ===\n",
+            replies.len()
+        ));
+        for (n, r) in replies.iter().enumerate() {
+            out.push_str(&format!(
+                "\n--- Reply {} of {} ---\n{}",
+                n + 1,
+                replies.len(),
+                block(*r)
+            ));
+        }
+        out
+    };
+    json!([
+        { "channel": "C0DEMO1", "thread": ts(12), "text": thread(
+            ("Priya", "U0PRIYA", "@alex the dark mode PR fails on the snapshot test, I think it's the new colors", 12),
+            &[("Jo", "U0JO", "Same on ABC-12, the tokens moved", 9), ("Priya", "U0PRIYA", "Rerunning it after Design review: settings", 3)],
+        ) },
+        { "channel": "D0DEMO2", "thread": ts(40), "text": thread(
+            ("Maya", "U0MAYA", "Could you look at ABC-20 today? Customers are asking about reset emails.", 40),
+            &[],
+        ) },
+        { "channel": "C0DEMO3", "thread": ts(120), "text": thread(
+            ("Alex", "U0ALEX", "The quickstart is ready for a look", 120),
+            &[("Sam", "U0SAM", "Approved the quickstart, merge when ready", 95)],
+        ) },
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::services::{Fake, Service};

@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use switchboard::connector::ConnectorError;
 use switchboard::day::calendar::{self, Feed, Look};
 use switchboard::day::{
-    Ask, AskOpts, Connector, Dirs, meetings, new_notes, slack_look, standup, todo,
+    Ask, AskOpts, Connector, Dirs, meetings, new_notes, slack_look, slack_thread, standup, todo,
 };
 use switchboard::util;
 
@@ -561,20 +561,44 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
         ),
     ]
     .join("");
-    let slack = Fake::new(|tool: &str, _: &Value| {
+    let thread_mine = mine.clone();
+    let slack = Fake::new(move |tool: &str, input: &Value| {
         if tool.ends_with("slack_read_user_profile") {
             "User ID: U0MEMEME1\nUsername: me".into()
+        } else if tool.ends_with("slack_read_thread") {
+            assert_eq!(input["channel_id"], "CDEV");
+            assert_eq!(input["message_ts"], json!(thread_mine));
+            json!({ "messages": format!("=== THREAD PARENT MESSAGE ===\nFrom: Me (U0MEMEME1)\nMessage TS: {thread_mine}\nmy question\nFiles: shot.png (ID: F1, image/png, 4 KB)\n\n=== THREAD REPLIES (1 total) ===\n\n--- Reply 1 of 1 ---\nFrom: Lin (ULIN)\nMessage TS: {}.000100\nan answer\n", secs - 20) }).to_string()
         } else {
             json!({ "results": format!("# Search Results for: \n\n## Messages (6 results)\n{page}") }).to_string()
         }
     });
 
     util::block_on(slack_look::look_slack(dirs, &slack, now)).unwrap();
+    // The server reads the threads with something new after the look, in a
+    // task of their own.
+    util::block_on(slack_thread::read_wanted(
+        &dirs.state,
+        &slack,
+        &Default::default(),
+        now,
+    ))
+    .unwrap();
     assert_eq!(
         slack.tools(),
-        ["slack_read_user_profile", "slack_search_public_and_private"],
-        "one profile, then one search for everything"
+        [
+            "slack_read_user_profile",
+            "slack_search_public_and_private",
+            "slack_read_thread"
+        ],
+        "one profile, one search for everything, then the thread with something new"
     );
+    let threads: Value =
+        serde_json::from_str(&read(dirs.state.join("slack-threads.json"))).unwrap();
+    let thread = &threads[format!("CDEV:{mine}")];
+    assert_eq!(thread["replies"], 1);
+    assert_eq!(thread["messages"][0]["files"][0]["id"], "F1");
+    assert_eq!(thread["messages"][1]["text"], "an answer");
     let saved: Value = serde_json::from_str(&read(dirs.state.join("slack.json"))).unwrap();
     let kind = |text: &str| {
         saved["items"]
@@ -613,6 +637,13 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
     );
 
     util::block_on(slack_look::look_slack(dirs, &slack, now + 60_000)).unwrap();
+    util::block_on(slack_thread::read_wanted(
+        &dirs.state,
+        &slack,
+        &Default::default(),
+        now + 60_000,
+    ))
+    .unwrap();
     assert_eq!(
         slack
             .tools()
@@ -621,6 +652,15 @@ fn the_slack_look_searches_once_and_sorts_what_it_finds_as_slack_updates_does() 
             .count(),
         1,
         "your member ID is kept"
+    );
+    assert_eq!(
+        slack
+            .tools()
+            .iter()
+            .filter(|t| *t == "slack_read_thread")
+            .count(),
+        1,
+        "a thread with nothing newer isn't read again"
     );
 }
 

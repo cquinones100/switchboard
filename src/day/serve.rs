@@ -11,15 +11,17 @@
 //! return; the notes (standup, meetings) carry on, and today's to-do list
 //! waits for you, as before.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use jiff::Zoned;
 use serde_json::Value;
 
 use super::calendar::{self, CalEvent, Feed, Fetched, SavedDay};
 use super::{
-    Claude, ClaudeAsk, Dirs, changes, log, meetings, new_notes, slack, slack_look, standup, todo,
+    Claude, ClaudeAsk, Dirs, changes, log, meetings, new_notes, slack, slack_look, slack_thread,
+    standup, todo,
 };
 use crate::items::{Item, ViewData};
 use crate::mux::server::{ClientId, Event, Server};
@@ -39,6 +41,19 @@ pub struct Answered {
 pub enum DayEvent {
     Feed(Fetched),
     SlackLooked(Result<String, String>),
+    /// The threads a look found something new in, read.
+    SlackThreadsRead(Result<slack_thread::Read, String>),
+    /// The chosen Slack message's thread read, by its key.
+    SlackThread(String, Result<(), String>),
+    /// A Slack file read and kept, by its ID.
+    SlackFile(String, Result<(), String>),
+    /// `slack-threads.json` read, as it was at its modified time.
+    SlackThreads(
+        Option<std::time::SystemTime>,
+        BTreeMap<String, slack_thread::Thread>,
+    ),
+    /// A kept Slack picture decoded, by its file's ID.
+    SlackPicture(String, Option<image::RgbaImage>),
     /// A note's writing ended: what to log, and whether it should be tried
     /// again later.
     Noted {
@@ -86,7 +101,58 @@ pub struct Day {
     calendar_kept: bool,
     slack_kept: bool,
     opened: HashMap<&'static str, i64>,
+    /// The Slack threads kept (`slack-threads.json`), as last read.
+    slack_threads: BTreeMap<String, slack_thread::Thread>,
+    slack_threads_at: Option<std::time::SystemTime>,
+    slack_threads_loading: bool,
+    /// The threads and files asked for once the Slack view's message is
+    /// chosen, and when, so one that fails waits `SLACK_RETRY_MS`; one of
+    /// each at a time.
+    slack_reading: HashMap<String, i64>,
+    slack_fetching: HashMap<String, i64>,
+    slack_thread_busy: bool,
+    /// The threads a look found something new in being read.
+    slack_wanted_busy: bool,
+    slack_file_busy: bool,
+    /// The pictures decoded for drawing, by file ID, the oldest let go
+    /// past `SLACK_PICTURES`; and those being decoded.
+    slack_pictures: HashMap<String, crate::mission::diagrams::Ready>,
+    slack_picture_order: VecDeque<String>,
+    slack_decoding: HashSet<String>,
+    /// Kept files that couldn't be drawn (a video with no first frame, a
+    /// damaged picture), and when, so each is tried again only after
+    /// `SLACK_RETRY_MS`.
+    slack_undrawable: HashMap<String, i64>,
+    /// Why each thread that failed to read did, until it is read.
+    slack_thread_failed: HashMap<String, (i64, String)>,
+    /// The files that failed to read, until one is read.
+    slack_file_failed: HashMap<String, String>,
 }
+
+/// A Slack file `p` can show: its ID, its name, where it is kept, and
+/// whether it is a video.
+pub type Playable = (String, String, std::path::PathBuf, bool);
+
+/// What the Slack board draws beyond its items for its chosen message
+/// (`Server::slack_extras`).
+#[derive(Default)]
+pub struct SlackExtras {
+    /// Its thread, once read.
+    pub thread: Option<slack_thread::Thread>,
+    /// Its thread's pictures decoded, by file ID.
+    pub pictures: HashMap<String, crate::mission::diagrams::Ready>,
+    /// Why its thread couldn't be read, when it couldn't.
+    pub failed: Option<String>,
+    /// Its thread's files that couldn't be read, by ID.
+    pub unread: HashMap<String, String>,
+    /// Its thread's files kept on this computer, by ID, which `p` shows.
+    pub kept: HashSet<String>,
+}
+
+/// How long a thread or file that failed to read waits before it is asked
+/// for again, and how many decoded pictures are held.
+const SLACK_RETRY_MS: i64 = 2 * 60_000;
+const SLACK_PICTURES: usize = 32;
 
 const FEED_FIRST_MS: i64 = 3_000;
 const SLACK_FIRST_MS: i64 = 11_000;
@@ -205,9 +271,96 @@ impl Server {
                 self.day.slack_busy = false;
                 self.day.slack_looked = util::ymd(&util::local_now());
                 self.day.slack_failed = result.is_err();
+                let looked = result.is_ok();
                 match result {
                     Ok(line) => log(&dirs.state, &line),
                     Err(e) => log(&dirs.state, &format!("slack: {e}")),
+                }
+                if looked {
+                    self.read_wanted_threads();
+                }
+            }
+            DayEvent::SlackThreadsRead(result) => {
+                self.day.slack_wanted_busy = false;
+                match result {
+                    Ok(read) => {
+                        if read.read > 0 {
+                            log(&dirs.state, &format!("slack: {} threads read", read.read));
+                        }
+                        // Said in the pane of the thread that failed.
+                        let at = util::now_ms();
+                        for (key, why) in read.failed {
+                            log(&dirs.state, &format!("slack: thread {key}: {why}"));
+                            // Choosing it waits as a look does.
+                            self.day.slack_reading.insert(key.clone(), at);
+                            self.day.slack_thread_failed.insert(key, (at, why));
+                        }
+                    }
+                    Err(e) => log(&dirs.state, &format!("slack: threads not kept ({e})")),
+                }
+            }
+            DayEvent::SlackThread(key, result) => {
+                self.day.slack_thread_busy = false;
+                match result {
+                    Ok(()) => {
+                        self.day.slack_reading.remove(&key);
+                        self.day.slack_thread_failed.remove(&key);
+                    }
+                    Err(e) => {
+                        log(&dirs.state, &format!("slack: thread {key}: {e}"));
+                        // Its wait starts as it fails.
+                        self.day.slack_reading.insert(key.clone(), util::now_ms());
+                        self.day
+                            .slack_thread_failed
+                            .insert(key, (util::now_ms(), e));
+                    }
+                }
+            }
+            DayEvent::SlackFile(id, result) => {
+                self.day.slack_file_busy = false;
+                match result {
+                    Ok(()) => {
+                        self.day.slack_fetching.remove(&id);
+                        self.day.slack_file_failed.remove(&id);
+                    }
+                    Err(e) => {
+                        log(&dirs.state, &format!("slack: file {id}: {e}"));
+                        // Its wait starts as it fails, so the files after it
+                        // get their turn first.
+                        self.day.slack_fetching.insert(id.clone(), util::now_ms());
+                        self.day.slack_file_failed.insert(id, e);
+                    }
+                }
+            }
+            DayEvent::SlackThreads(at, threads) => {
+                self.day.slack_threads_loading = false;
+                self.day.slack_threads_at = at;
+                // A thread read since it last failed has recovered.
+                self.day
+                    .slack_thread_failed
+                    .retain(|key, (at, _)| threads.get(key).is_none_or(|t| t.read < *at));
+                self.day.slack_threads = threads;
+            }
+            DayEvent::SlackPicture(id, img) => {
+                self.day.slack_decoding.remove(&id);
+                if img.is_none() {
+                    self.day.slack_undrawable.insert(id.clone(), util::now_ms());
+                }
+                if let Some(img) = img {
+                    let content = crate::ui::images::picture_key(&img);
+                    self.day.slack_pictures.insert(
+                        id.clone(),
+                        crate::mission::diagrams::Ready {
+                            image: Arc::new(img),
+                            content,
+                        },
+                    );
+                    self.day.slack_picture_order.push_back(id);
+                    while self.day.slack_picture_order.len() > SLACK_PICTURES {
+                        if let Some(old) = self.day.slack_picture_order.pop_front() {
+                            self.day.slack_pictures.remove(&old);
+                        }
+                    }
                 }
             }
             DayEvent::Noted { job, log: lines } => {
@@ -441,6 +594,232 @@ impl Server {
         tokio::spawn(async move {
             let fetched = calendar::fetch_feed().await;
             let _ = tx.send(Event::Day(DayEvent::Feed(fetched)));
+        });
+    }
+
+    /// Reads `slack-threads.json` again off the task once it has changed
+    /// (the look, a thread read when chosen, or /slack-updates' save wrote
+    /// it), which only a look at its modified time tells on the task.
+    fn slack_threads_changed(&mut self, dirs: &Dirs) {
+        let file = slack_thread::file(&dirs.state);
+        let at = std::fs::metadata(&file).and_then(|m| m.modified()).ok();
+        if at == self.day.slack_threads_at
+            || self.day.slack_threads_loading
+            || tokio::runtime::Handle::try_current().is_err()
+        {
+            return;
+        }
+        self.day.slack_threads_loading = true;
+        let (state, tx) = (dirs.state.clone(), self.tx.clone());
+        tokio::task::spawn_blocking(move || {
+            let threads = slack_thread::read(&state);
+            let _ = tx.send(Event::Day(DayEvent::SlackThreads(at, threads)));
+        });
+    }
+
+    /// What the Slack board draws beyond its items for the chosen message
+    /// (`item`): its thread, once read, the pictures of it decoded, and why
+    /// its thread couldn't be read, when it couldn't, and its files that couldn't. A
+    /// thread not kept is read now, then each of its pictures and videos
+    /// not kept, one at a time, and those kept are decoded off the task.
+    pub fn slack_extras(&mut self, item: Option<&Item>) -> SlackExtras {
+        if !settings::is_on("slack_threads") {
+            return Default::default();
+        }
+        let Some(item) = item else {
+            return Default::default();
+        };
+        let get = |k: &str| item.data.get(k).and_then(Value::as_str).unwrap_or("");
+        let key = get("thread").to_string();
+        let thread = self.day.slack_threads.get(&key).cloned();
+        let failed = self
+            .day
+            .slack_thread_failed
+            .get(&key)
+            .map(|(_, why)| why.clone());
+        let now = util::now_ms();
+        let due = |asked: Option<&i64>| asked.is_none_or(|at| now - at >= SLACK_RETRY_MS);
+        // Reading pauses while you're away, as the looks do; what is kept
+        // still draws.
+        let running = tokio::runtime::Handle::try_current().is_ok() && !self.away();
+        let stale = thread
+            .as_ref()
+            .is_none_or(|t| now - t.read >= slack_thread::STALE_MS);
+        if stale
+            && !key.is_empty()
+            && running
+            && !self.day.slack_thread_busy
+            && due(self.day.slack_reading.get(&key))
+            && let Some((channel, ts)) = key.split_once(':')
+        {
+            self.day.slack_thread_busy = true;
+            self.day.slack_reading.insert(key.clone(), now);
+            let (channel, ts, tx) = (channel.to_string(), ts.to_string(), self.tx.clone());
+            tokio::spawn(async move {
+                let state = Dirs::here().state;
+                let result = match slack_thread::read_threads(
+                    &state,
+                    &Claude,
+                    &[(channel, ts)],
+                    now,
+                )
+                .await
+                {
+                    Ok(read) => match read.failed.into_iter().next() {
+                        Some((_, why)) => Err(why),
+                        None => Ok(()),
+                    },
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = tx.send(Event::Day(DayEvent::SlackThread(key, result)));
+            });
+        }
+        let mut pictures = HashMap::new();
+        let mut kept = HashSet::new();
+        // Every file is read, the chosen message's first; the first of them
+        // decoded, fewer than are held, so holding them never lets one go
+        // that is asked for again.
+        let ts = get("ts");
+        let mut files: Vec<&slack_thread::SlackFile> = Vec::new();
+        if let Some(t) = &thread {
+            let own = t.messages.iter().filter(|m| m.ts == ts);
+            let rest = t.messages.iter().filter(|m| m.ts != ts);
+            files.extend(
+                own.chain(rest)
+                    .flat_map(|m| m.files.iter())
+                    .filter(|f| f.drawn()),
+            );
+        }
+        for (n, f) in files.into_iter().enumerate() {
+            let on_disk = slack_thread::kept(f).is_some();
+            // A picture whose file has gone (kept a week) is read again.
+            if !on_disk && self.day.slack_pictures.remove(&f.id).is_some() {
+                self.day.slack_picture_order.retain(|id| *id != f.id);
+            }
+            if let Some(ready) = self.day.slack_pictures.get(&f.id) {
+                pictures.insert(f.id.clone(), ready.clone());
+                kept.insert(f.id.clone());
+                continue;
+            }
+            if on_disk {
+                kept.insert(f.id.clone());
+            }
+            if !running {
+                continue;
+            }
+            if on_disk {
+                if n < SLACK_PICTURES / 2
+                    && due(self.day.slack_undrawable.get(&f.id))
+                    && self.day.slack_decoding.insert(f.id.clone())
+                {
+                    let (f, tx) = (f.clone(), self.tx.clone());
+                    tokio::task::spawn_blocking(move || {
+                        let img = slack_thread::load(&f);
+                        let _ = tx.send(Event::Day(DayEvent::SlackPicture(f.id, img)));
+                    });
+                }
+            } else if !self.day.slack_file_busy && due(self.day.slack_fetching.get(&f.id)) {
+                self.day.slack_file_busy = true;
+                self.day.slack_fetching.insert(f.id.clone(), now);
+                let (f, tx) = (f.clone(), self.tx.clone());
+                tokio::spawn(async move {
+                    let result = slack_thread::fetch(&Claude, &f)
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(Event::Day(DayEvent::SlackFile(f.id, result)));
+                });
+            }
+        }
+        let unread = thread
+            .iter()
+            .flat_map(|t| t.files())
+            .filter_map(|f| {
+                let why = self.day.slack_file_failed.get(&f.id)?;
+                Some((f.id.clone(), why.clone()))
+            })
+            .collect();
+        SlackExtras {
+            thread,
+            pictures,
+            failed,
+            unread,
+            kept,
+        }
+    }
+
+    /// What `p` shows for the chosen Slack message, in the order it steps
+    /// through them: the message's own pictures and videos (a video first),
+    /// then the rest of its thread's, each as kept on this computer (its
+    /// file's ID, name, path, and whether it is a video); and the ID of the
+    /// one `clicked` (its place among `Thread::files`), when one was.
+    pub fn slack_playable(
+        &self,
+        item: &Item,
+        clicked: Option<usize>,
+    ) -> (Vec<Playable>, Option<String>) {
+        let get = |k: &str| item.data.get(k).and_then(Value::as_str);
+        let (Some(key), Some(ts)) = (get("thread"), get("ts")) else {
+            return Default::default();
+        };
+        let Some(thread) = self.day.slack_threads.get(key) else {
+            return Default::default();
+        };
+        let mut own: Vec<&slack_thread::SlackFile> = thread
+            .messages
+            .iter()
+            .filter(|m| m.ts == ts)
+            .flat_map(|m| m.files.iter())
+            .filter(|f| f.drawn())
+            .collect();
+        own.sort_by_key(|f| !f.is_video());
+        let mut order = own.clone();
+        order.extend(thread.files());
+        // Each file once, where it first comes, so p steps through them all.
+        let mut seen = HashSet::new();
+        order.retain(|f| seen.insert(f.id.clone()));
+        let kept = order
+            .into_iter()
+            .filter_map(|f| {
+                let path = slack_thread::kept(f)?;
+                Some((f.id.clone(), f.name.clone(), path, f.is_video()))
+            })
+            .collect();
+        let clicked = clicked
+            .and_then(|n| thread.files().nth(n))
+            .map(|f| f.id.clone());
+        (kept, clicked)
+    }
+
+    /// After a look, the threads it found something new in, for the board's
+    /// pane and reply counts, read in a task of their own, one such read at
+    /// a time; only while UX 2.0 draws the board, and not while you're
+    /// away (the next look on your return reads them).
+    fn read_wanted_threads(&mut self) {
+        if !settings::is_on("slack_threads")
+            || !settings::is_on("ux2")
+            || self.away()
+            || self.day.slack_wanted_busy
+            || tokio::runtime::Handle::try_current().is_err()
+        {
+            return;
+        }
+        self.day.slack_wanted_busy = true;
+        let tx = self.tx.clone();
+        // Those that failed lately wait, as a chosen thread does.
+        let now = util::now_ms();
+        let waiting: HashSet<String> = self
+            .day
+            .slack_thread_failed
+            .iter()
+            .filter(|(_, (at, _))| now - at < SLACK_RETRY_MS)
+            .map(|(key, _)| key.clone())
+            .collect();
+        tokio::spawn(async move {
+            let result = slack_thread::read_wanted(&Dirs::here().state, &Claude, &waiting, now)
+                .await
+                .map_err(|e| e.to_string());
+            let _ = tx.send(Event::Day(DayEvent::SlackThreadsRead(result)));
         });
     }
 
@@ -844,7 +1223,11 @@ impl Server {
                 .then(|| connector::connector_down("Slack"))
                 .flatten(),
             now: ms,
+            threads: &self.day.slack_threads,
         });
+        if settings::is_on("slack_threads") {
+            self.slack_threads_changed(dirs);
+        }
         let changed = calendar != self.day.calendar || slack != self.day.slack;
         self.day.calendar = calendar;
         self.day.slack = slack;

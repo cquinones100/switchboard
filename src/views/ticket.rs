@@ -69,6 +69,17 @@ pub fn id_in_name(name: &str) -> Option<String> {
     IN_NAME.find(name).map(|m| m.as_str().to_string())
 }
 
+/// Every ticket ID `text` names, each once, in order.
+pub fn ids_in(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for m in IN_NAME.find_iter(text) {
+        if !out.iter().any(|id| id == m.as_str()) {
+            out.push(m.as_str().to_string());
+        }
+    }
+    out
+}
+
 /// A bare link to a Linear ticket as a link named by its identifier, which
 /// then reads as the identifier, clickable (pr-view.js's `tidy`).
 pub fn tidy(text: &str) -> String {

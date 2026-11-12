@@ -25,6 +25,8 @@ Collect what is new for the user on Slack and save it for mission control's Slac
 
    A message found two ways goes in once, under the first of those kinds. Use `include_context: false` and a concise response format to keep the reads small.
 
+   - **threads**: when both `switchboard setting slack_threads` and `switchboard setting ux2` print `on`, read with the read-thread tool (detailed format, `limit` 1000) the threads that up to eight of the newest messages above are replies in, each once, for the view's thread pane and reply counts. Keep each answer's text exactly as it came.
+
 4. **Save.** Pipe them to the script as JSON, each with its kind, the channel's ID, where it was (`#channel`, or the person for a DM), the author's ID and name, the text, its `ts`, its thread's `ts` (`thread`, when it is a reply in a thread; mission control uses it to bring back a message you dismissed when its thread gets a reply), and its permalink:
 
    ```
@@ -33,7 +35,7 @@ Collect what is new for the user on Slack and save it for mission control's Slac
    EOF
    ```
 
-   with the user's own messages beside them as `"replied": [{"channel": "D…", "ts": "…", "thread": "…"}]`.
+   with the user's own messages beside them as `"replied": [{"channel": "D…", "ts": "…", "thread": "…"}]`, and the threads read as `"threads": [{"channel": "C…", "thread": "<the thread's ts>", "text": "<the read-thread tool's answer>"}]`.
 
    Save even when nothing is new: an empty list still marks the look, so the view knows it is current. The script leaves out the Slack relay's own messages and DM.
 

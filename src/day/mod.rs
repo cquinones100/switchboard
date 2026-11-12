@@ -21,6 +21,7 @@
 //!   the next meeting, RSVP.
 //! - `changes`: what changed on today's calendar since you last looked.
 //! - `slack`, `slack_look`: the Slack view, its saved look, and the look.
+//! - `slack_thread`: the chosen message's thread and its pictures.
 //! - `meetings`, `standup`, `todo`: the notes written for you.
 //! - `new_notes`: the notifications for them until you read them.
 //! - `serve`: the server's side: the tick, the events, what mission control
@@ -35,6 +36,7 @@ pub mod rrule;
 mod serve;
 pub mod slack;
 pub mod slack_look;
+pub mod slack_thread;
 pub mod standup;
 pub mod todo;
 
