@@ -1138,7 +1138,7 @@ fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
 fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_list() {
     let (server, mut client) = two_tabs(json!({"view_keys": true}));
     client.type_text(&format!("{ALT}/"));
-    client.wait_text("Search and jump to a tab");
+    client.wait_text("? find a key");
     // `?` looks a key up without pressing it: j is the sidebar's.
     client.type_text("?");
     client.wait_text("Find a key");
@@ -1637,10 +1637,10 @@ fn with_ux2_m_brackets_move_between_groups_and_stay_the_tabs_outside_it() {
         true,
         "the tab unchanged"
     );
-    // Closed, M-] is the next tab again, round to the first.
+    // Closed, M-[ goes back through the tabs again, to the first.
     client.type_text("q");
     client.wait_for("mission control closed", closed);
-    client.type_text(&format!("{ALT}]"));
+    client.type_text(&format!("{ALT}["));
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });

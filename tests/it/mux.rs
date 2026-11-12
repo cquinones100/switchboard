@@ -831,3 +831,49 @@ fn the_tests_wait_longer_on_a_busy_machine() {
     assert_eq!(common::patience_from(None, 0.0, 10), 1);
     assert_eq!(common::patience_from(None, 200.0, 10), 8);
 }
+
+/// A server with a first tab and two more opened behind it, gone to from
+/// the first to the third and then the second.
+fn three_tabs_visited(server: &TestServer) {
+    server.ok(&["new-tab", "-d", "-n", "second"]);
+    server.ok(&["new-tab", "-d", "-n", "third"]);
+    let id = |i: usize| {
+        server.list()["sessions"][0]["tabs"][i]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (second, third) = (id(1), id(2));
+    server.ok(&["select-tab", "-t", &third]);
+    server.ok(&["select-tab", "-t", &second]);
+}
+
+fn is_current(server: &TestServer, i: usize) -> bool {
+    server.list()["sessions"][0]["tabs"][i]["current"] == true
+}
+
+#[test]
+fn alt_brackets_go_back_and_forward_through_the_tabs_visited() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    three_tabs_visited(&server);
+    for (key, i, what) in [
+        ("[", 2, "back to the third tab"),
+        ("[", 0, "back to the first tab"),
+        ("]", 2, "forward to the third tab"),
+    ] {
+        client.type_text(&format!("{ALT}{key}"));
+        client.wait_for(what, |_| is_current(&server, i));
+    }
+}
+
+#[test]
+fn with_tab_back_forward_off_alt_brackets_go_to_the_tab_beside() {
+    let server = TestServer::start_with_settings(r#"{"tab_back_forward": false}"#);
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    three_tabs_visited(&server);
+    client.type_text(&format!("{ALT}["));
+    client.wait_for("the first tab, on the left", |_| is_current(&server, 0));
+}

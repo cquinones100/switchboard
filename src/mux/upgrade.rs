@@ -1113,6 +1113,10 @@ mod tests {
                     rows: 30,
                     current: TabId(1),
                     last: None,
+                    trail: crate::mux::trail::Trail {
+                        back: vec![TabId(3)],
+                        forward: vec![TabId(5)],
+                    },
                     sidebar_repo: None,
                     sidebar_repo_open: false,
                     tabs: vec![SavedTab {

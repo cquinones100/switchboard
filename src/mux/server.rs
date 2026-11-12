@@ -30,6 +30,7 @@ use super::keys::{Action, Bindings};
 use super::layout::Layout;
 use super::pane::{Pane, PaneSpawn, PaneView};
 use super::proto::{self, ClientMsg, ServerMsg};
+use super::trail::Trail;
 use super::{Direction, PaneEvent, PaneId, TabId, TermNotice, socket};
 use crate::{paths, util};
 
@@ -198,6 +199,8 @@ pub struct Session {
     pub tabs: Vec<TabId>,
     pub current: TabId,
     pub last: Option<TabId>,
+    /// The tabs visited before and after the current one, for M-[ and M-].
+    pub trail: Trail,
     /// The size its tabs are laid out for: its latest client's.
     pub cols: u16,
     pub rows: u16,
@@ -1488,6 +1491,7 @@ impl Server {
             tabs: vec![tab],
             current: tab,
             last: None,
+            trail: Trail::default(),
             cols,
             rows,
             sidebar: self.sidebar_columns(cols),
@@ -1534,6 +1538,7 @@ impl Server {
         s.tabs.insert(at, tab);
         if opened == Opened::Front {
             s.last = Some(s.current);
+            s.trail.visited(s.current);
             s.current = tab;
         }
         // Opened from the Notifications window, it goes before it.
@@ -1741,6 +1746,7 @@ impl Server {
         if s.last == Some(tab) {
             s.last = None;
         }
+        s.trail.forget(tab);
         if s.tabs.is_empty() {
             let name = s.name.clone();
             self.sessions.remove(si);
@@ -1750,6 +1756,8 @@ impl Server {
         if s.current == tab {
             // As tmux does: the tab you were on before, else the one beside it.
             s.current = s.last.take().unwrap_or(s.tabs[at.min(s.tabs.len() - 1)]);
+            // The tab it falls back to is a new place, as a visit is.
+            s.trail.forward.clear();
         }
         let name = s.name.clone();
         self.dirty_session(&name);
@@ -1776,12 +1784,22 @@ impl Server {
     }
 
     pub fn select_tab(&mut self, session: &str, tab: TabId) {
+        self.select_tab_as(session, tab, false);
+    }
+
+    /// Goes to a tab, as `select_tab`; `stepping` when it is a step back or
+    /// forward through the tabs visited, which moves along the session's
+    /// trail rather than adding to it.
+    fn select_tab_as(&mut self, session: &str, tab: TabId, stepping: bool) {
         let Some(s) = self.session_mut(session) else {
             return;
         };
         let switched = s.current != tab && s.tabs.contains(&tab);
         if switched {
             s.last = Some(s.current);
+            if !stepping {
+                s.trail.visited(s.current);
+            }
             s.current = tab;
         }
         self.refresh_name(tab);
@@ -2427,6 +2445,12 @@ impl Server {
     }
 
     pub fn act(&mut self, id: ClientId, action: Action) {
+        // Off in Settings, M-[ and M-] go to the tab on either side.
+        let action = match action {
+            Action::TabBack if !crate::settings::is_on("tab_back_forward") => Action::PrevTab,
+            Action::TabForward if !crate::settings::is_on("tab_back_forward") => Action::NextTab,
+            other => other,
+        };
         let Some(session) = self.clients.get(&id).map(|c| c.session.clone()) else {
             return;
         };
@@ -2478,6 +2502,19 @@ impl Server {
             Action::LastTab => {
                 if let Some(last) = self.session(&session).and_then(|s| s.last) {
                     self.select_tab(&session, last);
+                }
+            }
+            Action::TabBack | Action::TabForward => {
+                let to = self.session_mut(&session).and_then(|s| {
+                    let current = s.current;
+                    if action == Action::TabBack {
+                        s.trail.back(current)
+                    } else {
+                        s.trail.forward(current)
+                    }
+                });
+                if let Some(t) = to {
+                    self.select_tab_as(&session, t, true);
                 }
             }
             Action::SelectTab(n) => {

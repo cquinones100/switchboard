@@ -40,6 +40,9 @@ pub enum Action {
     NextTab,
     /// The tab you were on before.
     LastTab,
+    /// Back or forward through the tabs visited, as a browser's buttons.
+    TabBack,
+    TabForward,
     /// The tab with this number (1-based, as the status line shows).
     SelectTab(usize),
     /// A new tab, its shell in the current pane's directory.
@@ -215,6 +218,8 @@ impl Action {
             "prev-tab" => Action::PrevTab,
             "next-tab" => Action::NextTab,
             "last-tab" => Action::LastTab,
+            "tab-back" => Action::TabBack,
+            "tab-forward" => Action::TabForward,
             "new-tab" => Action::NewTab,
             "close-pane" => Action::ClosePane,
             "close-tab" => Action::CloseTab,
@@ -286,6 +291,8 @@ impl Action {
             Action::PrevTab => "prev-tab".into(),
             Action::NextTab => "next-tab".into(),
             Action::LastTab => "last-tab".into(),
+            Action::TabBack => "tab-back".into(),
+            Action::TabForward => "tab-forward".into(),
             Action::SelectTab(n) => format!("select-tab-{n}"),
             Action::NewTab => "new-tab".into(),
             Action::Split(d) => format!("split-{}", dir(d)),
@@ -365,6 +372,8 @@ impl Action {
             Action::PrevTab => "Previous tab".into(),
             Action::NextTab => "Next tab".into(),
             Action::LastTab => "Go back to the previous tab".into(),
+            Action::TabBack => "Back to the tab before".into(),
+            Action::TabForward => "Forward to the tab after".into(),
             Action::SelectTab(n) => format!("Go to tab {n}"),
             Action::NewTab => "New tab".into(),
             Action::Split(d) => format!("Split pane {}", side(d)),
@@ -446,6 +455,9 @@ impl Action {
             }
             Action::PrevTab | Action::NextTab => {
                 "Tabs go in the order the tab bar shows them, coming round past either end.".into()
+            }
+            Action::TabBack | Action::TabForward => {
+                "Through the tabs you visited, as a browser's back and forward do; with nothing that way it does nothing. Off in Settings (tab_back_forward), they go to the tab on the left and right.".into()
             }
             Action::LastTab => {
                 "Pressed again, it goes back the other way, so two tabs can be swapped between with one key.".into()
@@ -599,9 +611,12 @@ impl Action {
     pub fn tags(&self) -> &'static [&'static str] {
         match self {
             Action::SelectPane(_) => &["panes", "navigate"],
-            Action::PrevTab | Action::NextTab | Action::LastTab | Action::SelectTab(_) => {
-                &["tabs", "navigate"]
-            }
+            Action::PrevTab
+            | Action::NextTab
+            | Action::LastTab
+            | Action::TabBack
+            | Action::TabForward
+            | Action::SelectTab(_) => &["tabs", "navigate"],
             Action::NewTab => &["tabs", "new"],
             Action::Split(_) => &["panes", "split"],
             Action::ClosePane => &["panes", "close"],
@@ -780,8 +795,8 @@ impl Default for Bindings {
         bind("M-Right", SelectPane(Right));
         bind("M-Up", SelectPane(Up));
         bind("M-Down", SelectPane(Down));
-        bind("M-[", PrevTab);
-        bind("M-]", NextTab);
+        bind("M-[", TabBack);
+        bind("M-]", TabForward);
         bind("M-Tab", LastTab);
         for n in 1..=9 {
             bind(&format!("M-{n}"), SelectTab(n));
@@ -981,6 +996,8 @@ mod tests {
             Action::CloseTab,
             Action::NextPane,
             Action::LastPane,
+            Action::TabBack,
+            Action::TabForward,
             Action::NextNeedsYou,
             Action::NextIdle,
             Action::FocusClaude,

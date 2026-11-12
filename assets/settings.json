@@ -477,6 +477,13 @@
     "default": true
   },
   {
+    "key": "tab_back_forward",
+    "category": "Tabs and status bar",
+    "label": "M-[ and M-] go back and forward",
+    "description": "M-[ and M-] go back and forward through the tabs you visited, as a browser's back and forward do, and do nothing with nowhere further to go; off, they go to the tab on the left and right, as the prefix's p and n always do",
+    "default": true
+  },
+  {
     "key": "one_claude_per_tab",
     "category": "Tabs and status bar",
     "label": "One Claude to a tab",

@@ -57,6 +57,7 @@ use serde_json::Value;
 use super::layout::Layout;
 use super::pane::Pane;
 use super::server::{Server, Session, new_tab};
+use super::trail::Trail;
 use super::{PaneId, TabId, procinfo};
 use crate::{paths, settings, util};
 
@@ -109,6 +110,10 @@ pub struct SavedSession {
     pub current: TabId,
     #[serde(default)]
     pub last: Option<TabId>,
+    /// The tabs visited each way (src/mux/trail.rs), handed over to a new
+    /// build only: a server started fresh starts with none.
+    #[serde(default, skip_serializing_if = "Trail::is_empty")]
+    pub trail: Trail,
     pub tabs: Vec<SavedTab>,
     /// The repository its sidebar is filtered to (src/sidebar's
     /// `Side::repo`), and whether its Other repos was unfolded.
@@ -619,6 +624,7 @@ impl Persist {
                 rows: s.rows,
                 current: s.current,
                 last: s.last,
+                trail: Trail::default(),
                 tabs,
                 sidebar_repo: side.and_then(|x| x.repo.clone()),
                 sidebar_repo_open: side.is_some_and(|x| x.repo.is_some() && x.repo_open),
@@ -762,6 +768,7 @@ impl Persist {
                 tabs: tabs.clone(),
                 current,
                 last,
+                trail: Trail::default(),
                 cols,
                 rows,
                 sidebar,
@@ -892,6 +899,7 @@ pub fn layout_now(server: &Server) -> Saved {
             rows: s.rows,
             current: s.current,
             last: s.last,
+            trail: s.trail.clone(),
             sidebar_repo: server
                 .sidebar
                 .sides
@@ -1022,11 +1030,13 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
         let side = server.sidebar.side(&ss.name);
         side.repo = ss.sidebar_repo;
         side.repo_open = ss.sidebar_repo_open;
+        let trail = ss.trail.keeping(&tabs);
         server.sessions.push(Session {
             name: ss.name,
             tabs,
             current,
             last,
+            trail,
             cols,
             rows,
             sidebar,
@@ -1047,6 +1057,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
                 tabs: Vec::new(),
                 current: TabId(0),
                 last: None,
+                trail: Trail::default(),
                 cols: 80,
                 rows: 24,
                 sidebar: server.sidebar_columns(80),
@@ -1093,6 +1104,7 @@ mod tests {
                 rows: 40,
                 current: TabId(2),
                 last: Some(TabId(1)),
+                trail: Default::default(),
                 sidebar_repo: None,
                 sidebar_repo_open: false,
                 tabs: vec![
