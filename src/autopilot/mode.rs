@@ -418,7 +418,10 @@ pub fn target_choices(
 /// name (empty, a space, `..`, a `:` and the like).
 pub fn typed_branch(text: &str) -> Option<String> {
     let t = text.trim();
+    // git takes neither HEAD nor @ as a branch's name.
     let bad = t.is_empty()
+        || t == "HEAD"
+        || t == "@"
         || t.starts_with(['-', '/', '.'])
         || t.ends_with(['/', '.'])
         || t.ends_with(".lock")
@@ -641,7 +644,7 @@ mod tests {
             typed_branch(" release/1.2 ").as_deref(),
             Some("release/1.2")
         );
-        for bad in ["", "a b", "a..b", "-x", "x:y", "x.lock", "x/"] {
+        for bad in ["", "a b", "a..b", "-x", "x:y", "x.lock", "x/", "HEAD", "@"] {
             assert_eq!(typed_branch(bad), None, "{bad}");
         }
     }

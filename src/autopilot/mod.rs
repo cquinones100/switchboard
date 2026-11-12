@@ -73,6 +73,8 @@
 //! - `place`: where each of its tabs is: busy, waiting on you, or landed.
 //! - `pilot`: what it keeps between checks, and what each check decides.
 //! - `line`: its line in mission control and the menu Enter opens on it.
+//! - `settings_box`: its settings in one box with UX 2.0 on (board 35),
+//!   which starts it while it is off and saves what changed while it is on.
 //! - `landed`: the landings its tabs made without asking, for the
 //!   notifications.
 //! - `view`: its own view in mission control, with UX 2.0 on.
@@ -85,6 +87,7 @@ pub mod mode;
 pub mod pilot;
 pub mod place;
 mod serve;
+pub mod settings_box;
 pub mod view;
 
 pub use line::{Act, Summary};
@@ -148,7 +151,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With the mode on, it opens mission control on the mode, whose menu (m) changes or stops it."
+                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With UX 2.0 on, it opens its settings box, which starts it, or changes or stops it while it is on; without it, with the mode on, it opens mission control on the mode, whose menu (m) changes or stops it."
             }
         }
     }

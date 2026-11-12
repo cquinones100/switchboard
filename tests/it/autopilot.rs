@@ -119,6 +119,30 @@ fn set_up(
     client.type_text("autopilot");
     client.wait_text("Autopilot: work a note");
     client.type_text("\r");
+    if more.get("ux2").is_some() {
+        // With UX 2.0, its settings box, on the note and the pane's
+        // repository, which starts it with the counts as they were.
+        let screen = client.wait_text("M-↵  Start");
+        assert!(
+            screen.iter().any(|l| l.contains("Work a note")),
+            "{screen:#?}"
+        );
+        assert!(screen.iter().any(|l| l.contains("› Work ")), "{screen:#?}");
+        assert!(screen.iter().any(|l| l.contains("› ~/repo")), "{screen:#?}");
+        // A repository landing through a PR is refused, in the box.
+        client.type_text("\x1b\r");
+        client.wait_text("Autopilot lands only straight onto a branch for now");
+        std::fs::write(
+            config.join("repos.json"),
+            json!({ repo.join(".git").to_str().unwrap(): { "landing": "direct" } }).to_string(),
+        )
+        .unwrap();
+        client.type_text("\x1b\r");
+        client.wait_text(
+            "Working Work: 3 at a time, up to 5 tabs, in ~/repo, landing on the default branch",
+        );
+        return (notes, note, server, client, repo);
+    }
     // A repository landing through a PR, as one with no GitHub and no
     // repos.json does, is refused.
     client.wait_text("Autopilot lands only straight onto a branch for now");
@@ -192,36 +216,38 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
-fn with_ux2_its_command_opens_the_board_and_m_or_its_button_opens_the_menu() {
+fn with_ux2_its_command_m_and_its_button_open_its_settings_box_whose_m_opens_the_menu() {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("Waiting on you");
     client.type_text("\x1b");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("Waiting on you"))
     });
-    // M-p's command with the mode on shows the board, no menu over it.
+    let closed = |client: &mut TestClient| {
+        client.type_text("\x1b");
+        client.wait_for("the box closed", |s| {
+            !s.iter().any(|l| l.contains("Autopilot · Work"))
+        });
+    };
+    // M-p's command with the mode on shows the board and its box over it.
     client.type_text("\x1bp");
     client.wait_text("Actions");
     client.type_text("autopilot");
     // Named for changing or stopping the mode while it is on.
     client.wait_text("Autopilot: work a note: change or stop working");
     client.type_text("\r");
-    client.wait_text("☰ Menu");
-    std::thread::sleep(Duration::from_millis(300));
-    let screen = client.screen();
-    assert!(
-        !screen
-            .iter()
-            .any(|l| l.contains("Pause: open no more tabs")),
-        "{screen:#?}"
-    );
+    let screen = client.wait_text("Autopilot · Work");
+    for want in ["tabs working, ", "Tabs at once", "M-↵  Save", "p  Pause"] {
+        assert!(
+            screen.iter().any(|l| l.contains(want)),
+            "{want}: {screen:#?}"
+        );
+    }
+    closed(&mut client);
     // m opens it.
     client.type_text("m");
-    client.wait_text("Pause: open no more tabs");
-    client.type_text("\x1b");
-    client.wait_for("menu closed", |s| {
-        !s.iter().any(|l| l.contains("Pause: open no more tabs"))
-    });
+    client.wait_text("Autopilot · Work");
+    closed(&mut client);
     // So does a click on the heading's button.
     let (row, col) = client.find_cell('☰').unwrap();
     client.send(
@@ -234,7 +260,10 @@ fn with_ux2_its_command_opens_the_board_and_m_or_its_button_opens_the_menu() {
         )
         .as_bytes(),
     );
-    client.wait_text("Pause: open no more tabs");
+    client.wait_text("Autopilot · Work");
+    // Its m opens the menu, for what the box hasn't.
+    client.type_text("m");
+    client.wait_text("Skip the next item");
     drop(server);
 }
 
@@ -261,11 +290,14 @@ fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages()
     .unwrap();
     // Wide enough for the pane beside the board's columns.
     client.resize(230, 40);
-    // Down and up the board's cards until the pane beside it says `text`.
+    // Down and up the board's cards until the pane beside it says `text`
+    // (with its stages, once the item's tab has opened: before, its card is
+    // under Next up, with none).
     let mut seek = |text: &str| {
         for step in 0..80 {
             let screen = client.screen();
-            if screen.iter().any(|l| l.contains(text)) {
+            let has = |t: &str| screen.iter().any(|l| l.contains(t));
+            if has(text) && (text != "Plan - First thing" || has("leak check")) {
                 return screen;
             }
             client.type_text(if (step / 2) % 2 == 0 { "j" } else { "k" });
@@ -590,84 +622,109 @@ fn a_landed_tab_closed_unseen_stays_out_of_the_sidebar_with_its_notifications_of
     );
 }
 
-/// Its menu opened with `m` on the board, the option starting with
-/// `label` chosen by moving down to it.
-fn choose(client: &mut TestClient, label: &str) {
-    client.type_text("m");
-    client.wait_text("Pause: open no more tabs");
-    for _ in 0..20 {
-        let screen = client.screen();
-        if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
-            client.type_text("\r");
-            return;
-        }
-        client.type_text("j");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    panic!("no {label} in its menu: {:#?}", client.screen());
-}
-
 /// What autopilot.json holds now.
 fn mode(server: &TestServer) -> Value {
     serde_json::from_str(&std::fs::read_to_string(server.state.join("autopilot.json")).unwrap())
         .unwrap()
 }
 
+/// Its settings box opened with `m` on the board, the focus moved `tabs`
+/// fields on from the note.
+fn open_box(client: &mut TestClient, tabs: usize) {
+    client.type_text("m");
+    client.wait_text("Autopilot · Work");
+    client.type_text(&"\t".repeat(tabs));
+    std::thread::sleep(Duration::from_millis(100));
+}
+
 #[test]
-fn its_menu_sets_each_count_alone_and_changing_its_note_keeps_them() {
+fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes() {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("☰ Menu");
     let before = mode(&server);
 
-    choose(&mut client, "Tabs working at once: 3…");
-    client.wait_text("How many of its tabs work at once");
-    client.type_text("\x7f4\r");
-    client.wait_text("Tabs working at once: 4");
+    // + on Tabs at once, then M-↵: that count alone written.
+    open_box(&mut client, 3);
+    client.type_text("+");
+    client.wait_text(" −  4  + ");
+    client.type_text("\x1b\r");
+    client.wait_text("Autopilot: 4 tabs at once");
     let now = mode(&server);
     assert_eq!(now["slots"], 4);
-    for kept in ["note", "noteId", "target", "cap", "spendLimit", "repo"] {
+    for kept in [
+        "note",
+        "noteId",
+        "target",
+        "cap",
+        "spendLimit",
+        "repo",
+        "on",
+    ] {
         assert_eq!(now[kept], before[kept], "{kept} kept");
     }
 
-    // A cap below the slots comes back as the slots.
-    choose(&mut client, "Most tabs open: 5…");
-    client.wait_text("The most of its tabs open at once");
-    client.type_text("\x7f2\r");
-    client.wait_text("Most tabs open: 4, as many as work at once");
-    assert_eq!(mode(&server)["cap"], 4);
+    // A change left with Esc is asked about, and not written.
+    open_box(&mut client, 3);
+    client.type_text("+");
+    client.wait_text(" −  5  + ");
+    client.type_text("\x1b");
+    client.wait_text("Leave without saving your changes? [Y/n]");
+    client.type_text("\r");
+    client.wait_for("the box closed", |s| {
+        !s.iter().any(|l| l.contains("Autopilot · Work"))
+    });
+    assert_eq!(mode(&server)["slots"], 4);
 
-    // What it said of a limit passed goes with a change of the limit.
+    // A new spend limit takes back what it said of the old one.
     let mut said = mode(&server);
     said["said"] = json!("Stopped opening tabs: today's Claude spend passed $5");
+    said["skipped"] = json!([{ "note": said["noteId"], "text": "Second thing" }]);
     std::fs::write(server.state.join("autopilot.json"), said.to_string()).unwrap();
-    choose(&mut client, "Spend limit: none…");
-    client.wait_text("Open no more tabs once today's Claude spend passes");
-    client.type_text("20\r");
-    client.wait_text("Spend limit: $20 a day");
+    open_box(&mut client, 5);
+    client.type_text("20");
+    client.wait_text("› 20");
+    client.type_text("\x1b\r");
+    client.wait_text("Autopilot: spend limit $20 a day");
     let now = mode(&server);
     assert_eq!(now["spendLimit"], 20);
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
-    // "Change its note…" asks the note and the branch, the counts kept.
-    choose(&mut client, "Change its note…");
-    client.wait_text("Work which note continuously?");
-    client.type_text("\r");
-    client.wait_text("Another branch…");
-    client.type_text("\r");
-    let screen = client.wait_text("Working Work: 4 at a time, up to 4 tabs");
+    // u on a skipped item takes it back.
+    client.type_text("m");
+    client.wait_text("Autopilot · Work");
+    let screen = client.wait_text("skipped by you");
     assert!(
-        !screen.iter().any(|l| l.contains("Tabs working at once")),
+        screen.iter().any(|l| l.contains("Second thing")),
         "{screen:#?}"
     );
-    let now = mode(&server);
-    assert_eq!(
-        (
-            now["slots"].clone(),
-            now["cap"].clone(),
-            now["spendLimit"].clone()
-        ),
-        (json!(4), json!(4), json!(20))
+    // Back from the note: Cancel, More, Stop, Pause, Save, the item.
+    client.type_text(&"\x1b[Z".repeat(6));
+    std::thread::sleep(Duration::from_millis(200));
+    client.type_text("u");
+    client.type_text("\x1b\r");
+    client.wait_text("back in line: Second thing");
+    assert_eq!(mode(&server)["skipped"], json!([]));
+
+    // Land without asking, after its question.
+    open_box(&mut client, 7);
+    client.type_text(" \x1b\r");
+    let screen = client.wait_text("without asking to push?");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Kept: the tests, two clean review rounds")),
+        "{screen:#?}"
     );
+    client.type_text("\r");
+    client.wait_text("Autopilot: land without asking on");
+    assert_eq!(mode(&server)["landWithoutAsking"], true);
+
+    // p pauses at once.
+    client.type_text("m");
+    client.wait_text("Autopilot · Work");
+    client.type_text("p");
+    client.wait_text("Paused");
+    assert_eq!(mode(&server)["paused"], true);
 }
 
 /// What the stand-in claude was last started with, a line an argument.

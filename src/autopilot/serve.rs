@@ -9,7 +9,9 @@
 //! notes…"), how many of its tabs work at once, the most open and a
 //! spend limit, each typed in a box with what it was before, Enter keeping
 //! it; the repository is the main clone of the pane it was asked from. With
-//! the mode on, it opens the line's menu instead.
+//! the mode on, it opens the line's menu instead. With UX 2.0 on, both are its
+//! settings box instead (src/autopilot/settings_box.rs), checked and
+//! written here (`autopilot_box_write`).
 //!
 //! Every tick reads `autopilot.json`, gathers the tabs it opened (their
 //! directories from what the server holds and git's files, their state from
@@ -33,6 +35,7 @@ use super::line::{self, Act, Summary};
 use super::mode::{self, Mode, note_title};
 use super::pilot::{Job, Keep, Kept, Mark};
 use super::place::{Mine, in_main_clone, in_worktree_of};
+use super::settings_box::{self, Context, Fields, Part, SettingsBox};
 use super::{AutopilotEvent, Command};
 use crate::agent::State;
 use crate::cmd::work::main_clone;
@@ -149,6 +152,114 @@ fn stamp_of(path: &Path) -> Option<super::Stamp> {
     ))
 }
 
+/// What it says of a repository that lands through a PR.
+const PR_REFUSED: &str = "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)";
+
+/// What the settings box shows besides its fields, read off the task: how
+/// the repository typed lands, the repositories and branches it suggests,
+/// today's spend, and the note's items left out for needing a choice.
+fn box_context(mode: &Mode, fields: &Fields, notes: &Path) -> Context {
+    let repo = fields.repo_path();
+    let landing = if fields.repo.trim().is_empty() {
+        String::new()
+    } else {
+        crate::repos::landing_for(&repo, false)
+            .map(|l| landing_words(&l.landing, &l.source))
+            .unwrap_or_else(|e| format!("couldn't tell how it lands: {e}"))
+    };
+    let mut repos: Vec<String> = Vec::new();
+    let mut add = |r: String| {
+        if !r.is_empty() && !repos.contains(&r) {
+            repos.push(r);
+        }
+    };
+    add(fields.repo.trim().to_string());
+    if mode.set_up() {
+        add(paths::tilde(&mode.repo));
+    }
+    for key in util::read_json_object(crate::repos::file()).keys() {
+        if let Some(top) = key.strip_suffix("/.git")
+            && Path::new(top).is_dir()
+        {
+            add(paths::tilde(top));
+        }
+    }
+    let mut branches: Vec<String> = Vec::new();
+    if let Some(place) = crate::tabs::git::locate(&repo) {
+        let c = &place.common_dir;
+        let recent = work_recent::branches(c);
+        let default = crate::tabs::git::default_branch(c);
+        for b in recent
+            .into_iter()
+            .chain(default)
+            .chain(crate::tabs::git::local_branches(c))
+        {
+            if !b.is_empty() && !branches.contains(&b) {
+                branches.push(b);
+            }
+        }
+    }
+    let state = paths::state_dir();
+    let needs_choice = if fields.hands_free || fields.note.is_empty() || !repo.is_dir() {
+        Vec::new()
+    } else {
+        let skip = fields.skipped.iter().cloned().collect();
+        let claims = worktree_from_note::claims_file();
+        let take = |with: bool| {
+            worktree_from_note::queue(notes, &repo, &fields.note, &skip, false, with, &claims)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| i.text)
+                .collect::<Vec<_>>()
+        };
+        let without = take(false);
+        take(true)
+            .into_iter()
+            .filter(|t| !without.contains(t))
+            .collect()
+    };
+    Context {
+        on: mode.on,
+        paused: mode.paused,
+        busy: 0,
+        open: 0,
+        spent: crate::usage::sessions::spent_today(&state, util::now_ms()),
+        landing_repo: fields.repo.clone(),
+        landing,
+        repos,
+        branches,
+        needs_choice,
+        offer_hands_free: settings::is_on("autopilot_handsfree"),
+        problem: String::new(),
+    }
+}
+
+/// The skipped items of the note whose ID is `id`; none for a note with
+/// no ID yet.
+fn skipped_of(mode: &Mode, id: &str) -> Vec<String> {
+    mode.skipped
+        .iter()
+        .filter(|x| !id.is_empty() && x.note == id)
+        .map(|x| x.text.clone())
+        .collect()
+}
+
+/// How a repository lands, in words, and what says so.
+fn landing_words(landing: &str, source: &str) -> String {
+    let how = if landing == "direct" {
+        "straight on it through queue-and-clean"
+    } else {
+        "through a PR, which autopilot doesn't take yet"
+    };
+    let from = match source {
+        "repos.json" => ", as repos.json says",
+        "github" => ", as GitHub's rules say",
+        "claude-md" => ", as its CLAUDE.md says",
+        _ => "",
+    };
+    format!("{how}{from}")
+}
+
 /// A whole number, 1 or more, as typed; empty keeps `was`.
 fn whole(text: &str, was: u32) -> Option<u32> {
     if text.is_empty() {
@@ -185,7 +296,9 @@ impl Server {
                     self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
                 }
-                if !Mode::read(&paths::state_dir()).on {
+                if crate::sidebar::text::ux2() {
+                    self.autopilot_box(client, Some(dir), None, Part::Note);
+                } else if !Mode::read(&paths::state_dir()).on {
                     self.autopilot_setup(client, &dir);
                 }
             }
@@ -218,10 +331,7 @@ impl Server {
                 match landing.as_deref() {
                     Ok("direct") => {}
                     Ok(_) => {
-                        server.mission_note(
-                            client,
-                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
-                        );
+                        server.mission_note(client, PR_REFUSED);
                         return;
                     }
                     Err(e) => {
@@ -243,6 +353,10 @@ impl Server {
     /// sets it up once a note is picked: "Land on:", then the counts.
     pub fn autopilot_work_note(&mut self, client: ClientId, repo: &Path, note: String) {
         self.open_mission(client, super::opening());
+        if crate::sidebar::text::ux2() {
+            self.autopilot_box(client, Some(repo.to_path_buf()), Some(note), Part::Note);
+            return;
+        }
         let Some(repo) = main_clone(repo) else {
             self.mission_note(client, "That isn't a repository");
             return;
@@ -256,10 +370,7 @@ impl Server {
                 match landing.as_deref() {
                     Ok("direct") => {}
                     Ok(_) => {
-                        server.mission_note(
-                            client,
-                            "Autopilot lands only straight onto a branch for now, and this repository lands through a PR (repos.json)",
-                        );
+                        server.mission_note(client, PR_REFUSED);
                         return;
                     }
                     Err(e) => {
@@ -698,12 +809,398 @@ impl Server {
         });
     }
 
+    // ── Its settings in one box (board 35) ──────────────────────────────────
+
+    /// Its settings box, with UX 2.0 on, in place of the chain of boxes and
+    /// the menu: the mode's settings, and while it is off the repository of
+    /// `dir` and the last note worked (else the first with an unticked
+    /// item); `note` in place of the mode's when given (Notes' M-p). The
+    /// focus starts on `focus`.
+    pub(crate) fn autopilot_box(
+        &mut self,
+        client: ClientId,
+        dir: Option<PathBuf>,
+        note: Option<String>,
+        focus: Part,
+    ) {
+        let mode = Mode::read(&paths::state_dir());
+        let notes = worktree_from_note::notes_dir();
+        self.off_task(
+            client,
+            move || {
+                let mut fields = Fields::from_mode(&mode);
+                if !mode.on
+                    && let Some(repo) = dir.as_deref().and_then(main_clone)
+                {
+                    fields.repo = paths::tilde(&repo);
+                }
+                if fields.note.is_empty() {
+                    let choices = mode::note_choices(&notes, &mode.note);
+                    fields.note = choices
+                        .open
+                        .into_iter()
+                        .chain(choices.rest)
+                        .next()
+                        .unwrap_or_default();
+                }
+                let was = fields.clone();
+                if let Some(note) = note.filter(|n| *n != fields.note) {
+                    // Its skipped items are the given note's, by its ID.
+                    let id = crate::notes::id::of_file(&notes.join(&note)).unwrap_or_default();
+                    fields.skipped = skipped_of(&mode, &id);
+                    fields.taken_back.clear();
+                    fields.skipped_of = id;
+                    fields.note = note;
+                }
+                let ctx = box_context(&mode, &fields, &notes);
+                (fields, was, ctx)
+            },
+            move |server, client, (fields, was, ctx)| {
+                server.autopilot_box_open(client, fields, was, ctx, focus)
+            },
+        );
+    }
+
+    /// The box opened again on `fields` as they were typed, after another
+    /// question (a note picked, a confirm said no), with `problem` under
+    /// the Repository field.
+    fn autopilot_box_again(
+        &mut self,
+        client: ClientId,
+        fields: Fields,
+        was: Fields,
+        problem: String,
+        focus: Part,
+    ) {
+        let mode = Mode::read(&paths::state_dir());
+        let notes = worktree_from_note::notes_dir();
+        self.off_task(
+            client,
+            move || {
+                let ctx = box_context(&mode, &fields, &notes);
+                (fields, ctx)
+            },
+            move |server, client, (fields, ctx)| {
+                let ctx = Context { problem, ..ctx };
+                server.autopilot_box_open(client, fields, was, ctx, focus)
+            },
+        );
+    }
+
+    fn autopilot_box_open(
+        &mut self,
+        client: ClientId,
+        fields: Fields,
+        was: Fields,
+        mut ctx: Context,
+        focus: Part,
+    ) {
+        let summary = self
+            .autopilot
+            .pilot
+            .summary(&self.autopilot.mode, self.autopilot_away());
+        ctx.busy = summary.busy;
+        ctx.open = summary.open;
+        let paused = ctx.paused;
+        let boxed = SettingsBox::new(fields, was.clone(), ctx, focus);
+        self.open(
+            client,
+            Box::new(boxed),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let Outcome::Picked(p) = outcome else {
+                    return;
+                };
+                let Ok(fields) = serde_json::from_str::<Fields>(&p.value) else {
+                    return;
+                };
+                match p.index {
+                    settings_box::SAVE => server.autopilot_box_save(client, fields, was),
+                    settings_box::PAUSE => server
+                        .autopilot_change(client, if paused { Act::Resume } else { Act::Pause }),
+                    settings_box::STOP => server.autopilot_change(client, Act::Stop),
+                    settings_box::MENU => server.autopilot_menu_list(client),
+                    settings_box::NOTE => server.autopilot_box_note(client, fields, was),
+                    _ => {}
+                }
+            })),
+        );
+    }
+
+    /// The Note field's Enter: every note, those holding an unticked item
+    /// first, the box opened again on the one picked (or as it was).
+    fn autopilot_box_note(&mut self, client: ClientId, fields: Fields, was: Fields) {
+        let notes = worktree_from_note::notes_dir();
+        let last = fields.note.clone();
+        self.off_task(
+            client,
+            move || mode::note_choices(&notes, &last),
+            move |server, client, choices| {
+                let items = choices
+                    .open
+                    .iter()
+                    .chain(&choices.rest)
+                    .map(|n| PickItem::new(n.strip_suffix(".md").unwrap_or(n), n.clone()))
+                    .collect();
+                let picker = Picker::new("Work which note continuously?", items)
+                    .named("notes")
+                    .prompt("note> ");
+                server.pick(client, picker, move |server, client, picked| {
+                    let mut fields = fields;
+                    let Some(p) = picked.filter(|p| p.value != fields.note) else {
+                        server.autopilot_box_again(client, fields, was, String::new(), Part::Note);
+                        return;
+                    };
+                    // The skipped items shown become the picked note's,
+                    // found by its ID, read off the task.
+                    let file = worktree_from_note::notes_dir().join(&p.value);
+                    server.off_task(
+                        client,
+                        move || crate::notes::id::of_file(&file).unwrap_or_default(),
+                        move |server, client, id| {
+                            let mode = Mode::read(&paths::state_dir());
+                            fields.note = p.value;
+                            fields.skipped = skipped_of(&mode, &id);
+                            fields.taken_back.clear();
+                            fields.skipped_of = id;
+                            server.autopilot_box_again(
+                                client,
+                                fields,
+                                was,
+                                String::new(),
+                                Part::Note,
+                            );
+                        },
+                    );
+                });
+            },
+        );
+    }
+
+    /// Its Save (Start while the mode is off): turning Land without asking
+    /// or Hands-free on asked first as the menu asks it, a no opening the
+    /// box again as it was typed.
+    fn autopilot_box_save(&mut self, client: ClientId, fields: Fields, was: Fields) {
+        let lands = |f: &Fields| f.land_without_asking || f.hands_free;
+        let question = if fields.hands_free && !was.hands_free {
+            Some((line::hands_free_question(), Part::HandsFree))
+        } else if lands(&fields) && !lands(&was) {
+            Some((line::land_question(), Part::Land))
+        } else {
+            None
+        };
+        let Some(((question, list), part)) = question else {
+            self.autopilot_box_write(client, fields, was);
+            return;
+        };
+        self.ask(
+            client,
+            crate::ui::Confirm::new(question).list(list),
+            move |server, client, yes| {
+                if yes {
+                    server.autopilot_box_write(client, fields, was);
+                } else {
+                    server.autopilot_box_again(client, fields, was, String::new(), part);
+                }
+            },
+        );
+    }
+
+    /// The fields checked and written into the mode at once: the
+    /// repository's main clone and how it lands looked at off the task
+    /// when it is new or the mode starts, and the note given its ID when
+    /// it is new; a problem opens the box again saying it.
+    fn autopilot_box_write(&mut self, client: ClientId, fields: Fields, was: Fields) {
+        let again = |server: &mut Server, fields, was, problem: String, part| {
+            server.autopilot_box_again(client, fields, was, problem, part)
+        };
+        if fields.note.is_empty() {
+            again(self, fields, was, "Pick a note to work".into(), Part::Note);
+            return;
+        }
+        if fields.limit().is_none() {
+            again(
+                self,
+                fields,
+                was,
+                "Spend limit: dollars, or empty for none".into(),
+                Part::Limit,
+            );
+            return;
+        }
+        let target = fields.target.trim().to_string();
+        if !target.is_empty() && mode::typed_branch(&target).is_none() {
+            again(
+                self,
+                fields,
+                was,
+                format!("Not a branch name: {target}"),
+                Part::Target,
+            );
+            return;
+        }
+        let mode = Mode::read(&paths::state_dir());
+        let starting = !mode.on;
+        let notes = worktree_from_note::notes_dir();
+        let typed = fields.repo_path();
+        // The note picked in the box, else the mode's own as it is now,
+        // which Notes may have renamed since the box opened.
+        let picked = fields.note != was.note || mode.note.is_empty();
+        let note = if picked {
+            fields.note.clone()
+        } else {
+            mode.note.clone()
+        };
+        let (mode_repo, mode_target) = (mode.repo.clone(), mode.target.clone());
+        let github = settings::is_on("github");
+        self.off_task(
+            client,
+            move || -> Result<(PathBuf, (String, Option<String>)), String> {
+                let repo = main_clone(&typed)
+                    .ok_or_else(|| format!("Not a repository: {}", paths::tilde(&typed)))?;
+                // Its tabs are counted by the repository they work in, so it
+                // moves to another only once stopped, as before the box.
+                if !starting && repo != mode_repo {
+                    return Err(format!(
+                        "Its tabs work in {}: stop it to work another repository",
+                        paths::tilde(&mode_repo)
+                    ));
+                }
+                // How it lands, checked as starting or picking a note did
+                // before the box.
+                if starting || picked || repo != mode_repo {
+                    match crate::repos::landing_for(&repo, false).map(|l| l.landing) {
+                        Ok(l) if l == "direct" => {}
+                        Ok(_) => return Err(PR_REFUSED.to_string()),
+                        Err(e) => return Err(format!("Couldn't tell how it lands: {e}")),
+                    }
+                }
+                // A note to start on, or picked, must be there to read.
+                let note_id = if picked || starting {
+                    Some(
+                        crate::notes::id::ensure_id(&notes.join(&note), &notes).map_err(|e| {
+                            format!(
+                                "Couldn't read the note {}, pick another: {e}",
+                                note_title(&note)
+                            )
+                        })?,
+                    )
+                } else {
+                    None
+                };
+                let note = (note, note_id);
+                let common = crate::tabs::git::locate(&repo).map(|p| p.common_dir);
+                // A branch named must be the repository's own, or one
+                // origin has, which an item starting makes a local one; one
+                // not fetched yet is fetched to tell, as an item starting
+                // would fetch it, while Settings' GitHub allows reaching it.
+                let known = |c: &Path| {
+                    crate::tabs::git::local_branches(c).contains(&target)
+                        || crate::tabs::git::on_origin(c, &target)
+                };
+                if !target.is_empty()
+                    && (starting || target != mode_target || repo != mode_repo)
+                    && !common.as_deref().is_some_and(known)
+                {
+                    if !github {
+                        return Err(format!(
+                            "{} has no branch {target} fetched, and GitHub is off in Settings, so it isn't fetched",
+                            paths::tilde(&repo)
+                        ));
+                    }
+                    if !crate::worktree::fetch_branch(&repo, "origin", &target, "autopilot") {
+                        return Err(format!("{} has no branch {target}", paths::tilde(&repo)));
+                    }
+                }
+                if target != mode_target
+                    && let Some(common) = &common
+                {
+                    work_recent::pick_branch(common, &target);
+                }
+                Ok((repo, note))
+            },
+            move |server, client, checked| {
+                let (repo, (note, note_id)) = match checked {
+                    Ok(found) => found,
+                    Err(problem) => {
+                        server.autopilot_box_again(client, fields, was, problem, Part::Repo);
+                        return;
+                    }
+                };
+                let written = Mode::update(&paths::state_dir(), |m| {
+                    fields.apply(m);
+                    let other_note = m.note != note;
+                    if other_note || m.repo != repo {
+                        // What it said of the note or repository before no
+                        // longer holds, as starting anew clears it.
+                        m.said.clear();
+                    }
+                    if other_note {
+                        // As starting on another note does.
+                        m.skipped.retain(|x| !x.note.is_empty());
+                        m.note = note.clone();
+                        m.note_id = note_id.clone().unwrap_or_default();
+                    } else if let Some(id) = &note_id {
+                        m.note_id = id.clone();
+                    }
+                    m.repo = repo.clone();
+                    if starting {
+                        m.on = true;
+                        m.paused = false;
+                        m.said.clear();
+                    }
+                });
+                let m = match written {
+                    Ok(m) => m,
+                    Err(e) => {
+                        server.mission_note(client, format!("Couldn't save it: {e}"));
+                        return;
+                    }
+                };
+                server.autopilot.pilot.reset();
+                server.autopilot_tick();
+                let said = if starting {
+                    format!(
+                        "Working {}: {} at a time, up to {} tabs, in {}, landing on {}",
+                        note_title(&m.note),
+                        m.slots,
+                        m.cap,
+                        paths::tilde(&m.repo),
+                        if m.target.is_empty() {
+                            "the default branch"
+                        } else {
+                            &m.target
+                        }
+                    )
+                } else {
+                    let changes = fields.changes(&was);
+                    if changes.is_empty() {
+                        "Autopilot: nothing changed".to_string()
+                    } else {
+                        format!("Autopilot: {}", changes.join(", "))
+                    }
+                };
+                server.mission_note(client, said);
+            },
+        );
+    }
+
     // ── Its menu ────────────────────────────────────────────────────────────
 
     /// The menu `m`, Enter on its line or heading, or its heading's button
     /// in mission control opens, moved through
     /// with j and k as mission control's other menus are.
     pub fn autopilot_menu(&mut self, client: ClientId) {
+        if crate::sidebar::text::ux2() {
+            self.autopilot_box(client, None, None, Part::Note);
+        } else {
+            self.autopilot_menu_list(client);
+        }
+    }
+
+    /// Its menu itself, which the box's `m` opens for the options it
+    /// doesn't have (skipping the next item, closing landed tabs).
+    fn autopilot_menu_list(&mut self, client: ClientId) {
+        let ux2 = crate::sidebar::text::ux2();
         let mode = Mode::read(&paths::state_dir());
         let close = settings::current_settings()
             .into_iter()
@@ -718,7 +1215,12 @@ impl Server {
         );
         let options = list
             .iter()
-            .map(|(_, label, _)| MenuOption::new(label.clone()))
+            .map(|(_, label, act)| match act {
+                Act::Change if ux2 => {
+                    MenuOption::new("Change its note, slots, cap or spend limit…")
+                }
+                _ => MenuOption::new(label.clone()),
+            })
             .collect();
         let menu = Menu::new(format!("Working {}", note_title(&mode.note)), options);
         self.choose(client, menu, move |server, client, chose| {
@@ -731,6 +1233,21 @@ impl Server {
     /// Does what an option of its menu, or of its notification's, says.
     pub fn autopilot_act(&mut self, client: ClientId, act: Act) {
         let state = paths::state_dir();
+        // With UX 2.0, its settings box, on the field the option names.
+        let field = match act {
+            Act::Change => Some(Part::Note),
+            Act::ChangeTarget => Some(Part::Target),
+            Act::Slots => Some(Part::Slots),
+            Act::Cap => Some(Part::Cap),
+            Act::SpendLimit => Some(Part::Limit),
+            _ => None,
+        };
+        if let Some(focus) = field
+            && crate::sidebar::text::ux2()
+        {
+            self.autopilot_box(client, None, None, focus);
+            return;
+        }
         match act {
             Act::Change => {
                 let repo = Mode::read(&state).repo;
