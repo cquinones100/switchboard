@@ -61,6 +61,8 @@ pub struct Entry {
     pub session: Option<String>,
     pub pane: Option<String>,
     pub tab: Option<TabId>,
+    /// What the landing has recorded of itself (`read_record`).
+    pub record: Option<Value>,
 }
 
 /// A running Claude session: its id and its working directory.
@@ -87,6 +89,9 @@ pub struct RepoLanding {
     pub target: Option<String>,
     pub holder: Option<Entry>,
     pub waiting: Vec<Entry>,
+    /// How it lands, `pr` or `direct`, as repos.json or the last answer
+    /// worked out says (`repos::landing_by_key`), `None` when neither does.
+    pub method: Option<String>,
 }
 
 /// What one read of the landing queues found: each tab's place, and each
@@ -137,6 +142,32 @@ pub fn git_of(dir: &Path) -> Option<(PathBuf, PathBuf)> {
         return Some((root, common.canonicalize().ok()?));
     }
     None
+}
+
+/// A worktree's own git directory (a linked worktree's under the shared
+/// one's `worktrees/`, the main clone's `.git`), from its `.git` alone.
+pub fn own_git_dir(root: &Path) -> Option<PathBuf> {
+    let dot_git = root.join(".git");
+    let meta = fs::metadata(&dot_git).ok()?;
+    if meta.is_dir() {
+        return Some(dot_git);
+    }
+    let text = fs::read_to_string(&dot_git).ok()?;
+    let named = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+    Some(root.join(named))
+}
+
+/// What a landing has done so far (`land-lock record`): its tests' counts,
+/// its review's rounds, its leak check and the tail of its last output,
+/// kept in the worktree's own git directory, where nothing commits it and
+/// it goes when the worktree does.
+pub const RECORD: &str = "landing.json";
+/// The whole of that last output, which `o` in the Landing view pages.
+pub const OUTPUT: &str = "landing-output.log";
+
+/// The record of the landing in the worktree at `root`, when it has one.
+pub fn read_record(root: &Path) -> Option<Value> {
+    util::read_json(own_git_dir(root)?.join(RECORD)).filter(Value::is_object)
 }
 
 /// The running Claude sessions, from the session files in `dir`
@@ -200,6 +231,7 @@ fn entry_of(value: &Value) -> Option<Entry> {
         session: text("session"),
         pane: text("pane"),
         tab: None,
+        record: None,
     })
 }
 
@@ -237,16 +269,22 @@ fn repo_landing(
         None => base.to_string(),
     };
     let live = |e: &Entry| live_in(e, running);
+    let recorded = |mut e: Entry| {
+        e.record = read_record(&e.path);
+        e
+    };
     let holder = util::read_json(common.join(named("land.lock")).join("holder"))
         .as_ref()
         .and_then(entry_of)
-        .filter(live);
+        .filter(live)
+        .map(recorded);
     let waiting = util::read_json(common.join(named("land.queue")))
         .and_then(|q| q.as_array().cloned())
         .unwrap_or_default()
         .iter()
         .filter_map(entry_of)
         .filter(live)
+        .map(recorded)
         .collect();
     let repo = super::repo::origin_of(root).map(|r| r.to_string());
     let folder = if common.file_name().is_some_and(|n| n == ".git") {
@@ -261,6 +299,11 @@ fn repo_landing(
                 .strip_prefix("ref: refs/remotes/origin/")
                 .map(str::to_string)
         });
+    let method = crate::repos::landing_by_key(
+        &repo
+            .clone()
+            .unwrap_or_else(|| common.to_string_lossy().into_owned()),
+    );
     RepoLanding {
         common: common.to_path_buf(),
         name: repo.clone().unwrap_or_else(|| {
@@ -274,6 +317,7 @@ fn repo_landing(
         target: target.map(str::to_string),
         holder,
         waiting,
+        method,
     }
 }
 
@@ -373,6 +417,13 @@ pub fn landing_of(tabs: &[TabPlace], running: &[RunningSession]) -> Read {
     Read { places, repos }
 }
 
+/// A worktree's folder name, what the view calls a landing no tab has.
+fn folder_of(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 /// "landing", or "3rd in line to land", for a tab's words.
 pub fn landing_words(landing: &Landing) -> String {
     if landing.holding {
@@ -398,11 +449,15 @@ pub struct ViewTab {
     pub name: String,
     pub phase: Option<String>,
     pub waiting: bool,
+    /// Autopilot's "Land without asking" is on in it (`@autopilot_land`).
+    pub autoland: bool,
 }
 
-fn header(id: &str, title: &str, count: usize) -> Item {
+/// A section's heading: its title, its count, and what UX 2.0 draws at
+/// its right edge in place of the count.
+fn header(id: &str, title: &str, count: usize, right: &str) -> Item {
     Item::new(format!("header:{id}"), title)
-        .data(serde_json::json!({ "header": true, "count": count }))
+        .data(serde_json::json!({ "header": true, "count": count, "right": right }))
 }
 
 /// The Landing view's rows: for each repository with something landing, a
@@ -433,31 +488,44 @@ pub fn view_items(
             .chain(r.waiting.iter().map(|e| (e, false)))
             .collect();
         if !direct.is_empty() {
+            let holder_tab = r
+                .holder
+                .as_ref()
+                .and_then(|h| tabs.iter().find(|t| Some(t.id) == h.tab));
+            let unasked = if holder_tab.is_some_and(|t| t.autoland) {
+                " · lands without asking"
+            } else {
+                ""
+            };
             let (way, id) = match &r.target {
                 Some(target) => (
-                    format!("{} → {target}", r.name),
+                    format!("{} → {target}{unasked}", r.name),
                     format!("{}:direct:{target}", r.common.display()),
                 ),
                 None => (
                     format!(
-                        "{} · straight to {}",
+                        "{} · straight on {}{unasked}",
                         r.name,
                         r.branch.as_deref().unwrap_or("the default branch")
                     ),
                     format!("{}:direct", r.common.display()),
                 ),
             };
-            items.push(header(&id, &way, direct.len()));
+            let right = match &r.holder {
+                Some(_) => format!("{} landing · 1 holds the lock", direct.len()),
+                None => format!("{} landing", direct.len()),
+            };
+            items.push(header(&id, &way, direct.len(), &right));
+            let holder_name = r.holder.as_ref().map(|h| match holder_tab {
+                Some(t) => t.name.clone(),
+                None => folder_of(&h.path),
+            });
             let ahead = usize::from(r.holder.is_some());
             for (i, (entry, holding)) in direct.iter().enumerate() {
                 let tab = tabs.iter().find(|t| Some(t.id) == entry.tab);
                 let name = match tab {
                     Some(t) => t.name.clone(),
-                    None => entry
-                        .path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
+                    None => folder_of(&entry.path),
                 };
                 let step = if *holding {
                     match tab.and_then(|t| t.phase.as_deref()) {
@@ -491,6 +559,13 @@ pub fn view_items(
                         "place": (!holding).then(|| at + 1),
                         "phase": tab.and_then(|t| t.phase.clone()),
                         "target": r.target,
+                        "record": entry.record,
+                        "output": own_git_dir(&entry.path).map(|d| d.join(OUTPUT)),
+                        "holder": (!holding).then(|| serde_json::json!({
+                            "name": holder_name,
+                            "phase": holder_tab.and_then(|t| t.phase.clone()),
+                            "since": r.holder.as_ref().map(|h| h.since),
+                        })),
                     },
                     "search": format!("{} {}", r.name, entry.path.display()),
                 }));
@@ -502,10 +577,16 @@ pub fn view_items(
             }
         }
         if !queue.is_empty() {
+            let way = if r.method.as_deref() == Some("pr") {
+                "through a PR · GitHub merge queue"
+            } else {
+                "merge queue"
+            };
             items.push(header(
                 &format!("{}:queue", r.common.display()),
-                &format!("{} · merge queue", r.name),
+                &format!("{} · {way}", r.name),
                 queue.len(),
+                &format!("{} in the merge queue", queue.len()),
             ));
             items.extend(queue);
         }
@@ -621,6 +702,7 @@ mod tests {
                 name: "lander".into(),
                 phase: Some("pushing".into()),
                 waiting: false,
+                autoland: false,
             },
             ViewTab {
                 id: TabId(2),
@@ -628,6 +710,7 @@ mod tests {
                 name: "waiter".into(),
                 phase: None,
                 waiting: true,
+                autoland: false,
             },
         ];
         let none = |_: &str| Vec::new();
@@ -639,7 +722,7 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("repo · straight to the default branch", "", State::Idle),
+                ("repo · straight on the default branch", "", State::Idle),
                 ("1. lander", "landing · pushing · tab 1", State::Active),
                 ("2. three", "waiting · no tab", State::Idle),
                 ("3. waiter", "waiting · tab 2", State::Attention),
@@ -756,6 +839,7 @@ mod tests {
                 name: name.into(),
                 phase: None,
                 waiting: false,
+                autoland: false,
             })
             .into();
         let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
@@ -763,7 +847,7 @@ mod tests {
         assert_eq!(
             titles,
             vec![
-                "repo · straight to the default branch",
+                "repo · straight on the default branch",
                 "1. first",
                 "repo → team/next",
                 "1. second",
@@ -892,6 +976,7 @@ mod tests {
                 name: name.into(),
                 phase: None,
                 waiting: false,
+                autoland: false,
             })
             .into();
         let items = view_items(&read.repos, &|_| Vec::new(), &view_tabs);
@@ -918,6 +1003,58 @@ mod tests {
 
         let (holding, _) = landing(serde_json::json!({ "path": main, "since": 1 }), &tabs[..1]);
         assert_eq!(holding, [1], "an entry naming neither, with one tab there");
+    }
+
+    #[test]
+    fn a_heading_says_how_its_repository_lands_with_its_counts_and_a_row_its_record() {
+        let entry = |path: &str, tab: u32, record: Option<Value>| Entry {
+            path: PathBuf::from(path),
+            since: 1,
+            session: None,
+            pane: None,
+            tab: Some(TabId(tab)),
+            record,
+        };
+        let repo = |method: &str| RepoLanding {
+            common: PathBuf::from(format!("/{method}/.git")),
+            repo: Some(format!("me/{method}")),
+            name: format!("me/{method}"),
+            branch: Some("main".into()),
+            target: None,
+            holder: Some(entry(
+                "/w/one",
+                1,
+                Some(serde_json::json!({ "tests": { "passed": 412 } })),
+            )),
+            waiting: vec![entry("/w/two", 2, None)],
+            method: Some(method.into()),
+        };
+        let tabs: Vec<ViewTab> = [(1, "one", true), (2, "two", false)]
+            .map(|(id, name, autoland)| ViewTab {
+                id: TabId(id),
+                index: id as usize,
+                name: name.into(),
+                phase: Some("testing".into()),
+                waiting: false,
+                autoland,
+            })
+            .into();
+        let queued = |_: &str| vec![Item::new("https://pr/1", "1. #1 a PR")];
+        let items = view_items(&[repo("direct")], &queued, &tabs);
+        assert_eq!(
+            items[0].title,
+            "me/direct · straight on main · lands without asking"
+        );
+        assert_eq!(items[0].data["right"], "2 landing · 1 holds the lock");
+        assert_eq!(items[1].data["landing"]["record"]["tests"]["passed"], 412);
+        assert_eq!(items[2].data["landing"]["holder"]["name"], "one");
+        assert_eq!(items[2].data["landing"]["holder"]["phase"], "testing");
+        assert_eq!(items[3].title, "me/direct · merge queue");
+
+        let items = view_items(&[repo("pr")], &queued, &tabs);
+        let heading = items.iter().find(|i| i.id.ends_with(":queue")).unwrap();
+        assert_eq!(heading.title, "me/pr · through a PR · GitHub merge queue");
+        assert_eq!(heading.data["right"], "1 in the merge queue");
     }
 
     #[test]

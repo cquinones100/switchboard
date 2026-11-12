@@ -979,6 +979,11 @@ impl Server {
                 name: t.name.clone(),
                 phase: t.phase.clone(),
                 waiting: t.state == crate::sidebar::model::TabState::Waiting,
+                autoland: self.tabs.get(&t.id).is_some_and(|tab| {
+                    tab.opts
+                        .get(crate::autopilot::LAND)
+                        .is_some_and(|v| v == "1")
+                }),
             })
             .collect();
         let by_repo = &self.sources.queues.by_repo;

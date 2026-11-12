@@ -984,9 +984,10 @@ impl Server {
         let was = m.current().map(|v| v.id.clone());
         // The Autopilot view orders its items by how far along they are, and
         // CI by whether their checks fail, run or pass, Resources by each
-        // tab's CPU or memory, Usage its tabs by their spend, and Reminders
-        // by their time, so a stage, a check, a reading or a reminder changed
-        // moves them: the cursor follows the chosen one.
+        // tab's CPU or memory, Usage its tabs by their spend, Reminders by
+        // their time, and Landing its waiters by their place in the queue,
+        // so a stage, a check, a reading, a reminder or J and K changed moves
+        // them: the cursor follows the chosen one.
         let follows = |id: &ViewId| {
             matches!(
                 id,
@@ -995,6 +996,7 @@ impl Server {
                     | ViewId::Resources
                     | ViewId::Usage
                     | ViewId::Reminders
+                    | ViewId::Landing
             )
         };
         // The Reminders view's chosen reminder, moved to another day, takes
@@ -1112,7 +1114,7 @@ impl Server {
         let keycap_kept =
             (m.keycap_for.is_some() && keycap_owner(&m) == m.keycap_for) || on_reminders(&m);
         if matches!(m.focus, Some(Focus::Key(_))) && !keycap_kept {
-            m.focus = (on_calendar(&m) || m.view == 0).then_some(Focus::Item);
+            m.focus = (keycaps_here(&m) || m.view == 0).then_some(Focus::Item);
         }
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
@@ -1931,7 +1933,7 @@ impl Server {
             Some(Focus::Filter) if press => k = Key::new(KeyCode::Char('/'), Mods::NONE),
             Some(Focus::Key(key))
                 if press
-                    && (on_calendar(m) || waiting_card(m).is_some())
+                    && (keycaps_here(m) || waiting_card(m).is_some())
                     && keycap_owner(m) == m.keycap_for =>
             {
                 k = key
@@ -1989,6 +1991,18 @@ impl Server {
             }
             Some(CalendarKey::Say(text)) => {
                 self.say(Some(client), &text);
+                return;
+            }
+            None => {}
+        }
+        match landing_key(m, k) {
+            Some(LandingKey::Done) => return,
+            Some(LandingKey::Do(act, label)) => {
+                self.mission_do(client, act, label);
+                return;
+            }
+            Some(LandingKey::Say(text)) => {
+                self.say(Some(client), text);
                 return;
             }
             None => {}
@@ -3479,6 +3493,13 @@ impl Server {
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
             Do::ReadLog { job, name, line } => self.read_ci_log(client, &job, &name, line),
+            Do::ReadOutput(file) => {
+                if !file.is_file() {
+                    self.mission_note(client, "Its last output is no longer kept.");
+                    return;
+                }
+                self.page_beside(client, "@landing_output", &file, None);
+            }
             Do::OpenNote(rel) => {
                 self.mission_close(client);
                 self.new_note_open(client, &rel);
@@ -3502,6 +3523,13 @@ impl Server {
             self.mission_note(client, format!("{name}'s log is no longer kept."));
             return;
         }
+        self.page_beside(client, MARK, &file, line);
+    }
+
+    /// A file paged in a pane beside the one you're in (`switchboard view
+    /// --log`), marked `mark`, in place of one with that mark read there
+    /// before, from `line` or else from its end.
+    fn page_beside(&mut self, client: ClientId, mark: &str, file: &Path, line: Option<usize>) {
         self.mission_close(client);
         let Some(pane) = self.current_pane(client) else {
             return;
@@ -3510,7 +3538,7 @@ impl Server {
             return;
         };
         let mut beside = pane;
-        if let Some(old) = self.marked_in(tab, MARK) {
+        if let Some(old) = self.marked_in(tab, mark) {
             self.kill_pane(old);
             if old == pane {
                 match self.tabs.get(&tab) {
@@ -3522,7 +3550,7 @@ impl Server {
         let mut args = vec!["view".to_string(), "--log".into()];
         args.extend(line.map(|n| format!("+{n}")));
         args.push(file.to_string_lossy().into_owned());
-        self.open_beside(beside, MARK, args, 50);
+        self.open_beside(beside, mark, args, 50);
     }
 
     /// Runs `work` in a task of its own under the busy box, which closes
@@ -4798,11 +4826,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A key on the footer is pressed as typed, the focus kept for it.
             if let Spot::Key(key) = spot {
                 m.hover = None;
-                // A Calendar keycap acts on its event, a Reminders keycap on
+                // A Calendar keycap acts on its event, a Landing keycap on its row, a Reminders keycap on
                 // its reminder, a waiting card's option on its card, and the
                 // Inbox ticket's tab line on its notification: a filter being
                 // typed is kept, done typing, rather than given the key.
-                if (on_calendar(m)
+                if (keycaps_here(m)
                     || on_reminders(m)
                     || waiting_card(m).is_some()
                     || m.current().is_some_and(|v| inbox_board::shown(m, v)))
@@ -5021,6 +5049,103 @@ fn follow_reminder(m: &mut Mission) {
     {
         m.reminders_day = (day != super::reminders::today(m)).then_some(day);
     }
+}
+
+/// What a key in UX 2.0's Landing view does, when it is one of its own.
+enum LandingKey {
+    /// Done in mission control itself (`i`, Esc over the output).
+    Done,
+    Do(Do, &'static str),
+    /// Why the key can't do it.
+    Say(&'static str),
+}
+
+/// UX 2.0's Landing view's own keys on the chosen worktree, as its detail
+/// lists them: `g` goes to its tab (Home still goes to the top), `J` and
+/// `K` move it down and up the landing queue, `x` takes it out, `o`
+/// pages all of its last output beside, and `i` shows that output over
+/// the list on a screen too narrow to show it under the rows, until `i`
+/// or Esc. `g` takes a merge queue's PR to its tab too. `None` leaves
+/// the key to the rest.
+fn landing_key(m: &mut Mission, k: Key) -> Option<LandingKey> {
+    if !m.snap.rules.ux2 || !m.current().is_some_and(|v| v.id == ViewId::Landing) {
+        return None;
+    }
+    if m.landing_output && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
+        m.landing_output = false;
+        return Some(LandingKey::Done);
+    }
+    if !plain(&k) {
+        return None;
+    }
+    let item = m.chosen_item()?;
+    // Every open tab, not only those a filter left showing.
+    let tabs = if m.snap.all_tabs.is_empty() {
+        &m.snap.tabs
+    } else {
+        &m.snap.all_tabs
+    };
+    let tab_of = |v: &Value| {
+        let id = v.get("tab").and_then(Value::as_str)?;
+        tabs.iter().find(|t| t.id.to_string() == id).map(|t| t.id)
+    };
+    if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
+        return match k.code {
+            KeyCode::Char('g') => Some(match tab_of(queue) {
+                Some(tab) => LandingKey::Do(Do::GoTo(tab), "Going to its tab"),
+                None => LandingKey::Say("No tab has its PR open."),
+            }),
+            _ => None,
+        };
+    }
+    let landing = item.data.get("landing").filter(|l| l.is_object())?.clone();
+    let flag = |key: &str| landing.get(key).and_then(Value::as_bool) == Some(true);
+    let root = PathBuf::from(landing["root"].as_str().unwrap_or_default());
+    let holds = "It holds the lock: it lands next whatever the queue says.";
+    Some(match k.code {
+        KeyCode::Char('g') => match tab_of(&landing) {
+            Some(tab) => LandingKey::Do(Do::GoTo(tab), "Going to its tab"),
+            None => LandingKey::Say("No tab is on it."),
+        },
+        KeyCode::Char('J' | 'K') if flag("holding") => LandingKey::Say(holds),
+        KeyCode::Char('J') if flag("last") => LandingKey::Say("It is last in the landing queue."),
+        KeyCode::Char('K') if flag("first") => LandingKey::Say("It is next in the landing queue."),
+        KeyCode::Char(c @ ('J' | 'K')) => LandingKey::Do(
+            Do::Land {
+                root,
+                way: if c == 'J' { "down" } else { "up" },
+            },
+            if c == 'J' {
+                "Moving it down the landing queue"
+            } else {
+                "Moving it up the landing queue"
+            },
+        ),
+        KeyCode::Char('x') if flag("holding") => LandingKey::Say(holds),
+        KeyCode::Char('x') => {
+            LandingKey::Do(Do::LeaveQueue(root), "Taking it out of the landing queue")
+        }
+        KeyCode::Char('o' | 'i') if !landing["record"]["output"].is_object() => LandingKey::Say(
+            "It has no output kept: queue-and-clean records it as it tests and reviews.",
+        ),
+        KeyCode::Char('o') => LandingKey::Do(
+            Do::ReadOutput(PathBuf::from(
+                landing["output"].as_str().unwrap_or_default(),
+            )),
+            "",
+        ),
+        KeyCode::Char('i') if (m.laid().0 as usize) < super::render::LANDING_OUTPUT_AT => {
+            m.landing_output = true;
+            LandingKey::Done
+        }
+        _ => return None,
+    })
+}
+
+/// Whether the view in front has keycaps on its chosen row that Tab stops
+/// at: the Calendar's, and UX 2.0's Landing's detail.
+fn keycaps_here(m: &Mission) -> bool {
+    on_calendar(m) || (m.snap.rules.ux2 && m.current().is_some_and(|v| v.id == ViewId::Landing))
 }
 
 /// Whether the Calendar view is in front.
@@ -5643,12 +5768,13 @@ fn move_focus(m: &mut Mission, by: isize) {
             .filter(|i| !heading(*i))
             .map(Stop::Item),
     );
-    // The Calendar's keycaps beside the chosen event, after it.
+    // The Calendar's keycaps beside the chosen event, and the Landing
+    // view's in the chosen worktree's detail, after it.
     let keycaps: Vec<Key> = m
         .hits
         .iter()
         .filter_map(|h| match h.spot {
-            Spot::Key(k) if on_calendar(m) || on_reminders(m) => Some(k),
+            Spot::Key(k) if keycaps_here(m) || on_reminders(m) => Some(k),
             // A waiting card's options, by their numbers.
             Spot::Key(k)
                 if waiting_card(m).is_some()

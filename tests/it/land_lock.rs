@@ -828,3 +828,68 @@ fn only_the_tab_whose_pane_took_the_lock_is_landing_among_tabs_in_its_directory(
         "the other tab in the clone isn't landing"
     );
 }
+
+#[test]
+fn with_ux2_j_in_the_landing_view_moves_the_chosen_waiter_down_the_queue() {
+    let server = TestServer::start();
+    common::write_settings(
+        &server.home,
+        json!({ "ux2": true, "github": false, "linear": false, "sidebar": false, "tips": false }),
+    );
+    let mut client = server.attach(170, 40);
+    client.wait_text("$");
+    let repo = repo(server.dir.path());
+    let at = server.dir.path();
+    let [one, two, three] =
+        ["one", "two", "three"].map(|name| worktree(&server.home, &repo, at, name));
+    // The queue is whole before the tabs open, so no read of it the tabs
+    // set off finds two last in a queue three hasn't joined yet.
+    assert_eq!(code(&lock(&server.home, &one, &["take"])), 0);
+    assert_eq!(code(&lock(&server.home, &two, &["take"])), 3);
+    assert_eq!(code(&lock(&server.home, &three, &["take"])), 3);
+    for (dir, name) in [(&one, "one"), (&two, "two"), (&three, "three")] {
+        server.ok(&["new-tab", "-d", "-c", dir.to_str().unwrap(), "-n", name]);
+    }
+    let paths = || -> Vec<String> {
+        stdout(&lock(&server.home, &repo, &["queue"]))
+            .lines()
+            .filter_map(|l| l.split('\t').nth(1).map(str::to_string))
+            .collect()
+    };
+    let s = |p: &Path| p.to_str().unwrap().to_string();
+    assert_eq!(paths(), vec![s(&one), s(&two), s(&three)]);
+
+    server.ok(&["press", "mission-landing"]);
+    client.wait_text("straight on the default branch");
+    // The landing one is chosen first; one step down is the first waiter,
+    // whose detail says it takes the lock at its turn. Each key waits for
+    // the screen to show it, so none moves past it.
+    client.wait_text("▌ one");
+    client.type_text("j");
+    client.wait_text("▌ two");
+    client.wait_text("takes the lock at its turn");
+    client.type_text("J");
+    let deadline = common::deadline(Duration::from_secs(20));
+    while paths() != vec![s(&one), s(&three), s(&two)] {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "J never moved it down: {:?}",
+            paths()
+        );
+        std::thread::sleep(Duration::from_millis(100) * common::patience());
+    }
+    // The cursor follows the moved waiter, so K moves the same one back up,
+    // rather than the one now where it was, which is first and stays.
+    // Last now, its detail offers only K: the view has read the new order.
+    client.wait_text("go to its tab  K  up the queue");
+    client.type_text("K");
+    let deadline = common::deadline(Duration::from_secs(20));
+    while paths() != vec![s(&one), s(&two), s(&three)] {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "K never moved it back up: {:?}",
+            paths()
+        );
+        std::thread::sleep(Duration::from_millis(100) * common::patience());
+    }
+}

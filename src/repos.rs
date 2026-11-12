@@ -401,6 +401,17 @@ pub fn landing_known(dir: &Path) -> Option<String> {
     set.or_else(|| cached_in(&cache_file(), &key).map(|c| c.landing))
 }
 
+/// How a repository lands by its key (`owner/name`, else its shared git
+/// directory), as `landing_known` says it, from the files alone, with no
+/// git process, for a read that runs on every tick.
+pub fn landing_by_key(key: &str) -> Option<String> {
+    let set = landing_entry(&read_safely(), key)
+        .get("landing")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    set.or_else(|| cached_in(&cache_file(), key).map(|c| c.landing))
+}
+
 /// How the repository at `dir` lands, as the module's comment says.
 pub fn landing_for(dir: &Path, refresh: bool) -> Result<Landing, String> {
     let ask = Ask {

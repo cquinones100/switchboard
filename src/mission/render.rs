@@ -2705,7 +2705,24 @@ fn list(
         work_map_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
-    if snap.rules.ux2 && view.id == ViewId::Landing && cols >= STAGES_AT + 6 * STAGE_STEP {
+    // `i`'s output over the list, whether the board or the list is drawn.
+    if snap.rules.ux2
+        && view.id == ViewId::Landing
+        && m.landing_output
+        && cols < LANDING_OUTPUT_AT
+        && let Some(landing) = m
+            .chosen_item()
+            .and_then(|i| i.data.get("landing"))
+            .filter(|l| l.is_object())
+    {
+        let budget = rows.saturating_sub(1 + lines.len());
+        lines.extend(landing_output_over(landing, cols, budget, m));
+        return;
+    }
+    if snap.rules.ux2
+        && view.id == ViewId::Landing
+        && stage_board_fits(view, cols, snap.now_secs * 1000)
+    {
         stage_rows(view, cols, rows, m, top_row, lines, hits);
         return;
     }
@@ -3337,39 +3354,26 @@ pub(super) fn work_branch(item: &Item) -> String {
     )
 }
 
-/// UX 2.0's Landing view: where the stage cells start, how wide each is and
-/// how far apart they start. A cell's two ends (the kit's half circles)
-/// are in its width, leaving 13 columns for its words ("3rd in queue").
-const STAGES_AT: usize = 40;
-const STAGE_WIDTH: usize = 15;
-const STAGE_STEP: usize = 16;
+/// UX 2.0's Landing view, as board 5 draws it and board 45 lays it out:
+/// the stages a worktree goes through landing straight on its branch, and
+/// a merge queue's PR's.
 const STAGES: [&str; 6] = ["tests", "review", "leak check", "lock", "push", "applied"];
-
-/// A Landing row's columns from x 2, as board 45 lays them out: the
-/// worktree's name at its width on the board, then a cell for each of
-/// `stages` stretching into the rest, one column apart.
-fn stage_columns(cols: usize, stages: usize) -> Vec<(usize, usize)> {
-    let mut wanted = vec![Col::Fixed {
-        min: STAGES_AT - 2 - 1,
-        natural: STAGES_AT - 2 - 1,
-        cap: STAGES_AT - 2 - 1,
-    }];
-    wanted.extend(std::iter::repeat_n(
-        Col::Stretch {
-            weight: 1,
-            min: STAGE_WIDTH,
-            max: None,
-        },
-        stages,
-    ));
-    kit::columns(&wanted, cols.saturating_sub(3), 1, &[])
-        .into_iter()
-        .map(|c| c.map_or((0, 0), |(x, w)| (x + 2, w)))
-        .collect()
-}
-
-/// A merge queue's stages, as its rows are drawn.
 const QUEUE_STAGES: [&str; 5] = ["CI", "approved", "merge queue", "merge", "deploy test"];
+/// A cell's widest, its two ends in it: 13 columns of words ("3rd in queue").
+const CELL_MAX: usize = 15;
+/// From this wide every cell is `CELL_MAX`; narrower, each column is as
+/// wide as its widest words.
+const CELLS_FULL_AT: usize = 160;
+/// The worktree column's width on the board, what it keeps before a
+/// waiting cell gives up its words, and the least it narrows to.
+const WORKTREE_W: usize = 37;
+const WORKTREE_MIN: usize = 20;
+/// A waiting cell with no room for its words: the mark alone.
+const WAITING_MARK: &str = "◌";
+/// Under this wide the chosen worktree's last output is behind `i`.
+pub(crate) const LANDING_OUTPUT_AT: usize = 140;
+/// The detail's labels' column.
+const DETAIL_LABEL: usize = 12;
 
 /// How far a stage of a landing has got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3409,33 +3413,102 @@ impl Stage {
     }
 }
 
+/// A stage's cell: how far it got, its words, and the dim note under it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StageCell {
+    stage: Stage,
+    label: String,
+    note: String,
+}
+
+fn stage_cell(stage: Stage, label: impl Into<String>) -> StageCell {
+    StageCell {
+        stage,
+        label: label.into(),
+        note: String::new(),
+    }
+}
+
 /// A landing's six stages from what the view holds of it (`data.landing`):
 /// a worktree is in the landing queue only once its tests, review and leak
 /// check are done (queue-and-clean takes the lock after them), so those are
-/// done; a waiter is queued for the lock at its place; the one holding it
-/// is at the step its phase names, a failure included (`tests failed …`,
-/// `review blocked …`, the words after it shown in the cell), the check
-/// after a clean rebase (`checking …`, `check failed`) in the tests' cell. Neither the
-/// phase nor the landing's files hold a test count or the review's rounds,
-/// so a done cell says only "passed" or "clean".
-fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
-    let done = |s: &str| (Stage::Done, format!("✓ {s}"));
-    let running = |s: &str| (Stage::Running, s.to_string());
-    let waiting = || (Stage::Waiting, "waiting".to_string());
-    let mut out = [
-        done("passed"),
-        done("clean"),
-        done("none"),
-        waiting(),
-        waiting(),
-        waiting(),
-    ];
+/// done, with the numbers its record (`land-lock record`) holds: the tests
+/// passed ("✓ 412", or "✕ 2 of 401" with the failing file under it), the
+/// review's clean rounds ("✓ 2 clean", or "round 1" with its reviewer and
+/// how long ago under it while it goes on) and the leak check's ("✓ none",
+/// "✕ found"); without a record, "passed", "clean" and "none". A waiter is
+/// queued for the lock at its place; the one holding it is at the step its
+/// phase names, a failure included (`tests failed …`, `review blocked …`,
+/// the words after it shown in the cell), the check after a clean rebase
+/// (`checking …`, `check failed`) in the tests' cell.
+fn landing_stages(landing: &serde_json::Value, now_ms: i64) -> [StageCell; 6] {
+    let done = |s: &str| stage_cell(Stage::Done, format!("✓ {s}"));
+    let running = |s: &str| stage_cell(Stage::Running, s);
+    let waiting = || stage_cell(Stage::Waiting, "waiting");
+    let record = &landing["record"];
+    let number = |v: &serde_json::Value, k: &str| v.get(k).and_then(serde_json::Value::as_u64);
+    let words = |v: &serde_json::Value, k: &str| {
+        printable(v.get(k).and_then(serde_json::Value::as_str).unwrap_or(""))
+    };
+    let failed_tests = |t: &serde_json::Value| {
+        number(t, "failed").unwrap_or(0) > 0
+            || t.get("ok").and_then(serde_json::Value::as_bool) == Some(false)
+    };
+    let tests = match &record["tests"] {
+        t if t.is_object() && failed_tests(t) && number(t, "total").is_none() => StageCell {
+            stage: Stage::Failed,
+            label: "✕ failed".into(),
+            note: words(t, "file"),
+        },
+        t if t.is_object() && failed_tests(t) => StageCell {
+            stage: Stage::Failed,
+            label: format!(
+                "✕ {} of {}",
+                number(t, "failed").unwrap_or(0),
+                number(t, "total").unwrap_or(0)
+            ),
+            note: words(t, "file"),
+        },
+        t if t.is_object() => match number(t, "passed").or(number(t, "total")) {
+            Some(n) => done(&n.to_string()),
+            None => done("passed"),
+        },
+        _ => done("passed"),
+    };
+    let review = match &record["review"] {
+        r if r.is_object() && number(r, "clean_rounds").unwrap_or(0) >= 2 => {
+            done(&format!("{} clean", number(r, "clean_rounds").unwrap_or(2)))
+        }
+        r if r.is_object() => {
+            let ago = text::ago(
+                r.get("at")
+                    .and_then(serde_json::Value::as_i64)
+                    .map(|ms| ms / 1000),
+                now_ms / 1000,
+            );
+            StageCell {
+                stage: Stage::Running,
+                label: format!("round {}", number(r, "round").unwrap_or(1)),
+                note: [words(r, "reviewer"), ago]
+                    .into_iter()
+                    .filter(|w| !w.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            }
+        }
+        _ => done("clean"),
+    };
+    let leak = match number(&record["leak"], "found") {
+        Some(n) if n > 0 => stage_cell(Stage::Failed, "✕ found"),
+        _ => done("none"),
+    };
+    let mut out = [tests, review, leak, waiting(), waiting(), waiting()];
     if landing.get("holding").and_then(serde_json::Value::as_bool) != Some(true) {
         let place = landing
             .get("place")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(1);
-        out[3] = (Stage::Queued, ordinal(place));
+        out[3] = stage_cell(Stage::Queued, ordinal(place));
         return out;
     }
     out[3] = done("held");
@@ -3443,25 +3516,33 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
         .get("phase")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    let failed = |rest: &str, or: &str| {
+    let failed = |rest: &str, or: &str, note: String| {
         let rest = rest.trim_start_matches([':', ' ']).trim();
-        (
-            Stage::Failed,
-            format!("✕ {}", if rest.is_empty() { or } else { rest }),
-        )
+        StageCell {
+            stage: Stage::Failed,
+            label: format!("✕ {}", if rest.is_empty() { or } else { rest }),
+            note,
+        }
     };
+    let tests_note = out[0].note.clone();
     if let Some(rest) = phase.strip_prefix("tests failed") {
-        out[0] = failed(rest, "failed");
+        out[0] = failed(rest, "failed", tests_note);
     } else if phase.starts_with("check failed") {
-        out[0] = failed("", "check failed");
+        out[0] = failed("", "check failed", tests_note);
     } else if let Some(rest) = phase.strip_prefix("review blocked") {
-        out[1] = failed(rest, "blocked");
+        out[1] = failed(rest, "blocked", out[1].note.clone());
     } else if phase.contains("testing") {
         out[0] = running("testing…");
     } else if phase.starts_with("checking") {
         out[0] = running("checking…");
     } else if phase.starts_with("reviewing") {
-        out[1] = running("reviewing…");
+        // A round under way keeps its number; with none recorded, or the
+        // last loop's clean rounds, it says only that it reviews.
+        out[1] = if out[1].stage == Stage::Running {
+            out[1].clone()
+        } else {
+            running("reviewing…")
+        };
     } else if phase.starts_with("pushing") {
         out[4] = running("pushing…");
     } else if phase.starts_with("applying") {
@@ -3480,7 +3561,7 @@ fn landing_stages(landing: &serde_json::Value) -> [(Stage, String); 6] {
 /// cell is its place, its checks running, or a failure when it can't merge;
 /// merging is the merge stage running. The deploy test waits, since the row
 /// leaves the queue once it merges.
-fn queue_stages(queue: &serde_json::Value) -> [(Stage, String); 5] {
+fn queue_stages(queue: &serde_json::Value) -> [StageCell; 5] {
     let state = queue
         .get("state")
         .and_then(serde_json::Value::as_str)
@@ -3489,11 +3570,11 @@ fn queue_stages(queue: &serde_json::Value) -> [(Stage, String); 5] {
         .get("position")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    let waiting = || (Stage::Waiting, "waiting".to_string());
+    let waiting = || stage_cell(Stage::Waiting, "waiting");
     let mut out = [
-        (Stage::Done, "✓ CI".to_string()),
-        (Stage::Done, "✓ approved".to_string()),
-        (
+        stage_cell(Stage::Done, "✓ CI"),
+        stage_cell(Stage::Done, "✓ approved"),
+        stage_cell(
             Stage::Queued,
             format!("{} in queue", ordinal(position.max(1))),
         ),
@@ -3501,12 +3582,12 @@ fn queue_stages(queue: &serde_json::Value) -> [(Stage, String); 5] {
         waiting(),
     ];
     match state {
-        "AWAITING_CHECKS" => out[2] = (Stage::Running, "checks…".into()),
-        "UNMERGEABLE" => out[2] = (Stage::Failed, "✕ can't merge".into()),
-        "MERGEABLE" => out[2] = (Stage::Done, "✓ ready".into()),
+        "AWAITING_CHECKS" => out[2] = stage_cell(Stage::Running, "checks…"),
+        "UNMERGEABLE" => out[2] = stage_cell(Stage::Failed, "✕ can't merge"),
+        "MERGEABLE" => out[2] = stage_cell(Stage::Done, "✓ ready"),
         "LOCKED" => {
-            out[2] = (Stage::Done, "✓ ready".into());
-            out[3] = (Stage::Running, "merging…".into());
+            out[2] = stage_cell(Stage::Done, "✓ ready");
+            out[3] = stage_cell(Stage::Running, "merging…");
         }
         _ => {}
     }
@@ -3524,18 +3605,426 @@ fn ordinal(n: u64) -> String {
     format!("{n}{suffix}")
 }
 
-/// `text` centered in `w` columns.
-fn centered(text: &str, w: usize) -> String {
-    let text = text::cut(text, w);
-    let left = w.saturating_sub(width(&text)) / 2;
-    let right = w.saturating_sub(width(&text) + left);
-    format!("{}{text}{}", " ".repeat(left), " ".repeat(right))
+/// An item's stage cells, none for a row that isn't a landing or a PR in
+/// a merge queue.
+fn stages_of(item: &Item, now_ms: i64) -> Vec<StageCell> {
+    if let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) {
+        landing_stages(landing, now_ms).to_vec()
+    } else if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
+        queue_stages(queue).to_vec()
+    } else {
+        Vec::new()
+    }
 }
 
-/// UX 2.0's Landing view: each repository's landing queue under its
-/// heading and the stages' names, each worktree two lines, its name bold
-/// with a cell per stage, then a dim note of where it is under it; the
-/// merge queue's rows one line each, as before.
+/// The stage names a section's heading puts over its cells.
+fn heads_of(item: &Item) -> &'static [&'static str] {
+    // A direct landing's heading names its target after `:direct:`, which
+    // may be a branch called queue, so it is told apart first.
+    if item.id.contains(":direct") {
+        &STAGES
+    } else if item.id.ends_with(":queue") {
+        &QUEUE_STAGES
+    } else {
+        &[]
+    }
+}
+
+/// A section of the Landing view laid out across `cols`: the worktree
+/// column and each cell's, from x 0 of the line, and whether a waiting
+/// cell shows its mark alone.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StageLayout {
+    worktree: (usize, usize),
+    cells: Vec<(usize, usize)>,
+    marks: bool,
+}
+
+/// How a section whose cells are `rows` lays out across `cols`, as board
+/// 45 says: the cells at the right edge one column apart, each `CELL_MAX`
+/// from 160 columns, the worktree column stretching over what is left.
+/// Narrower, the cells narrow to their widest words; then, when the
+/// worktree column would be under its width on the board, a waiting cell
+/// shows ◌ alone, so a column where every row waits is three wide; then
+/// the worktree column narrows to 20. `None` when even that doesn't fit.
+fn stage_layout(cols: usize, heads: &[&str], rows: &[Vec<StageCell>]) -> Option<StageLayout> {
+    // A row starts with the pointer and a space, and leaves the last
+    // column empty.
+    let room = cols.saturating_sub(3);
+    let widest = |c: usize, marks: bool| {
+        let words = rows
+            .iter()
+            .filter_map(|r| r.get(c))
+            .map(|cell| {
+                let label = if marks && cell.stage == Stage::Waiting {
+                    WAITING_MARK
+                } else {
+                    cell.label.as_str()
+                };
+                width(label).max(width(&cell.note).saturating_sub(2))
+            })
+            .max()
+            .unwrap_or(1);
+        let all_wait = rows
+            .iter()
+            .all(|r| r.get(c).is_none_or(|cell| cell.stage == Stage::Waiting));
+        let head = if marks && all_wait {
+            0
+        } else {
+            heads.get(c).map_or(0, |h| width(h))
+        };
+        (words.max(head) + 2).min(CELL_MAX)
+    };
+    let widths = |full: bool, marks: bool| -> Vec<usize> {
+        (0..heads.len())
+            .map(|c| if full { CELL_MAX } else { widest(c, marks) })
+            .collect()
+    };
+    let cells_w = |w: &[usize]| w.iter().sum::<usize>() + w.len();
+    let tries = [
+        (cols >= CELLS_FULL_AT, false, WORKTREE_W),
+        (false, false, WORKTREE_W),
+        (false, true, WORKTREE_MIN),
+    ];
+    let (widths, marks) = tries
+        .into_iter()
+        .map(|(full, marks, least)| (widths(full, marks), marks, least))
+        .find(|(w, _, least)| room >= cells_w(w) + least)
+        .map(|(w, marks, _)| (w, marks))?;
+    let mut wanted = vec![Col::Stretch {
+        weight: 1,
+        min: WORKTREE_MIN,
+        max: None,
+    }];
+    wanted.extend(widths.iter().map(|&w| Col::Right { natural: w, cap: w }));
+    let at = kit::columns(&wanted, room, 1, &[]);
+    let place = |c: Option<(usize, usize)>| c.map_or((2, 0), |(x, w)| (x + 2, w));
+    Some(StageLayout {
+        worktree: place(at[0]),
+        cells: at[1..].iter().map(|&c| place(c)).collect(),
+        marks,
+    })
+}
+
+/// Whether every section of the Landing view lays out across `cols`.
+fn stage_board_fits(view: &View, cols: usize, now_ms: i64) -> bool {
+    stage_sections(view, now_ms)
+        .iter()
+        .all(|(heads, rows)| heads.is_empty() || stage_layout(cols, heads, rows).is_some())
+}
+
+/// Each section's stage names and its rows' cells, a section to each
+/// heading (and one before the first, with no names).
+fn stage_sections(view: &View, now_ms: i64) -> Vec<(&'static [&'static str], Vec<Vec<StageCell>>)> {
+    let mut out: Vec<(&'static [&'static str], Vec<Vec<StageCell>>)> = vec![(&[], Vec::new())];
+    for item in &view.data.items {
+        if views::is_header(item) {
+            out.push((heads_of(item), Vec::new()));
+            continue;
+        }
+        let cells = stages_of(item, now_ms);
+        if let Some(last) = out.last_mut()
+            && !cells.is_empty()
+        {
+            last.1.push(cells);
+        }
+    }
+    out
+}
+
+/// What the chosen worktree waits on, from what the view holds of it.
+fn waits_on(landing: &serde_json::Value, now_ms: i64) -> String {
+    if landing.get("holding").and_then(serde_json::Value::as_bool) == Some(true) {
+        return "nothing: it holds the lock".into();
+    }
+    let holder = &landing["holder"];
+    let name = holder["name"].as_str().unwrap_or("");
+    if name.is_empty() {
+        return "its turn for the lock".into();
+    }
+    let phase = holder["phase"].as_str().unwrap_or("landing");
+    let since = text::ago(holder["since"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+    let mut out = format!("{name}, which holds the lock · {phase}");
+    if !since.is_empty() {
+        out.push_str(&format!(" · {since}"));
+    }
+    out
+}
+
+/// What happens next for the chosen worktree.
+fn then_words(landing: &serde_json::Value) -> String {
+    let onto = landing["target"]
+        .as_str()
+        .map_or("the default branch".to_string(), |t| t.to_string());
+    if landing.get("holding").and_then(serde_json::Value::as_bool) != Some(true) {
+        return format!("takes the lock at its turn, catches up with {onto}, pushes, cleans up");
+    }
+    let phase = landing["phase"].as_str().unwrap_or("");
+    if phase.starts_with("tests failed")
+        || phase.starts_with("check failed")
+        || phase.starts_with("review blocked")
+    {
+        "lets go of the lock, fixes it, and lands again".into()
+    } else if phase.contains("testing") || phase.starts_with("checking") {
+        format!("pushes onto {onto}, then cleans up")
+    } else if phase.starts_with("reviewing") {
+        format!("pushes onto {onto} once the review is clean")
+    } else if phase.starts_with("pushing") {
+        "applies what landed, then cleans up".into()
+    } else if phase.starts_with("applying") {
+        "cleans up".into()
+    } else if phase.starts_with("cleaning") {
+        "lets go of the lock".into()
+    } else {
+        format!("catches up with {onto}, pushes, cleans up")
+    }
+}
+
+/// The chosen worktree's last review round, in a line: its round, its
+/// reviewer, how long ago, and codex-review's summary.
+fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
+    let mut parts = vec![format!("round {}", review["round"].as_u64().unwrap_or(1))];
+    if let Some(r) = review["reviewer"].as_str().filter(|r| !r.is_empty()) {
+        parts.push(r.to_string());
+    }
+    let ago = text::ago(review["at"].as_i64().map(|ms| ms / 1000), now_ms / 1000);
+    if !ago.is_empty() {
+        parts.push(format!("{ago} ago"));
+    }
+    if let Some(n) = review["clean_rounds"].as_u64().filter(|n| *n > 0) {
+        parts.push(format!("{n} clean"));
+    } else if let Some(n) = review["findings"].as_u64() {
+        parts.push(format!("{n} found"));
+    }
+    if let Some(s) = review["summary"].as_str().filter(|s| !s.is_empty()) {
+        parts.push(s.to_string());
+    }
+    printable(&parts.join(" · "))
+}
+
+/// The keys the chosen worktree's detail offers, as the Landing view takes
+/// them (`serve::landing_key`).
+fn landing_keys(landing: &serde_json::Value, narrow: bool) -> Vec<(&'static str, &'static str)> {
+    let flag = |k: &str| landing.get(k).and_then(serde_json::Value::as_bool) == Some(true);
+    let mut keys = Vec::new();
+    if landing["tab"].as_str().is_some() {
+        keys.push(("g", "go to its tab"));
+    }
+    if !flag("holding") {
+        if !flag("last") {
+            keys.push(("J", "down the queue"));
+        }
+        if !flag("first") {
+            keys.push(("K", "up the queue"));
+        }
+        keys.push(("x", "out of the queue"));
+    }
+    if landing["record"]["output"].is_object() {
+        keys.push(("o", "all of its last output"));
+        if narrow {
+            keys.push(("i", "its last output here"));
+        }
+    }
+    keys
+}
+
+/// The chosen worktree's detail under the rows, as board 5 draws it: what
+/// it waits on, what happens then and where it is, its keys, then its last
+/// review round (or its last tests) with the tail of that output, faint,
+/// and what earlier rounds found with the commit that fixed each. `output`
+/// is how many of the output's lines it shows; under `LANDING_OUTPUT_AT` columns
+/// it shows none, `i` showing them over the list.
+fn landing_detail(
+    landing: &serde_json::Value,
+    cols: usize,
+    output: usize,
+    m: &Mission,
+    top_row: usize,
+    hits: &mut Vec<HitBox>,
+) -> Vec<Line> {
+    let theme = &m.snap.theme;
+    let now_ms = m.snap.now_secs * 1000;
+    let narrow = cols < LANDING_OUTPUT_AT;
+    let mut lines = vec![Line {
+        spans: vec![kit::rule(cols, theme)],
+        fill: None,
+    }];
+    let value_w = cols.saturating_sub(DETAIL_LABEL + 2).min(kit::WRAP_MAX);
+    let fact = |label: &str, value: &str| {
+        let mut row = Row::default();
+        row.put(
+            format!("  {label:<w$}", w = DETAIL_LABEL - 2),
+            fg(theme.dim),
+        )
+        .put(text::cut(&printable(value), value_w), fg(theme.text));
+        row.line(cols, None)
+    };
+    lines.push(fact("waits on", &waits_on(landing, now_ms)));
+    lines.push(fact("then", &then_words(landing)));
+    lines.push(fact(
+        "worktree",
+        landing["root"].as_str().unwrap_or_default(),
+    ));
+    let keys = landing_keys(landing, narrow);
+    if !keys.is_empty() {
+        let y = (top_row + lines.len()) as u16;
+        let mut spans = vec![Span::raw(" ".repeat(DETAIL_LABEL))];
+        for (key, what) in keys {
+            let x0 = spans_width(&spans);
+            let parsed = crate::mux::input::Key::parse(key);
+            let pointed = parsed
+                .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
+            let lit = pointed || (key == "i" && m.landing_output);
+            spans.extend(kit::keycap(key, what, lit, m.snap.caps, theme));
+            if let Some(k) = parsed {
+                hits.push(HitBox {
+                    y,
+                    x0: x0 as u16,
+                    x1: spans_width(&spans).saturating_sub(1) as u16,
+                    spot: Spot::Key(k),
+                });
+            }
+        }
+        lines.push(Line {
+            spans: fit(spans, cols, Style::new()),
+            fill: None,
+        });
+    }
+    let record = &landing["record"];
+    let review = &record["review"];
+    let out = &record["output"];
+    // The section named for what the kept output came from: the tests run
+    // again after the review are the last tests, not the last review.
+    let tests_last = out["of"].as_str() == Some("tests") && record["tests"].is_object();
+    let last = if review.is_object() && !tests_last {
+        Some(("Last review", review_line(review, now_ms)))
+    } else if record["tests"].is_object() {
+        let t = &record["tests"];
+        let failed = t["failed"].as_u64().unwrap_or(0);
+        let file = t["file"]
+            .as_str()
+            .filter(|f| !f.is_empty())
+            .map(|f| format!(" · {}", printable(f)))
+            .unwrap_or_default();
+        let words = if failed > 0 {
+            format!(
+                "{failed} of {} failed{file}",
+                t["total"].as_u64().unwrap_or(0)
+            )
+        } else if t["ok"].as_bool() == Some(false) {
+            format!("failed{file}")
+        } else {
+            match t["passed"].as_u64().or(t["total"].as_u64()) {
+                Some(n) => format!("{n} passed"),
+                None => "passed".into(),
+            }
+        };
+        Some(("Last tests", words))
+    } else {
+        None
+    };
+    if let Some((label, words)) = last {
+        lines.push(Line {
+            spans: kit::label(label, Tone::Dim, None, cols, theme),
+            fill: None,
+        });
+        let mut row = Row::default();
+        row.put(
+            format!("  {}", text::cut(&words, cols.saturating_sub(3))),
+            fg(theme.text),
+        );
+        lines.push(row.line(cols, None));
+    }
+    for found in record["found"].as_array().into_iter().flatten() {
+        let mut row = Row::default();
+        row.put(
+            format!("  round {} found ", found["round"].as_u64().unwrap_or(0)),
+            fg(theme.dim),
+        )
+        .put(
+            printable(found["title"].as_str().unwrap_or_default()),
+            fg(theme.text),
+        );
+        match found["fixed_by"].as_str().filter(|c| !c.is_empty()) {
+            Some(commit) => row
+                .put(" · fixed by ", fg(theme.dim))
+                .put(printable(commit), fg(ACCENT)),
+            None => row.put(" · not fixed", fg(theme.dim)),
+        };
+        lines.push(row.line(cols, None));
+    }
+    if !narrow {
+        let tail: Vec<&str> = out["tail"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        for line in &tail[tail.len().saturating_sub(output)..] {
+            let mut row = Row::default();
+            row.put(
+                format!("  {}", printable(line)),
+                Style::new().fg(theme.dim).add_modifier(Modifier::DIM),
+            );
+            lines.push(row.line(cols, None));
+        }
+    }
+    lines
+}
+
+/// A line of a recorded output as text alone: a tab a space and every
+/// other control character dropped, so an escape sequence in a log (a
+/// clipboard write, a graphics command) is shown inert, never sent to the
+/// terminal.
+fn printable(line: &str) -> String {
+    line.chars()
+        .filter_map(|c| match c {
+            '\t' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
+}
+
+/// The chosen worktree's last output over the list (`i`, on a screen too
+/// narrow to show it under the rows), as many of its last lines as fit.
+fn landing_output_over(
+    landing: &serde_json::Value,
+    cols: usize,
+    rows: usize,
+    m: &Mission,
+) -> Vec<Line> {
+    let theme = &m.snap.theme;
+    let out = &landing["record"]["output"];
+    let of = if out["of"].as_str() == Some("review") {
+        "Last review"
+    } else {
+        "Last tests"
+    };
+    let mut lines = vec![Line {
+        spans: kit::label(of, Tone::Dim, None, cols, theme),
+        fill: None,
+    }];
+    let tail: Vec<&str> = out["tail"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect();
+    let room = rows.saturating_sub(lines.len());
+    for line in &tail[tail.len().saturating_sub(room)..] {
+        let mut row = Row::default();
+        row.put(format!("  {}", printable(line)), fg(theme.text));
+        lines.push(row.line(cols, None));
+    }
+    lines
+}
+
+/// UX 2.0's Landing view: each repository's queue under its heading (how
+/// it lands, its counts at the right edge) and the stages' names, each
+/// worktree two lines, its name bold with a cell per stage, then a dim
+/// note of where it is with each cell's note under it; then the chosen
+/// worktree's detail.
 fn stage_rows(
     view: &View,
     cols: usize,
@@ -3546,32 +4035,42 @@ fn stage_rows(
     hits: &mut Vec<HitBox>,
 ) {
     let theme = &m.snap.theme;
+    let now_ms = m.snap.now_secs * 1000;
     let items = &view.data.items;
+    let budget = rows.saturating_sub(1 + lines.len());
+    let cursor = (m.cursor.max(0) as usize).min(items.len().saturating_sub(1));
+    let chosen_landing = items
+        .get(cursor)
+        .filter(|_| m.cursor >= 0)
+        .and_then(|i| i.data.get("landing"))
+        .filter(|l| l.is_object());
     // The rows each item takes: a heading its line, then its stage names
     // and the dashed rule under them; a landing or a queued PR its row of
     // cells and its note; anything else a line.
     let height = |item: &Item| {
         if views::is_header(item) {
-            if item.id.ends_with(":direct") || item.id.ends_with(":queue") {
-                3
-            } else {
-                1
-            }
-        } else if item.data.get("landing").is_some_and(|l| l.is_object())
-            || item.data.get("queue").is_some_and(|q| q.is_object())
-        {
-            2
-        } else {
+            if heads_of(item).is_empty() { 1 } else { 3 }
+        } else if stages_of(item, now_ms).is_empty() {
             1
+        } else {
+            2
         }
     };
+    let all: usize = items.iter().map(height).sum();
+    // The detail without its output's lines, kept at least half the room
+    // from the rows; what the rows and the whole detail leave goes to
+    // those, so its newest lines are the ones shown.
+    let mut scratch = Vec::new();
+    let detail = chosen_landing
+        .map(|l| landing_detail(l, cols, 0, m, 0, &mut scratch).len())
+        .unwrap_or(0);
+    let row_budget = budget.saturating_sub(detail.min(budget / 2));
+    let output_lines = budget.saturating_sub(detail + all.min(row_budget));
     // As many as fit, from as far back of the chosen one as they can, so
     // it is always in sight.
-    let budget = rows.saturating_sub(1 + lines.len());
-    let cursor = (m.cursor.max(0) as usize).min(items.len().saturating_sub(1));
     let mut first = cursor;
     let mut used = items.get(cursor).map_or(0, height);
-    while first > 0 && used + height(&items[first - 1]) <= budget {
+    while first > 0 && used + height(&items[first - 1]) <= row_budget {
         first -= 1;
         used += height(&items[first]);
     }
@@ -3580,12 +4079,19 @@ fn stage_rows(
         .iter()
         .take_while(|i| {
             shown += height(i);
-            shown <= budget
+            shown <= row_budget
         })
         .count()
         .max(1);
-    let cursor = m.cursor.max(0) as usize;
-    let name_w = STAGES_AT.saturating_sub(4);
+    // Each section's layout, by the heading it is under.
+    let layouts: Vec<Option<StageLayout>> = stage_sections(view, now_ms)
+        .iter()
+        .map(|(heads, rows)| stage_layout(cols, heads, rows))
+        .collect();
+    let mut section = items[..first.min(items.len())]
+        .iter()
+        .filter(|i| views::is_header(i))
+        .count();
     for (index, item) in items.iter().enumerate().skip(first).take(room) {
         let chosen = index == cursor && m.cursor >= 0;
         let fill = if chosen {
@@ -3604,35 +4110,72 @@ fn stage_rows(
             });
         };
         if views::is_header(item) {
+            section += 1;
+        }
+        let layout = layouts.get(section).cloned().flatten();
+        if views::is_header(item) {
             hit(lines);
-            let count = item
+            let right = item
                 .data
-                .get("count")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let mut row = Row::default();
-            row.put(format!(" {}", item.title), bold(theme.bright))
-                .put(format!("   {count}"), fg(theme.dim));
-            lines.push(row.line(cols, fill));
-            let names: &[&str] = if item.id.ends_with(":direct") {
-                &STAGES
-            } else if item.id.ends_with(":queue") {
-                &QUEUE_STAGES
-            } else {
-                &[]
-            };
-            if !names.is_empty() {
+                .get("right")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    item.data
+                        .get("count")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0)
+                        .to_string()
+                });
+            let room = cols.saturating_sub(1);
+            let at = kit::columns(
+                &[
+                    Col::Stretch {
+                        weight: 1,
+                        min: 1,
+                        max: None,
+                    },
+                    Col::Right {
+                        natural: width(&right),
+                        cap: room / 2,
+                    },
+                ],
+                room,
+                2,
+                &[1],
+            );
+            let mut heading = Vec::new();
+            if let Some(col) = at[0] {
+                kit::place(
+                    &mut heading,
+                    vec![Span::styled(format!(" {}", item.title), bold(theme.bright))],
+                    col,
+                );
+            }
+            if let Some(col) = at[1] {
+                kit::place(&mut heading, vec![Span::styled(right, fg(theme.dim))], col);
+            }
+            lines.push(Line {
+                spans: fit(heading, cols, Style::new()),
+                fill,
+            });
+            let names = heads_of(item);
+            if let Some(layout) = layout.filter(|_| !names.is_empty()) {
                 let first = if names.len() == STAGES.len() {
-                    " worktree"
+                    "worktree"
                 } else {
-                    " pull request"
+                    "pull request"
                 };
-                let at = stage_columns(cols, names.len());
-                let mut heads = vec![Span::styled(first, fg(theme.dim))];
-                for (name, &col) in names.iter().zip(&at[1..]) {
+                let mut heads = Vec::new();
+                kit::place(
+                    &mut heads,
+                    vec![Span::styled(first, fg(theme.dim))],
+                    layout.worktree,
+                );
+                for (name, &col) in names.iter().zip(&layout.cells) {
                     kit::place(
                         &mut heads,
-                        vec![Span::styled(centered(name, col.1), fg(theme.dim))],
+                        vec![Span::styled(kit::centered(name, col.1), fg(theme.dim))],
                         col,
                     );
                 }
@@ -3648,15 +4191,8 @@ fn stage_rows(
             continue;
         }
         let pointer = if chosen { "▌" } else { " " };
-        let stages: Vec<(Stage, String)> =
-            if let Some(landing) = item.data.get("landing").filter(|l| l.is_object()) {
-                landing_stages(landing).to_vec()
-            } else if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
-                queue_stages(queue).to_vec()
-            } else {
-                Vec::new()
-            };
-        if stages.is_empty() {
+        let stages = stages_of(item, now_ms);
+        let Some(layout) = layout.filter(|_| !stages.is_empty()) else {
             hit(lines);
             let mut row = Row::default();
             row.put(pointer, fg(ACCENT))
@@ -3666,29 +4202,57 @@ fn stage_rows(
                 .put(item.detail.clone(), fg(theme.dim));
             lines.push(row.line(cols, fill));
             continue;
-        }
+        };
         let name = item
             .title
             .split_once(". ")
             .map_or(item.title.as_str(), |(_, n)| n);
         hit(lines);
-        let at = stage_columns(cols, stages.len());
-        let mut top = Row::default();
-        top.put(pointer, fg(ACCENT))
-            .put(" ", Style::new())
-            .put(text::cut(name, name_w), bold(theme.bright));
-        for ((stage, label), &col) in stages.iter().zip(&at[1..]) {
-            let cell = kit::cell(label, col.1, stage.tone(), m.snap.caps, theme);
-            kit::place(&mut top.spans, cell, col);
+        let mut top = vec![Span::styled(pointer, fg(ACCENT)), Span::raw(" ")];
+        kit::place(
+            &mut top,
+            vec![Span::styled(name.to_string(), bold(theme.bright))],
+            layout.worktree,
+        );
+        let mut under = vec![Span::styled(pointer, fg(ACCENT)), Span::raw(" ")];
+        kit::place(
+            &mut under,
+            vec![Span::styled(item.detail.clone(), fg(theme.dim))],
+            layout.worktree,
+        );
+        for (cell, &col) in stages.iter().zip(&layout.cells) {
+            let label = if layout.marks && cell.stage == Stage::Waiting {
+                WAITING_MARK
+            } else {
+                cell.label.as_str()
+            };
+            kit::place(
+                &mut top,
+                kit::cell(label, col.1, cell.stage.tone(), m.snap.caps, theme),
+                col,
+            );
+            if !cell.note.is_empty() {
+                kit::place(
+                    &mut under,
+                    vec![kit::cell_note(&cell.note, col.1, theme)],
+                    col,
+                );
+            }
         }
-        lines.push(top.line(cols, fill));
+        lines.push(Line {
+            spans: fit(top, cols, Style::new()),
+            fill,
+        });
         hit(lines);
-        let mut under = Row::default();
-        under
-            .put(pointer, fg(ACCENT))
-            .put(" ", Style::new())
-            .put(text::cut(&item.detail, name_w), fg(theme.dim));
-        lines.push(under.line(cols, fill));
+        lines.push(Line {
+            spans: fit(under, cols, Style::new()),
+            fill,
+        });
+    }
+    if let Some(landing) = chosen_landing {
+        let detail = landing_detail(landing, cols, output_lines, m, top_row + lines.len(), hits);
+        let room = rows.saturating_sub(1 + lines.len());
+        lines.extend(detail.into_iter().take(room));
     }
 }
 
@@ -4752,6 +5316,14 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             keys.push(("/", "filter"));
             with(&keys)
         }
+        ViewId::Landing if m.snap.rules.ux2 => with(&[
+            ("jk", "move"),
+            ("g", "its tab"),
+            ("J K", "down or up the queue"),
+            ("x", "out of the queue"),
+            ("o", "its last output"),
+            ("↵", "menu"),
+        ]),
         ViewId::Calendar => with(&[
             ("jk", "events"),
             ("hl", "day"),
@@ -5721,8 +6293,8 @@ mod tests {
     #[test]
     fn the_check_after_a_clean_rebase_shows_in_the_tests_cell() {
         let at = |phase: &str| {
-            landing_stages(&serde_json::json!({ "holding": true, "phase": phase }))[0]
-                .1
+            landing_stages(&serde_json::json!({ "holding": true, "phase": phase }), 0)[0]
+                .label
                 .clone()
         };
         assert_eq!(at("checking after the rebase"), "checking…");
@@ -7950,9 +8522,295 @@ mod tests {
         let (lines, _) = screen(&m, 140, 26);
         let text = texts(&lines);
         let shown = text.iter().filter(|l| l.contains("landing-")).count();
-        // 22 rows under the bar: four repositories of five, and the landing before them.
-        assert_eq!(shown, 5, "{text:#?}");
+        // 22 rows under the bar: the chosen one's detail, then three
+        // repositories of five and the landing before them.
+        assert_eq!(shown, 4, "{text:#?}");
         assert!(text[..25].iter().any(|l| l.contains("landing-12")));
+    }
+
+    #[test]
+    fn a_recorded_output_s_escape_sequences_are_shown_inert() {
+        assert_eq!(
+            printable("ok\u{1b}]52;c;aGk=\u{7}\tdone\u{9b}2J"),
+            "ok]52;c;aGk= done2J"
+        );
+    }
+
+    #[test]
+    fn a_landing_s_record_puts_its_numbers_in_its_cells() {
+        let now = 1_000_000_000;
+        let cells = |record: serde_json::Value| {
+            landing_stages(
+                &serde_json::json!({ "holding": false, "place": 1, "record": record }),
+                now,
+            )
+        };
+        let none = cells(serde_json::Value::Null);
+        assert_eq!(
+            [&none[0].label, &none[1].label, &none[2].label],
+            ["✓ passed", "✓ clean", "✓ none"],
+            "without a record, the words of before"
+        );
+        let passed = cells(serde_json::json!({
+            "tests": { "passed": 412, "failed": 0, "total": 412 },
+            "review": { "round": 3, "reviewer": "codex", "clean_rounds": 2 },
+            "leak": { "found": 0 },
+        }));
+        assert_eq!(
+            [&passed[0].label, &passed[1].label, &passed[2].label],
+            ["✓ 412", "✓ 2 clean", "✓ none"]
+        );
+        let failing = cells(serde_json::json!({
+            "tests": { "passed": 399, "failed": 2, "total": 401, "file": "tests/it/mission.rs" },
+            "review": { "round": 1, "reviewer": "codex", "at": now - 180_000 },
+            "leak": { "found": 1 },
+        }));
+        assert_eq!(
+            (
+                failing[0].stage,
+                failing[0].label.as_str(),
+                failing[0].note.as_str()
+            ),
+            (Stage::Failed, "✕ 2 of 401", "tests/it/mission.rs")
+        );
+        assert_eq!(
+            (
+                failing[1].stage,
+                failing[1].label.as_str(),
+                failing[1].note.as_str()
+            ),
+            (Stage::Running, "round 1", "codex · 3m")
+        );
+        assert_eq!(
+            (failing[2].stage, failing[2].label.as_str()),
+            (Stage::Failed, "✕ found")
+        );
+        let again = landing_stages(
+            &serde_json::json!({ "holding": true, "phase": "reviewing again", "record": {
+                "review": { "round": 2, "reviewer": "codex", "clean_rounds": 0, "at": now },
+            } }),
+            now,
+        );
+        assert_eq!(
+            (
+                again[1].stage,
+                again[1].label.as_str(),
+                again[1].note.as_str()
+            ),
+            (Stage::Running, "round 2", "codex · <1m"),
+            "a review under way keeps its round"
+        );
+        let unrecorded = landing_stages(
+            &serde_json::json!({ "holding": true, "phase": "reviewing" }),
+            now,
+        );
+        assert_eq!(unrecorded[1].label, "reviewing…");
+        let uncounted = cells(serde_json::json!({
+            "tests": { "ok": false, "file": "Tests (macOS arm64)" },
+        }));
+        assert_eq!(
+            (
+                uncounted[0].stage,
+                uncounted[0].label.as_str(),
+                uncounted[0].note.as_str()
+            ),
+            (Stage::Failed, "✕ failed", "Tests (macOS arm64)"),
+            "a CI failure the log gave no counts for"
+        );
+    }
+
+    /// A Landing view of one repository: a holder testing with a record,
+    /// two waiters, and the holder chosen.
+    fn landing_board() -> Mission {
+        let tail: Vec<String> = (1..=30).map(|n| format!("test line {n} ... ok")).collect();
+        let holder = Item::new("land:/w/a", "1. note-stable-ids")
+            .detail("landing · pushing · tab 3")
+            .data(serde_json::json!({ "landing": {
+                "root": "/w/note-stable-ids", "tab": "@3", "holding": true, "phase": "pushing",
+                "output": "/w/.git/landing-output.log",
+                "record": {
+                    "tests": { "passed": 412, "failed": 0, "total": 412 },
+                    "review": { "round": 2, "reviewer": "codex", "clean_rounds": 2,
+                                "summary": "No issues left." },
+                    "found": [{ "round": 1, "title": "The lock leaks on Esc", "fixed_by": "abc1234" }],
+                    "output": { "of": "review", "tail": tail },
+                },
+            } }));
+        let waiter = |n: &str, place: u64, first: bool, last: bool| {
+            Item::new(format!("land:/w/{n}"), format!("{}. {n}", place + 1))
+                .detail("waiting · tab 4")
+                .data(serde_json::json!({ "landing": {
+                    "root": format!("/w/{n}"), "holding": false, "place": place,
+                    "first": first, "last": last,
+                    "holder": { "name": "note-stable-ids", "phase": "pushing" },
+                } }))
+        };
+        let mut heading = views::header("/r:direct", "switchboard · straight on main", 3);
+        heading.data["right"] = "3 landing · 1 holds the lock".into();
+        let items = vec![
+            heading,
+            holder,
+            waiter("note-benchmark", 1, true, false),
+            waiter("note-tips", 2, false, true),
+        ];
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Landing, "Landing", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 1;
+        m
+    }
+
+    #[test]
+    fn with_ux2_landing_s_columns_fill_any_width_and_narrow_in_board_45_s_order() {
+        let m = landing_board();
+        // The last tinted column of a row: the cells end at the right edge.
+        let tinted_end = |line: &Line| {
+            line.spans
+                .iter()
+                .fold((0, 0), |(x, end), s| {
+                    let next = x + width(&s.content);
+                    (
+                        next,
+                        if s.style.bg.is_some() && s.style.bg != Some(Theme::DARK.highlight) {
+                            next
+                        } else {
+                            end
+                        },
+                    )
+                })
+                .1
+        };
+        let row_of =
+            |text: &[String], what: &str| text.iter().position(|l| l.contains(what)).unwrap();
+        for cols in [120, 160, 240] {
+            let (lines, _) = screen(&m, cols, 40);
+            let text = texts(&lines);
+            let heading = &text[row_of(&text, "straight on main")];
+            assert!(
+                heading.trim_end().ends_with("3 landing · 1 holds the lock")
+                    && width(heading.trim_end()) == cols - 1,
+                "at {cols}, the counts at the right edge: {heading}"
+            );
+            let waiter = row_of(&text, "note-tips");
+            assert_eq!(
+                tinted_end(&lines[waiter]),
+                cols - 1,
+                "at {cols}: {}",
+                text[waiter]
+            );
+        }
+        // From 160 the cells are the board's 13 wide and the worktree
+        // stretches; at 120 they narrow to their words first.
+        let cell_w = |cols: usize| {
+            let (lines, _) = screen(&m, cols, 40);
+            let text = texts(&lines);
+            let row = &lines[row_of(&text, "note-tips")];
+            row.spans
+                .iter()
+                .filter(|s| s.content.contains("waiting"))
+                .map(|s| width(&s.content))
+                .next()
+                .unwrap()
+        };
+        assert_eq!(cell_w(240), CELL_MAX - 2);
+        assert_eq!(cell_w(160), CELL_MAX - 2);
+        assert!(cell_w(120) < CELL_MAX - 2, "{}", cell_w(120));
+        // Narrower still, a waiting cell is ◌ alone, then the worktree
+        // column is 20 wide; narrower than that is the list.
+        let (lines, _) = screen(&m, 84, 40);
+        let text = texts(&lines);
+        assert!(text[row_of(&text, "note-tips")].contains("◌"), "{text:#?}");
+        let (lines, _) = screen(&m, 60, 40);
+        assert!(!texts(&lines).iter().any(|l| l.contains("leak check")));
+    }
+
+    #[test]
+    fn with_ux2_the_chosen_landing_s_detail_says_what_it_waits_on_and_its_last_review() {
+        let mut m = landing_board();
+        let (lines, hits) = screen(&m, 160, 50);
+        let text = texts(&lines).join("\n");
+        for words in [
+            "waits on",
+            "nothing: it holds the lock",
+            "applies what landed, then cleans up",
+            "/w/note-stable-ids",
+            "LAST REVIEW",
+            "round 2 · codex",
+            "No issues left.",
+            "round 1 found The lock leaks on Esc · fixed by abc1234",
+            "test line 30 ... ok",
+            "o  all of its last output",
+            "✓ 412",
+            "✓ 2 clean",
+        ] {
+            assert!(text.contains(words), "{words:?} in {text}");
+        }
+        let o = crate::mux::input::Key::parse("o").unwrap();
+        assert!(hits.iter().any(|h| h.spot == Spot::Key(o)));
+        // Under the mouse, or with Tab's focus on it, a keycap is lit.
+        let lit = |m: &Mission| {
+            screen(m, 160, 50)
+                .0
+                .iter()
+                .flat_map(|l| l.spans.clone())
+                .any(|s| {
+                    s.content.contains(" all of its last output")
+                        && s.style.add_modifier.contains(Modifier::BOLD)
+                })
+        };
+        assert!(!lit(&m));
+        m.hover = Some(Spot::Key(o));
+        assert!(lit(&m));
+        m.hover = None;
+        m.focus = Some(Focus::Key(o));
+        assert!(lit(&m));
+        m.focus = None;
+        // A waiter waits on the one holding the lock.
+        m.cursor = 2;
+        let text = texts(&screen(&m, 160, 50).0).join("\n");
+        assert!(
+            text.contains("note-stable-ids, which holds the lock · pushing"),
+            "{text}"
+        );
+        assert!(
+            text.contains("J  down the queue") && !text.contains("K  up the queue"),
+            "{text}"
+        );
+        // Under 140 columns the output is behind i, shown over the list.
+        m.cursor = 1;
+        let text = texts(&screen(&m, 130, 50).0).join("\n");
+        assert!(
+            !text.contains("test line 30") && text.contains("i  its last output here"),
+            "{text}"
+        );
+        m.landing_output = true;
+        let text = texts(&screen(&m, 130, 50).0).join("\n");
+        assert!(
+            text.contains("test line 30 ... ok") && !text.contains("leak check"),
+            "{text}"
+        );
+        // Output from tests run after the review is named for them.
+        let mut t = landing_board();
+        let landing = t
+            .snap
+            .views
+            .iter_mut()
+            .find(|v| v.id == ViewId::Landing)
+            .unwrap();
+        landing.data.items[1].data["landing"]["record"]["output"]["of"] = "tests".into();
+        let text = texts(&screen(&t, 160, 50).0).join("\n");
+        assert!(
+            text.contains("LAST TESTS")
+                && text.contains("412 passed")
+                && !text.contains("LAST REVIEW"),
+            "{text}"
+        );
+        // Narrow enough for the plain list, it still shows over it.
+        let text = texts(&screen(&m, 70, 50).0).join("\n");
+        assert!(text.contains("test line 30 ... ok"), "{text}");
     }
 
     #[test]

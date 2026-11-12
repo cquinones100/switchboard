@@ -125,6 +125,9 @@ pub enum Do {
         name: String,
         line: Option<usize>,
     },
+    /// A landing's whole last output (`land-lock record output`) read in a
+    /// pane beside the one you're in, from its end.
+    ReadOutput(PathBuf),
     /// A note written for you opened in Notes (a path in the notes
     /// directory), its notification let go.
     OpenNote(String),

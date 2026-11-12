@@ -357,6 +357,9 @@ pub struct Mission {
     /// The Landing view kept while this client has it in front, or opens
     /// on it, with nothing landing.
     pub keep_landing: bool,
+    /// The Landing view's chosen worktree's last output shown over the
+    /// list (`i`), on a screen too narrow to show it under the rows.
+    pub landing_output: bool,
     /// Autopilot's view kept the same way, with the mode off.
     pub keep_autopilot: bool,
     /// How far the pane beside a board is scrolled (`J`, `K`, the wheel
@@ -440,6 +443,7 @@ impl Mission {
             came: None,
             spun_at: 0,
             keep_landing: false,
+            landing_output: false,
             keep_autopilot: false,
             side: None,
             ci_check: None,

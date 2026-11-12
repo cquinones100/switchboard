@@ -62,6 +62,17 @@
 //!                     what the change needs to take effect that a
 //!                     hands-free tab left for you (`--not-applied`); said
 //!                     again for the same hash, it updates that landing
+//! land-lock record clear | <tests|review|leak> <json> | found <json> | output <tests|review> <file>
+//!                     keeps what this landing has done for the Landing
+//!                     view's cells and detail, in landing.json in the
+//!                     worktree's own git directory: a key's JSON object
+//!                     (`tests` {ok, passed, failed, total, file}, `review`
+//!                     {round, reviewer, clean_rounds, findings, summary},
+//!                     `leak` {found}) in place of the last, stamped with
+//!                     `at`; `found` adds an earlier round's finding
+//!                     {round, title, fixed_by} to the list; `output` keeps
+//!                     the file whole beside it (landing-output.log) and its
+//!                     last 40 lines in the record; `clear` starts it again
 //! ```
 //!
 //! A landing holds it only to rebase, test and push, but one whose change no
@@ -109,7 +120,7 @@ const STALE_MUTEX_MS: i64 = 10_000;
 const MUTEX_WAIT: Duration = Duration::from_millis(20);
 const MUTEX_TRIES: u32 = 500;
 
-const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
+const USAGE: &str = "usage: land-lock [--target <branch>] take|wait|release|leave|holder|queue|move|phase [words]|record ...|landed <short hash> <branch>|autolanded <short hash> [--plan <file> | --decided <n>] [--not-applied <labels>] [item]";
 
 pub fn main(mut args: Vec<String>) -> ExitCode {
     let mut given_target = None;
@@ -135,6 +146,9 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
     }
     if command == "landed" {
         return landed(&args[1..]);
+    }
+    if command == "record" {
+        return record(&args[1..]);
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let found = common_dir(&cwd).and_then(|common| {
@@ -220,6 +234,104 @@ pub fn main(mut args: Vec<String>) -> ExitCode {
         eprintln!("land-lock: {e}");
         ExitCode::FAILURE
     })
+}
+
+/// How many of the last output's lines the record keeps.
+const OUTPUT_TAIL: usize = 40;
+
+const RECORD_USAGE: &str = "usage: land-lock record clear | <tests|review|leak> <json> | found <json> | output <tests|review> <file>";
+
+/// `land-lock record`, as the module's comment says.
+fn record(args: &[String]) -> ExitCode {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let Some(dir) = worktree::git_at(&cwd, &["rev-parse", "--show-toplevel"])
+        .ok()
+        .and_then(|top| crate::sources::landing::own_git_dir(Path::new(&top)))
+    else {
+        eprintln!("not in a git repository");
+        return ExitCode::from(2);
+    };
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    match record_in(&dir, &words, util::now_ms()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(RecordError::Usage) => {
+            eprintln!("{RECORD_USAGE}");
+            ExitCode::from(2)
+        }
+        Err(RecordError::Io(e)) => {
+            eprintln!("land-lock record: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+enum RecordError {
+    Usage,
+    Io(io::Error),
+}
+
+impl From<io::Error> for RecordError {
+    fn from(e: io::Error) -> Self {
+        RecordError::Io(e)
+    }
+}
+
+/// Changes the record in the git directory `dir` as `words` say, at `now`
+/// (ms), the rest of it kept.
+fn record_in(dir: &Path, words: &[&str], now: i64) -> Result<(), RecordError> {
+    use crate::sources::landing::{OUTPUT, RECORD};
+    let file = dir.join(RECORD);
+    let object = |text: &str| -> Result<Value, RecordError> {
+        match serde_json::from_str::<Value>(text) {
+            Ok(Value::Object(mut map)) => {
+                map.insert("at".into(), util::js_number(now as f64));
+                Ok(Value::Object(map))
+            }
+            _ => Err(RecordError::Usage),
+        }
+    };
+    let mut data = util::read_json_object(&file);
+    match words {
+        ["clear"] => {
+            let _ = fs::remove_file(dir.join(OUTPUT));
+            data.clear();
+        }
+        [key @ ("tests" | "review" | "leak"), text] => {
+            data.insert(key.to_string(), object(text)?);
+        }
+        ["found", text] => {
+            let found = object(text)?;
+            match data.get_mut("found").and_then(Value::as_array_mut) {
+                Some(list) => list.push(found),
+                None => {
+                    data.insert("found".into(), json!([found]));
+                }
+            }
+        }
+        ["output", of @ ("tests" | "review"), path] => {
+            let bytes = fs::read(path)?;
+            util::write_atomic(dir.join(OUTPUT), &bytes)?;
+            let text = String::from_utf8_lossy(&bytes);
+            // Kept as text alone: no escape sequence of a log reaches the
+            // record the Landing view draws.
+            let lines: Vec<String> = text
+                .lines()
+                .map(|l| {
+                    l.chars()
+                        .filter(|c| *c == '\t' || !c.is_control())
+                        .collect()
+                })
+                .collect();
+            let tail = &lines[lines.len().saturating_sub(OUTPUT_TAIL)..];
+            data.insert(
+                "output".into(),
+                json!({ "of": of, "tail": tail, "lines": lines.len(), "at": util::js_number(now as f64) }),
+            );
+        }
+        _ => return Err(RecordError::Usage),
+    }
+    util::write_atomic(&file, util::json_compact(&Value::Object(data)))?;
+    Ok(())
 }
 
 /// Shows the landing's step on the caller's pane, and marks its loop
@@ -749,6 +861,56 @@ fn ordinal(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_record_merges_its_keys_and_keeps_the_output_s_tail() {
+        let scratch = crate::tabs::git::tests::Scratch::new("land-record");
+        let dir = &scratch.0;
+        let read = || util::read_json(dir.join(crate::sources::landing::RECORD)).unwrap();
+        let ok = |words: &[&str], now| assert!(record_in(dir, words, now).is_ok(), "{words:?}");
+        ok(&["tests", r#"{"passed":412,"failed":0,"total":412}"#], 5);
+        ok(&["review", r#"{"round":1,"reviewer":"codex"}"#], 6);
+        ok(
+            &["found", r#"{"round":1,"title":"a","fixed_by":"abc1234"}"#],
+            7,
+        );
+        ok(&["found", r#"{"round":2,"title":"b"}"#], 8);
+        let r = read();
+        assert_eq!(r["tests"]["passed"], 412);
+        assert_eq!(r["tests"]["at"], 5);
+        assert_eq!(r["review"]["round"], 1, "another key kept");
+        assert_eq!(r["found"].as_array().unwrap().len(), 2, "found adds");
+        ok(
+            &[
+                "review",
+                r#"{"round":2,"reviewer":"codex","clean_rounds":1}"#,
+            ],
+            9,
+        );
+        assert_eq!(read()["review"]["round"], 2, "a key replaced whole");
+
+        let out = dir.join("out.txt");
+        let text: String = (1..=50).map(|n| format!("line {n}\n")).collect();
+        fs::write(&out, text).unwrap();
+        ok(&["output", "tests", out.to_str().unwrap()], 10);
+        let r = read();
+        let tail = r["output"]["tail"].as_array().unwrap();
+        assert_eq!((tail.len(), &tail[0]), (40, &json!("line 11")));
+        assert_eq!(r["output"]["lines"], 50);
+        assert!(dir.join(crate::sources::landing::OUTPUT).is_file());
+
+        assert!(matches!(
+            record_in(dir, &["tests", "not json"], 11),
+            Err(RecordError::Usage)
+        ));
+        assert!(matches!(
+            record_in(dir, &["other", "{}"], 11),
+            Err(RecordError::Usage)
+        ));
+        ok(&["clear"], 12);
+        assert_eq!(read(), json!({}));
+        assert!(!dir.join(crate::sources::landing::OUTPUT).exists());
+    }
 
     #[test]
     fn places_are_ordinals() {
