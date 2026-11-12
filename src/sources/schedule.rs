@@ -1,6 +1,6 @@
 //! When each GitHub and Linear lookup is due, as the sidebar daemon's
 //! `polled` and `guarded` decided (lib/sidebar/daemon.js): each runs every
-//! `FAST` with the `poll_fast` setting on (the PR board every 30 seconds),
+//! `FAST` with the `poll_fast` setting on (off at first; the PR board every 30 seconds),
 //! else at its own slow interval; none is asked again while its last ask is
 //! still waiting on its answer, whoever asked, since a late answer would
 //! overwrite a newer one; none is asked while you're away, and all are
@@ -17,6 +17,12 @@
 //! Something that has just asked GitHub about a PR (M-m's pr-ready.sh, a
 //! skill) appends to `github` in the state directory, and the lookups that
 //! show PRs are asked again, at most every `GITHUB_NOW` (`github_now`).
+//!
+//! GitHub's hour's limit slows its lookups down (`Budget`): with under
+//! `LOW` of the hour left, each waits four times its interval, and with
+//! under `SCARCE` left only the default branch's CI is asked, until the
+//! limit resets; what you ask for by a key (`ask`) is asked all the same.
+//! Linear's lookups go on as they were.
 //!
 //! Time is passed in, so the tests can say what happens when.
 
@@ -88,6 +94,36 @@ pub const LOOKUPS: [Lookup; 7] = [
     },
 ];
 
+/// The lookups that ask GitHub, which its hour's limit slows down.
+const GITHUB_ALL: [&str; 5] = ["merges", "board", "checks", "mergeQueues", "mainCi"];
+
+/// Under this share of GitHub's hour left, its lookups slow down; under
+/// `SCARCE`, all but the default branch's CI stop.
+pub const LOW: f64 = 0.2;
+pub const SCARCE: f64 = 0.05;
+
+/// How much of GitHub's hour's limit is left, as the lookups pace by it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Budget {
+    #[default]
+    Plenty,
+    /// Under `LOW` left: four times each interval.
+    Low,
+    /// Under `SCARCE` left: only `mainCi`.
+    Scarce,
+}
+
+impl Budget {
+    /// The budget for a share of the hour left (`None`: nothing known).
+    pub fn of(left: Option<f64>) -> Budget {
+        match left {
+            Some(l) if l < SCARCE => Budget::Scarce,
+            Some(l) if l < LOW => Budget::Low,
+            _ => Budget::Plenty,
+        }
+    }
+}
+
 /// The lookups that show PRs, asked again from the `github` file.
 pub const GITHUB_LOOKUPS: [&str; 4] = ["merges", "board", "checks", "mergeQueues"];
 
@@ -103,6 +139,7 @@ pub struct Schedule {
     entries: Vec<Entry>,
     was_away: bool,
     github_asked: Option<Instant>,
+    budget: Budget,
 }
 
 impl Default for Schedule {
@@ -125,6 +162,7 @@ impl Schedule {
                 .collect(),
             was_away: false,
             github_asked: None,
+            budget: Budget::Plenty,
         }
     }
 
@@ -136,16 +174,24 @@ impl Schedule {
         let back = self.was_away && !away;
         self.was_away = away;
         let started = self.started;
+        let budget = self.budget;
         let mut due = Vec::new();
         for entry in &mut self.entries {
             if entry.busy || (away && entry.last.is_some()) {
                 continue;
             }
-            let interval = if fast {
+            let github = GITHUB_ALL.contains(&entry.lookup.name);
+            if github && budget == Budget::Scarce && entry.lookup.name != "mainCi" {
+                continue;
+            }
+            let mut interval = if fast {
                 entry.lookup.fast
             } else {
                 entry.lookup.slow
             };
+            if github && budget != Budget::Plenty {
+                interval *= 4;
+            }
             let ready = back
                 || match entry.last {
                     None => now + SLACK >= started + entry.lookup.first,
@@ -185,6 +231,12 @@ impl Schedule {
     /// Whether a lookup is still waiting on its answer.
     pub fn busy(&self, name: &str) -> bool {
         self.entries.iter().any(|e| e.lookup.name == name && e.busy)
+    }
+
+    /// Paces GitHub's lookups by what is left of its hour (`due`), giving
+    /// the budget it had.
+    pub fn set_budget(&mut self, budget: Budget) -> Budget {
+        std::mem::replace(&mut self.budget, budget)
     }
 
     /// Whether the `github` file may ask the PR lookups again now: at most
@@ -273,6 +325,39 @@ mod tests {
         s.ask("board", t0 + S(700));
         s.due(t0 + S(701), true, true);
         assert!(!s.due(t0 + S(800), true, false).contains(&"board"));
+    }
+
+    #[test]
+    fn github_s_lookups_slow_down_near_the_hour_s_limit() {
+        assert_eq!(Budget::of(None), Budget::Plenty);
+        assert_eq!(Budget::of(Some(0.5)), Budget::Plenty);
+        assert_eq!(Budget::of(Some(0.19)), Budget::Low);
+        assert_eq!(Budget::of(Some(0.04)), Budget::Scarce);
+        let t0 = Instant::now();
+        let mut s = Schedule::new(&LOOKUPS, t0);
+        for name in s.due(t0 + S(10), false, false) {
+            s.done(name);
+        }
+        assert_eq!(s.set_budget(Budget::Low), Budget::Plenty);
+        // The PR board's two minutes are eight under 20%; Linear's aren't.
+        let at = s.due(t0 + S(131), false, false);
+        assert!(!at.contains(&"board") && at.contains(&"tickets"), "{at:?}");
+        for name in at {
+            s.done(name);
+        }
+        assert!(s.due(t0 + S(10 + 480), false, false).contains(&"board"));
+        for name in LOOKUPS.map(|l| l.name) {
+            s.done(name);
+        }
+        // Under 5%, only the default branch's CI, at four times its two minutes.
+        s.set_budget(Budget::Scarce);
+        let at = s.due(t0 + S(10_000), false, false);
+        assert!(at.contains(&"mainCi") && at.contains(&"tickets"), "{at:?}");
+        assert!(
+            !at.iter()
+                .any(|n| ["merges", "board", "checks", "mergeQueues"].contains(n))
+        );
+        assert!(s.ask("board", t0 + S(10_001)), "a key still asks");
     }
 
     #[test]

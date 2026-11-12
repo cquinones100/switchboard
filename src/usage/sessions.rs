@@ -427,6 +427,22 @@ pub fn request_items(day: &Tally) -> Vec<Item> {
     rows
 }
 
+/// What is left of GitHub's hour's limit, as its last answer said, on the
+/// request audit's GitHub row (`remaining` of `limit`).
+pub fn github_left(rows: &mut [Item], left: Option<(i64, i64)>) {
+    let (Some((remaining, limit)), Some(row)) =
+        (left, rows.iter_mut().find(|r| r.id == "requests:GitHub"))
+    else {
+        return;
+    };
+    row.detail = format!(
+        "{} · {} of {} left this hour",
+        row.detail,
+        thousands(usize::try_from(remaining).unwrap_or(0)),
+        thousands(usize::try_from(limit).unwrap_or(0))
+    );
+}
+
 /// The Usage view's rows: today's spend, each rate limit not yet reset, and
 /// with `requests` the request audit's.
 pub fn usage_items(state: &Path, now_ms: i64, requests: Option<&Tally>) -> Vec<Item> {

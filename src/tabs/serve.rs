@@ -153,8 +153,19 @@ impl Server {
     }
 
     // Runs a lookup off the server task, answering with `Event::TabLookup`.
+    // A branch's PR isn't asked for while GitHub's lookups are slowed down
+    // for its hour's limit (`sources::schedule::Budget`): the PR board's
+    // answer still names it, and the lookup, unanswered, is asked again
+    // once it counts as lost.
     fn start_lookup(&self, ask: Ask) {
         if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let left = crate::integrations::github::tightest_limit().map(|l| l.left());
+        if matches!(ask, Ask::Pr { .. })
+            && crate::sources::schedule::Budget::of(left)
+                != crate::sources::schedule::Budget::Plenty
+        {
             return;
         }
         let tx = self.tx.clone();

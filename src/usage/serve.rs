@@ -405,7 +405,13 @@ impl Server {
                             crate::requests::tally_week(&local),
                         )
                     });
-                    let base = sessions::usage_items(&state, now, requests.as_ref().map(|r| &r.0));
+                    let mut base =
+                        sessions::usage_items(&state, now, requests.as_ref().map(|r| &r.0));
+                    sessions::github_left(
+                        &mut base,
+                        crate::integrations::github::tightest_limit()
+                            .map(|l| (l.remaining, l.limit)),
+                    );
                     let model = charts::model(&state, now, &open, requests);
                     let data = ViewData {
                         items: charts::items(base, &model),

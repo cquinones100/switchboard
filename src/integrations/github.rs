@@ -20,7 +20,9 @@
 //! Every call but `get_public` refuses while the `github` setting is off (but
 //! in a program you run yourself, `super::run_by_you`); `get_public` goes
 //! without a token then. Every call is counted in the request audit under
-//! GitHub, as "GraphQL" or "REST".
+//! GitHub, as "GraphQL" or "REST", and every answer to a call with a token
+//! says how much of the hour's limit is left, kept for the lookups to slow
+//! down by (`tightest_limit`).
 
 use std::fmt;
 use std::path::Path;
@@ -197,7 +199,86 @@ async fn request(
         protocol,
         source,
     };
-    net::request_json(method, url, &headers, body, audit).await
+    let response = net::request_json(method, url, &headers, body, audit).await?;
+    if credential.is_some() {
+        note_limit(&response, protocol);
+    }
+    Ok(response)
+}
+
+// ── The hour's limit ────────────────────────────────────────────────────────
+
+/// What GitHub last said of one of its limits (`graphql`, `core`, ...): how
+/// many points or requests are left of how many, and when it resets, in
+/// seconds since the epoch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limit {
+    pub remaining: i64,
+    pub limit: i64,
+    pub reset: i64,
+}
+
+impl Limit {
+    /// What is left of the hour, from 0 to 1.
+    pub fn left(&self) -> f64 {
+        if self.limit <= 0 {
+            return 1.0;
+        }
+        self.remaining.max(0) as f64 / self.limit as f64
+    }
+}
+
+// Every limit's last reading, by its resource, shared by every call.
+static LIMITS: std::sync::Mutex<Vec<(String, Limit)>> = std::sync::Mutex::new(Vec::new());
+
+/// The limit an answer's headers report, with its resource (GitHub's
+/// `x-ratelimit-resource`, else `graphql` for a GraphQL call and `core` for
+/// a REST one); none when they don't say.
+pub fn limit_of(response: &Response, protocol: &str) -> Option<(String, Limit)> {
+    let number = |name: &str| response.header(name)?.trim().parse::<i64>().ok();
+    let limit = Limit {
+        remaining: number("x-ratelimit-remaining")?,
+        limit: number("x-ratelimit-limit")?,
+        reset: number("x-ratelimit-reset")?,
+    };
+    let resource = response
+        .header("x-ratelimit-resource")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if protocol == "GraphQL" {
+                "graphql".into()
+            } else {
+                "core".into()
+            }
+        });
+    Some((resource, limit))
+}
+
+fn note_limit(response: &Response, protocol: &str) {
+    let Some((resource, limit)) = limit_of(response, protocol) else {
+        return;
+    };
+    let mut limits = LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    match limits.iter_mut().find(|(r, _)| *r == resource) {
+        Some((_, kept)) => *kept = limit,
+        None => limits.push((resource, limit)),
+    }
+}
+
+/// The hour's limit with the least left, GraphQL's or REST's (`core`; the
+/// search API's own limit is a minute's), of those GitHub's answers
+/// reported that haven't reset since: what slows the lookups down
+/// (`sources::schedule::Budget`), the health light's line and the Usage
+/// view's. None while every one has reset, or none was read.
+pub fn tightest_limit() -> Option<Limit> {
+    let now = util::now_secs();
+    let limits = LIMITS.lock().unwrap_or_else(|e| e.into_inner());
+    limits
+        .iter()
+        .filter(|(r, _)| r == "graphql" || r == "core")
+        .map(|(_, l)| *l)
+        .filter(|l| l.reset > now)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
 }
 
 /// A REST GET of what anyone may read (a public repository's releases),
@@ -1186,6 +1267,32 @@ pub async fn open_fork_prs(repo: &Repo, source: &str) -> Result<Vec<ForkPr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_answer_s_headers_give_its_limit_by_resource() {
+        let answer = |headers: &[(&str, &str)]| Response {
+            status: 200,
+            headers: headers
+                .iter()
+                .map(|(n, v)| (n.to_string(), v.to_string()))
+                .collect(),
+            body: Value::Null,
+        };
+        let counted = [
+            ("x-ratelimit-remaining", "900"),
+            ("x-ratelimit-limit", "5000"),
+            ("x-ratelimit-reset", "1800000000"),
+        ];
+        let (resource, limit) = limit_of(&answer(&counted), "GraphQL").unwrap();
+        assert_eq!(resource, "graphql", "named by the protocol when unsaid");
+        assert_eq!(limit.remaining, 900);
+        assert!((limit.left() - 0.18).abs() < 1e-9);
+        let mut named = counted.to_vec();
+        named.push(("X-RateLimit-Resource", "search"));
+        assert_eq!(limit_of(&answer(&named), "GraphQL").unwrap().0, "search");
+        assert_eq!(limit_of(&answer(&counted), "REST").unwrap().0, "core");
+        assert_eq!(limit_of(&answer(&counted[..2]), "REST"), None, "no reset");
+    }
 
     fn page(names: &[&str], next: Option<&str>) -> Value {
         json!({

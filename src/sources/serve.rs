@@ -23,13 +23,13 @@ use serde_json::{Value, json};
 
 use super::landing::{self, Read};
 use super::repo::{self, PrKey};
-use super::schedule::GITHUB_LOOKUPS;
+use super::schedule::{Budget, GITHUB_LOOKUPS};
 use super::{
     CI, INBOX, LANDING, PRS, TICKETS, TabInfo, VIEWS, ciboard, enabled, inbox, mainci, pr_repos_of,
     prboard, prnotices, prs, queues, repos_of, setup, tickets,
 };
 use crate::facts::{Facts, Landing, Merge, Method, PrFacts, PrState, TabFacts};
-use crate::integrations::github::Repo;
+use crate::integrations::github::{self, Repo};
 use crate::items::{Item, ViewData};
 use crate::mux::TabId;
 use crate::mux::server::{Event, Reply, Server};
@@ -49,7 +49,7 @@ pub enum Answer {
         at: i64,
         result: anyhow::Result<(Vec<Value>, Option<Vec<Value>>)>,
     },
-    Checks(anyhow::Result<Vec<Item>>),
+    Checks(anyhow::Result<(Vec<Item>, ciboard::Kept)>),
     MainCi(anyhow::Result<Vec<mainci::Looked>>),
     Queues {
         repos: Vec<String>,
@@ -132,12 +132,27 @@ impl Server {
         }
         let away = self.away();
         let fast = settings::is_on("poll_fast");
+        let limit = github::tightest_limit();
+        let budget = Budget::of(limit.map(|l| l.left()));
+        if self.sources.schedule.set_budget(budget) == Budget::Plenty
+            && budget != Budget::Plenty
+            && let Some(limit) = limit
+        {
+            self.say(
+                None,
+                &format!(
+                    "GitHub: {}% of the hour's requests left, so its lookups slow down until it resets",
+                    (limit.left() * 100.0).floor()
+                ),
+            );
+        }
         for name in self.sources.schedule.due(now, fast, away) {
             self.start_lookup_named(name, &tabs);
         }
         // A tab's PR not asked about yet is asked about now, and so is a
         // worktree's no tab is in.
         if !away
+            && budget != Budget::Scarce
             && settings::is_on("github")
             && tabs
                 .iter()
@@ -184,6 +199,7 @@ impl Server {
                         view.items = self.sources.board.take(&scope, at, open, merged);
                         setup::answered(view);
                         let board = view.items.clone();
+                        self.name_tabs_from_board(&tabs, &board);
                         let news = self.sources.pr_known.take(&board, &scope, util::now_ms());
                         if !news.is_empty() {
                             self.sources.pr_notices =
@@ -198,8 +214,9 @@ impl Server {
                 self.sources.schedule.done("checks");
                 let view = self.sources.views.entry(CI).or_default();
                 match result {
-                    Ok(items) => {
+                    Ok((items, kept)) => {
                         self.sources.checks = items;
+                        self.sources.ci_kept = kept;
                         setup::answered(view);
                     }
                     Err(e) => setup::failed(view, &e, "your pull requests' checks"),
@@ -652,6 +669,38 @@ impl Server {
         self.sources.untabbed = found;
     }
 
+    // Has the tab names ask at once for the PR of a tab's branch with none
+    // known, when the board's answer has an open PR of yours from that
+    // branch, in its origin or the project its upstream names
+    // (`tabs::names`'s `ask_soon`), rather than after its five minutes.
+    fn name_tabs_from_board(&mut self, tabs: &[TabInfo], board: &[Item]) {
+        let now = Instant::now();
+        let mut soon = false;
+        for tab in tabs {
+            let Some(place) = tab
+                .path
+                .as_deref()
+                .and_then(crate::tabs::git::locate)
+                .filter(|p| p.on_branch())
+            else {
+                continue;
+            };
+            let Some(origin) = &tab.repo else {
+                continue;
+            };
+            if prboard::pr_of_branch(board, origin, tab.upstream.as_ref(), &place.branch).is_some()
+            {
+                soon |= self
+                    .tab_names
+                    .names
+                    .ask_soon(&place.common_dir, &place.branch, now);
+            }
+        }
+        if soon {
+            self.name_all_tabs();
+        }
+    }
+
     // Starts a lookup the schedule has marked asked, or lets it go again at
     // once when its settings are off or it has nothing to ask about.
     fn start_lookup_named(&mut self, name: &'static str, tabs: &[TabInfo]) {
@@ -724,9 +773,10 @@ impl Server {
                     .filter_map(|i| i.data.pointer("/ci/job").and_then(Value::as_str))
                     .map(str::to_string)
                     .collect();
-                tokio::spawn(
-                    async move { send(Answer::Checks(ciboard::fetch(repos, kept).await)) },
-                );
+                let checks = self.sources.ci_kept.clone();
+                tokio::spawn(async move {
+                    send(Answer::Checks(ciboard::fetch(repos, kept, checks).await));
+                });
             }
             "mainCi" => {
                 let watched = if settings::is_on("main_ci_watch") && settings::is_on("github") {

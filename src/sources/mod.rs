@@ -154,6 +154,8 @@ pub struct Sources {
     /// after them.
     main_ci: Vec<Item>,
     checks: Vec<Item>,
+    /// Your PRs' checks past the CI search's first page, as last read.
+    ci_kept: ciboard::Kept,
     /// The failing tips whose notification you dismissed, by their item's id.
     main_ci_dismissed: HashSet<String>,
     /// What the PR board's last answer said of each PR, and your PRs' news

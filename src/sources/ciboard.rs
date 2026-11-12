@@ -5,7 +5,9 @@
 //! its log that failed and the line that says why. One search for
 //! the pull requests and their first hundred checks (and, for a PR with
 //! more, the rest a hundred a query, through
-//! `github::rest_of`), then the log of each failing GitHub Actions job,
+//! `github::rest_of`, read again only once the PR's head commit or how
+//! many of its checks stand at each state changed, the rest kept from the
+//! last look in between, `Kept`), then the log of each failing GitHub Actions job,
 //! read once (a finished job's log doesn't change) and kept in
 //! `ci-logs/<job>.log` in the state directory, where the next look cuts its
 //! failing step again (`failing_step`) and "Read the failing log" reads it;
@@ -13,6 +15,7 @@
 //! failing go, but those of the default branch's failing CI
 //! (src/sources/mainci.rs), which lists its items here too.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
@@ -26,7 +29,8 @@ use crate::paths;
 
 pub const MAX_LOGS: usize = 15;
 const FIELDS: &str = "... on PullRequest { number title url headRefName repository { nameWithOwner } \
-  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { \
+  commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 100) { \
+    checkRunCountsByState { state count } statusContextCountsByState { state count } \
     pageInfo { hasNextPage endCursor } nodes { \
     __typename ... on CheckRun { name status conclusion detailsUrl startedAt completedAt } ... on StatusContext { context state targetUrl } \
   } } } } } } }";
@@ -449,6 +453,78 @@ async fn rest_of_checks(pr: &Value) -> anyhow::Result<Option<github::Paged>> {
     Ok(Some(paged))
 }
 
+/// The checks past the search's first page of each PR that has more, as
+/// the last look read them, by the PR's address, with what they were read
+/// at: the head commit, and how many of all its checks stand at each state
+/// (GitHub's counts by state, which the search gives for every check, not
+/// only its first page's). A look whose search finds both unchanged takes
+/// them from here rather than reading them again; any check past the first
+/// page that finishes, passing or failing, changes the counts and reads
+/// them again, and so does `KEEP_FOR_MS` passing, for a job rerun that
+/// ends with the same counts between two looks.
+#[derive(Clone, Debug, Default)]
+pub struct Kept {
+    by_pr: HashMap<String, KeptChecks>,
+}
+
+#[derive(Clone, Debug)]
+struct KeptChecks {
+    at: String,
+    read_ms: i64,
+    rest: Vec<Value>,
+    complete: bool,
+}
+
+/// The longest kept checks are used before being read again.
+const KEEP_FOR_MS: i64 = 10 * 60 * 1000;
+
+// What a PR's kept checks were read at: its head commit and its checks'
+// counts by state; empty when the search gave no head commit.
+fn read_at(pr: &Value) -> String {
+    let oid = text(pr, "/commits/nodes/0/commit/oid");
+    if oid.is_empty() {
+        return String::new();
+    }
+    let count = |of: &str| {
+        pr.pointer(&format!("{CONTEXTS}/{of}"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    json!([
+        oid,
+        count("checkRunCountsByState"),
+        count("statusContextCountsByState")
+    ])
+    .to_string()
+}
+
+impl Kept {
+    /// A PR's checks past the first page, when the last look read them at
+    /// the head commit and counts the search now gives.
+    fn rest_of(&self, pr: &Value, now_ms: i64) -> Option<(&[Value], bool, i64)> {
+        let kept = self.by_pr.get(text(pr, "/url"))?;
+        let at = read_at(pr);
+        (!at.is_empty() && kept.at == at && now_ms - kept.read_ms < KEEP_FOR_MS).then_some((
+            kept.rest.as_slice(),
+            kept.complete,
+            kept.read_ms,
+        ))
+    }
+
+    fn keep(&mut self, pr: &Value, rest: Vec<Value>, complete: bool, read_ms: i64) {
+        let at = read_at(pr);
+        self.by_pr.insert(
+            text(pr, "/url").to_string(),
+            KeptChecks {
+                at,
+                read_ms,
+                rest,
+                complete,
+            },
+        );
+    }
+}
+
 /// The PR with every check read in place of the first page's.
 fn with_checks(pr: &mut Value, paged: github::Paged) {
     if let Some(contexts) = pr.pointer_mut(CONTEXTS) {
@@ -485,7 +561,11 @@ fn read_order(prs: &[&[Failing]]) -> Vec<(usize, usize)> {
 /// those running, then those passing. A failed job's log asked of GitHub
 /// counts against the look's `MAX_LOGS`; one already kept doesn't, so a
 /// later look reads those it had no room for.
-pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result<Vec<Item>> {
+pub async fn fetch(
+    repos: Vec<String>,
+    also_kept: Vec<String>,
+    kept: Kept,
+) -> anyhow::Result<(Vec<Item>, Kept)> {
     let query = format!(
         "query($q: String!) {{ search(query: $q, type: ISSUE, first: 50) {{ nodes {{ {FIELDS} }} }} }}"
     );
@@ -503,10 +583,25 @@ pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result
         .unwrap_or_default();
     // A page that can't be read fails the look, so the view keeps what the
     // last one found rather than dropping a PR whose failure it can't see.
+    let mut now_kept = Kept::default();
+    let now_ms = crate::util::now_ms();
     for pr in prs.iter_mut().filter(|p| needs_rest(p)) {
-        if let Some(paged) = rest_of_checks(pr).await? {
-            with_checks(pr, paged);
-        }
+        let first = first_page(pr);
+        let (rest, complete, read_ms) = match kept.rest_of(pr, now_ms) {
+            Some((rest, complete, read_ms)) => (rest.to_vec(), complete, read_ms),
+            None => match rest_of_checks(pr).await? {
+                Some(paged) => (
+                    paged.nodes.into_iter().skip(first.len()).collect(),
+                    paged.complete,
+                    now_ms,
+                ),
+                None => continue,
+            },
+        };
+        now_kept.keep(pr, rest.clone(), complete, read_ms);
+        let mut nodes = first;
+        nodes.extend(rest);
+        with_checks(pr, github::Paged { nodes, complete });
     }
     let mut others = Vec::new();
     let mut failing_prs = Vec::new();
@@ -569,7 +664,15 @@ pub async fn fetch(repos: Vec<String>, also_kept: Vec<String>) -> anyhow::Result
             }
         }
     }
-    Ok(items)
+    Ok((items, now_kept))
+}
+
+// A PR's checks on the search's first page.
+fn first_page(pr: &Value) -> Vec<Value> {
+    pr.pointer(&format!("{CONTEXTS}/nodes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// A job's log as "Read the failing log" shows it: less showed the file
@@ -630,6 +733,41 @@ mod tests {
         assert_eq!(failing[0].name, "e2e");
         assert_eq!(failing[0].job.as_deref(), Some("12"));
         assert!(!needs_rest(&pr), "found on the pages read");
+    }
+
+    #[test]
+    fn a_pr_s_checks_past_the_first_page_are_kept_while_its_head_and_counts_stay() {
+        let pr = |oid: &str, failed: u64| {
+            json!({ "number": 9, "url": "https://github.com/o/r/pull/9",
+                "commits": { "nodes": [{ "commit": { "oid": oid, "statusCheckRollup": { "state": "FAILURE",
+                    "contexts": { "checkRunCountsByState": [
+                        { "state": "FAILURE", "count": failed }, { "state": "IN_PROGRESS", "count": 3 - failed }
+                    ] } } } }] } })
+        };
+        let rest = vec![json!({ "name": "e2e", "conclusion": "SUCCESS" })];
+        let mut kept = Kept::default();
+        kept.keep(&pr("abc", 1), rest.clone(), true, 0);
+        assert_eq!(
+            kept.rest_of(&pr("abc", 1), KEEP_FOR_MS - 1),
+            Some((rest.as_slice(), true, 0)),
+            "the next look reads none of them"
+        );
+        assert_eq!(kept.rest_of(&pr("def", 1), 0), None, "a new head");
+        assert_eq!(
+            kept.rest_of(&pr("abc", 2), 0),
+            None,
+            "a second failure, the rollup failing already"
+        );
+        assert_eq!(
+            kept.rest_of(&pr("", 1), 0),
+            None,
+            "a PR the search said nothing of"
+        );
+        assert_eq!(
+            kept.rest_of(&pr("abc", 1), KEEP_FOR_MS),
+            None,
+            "read again once they have been kept long enough"
+        );
     }
 
     #[test]

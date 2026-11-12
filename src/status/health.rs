@@ -17,6 +17,8 @@
 //!   watched tmux-continuum's last save. A save here is written only when
 //!   something changed, so an old file alone is no sign of trouble; a write
 //!   asked for and not landed is.
+//! - GitHub: under 20% of its hour's limit is left, so its lookups are
+//!   slowed down (`sources::schedule::Budget`), until the limit resets.
 //!
 //! The sidebar daemon going down can't happen apart from the server now, and
 //! whether setup is out of date is setup's to say. It is read on the server's
@@ -84,6 +86,16 @@ pub fn unsaved_for(
 /// The words for an unsaved layout.
 pub fn unsaved_words(age: Duration) -> String {
     format!("saves {}m old", age.as_secs() / 60)
+}
+
+/// What the light says while GitHub's lookups are slowed down for its hour's
+/// limit (`sources::schedule::Budget`), from the share of it left.
+pub fn github_words(left: Option<f64>) -> Option<String> {
+    let left = left.filter(|l| *l < crate::sources::schedule::LOW)?;
+    Some(format!(
+        "GitHub: {}% of the hour left",
+        (left * 100.0).floor()
+    ))
 }
 
 /// Everything wrong now, in health.sh's order (saves, relay, connectors).
@@ -160,6 +172,16 @@ mod tests {
         assert_eq!(unsaved_words(min(8)), "saves 8m old");
         // No file at all.
         assert_eq!(unsaved_for(Some(t0), None, t0 + min(6)), Some(min(6)));
+    }
+
+    #[test]
+    fn github_shows_only_while_its_lookups_are_slowed() {
+        assert_eq!(github_words(None), None);
+        assert_eq!(github_words(Some(0.5)), None);
+        assert_eq!(
+            github_words(Some(0.123)).as_deref(),
+            Some("GitHub: 12% of the hour left")
+        );
     }
 
     #[test]

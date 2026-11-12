@@ -49,7 +49,11 @@ impl Server {
             } else {
                 crate::mux::persist::last_asked(self)
             };
-            health::check(&paths::state_dir(), &health::relay_dir(), asked)
+            let mut problems = health::check(&paths::state_dir(), &health::relay_dir(), asked);
+            problems.extend(health::github_words(
+                crate::integrations::github::tightest_limit().map(|l| l.left()),
+            ));
+            problems
         } else {
             Vec::new()
         };

@@ -14,8 +14,7 @@
 //!
 //! A directory's answer is kept while its branch stays the one it was
 //! worked out on: ten minutes once it has a PR, whose number never changes,
-//! one minute before, about as often as a branch with no PR is asked about
-//! again. Working it out reads git's files and nothing else; a PR or title
+//! one minute before. Working it out reads git's files and nothing else; a PR or title
 //! not known yet, or gone stale, is asked for in the background (an `Ask`,
 //! which the server runs off its task and answers with an `Answer`), and
 //! what was known goes out meanwhile, so a tab is never held up by the
@@ -23,10 +22,18 @@
 //! is dropped, as the scripts emptied path-facts.sh's cache before renaming
 //! the tabs, so a PR number or title shows as soon as it is known.
 //!
+//! A branch with no PR known is asked about again at once when the PR
+//! board, which searches your open PRs every couple of minutes anyway,
+//! shows one of yours from a branch of that name (`ask_soon`, from
+//! `sources::serve`'s `name_tabs_from_board`); the branch's own lookup
+//! still says which PR is its, so the board never names one itself.
+//!
 //! How long each lookup's answer holds is the scripts' own: a PR found, or a
-//! title, for a day; no PR for a minute, since a branch with none is usually
-//! one whose agent is about to open one; no such ticket for an hour, since
-//! that is usually a branch that only looks like it names one. A lookup that
+//! title, for a day; no such ticket for an hour, since
+//! that is usually a branch that only looks like it names one. No PR holds
+//! five minutes, where the scripts' held one, since a branch with none was
+//! asked about every minute a tab, which added up to hundreds of GitHub's
+//! requests an hour; the PR board finds a new one sooner. A lookup that
 //! fails (no network, no token, a rate limit) keeps what was known and is
 //! tried again in a minute, so a blip never blanks a title already shown.
 
@@ -48,7 +55,7 @@ pub const FACTS_FOUND: Duration = Duration::from_secs(600);
 pub const FACTS_MISSING: Duration = Duration::from_secs(60);
 /// How long a PR found, or the lack of one, holds (window-pr.sh).
 const PR_FOUND: Duration = Duration::from_secs(24 * 3600);
-const PR_MISSING: Duration = Duration::from_secs(60);
+const PR_MISSING: Duration = Duration::from_secs(300);
 /// How long a ticket's title, or there being no such ticket, holds
 /// (ticket-title.sh).
 const TITLE_FOUND: Duration = Duration::from_secs(24 * 3600);
@@ -395,6 +402,23 @@ impl Names {
         known.value.clone()
     }
 
+    /// Asks for a branch's PR on the next naming, when none is known for it:
+    /// the PR board shows one of yours from a branch of that name, which the
+    /// branch's own lookup, looking where it does, then finds and takes, so
+    /// a new PR shows within a board's look rather than five minutes. Gives
+    /// whether it will be asked, every directory's answer then dropped.
+    pub fn ask_soon(&mut self, repo: &Path, branch: &str, now: Instant) -> bool {
+        let Some(known) = self.prs.get_mut(&(repo.to_path_buf(), branch.to_string())) else {
+            return false;
+        };
+        if known.value.is_some() || known.asked.is_some() || known.next <= now {
+            return false;
+        }
+        known.next = now;
+        self.kept.clear();
+        true
+    }
+
     /// Takes a lookup's answer in. Gives whether it changed what is known,
     /// in which case every directory's answer has been dropped and the tabs
     /// should be named again.
@@ -643,6 +667,36 @@ mod tests {
             })
         );
         assert!(pr.due(later));
+    }
+
+    #[test]
+    fn a_branch_with_no_pr_is_asked_about_again_at_once_when_the_board_shows_one() {
+        let scratch = Scratch::new("names-board");
+        let dir = scratch.0.join("app");
+        if !repo(&dir) {
+            eprintln!("skipped: no git");
+            return;
+        }
+        assert!(git(&dir, &["checkout", "-q", "-b", "cache"]));
+        let (mut names, now) = names(Switches::default());
+        let repo_dir = dir.join(".git");
+        assert!(!names.ask_soon(&repo_dir, "cache", now), "never asked yet");
+        assert_eq!(names.facts(&dir, now).1.len(), 1, "its first ask");
+        assert!(!names.ask_soon(&repo_dir, "cache", now), "still waiting");
+        let none = Answer::Pr {
+            repo: repo_dir.clone(),
+            branch: "cache".into(),
+            found: Ok(None),
+        };
+        names.answer(none, now);
+        let later = now + Duration::from_secs(90);
+        assert_eq!(
+            names.facts(&dir, later).1,
+            Vec::new(),
+            "none for five minutes"
+        );
+        assert!(names.ask_soon(&repo_dir, "cache", later));
+        assert_eq!(names.facts(&dir, later).1.len(), 1, "asked at once");
     }
 
     #[test]

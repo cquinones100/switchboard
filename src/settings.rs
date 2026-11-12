@@ -423,4 +423,13 @@ mod tests {
             "every default is a value its option takes"
         );
     }
+
+    #[test]
+    fn looking_often_is_off_at_first() {
+        let fast = schema().into_iter().find(|o| o.key == "poll_fast").unwrap();
+        assert!(
+            !fast.default.as_bool().unwrap(),
+            "about eight times the requests to GitHub"
+        );
+    }
 }

@@ -39,7 +39,7 @@ pub fn columns(ux2: bool) -> &'static [&'static str] {
 pub const MERGED_DAYS: i64 = 7;
 pub const MERGED_EVERY: Duration = Duration::from_secs(10 * 60);
 
-const FIELDS: &str = "... on PullRequest { number title url isDraft state reviewDecision mergedAt mergedBy { login } body additions deletions author { login } repository { nameWithOwner } mergeQueueEntry { position } commitCount: commits { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } latestReviews(first: 10) { nodes { author { login } } } }";
+const FIELDS: &str = "... on PullRequest { number title url headRefName isCrossRepository headRepositoryOwner { login } isDraft state reviewDecision mergedAt mergedBy { login } body additions deletions author { login } repository { nameWithOwner } mergeQueueEntry { position } commitCount: commits { totalCount } commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } } latestReviews(first: 10) { nodes { author { login } } } }";
 
 fn column_of(pr: &Value, ux2: bool) -> &'static str {
     if text(pr, "/state") == "MERGED" {
@@ -133,7 +133,11 @@ pub fn item_of(pr: &Value, ux2: bool) -> Option<Item> {
         .target(Target::Url(url.to_string()))
         .group(column_of(pr, ux2))
         .data(json!({
-            "pr": { "number": number, "repo": repo },
+            "pr": {
+                "number": number, "repo": repo, "branch": text(pr, "/headRefName"),
+                "cross": pr.get("isCrossRepository").and_then(Value::as_bool) == Some(true),
+                "headOwner": text(pr, "/headRepositoryOwner/login"),
+            },
             "url": url,
             "checks": check,
             "review": text(pr, "/reviewDecision"),
@@ -253,9 +257,94 @@ pub async fn fetch(
     Ok((nodes("open"), with_merged.then(|| nodes("merged"))))
 }
 
+/// The open PR on the board from `branch` of the clone whose origin is
+/// `origin`, with the repository it is in: one in origin from origin itself,
+/// else one in `upstream` (a fork's clone's) from origin's owner's fork, as
+/// `github::branch_pr` takes them, so a PR from a fork's branch of the
+/// same name never counts; of several, the newest (the highest number),
+/// as that lookup takes it.
+pub fn pr_of_branch(
+    board: &[Item],
+    origin: &github::Repo,
+    upstream: Option<&github::Repo>,
+    branch: &str,
+) -> Option<(u64, github::Repo)> {
+    let find = |repo: &github::Repo, from_fork: bool| {
+        board
+            .iter()
+            .filter_map(|item| {
+                let pr = item.data.get("pr")?;
+                let cross = pr.get("cross")?.as_bool()?;
+                let head_owner = pr.get("headOwner")?.as_str()?;
+                let from = if from_fork {
+                    cross && head_owner.eq_ignore_ascii_case(&origin.owner)
+                } else {
+                    !cross
+                };
+                (from
+                    && item.group.as_deref() != Some("Merged")
+                    && pr.get("repo")?.as_str()? == repo.to_string()
+                    && pr.get("branch")?.as_str()? == branch)
+                    .then(|| pr.get("number")?.as_u64())
+                    .flatten()
+            })
+            .max()
+            .map(|number| (number, repo.clone()))
+    };
+    find(origin, false).or_else(|| find(upstream?, true))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_branch_s_open_pr_is_found_on_the_board() {
+        let card = |number: u64, repo: &str, branch: &str, state: &str, head: &str| {
+            item_of(
+                &json!({ "number": number, "url": format!("https://github.com/{repo}/pull/{number}"),
+                    "title": "t", "state": state, "headRefName": branch,
+                    "isCrossRepository": !repo.starts_with(&format!("{head}/")),
+                    "headRepositoryOwner": { "login": head },
+                    "repository": { "nameWithOwner": repo } }),
+                false,
+            )
+            .unwrap()
+        };
+        let board = vec![
+            card(1, "me/app", "old", "MERGED", "me"),
+            card(2, "up/app", "fix", "OPEN", "me"),
+            card(3, "me/app", "other", "OPEN", "me"),
+            card(4, "up/app", "main", "OPEN", "me"),
+            card(6, "me/app", "other", "OPEN", "me"),
+            card(5, "me/app", "other", "OPEN", "me"),
+        ];
+        let me = github::Repo {
+            owner: "me".into(),
+            name: "app".into(),
+        };
+        let up = github::Repo {
+            owner: "up".into(),
+            name: "app".into(),
+        };
+        assert_eq!(
+            pr_of_branch(&board, &me, Some(&up), "fix"),
+            Some((2, up.clone())),
+            "from my fork, in the project upstream names"
+        );
+        assert_eq!(pr_of_branch(&board, &me, None, "fix"), None);
+        assert_eq!(pr_of_branch(&board, &me, None, "old"), None, "merged");
+        assert_eq!(
+            pr_of_branch(&board, &me, None, "other"),
+            Some((6, me.clone())),
+            "the newest of a branch's PRs"
+        );
+        assert_eq!(
+            pr_of_branch(&board, &up, None, "main"),
+            None,
+            "a clone of the project itself on main isn't my fork's main"
+        );
+    }
 
     fn pr(number: u64, extra: Value) -> Value {
         let mut pr = json!({

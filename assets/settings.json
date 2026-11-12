@@ -662,8 +662,8 @@
     "key": "poll_fast",
     "category": "Mission control",
     "label": "Look often",
-    "description": "Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes",
-    "default": true
+    "description": "Ask GitHub and Linear every 15 seconds (the PR board every 30) and look at the Slack Home tab every 10, in place of every one or two minutes: about eight times as many requests, which can reach GitHub's 5,000 an hour",
+    "default": false
   },
   {
     "key": "pr_board",
