@@ -47,6 +47,9 @@ pub struct PaneInfo {
     pub command: String,
     /// The tab's active pane.
     pub active: bool,
+    /// Its Claude's address for another session's messages (`uds:<socket>`,
+    /// as `switchboard tabs` shows it), or empty.
+    pub address: String,
 }
 
 /// A tab's stage as the sidebar groups it (`list`'s `stage`): its key and
@@ -330,6 +333,11 @@ pub fn windows_of(list: &Value) -> Vec<Window> {
                         cwd: p.get("cwd").and_then(Value::as_str).map(PathBuf::from),
                         command: text(p, "command"),
                         active: p.get("active") == Some(&Value::Bool(true)),
+                        address: claude
+                            .and_then(|c| c.pointer("/peer/socket"))
+                            .and_then(Value::as_str)
+                            .map(|s| format!("uds:{s}"))
+                            .unwrap_or_default(),
                     }
                 })
                 .collect();

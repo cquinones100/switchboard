@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
 
 use regex::Regex;
@@ -63,6 +63,8 @@ pub struct Tab {
     /// Its stage in the sidebar, which the Home groups by.
     pub stage: Option<TabStage>,
     pub remind_at: Option<i64>,
+    /// Its Claude's address for another session's messages, or empty.
+    pub address: String,
 }
 
 /// What this module keeps in memory: each tab's Claude pane as last seen,
@@ -110,8 +112,10 @@ pub fn claude_tabs(cx: &Relay) -> Vec<Tab> {
             cwd: chosen.cwd.clone(),
             stage: w.stage.clone(),
             remind_at: w.remind_at,
+            address: chosen.address.clone(),
         });
     }
+    note_senders(&tabs);
     let mut mem = cx.mem.borrow_mut();
     mem.tabs.panes = tabs
         .iter()
@@ -119,6 +123,26 @@ pub fn claude_tabs(cx: &Relay) -> Vec<Tab> {
         .collect();
     tabs.sort_by_key(|t| t.index);
     tabs
+}
+
+/// The tabs' names by their Claude's address, as the last look at the tabs
+/// saw them, for naming the tab whose message started another's turn: a
+/// transcript names its sender only by address.
+static SENDERS: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+fn note_senders(tabs: &[Tab]) {
+    let named = tabs
+        .iter()
+        .filter(|t| !t.address.is_empty())
+        .map(|t| (t.address.clone(), format!("Tab {}, {}", t.index, t.name)));
+    if let Ok(mut senders) = SENDERS.lock() {
+        senders.extend(named);
+    }
+}
+
+/// The tab whose Claude has this address, as the tab list names it.
+fn sender_named(address: &str) -> Option<String> {
+    SENDERS.lock().ok()?.get(address).cloned()
 }
 
 /// One tab, looked up afresh.
@@ -458,13 +482,41 @@ pub fn last_prompt(file: &Path) -> Option<LastPrompt> {
     let mut tail = PROMPT_TAIL;
     loop {
         let (text, whole) = tail_of(file, tail)?;
+        // Whether the last reply so far waits on a tool, so its turn runs on,
+        // until something other than the tool's result is said (Esc's
+        // interruption, a prompt of yours).
+        let mut running = false;
         let entries: Vec<Value> = text
             .split('\n')
             .filter(|l| !l.is_empty())
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|e| !e.get("isSidechain").is_some_and(util::truthy))
             .filter(|e| {
-                !e.get("isSidechain").is_some_and(util::truthy)
-                    && !e.get("isMeta").is_some_and(util::truthy)
+                let meta = e.get("isMeta").is_some_and(util::truthy);
+                match e.get("type").and_then(Value::as_str) {
+                    Some("assistant") => {
+                        running = e.pointer("/message/stop_reason").and_then(Value::as_str)
+                            == Some("tool_use");
+                    }
+                    Some("user") if !meta => {
+                        let results_only = e
+                            .pointer("/message/content")
+                            .and_then(Value::as_array)
+                            .is_some_and(|parts| {
+                                parts.iter().all(|p| {
+                                    p.get("type").and_then(Value::as_str) == Some("tool_result")
+                                })
+                            });
+                        running &= results_only;
+                    }
+                    _ => {}
+                }
+                // Another session's message arrives as a meta entry once a
+                // turn has ended, and starts one all the same (one that comes
+                // in while a turn runs is queued into it).
+                let starts_a_turn =
+                    !running && e.pointer("/origin/kind").and_then(Value::as_str) == Some("peer");
+                starts_a_turn || !meta
             })
             .collect();
         let start = entries.iter().rposition(|e| {
@@ -486,6 +538,28 @@ pub fn last_prompt(file: &Path) -> Option<LastPrompt> {
         // harness's framing: it reads as the report, cut short. Known by its
         // origin alone, never its text, which a prompt of yours may quote.
         if origin == Some("peer") {
+            let cut = |text: &str| {
+                let text = flat(text);
+                if text.chars().count() > 200 {
+                    format!("{}…", text.chars().take(200).collect::<String>())
+                } else {
+                    text
+                }
+            };
+            // Another session's message (SendMessage), by its sender.
+            if let Some(body) = entry.pointer("/origin/body").and_then(Value::as_str) {
+                let sender = entry
+                    .pointer("/origin/from")
+                    .and_then(Value::as_str)
+                    .and_then(sender_named)
+                    .unwrap_or_else(|| "Another tab".to_string());
+                return Some(LastPrompt {
+                    prompt: format!("{sender} sent: {}", cut(body)),
+                    background: true,
+                    sent_at,
+                    after,
+                });
+            }
             const FOLLOWS: &str = "The report follows:";
             let framed = raw
                 .find(FOLLOWS)
@@ -496,14 +570,8 @@ pub fn last_prompt(file: &Path) -> Option<LastPrompt> {
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .unwrap_or_else(|| AGENT.replace_all(framed, "").into_owned());
-            let report = flat(&report);
-            let shown = if report.chars().count() > 200 {
-                format!("{}…", report.chars().take(200).collect::<String>())
-            } else {
-                report
-            };
             return Some(LastPrompt {
-                prompt: format!("An agent reported back: {shown}"),
+                prompt: format!("An agent reported back: {}", cut(&report)),
                 background: true,
                 sent_at,
                 after,
@@ -1298,6 +1366,75 @@ mod tests {
             last_prompt(&peer).unwrap().prompt,
             "An agent reported back: all done"
         );
+        let message = |from: &str| json!({ "type": "user", "isMeta": true, "timestamp": "2026-11-12T04:44:00Z", "origin": { "kind": "peer", "from": from, "name": "proposer", "body": "Here is   my\nproposal" }, "message": { "content": "Another Claude session sent a message:\n<cross-session-message>Here is my proposal</cross-session-message>" } });
+        let messaged = write(
+            &dir,
+            "m.jsonl",
+            &[
+                json!({ "type": "user", "message": { "content": "walk me through it" } }),
+                json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The walkthrough." }] } }),
+                message("uds:/tmp/unknown.sock"),
+                json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The proposal looks right." }] } }),
+            ],
+        );
+        let p = last_prompt(&messaged).unwrap();
+        assert_eq!(p.prompt, "Another tab sent: Here is my proposal");
+        assert!(p.background);
+        let turn = turn_from(&messaged, None, None).unwrap();
+        assert!(turn.contains("The proposal looks right."), "{turn}");
+        assert!(!turn.contains("The walkthrough."), "{turn}");
+        assert!(turn_from(&messaged, Some("walk me through it"), None).is_none());
+        // One that comes in while a turn waits on a tool stays in that turn.
+        let midway = write(
+            &dir,
+            "mid.jsonl",
+            &[
+                json!({ "type": "user", "message": { "content": "walk me through it" } }),
+                json!({ "type": "assistant", "message": { "stop_reason": "tool_use", "content": [{ "type": "text", "text": "Reading." }, { "type": "tool_use", "id": "t1" }] } }),
+                message("uds:/tmp/unknown.sock"),
+                json!({ "type": "assistant", "message": { "stop_reason": "end_turn", "content": [{ "type": "text", "text": "The walkthrough." }] } }),
+            ],
+        );
+        let turn = turn_from(&midway, None, None).unwrap();
+        assert!(turn.contains("> walk me through it"), "{turn}");
+        assert!(turn.contains("Reading."), "{turn}");
+        // One after Esc interrupted the call starts a turn of its own.
+        let interrupted = write(
+            &dir,
+            "esc.jsonl",
+            &[
+                json!({ "type": "user", "message": { "content": "walk me through it" } }),
+                json!({ "type": "assistant", "message": { "stop_reason": "tool_use", "content": [{ "type": "tool_use", "id": "t1" }] } }),
+                json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "tool_use_id": "t1", "content": "denied" }] } }),
+                json!({ "type": "user", "message": { "content": [{ "type": "text", "text": "[Request interrupted by user for tool use]" }] } }),
+                message("uds:/tmp/unknown.sock"),
+                json!({ "type": "assistant", "message": { "stop_reason": "end_turn", "content": [{ "type": "text", "text": "The proposal looks right." }] } }),
+            ],
+        );
+        assert_eq!(
+            last_prompt(&interrupted).unwrap().prompt,
+            "Another tab sent: Here is my proposal"
+        );
+        note_senders(&[Tab {
+            index: 3,
+            name: "design".into(),
+            address: "uds:/tmp/tab-three.sock".into(),
+            ..Tab::default()
+        }]);
+        let named = write(&dir, "n.jsonl", &[message("uds:/tmp/tab-three.sock")]);
+        assert_eq!(
+            last_prompt(&named).unwrap().prompt,
+            "Tab 3, design sent: Here is my proposal"
+        );
+        let meta = write(
+            &dir,
+            "meta.jsonl",
+            &[
+                json!({ "type": "user", "message": { "content": "typed" } }),
+                json!({ "type": "user", "isMeta": true, "message": { "content": "a reminder" } }),
+            ],
+        );
+        assert_eq!(last_prompt(&meta).unwrap().prompt, "typed");
         let slash = write(
             &dir,
             "s.jsonl",

@@ -698,6 +698,52 @@ fn alerts_come_once_per_state_change_with_the_screen_for_a_wait() {
 }
 
 #[test]
+fn a_turn_another_tabs_message_started_is_posted_with_who_sent_it() {
+    let rig = Rig::new();
+    let (tab, _) = rig.claude_tab("work");
+    let (sender, _) = rig.claude_tab("design");
+    let sender_index = rig.index_of(&sender);
+    let address = "uds:/tmp/scenario-design.sock";
+    {
+        let mut windows = rig.mux.windows.borrow_mut();
+        let (_, panes) = windows.iter_mut().find(|(w, _)| w.id == sender).unwrap();
+        panes[0].info.address = address.into();
+    }
+    rig.transcript(
+        &tab,
+        "messaged",
+        &[
+            json!({ "type": "user", "message": { "content": "walk me through it" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The walkthrough." }] } }),
+            json!({ "type": "user", "isMeta": true, "origin": { "kind": "peer", "from": address, "body": "Here is my proposal" }, "message": { "content": "Another Claude session sent a message:\n<cross-session-message>Here is my proposal</cross-session-message>" } }),
+            json!({ "type": "assistant", "message": { "content": [{ "type": "text", "text": "The proposal looks right." }] } }),
+        ],
+    );
+    rig.set_state(&tab, "done", "200");
+    let run = |rig: &Rig| {
+        let tabs = tabs::claude_tabs(&rig.cx);
+        rig.block_on(alerts::alert_tabs(&rig.cx, &tabs, &[]));
+    };
+    run(&rig);
+    run(&rig);
+    let finished: Vec<_> = rig
+        .posts()
+        .into_iter()
+        .filter(|p| p.body.contains("has finished"))
+        .collect();
+    assert_eq!(finished.len(), 1);
+    let body = &finished[0].body;
+    assert!(
+        body.contains(&format!(
+            "Tab {sender_index}, design sent: Here is my proposal"
+        )),
+        "{body}"
+    );
+    assert!(body.contains("The proposal looks right."), "{body}");
+    assert!(!body.contains("The walkthrough."), "{body}");
+}
+
+#[test]
 fn a_loop_tab_is_alerted_when_it_waits_not_each_time_it_finishes_a_tick() {
     let rig = Rig::new();
     let (tab, _) = rig.claude_tab("work");
