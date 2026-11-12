@@ -251,13 +251,30 @@ fn landing_words(landing: &str, source: &str) -> String {
     } else {
         "through a PR, which autopilot doesn't take yet"
     };
-    let from = match source {
+    format!("{how}{}", said_by(source))
+}
+
+/// What said how a repository lands, as words to follow it.
+fn said_by(source: &str) -> &'static str {
+    match source {
         "repos.json" => ", as repos.json says",
         "github" => ", as GitHub's rules say",
         "claude-md" => ", as its CLAUDE.md says",
         _ => "",
-    };
-    format!("{how}{from}")
+    }
+}
+
+/// Why `branch` can't be landed on in the repository at `repo`, which
+/// lands through PRs, as `source` says.
+fn target_refused(branch: &str, repo: &Path, source: &str) -> String {
+    let name = repo
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| paths::tilde(repo));
+    format!(
+        "{branch} can't be landed on: {name} lands through PRs{}, and they go to the default branch. Land on the default branch, or set \"landing\": \"direct\" for it in ~/.config/switchboard/repos.json",
+        said_by(source)
+    )
 }
 
 /// A whole number, 1 or more, as typed; empty keeps `was`.
@@ -445,6 +462,7 @@ impl Server {
         repo: PathBuf,
         then: impl FnOnce(&mut Server, ClientId, String) + Send + 'static,
     ) {
+        let repo_for_check = repo.clone();
         self.off_task(
             client,
             move || {
@@ -478,6 +496,42 @@ impl Server {
                         });
                     }
                 };
+                // A branch other than the default is checked first: a
+                // repository landing through PRs sends them to the default
+                // branch, so an item cut from another would land there with
+                // that branch's commits.
+                let at = repo_for_check;
+                let default_name = default.clone();
+                let allow = move |server: &mut Server, client: ClientId, branch: String| {
+                    if branch.is_empty() {
+                        keep(&branch);
+                        then(server, client, branch);
+                        return;
+                    }
+                    server.off_task(
+                        client,
+                        move || crate::repos::landing_for(&at, false).map(|l| (l, at)),
+                        move |server, client, landing| match landing {
+                            Ok((l, _)) if l.landing == "direct" => {
+                                keep(&branch);
+                                then(server, client, branch)
+                            }
+                            // The default branch typed by name is where a PR
+                            // goes, so it is taken as the default branch.
+                            Ok(_) if default_name.as_deref() == Some(branch.as_str()) => {
+                                keep("");
+                                then(server, client, String::new())
+                            }
+                            Ok((l, at)) => {
+                                server.say(Some(client), &target_refused(&branch, &at, &l.source))
+                            }
+                            Err(e) => server.say(
+                                Some(client),
+                                &format!("Couldn't tell how it lands: {e}"),
+                            ),
+                        },
+                    );
+                };
                 let items = mode::target_choices(default.as_deref(), &branches, &recent)
                     .into_iter()
                     .map(|(label, value)| PickItem::new(label, value))
@@ -499,10 +553,7 @@ impl Server {
                                     return;
                                 };
                                 match mode::typed_branch(&p.value) {
-                                    Some(b) => {
-                                        keep(&b);
-                                        then(server, client, b)
-                                    }
+                                    Some(b) => allow(server, client, b),
                                     None => server.mission_note(
                                         client,
                                         format!("Not a branch name: {}", p.value),
@@ -511,10 +562,7 @@ impl Server {
                             })),
                         );
                     }
-                    Some(p) => {
-                        keep(&p.value);
-                        then(server, client, p.value)
-                    }
+                    Some(p) => allow(server, client, p.value),
                     None => {}
                 });
             },

@@ -349,6 +349,7 @@ fn notes_gw_press_opens_a_tab_for_the_item_on_its_line_and_offers_it_the_next_ti
 #[test]
 fn land_on_lists_the_branch_picked_last_time_first() {
     let (server, repo, mut client) = world();
+    lands(&server, &repo, "direct");
     git(&repo, &["branch", "team/dev"]);
     git(&repo, &["branch", "a-first-by-name"]);
     let notes = server.home.join("Notes");
@@ -397,6 +398,99 @@ fn land_on_lists_the_branch_picked_last_time_first() {
         "the branch picked last time first: {screen:#?}"
     );
     client.send(b"\x1b");
+}
+
+/// Sets how the repository at `repo` lands in the test's repos.json.
+fn lands(server: &TestServer, repo: &Path, way: &str) {
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("repos.json"),
+        serde_json::json!({ repo.join(".git").to_str().unwrap(): { "landing": way } }).to_string(),
+    )
+    .unwrap();
+}
+
+/// In a repository landing through PRs, which go to the default branch, a
+/// hand-started item is refused any other branch to land on, through M-I's
+/// "Start work on a note's checklist items" and Notes' `gw` alike, and
+/// opens no tab; the default branch opens one as before.
+#[test]
+fn a_repository_landing_by_pr_refuses_a_target_other_than_the_default_branch() {
+    let (server, repo, mut client) = world();
+    lands(&server, &repo, "pr");
+    git(&repo, &["branch", "team/dev"]);
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(
+        notes.join("Plan.md"),
+        "# Plan\n\n- [ ] Fix the login\n- [ ] Write the docs\n",
+    )
+    .unwrap();
+    let before = tabs(&server).len();
+    server.ok(&["press", "work-on-note"]);
+    client.wait_text("Open in >");
+    client.send(b"\r");
+    client.wait_text("note>");
+    client.send(b"\r");
+    client.wait_text("Every item listed (2)");
+    client.send(b"\x1b[B");
+    client.send(b"\r");
+    client.wait_text("Land on");
+    client.type_text("team/dev");
+    client.wait_text("branch> team/dev");
+    client.send(b"\r");
+    client.wait_text("team/dev can't be landed on");
+    client.send(b"\r");
+    assert_eq!(tabs(&server).len(), before, "no tab for a refused branch");
+    assert!(
+        !std::fs::read_to_string(server.state.join("work-recent.json"))
+            .unwrap_or_default()
+            .contains("team/dev"),
+        "a refused branch isn't kept to list first"
+    );
+
+    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
+    client.wait_text("Work on “Write the docs”: the repository");
+    client.send(b"\r");
+    client.wait_text("Land on");
+    client.type_text("team/dev");
+    client.wait_text("branch> team/dev");
+    client.send(b"\r");
+    client.wait_text("team/dev can't be landed on");
+    client.send(b"\r");
+    assert_eq!(tabs(&server).len(), before, "no tab for a refused branch");
+
+    // Nor is the default branch typed by name for "Another branch…".
+    server.ok(&["press", "work-on-item", "Plan.md", "4"]);
+    client.wait_text("Work on “Write the docs”: the repository");
+    client.send(b"\r");
+    client.wait_text("Land on");
+    client.type_text("Another");
+    client.wait_text("branch> Another");
+    client.send(b"\r");
+    client.wait_text("Land on which branch?");
+    client.type_text("main");
+    client.send(b"\r");
+    wait("the item's tab", || tabs(&server).len() == before + 1);
+}
+
+/// In a repository landing by PR, the default branch picked from "Land on:"
+/// opens the item's tab.
+#[test]
+fn a_repository_landing_by_pr_takes_the_default_branch_from_the_list() {
+    let (server, repo, mut client) = world();
+    lands(&server, &repo, "pr");
+    let notes = server.home.join("Notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] Write the docs\n").unwrap();
+    let before = tabs(&server).len();
+    server.ok(&["press", "work-on-item", "Plan.md", "3"]);
+    client.wait_text("Work on “Write the docs”: the repository");
+    client.send(b"\r");
+    client.wait_text("Land on");
+    client.send(b"\r");
+    wait("the item's tab", || tabs(&server).len() == before + 1);
 }
 
 /// Waits for the tab just opened to be in front, its row `row` in the

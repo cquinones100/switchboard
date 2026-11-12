@@ -27,6 +27,11 @@
 //! repository (`id::migrate_claims`); one it can't place is listed, and
 //! still read by path.
 //!
+//! `--target <branch>` cuts the item's branch from that branch and records
+//! it as the one queue-and-clean lands on, so it is refused in a repository
+//! that lands through PRs, whose PRs go to the default branch: the item
+//! would land there, carrying the target's commits.
+//!
 //! A tab of autopilot's in a repository landing straight on a branch starts
 //! its Claude with one permission for the session, the landing's own push
 //! (`push_rule`), since Claude Code's auto mode otherwise judges that push
@@ -129,7 +134,8 @@ fn usage() -> ExitCode {
          hand them over.\n\
          --target cuts the item's branch from that local branch rather than the default\n\
          branch, and records it as branch.<branch>.wtnTarget, which queue-and-clean\n\
-         lands it on (autopilot's target, or one picked by hand).",
+         lands it on (autopilot's target, or one picked by hand). It is refused in a\n\
+         repository that lands through PRs, which go to the default branch.",
         worktree::DEFAULT_WORKTREE_DIR
     );
     ExitCode::from(1)
@@ -1150,7 +1156,25 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
         refused_in_autopilot(&format!("{branch} is for another item: {other}."));
         return Err(refusal);
     }
-    let target = given.last("--target").filter(|t| !t.is_empty());
+    let target = match given.last("--target").filter(|t| !t.is_empty()) {
+        Some(target) if crate::repos::landing_for(&root, false)?.landing != "direct" => {
+            // Where PRs land, the default branch named is the default
+            // branch, cut from origin's as it is now with no target
+            // recorded, since that is where its PR goes; any other is
+            // refused.
+            let default = crate::tabs::git::locate(&root)
+                .and_then(|p| crate::tabs::git::default_branch(&p.common_dir));
+            if default.as_deref() != Some(target) {
+                return Err(format!(
+                    "{} lands through PRs, so an item cut from {target} would land on the default branch through a PR, carrying {target}'s commits. \
+                     Start it without --target, or set \"landing\": \"direct\" for the repository in ~/.config/switchboard/repos.json",
+                    paths::tilde(&root)
+                ));
+            }
+            None
+        }
+        target => target,
+    };
     let start = start_point(&root, target)?;
     let purpose = Purpose {
         work: "item",

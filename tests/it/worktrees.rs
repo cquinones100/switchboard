@@ -2027,7 +2027,7 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(
         notes.join("Work.md"),
-        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n- [ ] Fourth thing\n- [ ] Fifth thing\n",
+        "# Work\n\n- [ ] First thing\n- [ ] Second thing\n- [ ] Third thing\n- [ ] Fourth thing\n- [ ] Fifth thing\n- [ ] Sixth thing\n",
     )
     .unwrap();
     let (origin, repo) = w.origin_and_clone();
@@ -2068,6 +2068,52 @@ fn an_items_branch_is_cut_from_its_target_which_landing_names_with_what_it_track
         assert!(out.status.success(), "{}", stderr(&out));
         serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["target"].clone()
     };
+
+    // A repository landing through PRs refuses a target: its PR would go to
+    // the default branch carrying the target's commits.
+    let repos = w.path(".config/switchboard/repos.json");
+    std::fs::create_dir_all(repos.parent().unwrap()).unwrap();
+    let landing = |way: &str| {
+        let key = repo.canonicalize().unwrap().join(".git");
+        std::fs::write(
+            &repos,
+            json!({ key.to_str().unwrap(): { "landing": way } }).to_string(),
+        )
+        .unwrap();
+    };
+    landing("pr");
+    let refused = w.run(
+        &repo,
+        &[
+            "worktree-from-note",
+            "--no-claude",
+            "--note",
+            "Work",
+            "--item",
+            "3",
+            "--target",
+            "local-dev",
+        ],
+    );
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains(
+            "lands through PRs, so an item cut from local-dev would land on the default branch"
+        ),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(w.git_fails(&repo, &["config", "branch.note/first-thing.wtnTarget"]));
+    assert!(!w.git(&repo, &["worktree", "list"]).contains("first-thing"));
+    // The default branch named as the target is the default branch, with
+    // no target recorded.
+    let named_default = wtn("8", "main");
+    assert!(w.git_fails(&repo, &["config", "branch.note/sixth-thing.wtnTarget"]));
+    assert_eq!(
+        w.git(&named_default, &["rev-parse", "HEAD"]),
+        w.git(&repo, &["rev-parse", "origin/main"])
+    );
+    landing("direct");
 
     let first = wtn("3", "local-dev");
     assert_eq!(w.git(&first, &["rev-parse", "HEAD"]), dev_tip);
