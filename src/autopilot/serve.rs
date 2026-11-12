@@ -9,9 +9,10 @@
 //! notes…"), how many of its tabs work at once, the most open and a
 //! spend limit, each typed in a box with what it was before, Enter keeping
 //! it; the repository is the main clone of the pane it was asked from. With
-//! the mode on, it opens the line's menu instead. With UX 2.0 on, both are its
-//! settings box instead (src/autopilot/settings_box.rs), checked and
-//! written here (`autopilot_box_write`).
+//! the mode on, it opens mission control on the mode and nothing over it, its
+//! menu (`m`) a key away. With UX 2.0 on, setting it up is its settings box
+//! instead (src/autopilot/settings_box.rs), which the view's menu opens while
+//! it is on, checked and written here (`autopilot_box_write`).
 //!
 //! Every tick reads `autopilot.json`, gathers the tabs it opened (their
 //! directories from what the server holds and git's files, their state from
@@ -299,8 +300,10 @@ impl Server {
     // ── M-p ─────────────────────────────────────────────────────────────────
 
     /// M-p's command, pressed with `pane` current: mission control on the
-    /// Autopilot view, which shows the mode while it is on (its menu a key
-    /// or a click away there), else the mode set up.
+    /// Autopilot view, which shows the mode while it is on (its menu and
+    /// settings box a key or a click away there, nothing opened over it),
+    /// else the mode set up: its settings box with UX 2.0, its questions
+    /// without.
     pub fn autopilot_command(&mut self, client: ClientId, command: Command, pane: Option<PaneId>) {
         match command {
             Command::WorkNote => {
@@ -313,9 +316,12 @@ impl Server {
                     self.mission_note(client, "Autopilot is off in Settings (Autopilot)");
                     return;
                 }
+                if Mode::read(&paths::state_dir()).on {
+                    return;
+                }
                 if crate::sidebar::text::ux2() {
                     self.autopilot_box(client, Some(dir), None, Part::Note);
-                } else if !Mode::read(&paths::state_dir()).on {
+                } else {
                     self.autopilot_setup(client, &dir);
                 }
             }

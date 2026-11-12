@@ -120,7 +120,7 @@ pub fn opening() -> crate::mission::Opening {
 pub enum Command {
     /// "Autopilot: work a note": with the mode off, which note, how
     /// many tabs at once, the most open and a spend limit, then on; with it
-    /// on, its menu.
+    /// on, its board, whose menu changes or stops it.
     WorkNote,
 }
 
@@ -151,7 +151,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With UX 2.0 on, it opens its settings box, which starts it, or changes or stops it while it is on; without it, with the mode on, it opens mission control on the mode, whose menu (m) changes or stops it."
+                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With UX 2.0 on, those are its settings box, which starts it. While it is on, it opens mission control on the mode's board and nothing over it: its menu (m) changes or stops it, and with UX 2.0 opens the settings box."
             }
         }
     }

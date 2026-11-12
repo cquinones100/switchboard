@@ -216,8 +216,8 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
-fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose_m_opens_the_menu()
-{
+fn with_ux2_its_command_shows_its_board_whose_menu_and_button_open_its_settings_box_whose_m_opens_the_menu()
+ {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("WAITING ON YOU");
     client.type_text("\x1b");
@@ -230,12 +230,23 @@ fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose
             !s.iter().any(|l| l.contains("Autopilot · Work"))
         });
     };
-    // M-p's command with the mode on shows the board and its box over it.
+    // M-p's command with the mode on shows the board and nothing over it.
     client.type_text("\x1bp");
     client.wait_text("Actions");
     client.type_text("autopilot");
-    // Named for changing or stopping the mode while it is on.
-    client.wait_text("Autopilot: work a note: change or stop working");
+    // Named for showing its board while it is on.
+    client.wait_text("Autopilot: work a note: show its board for Work");
+    client.type_text("\r");
+    client.wait_text("WAITING ON YOU");
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !screen.iter().any(|l| l.contains("Autopilot · Work")),
+        "{screen:#?}"
+    );
+    // The view's menu, `m`, leads to the box.
+    client.type_text("m");
+    client.wait_text("Autopilot's settings");
     client.type_text("\r");
     let screen = client.wait_text("Autopilot · Work");
     for want in ["tabs working, ", "Tabs at once", "M-↵  Save", "p  Pause"] {
@@ -244,12 +255,6 @@ fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose
             "{want}: {screen:#?}"
         );
     }
-    closed(&mut client);
-    // The view's menu, `m`, leads to it.
-    client.type_text("m");
-    client.wait_text("Autopilot's settings");
-    client.type_text("\r");
-    client.wait_text("Autopilot · Work");
     closed(&mut client);
     // So does a click on the heading's button.
     let (row, col) = client.find_cell('☰').unwrap();

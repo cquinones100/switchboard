@@ -184,14 +184,15 @@ pub fn entries(
 }
 
 /// While autopilot works `note` (its path), its command's words say what
-/// picking it does then: change or stop the mode, after the command's name,
-/// so typing the name still finds it. Its action, tags and keys stay as they
-/// are, since the recent picks and its key go by the action.
+/// picking it does then: show the mode's board, whose `m` changes or stops
+/// it, after the command's name, so typing the name still finds it. Its
+/// action, tags and keys stay as they are, since the recent picks and its key
+/// go by the action.
 pub fn autopilot_on(entries: &mut [Entry], note: &str) {
     let work_note = Action::Autopilot(crate::autopilot::Command::WorkNote);
     for entry in entries.iter_mut().filter(|e| e.action == work_note) {
         entry.words = format!(
-            "Autopilot: work a note: change or stop working {}: its tabs at once, the most open, the spend limit, the branch it lands on, pause or stop",
+            "Autopilot: work a note: show its board for {} (m for its settings: its tabs at once, the most open, the spend limit, the branch it lands on, pause or stop)",
             crate::autopilot::mode::note_title(note)
         );
     }
@@ -593,9 +594,9 @@ mod tests {
         autopilot_on(&mut on, "Work/Ship it.md");
         let entry = on.iter().find(|e| e.action == work_note).unwrap();
         assert!(
-            entry
-                .words
-                .starts_with("Autopilot: work a note: change or stop working Ship it:"),
+            entry.words.starts_with(
+                "Autopilot: work a note: show its board for Ship it (m for its settings"
+            ),
             "{}",
             entry.words
         );
