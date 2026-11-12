@@ -292,6 +292,10 @@ pub trait Overlay: AsAny + Send {
         None
     }
 
+    /// Opens beside a click's cell rather than where it would (`Place::Near`),
+    /// for a menu or a question a click opened; the rest stay put.
+    fn open_near(&mut self, _at: (u16, u16)) {}
+
     fn key(&mut self, key: Key, look: &Look) -> Step;
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step;

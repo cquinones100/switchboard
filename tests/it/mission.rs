@@ -1734,3 +1734,91 @@ fn with_ux2_m_brackets_move_between_groups_and_stay_the_tabs_outside_it() {
         tabs(l)[0]["current"] == true
     });
 }
+
+/// Where a text first shows on the screen, from the top: its row and the
+/// column it starts at.
+fn find_on(screen: &[String], text: &str) -> Option<(usize, usize)> {
+    screen.iter().enumerate().find_map(|(row, line)| {
+        let at = line.find(text)?;
+        Some((row, line[..at].chars().count()))
+    })
+}
+
+/// A left click at a 0-based cell.
+fn click(client: &mut TestClient, (row, col): (usize, usize)) {
+    client.send(
+        format!(
+            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        )
+        .as_bytes(),
+    );
+}
+
+/// The top-left corner of the box with this title.
+fn corner_of(screen: &[String], title: &str) -> (usize, usize) {
+    find_on(screen, &format!("╭─ {title} "))
+        .unwrap_or_else(|| panic!("no box {title}:\n{}", screen.join("\n")))
+}
+
+/// Whether the box with this title is in the middle of the screen, as a
+/// box opened by a key is.
+fn in_the_middle(screen: &[String], title: &str) -> bool {
+    let (top, left) = corner_of(screen, title);
+    let bottom = (top..screen.len())
+        .find(|&r| screen[r].chars().nth(left) == Some('╰'))
+        .unwrap();
+    top == (screen.len() - (bottom + 1 - top)) / 2
+}
+
+#[test]
+fn a_menu_a_click_opens_opens_beside_the_click_and_enters_in_the_middle() {
+    let (_server, mut client) = two_tabs(json!({}));
+    let screen = open(&mut client);
+    let card = find_on(&screen, "second").unwrap();
+    // A click chooses the card, a second opens its menu, beside the click.
+    click(&mut client, card);
+    click(&mut client, card);
+    let screen = client.wait_text("Go to tab 2");
+    assert_eq!(corner_of(&screen, "2 second"), (card.0 + 1, card.1 + 1));
+    // A question an option's click opens opens beside that option.
+    let option = find_on(&screen, "Close the tab").unwrap();
+    click(&mut client, option);
+    let screen = client.wait_text("Close tab 2 second?");
+    // With no room to its right, it opens to the option's left.
+    let (top, left) = corner_of(&screen, "Are you sure?");
+    let right = screen[top]
+        .chars()
+        .skip(left)
+        .position(|c| c == '╮')
+        .unwrap()
+        + left;
+    assert_eq!(
+        (top, right),
+        (option.0 + 1, option.1 - 1),
+        "{}",
+        screen.join("\n")
+    );
+    client.type_text("n");
+    client.wait_for("the question closed", |s| {
+        !s.iter().any(|l| l.contains("Close tab 2"))
+    });
+    // Enter opens it in the middle.
+    client.type_text("\r");
+    let screen = client.wait_text("Go to tab 2");
+    assert!(in_the_middle(&screen, "2 second"), "{}", screen.join("\n"));
+}
+
+#[test]
+fn with_boxes_near_click_off_a_clicks_menu_opens_in_the_middle() {
+    let (_server, mut client) = two_tabs(json!({"boxes_near_click": false}));
+    let screen = open(&mut client);
+    let card = find_on(&screen, "second").unwrap();
+    click(&mut client, card);
+    click(&mut client, card);
+    let screen = client.wait_text("Go to tab 2");
+    assert!(in_the_middle(&screen, "2 second"), "{}", screen.join("\n"));
+}

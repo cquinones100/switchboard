@@ -53,10 +53,17 @@ impl Server {
 
     /// Puts an overlay over a client's screen, above any already up; `then`
     /// is told how it ends.
-    pub fn open(&mut self, client: ClientId, overlay: Box<dyn Overlay>, then: Option<Then>) {
+    /// One a click opens (a menu, a question) opens beside the click, with
+    /// Settings' `boxes_near_click` on.
+    pub fn open(&mut self, client: ClientId, mut overlay: Box<dyn Overlay>, then: Option<Then>) {
         let Some(c) = self.clients.get_mut(&client) else {
             return;
         };
+        if let Some(at) = c.pressed_at
+            && setting_on("boxes_near_click")
+        {
+            overlay.open_near(at);
+        }
         c.overlays.look = Look::read_for(c.truecolor());
         c.overlays.layers.push(Layer { overlay, then });
         self.overlays_changed(client);

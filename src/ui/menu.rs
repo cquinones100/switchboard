@@ -49,6 +49,8 @@ pub struct Menu {
     cursor: usize,
     close_lit: bool,
     drawn: Option<Drawn>,
+    /// Where it opens: the middle, or beside the click that opened it.
+    place: draw::Place,
     /// Which of the box's lines is the first option, and the first option
     /// shown on it.
     first_line: usize,
@@ -64,6 +66,7 @@ impl Menu {
             cursor: 0,
             close_lit: false,
             drawn: None,
+            place: draw::Place::Center,
             first_line: 0,
             first_shown: 0,
         }
@@ -191,7 +194,12 @@ impl Overlay for Menu {
             spec.width = inner as u16;
         }
         spec.close_lit = self.cursor == n || self.close_lit;
+        spec.place = self.place;
         self.drawn = Some(draw::draw_box(buf, &spec, look));
+    }
+
+    fn open_near(&mut self, (x, y): (u16, u16)) {
+        self.place = draw::Place::Near { x, y };
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {

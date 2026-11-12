@@ -121,6 +121,11 @@ pub enum Place {
     /// Its top-left corner at a cell, moved in as far as it must to fit:
     /// the restart's steps beside the sidebar's build row.
     At { x: u16, y: u16 },
+    /// Beside a click at a cell, for a menu or question the click opened:
+    /// its top-left a cell right of and a row below it, flipped to the left
+    /// or above where it would run off the screen, then moved in to fit as
+    /// `At` is, so its options are a short move from the mouse.
+    Near { x: u16, y: u16 },
 }
 
 /// One line inside a box: its spans, a background for the whole line (the
@@ -324,6 +329,24 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
             x.min(cols.saturating_sub(outer_w)),
             y.min(rows.saturating_sub(outer_h)),
         ),
+        Place::Near { x, y } => {
+            let right = x.saturating_add(1);
+            let below = y.saturating_add(1);
+            let left = if right.saturating_add(outer_w) > cols {
+                x.saturating_sub(outer_w)
+            } else {
+                right
+            };
+            let top = if below.saturating_add(outer_h) > rows {
+                y.saturating_sub(outer_h)
+            } else {
+                below
+            };
+            (
+                left.min(cols.saturating_sub(outer_w)),
+                top.min(rows.saturating_sub(outer_h)),
+            )
+        }
         _ => (
             cols.saturating_sub(outer_w) / 2,
             rows.saturating_sub(outer_h) / 2,
@@ -509,6 +532,31 @@ pub(crate) mod tests {
         let drawn = draw_box(&mut buf, &spec, &Look::default());
         assert_eq!(drawn.outer.y, 0);
         assert_eq!(drawn.outer.right(), 80);
+    }
+
+    #[test]
+    fn a_box_near_a_click_opens_beside_it_and_flips_at_the_edges() {
+        let lines = [BoxLine::text(" Open", Style::new())];
+        let near = |x, y| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+            let mut spec = BoxSpec::new("Menu", &lines);
+            spec.place = Place::Near { x, y };
+            spec.width = 20;
+            draw_box(&mut buf, &spec, &Look::default()).outer
+        };
+        let beside = near(10, 5);
+        assert_eq!((beside.x, beside.y), (11, 6));
+        // Near the right edge it opens to the click's left, near the
+        // bottom above it.
+        let corner = near(75, 22);
+        assert_eq!((corner.right(), corner.bottom()), (75, 22));
+        // Where neither side has room it is moved in to fit.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 6));
+        let mut spec = BoxSpec::new("Menu", &lines);
+        spec.place = Place::Near { x: 15, y: 3 };
+        spec.width = 20;
+        let squeezed = draw_box(&mut buf, &spec, &Look::default()).outer;
+        assert!(squeezed.right() <= 30 && squeezed.bottom() <= 6);
     }
 
     #[test]

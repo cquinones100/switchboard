@@ -336,6 +336,10 @@ pub struct Client {
     /// the mouse (src/mux/header.rs).
     pub header_keys: super::header::Keys,
     pub header_hover: Option<super::header::Button>,
+    /// Where the left click being handled was pressed, while it is handled
+    /// alone, so a box it opens opens beside it (`Server::open`); never
+    /// set while a key is handled.
+    pub pressed_at: Option<(u16, u16)>,
     /// What is shown over the tab, the top one taking the input (src/ui).
     pub overlays: crate::ui::Stack,
     pub activity: Instant,
@@ -2019,6 +2023,7 @@ impl Server {
             status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
+            pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now(),
             options_taken: 0,
@@ -2104,6 +2109,7 @@ impl Server {
             status_hits: Default::default(),
             header_keys: Default::default(),
             header_hover: None,
+            pressed_at: None,
             overlays: Default::default(),
             activity: Instant::now()
                 .checked_sub(idle)
@@ -2381,7 +2387,25 @@ impl Server {
         said.or_else(|| slot.pane.cwd())
     }
 
+    /// Handles one input from a client; a left click's cell is kept on the
+    /// client while it is handled, so a box it opens opens beside it.
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
+        let pressed_at = match parsed.input {
+            Input::Mouse(m) if m.kind == MouseKind::Press && m.button == MouseButton::Left => {
+                Some((m.col, m.row))
+            }
+            _ => None,
+        };
+        if let Some(c) = self.clients.get_mut(&id) {
+            c.pressed_at = pressed_at;
+        }
+        self.dispatch_input(id, parsed);
+        if let Some(c) = self.clients.get_mut(&id) {
+            c.pressed_at = None;
+        }
+    }
+
+    fn dispatch_input(&mut self, id: ClientId, parsed: input::Parsed) {
         // The terminal's answers about its colours, asked as it attached,
         // are the server's (src/mux/terminal.rs, and the background's for
         // the theme in src/status), whatever is up.

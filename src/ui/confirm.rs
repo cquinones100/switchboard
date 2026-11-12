@@ -32,6 +32,8 @@ pub struct Confirm {
     /// Under the mouse.
     lit: Option<Button>,
     drawn: Option<Drawn>,
+    /// Where it opens: the middle, or beside the click that opened it.
+    place: draw::Place,
     /// The columns of Yes and No on their line, inside the box, and which
     /// of the box's lines that is.
     spans: [(u16, u16); 2],
@@ -47,6 +49,7 @@ impl Confirm {
             tabbed: false,
             lit: None,
             drawn: None,
+            place: draw::Place::Center,
             spans: [(0, 0); 2],
             buttons_at: 0,
         }
@@ -144,7 +147,12 @@ impl Overlay for Confirm {
         spec.keys = Some("y or click Yes  tab move  ↵ choose  any other key no");
         spec.edge = draw::YELLOW;
         spec.close_lit = self.chosen == Button::Close || self.lit == Some(Button::Close);
+        spec.place = self.place;
         self.drawn = Some(draw::draw_box(buf, &spec, look));
+    }
+
+    fn open_near(&mut self, (x, y): (u16, u16)) {
+        self.place = draw::Place::Near { x, y };
     }
 
     fn key(&mut self, key: Key, look: &Look) -> Step {

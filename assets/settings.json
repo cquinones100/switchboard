@@ -330,6 +330,13 @@
     "default": true
   },
   {
+    "key": "boxes_near_click",
+    "category": "Mission control",
+    "label": "Open boxes by the click",
+    "description": "A menu or question a click opens appears beside the place clicked, so its options are a short move away; one opened by a key stays in the middle. Off, every box opens in the middle of the screen",
+    "default": true
+  },
+  {
     "key": "tab_focus",
     "category": "Mission control",
     "label": "Tab moves focus",
