@@ -471,6 +471,74 @@ fn on_a_short_screen_the_header_stays_and_a_click_on_more_scrolls_half_a_screen(
     client.wait_for("back at the top", |s| !left(&s[1], 34).contains("▲"));
 }
 
+/// The index of the tab in front.
+fn in_front(list: &Value) -> usize {
+    tabs(list)
+        .iter()
+        .position(|t| t["current"] == true)
+        .unwrap()
+}
+
+/// Eight tabs on a short screen, the first in front.
+fn short_screen_of_tabs(server: &TestServer) -> TestClient {
+    let mut client = server.attach(120, 14);
+    client.wait_text("$");
+    for n in 2..=8 {
+        server.ok(&["new-tab", "-d", "-n", &format!("t{n}")]);
+    }
+    server.ok(&[
+        "select-tab",
+        "-t",
+        tabs(&server.list())[0]["id"].as_str().unwrap(),
+    ]);
+    client.wait_for("tabs cut below", |s| {
+        s.iter().any(|l| left(l, 34).contains("▼"))
+    });
+    client
+}
+
+#[test]
+fn the_wheel_over_the_sidebar_moves_half_a_screen_once_a_flick() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = short_screen_of_tabs(&server);
+    // One wheel-down: half a screen on, as C-d, the focus in the sidebar.
+    client.send(b"\x1b[<65;6;5M");
+    let list = wait_list(&server, "half a screen down", |l| {
+        focused(l) && in_front(l) > 1
+    });
+    let half = in_front(&list);
+    client.wait_for("tabs above counted", |s| left(&s[1], 34).contains("▲"));
+    // One wheel-up, the other way: back to the first, as C-u.
+    client.send(b"\x1b[<64;6;5M");
+    wait_list(&server, "back at the first", |l| in_front(l) == 0);
+    client.wait_for("back at the top", |s| !left(&s[1], 34).contains("▲"));
+    // A flick of five: half a screen once.
+    client.send("\x1b[<65;6;5M".repeat(5).as_bytes());
+    wait_list(&server, "half a screen down again", |l| in_front(l) > 0);
+    std::thread::sleep(Duration::from_millis(100) * common::patience());
+    assert_eq!(in_front(&server.list()), half);
+}
+
+#[test]
+fn with_half_page_scrolling_off_the_wheel_moves_a_tab_at_a_time() {
+    // Off from the start, so the wheel never meets it still on.
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "sidebar_half_page": false}"#,
+    );
+    let mut client = short_screen_of_tabs(&server);
+    // One wheel-down moves the cursor one tab, as j does, the list not
+    // scrolled.
+    client.send(b"\x1b[<65;6;5M");
+    wait_list(&server, "the next tab", |l| focused(l) && in_front(l) > 0);
+    std::thread::sleep(Duration::from_millis(100) * common::patience());
+    assert_eq!(in_front(&server.list()), 1);
+    let screen = client.wait_for("the cursor on t8", |s| {
+        s.iter().any(|l| left(l, 34).contains("▌ ○  2 t8"))
+    });
+    assert!(!left(&screen[1], 34).contains("▲"), "{}", screen.join("\n"));
+}
+
 #[test]
 fn d_and_l_in_the_sidebar_put_a_tool_in_the_chosen_tab_s_pane_s_place() {
     let server = TestServer::start();
@@ -845,6 +913,28 @@ fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
     wait_list(&server, "the focus in the window", |l| !focused(l));
     client.type_text("j");
     wait_chosen(&mut client, "DM Grace");
+}
+
+#[test]
+fn the_wheel_past_the_last_tab_steps_over_the_notifications_as_j_does() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+
+    // Down from the only tab: onto the Slack line, as j.
+    client.send(b"\x1b[<65;6;5M");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    wait_chosen(&mut client, "DM Ada");
+    // After the flick's pause, down again: the note's line.
+    std::thread::sleep(Duration::from_millis(300));
+    client.send(b"\x1b[<65;6;5M");
+    wait_chosen(&mut client, "Plan");
+    // Up: back onto the Slack line.
+    client.send(b"\x1b[<64;6;5M");
+    wait_chosen(&mut client, "DM Ada");
 }
 
 #[test]

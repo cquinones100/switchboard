@@ -36,6 +36,10 @@ use crate::mux::{PaneId, TabId};
 use crate::ui::{Outcome, PickItem, Picker, Theme};
 use crate::{paths, settings, util};
 
+/// How long after a half-screen move by the wheel the rest of the same
+/// flick is let go: a trackpad or a fast wheel sends many events at once.
+const FLICK: Duration = Duration::from_millis(150);
+
 mod history;
 mod window;
 
@@ -1828,7 +1832,7 @@ impl Server {
 
     /// A mouse event, before the panes see it: on the sidebar, a click goes
     /// to a tab (a right click peeks at it) or, on the ▲ or ▼ more row,
-    /// scrolls half a screen, the wheel moves the cursor and
+    /// scrolls half a screen, as the wheel does, and
     /// the mouse lights the row it is over (hover_highlight); a press
     /// anywhere else takes the focus out of the sidebar. Drags and releases
     /// are the panes'. Gives whether the sidebar took it.
@@ -1874,17 +1878,42 @@ impl Server {
                 }
             }
             (MouseKind::Press, MouseButton::WheelUp | MouseButton::WheelDown) => {
-                // The wheel browses, as j and k do, the focus coming into
-                // the sidebar.
+                // The wheel moves half a screen through the tabs, as C-d and
+                // C-u do, the focus coming into the sidebar; the rest of one
+                // flick (the same way within FLICK of the move) is let go.
+                // On a notification, or at the first or last tab going on
+                // past it, it steps as j and k do, so the notifications stay
+                // in reach, one step a flick; with sidebar_half_page off it
+                // always steps, every event.
+                let down = m.button == MouseButton::WheelDown;
                 if !self.sidebar.focused(&session) {
                     self.sidebar_enter(&session, None);
                 }
-                let by = if m.button == MouseButton::WheelUp {
-                    Key::new(KeyCode::Up, Mods::NONE)
-                } else {
-                    Key::new(KeyCode::Down, Mods::NONE)
+                let half_page = settings::is_on("sidebar_half_page");
+                if half_page {
+                    let now = std::time::Instant::now();
+                    let same_flick = self
+                        .sidebar
+                        .wheel
+                        .get(&client)
+                        .is_some_and(|(was, at)| *was == down && now - *at < FLICK);
+                    if same_flick {
+                        return true;
+                    }
+                    self.sidebar.wheel.insert(client, (down, now));
+                }
+                let order = self.sidebar_order(&session);
+                let edge = if down { order.last() } else { order.first() };
+                let on_tab_short_of_the_edge = match &self.sidebar.side(&session).cursor {
+                    Some(Owner::Tab(t)) => Some(t) != edge,
+                    _ => false,
                 };
-                self.sidebar_key_in(client, &session, by, &[]);
+                if half_page && on_tab_short_of_the_edge {
+                    self.sidebar_scroll_click(client, &session, down);
+                } else {
+                    let code = if down { KeyCode::Down } else { KeyCode::Up };
+                    self.sidebar_key_in(client, &session, Key::new(code, Mods::NONE), &[]);
+                }
             }
             (MouseKind::Press, MouseButton::Left) => match owner {
                 Some(Owner::Tab(t)) => self.sidebar_go(&session, t),

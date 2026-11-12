@@ -69,7 +69,7 @@
     "key": "sidebar_half_page",
     "category": "Sidebar",
     "label": "Half-page scrolling",
-    "description": "C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do",
+    "description": "C-d and C-u in the sidebar, and the wheel over it, scroll its list half a screen down or up, the cursor moving with it, as in Vim, one flick of the wheel moving once; off, C-d and C-u run in the chosen tab as other Ctrl keys do and the wheel moves a tab at a time",
     "default": true
   },
   {

@@ -505,7 +505,7 @@ Moving past the last tab with `j`, `n` in the sidebar, or a click puts the curso
 | any other Alt or Ctrl key | goes to the chosen tab and runs there |
 | `?` | these keys |
 
-A click on a tab goes there, a right click peeks at it, and the wheel moves the cursor, bringing the focus into the sidebar. A click on the `▲ more` or `▼ more` row scrolls half a screen, as `C-u` and `C-d` do, whether or not a filter is being typed (with `sidebar_half_page` on). A click anywhere else takes the focus back out. With Settings' "Highlight on hover" (`hover_highlight`) on, the row under the mouse is lit.
+A click on a tab goes there, a right click peeks at it, and the wheel scrolls half a screen, as `C-d` and `C-u` do, bringing the focus into the sidebar, the rest of one flick let go; on a notification, or going on past the first or last tab, it steps as `j` and `k` do, so the notifications stay in reach (with `sidebar_half_page` off, it always steps, as `j` and `k` do). A click on the `▲ more` or `▼ more` row scrolls half a screen, as `C-u` and `C-d` do, whether or not a filter is being typed (with `sidebar_half_page` on). A click anywhere else takes the focus back out. With Settings' "Highlight on hover" (`hover_highlight`) on, the row under the mouse is lit.
 
 ### Peeking
 
@@ -1988,7 +1988,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 |---|---|---|
 | Sidebar (`sidebar`) | on | The sidebar on the left of every window; M-s still hides or shows it for now |
 | Shade the sidebar (`sidebar_panel`) | on | The sidebar is drawn on a shade of its own, a step darker than the panes, as UX 2.0's canvas draws it; off, it is drawn on the terminal's background as before. The chosen row keeps its shade and accent bar either way |
-| Half-page scrolling (`sidebar_half_page`) | on | C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do |
+| Half-page scrolling (`sidebar_half_page`) | on | C-d and C-u in the sidebar, and the wheel over it, scroll its list half a screen down or up, the cursor moving with it, as in Vim, one flick of the wheel moving once; off, C-d and C-u run in the chosen tab as other Ctrl keys do and the wheel moves a tab at a time |
 | Sidebar repository filter (`sidebar_repo_filter`) | on | M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group |
 | Reminders (`reminders`) | on | M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone |
 | Build failing (`build_failing`) | on | A Build failing group in the sidebar and mission control for the tabs whose open PR has a failing check, asked of GitHub every minute, an idle one wearing a red ✗; off, they stay in Working or Idle with the failing count in their words #github |

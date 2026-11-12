@@ -35,7 +35,7 @@ pub mod walk;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::mux::server::ClientId;
 use crate::mux::{PaneId, TabId};
@@ -125,6 +125,9 @@ pub struct Sidebar {
     pub sides: HashMap<String, Side>,
     /// What the mouse is over, per client (hover_highlight).
     pub hover: HashMap<ClientId, Owner>,
+    /// Each client's last half-screen move by the wheel: its direction
+    /// (down) and when, so the rest of one flick is let go.
+    pub wheel: HashMap<ClientId, (bool, Instant)>,
     /// Where each client's sidebar was last drawn.
     pub drawn: HashMap<ClientId, Drawn>,
     /// The spinner's frame, and whether its next turn is timed.
