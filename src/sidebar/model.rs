@@ -307,6 +307,9 @@ pub struct Rules {
     /// UX 2.0: the sidebar opens with its tab count and the notifications,
     /// in place of the session's name with them pinned at the bottom.
     pub ux2: bool,
+    /// The sidebar drawn on a shade of its own, the canvas's sunken
+    /// surface, a step off the panes (sidebar_panel).
+    pub panel: bool,
 }
 
 impl Rules {
@@ -317,6 +320,7 @@ impl Rules {
             reminders: crate::settings::is_on("reminders"),
             build_failing: crate::settings::is_on("build_failing"),
             ux2: crate::settings::is_on("ux2"),
+            panel: crate::settings::is_on("sidebar_panel"),
         }
     }
 
@@ -985,6 +989,7 @@ pub(crate) mod tests {
             reminders: true,
             build_failing: true,
             ux2: false,
+            panel: false,
         }
     }
 

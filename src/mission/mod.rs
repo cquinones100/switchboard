@@ -255,6 +255,7 @@ impl Default for Snapshot {
                 reminders: true,
                 build_failing: true,
                 ux2: false,
+                panel: false,
             },
             theme: Theme::DARK,
             card: (56, 13),

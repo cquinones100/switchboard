@@ -401,7 +401,7 @@ Menus and questions take a click too: one click takes an option or answers Yes o
 
 ## The sidebar
 
-The sidebar runs down the left of every tab: the session's tabs, most in need of you first, what each one's Claude is doing, under them the first items of each plugin that asks for a place there (see "Plugins"), and the notifications. It is 34 columns wide, and a window narrower than 90 columns has none (both are set in `sidebar.json`, below); a zoomed pane covers it. Settings' "Sidebar" (`sidebar`) turns it off and on, as does "Turn the sidebar on or off" in `M-p`.
+The sidebar runs down the left of every tab: the session's tabs, most in need of you first, what each one's Claude is doing, under them the first items of each plugin that asks for a place there (see "Plugins"), and the notifications. It is 34 columns wide, and a window narrower than 90 columns has none (both are set in `sidebar.json`, below); a zoomed pane covers it. Settings' "Sidebar" (`sidebar`) turns it off and on, as does "Turn the sidebar on or off" in `M-p`. It is drawn on a shade of its own, a step darker than the panes (in the canvas's own colors on a terminal that draws truecolor), with the chosen row lighter and the accent's `▌` at its left; Settings' "Shade the sidebar" (`sidebar_panel`) off draws it on the terminal's background.
 
 At its top are the session's name, in a pill of the current tab's color, and its counts: failing builds first, in red (`✗ 2`), then the tabs waiting on you (`! 1`), finished (`✓ 3`) and working (`⋯ 4`). Below them are the tabs in their groups, each group under its heading with how many it holds.
 
@@ -1979,6 +1979,7 @@ Mission control's Settings view (`M-p`, then "Settings: turn the workspace's opt
 | Setting | Default | What it does |
 |---|---|---|
 | Sidebar (`sidebar`) | on | The sidebar on the left of every window; M-s still hides or shows it for now |
+| Shade the sidebar (`sidebar_panel`) | on | The sidebar is drawn on a shade of its own, a step darker than the panes, as UX 2.0's canvas draws it; off, it is drawn on the terminal's background as before. The chosen row keeps its shade and accent bar either way |
 | Half-page scrolling (`sidebar_half_page`) | on | C-d and C-u in the sidebar scroll its list half a screen down or up, the cursor moving with it, as in Vim; off, they run in the chosen tab as other Ctrl keys do |
 | Sidebar repository filter (`sidebar_repo_filter`) | on | M-p's Filter the sidebar to a repository moves every other repository's tabs to an Other repos group at the bottom, whatever they are doing, until Show every repository's tabs clears it; the filter is kept across restarts. Off, the commands are gone and every tab is in its own group |
 | Reminders (`reminders`) | on | M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone |

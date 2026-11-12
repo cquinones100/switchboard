@@ -59,6 +59,13 @@
     "default": true
   },
   {
+    "key": "sidebar_panel",
+    "category": "Sidebar",
+    "label": "Shade the sidebar",
+    "description": "The sidebar is drawn on a shade of its own, a step darker than the panes, as UX 2.0's canvas draws it; off, it is drawn on the terminal's background as before. The chosen row keeps its shade and accent bar either way",
+    "default": true
+  },
+  {
     "key": "sidebar_half_page",
     "category": "Sidebar",
     "label": "Half-page scrolling",

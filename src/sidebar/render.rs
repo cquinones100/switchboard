@@ -992,6 +992,15 @@ pub fn sidebar_lines(
     shown_owners.extend(notice_owners);
     shown.truncate(rows);
     shown_owners.truncate(rows);
+    if r.panel {
+        // The sidebar on its shade, as the canvas draws it: every line not
+        // filled already (the chosen row, a hovered one) on the sunken
+        // surface, which the spans without a background of their own show.
+        let shade = kit::Surface::Sunken.color(theme);
+        for line in &mut shown {
+            line.fill.get_or_insert(shade);
+        }
+    }
     Lines {
         lines: shown,
         owners: shown_owners,
@@ -1458,6 +1467,50 @@ mod tests {
         assert_eq!(chosen.lines[18].fill, Some(Theme::DARK.highlight));
         let none = lines(&[t], 40, 20, &view(1));
         assert!(!texts(&none).iter().any(|l| l.contains("NOTIFICATIONS")));
+    }
+
+    #[test]
+    fn with_its_shade_every_line_of_the_sidebar_is_on_the_sunken_surface_but_the_chosen_row() {
+        let tabs = [
+            tab(1, "work", TabState::Idle),
+            tab(2, "other", TabState::Idle),
+        ];
+        let shaded = |panel: bool, theme: &Theme| {
+            let r = Rules {
+                ux2: true,
+                panel,
+                ..rules()
+            };
+            sidebar_lines(&tabs, None, &[], &[], "s", 34, 20, &view(1), &r, theme)
+        };
+        for theme in [Theme::DARK, Theme::DARK_TRUE, Theme::LIGHT] {
+            let out = shaded(true, &theme);
+            assert_eq!(out.lines.len(), 20);
+            let sunken = kit::Surface::Sunken.color(&theme);
+            let chosen: Vec<usize> = (0..out.lines.len())
+                .filter(|&i| out.lines[i].text().starts_with('▌'))
+                .collect();
+            assert_eq!(chosen.len(), 1, "the chosen tab's row");
+            for (i, line) in out.lines.iter().enumerate() {
+                let want = if chosen.contains(&i) {
+                    theme.highlight
+                } else {
+                    sunken
+                };
+                assert_eq!(line.fill, Some(want), "line {i}: {:?}", line.text());
+            }
+        }
+        assert_eq!(
+            kit::Surface::Sunken.color(&Theme::DARK_TRUE),
+            Color::Rgb(0x11, 0x12, 0x1a)
+        );
+        let plain = shaded(false, &Theme::DARK);
+        assert!(
+            plain
+                .lines
+                .iter()
+                .all(|l| l.fill.is_none() || l.fill == Some(Theme::DARK.highlight))
+        );
     }
 
     #[test]
