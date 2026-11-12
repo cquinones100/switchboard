@@ -8,8 +8,8 @@ use ratatui::buffer::Buffer;
 use ratatui::text::Span;
 
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use super::{Look, Outcome, Overlay, Step};
-use crate::mux::input::{Key, KeyCode, Mouse};
+use super::{Look, Outcome, Overlay, Step, kit};
+use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 
 pub struct KeyList {
     rows: Vec<(String, String)>,
@@ -17,6 +17,8 @@ pub struct KeyList {
     /// How many rows the last draw showed.
     room: usize,
     drawn: Option<Drawn>,
+    /// Its scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
+    dragging: Option<crate::ui::kit::Grab>,
 }
 
 impl KeyList {
@@ -27,6 +29,7 @@ impl KeyList {
             scroll: 0,
             room: 10,
             drawn: None,
+            dragging: None,
         }
     }
 
@@ -79,7 +82,15 @@ impl Overlay for KeyList {
         } else {
             "any key closes"
         });
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        let drawn = draw::draw_box(buf, &spec, look);
+        draw::edge_bar(
+            buf,
+            &drawn,
+            (0, self.room),
+            (self.rows.len(), self.scroll),
+            look,
+        );
+        self.drawn = Some(drawn);
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
@@ -93,6 +104,33 @@ impl Overlay for KeyList {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
+        // Its scroll bar: a press pages toward it, a drag moves the list.
+        let bar = self
+            .drawn
+            .as_ref()
+            .and_then(|d| match self.dragging {
+                Some(_) => draw::edge_bar_drag_row(d, 0, mouse.row),
+                None => draw::edge_bar_row(d, (0, self.room), mouse.col, mouse.row),
+            })
+            .filter(|_| look.mouse && look.scroll_bars && self.rows.len() > self.room);
+        let (total, room) = (self.rows.len(), self.room);
+        match (mouse.kind, mouse.button, bar) {
+            (MouseKind::Press, MouseButton::Left, Some(row)) => {
+                self.dragging = Some(kit::scroll_grab(total, self.scroll, room, room, row));
+                let to = kit::scroll_press(total, self.scroll, room, room, row);
+                return self.scroll_to(to.unwrap_or(self.scroll));
+            }
+            (MouseKind::Drag, _, Some(row)) if self.dragging.is_some() => {
+                let grab = self.dragging.unwrap_or_default();
+                return self.scroll_to(kit::scroll_drag(total, room, room, row, grab));
+            }
+            (MouseKind::Drag, ..) if self.dragging.is_some() => return Step::Same,
+            (MouseKind::Release, ..) if self.dragging.is_some() => {
+                self.dragging = None;
+                return Step::Same;
+            }
+            _ => {}
+        }
         match draw::gesture(&mouse) {
             Gesture::WheelDown => self.scroll_to(self.scroll + 1),
             Gesture::WheelUp => self.scroll_to(self.scroll.saturating_sub(1)),
@@ -135,5 +173,42 @@ mod tests {
             list.key(Key::new(KeyCode::Char('x'), Mods::NONE), &look),
             Step::Close(Outcome::Dismissed)
         );
+    }
+
+    #[test]
+    fn its_right_edge_is_a_scroll_bar_that_pages_and_drags_it() {
+        let rows: Vec<_> = (0..40)
+            .map(|i| (format!("M-{i}"), format!("thing {i}")))
+            .collect();
+        let mut list = KeyList::new(rows);
+        let look = Look::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 20));
+        list.draw(&mut buf, &look);
+        let drawn = list.drawn.clone().unwrap();
+        let x = drawn.outer.right() - 1;
+        let edge: String = drawn
+            .rows
+            .iter()
+            .map(|(y, _)| buf[(x, *y)].symbol().to_string())
+            .collect();
+        assert!(edge.starts_with('┃') && edge.ends_with('│'), "{edge}");
+        let at = |kind, row| Mouse {
+            kind,
+            button: MouseButton::Left,
+            col: x,
+            row,
+            mods: Mods::NONE,
+        };
+        let (last_y, _) = *drawn.rows.last().unwrap();
+        assert_eq!(
+            list.mouse(at(MouseKind::Press, last_y), &look),
+            Step::Redraw
+        );
+        assert_eq!(list.scroll, list.room, "a page down, the box still open");
+        let (first_y, _) = drawn.rows[0];
+        list.mouse(at(MouseKind::Drag, first_y), &look);
+        assert_eq!(list.scroll, 0, "dragged to the top");
+        list.mouse(at(MouseKind::Release, first_y), &look);
+        assert!(list.dragging.is_none());
     }
 }

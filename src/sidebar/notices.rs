@@ -208,6 +208,9 @@ pub struct Look<'a> {
     pub theme: &'a Theme,
     /// Now, in the time zone each notification's time is read in.
     pub now: &'a jiff::Zoned,
+    /// A scroll bar at the right while the list runs past the window
+    /// (scroll_bars), every line laid out a column narrower for it.
+    pub bars: bool,
 }
 
 /// What the server keeps of each session's window.
@@ -283,6 +286,9 @@ pub fn list_lines(
     cols: usize,
     rows: usize,
 ) -> (Vec<Line>, Vec<Option<Spot>>) {
+    // A column kept at the right for the scroll bar.
+    let full = cols;
+    let cols = cols - usize::from(look.bars && cols > 1);
     let theme = look.theme;
     let fg = |c: Color| Style::new().fg(c);
     let back_style = if look.back || look.hover == Some(Spot::Back) {
@@ -370,8 +376,17 @@ pub fn list_lines(
         .max(0) as usize;
     let mut lines = vec![line(head, cols, None), line(rule, cols, None)];
     let mut spots = vec![Some(Spot::Back), Some(Spot::Back)];
+    let total = body_lines.len();
     lines.extend(body_lines.into_iter().skip(top).take(room));
     spots.extend(owners.into_iter().skip(top).take(room));
+    // The list follows the chosen notification, so its bar only shows where
+    // that is.
+    if look.bars && cols < full {
+        let bar = crate::ui::kit::scrollbar(total, top, room, room, theme);
+        for (l, mark) in lines.iter_mut().skip(2).zip(bar) {
+            l.spans.push(mark);
+        }
+    }
     while lines.len() < rows.saturating_sub(1) {
         lines.push(line(Vec::new(), cols, None));
         spots.push(None);
@@ -395,6 +410,12 @@ pub fn list_lines(
     spots.push(Some(Spot::ViewActions));
     lines.truncate(rows);
     spots.truncate(rows);
+    for l in &mut lines {
+        let w: usize = l.spans.iter().map(|s| width(&s.content)).sum();
+        if w < full {
+            l.spans.push(Span::raw(" ".repeat(full - w)));
+        }
+    }
     (lines, spots)
 }
 
@@ -440,6 +461,7 @@ mod tests {
             hover: None,
             theme: &Theme::DARK,
             now: &NOW,
+            bars: false,
         }
     }
 
@@ -567,6 +589,26 @@ mod tests {
             sources,
             ["meeting", "slack", "inbox", "autopilot", "habits"]
         );
+    }
+
+    #[test]
+    fn a_long_list_has_a_scroll_bar_at_its_right() {
+        let items: Vec<Item> = (0..20)
+            .map(|i| Item::new(format!("{i}"), format!("notice {i}")).detail("more"))
+            .collect();
+        let bars = Look {
+            bars: true,
+            ..look(15)
+        };
+        let (lines, _) = list_lines(&items, &bars, 30, 10);
+        let last: String = lines
+            .iter()
+            .map(|l| l.text().chars().last().unwrap_or(' '))
+            .collect();
+        assert!(last.contains('┃') && last.contains('│'), "{last:?}");
+        assert!(lines.iter().all(|l| width(&l.text()) == 30));
+        let (lines, _) = list_lines(&items, &look(15), 30, 10);
+        assert!(!lines.iter().any(|l| l.text().contains('┃')));
     }
 
     #[test]

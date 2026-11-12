@@ -388,6 +388,7 @@ impl Server {
             hover: None,
             theme: &super::theme(),
             now: &crate::util::local_now(),
+            bars: crate::ui::kit::scroll_bars(),
         };
         let items = self.notice_items(&entries);
         let (_, spots) = notices::list_lines(&items, &look, cols as usize, rows as usize);
@@ -463,6 +464,7 @@ impl Server {
             hover: self.sidebar.windows.hover.get(&client).copied(),
             theme: &super::theme(),
             now: &crate::util::local_now(),
+            bars: crate::ui::kit::scroll_bars(),
         };
         let items = self.notice_items(&entries);
         let (lines, _) =

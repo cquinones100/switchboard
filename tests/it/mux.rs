@@ -879,3 +879,37 @@ fn with_tab_back_forward_off_alt_brackets_go_to_the_tab_beside() {
     client.type_text(&format!("{ALT}["));
     client.wait_for("the first tab, on the left", |_| is_current(&server, 0));
 }
+
+#[test]
+fn a_pane_scrolled_back_shows_a_scroll_bar_until_it_is_at_the_bottom() {
+    let server = TestServer::start();
+    let mut client = server.attach(80, 24);
+    client.wait_text("$");
+    client.type_text("seq 1 300\r");
+    // All of it out and the prompt back, so the wheel has a history to
+    // scroll into.
+    client.wait_for("the prompt after the output", |s| {
+        s.iter()
+            .position(|l| l.trim() == "300")
+            .is_some_and(|at| s[at + 1..].iter().any(|l| l.contains('$')))
+    });
+    let thumb_rows = |screen: &[String]| {
+        screen
+            .iter()
+            .filter(|l| l.trim_end_matches(' ').ends_with('┃'))
+            .count()
+    };
+    assert_eq!(thumb_rows(&client.screen()), 0, "no bar on the live screen");
+    client.send(b"\x1b[<64;40;10M");
+    let screen = client.wait_for("the scroll bar", |s| thumb_rows(s) > 0);
+    assert!(
+        screen.iter().any(|l| l.ends_with('│')),
+        "a track beside the thumb: {screen:#?}"
+    );
+    // Dragging the thumb to the bottom ends the wheel's copy mode, so what
+    // is typed reaches the shell again.
+    client.send(b"\x1b[<0;80;3M\x1b[<32;80;23M\x1b[<0;80;23m");
+    client.wait_for("the bar gone at the bottom", |s| thumb_rows(s) == 0);
+    client.type_text("echo typed-$((40+2))\r");
+    client.wait_text("typed-42");
+}

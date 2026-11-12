@@ -5226,6 +5226,11 @@ fn count_with_git(tree: &Path) -> Option<(String, u32, Option<u32>, String)> {
 /// a view's name goes there, on a card or row chooses it, and on the
 /// chosen one does what Enter does.
 fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
+    // A drag of the pane's bar ends at any press, so one let go over the
+    // sidebar, which never reaches here, leaves no drag behind.
+    if mouse.kind == MouseKind::Press {
+        m.pane_bar_drag = None;
+    }
     let (cols, rows) = m.size;
     let hit = m
         .hits
@@ -5287,6 +5292,26 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             Then::Key(Key::new(KeyCode::Char(key), Mods::NONE))
         }
         (MouseKind::Press, MouseButton::Right) => right_press(m, mouse, hit),
+        // Dragging the pane's scroll bar, from a press on it: the pane
+        // moves with the mouse up and down, whatever its column.
+        (MouseKind::Drag, MouseButton::Left) if m.pane_bar_drag.is_some() => {
+            // The bar's row the mouse is level with, past its ends too.
+            let bar = m.hits.iter().find_map(|h| match h.spot {
+                Spot::PaneBar { row, body, total } => {
+                    let top = h.y.saturating_sub(row as u16);
+                    Some((usize::from(mouse.row.saturating_sub(top)), body, total))
+                }
+                _ => None,
+            });
+            match bar {
+                Some(bar) if m.side_bar_to(bar, m.pane_bar_drag) => Then::Redraw,
+                _ => Then::Nothing,
+            }
+        }
+        (MouseKind::Release, _) if m.pane_bar_drag.is_some() => {
+            m.pane_bar_drag = None;
+            Then::Nothing
+        }
         (MouseKind::Press, MouseButton::Left) => {
             let Some(spot) = hit else {
                 return Then::Nothing;
@@ -5368,6 +5393,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::Side(_) => Then::Nothing,
+                Spot::PaneBar { row, body, total } => {
+                    m.pane_bar_drag = Some(m.side_bar_grab((row, body, total)));
+                    if m.side_bar_to((row, body, total), None) {
+                        Then::Redraw
+                    } else {
+                        Then::Nothing
+                    }
+                }
                 Spot::Kind(key) => {
                     choose_kind(m, key);
                     Then::Prepare

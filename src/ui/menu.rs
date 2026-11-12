@@ -195,7 +195,17 @@ impl Overlay for Menu {
         }
         spec.close_lit = self.cursor == n || self.close_lit;
         spec.place = self.place;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        let drawn = draw::draw_box(buf, &spec, look);
+        // Its window follows the cursor, so its scroll bar only shows where
+        // it is.
+        draw::edge_bar(
+            buf,
+            &drawn,
+            (self.first_line, fits),
+            (self.options.len(), first),
+            look,
+        );
+        self.drawn = Some(drawn);
     }
 
     fn open_near(&mut self, (x, y): (u16, u16)) {

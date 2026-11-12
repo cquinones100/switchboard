@@ -220,6 +220,7 @@ impl Overlay for FormatMenu {
         // Too many for the screen: the lines around the cursor's, its
         // heading with it.
         let room = (buf.area.height as usize).saturating_sub(6).max(1);
+        let all = lines.len();
         if lines.len() > room {
             let at = self
                 .rows
@@ -244,7 +245,11 @@ impl Overlay for FormatMenu {
         spec.keys = Some("a key or ↵ picks  ↑↓ move  esc or Q closes");
         spec.width = 30;
         spec.close_lit = self.close_lit;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        let drawn = draw::draw_box(buf, &spec, look);
+        // Its window follows the cursor, so its scroll bar only shows where
+        // it is.
+        draw::edge_bar(buf, &drawn, (0, room), (all, self.top), look);
+        self.drawn = Some(drawn);
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {

@@ -323,6 +323,8 @@ pub struct Rules {
     /// The sidebar drawn on a shade of its own, the canvas's sunken
     /// surface, a step off the panes (sidebar_panel).
     pub panel: bool,
+    /// Scroll bars beside what runs past its room (scroll_bars).
+    pub scroll_bars: bool,
 }
 
 impl Rules {
@@ -334,6 +336,7 @@ impl Rules {
             build_failing: crate::settings::is_on("build_failing"),
             ux2: crate::settings::is_on("ux2"),
             panel: crate::settings::is_on("sidebar_panel"),
+            scroll_bars: crate::settings::is_on("scroll_bars"),
         }
     }
 
@@ -1015,6 +1018,7 @@ pub(crate) mod tests {
             build_failing: true,
             ux2: false,
             panel: false,
+            scroll_bars: false,
         }
     }
 

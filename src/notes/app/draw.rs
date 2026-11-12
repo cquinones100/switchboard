@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::{App, Focus, Shown, list_width};
+use super::{App, Focus, NoteBar, Shown, list_width};
 use crate::notes::easy;
 use crate::notes::editor::Mode;
 use crate::notes::images::Picture;
@@ -182,6 +182,21 @@ impl App {
             }
         }
         self.list_top = self.list_top.min(self.list_rows.len().saturating_sub(1));
+        // The rows a column narrower while the scroll bar is beside them.
+        let full = r;
+        let bar = self.list_overflows() && r.width > 1;
+        let r = Rect {
+            width: r.width - u16::from(bar),
+            ..r
+        };
+        if bar {
+            crate::ui::kit::draw_scrollbar(
+                buf,
+                (full.right() - 1, r.y, r.height),
+                (self.list_rows.len(), self.list_top, h),
+                &self.look.theme,
+            );
+        }
         for (i, row) in self
             .list_rows
             .iter()
@@ -563,7 +578,61 @@ impl App {
             shown.extend(self.pieces(rows[i], &ctx));
             i += 1;
         }
+        // The last line drawn cut at the bottom shows only in part.
+        let clipped = shown.len() > text.height as usize;
         shown.truncate(text.height as usize);
+        // The scroll bar in the column right of the text, by the note's
+        // lines (a fold's hidden ones left out): its places run from the
+        // first line at the top to `last`, the first that shows the note's
+        // end whole, found by the lines' heights on the screen, so the
+        // thumb at the bottom is the note's end however its lines wrap.
+        self.geo.note_bar = None;
+        if self.opts.scroll_bars && !rows.is_empty() {
+            let last = {
+                let mut fit = Fit {
+                    rows: &rows,
+                    ctx: &ctx,
+                    heights: std::collections::HashMap::new(),
+                    view,
+                    so,
+                };
+                let (mut at, mut used) = (rows.len(), 0);
+                while at > 0 {
+                    let h = self.tall(&mut fit, at - 1);
+                    if used + h > view {
+                        break;
+                    }
+                    used += h;
+                    at -= 1;
+                }
+                at.min(rows.len() - 1)
+            };
+            // Through a drag, the measure it started with, so the thumb
+            // stays under the mouse as the lines it passes wrap otherwise.
+            let lines_shown = match self.bar_drag {
+                Some((super::BarDrag::Note, _, shown)) => shown,
+                _ => (i - ti - usize::from(clipped)).max(1),
+            };
+            let bar = NoteBar {
+                x: text.right(),
+                y: text.y,
+                height: text.height,
+                rows: rows.clone(),
+                top: ti,
+                last,
+                shown: lines_shown,
+            };
+            // Only a bar drawn takes the mouse: a note whose end shows from
+            // its first line has nowhere to move to.
+            let drawn = last > 0
+                && crate::ui::kit::draw_scrollbar(
+                    buf,
+                    (bar.x, bar.y, bar.height),
+                    (bar.places(), bar.top.min(last), bar.shown),
+                    &self.look.theme,
+                );
+            self.geo.note_bar = drawn.then_some(bar);
+        }
         let mut near: Vec<Picture> = Vec::new();
         let span = text.height as usize;
         for &r in rows[ti.saturating_sub(span)..(i + span).min(rows.len())].iter() {

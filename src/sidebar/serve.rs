@@ -1017,6 +1017,20 @@ impl Server {
             for y in 0..rows {
                 buf[(width, y)].set_symbol("│").set_style(line);
             }
+            // The line beside the list is its scroll bar while the list runs
+            // past its room: the thumb a heavier line where the list is.
+            let sc = &out.scroll;
+            if crate::ui::kit::scroll_bars()
+                && let Some((at, len)) =
+                    crate::ui::kit::thumb(sc.length, sc.top, sc.space, sc.space)
+            {
+                for y in at..at + len {
+                    let y = (sc.list_y + y) as u16;
+                    if y < rows {
+                        buf[(width, y)].set_symbol("┃");
+                    }
+                }
+            }
         }
         Some(Drawn {
             area,
@@ -2327,6 +2341,33 @@ impl Server {
                 } else {
                     let code = if down { KeyCode::Down } else { KeyCode::Up };
                     self.sidebar_key_in(client, &session, Key::new(code, Mods::NONE), &[]);
+                }
+            }
+            // A press on the line beside the list, where its scroll bar is,
+            // pages it toward the press, as C-u and C-d do (with half-page
+            // scrolling off, a tab at a time, as the wheel does).
+            (MouseKind::Press, MouseButton::Left)
+                if m.col == d.area.right() && crate::ui::kit::scroll_bars() =>
+            {
+                let sc = &d.scroll;
+                let row = usize::from(m.row - d.area.y);
+                if let Some((at, len)) =
+                    crate::ui::kit::thumb(sc.length, sc.top, sc.space, sc.space)
+                    && let Some(row) = row.checked_sub(sc.list_y).filter(|r| *r < sc.space)
+                    && !(at..at + len).contains(&row)
+                {
+                    let down = row >= at + len;
+                    if settings::is_on("sidebar_half_page") {
+                        self.sidebar_scroll_click(client, &session, down);
+                    } else {
+                        // With half-page scrolling off, a tab at a time, as
+                        // the wheel moves then.
+                        if !self.sidebar.focused(&session) {
+                            self.sidebar_enter(&session, None);
+                        }
+                        let code = if down { KeyCode::Down } else { KeyCode::Up };
+                        self.sidebar_key_in(client, &session, Key::new(code, Mods::NONE), &[]);
+                    }
                 }
             }
             (MouseKind::Press, MouseButton::Left) => match owner {

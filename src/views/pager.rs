@@ -134,6 +134,12 @@ pub struct Pager {
     /// and the line it is on.
     cursor_on: bool,
     cursor: usize,
+    /// Whether the text is laid out a column narrower for a scroll bar at
+    /// the pane's right edge (Settings' `scroll_bars`); a board's panel
+    /// beside the column draws the bar in its rule instead.
+    bar: bool,
+    /// The scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
+    dragging: Option<crate::ui::kit::Grab>,
 }
 
 fn said(text: &str, style: Style) -> Vec<Span> {
@@ -159,6 +165,8 @@ impl Pager {
             look: board::Look::default(),
             cursor_on: false,
             cursor: 0,
+            bar: false,
+            dragging: None,
         };
         pager.set_content(content);
         pager
@@ -285,7 +293,21 @@ impl Pager {
         self.put_cursor_back(at);
     }
 
+    /// Laid out at the pane's width, and again a column narrower when it
+    /// runs past the screen with no panel beside it, for the scroll bar.
     fn lay_out(&mut self) {
+        self.bar = false;
+        self.lay_out_at_width();
+        let overflows = crate::ui::kit::has_scrollbar(self.doc.lines.len(), self.body());
+        if overflows && self.panel.is_none() && self.cols > 1 {
+            self.cols -= 1;
+            self.lay_out_at_width();
+            self.cols += 1;
+            self.bar = true;
+        }
+    }
+
+    fn lay_out_at_width(&mut self) {
         let body = self.body();
         let images = self.pictures.as_mut().map(|p| p.layout(body));
         self.panel = None;
@@ -845,6 +867,19 @@ impl Pager {
                 self.keep_cursor_in_sight();
                 act
             }
+            MouseEventKind::Drag(MouseButton::Left) if self.dragging.is_some() => {
+                let total = self.doc.lines.len();
+                let body = self.body();
+                let grab = self.dragging.unwrap_or_default();
+                let to = crate::ui::kit::scroll_drag(total, body, body, mouse.row as usize, grab);
+                let act = self.scroll_to(to);
+                self.keep_cursor_in_sight();
+                act
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.dragging = None;
+                Act::Same
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 if matches!(self.content, Content::Failed(_)) {
                     return Act::Quit;
@@ -854,6 +889,19 @@ impl Pager {
                     return Act::Same;
                 }
                 let col = mouse.column as usize;
+                if let (Some(_), Some(x)) = self.scroll_bar()
+                    && col == x
+                {
+                    let total = self.doc.lines.len();
+                    let body = self.body();
+                    self.dragging = Some(crate::ui::kit::scroll_grab(
+                        total, self.top, body, body, row,
+                    ));
+                    let to = crate::ui::kit::scroll_press(total, self.top, body, body, row);
+                    let act = self.scroll_to(to.unwrap_or(self.top));
+                    self.keep_cursor_in_sight();
+                    return act;
+                }
                 let line = self.top + row;
                 let in_column = self.panel.as_ref().is_none_or(|(_, at)| col <= *at);
                 if self.has_cursor() && in_column && line < self.doc.lines.len() {
@@ -900,6 +948,7 @@ impl Pager {
         let mut out = String::from("\x1b[?2026h\x1b[?25l");
         let body = self.body();
         let gutter = self.gutter();
+        let (bar, bar_x) = self.scroll_bar();
         for r in 0..body {
             out.push_str(&format!("\x1b[{};{}H", r + 1, gutter + 1));
             if let Some(line) = self.doc.lines.get(self.top + r) {
@@ -915,6 +964,26 @@ impl Pager {
                     let marks = self.matches(&line.plain());
                     out.push_str(&line.ansi(&panel.links, 0, self.cols - at - 1, &marks));
                 }
+            }
+            if let Some(x) = bar_x {
+                let thumb = bar.is_some_and(|(at, len)| (at..at + len).contains(&r));
+                let (style, mark) = if thumb {
+                    (
+                        super::markdown::Style::fg(board::text_color(&self.look)),
+                        '┃',
+                    )
+                } else {
+                    (
+                        super::markdown::Style::fg(board::rule_color(&self.look)),
+                        '│',
+                    )
+                };
+                out.push_str(&format!(
+                    "\x1b[{};{}H{}{mark}\x1b[0m",
+                    r + 1,
+                    x + 1,
+                    style.sgr()
+                ));
             }
             if self.on_cursor(self.top + r) {
                 out.push_str(&format!("\x1b[{};1H\x1b[0;1;38;5;{CURSOR}m›\x1b[0m", r + 1));
@@ -999,12 +1068,29 @@ impl Pager {
     }
 
     /// The columns the scrolling text is drawn in: the pane's, less a
-    /// board's panel beside it.
+    /// board's panel beside it or the scroll bar.
     fn text_cols(&self) -> usize {
         match &self.panel {
             Some((_, at)) => *at,
-            None => self.cols,
+            None => self.cols - usize::from(self.bar),
         }
+    }
+
+    /// The scroll bar's thumb (its first row and length) and the column
+    /// it is drawn in, the pane's last or, with a board's panel beside, the
+    /// rule between them; `None`s while everything fits or it is off.
+    fn scroll_bar(&self) -> (Option<(usize, usize)>, Option<usize>) {
+        let body = self.body();
+        let total = self.doc.lines.len();
+        if !crate::ui::kit::has_scrollbar(total, body) {
+            return (None, None);
+        }
+        let x = match &self.panel {
+            Some((_, at)) => *at,
+            None if self.bar => self.cols - 1,
+            None => return (None, None),
+        };
+        (crate::ui::kit::thumb(total, self.top, body, body), Some(x))
     }
 
     /// The screen as text, for the tests: a board's panel after a `│`.
@@ -1039,14 +1125,15 @@ fn act_or_redraw(act: Act) -> Act {
 
 /// The terminal as the pager wants it while it runs, and put back however
 /// it ends: raw, on the alternate screen, the cursor hidden, clicks and the
-/// wheel reported (1000 and SGR's 1006, not every movement).
+/// wheel reported, and movement with the button held for the scroll bar
+/// (1002 and SGR's 1006, not every movement).
 struct Screen;
 
 impl Screen {
     fn enter() -> io::Result<Screen> {
         terminal::enable_raw_mode()?;
         let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h")?;
+        out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[?1002h\x1b[?1006h")?;
         out.flush()?;
         Ok(Screen)
     }
@@ -1055,7 +1142,7 @@ impl Screen {
 impl Drop for Screen {
     fn drop(&mut self) {
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[?1006l\x1b[?1000l\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out.write_all(b"\x1b[?1006l\x1b[?1002l\x1b[0m\x1b[?25h\x1b[?1049l");
         let _ = out.flush();
         let _ = terminal::disable_raw_mode();
     }
@@ -1253,6 +1340,43 @@ mod tests {
             text: text.to_string(),
             place: "M-r on GitHub".into(),
         }
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn a_page_past_the_screen_has_a_scroll_bar_that_pages_and_drags() {
+        let mut pager = Pager::new(markdown(&long_text()), 60, 20);
+        assert!(pager.bar, "laid out a column narrower");
+        assert!(pager.doc.lines.iter().all(|l| l.width() <= 59));
+        let frame = pager.frame();
+        assert!(frame.contains(";60H"), "drawn in the last column");
+        assert!(frame.contains('┃') && frame.contains('│'));
+        // A press below the thumb pages down; a drag from there moves with
+        // the mouse, stopping at the top.
+        let act = pager.mouse(mouse(MouseEventKind::Down(MouseButton::Left), 59, 17));
+        assert_eq!(act, Act::Redraw);
+        assert_eq!(pager.top(), 19);
+        pager.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 59, 18));
+        assert!(pager.top() > 19, "a row down moves it down");
+        pager.mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 59, 0));
+        assert_eq!(pager.top(), 0);
+        pager.mouse(mouse(MouseEventKind::Up(MouseButton::Left), 59, 0));
+        assert!(pager.dragging.is_none());
+    }
+
+    #[test]
+    fn a_page_that_fits_has_no_scroll_bar() {
+        let pager = Pager::new(markdown("# Short\n\nOne line."), 60, 20);
+        assert!(!pager.bar);
+        assert!(!pager.frame().contains('┃'));
     }
 
     #[test]

@@ -133,6 +133,9 @@ pub struct Look {
     /// own options take Tab whatever it says.
     pub tab_focus: bool,
     pub theme: Theme,
+    /// A box whose list runs past it has a scroll bar on its right edge
+    /// (scroll_bars).
+    pub scroll_bars: bool,
 }
 
 impl Default for Look {
@@ -144,6 +147,7 @@ impl Default for Look {
             close: false,
             tab_focus: true,
             theme: Theme::DARK,
+            scroll_bars: true,
         }
     }
 }
@@ -179,6 +183,7 @@ impl Look {
             close: mouse && on("easy_keys"),
             tab_focus: on("tab_focus"),
             theme: if light { Theme::LIGHT } else { Theme::DARK },
+            scroll_bars: on("scroll_bars"),
         }
     }
 

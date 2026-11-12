@@ -742,6 +742,11 @@ pub fn rule_color(look: &Look) -> u8 {
     color(kit::border(&look.theme))
 }
 
+/// The color of the text, a scroll bar's thumb among it.
+pub fn text_color(look: &Look) -> u8 {
+    color(look.theme.text)
+}
+
 /// "N more", for a list cut short.
 pub fn more(n: usize) -> Part {
     Part::Row(vec![Piece::Text(format!("{n} more"), Tone::Dim)])

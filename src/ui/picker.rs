@@ -49,7 +49,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
 use super::kit::{self, Tone};
 use super::{Look, Outcome, Overlay, Step};
-use crate::mux::input::{Key, KeyCode, Mods, Mouse};
+use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 
 /// Two clicks on a row this close together pick it.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -124,6 +124,8 @@ pub struct Picker {
     hover: Option<usize>,
     last_click: Option<(Instant, usize)>,
     drawn: Option<Drawn>,
+    /// Its scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
+    dragging: Option<crate::ui::kit::Grab>,
     /// How many rows the last draw had room for.
     room: usize,
     /// Each item's text whole, by its place in `items`, shown under the
@@ -161,6 +163,7 @@ impl Picker {
             hover: None,
             last_click: None,
             drawn: None,
+            dragging: None,
             room: 10,
             previews: Vec::new(),
             header: Vec::new(),
@@ -739,7 +742,15 @@ impl Overlay for Picker {
         };
         // fzf's lists kept Esc alone, with no close button of their own.
         spec.closes = false;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        let drawn = draw::draw_box(buf, &spec, look);
+        draw::edge_bar(
+            buf,
+            &drawn,
+            (self.first_row(), self.room),
+            (self.shown.len(), self.top),
+            look,
+        );
+        self.drawn = Some(drawn);
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
@@ -778,6 +789,38 @@ impl Overlay for Picker {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
+        // Its scroll bar: a press pages toward it, a drag moves the list,
+        // the cursor kept on a row shown.
+        let bar = self
+            .drawn
+            .as_ref()
+            .and_then(|d| match self.dragging {
+                Some(_) => draw::edge_bar_drag_row(d, self.first_row(), mouse.row),
+                None => draw::edge_bar_row(d, (self.first_row(), self.room), mouse.col, mouse.row),
+            })
+            .filter(|_| look.mouse && look.scroll_bars && self.shown.len() > self.room);
+        let (total, room) = (self.shown.len(), self.room);
+        let to = match (mouse.kind, mouse.button, bar) {
+            (MouseKind::Press, MouseButton::Left, Some(row)) => {
+                self.dragging = Some(kit::scroll_grab(total, self.top, room, room, row));
+                Some(kit::scroll_press(total, self.top, room, room, row).unwrap_or(self.top))
+            }
+            (MouseKind::Drag, _, Some(row)) if self.dragging.is_some() => {
+                let grab = self.dragging.unwrap_or_default();
+                Some(kit::scroll_drag(total, room, room, row, grab))
+            }
+            (MouseKind::Drag, ..) if self.dragging.is_some() => return Step::Same,
+            (MouseKind::Release, ..) if self.dragging.is_some() => {
+                self.dragging = None;
+                return Step::Same;
+            }
+            _ => None,
+        };
+        if let Some(to) = to {
+            self.top = to;
+            self.cursor = self.cursor.clamp(to, to + room - 1).min(total - 1);
+            return Step::Redraw;
+        }
         let Some(drawn) = &self.drawn else {
             return Step::Same;
         };
@@ -960,6 +1003,57 @@ mod tests {
         // The screen is ASCII up to there, so its bytes are its columns.
         let x = s[y as usize][..x as usize].chars().count() as u16;
         assert_eq!(buf[(x, y)].fg, draw::EDGE, "matched letters in colour81");
+    }
+
+    #[test]
+    fn a_long_list_has_a_scroll_bar_on_its_edge_that_pages_and_drags() {
+        let look = Look::default();
+        let many = (0..60)
+            .map(|i| PickItem::new(format!("Row {i}"), i.to_string()))
+            .collect();
+        let mut p = Picker::new("Pick", many);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, 30));
+        p.draw(&mut buf, &look);
+        let d = p.drawn.clone().unwrap();
+        let x = d.outer.right() - 1;
+        let first = p.first_row();
+        let rows: Vec<u16> = d
+            .rows
+            .iter()
+            .filter(|(_, i)| *i >= first && *i < first + p.room)
+            .map(|(y, _)| *y)
+            .collect();
+        let edge: String = rows
+            .iter()
+            .map(|y| buf[(x, *y)].symbol().to_string())
+            .collect();
+        assert!(edge.starts_with('┃') && edge.ends_with('│'), "{edge}");
+        let at = |kind, row| Mouse {
+            kind,
+            button: MouseButton::Left,
+            col: x,
+            row,
+            mods: Mods::NONE,
+        };
+        assert_eq!(
+            p.mouse(at(MouseKind::Press, *rows.last().unwrap()), &look),
+            Step::Redraw
+        );
+        assert_eq!(p.top, p.room, "a page down");
+        assert!(p.cursor >= p.top, "the cursor on a row shown");
+        p.mouse(at(MouseKind::Drag, rows[0]), &look);
+        assert_eq!(p.top, 0, "dragged to the top");
+        p.mouse(at(MouseKind::Release, rows[0]), &look);
+        let off = Look {
+            scroll_bars: false,
+            ..look
+        };
+        p.draw(&mut buf, &off);
+        let edge: String = rows
+            .iter()
+            .map(|y| buf[(x, *y)].symbol().to_string())
+            .collect();
+        assert!(!edge.contains('┃'), "{edge}");
     }
 
     #[test]

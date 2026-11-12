@@ -139,6 +139,14 @@ pub enum Spot {
     /// the most the pane's first line shown can be, for `J` and the wheel
     /// to stop at its end.
     Side(usize),
+    /// A row of the scroll bar of the pane beside a board: the row, the
+    /// pane's height and its lines in all; a press pages the pane toward
+    /// it, a drag moves the pane with it.
+    PaneBar {
+        row: usize,
+        body: usize,
+        total: usize,
+    },
     /// A failed check's line under its PR in the CI view: the PR's place
     /// in the view and the check's among its failed ones.
     Check(isize, usize),
@@ -260,6 +268,7 @@ impl Default for Snapshot {
                 build_failing: true,
                 ux2: false,
                 panel: false,
+                scroll_bars: false,
             },
             theme: Theme::DARK,
             card: (56, 13),
@@ -371,6 +380,9 @@ pub struct Mission {
     /// over it): the view and the item it was scrolled on, and its first
     /// line shown. Another view or item shows its pane from the top.
     pub side: Option<(usize, String, usize)>,
+    /// The pane's scroll bar is being dragged (`Spot::PaneBar`), from where
+    /// (`kit::scroll_grab`).
+    pub pane_bar_drag: Option<crate::ui::kit::Grab>,
     /// The CI view's chosen failed check: the PR's item id and the check's
     /// key (`views::ci_check_key`, its name and page), so a look that changes which checks fail keeps the same one
     /// chosen; none, another item's, or a check no longer failing is the
@@ -450,6 +462,7 @@ impl Mission {
             landing_output: false,
             keep_autopilot: false,
             side: None,
+            pane_bar_drag: None,
             ci_check: None,
             notice_kind: 1,
             unfolded: HashSet::new(),
@@ -680,6 +693,30 @@ impl Mission {
     /// Scrolls the pane beside a board by `lines` (up when negative),
     /// kept between its top and `last`, the most its first line shown can
     /// be; false when it didn't move.
+    /// The thumb's row a press on the pane's scroll bar's `row` takes it by.
+    pub fn side_bar_grab(&self, (row, body, total): (usize, usize, usize)) -> crate::ui::kit::Grab {
+        let top = self.side_top().min(total.saturating_sub(body));
+        crate::ui::kit::scroll_grab(total, top, body, body, row)
+    }
+
+    /// The pane beside a board scrolled by a press on its scroll bar's
+    /// `row` (a page toward it) or a drag to it (`drag`, the thumb's row
+    /// it was taken by).
+    pub fn side_bar_to(
+        &mut self,
+        (row, body, total): (usize, usize, usize),
+        drag: Option<crate::ui::kit::Grab>,
+    ) -> bool {
+        let last = total.saturating_sub(body);
+        let was = self.side_top().min(last);
+        let to = if let Some(grab) = drag {
+            crate::ui::kit::scroll_drag(total, body, body, row, grab)
+        } else {
+            crate::ui::kit::scroll_press(total, was, body, body, row).unwrap_or(was)
+        };
+        self.scroll_side(to as isize - was as isize, last)
+    }
+
     pub fn scroll_side(&mut self, lines: isize, last: usize) -> bool {
         let Some(id) = self.chosen_item().map(|i| i.id.clone()) else {
             return false;

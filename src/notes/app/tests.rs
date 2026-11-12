@@ -601,6 +601,70 @@ fn the_wheel_scrolls_a_note_and_the_list_past_where_their_cursors_were() {
     assert_eq!(app.list_top, 1, "a key brings the cursor back in sight");
 }
 
+#[test]
+fn a_long_note_and_list_have_scroll_bars_that_page_and_drag() {
+    let (_dir, mut store) = temp("bars");
+    let long = store.create("", Some("Long"));
+    let body: String = (1..=120).map(|i| format!("line {i}\n")).collect();
+    write(&long, &format!("# Long\n{body}"));
+    for i in 0..40 {
+        let note = store.create("", Some(&format!("Short {i}")));
+        write(&note, &format!("# Short {i}\n"));
+    }
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&long, false, false);
+    let shown = screen(&mut app);
+    let bar = app.geo.note_bar.as_ref().map(|b| (b.x, b.y)).unwrap();
+    let column: String = shown
+        .iter()
+        .map(|l| l.chars().nth(bar.0 as usize).unwrap_or(' '))
+        .collect();
+    assert!(column.contains('┃') && column.contains('│'), "{shown:#?}");
+    let list = app.geo.list;
+    let list_column: String = shown
+        .iter()
+        .map(|l| l.chars().nth(list.right() as usize - 1).unwrap_or(' '))
+        .collect();
+    assert!(list_column.contains('┃'), "{shown:#?}");
+    let mouse = |app: &mut App, kind: MouseKind, col: u16, row: u16| {
+        app.mouse(Mouse {
+            kind,
+            button: MouseButton::Left,
+            col,
+            row,
+            mods: Mods::NONE,
+        })
+    };
+    // A press low on the note's track pages it down.
+    let bottom = bar.1 + app.geo.note_bar.as_ref().unwrap().height - 1;
+    mouse(&mut app, MouseKind::Press, bar.0, bottom);
+    screen(&mut app);
+    assert!(app.editor.top > 0, "paged down");
+    mouse(&mut app, MouseKind::Drag, bar.0, bar.1);
+    screen(&mut app);
+    assert_eq!(app.editor.top, 0, "dragged back to the top");
+    mouse(&mut app, MouseKind::Release, bar.0, bar.1);
+    // The list's bar pages the list.
+    mouse(
+        &mut app,
+        MouseKind::Press,
+        list.right() - 1,
+        list.bottom() - 1,
+    );
+    mouse(
+        &mut app,
+        MouseKind::Release,
+        list.right() - 1,
+        list.bottom() - 1,
+    );
+    assert!(app.list_top > 0);
+    // Off, neither is drawn.
+    app.opts.scroll_bars = false;
+    screen(&mut app);
+    assert!(app.geo.note_bar.is_none());
+}
+
 /// A narrow app, as beside a tab, on a note of `count` lines after its
 /// title, each `L<n>` and words enough to wrap to several rows.
 fn tall_lines(name: &str, rows: u16, count: usize, words: usize) -> (Dir, App) {

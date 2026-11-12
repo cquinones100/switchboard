@@ -665,8 +665,10 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     client.wait_text("Planning");
 }
 
-/// What a line of the screen shows right of the sidebar's edge, if any.
+/// What a line of the screen shows right of the sidebar's edge, if any,
+/// the view's scroll bar at its right left out.
 fn pane_text(line: &str) -> &str {
+    let line = line.trim_end().trim_end_matches(['│', '┃']);
     line.rsplit('│').next().unwrap_or(line).trim()
 }
 

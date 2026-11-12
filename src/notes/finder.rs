@@ -13,7 +13,7 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
 use super::store::NoteEntry;
-use crate::mux::input::{Key, KeyCode, Mouse};
+use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
 use crate::ui::{Look, Outcome, Overlay, Picked, Step};
 
@@ -26,6 +26,11 @@ pub struct Finder {
     room: usize,
     drawn: Option<Drawn>,
     matcher: Matcher,
+    /// The column of the line between the list and the preview, which is
+    /// the list's scroll bar while it runs past the box.
+    bar_x: Option<u16>,
+    /// The scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
+    dragging: Option<crate::ui::kit::Grab>,
 }
 
 /// What a note is matched by: its title, its folder and how it starts.
@@ -49,6 +54,8 @@ impl Finder {
             room: 10,
             drawn: None,
             matcher: Matcher::new(Config::DEFAULT),
+            bar_x: None,
+            dragging: None,
         };
         f.refilter();
         f
@@ -190,11 +197,25 @@ impl Overlay for Finder {
             drawn.inner.width.saturating_sub(list_w as u16 + 2),
             drawn.inner.height.saturating_sub(4),
         );
+        self.bar_x = None;
         if preview.width > 10 {
             for y in preview.y..preview.bottom() {
                 buf[(preview.x - 1, y)]
                     .set_symbol("│")
                     .set_style(look.faint());
+            }
+            // The line beside the list is its scroll bar while it runs past
+            // the box: the thumb a heavier line beside the rows it stands for.
+            if look.scroll_bars
+                && let Some((at, len)) =
+                    crate::ui::kit::thumb(self.shown.len(), self.top, self.room, self.room)
+            {
+                for (y, i) in &drawn.rows {
+                    if (2 + at..2 + at + len).contains(i) {
+                        buf[(preview.x - 1, *y)].set_symbol("┃");
+                    }
+                }
+                self.bar_x = Some(preview.x - 1);
             }
             if let Some(&i) = self.shown.get(self.cursor) {
                 let text = &self.notes[i].text;
@@ -258,6 +279,45 @@ impl Overlay for Finder {
         let Some(drawn) = &self.drawn else {
             return Step::Same;
         };
+        // The list's scroll bar: a press pages toward it, a drag moves the
+        // list, the cursor kept on a row shown.
+        // A drag under way follows the mouse up and down whatever its column.
+        let bar = match self.dragging {
+            Some(_) => draw::edge_bar_drag_row(drawn, 2, mouse.row),
+            None => self
+                .bar_x
+                .filter(|x| *x == mouse.col && look.mouse)
+                .and_then(|_| drawn.rows.iter().find(|(y, _)| *y == mouse.row))
+                .and_then(|(_, i)| i.checked_sub(2))
+                .filter(|r| *r < self.room),
+        };
+        let (total, room) = (self.shown.len(), self.room);
+        let to = match (mouse.kind, mouse.button, bar) {
+            (MouseKind::Press, MouseButton::Left, Some(row)) => {
+                self.dragging = Some(crate::ui::kit::scroll_grab(
+                    total, self.top, room, room, row,
+                ));
+                Some(
+                    crate::ui::kit::scroll_press(total, self.top, room, room, row)
+                        .unwrap_or(self.top),
+                )
+            }
+            (MouseKind::Drag, _, Some(row)) if self.dragging.is_some() => {
+                let grab = self.dragging.unwrap_or_default();
+                Some(crate::ui::kit::scroll_drag(total, room, room, row, grab))
+            }
+            (MouseKind::Drag, ..) if self.dragging.is_some() => return Step::Same,
+            (MouseKind::Release, ..) if self.dragging.is_some() => {
+                self.dragging = None;
+                return Step::Same;
+            }
+            _ => None,
+        };
+        if let Some(to) = to {
+            self.top = to;
+            self.cursor = self.cursor.clamp(to, to + room - 1).min(total - 1);
+            return Step::Redraw;
+        }
         let hit = drawn.hit(mouse.col, mouse.row);
         match draw::gesture(&mouse) {
             Gesture::Click if look.mouse => match hit {

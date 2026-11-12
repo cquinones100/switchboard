@@ -250,6 +250,61 @@ impl Drawn {
     }
 }
 
+/// A box's lines `first..first + room` show `total` rows from `top`: while
+/// they run past it (and Settings' `scroll_bars` is on), its right edge
+/// beside them is their scroll bar, the edge's `│` the track and the
+/// thumb a heavier `┃` on it, so the box keeps its width.
+pub fn edge_bar(
+    buf: &mut Buffer,
+    drawn: &Drawn,
+    (first, room): (usize, usize),
+    (total, top): (usize, usize),
+    look: &Look,
+) {
+    if !look.scroll_bars {
+        return;
+    }
+    let Some((at, len)) = super::kit::thumb(total, top, room, room) else {
+        return;
+    };
+    let x = drawn.outer.right().saturating_sub(1);
+    for (y, i) in &drawn.rows {
+        if (first + at..first + at + len).contains(i)
+            && let Some(cell) = buf.cell_mut((x, *y))
+        {
+            cell.set_symbol("┃");
+        }
+    }
+}
+
+/// The row of a box's edge bar (`edge_bar`, its lines `first..first +
+/// room`) at a screen cell, counted from the bar's top.
+pub fn edge_bar_row(
+    drawn: &Drawn,
+    (first, room): (usize, usize),
+    col: u16,
+    row: u16,
+) -> Option<usize> {
+    if col + 1 != drawn.outer.right() {
+        return None;
+    }
+    drawn
+        .rows
+        .iter()
+        .find(|(y, _)| *y == row)
+        .and_then(|(_, i)| i.checked_sub(first))
+        .filter(|i| *i < room)
+}
+
+/// The row of a box's edge bar a drag under way is at, whatever column
+/// the mouse is in: screen row `row` counted from the bar's top, past its
+/// bottom too, so a drag on beyond it still reaches the end
+/// (`kit::scroll_drag` holds it to the track).
+pub fn edge_bar_drag_row(drawn: &Drawn, first: usize, row: u16) -> Option<usize> {
+    let (top, _) = drawn.rows.iter().find(|(_, i)| *i == first)?;
+    Some(usize::from(row.saturating_sub(*top)))
+}
+
 /// What a mouse event is, to a box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gesture {

@@ -281,6 +281,18 @@ impl App {
                 put_line(buf, w, y, 1, &Spans::from(kit::rule_v(&theme)));
             }
         }
+        // The rows a column narrower while the scroll bar is beside them.
+        let bar = self.opts.scroll_bars && w > 1 && rows.len() > h;
+        let full = w;
+        let w = w - u16::from(bar);
+        if bar {
+            kit::draw_scrollbar(
+                buf,
+                (full - 1, 0, h as u16),
+                (rows.len(), self.list_top, h),
+                &theme,
+            );
+        }
         for (y, row) in rows.iter().skip(self.list_top).take(h).enumerate() {
             let y = y as u16;
             match row {
@@ -763,7 +775,21 @@ impl App {
         out
     }
 
+    /// The diff, and its scroll bar in the column kept for it.
     fn draw_diff(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
+        let cursor = self.draw_diff_body(buf);
+        if self.opts.scroll_bars && self.current().is_some() {
+            let area = self.diff_area();
+            let h = self.body_height();
+            let (total, top) = self.diff_extent();
+            let y = area.y + self.head_height() as u16;
+            let x = area.right().saturating_sub(1);
+            kit::draw_scrollbar(buf, (x, y, h as u16), (total, top, h), &self.theme());
+        }
+        cursor
+    }
+
+    fn draw_diff_body(&mut self, buf: &mut Buffer) -> Option<(u16, u16)> {
         let area = self.diff_area();
         let Some(entry) = self.current().cloned() else {
             if let Some(change) = &self.change {
@@ -1327,6 +1353,15 @@ impl App {
         }
         a.top = a.top.min(lines.len().saturating_sub(1));
         let (top, cursor) = (a.top, a.cursor);
+        // Its scroll bar in the column the text leaves at its right.
+        self.answer_bar = None;
+        if self.opts.scroll_bars {
+            let (x, y) = (inner.right().saturating_sub(1), inner.y + 1);
+            let theme = self.theme();
+            if kit::draw_scrollbar(buf, (x, y, body as u16), (lines.len(), top, body), &theme) {
+                self.answer_bar = Some((x, y, body));
+            }
+        }
         for (k, (_, spans)) in lines.iter().skip(top).take(body).enumerate() {
             let y = inner.y + 1 + k as u16;
             let mut x = inner.x + 1;

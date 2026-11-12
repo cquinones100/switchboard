@@ -906,6 +906,29 @@ impl Pane {
         self.term.grid().display_offset()
     }
 
+    /// The scrollback as a scroll bar measures it: every line kept, the
+    /// first shown, and how many show.
+    pub fn scroll_extent(&self) -> (usize, usize, usize) {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let rows = self.term.screen_lines();
+        (
+            history + rows,
+            history - grid.display_offset().min(history),
+            rows,
+        )
+    }
+
+    /// Scrolls so the line `top` of `scroll_extent` is the first shown.
+    pub fn scroll_to_top_line(&mut self, top: usize) {
+        let history = self.term.grid().history_size();
+        let offset = history.saturating_sub(top) as i32;
+        let now = self.scrolled() as i32;
+        if offset != now {
+            self.scroll(offset - now);
+        }
+    }
+
     /// A point on the screen as now shown (scrolled back or not), as the
     /// emulator's grid has it, kept inside the screen.
     fn screen_point(&self, col: u16, row: u16) -> GridPoint {

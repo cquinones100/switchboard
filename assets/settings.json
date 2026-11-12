@@ -774,6 +774,13 @@
     "default": true
   },
   {
+    "key": "scroll_bars",
+    "category": "Appearance",
+    "label": "Scroll bars",
+    "description": "A scroll bar at the right of every list, view and pane with more than fits, showing where you are: a click on its track pages toward the click, and dragging its thumb scrolls with it. Off, nothing is drawn there",
+    "default": true
+  },
+  {
     "key": "photos",
     "category": "Appearance",
     "label": "People's photos",

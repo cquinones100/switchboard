@@ -9,9 +9,9 @@ use ratatui::buffer::Buffer;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-use crate::mux::input::{Key, KeyCode, Mouse};
+use crate::mux::input::{Key, KeyCode, Mouse, MouseButton, MouseKind};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit};
-use crate::ui::{Look, Outcome, Overlay, Step};
+use crate::ui::{Look, Outcome, Overlay, Step, kit};
 pub use crate::usage::report::{Line, Tone};
 
 /// The widest the inside gets, as the popups' `-w 90`.
@@ -26,6 +26,8 @@ pub struct TextBox {
     room: usize,
     wrapped: usize,
     drawn: Option<Drawn>,
+    /// Its scroll bar's thumb being dragged, from where (`kit::scroll_grab`).
+    dragging: Option<crate::ui::kit::Grab>,
 }
 
 impl TextBox {
@@ -37,6 +39,7 @@ impl TextBox {
             room: 10,
             wrapped: 0,
             drawn: None,
+            dragging: None,
         }
     }
 
@@ -115,7 +118,15 @@ impl Overlay for TextBox {
             "any key closes"
         });
         spec.width = inner as u16;
-        self.drawn = Some(draw::draw_box(buf, &spec, look));
+        let drawn = draw::draw_box(buf, &spec, look);
+        draw::edge_bar(
+            buf,
+            &drawn,
+            (0, self.room),
+            (self.wrapped, self.scroll),
+            look,
+        );
+        self.drawn = Some(drawn);
     }
 
     fn key(&mut self, key: Key, _look: &Look) -> Step {
@@ -129,6 +140,33 @@ impl Overlay for TextBox {
     }
 
     fn mouse(&mut self, mouse: Mouse, look: &Look) -> Step {
+        // Its scroll bar: a press pages toward it, a drag moves the text.
+        let bar = self
+            .drawn
+            .as_ref()
+            .and_then(|d| match self.dragging {
+                Some(_) => draw::edge_bar_drag_row(d, 0, mouse.row),
+                None => draw::edge_bar_row(d, (0, self.room), mouse.col, mouse.row),
+            })
+            .filter(|_| look.mouse && look.scroll_bars && self.wrapped > self.room);
+        let (total, room) = (self.wrapped, self.room);
+        match (mouse.kind, mouse.button, bar) {
+            (MouseKind::Press, MouseButton::Left, Some(row)) => {
+                self.dragging = Some(kit::scroll_grab(total, self.scroll, room, room, row));
+                let to = kit::scroll_press(total, self.scroll, room, room, row);
+                return self.scroll_to(to.unwrap_or(self.scroll));
+            }
+            (MouseKind::Drag, _, Some(row)) if self.dragging.is_some() => {
+                let grab = self.dragging.unwrap_or_default();
+                return self.scroll_to(kit::scroll_drag(total, room, room, row, grab));
+            }
+            (MouseKind::Drag, ..) if self.dragging.is_some() => return Step::Same,
+            (MouseKind::Release, ..) if self.dragging.is_some() => {
+                self.dragging = None;
+                return Step::Same;
+            }
+            _ => {}
+        }
         match draw::gesture(&mouse) {
             Gesture::WheelDown => self.scroll_to(self.scroll + 1),
             Gesture::WheelUp => self.scroll_to(self.scroll.saturating_sub(1)),

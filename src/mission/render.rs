@@ -1481,7 +1481,9 @@ fn cards_ux2(
     }
     let start = cursor_top.min(cursor_bottom.saturating_sub(body));
     let end = start + body;
+    let from = lines.len();
     lines.extend(drawn.iter().skip(start).take(body).cloned());
+    rows_bar(&mut lines[from..], (drawn.len(), start, body), cols, m);
     let shown = |y: usize| y >= start && y < end;
     for (top, bottom, x0, x1, index) in at {
         for y in (top..=bottom).filter(|y| shown(*y)) {
@@ -1629,12 +1631,14 @@ fn cards(
         }
     }
     let start = cursor_top.min(cursor_bottom.saturating_sub(body));
+    let from = lines.len();
     for spans in drawn.iter().skip(start).take(body) {
         lines.push(Line {
             spans: spans.clone(),
             fill: None,
         });
     }
+    rows_bar(&mut lines[from..], (drawn.len(), start, body), cols, m);
     for (top, bottom, x0, x1, index) in at {
         for line in top.max(start)..=bottom.min(start + body - 1) {
             hits.push(HitBox {
@@ -1645,6 +1649,57 @@ fn cards(
             });
         }
     }
+}
+
+/// A scroll bar in the last column of a view's rows, `cols` wide, while
+/// they run past the screen (Settings' `scroll_bars`): the Tabs view's
+/// cards, whose last cell (a card's edge or the gap after it) the bar takes
+/// in place, and a list's rows, laid out a column narrower for it. They
+/// scroll to keep the chosen card or row in view, so the bar shows where
+/// that is and takes no click.
+fn rows_bar(
+    lines: &mut [Line],
+    (total, top, body): (usize, usize, usize),
+    cols: usize,
+    m: &Mission,
+) {
+    if !m.snap.rules.scroll_bars || cols < 2 {
+        return;
+    }
+    let bar = kit::scrollbar(total, top, body, body, &m.snap.theme);
+    for (line, mark) in lines.iter_mut().zip(bar) {
+        let mut spans = clip(std::mem::take(&mut line.spans), cols - 1);
+        spans.push(mark);
+        line.spans = spans;
+    }
+}
+
+/// Spans cut to `cols` columns with no ellipsis, the cells past them
+/// dropped, and padded to fill them.
+fn clip(spans: Vec<Span<'static>>, cols: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut used = 0;
+    for span in spans {
+        let mut kept = String::new();
+        for g in unicode_segmentation::UnicodeSegmentation::graphemes(span.content.as_ref(), true) {
+            let w = width(g);
+            if used + w > cols {
+                break;
+            }
+            kept.push_str(g);
+            used += w;
+        }
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, span.style));
+        }
+        if used >= cols {
+            break;
+        }
+    }
+    if used < cols {
+        out.push(Span::raw(" ".repeat(cols - used)));
+    }
+    out
 }
 
 // ── Boards, tables and lists ────────────────────────────────────────────────
@@ -1885,7 +1940,14 @@ fn board_cards(
                 .collect(),
         })
         .collect();
-    let drawn = kit::board(&board_columns, board_w, body - week_h, more_lit(m), theme);
+    let drawn = kit::board(
+        &board_columns,
+        board_w,
+        body - week_h,
+        more_lit(m),
+        m.snap.rules.scroll_bars,
+        theme,
+    );
     board_hits(&drawn, top_row, hits, |c, i| held[c][i].0);
     let mut rows = drawn.lines;
     let under = side_w == 0 && chosen_item.is_some();
@@ -1995,15 +2057,20 @@ fn pane_beside(
         hits,
     );
     let top = m.side_top().min(about.last_top(body));
+    let total = about.lines.len();
     let about = about.window(top, body);
+    let bar_x = board_w + side_w - 1;
+    let bar = pane_bar((total, top, body), (bar_x, top_row), hits, m);
+    let inner = side_w - 2 - usize::from(!bar.is_empty());
     for (i, row) in rows.iter_mut().enumerate() {
         let mut spans = fit(std::mem::take(row), board_w, Style::new());
         spans.push(Span::styled("│ ", fg(theme.faint)));
         spans.extend(fit(
             about.lines.get(i).cloned().unwrap_or_default(),
-            side_w - 2,
+            inner,
             Style::new(),
         ));
+        spans.extend(bar.get(i).cloned());
         *row = spans;
     }
     about
@@ -2042,13 +2109,18 @@ fn pane_under(
     let at = top_row + rows.len();
     side_hits(about.last_top(room), 0, cols, at, room, hits);
     let top = m.side_top().min(about.last_top(room));
+    let total = about.lines.len();
     let about = about.window(top, room);
+    let bar = pane_bar((total, top, room), (cols.saturating_sub(1), at), hits, m);
+    let inner = cols - usize::from(!bar.is_empty());
     for i in 0..room {
-        rows.push(fit(
+        let mut spans = fit(
             about.lines.get(i).cloned().unwrap_or_default(),
-            cols,
+            inner,
             Style::new(),
-        ));
+        );
+        spans.extend(bar.get(i).cloned());
+        rows.push(spans);
     }
     about
         .pictures
@@ -2058,6 +2130,35 @@ fn pane_under(
             ..p.clone()
         })
         .collect()
+}
+
+/// The scroll bar of a pane beside or under a board, for `total` lines of
+/// which `body` show from `top`, down column `x` from screen row `y`:
+/// a span a row, none while it fits or Settings' `scroll_bars` is off
+/// (the snapshot's rules);
+/// its rows' hits go before the pane's own, so a press there pages the
+/// pane and a drag moves it (`Spot::PaneBar`).
+fn pane_bar(
+    (total, top, body): (usize, usize, usize),
+    (x, y): (usize, usize),
+    hits: &mut Vec<HitBox>,
+    m: &Mission,
+) -> Vec<Span<'static>> {
+    let theme = &m.snap.theme;
+    if !m.snap.rules.scroll_bars {
+        return Vec::new();
+    }
+    let bar = kit::scrollbar(total, top, body, body, theme);
+    if !bar.is_empty() {
+        let rows = (0..body).map(|row| HitBox {
+            y: (y + row) as u16,
+            x0: x as u16,
+            x1: x as u16,
+            spot: Spot::PaneBar { row, body, total },
+        });
+        hits.splice(0..0, rows);
+    }
+    bar
 }
 
 /// Whether a board's "‹ more" and "more ›" markers are lit: under the
@@ -2861,6 +2962,14 @@ fn list(
     } else {
         5
     };
+    // The rows a column narrower while the scroll bar is beside them.
+    let full = cols;
+    let cols = if snap.rules.scroll_bars && data.items.len() > room && cols > 1 {
+        cols - 1
+    } else {
+        cols
+    };
+    let rows_from = lines.len();
     for (index, item) in shown {
         let chosen = index == cursor && m.cursor >= 0;
         let fill = if chosen {
@@ -2980,6 +3089,13 @@ fn list(
         spans.push(Span::styled(format!("{at:>when_w$} "), fg(theme.faint)));
         lines.push(Line { spans, fill });
     }
+    rows_bar(
+        &mut lines[rows_from..],
+        (data.items.len(), first, room),
+        full,
+        m,
+    );
+    let cols = full;
     if footer {
         while lines.len() + 3 < rows {
             lines.push(Row::default().line(cols, None));
@@ -3031,6 +3147,13 @@ fn work_map_rows(
     let pane_h = pane.as_ref().map_or(0, |_| 3 + WORK_PANE_BODY);
     let budget = rows.saturating_sub(1 + lines.len());
     let room = budget.saturating_sub(2 + pane_h).max(1);
+    // The rows a column narrower while the scroll bar is beside them.
+    let full = cols;
+    let cols = if snap.rules.scroll_bars && items.len() > room && cols > 1 {
+        cols - 1
+    } else {
+        cols
+    };
     let widths = work_widths(cols);
     // The columns' heads.
     let heads = [
@@ -3061,6 +3184,7 @@ fn work_map_rows(
         fill: None,
     });
     let first = (cursor + 1).saturating_sub(room);
+    let rows_from = lines.len();
     for (index, item) in items.iter().enumerate().skip(first).take(room) {
         let chosen = index == cursor && m.cursor >= 0;
         let hovered = !chosen && m.hover == Some(Spot::Index(index as isize));
@@ -3082,6 +3206,8 @@ fn work_map_rows(
             fill: hovered.then_some(theme.panel),
         });
     }
+    rows_bar(&mut lines[rows_from..], (items.len(), first, room), full, m);
+    let cols = full;
     if let Some((head, body)) = pane {
         while lines.len() + pane_h < rows.saturating_sub(1) {
             lines.push(Row::default().line(cols, None));
@@ -4550,7 +4676,14 @@ fn pilot_board(
                 .collect(),
         })
         .collect();
-    let drawn = kit::board(&board_columns, board_w, body, more_lit(m), theme);
+    let drawn = kit::board(
+        &board_columns,
+        board_w,
+        body,
+        more_lit(m),
+        m.snap.rules.scroll_bars,
+        theme,
+    );
     board_hits(&drawn, top, hits, |c, i| held[c][i]);
     for p in &drawn.placed {
         let card = &board_columns[p.column].cards[p.card];
@@ -5131,13 +5264,18 @@ fn ci_rows(
             hits,
         );
     }
-    let about = about
-        .map(|a| {
+    let pane_x = if wide { list_w + 2 } else { 2 };
+    let (about, bar) = match about {
+        Some(a) => {
             let top = m.side_top().min(a.last_top(pane_h));
-            a.window(top, pane_h)
-        })
-        .unwrap_or_default()
-        .lines;
+            let total = a.lines.len();
+            let bar_x = pane_x + pane_w - 3;
+            let bar = pane_bar((total, top, pane_h), (bar_x, pane_top), hits, m);
+            (a.window(top, pane_h).lines, bar)
+        }
+        None => (Vec::new(), Vec::new()),
+    };
+    let pane_inner = pane_w - 2 - usize::from(!bar.is_empty());
     let first = (chosen_line + 1).saturating_sub(list_h);
     let shown: Vec<_> = entries.into_iter().skip(first).take(list_h).collect();
     for (i, (_, spot)) in shown.iter().enumerate() {
@@ -5161,9 +5299,10 @@ fn ci_rows(
             spans.push(Span::raw(" "));
             spans.extend(fit(
                 about.get(i).cloned().unwrap_or_default(),
-                pane_w - 2,
+                pane_inner,
                 Style::new(),
             ));
+            spans.extend(bar.get(i).cloned());
         }
         lines.push(Line { spans, fill: None });
     }
@@ -5176,9 +5315,10 @@ fn ci_rows(
             let mut spans = vec![Span::raw("  ")];
             spans.extend(fit(
                 about.get(i).cloned().unwrap_or_default(),
-                cols - 2,
+                pane_inner,
                 Style::new(),
             ));
+            spans.extend(bar.get(i).cloned());
             lines.push(Line { spans, fill: None });
         }
     }
@@ -5430,6 +5570,16 @@ fn notice_board(
         fill: None,
     });
     lines.push(Row::default().line(cols, None));
+    // The rows a column narrower while the scroll bar is beside them: the
+    // heads and their rule take the two lines before them.
+    let items = &view.data.items;
+    let room = rows.saturating_sub(1 + lines.len() + 2).max(1);
+    let full = cols;
+    let cols = if m.snap.rules.scroll_bars && items.len() > room && cols > 1 {
+        cols - 1
+    } else {
+        cols
+    };
     // The column heads.
     const WHEN: usize = 9;
     const SIDEBAR: usize = 10;
@@ -5463,7 +5613,6 @@ fn notice_board(
         ],
         fill: None,
     });
-    let items = &view.data.items;
     if items.is_empty() {
         let empty = view.data.empty.clone().unwrap_or_default();
         lines.push(
@@ -5474,9 +5623,9 @@ fn notice_board(
         );
         return;
     }
-    let room = rows.saturating_sub(1 + lines.len()).max(1);
     let cursor = m.cursor.max(0) as usize;
     let first = (cursor + 1).saturating_sub(room);
+    let rows_from = lines.len();
     for (index, item) in items.iter().enumerate().skip(first).take(room) {
         let chosen = index == cursor && m.cursor >= 0;
         let lit = !chosen && m.hover == Some(Spot::Index(index as isize));
@@ -5568,6 +5717,7 @@ fn notice_board(
             fill: None,
         });
     }
+    rows_bar(&mut lines[rows_from..], (items.len(), first, room), full, m);
 }
 
 /// The key a footer's label names: its arrows and words as the keys
@@ -9575,6 +9725,50 @@ mod tests {
         assert!(!m.scroll_side(1, last), "nothing further");
         m.scroll_side(-1000, last);
         assert_eq!(m.side_top(), 0);
+    }
+
+    #[test]
+    fn the_pane_beside_a_board_has_a_scroll_bar_that_pages_and_drags_it() {
+        let item = Item::new("menu", "Fix the menu")
+            .group("Todo")
+            .data(serde_json::json!({
+                "ticket": "menu", "state": "Todo", "description": long_description(30),
+            }));
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Tickets, "Tickets", vec![item])],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.rules.scroll_bars = true;
+        m.view = 1;
+        m.size = (160, 20);
+        let (lines, hits, _, _) = drawn(&m, 160, 20);
+        let bar: Vec<(u16, usize, usize, usize)> = hits
+            .iter()
+            .filter_map(|h| match h.spot {
+                Spot::PaneBar { row, body, total } => Some((h.x0, row, body, total)),
+                _ => None,
+            })
+            .collect();
+        assert!(!bar.is_empty(), "the bar's rows are hits");
+        assert!(
+            bar.iter().all(|b| b.0 == 159),
+            "in the last column: {bar:?}"
+        );
+        let text = texts(&lines);
+        assert!(
+            text.iter().any(|l| l.ends_with('┃')),
+            "the thumb: {text:#?}"
+        );
+        m.hits = hits;
+        let (_, _, body, total) = bar[0];
+        assert!(m.side_bar_to((body - 1, body, total), None), "a page down");
+        assert_eq!(m.side_top(), body);
+        m.side_bar_to((0, body, total), Some((body - 1, body)));
+        assert_eq!(m.side_top(), 0, "dragged to the top");
+        m.snap.rules.scroll_bars = false;
+        let (_, hits, _, _) = drawn(&m, 160, 20);
+        assert!(!hits.iter().any(|h| matches!(h.spot, Spot::PaneBar { .. })));
     }
 
     #[test]

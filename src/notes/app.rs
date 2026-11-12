@@ -157,6 +157,9 @@ pub struct Options {
     pub item_chips: bool,
     /// The terminal draws the kit's half-circle ends itself (Ghostty).
     pub caps: bool,
+    /// A scroll bar at the list's right edge and the note's while they run
+    /// past the screen (scroll_bars).
+    pub scroll_bars: bool,
 }
 
 impl Default for Options {
@@ -182,6 +185,7 @@ impl Default for Options {
             ux2: false,
             item_chips: true,
             caps: false,
+            scroll_bars: true,
         }
     }
 }
@@ -215,6 +219,7 @@ impl Options {
                 .iter()
                 .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
             item_chips: on("notes_item_chips"),
+            scroll_bars: on("scroll_bars"),
             caps: crate::ui::kit::caps(&format!(
                 "{} {}",
                 std::env::var("TERM").unwrap_or_default(),
@@ -347,6 +352,40 @@ struct Geo {
     chips: Vec<(Rect, (usize, usize), render::Chip)>,
     /// UX 2.0's "Add an item" input's row, when it is drawn.
     input: Option<u16>,
+    /// The note's scroll bar, when it is drawn: its column, first row and
+    /// height, the shown lines' rows of the note (a closed fold's hidden
+    /// ones left out) and how many show from the first.
+    note_bar: Option<NoteBar>,
+}
+
+/// The note's scroll bar as it was drawn, for the mouse.
+struct NoteBar {
+    x: u16,
+    y: u16,
+    height: u16,
+    rows: Vec<usize>,
+    /// The first line shown, which the wheel may have taken past `last`;
+    /// the thumb is drawn at `last` then.
+    top: usize,
+    /// The first line that shows the note's end whole, the last place the
+    /// top goes.
+    last: usize,
+    shown: usize,
+}
+
+impl NoteBar {
+    /// What the bar measures, so its thumb's places are the lines from the
+    /// first to `last`: those, and the lines shown.
+    fn places(&self) -> usize {
+        self.last + self.shown
+    }
+}
+
+/// Which scroll bar's thumb is being dragged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BarDrag {
+    List,
+    Note,
 }
 
 /// A note shown when there are none: what a note can do.
@@ -557,6 +596,11 @@ pub struct App {
     mouse_at: Option<(u16, u16)>,
     /// Where a press in the note landed, to tell a click from a drag.
     press: Option<((usize, usize), bool)>,
+    /// A scroll bar's thumb being dragged, its row it was taken by
+    /// (`kit::scroll_grab`), and how many of the note's lines showed then,
+    /// kept for the drag so the thumb keeps its length as the lines it
+    /// passes wrap to other heights.
+    bar_drag: Option<(BarDrag, crate::ui::kit::Grab, usize)>,
     parser: Parser,
     last_input: Instant,
 }
@@ -587,6 +631,7 @@ impl App {
             } else {
                 crate::ui::Theme::DARK
             },
+            scroll_bars: opts.scroll_bars,
             ..Look::default()
         };
         App {
@@ -637,6 +682,7 @@ impl App {
             hover_button: None,
             mouse_at: None,
             press: None,
+            bar_drag: None,
             parser: Parser::new(),
             last_input: Instant::now(),
             opts,
@@ -3234,6 +3280,31 @@ impl App {
                     self.scroll(3, down);
                 }
             }
+            (MouseKind::Press, MouseButton::Left) if self.on_scroll_bar(x, y).is_some() => {
+                if let Some(bar) = self.on_scroll_bar(x, y) {
+                    // The press focuses the side its bar is on, as a press
+                    // there does, leaving the note saving it.
+                    match bar {
+                        BarDrag::List if self.focus == Focus::Note => {
+                            self.save();
+                            self.focus = Focus::List;
+                        }
+                        BarDrag::List => self.focus = Focus::List,
+                        BarDrag::Note => self.focus = Focus::Note,
+                    }
+                    let shown = self.geo.note_bar.as_ref().map_or(1, |b| b.shown);
+                    self.bar_drag = Some((bar, self.bar_grab(bar, y), shown));
+                    self.scroll_bar_to(bar, y, None);
+                }
+            }
+            (MouseKind::Drag, MouseButton::Left) if self.bar_drag.is_some() => {
+                if let Some((bar, grab, shown)) = self.bar_drag {
+                    self.scroll_bar_to(bar, y, Some((grab, shown)));
+                }
+            }
+            (MouseKind::Release, _) if self.bar_drag.is_some() => {
+                self.bar_drag = None;
+            }
             (MouseKind::Press, MouseButton::Left) => {
                 if let Some(b) = button {
                     return self.button(b);
@@ -3307,6 +3378,72 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Whether the list's rows run past it, so it has a scroll bar.
+    fn list_overflows(&self) -> bool {
+        self.opts.scroll_bars && self.list_rows.len() > self.geo.list.height as usize
+    }
+
+    /// The scroll bar at screen cell (`x`, `y`), when one is drawn there.
+    fn on_scroll_bar(&self, x: u16, y: u16) -> Option<BarDrag> {
+        let list = self.geo.list;
+        let in_list = x + 1 == list.right() && y >= list.y && y < list.bottom();
+        if in_list && self.list_overflows() {
+            return Some(BarDrag::List);
+        }
+        let bar = self.geo.note_bar.as_ref()?;
+        (x == bar.x && y >= bar.y && y < bar.y + bar.height).then_some(BarDrag::Note)
+    }
+
+    /// The thumb's row a press at screen row `y` takes a scroll bar by.
+    fn bar_grab(&self, bar: BarDrag, y: u16) -> crate::ui::kit::Grab {
+        use crate::ui::kit::scroll_grab;
+        match bar {
+            BarDrag::List => {
+                let h = self.geo.list.height as usize;
+                let row = y.saturating_sub(self.geo.list.y) as usize;
+                scroll_grab(self.list_rows.len(), self.list_top, h, h, row)
+            }
+            BarDrag::Note => self.geo.note_bar.as_ref().map_or((0, 0), |b| {
+                let row = y.saturating_sub(b.y) as usize;
+                scroll_grab(b.places(), b.top, b.shown, b.height as usize, row)
+            }),
+        }
+    }
+
+    /// A press or a drag (`drag`, the thumb's row it was taken by and the lines
+    /// shown as it was) on a scroll bar at screen row `y`.
+    fn scroll_bar_to(&mut self, bar: BarDrag, y: u16, drag: Option<(crate::ui::kit::Grab, usize)>) {
+        use crate::ui::kit::{scroll_drag, scroll_press};
+        match bar {
+            BarDrag::List => {
+                let h = self.geo.list.height as usize;
+                let total = self.list_rows.len();
+                let row = y.saturating_sub(self.geo.list.y) as usize;
+                self.list_top = if let Some((grab, _)) = drag {
+                    scroll_drag(total, h, h, row, grab)
+                } else {
+                    scroll_press(total, self.list_top, h, h, row).unwrap_or(self.list_top)
+                };
+            }
+            BarDrag::Note => {
+                let Some(b) = &self.geo.note_bar else {
+                    return;
+                };
+                let (h, places) = (b.height as usize, b.places());
+                let row = y.saturating_sub(b.y) as usize;
+                let to = if let Some((grab, shown)) = drag {
+                    scroll_drag(b.last + shown, shown, h, row, grab)
+                } else {
+                    scroll_press(places, b.top, b.shown, h, row).unwrap_or(b.top)
+                };
+                if let Some(&top) = b.rows.get(to) {
+                    self.editor.top = top;
+                    self.scrolled = true;
+                }
+            }
         }
     }
 

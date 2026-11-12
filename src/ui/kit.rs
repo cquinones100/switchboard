@@ -11,12 +11,14 @@
 //! Tickets and Autopilot boards' one look), a box's
 //! `option`, the `pane` beside a list, an `input`, a calendar's `event`,
 //! a two-row bar's `bar_name`, the key `hints` of every footer and bar
-//! (the key in the accent, what it does dim, two spaces between), and a
-//! log's line that says why it failed, `marked`; and a person's `avatar`
+//! (the key in the accent, what it does dim, two spaces between), a
+//! log's line that says why it failed, `marked`; a person's `avatar`
 //! (board 0d), `Large` (4 by 2) beside what they wrote, their name and
 //! words `SAID_INDENT` columns in, or `Small` (2 by 1) in a run of names,
 //! its initial on the color `avatar_color` gives their name whatever
-//! service they are from, under the photo the image atom draws.
+//! service they are from, under the photo the image atom draws; and the
+//! `scrollbar` of whatever runs past its edge, with `scroll_press` and
+//! `scroll_drag` for a click on its track and a drag of its thumb.
 //!
 //! A row's parts are laid out by `columns` (board 45, "Layout: how a view
 //! fills a screen of any size"): fixed columns at their natural width up
@@ -994,12 +996,15 @@ pub const BOARD_COLUMN_MIN: usize = 16;
 /// when `lit` says so (under the mouse or Tab's focus); a marker whose
 /// hidden columns hold no card, or any marker while none of the board's
 /// cards is chosen, is only a count, since `h` and `l` pass over empty
-/// columns and move from a chosen card.
+/// columns and move from a chosen card. With `bars` (Settings'
+/// `scroll_bars`), a column whose cards run past its rows has a scroll bar
+/// in its last column, its cards a column narrower.
 pub fn board(
     columns: &[BoardColumn],
     cols: usize,
     rows: usize,
     lit: [bool; 2],
+    bars: bool,
     theme: &Theme,
 ) -> Board {
     let n = columns.len().max(1);
@@ -1079,6 +1084,12 @@ pub fn board(
             ]);
             col.push(vec![Span::styled(format!("╰{}╯", "┄".repeat(inner)), e)]);
         }
+        let all = |w: usize| -> usize {
+            let n = column.cards.len();
+            column.cards.iter().map(|c| c.height(w)).sum::<usize>() + n.saturating_sub(1)
+        };
+        let bar = bars && col_w > 2 && all(col_w) > card_rows;
+        let col_w = col_w - usize::from(bar);
         let heights: Vec<usize> = column.cards.iter().map(|c| c.height(col_w)).collect();
         // From the first card that keeps the chosen one whole in sight.
         let span = |from: usize, to: usize| heights[from..=to].iter().sum::<usize>() + (to - from);
@@ -1107,6 +1118,19 @@ pub fn board(
             }
             col.extend(board_card(card, col_w, theme));
             y += h + 1;
+        }
+        if bar {
+            let top = heights[..first].iter().sum::<usize>() + first;
+            // As tall as the cards drawn, not the rows given, so a pane
+            // under the board keeps the rows they leave.
+            let shown = col.len().saturating_sub(2).max(1);
+            let marks = scrollbar(all(col_w), top, shown, shown, theme);
+            col.resize(2 + shown, Vec::new());
+            for (row, mark) in col.iter_mut().skip(2).zip(marks) {
+                let mut spans = fit(std::mem::take(row), col_w, Style::new());
+                spans.push(mark);
+                *row = spans;
+            }
         }
         drawn.push(col);
     }
@@ -1385,6 +1409,163 @@ pub fn initial(name: &str, color: Color) -> Vec<Span<'static>> {
         Span::styled(initial.clone(), fill.fg(fg).add_modifier(Modifier::BOLD)),
         Span::styled(" ".repeat(2 - width(&initial)), fill),
     ]
+}
+
+/// Whether the scroll bars are drawn (Settings' `scroll_bars`).
+pub fn scroll_bars() -> bool {
+    crate::settings::is_on("scroll_bars")
+}
+
+/// Where a scroll bar's thumb sits in a column `height` rows tall, for
+/// `total` rows of which `visible` show from `top`: its first row and how
+/// many it takes, at least one; `None` when everything fits. Its length is
+/// `visible / total` of the column and its place `top / total`, rounded so
+/// it touches the top only at `top == 0` and the bottom only at the end.
+pub fn thumb(total: usize, top: usize, visible: usize, height: usize) -> Option<(usize, usize)> {
+    if total <= visible || height == 0 {
+        return None;
+    }
+    // Short of the whole track while there is more than fits, so the thumb
+    // has room to move and a press beside it pages.
+    let len = (visible * height)
+        .div_ceil(total)
+        .clamp(1, height.saturating_sub(1).max(1));
+    let room = height - len;
+    let last = total - visible;
+    let at = if top == 0 {
+        0
+    } else if top >= last {
+        room
+    } else if room >= 2 {
+        ((top * room + last / 2) / last).clamp(1, room - 1)
+    } else {
+        (top * room + last / 2) / last
+    };
+    Some((at, len))
+}
+
+/// A scroll bar, one span a row for a column `height` tall: a faint track
+/// of `│` and the thumb of `┃` in the text's tone; empty when everything
+/// fits (`thumb`). The caller asks `scroll_bars` (or its own reading of
+/// the setting) first.
+pub fn scrollbar(
+    total: usize,
+    top: usize,
+    visible: usize,
+    height: usize,
+    theme: &Theme,
+) -> Vec<Span<'static>> {
+    let Some((at, len)) = thumb(total, top, visible, height) else {
+        return Vec::new();
+    };
+    (0..height)
+        .map(|r| {
+            if (at..at + len).contains(&r) {
+                Span::styled("┃", Tone::Text.style(theme))
+            } else {
+                Span::styled("│", Tone::Faint.style(theme))
+            }
+        })
+        .collect()
+}
+
+/// Whether a surface showing `visible` of `total` rows draws a bar, so it
+/// lays its content out a column narrower.
+pub fn has_scrollbar(total: usize, visible: usize) -> bool {
+    total > visible && scroll_bars()
+}
+
+/// Writes a scroll bar (`scrollbar`) down column `x` from row `y`,
+/// `height` rows; gives whether it drew one. The caller asks
+/// `scroll_bars` first.
+pub fn draw_scrollbar(
+    buf: &mut ratatui::buffer::Buffer,
+    (x, y, height): (u16, u16, u16),
+    (total, top, visible): (usize, usize, usize),
+    theme: &Theme,
+) -> bool {
+    let spans = scrollbar(total, top, visible, height as usize, theme);
+    for (r, span) in spans.iter().enumerate() {
+        let line = ratatui::text::Line::from(span.clone());
+        super::draw::put_line(buf, x, y + r as u16, 1, &line);
+    }
+    !spans.is_empty()
+}
+
+/// Where a press on row `row` of a scroll bar `height` tall takes the top:
+/// a press on the track pages toward it (a screen's worth, `visible`), one
+/// on the thumb leaves it; `None` when there is no bar.
+pub fn scroll_press(
+    total: usize,
+    top: usize,
+    visible: usize,
+    height: usize,
+    row: usize,
+) -> Option<usize> {
+    let (at, len) = thumb(total, top, visible, height)?;
+    let last = total - visible;
+    Some(if row < at {
+        top.saturating_sub(visible)
+    } else if row >= at + len {
+        (top + visible).min(last)
+    } else {
+        top
+    })
+}
+
+/// Where a drag of a scroll bar's thumb started: the bar's row the press
+/// was on and the top it left, from `scroll_grab`.
+pub type Grab = (usize, usize);
+
+/// What a press on row `row` of a scroll bar starts a drag from: that row
+/// and the top once the press has done what it does (`scroll_press`).
+pub fn scroll_grab(total: usize, top: usize, visible: usize, height: usize, row: usize) -> Grab {
+    (
+        row,
+        scroll_press(total, top, visible, height, row).unwrap_or(top),
+    )
+}
+
+/// Where dragging the thumb to row `row` of a bar `height` tall takes the
+/// top: from where the drag started (`grab`), in proportion between the
+/// top it left and the end the mouse moves toward, reached as the thumb
+/// reaches that end of the track, so the top stays put until the mouse
+/// moves and the thumb's ends are the content's.
+pub fn scroll_drag(
+    total: usize,
+    visible: usize,
+    height: usize,
+    row: usize,
+    (from_row, from_top): Grab,
+) -> usize {
+    let Some((at, len)) = thumb(total, from_top, visible, height) else {
+        return 0;
+    };
+    // A top past `last` (the wheel lets some lists show their last row at
+    // the top) is kept until the mouse moves up.
+    let last = total - visible;
+    if row < from_row {
+        // Up: the rows until the thumb's top meets the track's, at least
+        // one while there is more above, which a short track's rounding
+        // can put at its top.
+        let rows = if at == 0 && from_top > 0 { 1 } else { at };
+        if rows == 0 {
+            return from_top;
+        }
+        let moved = (from_row - row).min(rows);
+        from_top - (moved * from_top + rows / 2) / rows
+    } else {
+        // Down: the rows until the thumb's end meets the track's.
+        let rows = match height - len - at {
+            0 if from_top < last => 1,
+            rows => rows,
+        };
+        if rows == 0 || from_top >= last {
+            return from_top;
+        }
+        let moved = (row - from_row).min(rows);
+        from_top + (moved * (last - from_top) + rows / 2) / rows
+    }
 }
 
 #[cfg(test)]
@@ -1752,7 +1933,7 @@ mod tests {
             ),
             column("Done", Vec::new()),
         ];
-        let b = board(&columns, 62, 20, [false; 2], &T);
+        let b = board(&columns, 62, 20, [false; 2], false, &T);
         let rows: Vec<String> = b.lines.iter().map(|l| text(l)).collect();
         assert!(rows[0].starts_with("NEXT 1"), "{rows:#?}");
         // Three columns of 20 a column apart: 0, 21 and 42.
@@ -1799,7 +1980,7 @@ mod tests {
         let mut later = columns.clone();
         later[1].cards[0].chosen = false;
         later[1].cards[1].chosen = true;
-        let b = board(&later, 62, 7, [false; 2], &T);
+        let b = board(&later, 62, 7, [false; 2], false, &T);
         assert_eq!(
             b.placed[1],
             Placed {
@@ -1821,7 +2002,7 @@ mod tests {
             .map(|(i, n)| column(n, vec![board_card_of("Fix it", i == 2)]))
             .collect();
         // Under three times 16 and the gaps: two columns.
-        let b = board(&columns, 40, 20, [false, true], &T);
+        let b = board(&columns, 40, 20, [false, true], false, &T);
         let rows: Vec<String> = b.lines.iter().map(|l| text(l)).collect();
         assert!(rows[0].starts_with("‹ 2 more"), "{rows:#?}");
         assert!(rows[0].ends_with("1 more ›"), "{rows:#?}");
@@ -1844,18 +2025,18 @@ mod tests {
         let mut empty = columns.clone();
         empty[3].cards.clear();
         empty[4].cards.clear();
-        let b = board(&empty, 40, 20, [false; 2], &T);
+        let b = board(&empty, 40, 20, [false; 2], false, &T);
         assert!(text(&b.lines[0]).ends_with("1 more ›"));
         assert!(b.more_right.is_none() && b.more_left.is_some());
         // None of its cards chosen (the cursor in a row under the board):
         // counts alone.
         let mut none = columns.clone();
         none[2].cards[0].chosen = false;
-        let b = board(&none, 40, 20, [false; 2], &T);
+        let b = board(&none, 40, 20, [false; 2], false, &T);
         assert!(text(&b.lines[0]).ends_with("more ›"));
         assert!(b.more_left.is_none() && b.more_right.is_none());
         // Wide enough for all: no markers.
-        let b = board(&columns, 5 * 17 - 1, 20, [false; 2], &T);
+        let b = board(&columns, 5 * 17 - 1, 20, [false; 2], false, &T);
         assert!(b.more_left.is_none() && b.more_right.is_none());
         assert!(text(&b.lines[0]).starts_with("A 1"));
     }
@@ -1984,5 +2165,91 @@ mod tests {
         assert_eq!(text(&small[0]), "A ");
         assert_eq!(text(&avatar("", AvatarSize::Small)[0]), "? ");
         assert_eq!(SAID_INDENT, 5);
+    }
+
+    #[test]
+    fn a_board_column_past_its_rows_has_a_scroll_bar() {
+        let columns = vec![column(
+            "Todo",
+            (0..6)
+                .map(|i| board_card_of(&format!("Card {i}"), i == 0))
+                .collect(),
+        )];
+        let b = board(&columns, 30, 12, [false; 2], true, &T);
+        let last: String = b.lines[2..]
+            .iter()
+            .map(|l| text(l).chars().last().unwrap_or(' '))
+            .collect();
+        assert!(last.contains('┃') && last.contains('│'), "{last:?}");
+        assert!(b.placed.iter().all(|p| p.w == 29), "{:?}", b.placed);
+        let off = board(&columns, 30, 12, [false; 2], false, &T);
+        assert!(off.placed.iter().all(|p| p.w == 30));
+    }
+
+    #[test]
+    fn no_scroll_bar_when_everything_fits() {
+        assert_eq!(thumb(10, 0, 10, 10), None);
+        assert_eq!(thumb(3, 0, 10, 10), None);
+        assert!(scrollbar(10, 0, 10, 10, &T).is_empty());
+    }
+
+    #[test]
+    fn the_thumb_is_its_share_of_the_column_at_its_place() {
+        // 40 rows, 10 showing, in a column of 10: a thumb of 3 (rounded up).
+        assert_eq!(thumb(40, 0, 10, 10), Some((0, 3)));
+        assert_eq!(thumb(40, 30, 10, 10), Some((7, 3)));
+        // Scrolled between the ends, it touches neither.
+        assert_eq!(thumb(40, 1, 10, 10), Some((1, 3)));
+        assert_eq!(thumb(40, 29, 10, 10), Some((6, 3)));
+        assert_eq!(thumb(40, 15, 10, 10), Some((4, 3)));
+        let bar = scrollbar(40, 30, 10, 10, &T);
+        assert_eq!(text(&bar), "│││││││┃┃┃");
+    }
+
+    #[test]
+    fn one_row_past_the_screen_leaves_the_thumb_room_to_move() {
+        assert_eq!(thumb(21, 0, 20, 20), Some((0, 19)));
+        assert_eq!(thumb(21, 1, 20, 20), Some((1, 19)));
+        assert_eq!(scroll_press(21, 0, 20, 20, 19), Some(1));
+        assert_eq!(scroll_drag(21, 20, 20, 19, (0, 0)), 1);
+    }
+
+    #[test]
+    fn a_very_long_list_keeps_a_thumb_one_row_tall() {
+        assert_eq!(thumb(100_000, 0, 10, 10), Some((0, 1)));
+        assert_eq!(thumb(100_000, 99_990, 10, 10), Some((9, 1)));
+    }
+
+    #[test]
+    fn the_track_pages_and_the_thumb_drags() {
+        assert_eq!(scroll_press(40, 0, 10, 10, 8), Some(10));
+        assert_eq!(scroll_press(40, 25, 10, 10, 9), Some(30));
+        assert_eq!(scroll_press(40, 30, 10, 10, 0), Some(20));
+        assert_eq!(scroll_press(40, 0, 10, 10, 1), Some(0));
+        assert_eq!(scroll_press(10, 0, 10, 10, 1), None);
+        assert_eq!(scroll_drag(40, 10, 10, 0, (1, 0)), 0);
+        assert_eq!(scroll_drag(40, 10, 10, 9, (1, 0)), 30);
+        // Taken by its top row, a drag a row down moves it down, and the top
+        // stays put while the mouse moves along the same row.
+        let (at, _) = thumb(100, 40, 20, 20).unwrap();
+        let grab = scroll_grab(100, 40, 20, 20, at);
+        assert_eq!(grab, (at, 40));
+        assert!(scroll_drag(100, 20, 20, at + 1, grab) > 40);
+        assert_eq!(scroll_drag(100, 20, 20, at, grab), 40);
+        let deep = scroll_grab(10023, 9997, 23, 22, 20);
+        assert_eq!(scroll_drag(10023, 23, 22, 20, deep), 9997);
+        // From near the end, the track's top is the content's.
+        let (at, _) = thumb(10000, 9977, 20, 20).unwrap();
+        let near_end = scroll_grab(10000, 9977, 20, 20, at);
+        assert_eq!(scroll_drag(10000, 20, 20, 0, near_end), 0);
+        assert_eq!(scroll_drag(10000, 20, 20, 19, near_end), 9980);
+        // A short track's rounding puts the thumb at its end a line short;
+        // a drag on down still reaches it.
+        assert_eq!(thumb(22, 1, 20, 20), Some((1, 19)));
+        assert_eq!(scroll_drag(22, 20, 20, 19, (18, 1)), 2);
+        // A drag past the track's bottom takes it to the end.
+        assert_eq!(scroll_drag(18, 16, 16, 30, (15, 1)), 2);
+        // A top the wheel left past the last stays put on the same row.
+        assert_eq!(scroll_drag(40, 20, 20, 15, (15, 39)), 39);
     }
 }

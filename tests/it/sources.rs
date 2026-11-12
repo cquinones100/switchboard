@@ -518,7 +518,13 @@ fn j_and_k_scroll_the_description_beside_the_pr_board() {
     // J to the end of the description, which stops there; K back to its top.
     client.type_text(&"J".repeat(80));
     let screen = client.wait_text("Line 30");
-    let first_line = |l: &String| l.trim_end().ends_with("Line 1");
+    // The pane's scroll bar left out, at the right of every row.
+    let first_line = |l: &String| {
+        l.trim_end()
+            .trim_end_matches(['│', '┃'])
+            .trim_end()
+            .ends_with("Line 1")
+    };
     assert!(!screen.iter().any(first_line), "{screen:#?}");
     client.type_text(&"K".repeat(80));
     client.wait_for("the description from its top", |s| {

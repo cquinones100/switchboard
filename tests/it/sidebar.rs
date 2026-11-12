@@ -1760,3 +1760,32 @@ fn with_sidebar_select_off_v_does_nothing() {
             .any(|l| left(l, 34).contains("selected"))
     );
 }
+
+#[test]
+fn the_line_beside_a_list_cut_short_is_its_scroll_bar_and_a_press_below_the_thumb_pages_down() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = short_screen_of_tabs(&server);
+    let first = client.screen()[0].clone();
+    let side = first.chars().position(|c| c == '│').unwrap();
+    let beside = |s: &[String]| -> Vec<char> {
+        s.iter()
+            .map(|l| l.chars().nth(side).unwrap_or(' '))
+            .collect()
+    };
+    let screen = client.wait_for("the thumb beside the list", |s| beside(s).contains(&'┃'));
+    let column = beside(&screen);
+    let last_thumb = column.iter().rposition(|c| *c == '┃').unwrap();
+    let below = column
+        .iter()
+        .enumerate()
+        .skip(last_thumb + 1)
+        .find(|(_, c)| **c == '│')
+        .map(|(y, _)| y)
+        .unwrap();
+    let (x, y) = (side + 1, below + 1);
+    client.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    client.wait_for("tabs above counted", |s| {
+        left(&s[1], 34).contains("▲") && left(&s[1], 34).contains("more")
+    });
+}

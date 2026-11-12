@@ -288,6 +288,16 @@ pub struct CopyMode {
     pub search: Option<(String, bool)>,
 }
 
+/// Copy mode the wheel brought up ends once the view is back at the bottom,
+/// whether the wheel or the scroll bar took it there; copy mode entered by
+/// hand stays until `q`.
+fn leave_wheel_copy_at_bottom(slot: &mut PaneSlot) {
+    if slot.copy.as_ref().is_some_and(|c| c.exit_at_bottom) && slot.pane.scrolled() == 0 {
+        slot.copy = None;
+        slot.pane.copy_end();
+    }
+}
+
 pub struct PaneSlot {
     pub pane: Pane,
     pub tab: TabId,
@@ -302,6 +312,9 @@ enum Drag {
     Select(PaneId),
     /// A pane that takes the mouse gets the drag.
     Forward(PaneId),
+    /// A scrolled-back pane's scroll bar, its thumb dragged from where
+    /// (`kit::scroll_grab`).
+    Scrollbar(PaneId, crate::ui::kit::Grab),
     /// A line between panes, moved with the mouse: its tab, the panes
     /// before and after it, whether it runs down, and where it is now.
     Border {
@@ -2989,6 +3002,34 @@ impl Server {
         }
         let drag = c.drag;
         match (m.kind, drag) {
+            (MouseKind::Drag, Some(Drag::Scrollbar(pane, grab))) => {
+                let rect = self.pane_rect(id, pane);
+                if let (Some(rect), Some(slot)) = (rect, self.panes.get_mut(&pane)) {
+                    let (total, _, visible) = slot.pane.scroll_extent();
+                    let height = usize::from(rect.height.saturating_sub(1));
+                    let row = usize::from(m.row.saturating_sub(rect.y + 1));
+                    let top = crate::ui::kit::scroll_drag(total, visible, height, row, grab);
+                    slot.pane.scroll_to_top_line(top);
+                    // Back into the history after the bottom, as the wheel
+                    // brings copy mode up again.
+                    if slot.copy.is_none() && slot.pane.scrolled() > 0 {
+                        slot.copy = Some(CopyMode {
+                            exit_at_bottom: true,
+                            search: None,
+                        });
+                    }
+                    leave_wheel_copy_at_bottom(slot);
+                    let tab = slot.tab;
+                    self.dirty_tab(tab);
+                }
+                return;
+            }
+            (MouseKind::Release, Some(Drag::Scrollbar(..))) => {
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = None;
+                }
+                return;
+            }
             (MouseKind::Drag, Some(Drag::Border { .. })) => {
                 self.drag_border(id, m);
                 return;
@@ -3081,14 +3122,32 @@ impl Server {
                     }
                     slot.pane
                         .scroll(if up { WHEEL_LINES } else { -WHEEL_LINES });
-                    if slot.copy.as_ref().is_some_and(|c| c.exit_at_bottom)
-                        && slot.pane.scrolled() == 0
-                    {
-                        slot.copy = None;
-                        slot.pane.copy_end();
-                    }
+                    leave_wheel_copy_at_bottom(slot);
                     let tab = slot.tab;
                     self.dirty_tab(tab);
+                }
+            }
+            (MouseKind::Press, MouseButton::Left) if self.on_pane_scrollbar(pane, col, row) => {
+                // A press on the bar focuses its pane, as one on its text does.
+                if self.current_pane(id) != Some(pane) {
+                    self.focus_pane(pane);
+                }
+                let mut grab = (0, 0);
+                if let Some(slot) = self.panes.get_mut(&pane) {
+                    let (total, top, visible) = slot.pane.scroll_extent();
+                    let height = usize::from(slot.pane.size().1.saturating_sub(1));
+                    let row = usize::from(row - 1);
+                    grab = crate::ui::kit::scroll_grab(total, top, visible, height, row);
+                    if let Some(to) = crate::ui::kit::scroll_press(total, top, visible, height, row)
+                    {
+                        slot.pane.scroll_to_top_line(to);
+                    }
+                    leave_wheel_copy_at_bottom(slot);
+                    let tab = slot.tab;
+                    self.dirty_tab(tab);
+                }
+                if let Some(c) = self.clients.get_mut(&id) {
+                    c.drag = Some(Drag::Scrollbar(pane, grab));
                 }
             }
             (MouseKind::Press, button) => {
@@ -3131,6 +3190,18 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// Whether a pane's cell (`col`, `row` from its top left) is on the
+    /// scroll bar it shows while scrolled back: its last column, under
+    /// the `[n]` label.
+    fn on_pane_scrollbar(&self, pane: PaneId, col: u16, row: u16) -> bool {
+        self.panes.get(&pane).is_some_and(|s| {
+            s.pane.scrolled() > 0
+                && row >= 1
+                && col + 1 == s.pane.size().0
+                && crate::ui::kit::scroll_bars()
+        })
     }
 
     /// A press on a line between panes, which a drag then moves.
@@ -3364,6 +3435,20 @@ impl Server {
                         Style::new()
                             .bg(compose::colors::ACCENT)
                             .fg(ratatui::style::Color::Indexed(232)),
+                    );
+                }
+                // Under the label, where in the scrollback the view is,
+                // gone again at the bottom.
+                if slot.pane.scrolled() > 0 && crate::ui::kit::scroll_bars() {
+                    let (total, top, visible) = slot.pane.scroll_extent();
+                    let x = rect.right().saturating_sub(1);
+                    let height = rect.height.saturating_sub(1);
+                    frame.links.clear_area(Rect::new(x, rect.y + 1, 1, height));
+                    crate::ui::kit::draw_scrollbar(
+                        &mut frame.buf,
+                        (x, rect.y + 1, height),
+                        (total, top, visible),
+                        &c.overlays.look().theme,
                     );
                 }
             }

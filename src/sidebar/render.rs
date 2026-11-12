@@ -248,10 +248,14 @@ impl Row {
 
 /// Where the list scrolled to: the line at its top, how many lines it has
 /// room for of how many, each line's tab, and the chosen tab's first line,
-/// all counted in the list of groups and tabs alone, under the header.
+/// all counted in the list of groups and tabs alone, under the header; and
+/// the sidebar's row the list starts on and how many rows it has, its "more"
+/// row among them, which the scroll bar runs down beside.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scroll {
     pub top: usize,
+    pub list_y: usize,
+    pub space: usize,
     pub room: usize,
     pub length: usize,
     /// Each line's stop: a tab, or a folded group's line.
@@ -1127,6 +1131,7 @@ pub fn sidebar_lines(
             })
             .count()
     });
+    let head_rows = head.len();
     let mut shown: Vec<Line> = head;
     let mut shown_owners: Vec<Option<Owner>> = head_owners;
     shown.extend(lines.into_iter().skip(top).take(end - top));
@@ -1158,6 +1163,8 @@ pub fn sidebar_lines(
         owners: shown_owners,
         scroll: Scroll {
             top,
+            list_y: head_rows,
+            space,
             room: space,
             length,
             owners: owners

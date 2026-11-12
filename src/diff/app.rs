@@ -106,6 +106,14 @@ const ADDED: u32 = 0x2ea043;
 const REMOVED: u32 = 0xf85149;
 const ACCENT: Color = Color::Indexed(81);
 
+/// Which of the diff's scroll bars a press is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BarDrag {
+    List,
+    Diff,
+    Answer,
+}
+
 /// The settings the diff follows, read as it opens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Options {
@@ -149,6 +157,9 @@ pub struct Options {
     /// Outside the workspace, through the desktop's clipboard too; off in
     /// the tests.
     pub clipboard: bool,
+    /// A scroll bar at the list's right edge and the diff's while they run
+    /// past the screen (scroll_bars), the diff's column kept for it.
+    pub scroll_bars: bool,
 }
 
 impl Options {
@@ -180,6 +191,7 @@ impl Options {
                 .iter()
                 .any(|s| s.key == "theme" && crate::status::theme::light_for(&s.value)),
             pane_arrows: on("pane_arrows"),
+            scroll_bars: on("scroll_bars"),
             haiku: true,
             server: crate::mux::socket::in_pane(),
             clipboard: true,
@@ -540,6 +552,9 @@ pub struct App {
     /// the list scrolls to the cursor only when the cursor has moved, so
     /// the wheel scrolls it past the cursor.
     list_followed: Option<usize>,
+    /// The scroll bar whose thumb is being dragged, the screen row its
+    /// first row is on, and where the drag started (`kit::scroll_grab`).
+    bar_drag: Option<(BarDrag, u16, kit::Grab)>,
     focus: Focus,
     /// The user has moved through the list, so a story arriving keeps the
     /// file shown.
@@ -601,6 +616,9 @@ pub struct App {
     /// Where the boxes were last drawn, for clicks outside them.
     ask_rect: Option<Rect>,
     answer_rect: Option<Rect>,
+    /// The answer window's scroll bar where it was last drawn: its column,
+    /// first row and height.
+    answer_bar: Option<(u16, u16, usize)>,
     /// Escapes to write after the frame: the clipboard's.
     pub out: Vec<u8>,
     teller: Teller,
@@ -649,6 +667,7 @@ impl App {
             list_top: 0,
             list_width: LIST_WIDTH,
             list_followed: None,
+            bar_drag: None,
             focus: Focus::List,
             moved: false,
             files: HashMap::new(),
@@ -683,6 +702,7 @@ impl App {
             buttons: Vec::new(),
             ask_rect: None,
             answer_rect: None,
+            answer_bar: None,
             out: Vec::new(),
             teller: Teller::default(),
             history: None,
@@ -1398,7 +1418,8 @@ impl App {
     }
 
     fn widths_of_alone(&self, alone: Option<bool>) -> (u16, u16) {
-        let w = self.diff_area().width;
+        let w =
+            self.diff_area().width - u16::from(self.opts.scroll_bars).min(self.diff_area().width);
         match alone {
             Some(true) => (0, w),
             Some(false) => (w, 0),
@@ -2261,6 +2282,177 @@ impl App {
         };
         let hi = (self.top + h - 1).min(n.saturating_sub(1));
         self.cur = self.cur.clamp(self.top.min(hi), hi);
+        self.moved = true;
+    }
+
+    /// The rows the diff has in all and the first shown, for its scroll
+    /// bar: the shown file's lines, or while the files read as one scroll,
+    /// every file's, one not read yet counted by its changed lines, since
+    /// the scroll never reads every file.
+    fn diff_extent(&mut self) -> (usize, usize) {
+        if !self.one_scroll() {
+            let top = self.top;
+            return (self.screen_lines().len(), top);
+        }
+        let (mut total, mut top) = (0, 0);
+        for k in 0..self.order.len() {
+            if k == self.view {
+                top = total + self.top;
+            }
+            let entry = self.order.get(k).and_then(|&i| self.entry(i));
+            let laid = entry.and_then(|e| self.lines.get(&e.key()).map(|(_, _, l)| l.len()));
+            let guess = entry.map_or(1, |e| (e.additions + e.deletions).max(1));
+            let gap = if k + 1 < self.order.len() { 2 } else { 0 };
+            total += laid.unwrap_or(guess) + gap;
+        }
+        (total, top)
+    }
+
+    /// The diff scrolled so row `to` of `diff_extent` is at the top, as
+    /// far as the scroll goes.
+    fn scroll_diff_to(&mut self, to: usize) {
+        let (_, top) = self.diff_extent();
+        if to > top {
+            self.scroll_diff(to - top, true);
+        } else if to < top {
+            self.scroll_diff(top - to, false);
+        }
+    }
+
+    /// The list's rows in all and its width, for its scroll bar.
+    fn list_extent(&self) -> (usize, u16) {
+        (
+            self.list_rows().len(),
+            self.list_width.min(self.cols.saturating_sub(10)),
+        )
+    }
+
+    /// Where a press on a scroll bar lands, the list's or the diff's, and
+    /// the row in the bar.
+    fn on_scroll_bar(&mut self, x: u16, y: u16) -> Option<(BarDrag, usize)> {
+        if !self.opts.scroll_bars || self.ask_box.is_some() {
+            return None;
+        }
+        if self.answer.is_some() {
+            let (bx, by, body) = self.answer_bar?;
+            let on = x == bx && y >= by && ((y - by) as usize) < body;
+            return on.then(|| (BarDrag::Answer, (y - by) as usize));
+        }
+        let h = self.diff_area().height as usize;
+        let (rows, w) = self.list_extent();
+        if w > 0 && x + 1 == w && rows > h {
+            return Some((BarDrag::List, y as usize));
+        }
+        let area = self.diff_area();
+        let body = area.y + self.head_height() as u16;
+        if x + 1 == area.right() && y >= body && y < area.bottom() {
+            let (total, _) = self.diff_extent();
+            if total > self.body_height() {
+                return Some((BarDrag::Diff, (y - body) as usize));
+            }
+        }
+        None
+    }
+
+    /// The first line a scroll bar's surface shows now.
+    fn bar_top(&mut self, bar: BarDrag) -> usize {
+        match bar {
+            BarDrag::List => self.list_top,
+            BarDrag::Diff => self.diff_extent().1,
+            BarDrag::Answer => self.answer.as_ref().map_or(0, |a| a.top),
+        }
+    }
+
+    /// The answer window's lines in all, its first shown and how many show.
+    fn answer_extent(&self) -> (usize, usize, usize) {
+        let total = self.answer_lines(self.answer_width()).len();
+        let top = self.answer.as_ref().map_or(0, |a| a.top);
+        (total, top, self.answer_bar.map_or(1, |(_, _, body)| body))
+    }
+
+    /// A press or a drag (`drag`, the thumb's row it was taken by) on a
+    /// scroll bar's row `row`.
+    fn scroll_bar_to(&mut self, bar: BarDrag, row: usize, drag: Option<kit::Grab>) {
+        match bar {
+            BarDrag::List => {
+                let h = self.diff_area().height as usize;
+                let (rows, _) = self.list_extent();
+                self.list_top = if let Some(grab) = drag {
+                    kit::scroll_drag(rows, h, h, row, grab)
+                } else {
+                    kit::scroll_press(rows, self.list_top, h, h, row).unwrap_or(self.list_top)
+                };
+            }
+            BarDrag::Diff => {
+                let h = self.body_height().max(1);
+                let (total, top) = self.diff_extent();
+                let to = if let Some(grab) = drag {
+                    kit::scroll_drag(total, h, h, row, grab)
+                } else {
+                    kit::scroll_press(total, top, h, h, row).unwrap_or(top)
+                };
+                // The end as the bar counts it is the diff's end, wherever
+                // reading its files would put it: the last file's last lines,
+                // read alone, as G reads only the file it goes to.
+                if to >= total.saturating_sub(h) {
+                    self.scroll_diff_to_end(h);
+                } else if to == 0 {
+                    self.scroll_diff_to_start();
+                } else {
+                    self.scroll_diff_to(to);
+                }
+            }
+            BarDrag::Answer => {
+                let (total, top, body) = self.answer_extent();
+                let to = if let Some(grab) = drag {
+                    kit::scroll_drag(total, body, body, row, grab)
+                } else {
+                    kit::scroll_press(total, top, body, body, row).unwrap_or(top)
+                };
+                // The cursor brought into the view, as the wheel does.
+                if let Some(a) = &mut self.answer {
+                    a.top = to;
+                    a.cursor = a
+                        .cursor
+                        .clamp(to, to + body - 1)
+                        .min(total.saturating_sub(1));
+                }
+            }
+        }
+    }
+
+    /// The diff scrolled to its start: in the one scroll of files, the first
+    /// file's first line with the cursor there, whatever the files between
+    /// were estimated at.
+    fn scroll_diff_to_start(&mut self) {
+        if !self.one_scroll() || self.order.is_empty() {
+            self.scroll_diff_to(0);
+            return;
+        }
+        if self.at != 0 {
+            self.cross_to(0, 0);
+        }
+        self.cur = 0;
+        (self.view, self.top) = (0, 0);
+        self.moved = true;
+    }
+
+    /// The diff scrolled to its end, `h` rows showing: in the one scroll
+    /// of files, the last file's last rows, with the cursor on its last
+    /// line, reading that file alone rather than every file before it.
+    fn scroll_diff_to_end(&mut self, h: usize) {
+        if !self.one_scroll() || self.order.is_empty() {
+            self.scroll_diff(usize::MAX / 2, true);
+            return;
+        }
+        let k = self.order.len() - 1;
+        let n = self.lines_of(k).len();
+        let last = n.saturating_sub(1);
+        if k != self.at {
+            self.cross_to(k, last);
+        }
+        self.cur = last;
+        (self.view, self.top) = (k, n.saturating_sub(h));
         self.moved = true;
     }
 
@@ -3270,6 +3462,18 @@ impl App {
             .find(|(_, r)| x >= r.x && x < r.right() && y >= r.y && y < r.bottom())
             .map(|(b, _)| *b);
         match m.kind {
+            MouseEventKind::Drag(MouseButton::Left) if self.bar_drag.is_some() => {
+                let Some((bar, from, grab)) = self.bar_drag else {
+                    return Act::Same;
+                };
+                let row = y.saturating_sub(from) as usize;
+                self.scroll_bar_to(bar, row, Some(grab));
+                return Act::Redraw;
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.bar_drag.is_some() => {
+                self.bar_drag = None;
+                return Act::Same;
+            }
             MouseEventKind::Moved | MouseEventKind::Drag(_) => {
                 if !self.opts.hover || hit == self.hover {
                     return Act::Same;
@@ -3318,6 +3522,20 @@ impl App {
         }
         if let Some(button) = hit {
             return self.press(button);
+        }
+        if let Some((bar, row)) = self.on_scroll_bar(x, y) {
+            // The press focuses the side its bar is on, as a press there does.
+            match bar {
+                BarDrag::List => self.focus = Focus::List,
+                BarDrag::Diff if self.focus == Focus::List => self.focus = self.main_side(),
+                BarDrag::Diff | BarDrag::Answer => {}
+            }
+            // The drag goes on from where the press left it, the diff's real
+            // end included, which reading files on the way can move.
+            self.scroll_bar_to(bar, row, None);
+            let top = self.bar_top(bar);
+            self.bar_drag = Some((bar, y - row as u16, (row, top)));
+            return Act::Redraw;
         }
         self.visual = None;
         // A click outside a box closes it.
@@ -3723,6 +3941,7 @@ mod tests {
             haiku: false,
             server: false,
             clipboard: false,
+            scroll_bars: false,
         }
     }
 
@@ -4705,6 +4924,66 @@ mod tests {
             screen(&mut app).iter().any(|l| l.contains("README.md")),
             "Esc shows the diff"
         );
+    }
+
+    #[test]
+    fn the_list_past_the_screen_has_a_scroll_bar_that_pages_and_drags() {
+        let (tx, _rx) = channel();
+        let mut app = App::new(
+            Options {
+                scroll_bars: true,
+                ..opts()
+            },
+            100,
+            16,
+            tx,
+        );
+        let paths: Vec<String> = (0..40).map(|i| format!("f{i:02}.txt")).collect();
+        let mut diff = String::new();
+        for p in &paths {
+            diff.push_str(&format!(
+                "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-a\n+b\n"
+            ));
+            app.give_text("L", p, Some("a\n".into()));
+            app.give_text("R", p, Some("b\n".into()));
+        }
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "R".into(),
+            entries: paths.iter().map(|p| entry(p, 'M', 1, 1)).collect(),
+            diff,
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        let shown = screen(&mut app);
+        let bar_col = |shown: &[String]| -> Vec<char> {
+            shown
+                .iter()
+                .take(16)
+                .map(|l| l.chars().nth(29).unwrap_or(' '))
+                .collect()
+        };
+        let col = bar_col(&shown);
+        assert!(col.contains(&'┃') && col.contains(&'│'), "{shown:#?}");
+        let click = |app: &mut App, kind: MouseEventKind, row: u16| {
+            app.mouse(MouseEvent {
+                kind,
+                column: 29,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        click(&mut app, MouseEventKind::Down(MouseButton::Left), 15);
+        assert!(app.list_top > 0, "a press below the thumb pages down");
+        click(&mut app, MouseEventKind::Drag(MouseButton::Left), 0);
+        assert_eq!(app.list_top, 0, "dragged back to the top");
+        click(&mut app, MouseEventKind::Up(MouseButton::Left), 0);
+        assert!(app.bar_drag.is_none());
+        app.opts.scroll_bars = false;
+        assert!(!bar_col(&screen(&mut app)).contains(&'┃'));
     }
 
     #[test]
