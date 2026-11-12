@@ -5876,6 +5876,30 @@ struct Bar {
     filter_hit: bool,
 }
 
+/// How many of a bar's names, `widths` wide with a space between, to skip
+/// so the one at `target` and the `tail` after it end inside `cols`, after
+/// the `before` columns ahead of the names and a `‹ ` once any are skipped.
+fn bar_skip(
+    widths: &[usize],
+    target: Option<usize>,
+    before: usize,
+    tail: usize,
+    cols: usize,
+) -> usize {
+    let Some(t) = target.filter(|&t| t < widths.len()) else {
+        return 0;
+    };
+    let end_of = |skip: usize| {
+        let names: usize = widths[skip..=t].iter().map(|w| w + 1).sum();
+        before + if skip > 0 { 2 } else { 0 } + names - 1 + tail
+    };
+    let mut skip = 0;
+    while skip < t && end_of(skip) > cols {
+        skip += 1;
+    }
+    skip
+}
+
 /// With UX 2.0, the bar as two rows and a rule (board 3 of the canvas):
 /// the groups that have a view, the one in front lit, then the tabs'
 /// counts; that group's views, the one in front lit and underlined, then
@@ -5933,18 +5957,31 @@ fn grouped_bar(
     head.put(" ", Style::new());
     head.spans.extend(bar.counts);
     lines.push(with_close(head, m, cols, hits));
-    let mut row = Row::default();
-    row.put(" ", Style::new());
     let names: &[usize] = if gridded {
         &in_grid
     } else {
         shown.map(|(_, held)| held.as_slice()).unwrap_or(&[])
     };
-    for &i in names {
-        let title = match i.checked_sub(1).and_then(|v| snap.views.get(v)) {
-            Some(v) => views::bar_title(v),
-            None => "Tabs",
-        };
+    let title_of = |i: usize| match i.checked_sub(1).and_then(|v| snap.views.get(v)) {
+        Some(v) => views::bar_title(v),
+        None => "Tabs",
+    };
+    // With Tab's focus on a view's name or the filter past the screen's
+    // edge, the row scrolls: the names before it give way to a ‹.
+    let (target, tail) = match m.focus {
+        Some(Focus::View(v)) => (names.iter().position(|&i| i == v), 0),
+        Some(Focus::Filter) => (names.len().checked_sub(1), 1 + spans_width(&bar.filter)),
+        _ => (None, 0),
+    };
+    let widths: Vec<usize> = names.iter().map(|&i| width(title_of(i)) + 2).collect();
+    let skip = bar_skip(&widths, target, 1, tail, cols);
+    let mut row = Row::default();
+    row.put(" ", Style::new());
+    if skip > 0 {
+        row.put("‹ ", fg(theme.dim));
+    }
+    for &i in &names[skip..] {
+        let title = title_of(i);
         let x = row.width();
         let name = if bar.jumped == Some(i) {
             vec![Span::styled(
@@ -6110,27 +6147,13 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
             Some(Focus::View(v)) => Some(v.min(labels.len() - 1)),
             _ => None,
         };
-        let end_of = |skip: usize| -> usize {
-            let t = target.unwrap_or(0);
-            let names: usize = labels[skip..=t.max(skip)]
-                .iter()
-                .map(|l| width(l) + 1)
-                .sum::<usize>();
-            width(prefix)
-                + if skip > 0 { 2 } else { 0 }
-                + names.saturating_sub(1)
-                + if m.focus == Some(Focus::Filter) {
-                    2 + spans_width(&counts) + spans_width(&filter)
-                } else {
-                    0
-                }
+        let tail = if m.focus == Some(Focus::Filter) {
+            2 + spans_width(&counts) + spans_width(&filter)
+        } else {
+            0
         };
-        let mut skip = 0;
-        if let Some(t) = target {
-            while skip < t && end_of(skip) > cols {
-                skip += 1;
-            }
-        }
+        let widths: Vec<usize> = labels.iter().map(|l| width(l)).collect();
+        let skip = bar_skip(&widths, target, width(prefix), tail, cols);
         let mut head = Row::default();
         head.put(" ", Style::new())
             .put("MISSION CONTROL", bold(ACCENT))
@@ -7554,6 +7577,61 @@ mod tests {
         m.view = 1;
         let t = texts(&screen(&m, 100, 12).0);
         assert!(t[1].starts_with("  Tabs   Map  "), "{:?}", t[1]);
+    }
+
+    fn work_views() -> Vec<View> {
+        vec![
+            list_view(ViewId::Landing, "Landing", vec![]),
+            list_view(ViewId::Autopilot, "Autopilot", vec![]),
+            list_view(ViewId::WorkMap, "Work map", vec![]),
+            list_view(ViewId::Closed, "Closed", vec![]),
+            list_view(ViewId::Sessions, "Sessions", vec![]),
+        ]
+    }
+
+    #[test]
+    fn with_ux2_a_narrow_bar_scrolls_its_views_row_to_tabs_focus() {
+        let mut m = mission(vec![tab(1, "api")], work_views());
+        m.snap.rules.ux2 = true;
+        m.snap.tab_focus = true;
+        let t = texts(&screen(&m, 48, 12).0);
+        assert!(t[1].starts_with("  Tabs   Landing "), "{:?}", t[1]);
+        assert!(!t[1].contains('‹'), "{:?}", t[1]);
+        m.focus = Some(Focus::View(5));
+        let (lines, hits) = screen(&m, 48, 12);
+        let t = texts(&lines);
+        assert!(t[1].starts_with(" ‹  Autopilot "), "{:?}", t[1]);
+        assert!(t[1].contains(" Sessions "), "{:?}", t[1]);
+        let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
+        assert!(last.x1 < 48, "{last:?}");
+        assert_eq!(
+            t[1].chars()
+                .skip(last.x0 as usize)
+                .take((last.x1 - last.x0 + 1) as usize)
+                .collect::<String>(),
+            " Sessions "
+        );
+        assert!(hits.iter().all(|h| h.spot != Spot::View(0)));
+        m.focus = Some(Focus::Filter);
+        let (lines, hits) = screen(&m, 48, 12);
+        let t = texts(&lines);
+        assert!(t[1].ends_with(" / filter"), "{:?}", t[1]);
+        let filter = hits.iter().find(|h| h.spot == Spot::Filter).unwrap();
+        assert!(filter.x1 < 48, "{filter:?}");
+    }
+
+    #[test]
+    fn a_narrow_one_row_bar_scrolls_to_tabs_focus() {
+        let mut m = mission(vec![tab(1, "api")], work_views());
+        m.snap.tab_focus = true;
+        let t = texts(&screen(&m, 60, 12).0);
+        assert!(!t[0].contains('‹'), "{:?}", t[0]);
+        m.focus = Some(Focus::View(5));
+        let (lines, hits) = screen(&m, 60, 12);
+        let t = texts(&lines);
+        assert!(t[0].contains("‹ "), "{:?}", t[0]);
+        let last = hits.iter().find(|h| h.spot == Spot::View(5)).unwrap();
+        assert!(last.x1 < 60, "{last:?}");
     }
 
     #[test]
