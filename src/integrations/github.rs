@@ -864,24 +864,12 @@ pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Rep
         Remotes::Default(repo) => (repo, None),
         Remotes::Clone { origin, upstream } => (origin, upstream),
     };
-    let branch = git(dir, &["branch", "--show-current"])
-        .await
-        .unwrap_or_default();
-    if branch.is_empty() {
+    let Some((branch, head)) = branch_and_head(dir).await else {
         return Ok(None);
-    }
-    let merge = git(dir, &["config", &format!("branch.{branch}.merge")])
-        .await
-        .unwrap_or_default();
-    let tracked = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
-    let head = if tracked.is_empty() {
-        branch.clone()
-    } else {
-        tracked.to_string()
     };
     let owner = pushed_to(dir, &branch)
         .await
-        .unwrap_or_else(|| repo.owner.clone());
+        .map_or_else(|| repo.owner.clone(), |r| r.owner);
     let prs = format!(
         "pullRequests(headRefName: $head, first: 20, orderBy: {{field: CREATED_AT, direction: DESC}}) {{ \
          nodes {{ {FIELDS} isCrossRepository headRepositoryOwner {{ login }} }} }}"
@@ -957,10 +945,86 @@ pub async fn branch_pr_by_branch(dir: &Path, source: &str) -> Result<Option<(Rep
     }))
 }
 
-// The owner of the repository a branch is pushed to: its remote's URL (the
-// remote may be a URL itself, as `gh pr checkout` sets it). `None` for a
-// branch with no remote, or one not on GitHub.
-async fn pushed_to(dir: &Path, branch: &str) -> Option<String> {
+// The branch `dir` is on and its name where it is pushed: the branch it
+// tracks there, else its own. `None` on a detached HEAD.
+async fn branch_and_head(dir: &Path) -> Option<(String, String)> {
+    let branch = git(dir, &["branch", "--show-current"])
+        .await
+        .unwrap_or_default();
+    if branch.is_empty() {
+        return None;
+    }
+    let merge = git(dir, &["config", &format!("branch.{branch}.merge")])
+        .await
+        .unwrap_or_default();
+    let tracked = merge.strip_prefix("refs/heads/").unwrap_or(&merge);
+    let head = if tracked.is_empty() {
+        branch.clone()
+    } else {
+        tracked.to_string()
+    };
+    Some((branch, head))
+}
+
+/// The branch `dir` is on as GitHub has it: the repository it is pushed to
+/// (its push remote's, else its remote's, else origin's, or the one `gh repo set-default` named)
+/// and its name there (the branch it tracks, else its own), as
+/// `branch_pr_by_branch` matches its PR. `None` on a detached HEAD.
+pub async fn pushed_branch(dir: &Path) -> Result<Option<(Repo, String)>> {
+    let repo = match remotes(dir).await? {
+        Remotes::Default(repo) => repo,
+        Remotes::Clone { origin, .. } => origin,
+    };
+    let Some((branch, head)) = branch_and_head(dir).await else {
+        return Ok(None);
+    };
+    // A push remote of its own (`branch.<name>.pushRemote`, else
+    // `remote.pushDefault`) other than the one it tracks is where `git push`
+    // sends the branch, under its own name. Otherwise it goes where it is
+    // tracked, to the branch it tracks unless `push.default` pushes every
+    // branch under its own name.
+    let own_name = matches!(
+        git(dir, &["config", "push.default"])
+            .await
+            .unwrap_or_default()
+            .as_str(),
+        "current" | "matching"
+    );
+    let tracked = git(dir, &["config", &format!("branch.{branch}.remote")])
+        .await
+        .unwrap_or_default();
+    for key in [
+        format!("branch.{branch}.pushRemote"),
+        "remote.pushDefault".into(),
+    ] {
+        let remote = git(dir, &["config", &key]).await.unwrap_or_default();
+        if remote.is_empty() {
+            continue;
+        }
+        if remote == tracked {
+            break;
+        }
+        let url = git(dir, &["remote", "get-url", "--push", &remote])
+            .await
+            .unwrap_or(remote);
+        if let Some(pushed) = parse_remote(&url) {
+            return Ok(Some((pushed, branch)));
+        }
+    }
+    let name = if own_name { branch.clone() } else { head };
+    // A branch with no remote of its own is pushed to origin, whichever
+    // repository `gh repo set-default` named.
+    let pushed = match pushed_to(dir, &branch).await {
+        Some(pushed) => pushed,
+        None => remote_repo(dir, "origin").await.unwrap_or(repo),
+    };
+    Ok(Some((pushed, name)))
+}
+
+// The repository a branch is pushed to: its remote's URL (the remote may be
+// a URL itself, as `gh pr checkout` sets it). `None` for a branch with no
+// remote, or one not on GitHub.
+async fn pushed_to(dir: &Path, branch: &str) -> Option<Repo> {
     let remote = git(dir, &["config", &format!("branch.{branch}.remote")])
         .await
         .ok()
@@ -969,7 +1033,7 @@ async fn pushed_to(dir: &Path, branch: &str) -> Option<String> {
         Ok(url) => url,
         Err(_) => remote,
     };
-    parse_remote(&url).map(|r| r.owner)
+    parse_remote(&url)
 }
 
 // The PR to show among those on the head branch, newest first: one whose

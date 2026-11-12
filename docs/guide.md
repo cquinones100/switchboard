@@ -168,7 +168,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-d` | The branch's diff against its PR's base in place of the pane, or close it |
 | `M-r` | Open the branch's PR in the browser |
 | `M-l` | Open the branch's Linear ticket in the browser |
-| `M-m` | Check whether the branch's PR is ready to merge |
+| `M-m` | Check whether the branch's PR is ready to merge, or with no PR, how its CI went on GitHub |
 | `M-F` | Search your notes, Linear, GitHub and Slack at once |
 | `M-N` | Go to Notes, wherever it is open, or open it in a tab of its own |
 | `M-e` | Notes in a pane to the right, or back in its own tab |
@@ -864,6 +864,8 @@ With GitHub turned off in Settings (Integrations, `github`), `M-v`, `M-r`, `M-m`
 
 `M-m` asks GitHub whether the branch's PR is ready to merge and answers in a box, "Reaching out to GitHub..." until it knows. A merged or closed PR says so and stops there, and so does one in the merge queue, with its place and where it stands (waiting on the queue's checks, passed and waiting its turn, merging now, or unable to merge and about to be removed). Otherwise the verdict is GitHub's own, so it agrees with the merge button: ready to merge (noting merge hooks, or optional checks not passing), or not ready because the branch is behind its base, a required review or check blocks it, it has conflicts, or it is still a draft. When GitHub hasn't worked out yet whether it can merge, it is asked again, up to three times a second apart. Under the verdict come the lines that explain it: the required checks, all checks counted by outcome, the review, conflicts, whether it is a draft, and auto-merge.
 
+A branch with no PR (one pushed before its PR is opened, the default branch of a repository that lands straight on it) gets the CI of the commit GitHub has for it instead, in the repository it is pushed to: "No PR · CI on <branch> at <commit>", then whether its checks are passing, failing (how many of all), running (how many of all), canceled (how many of all) or there are none, with all of them counted by outcome. When this tab's commit isn't the one GitHub checked, a line says the tab is that many commits ahead of it or behind it, or that its commit isn't the one GitHub checked. A branch GitHub doesn't have says so. With a check failing, "See the failing checks" is offered as for a PR; there are no conflicts or review lines, which only a PR has.
+
 The box ends with what can be done about the answer. With a check failing, "See the failing checks" opens a pane beside yours listing each one with its description and link and, for a GitHub Actions job, the last 25 lines of its log. With conflicts, "Type /resolve-conflicts into this tab's Claude" types it into the tab's Claude session and moves you there to press Enter, since what is in its prompt already can't be seen from the box. `j` and `k` (or the arrows, Tab, the wheel) move between them, Enter, Space or a click takes one, and Esc or `q` closes the box; with nothing to do, any key closes it. Each `M-m` also has mission control's PR views look again, so they agree with what it said.
 
 ### Search everything
@@ -904,7 +906,7 @@ switchboard view --log ci.log           # page a CI job's log from its end
 switchboard view --log +40 ci.log       # page it from line 40
 switchboard view +42 src/main.rs        # page any file as plain text from line 42
 switchboard pr-view [dir]               # the branch's PR description
-switchboard pr-view --checks [dir]      # the PR's failing checks, as M-m shows them
+switchboard pr-view --checks [dir]      # the PR's failing checks (the branch's, with no PR), as M-m shows them
 switchboard ticket-view [dir | ABC-123] # a ticket, by ID or from a directory's branch
 switchboard pr-image [dir]              # the branch's PR description as GitHub draws it, as images
 switchboard pr-image --ticket ABC-123   # a Linear ticket the same way

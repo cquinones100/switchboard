@@ -21,6 +21,13 @@
 //! failed or is running, since a failure can be anywhere in GitHub's list.
 //! GitHub works out mergeability lazily, so an UNKNOWN is asked again, up
 //! to three times a second apart, as pr-ready.sh did.
+//!
+//! A branch with no PR (one pushed before opening it, the default branch
+//! of a repository that lands straight on it) gets the CI of the commit
+//! GitHub has for it instead, from a second query on the branch's ref where
+//! git pushes it (`BRANCH_QUERY`), with no conflicts or review lines, which
+//! only a PR has. The commit is GitHub's, so the answer says when this tab's
+//! `HEAD` isn't it: ahead of it or behind it by some commits, or elsewhere.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -52,6 +59,15 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!, $afte
       ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) } \
       ... on StatusContext { context state targetUrl description isRequired(pullRequestNumber: $number) } \
     } } } } } } } } }";
+
+const BRANCH_QUERY: &str = "query($owner: String!, $name: String!, $qualified: String!, $after: String) { repository(owner: $owner, name: $name) { \
+    ref(qualifiedName: $qualified) { target { ... on Commit { oid statusCheckRollup { contexts(first: 100, after: $after) { \
+    checkRunCountsByState { state count } statusContextCountsByState { state count } \
+    pageInfo { hasNextPage endCursor } \
+    nodes { __typename \
+      ... on CheckRun { name status conclusion detailsUrl } \
+      ... on StatusContext { context state targetUrl description } \
+    } } } } } } } }";
 
 /// What the answer offers to do, by the number the box gives back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -374,6 +390,122 @@ pub fn answer_from(pr: &Value) -> Answer {
     Answer { lines, choices }
 }
 
+/// Where this tab's `HEAD` is against the commit GitHub has for the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Local {
+    /// The same commit.
+    Checked,
+    /// Ahead of it by this many commits.
+    Ahead(u64),
+    /// Behind it by this many commits.
+    Behind(u64),
+    /// Beside it, or nowhere git can tell.
+    Elsewhere,
+}
+
+/// The counts of `contexts` (a `statusCheckRollup`'s) by gh's bucket.
+fn bucket_counts(contexts: &Value) -> Vec<(&'static str, u64)> {
+    ["checkRunCountsByState", "statusContextCountsByState"]
+        .iter()
+        .filter_map(|k| contexts.get(*k).and_then(Value::as_array))
+        .flatten()
+        .map(|c| {
+            (
+                bucket(c.get("state").and_then(Value::as_str).unwrap_or("")),
+                c.get("count").and_then(Value::as_u64).unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+/// The answer for a branch with no PR, from the commit GitHub has for it
+/// (`checks` as `commit_checks` shapes it; `None` when GitHub has no such
+/// branch) and where this tab is against it.
+pub fn answer_from_branch(branch: &str, checks: Option<&Value>, local: Local) -> Answer {
+    let Some(checks) = checks else {
+        return Answer {
+            lines: vec![Line::from(Span::styled(
+                format!("No PR, and {branch} isn't on GitHub."),
+                bold(yellow()),
+            ))],
+            choices: Vec::new(),
+        };
+    };
+    let oid = checks
+        .pointer("/commits/nodes/0/commit/oid")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!("No PR · CI on {branch} at {}", short(oid)),
+            bold(Style::new()),
+        )),
+        Line::default(),
+    ];
+    let contexts = checks.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
+    let by_bucket = bucket_counts(&contexts);
+    let total: u64 = by_bucket.iter().map(|(_, n)| n).sum();
+    let of = |b: &str| -> u64 {
+        by_bucket
+            .iter()
+            .filter(|(k, _)| *k == b)
+            .map(|(_, n)| n)
+            .sum()
+    };
+    let (failing, running, canceled) = (of("fail"), of("pending"), of("cancel"));
+    let verdict = if total == 0 {
+        Span::styled("No checks.", bold(dim()))
+    } else if failing > 0 {
+        Span::styled(format!("Failing: {failing} of {total}."), bold(red()))
+    } else if running > 0 {
+        Span::styled(format!("Running: {running} of {total}."), bold(yellow()))
+    } else if canceled > 0 {
+        Span::styled(format!("Canceled: {canceled} of {total}."), bold(yellow()))
+    } else {
+        Span::styled("Passing.", bold(green()))
+    };
+    lines.push(Line::from(verdict));
+    if total > 0 {
+        lines.push(Line::from(vec![
+            Span::raw(format!("{:<17} ", "All checks")),
+            Span::raw(counts(by_bucket.into_iter())),
+        ]));
+    }
+    let behind = match local {
+        Local::Checked => None,
+        Local::Ahead(1) => Some("This tab is 1 commit ahead of what GitHub checked.".to_string()),
+        Local::Ahead(n) => Some(format!(
+            "This tab is {n} commits ahead of what GitHub checked."
+        )),
+        Local::Behind(1) => Some("This tab is 1 commit behind what GitHub checked.".to_string()),
+        Local::Behind(n) => Some(format!(
+            "This tab is {n} commits behind what GitHub checked."
+        )),
+        Local::Elsewhere => Some("This tab's commit isn't the one GitHub checked.".into()),
+    };
+    if let Some(behind) = behind {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(behind, yellow())));
+    }
+    let choices = if failing > 0 {
+        vec![Choice::SeeFailing]
+    } else {
+        Vec::new()
+    };
+    Answer { lines, choices }
+}
+
+/// A commit's first seven characters, as GitHub shows it.
+fn short(oid: &str) -> &str {
+    &oid[..oid.len().min(7)]
+}
+
+/// The commit `BRANCH_QUERY` found in the shape of a PR's answer, its checks
+/// at `CONTEXTS`, so the paging and the failing checks read either alike.
+fn commit_checks(commit: Value) -> Value {
+    json!({ "commits": { "nodes": [{ "commit": commit }] } })
+}
+
 /// Where the PR's checks are in M-m's answer, from the PR and from `data`.
 const CONTEXTS: &str = "/commits/nodes/0/commit/statusCheckRollup/contexts";
 /// The most pages of checks read, a thousand checks.
@@ -387,17 +519,9 @@ fn needs_rest(pr: &Value) -> bool {
     let Some(contexts) = pr.pointer(CONTEXTS) else {
         return false;
     };
-    let unsettled = ["checkRunCountsByState", "statusContextCountsByState"]
+    let unsettled = bucket_counts(contexts)
         .iter()
-        .filter_map(|k| contexts.get(*k).and_then(Value::as_array))
-        .flatten()
-        .any(|c| {
-            c.get("count").and_then(Value::as_u64).unwrap_or(0) > 0
-                && matches!(
-                    bucket(c.get("state").and_then(Value::as_str).unwrap_or("")),
-                    "fail" | "pending"
-                )
-        });
+        .any(|(b, n)| *n > 0 && matches!(*b, "fail" | "pending"));
     let more = contexts
         .pointer("/pageInfo/hasNextPage")
         .and_then(Value::as_bool)
@@ -413,16 +537,37 @@ fn with_checks(mut pr: Value, paged: github::Paged) -> Value {
     pr
 }
 
+/// What M-m reads for a tab: its branch's PR, else the branch's own CI.
+enum State {
+    /// The PR as `QUERY` gives it, and whether every check is there.
+    Pr {
+        repo: github::Repo,
+        pr: Value,
+        complete: bool,
+    },
+    /// The branch's commit on GitHub (`commit_checks`'s shape; `None` when
+    /// GitHub has no such branch), whether every check is there, and where
+    /// this tab is against it.
+    Branch {
+        repo: github::Repo,
+        branch: String,
+        checks: Option<Value>,
+        complete: bool,
+        local: Local,
+    },
+}
+
 /// The PR for `dir`'s branch as M-m's query gives it, asked again while
-/// GitHub hasn't worked out whether it can merge, with every check when
-/// any failed or is running (`needs_rest`), and whether every check is
-/// there: false when there were more than `CHECK_PAGES` pages.
-async fn pr_state(dir: &Path) -> Result<(github::Repo, Value, bool), String> {
+/// GitHub hasn't worked out whether it can merge, else the branch's own
+/// checks; either with every check when any failed or is running
+/// (`needs_rest`), and whether every check is there: false when there were
+/// more than `CHECK_PAGES` pages.
+async fn state_of(dir: &Path) -> Result<State, String> {
     let found = github::branch_pr(dir, SOURCE)
         .await
         .map_err(|e| e.to_string())?;
     let Some((repo, pr)) = found else {
-        return Err("No pull request for this branch.".into());
+        return branch_state(dir).await;
     };
     let variables = json!({ "owner": repo.owner, "name": repo.name, "number": pr.number });
     let mut answer = Value::Null;
@@ -441,27 +586,131 @@ async fn pr_state(dir: &Path) -> Result<(github::Repo, Value, bool), String> {
             break;
         }
     }
+    let (pr, complete) = every_check(answer, QUERY, &variables, "/repository/pullRequest").await?;
+    Ok(State::Pr { repo, pr, complete })
+}
+
+/// `state_of` for a branch with no PR: the checks of the commit GitHub has
+/// for it, in the repository it is pushed to.
+async fn branch_state(dir: &Path) -> Result<State, String> {
+    let pushed = github::pushed_branch(dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some((repo, branch)) = pushed else {
+        return Err("No pull request for this branch.".into());
+    };
+    let variables = json!({
+        "owner": repo.owner, "name": repo.name,
+        "qualified": format!("refs/heads/{branch}"),
+    });
+    let data = github::graphql(BRANCH_QUERY, variables.clone(), SOURCE)
+        .await
+        .map_err(|e| e.to_string())?;
+    let Some(commit) = data
+        .pointer("/repository/ref/target")
+        .filter(|t| t.get("oid").is_some())
+        .cloned()
+    else {
+        return Ok(State::Branch {
+            repo,
+            branch,
+            checks: None,
+            complete: true,
+            local: Local::Checked,
+        });
+    };
+    let oid = commit
+        .get("oid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let (checks, complete) = every_check(
+        commit_checks(commit),
+        BRANCH_QUERY,
+        &variables,
+        "/repository/ref/target",
+    )
+    .await?;
+    let local = local_against(dir, &oid).await;
+    Ok(State::Branch {
+        repo,
+        branch,
+        checks: Some(checks),
+        complete,
+        local,
+    })
+}
+
+/// `answer` (in a PR's shape) with every check read when `needs_rest` says
+/// they are needed, `query` asked again for the pages after the first, its
+/// checks at `at` in the query's data; and whether every check is there.
+async fn every_check(
+    answer: Value,
+    query: &str,
+    variables: &Value,
+    at: &str,
+) -> Result<(Value, bool), String> {
     if !needs_rest(&answer) {
-        return Ok((repo, answer, true));
+        return Ok((answer, true));
     }
     let first = answer.pointer(CONTEXTS).cloned().unwrap_or(Value::Null);
-    let paged = github::rest_of(
-        QUERY,
-        &variables,
-        &format!("/repository/pullRequest{CONTEXTS}"),
-        &first,
-        CHECK_PAGES,
-        SOURCE,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    // A branch's commit is at the query's `target`, its checks right under
+    // it, where a PR's are under its last commit.
+    let contexts = if at.ends_with("/target") {
+        format!("{at}/statusCheckRollup/contexts")
+    } else {
+        format!("{at}{CONTEXTS}")
+    };
+    let paged = github::rest_of(query, variables, &contexts, &first, CHECK_PAGES, SOURCE)
+        .await
+        .map_err(|e| e.to_string())?;
     let complete = paged.complete;
-    Ok((repo, with_checks(answer, paged), complete))
+    Ok((with_checks(answer, paged), complete))
+}
+
+/// Where this tab's `HEAD` is against `oid`, the commit GitHub has for the
+/// branch: the commit from git's files, and only when it differs, git asked
+/// how far apart they are.
+async fn local_against(dir: &Path, oid: &str) -> Local {
+    let head = crate::tabs::git::head_commit(dir)
+        .and_then(|h| h.split_whitespace().nth(1).map(str::to_string));
+    if head.as_deref() == Some(oid) {
+        return Local::Checked;
+    }
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.arg("-C")
+        .arg(dir)
+        .args(["--no-optional-locks", "rev-list", "--left-right", "--count"])
+        .arg(format!("{oid}...HEAD"));
+    let Ok(output) = util::run_async(&mut cmd, Some(Duration::from_secs(10))).await else {
+        return Local::Elsewhere;
+    };
+    if !output.status.success() {
+        return Local::Elsewhere;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut parts = text.split_whitespace().map(|n| n.parse::<u64>().ok());
+    match (parts.next().flatten(), parts.next().flatten()) {
+        (Some(0), Some(0)) => Local::Checked,
+        (Some(0), Some(ahead)) => Local::Ahead(ahead),
+        (Some(behind), Some(0)) => Local::Behind(behind),
+        _ => Local::Elsewhere,
+    }
 }
 
 /// M-m's answer for `dir`, or why there is none.
 pub async fn check(dir: PathBuf) -> Result<Answer, String> {
-    let (_, pr, complete) = pr_state(&dir).await?;
+    let (pr, complete) = match state_of(&dir).await? {
+        State::Pr { pr, complete, .. } => (pr, complete),
+        // GitHub's counts are whole, and a branch has no required checks to
+        // count from the list.
+        State::Branch {
+            branch,
+            checks,
+            local,
+            ..
+        } => return Ok(answer_from_branch(&branch, checks.as_ref(), local)),
+    };
     let mut answer = answer_from(&pr);
     if !complete {
         answer.lines.push(Line::from(Span::styled(
@@ -480,23 +729,45 @@ static STAMP: LazyLock<Regex> =
 /// a GitHub Actions job's last 25 lines of log, as pr-ready.sh's
 /// `failing` showed them in less.
 pub async fn failing_markdown(dir: &Path) -> Result<String, String> {
-    let (repo, pr, complete) = pr_state(dir).await?;
-    Ok(failing_text(&repo, &pr, complete).await)
+    Ok(match state_of(dir).await? {
+        State::Pr { repo, pr, complete } => {
+            let of = format!(
+                "#{}",
+                pr.get("number").map(util::js_string).unwrap_or_default()
+            );
+            failing_text(&repo, &of, &pr, complete).await
+        }
+        State::Branch {
+            repo,
+            branch,
+            checks: Some(checks),
+            complete,
+            ..
+        } => {
+            let oid = checks
+                .pointer("/commits/nodes/0/commit/oid")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let of = format!("`{branch}` at `{}`", short(oid));
+            failing_text(&repo, &of, &checks, complete).await
+        }
+        State::Branch { branch, .. } => {
+            return Err(format!("No PR, and {branch} isn't on GitHub."));
+        }
+    })
 }
 
-/// `failing_markdown`'s text for the PR as `pr_state` read it: when GitHub
-/// had more checks than were read, it ends saying so rather than that
-/// nothing is failing.
-async fn failing_text(repo: &github::Repo, pr: &Value, complete: bool) -> String {
+/// `failing_markdown`'s text for the checks as `state_of` read them (a PR's,
+/// or a branch's commit in its shape), headed with what they are `of`: when
+/// GitHub had more checks than were read, it ends saying so rather than
+/// that nothing is failing.
+async fn failing_text(repo: &github::Repo, of: &str, pr: &Value, complete: bool) -> String {
     let nodes: Vec<Value> = pr
-        .pointer("/commits/nodes/0/commit/statusCheckRollup/contexts/nodes")
+        .pointer(&format!("{CONTEXTS}/nodes"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let mut out = format!(
-        "# Failing checks of #{}\n\n",
-        pr.get("number").map(util::js_string).unwrap_or_default()
-    );
+    let mut out = format!("# Failing checks of {of}\n\n");
     let mut any = false;
     for node in nodes.iter().filter(|n| check_bucket(n) == "fail") {
         any = true;
@@ -885,10 +1156,10 @@ mod tests {
             owner: "acme".into(),
             name: "w".into(),
         };
-        let text = util::block_on(failing_text(&repo, &pr, true));
+        let text = util::block_on(failing_text(&repo, "#12", &pr, true));
         assert!(text.contains("## e2e"), "{text}");
         assert!(!text.contains("No check is failing"), "{text}");
-        let text = util::block_on(failing_text(&repo, &pr, false));
+        let text = util::block_on(failing_text(&repo, "#12", &pr, false));
         assert!(
             text.ends_with("## e2e\n\n_And more checks GitHub didn't send._\n"),
             "{text}"
@@ -900,6 +1171,100 @@ mod tests {
             .and_then(Value::as_array)
             .cloned()
             .unwrap()
+    }
+
+    fn branch(runs: &[(&str, &str)]) -> Value {
+        let nodes: Vec<Value> = runs
+            .iter()
+            .map(|(name, conclusion)| match *conclusion {
+                "RUNNING" => json!({ "__typename": "CheckRun", "name": name, "status": "IN_PROGRESS", "conclusion": null }),
+                c => json!({ "__typename": "CheckRun", "name": name, "status": "COMPLETED", "conclusion": c }),
+            })
+            .collect();
+        let by: Vec<Value> = nodes
+            .iter()
+            .map(|n| {
+                let state = n["conclusion"].as_str().unwrap_or("IN_PROGRESS");
+                json!({ "state": state, "count": 1 })
+            })
+            .collect();
+        commit_checks(json!({
+            "oid": "abcdef1234567890",
+            "statusCheckRollup": { "contexts": {
+                "checkRunCountsByState": by, "statusContextCountsByState": [], "nodes": nodes,
+            } },
+        }))
+    }
+
+    #[test]
+    fn a_branch_with_no_pr_says_how_its_ci_went() {
+        let failing = branch(&[("test", "FAILURE"), ("lint", "SUCCESS"), ("e2e", "RUNNING")]);
+        let answer = answer_from_branch("main", Some(&failing), Local::Checked);
+        let text = answer.text();
+        assert!(
+            text.starts_with("No PR · CI on main at abcdef1\n\nFailing: 1 of 3."),
+            "{text}"
+        );
+        assert!(
+            text.contains("All checks        1 pass, 1 fail, 1 pending"),
+            "{text}"
+        );
+        assert!(!text.contains("GitHub checked"), "{text}");
+        assert_eq!(answer.choices, vec![Choice::SeeFailing]);
+
+        let running = branch(&[("lint", "SUCCESS"), ("e2e", "RUNNING")]);
+        let answer = answer_from_branch("main", Some(&running), Local::Ahead(2));
+        assert!(
+            answer.text().contains("Running: 1 of 2."),
+            "{}",
+            answer.text()
+        );
+        assert!(
+            answer
+                .text()
+                .ends_with("This tab is 2 commits ahead of what GitHub checked.")
+        );
+        assert!(answer.choices.is_empty());
+
+        let canceled = branch(&[("lint", "SUCCESS"), ("e2e", "CANCELLED")]);
+        let answer = answer_from_branch("main", Some(&canceled), Local::Checked);
+        assert!(
+            answer.text().contains("Canceled: 1 of 2."),
+            "{}",
+            answer.text()
+        );
+
+        let passing = branch(&[("lint", "SUCCESS")]);
+        let answer = answer_from_branch("main", Some(&passing), Local::Elsewhere);
+        assert!(answer.text().contains("Passing."), "{}", answer.text());
+        assert!(
+            answer
+                .text()
+                .ends_with("This tab's commit isn't the one GitHub checked.")
+        );
+
+        let none = commit_checks(json!({ "oid": "abcdef1", "statusCheckRollup": null }));
+        let answer = answer_from_branch("main", Some(&none), Local::Checked);
+        assert!(answer.text().ends_with("No checks."), "{}", answer.text());
+
+        let missing = answer_from_branch("topic", None, Local::Checked);
+        assert_eq!(missing.text(), "No PR, and topic isn't on GitHub.");
+        assert!(missing.choices.is_empty());
+    }
+
+    #[test]
+    fn a_branch_s_failing_checks_are_headed_with_its_commit() {
+        let repo = github::Repo {
+            owner: "acme".into(),
+            name: "w".into(),
+        };
+        let checks = branch(&[("test", "FAILURE"), ("lint", "SUCCESS")]);
+        let text = util::block_on(failing_text(&repo, "`main` at `abcdef1`", &checks, true));
+        assert!(
+            text.starts_with("# Failing checks of `main` at `abcdef1`\n\n## test\n"),
+            "{text}"
+        );
+        assert!(!text.contains("lint"), "{text}");
     }
 
     #[test]

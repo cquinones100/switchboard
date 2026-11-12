@@ -381,6 +381,71 @@ mod with_github {
         client.wait_text("https://ci.example/9");
     }
 
+    /// A stand-in for GitHub with no PR on any branch, and feature-x's
+    /// commit failing a check whose job's log ends in the failure.
+    fn branch_github() -> Fake {
+        Fake::github("test-token", |request| {
+            if request.target == "/repos/acme/widgets/actions/jobs/5/logs" {
+                return Some(Reply::bytes(
+                    200,
+                    "text/plain",
+                    "2026-11-11T10:00:00.0000000Z running\n2026-11-11T10:00:01.0000000Z FAIL login::token\n",
+                ));
+            }
+            if request.path() != "/graphql" {
+                return None;
+            }
+            let body = request.json();
+            let asked = body["query"].as_str().unwrap_or("");
+            let answer = if asked.contains("pullRequests") {
+                json!({"data": {"repository": {"pullRequests": {"nodes": []}}}})
+            } else if asked.contains("ref(qualifiedName") {
+                assert_eq!(body["variables"]["qualified"], "refs/heads/feature-x");
+                json!({"data": {"repository": {"ref": {"target": {
+                    "oid": "0123456789abcdef0123456789abcdef01234567",
+                    "statusCheckRollup": {"contexts": {
+                        "checkRunCountsByState": [{"state": "SUCCESS", "count": 2}, {"state": "FAILURE", "count": 1}],
+                        "statusContextCountsByState": [],
+                        "pageInfo": {"hasNextPage": false, "endCursor": null},
+                        "nodes": [
+                            {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": ""},
+                            {"__typename": "CheckRun", "name": "docs", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": ""},
+                            {"__typename": "CheckRun", "name": "tests", "status": "COMPLETED", "conclusion": "FAILURE",
+                             "detailsUrl": "https://github.com/acme/widgets/actions/runs/77/job/5"}
+                        ]
+                    }}
+                }}}}})
+            } else {
+                return None;
+            };
+            Some(Reply::json(200, answer))
+        })
+    }
+
+    #[test]
+    fn m_m_with_no_pr_shows_the_branch_s_ci() {
+        let fake = branch_github();
+        let server = TestServer::start_with_env(&[
+            ("GH_TOKEN", "test-token"),
+            ("SWITCHBOARD_GITHUB_GRAPHQL", &fake.graphql_url()),
+            ("SWITCHBOARD_GITHUB_API", &fake.url),
+        ]);
+        settings(&server, json!({"linear": false}));
+        let work = widgets(&server);
+        let mut client = server.attach(140, 36);
+        client.wait_text("$");
+        cd(&server, &mut client, &work);
+
+        client.send(b"\x1bm");
+        client.wait_text("No PR · CI on feature-x at 0123456");
+        client.wait_text("Failing: 1 of 3.");
+        client.wait_text("This tab's commit isn't the one GitHub checked.");
+        client.wait_text("See the failing checks");
+        client.send(b"\r");
+        client.wait_text("Failing checks of");
+        client.wait_text("FAIL login::token");
+    }
+
     #[test]
     fn m_v_counts_an_open_thread_past_the_first_page() {
         let fake = paged_github();

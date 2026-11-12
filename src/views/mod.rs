@@ -212,7 +212,7 @@ impl Command {
                 "The ticket ID comes from the branch's name, else the tab's. With a workspace written in linear.json the link is made at once; without, Linear is asked where the ticket is."
             }
             Command::PrReady => {
-                "The verdict is GitHub's own, so it agrees with the merge button, with the required checks, review, conflicts and auto-merge under it. The box offers to show the failing checks or have the tab's Claude resolve conflicts."
+                "The verdict is GitHub's own, so it agrees with the merge button, with the required checks, review, conflicts and auto-merge under it. The box offers to show the failing checks or have the tab's Claude resolve conflicts. A branch with no PR gets its own CI on GitHub instead."
             }
             Command::Search => {
                 "Each source's results show as it answers, Slack's through Claude's connector about 15 seconds after the rest; notes are read on this computer and sent nowhere. Ctrl-O opens a result in the browser instead."
