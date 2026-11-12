@@ -275,6 +275,7 @@ fn project_skills() -> Vec<(String, String)> {
 fn every_project_skill_is_named_after_its_folder_has_a_description_and_never_ships() {
     let all = project_skills();
     assert!(all.iter().any(|(name, _)| name == "review-pr"));
+    assert!(all.iter().any(|(name, _)| name == "design-docs"));
     let shipped = switchboard::setup::skills::shipped();
     let named = regex::Regex::new(r"`((?:src|assets|tests|docs|\.claude)/[^`\s]+)`").unwrap();
     for (name, text) in all {

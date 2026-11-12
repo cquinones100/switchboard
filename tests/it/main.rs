@@ -16,6 +16,7 @@ mod claude_here;
 mod claude_reply;
 mod codex_review;
 mod demo;
+mod design_docs;
 mod diff;
 mod headless;
 mod land_lock;

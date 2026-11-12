@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Slack fixture</title><script src="./support.js"></script></head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+.board{width:420px;height:880px;box-sizing:border-box;background:#0b0c12;position:relative;font-family:-apple-system,'Helvetica Neue',sans-serif}
+.phone{position:absolute;left:10px;top:12px;width:400px;height:856px;border-radius:52px;background:#000}
+.screen{position:absolute;inset:8px;border-radius:44px;overflow:hidden;background:#1a1d21;color:#d1d2d3;padding:60px 20px;font-size:15px;line-height:21px}
+.msg b{color:#fff}
+</style>
+</helmet>
+<div class="board"><div class="phone"><div class="screen">
+<div class="msg"><b>Switchboard</b> 9:40 AM<br>🤖 Tab 2, stable note IDs is waiting on you.</div>
+<div class="msg"><b>Alex</b> 2:05 PM<br>land it on main once the review loop is clean</div>
+</div></div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":420,"height":880}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>
