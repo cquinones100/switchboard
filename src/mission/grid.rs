@@ -1,6 +1,6 @@
 //! Several of mission control's views at once (board 11 of the UX 2.0
-//! canvas, new with the port, with no tmux-version file behind it): `=`
-//! opens the "Views at once" box (`views_box`, board 32), whose Enter shows
+//! canvas, new with the port, with no tmux-version file behind it): a
+//! view's `m` menu's "Several views at once…" opens the "Views at once" box (`views_box`, board 32), whose Enter shows
 //! two to four views under the bar in a layout (2 × 2, one beside two
 //! stacked, or side by side), each under a label with its count, and the
 //! one with the focus taking the keys as the view in front does alone.
@@ -8,7 +8,7 @@
 //! What is picked is kept by each view's key (`View::key`, "tabs" for
 //! the cards, the same whatever its title says), so a view turned on or off between two draws leaves the
 //! others in their places, and saved in the state directory
-//! (`mission-grid.json`), so the next `=`, after a restart too, starts
+//! (`mission-grid.json`), so the next time it opens, after a restart too, starts
 //! from it. The split of the screen is a plain function (`split`): the
 //! cells' columns stretch by board 45's weights through `kit::columns`,
 //! none under `CELL_MIN`, and a layout whose columns don't fit falls back

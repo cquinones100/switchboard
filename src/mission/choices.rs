@@ -102,6 +102,11 @@ pub enum Do {
     /// Every notification shown put away, each by its source and its own
     /// item, as dismissing it alone would.
     DismissAll(Vec<(String, Item)>),
+    /// A Slack message's video played or picture shown, the thread's next
+    /// each time it is picked again.
+    SlackPlay(Box<Item>),
+    /// The Work map's repository folded, the cursor on its heading.
+    FoldRepo(String),
     /// A closed tab opened again.
     Reopen(String),
     RemoveClosed(String),
@@ -145,6 +150,22 @@ pub enum Do {
         tab: TabId,
         pid: u32,
         name: String,
+    },
+    /// A waiting tab's question answered with one of its options, as its
+    /// number typed into the tab.
+    AnswerWith {
+        tab: TabId,
+        reply: String,
+    },
+    /// The chosen card's screen in its place on the Tabs view, or back.
+    CardScreen(TabId),
+    /// A Settings row changed: an on/off flipped, a choice to the next, a
+    /// file of yours or a repository's landing typed or picked.
+    Change(Box<Item>),
+    /// A file opened in your editor in a tab of its own.
+    EditFile {
+        dir: PathBuf,
+        file: String,
     },
 }
 
@@ -791,6 +812,13 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                     Do::LeaveQueue(root.clone()),
                 ));
             }
+            if l["record"]["output"].is_object() {
+                out.push(choice(
+                    'o',
+                    "Read all of its last output in a pane beside",
+                    Do::ReadOutput(PathBuf::from(text(l, "/output"))),
+                ));
+            }
             out.push(choice(
                 'y',
                 "Copy its directory",
@@ -876,27 +904,48 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
                 ));
             }
         }
+        // Board 54's order, each with its key: joining first, so Enter twice
+        // joins, then the answers its invitation takes, then the event in
+        // Google Calendar and its call's link.
         ViewId::Calendar => {
             let event: Option<CalEvent> = serde_json::from_value(item.data.clone()).ok();
             if let Some(e) = event {
-                // The keys the view takes without the menu: o joins.
+                let meet = e
+                    .join
+                    .as_deref()
+                    .is_some_and(|j| j.contains("meet.google.com"));
                 if let Some(join) = &e.join {
-                    out.push(choice('o', "Join its call", Do::Open(join.clone())));
+                    let label = if meet {
+                        "Join the Meet"
+                    } else {
+                        "Join its call"
+                    };
+                    out.push(choice('o', label, Do::Open(join.clone())));
+                }
+                let offered = calendar::rsvp_choices(&e);
+                for (r, key, label) in [
+                    (Rsvp::Yes, 'y', "Going"),
+                    (Rsvp::No, 'n', "Not going"),
+                    (Rsvp::Maybe, 'm', "Maybe"),
+                ] {
+                    if offered.contains(&r) {
+                        out.push(choice(key, label, Do::Rsvp(Box::new(e.clone()), r)));
+                    }
                 }
                 if let Some(link) = &e.link {
                     out.push(choice(
                         'g',
-                        "Open it in Google Calendar",
+                        "Open in Google Calendar",
                         Do::Open(link.clone()),
                     ));
                 }
-                for r in calendar::rsvp_choices(&e) {
-                    let (key, label) = r.choice();
-                    out.push(choice(
-                        key.chars().next().unwrap_or('r'),
-                        label,
-                        Do::Rsvp(Box::new(e.clone()), r),
-                    ));
+                if let Some(join) = &e.join {
+                    let label = if meet {
+                        "Copy the Meet link"
+                    } else {
+                        "Copy its call's link"
+                    };
+                    out.push(choice('c', label, Do::Copy(join.clone())));
                 }
                 for (i, r) in e.refs.iter().enumerate() {
                     if let Some(url) = &r.url {
@@ -973,9 +1022,16 @@ pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -
             }
             out.extend(copy);
         }
-        ViewId::Notifications => return notice_choices(item, shown, ctx),
-        // Enter presses a key itself, with no menu (`mission_enter`).
-        ViewId::Keys => {}
+        ViewId::Notifications => return notice_choices(item, ctx),
+        // A workspace key pressed, as Enter did before its menu; an
+        // app's own key has none (`mission_enter` says where it is).
+        ViewId::Keys => {
+            if let Some(action) = super::keymap::press_of(item) {
+                out.push(choice('p', "Press it here", Do::Press(action)));
+            }
+        }
+        // A setting's are the server's, which reads the settings file.
+        ViewId::Settings => {}
         _ => out = target_choices(item, ctx),
     }
     out
@@ -1071,13 +1127,11 @@ pub fn puts_away(act: &Do) -> bool {
 /// the notifications being put away one at a time; for a kind no view lists,
 /// what it leads to (`notice_leads`). Then putting it away: the view's own
 /// dismissing where its menu has one (a Slack message's, worded as there),
-/// else "Dismiss it", and, with more than one of `shown` (the notifications
-/// the sidebar shows) to put away, dismissing every one of them. A
-/// suggestion has its habit's choices alone, and is left out of dismissing
-/// every one, its choices saying what becomes of it. Whatever is picked but
-/// a suggestion's, the notification is dismissed after, since it was dealt
-/// with (`dismisses`).
-pub fn notice_choices(item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice> {
+/// else "Dismiss it" (dismissing every one shown is the view's own menu's,
+/// `dismiss_all`). A suggestion has its habit's choices alone. Whatever is
+/// picked but a suggestion's, the notification is dismissed after, since it
+/// was dealt with (`dismisses`).
+pub fn notice_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     let (source, id) = notice_of(item);
     if source == "habits" {
         return (ctx.habit)(&id)
@@ -1120,15 +1174,17 @@ pub fn notice_choices(item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice>
             },
         ));
     }
-    let every_one: Vec<(String, Item)> = shown.iter().filter_map(dismisses).collect();
-    if every_one.len() > 1 {
-        out.push(choice(
-            'X',
-            "Dismiss every notification shown",
-            Do::DismissAll(every_one),
-        ));
-    }
     out
+}
+
+/// "Dismiss every notification shown", of the Notifications view's and
+/// window's own menus (`m`), never of one notification's, since it acts on
+/// every one: every one of `shown` (the notifications the sidebar shows)
+/// put away as dismissing it alone would, suggestions left to their own
+/// choices; none when there is nothing to put away.
+pub fn dismiss_all(shown: &[Item]) -> Option<Do> {
+    let every_one: Vec<(String, Item)> = shown.iter().filter_map(dismisses).collect();
+    (!every_one.is_empty()).then_some(Do::DismissAll(every_one))
 }
 
 /// What a menu shows above an item's choices in a view: a Slack message
@@ -1480,7 +1536,7 @@ mod tests {
             habit: &habit,
         };
         let suggestion = Item::new("habits\tkey:M-d", "Press M-d");
-        let choices = notice_choices(&suggestion, &[], &c);
+        let choices = notice_choices(&suggestion, &c);
         assert_eq!(choices[0].label, "Got key:M-d");
         // The next meeting offers what its event's menu in the Calendar
         // view does, then putting it away; every pick dismisses it after.
@@ -1489,10 +1545,10 @@ mod tests {
             .data(json!({ "kind": "meeting", "event": {
                 "title": "Standup", "join": "https://meet.example/x",
                 "link": "https://calendar.example/e" } }));
-        let choices = notice_choices(&meeting, &[], &c);
-        assert_eq!(keys(&choices), "ogx");
+        let choices = notice_choices(&meeting, &c);
+        assert_eq!(keys(&choices), "ogcx");
         assert_eq!(choices[0].act, Do::Open("https://meet.example/x".into()));
-        assert!(matches!(&choices[2].act, Do::Dismiss { source, .. } if source == "meeting"));
+        assert!(matches!(&choices[3].act, Do::Dismiss { source, .. } if source == "meeting"));
         let (source, own) = dismisses(&meeting).expect("dismissed after");
         assert_eq!((source.as_str(), own.id.as_str()), ("meeting", "m1"));
         assert_eq!(dismisses(&suggestion), None, "a suggestion's choices say");
@@ -1500,7 +1556,7 @@ mod tests {
         let inbox = Item::new("inbox\tn1", "AB-3 Do it")
             .target(Target::Url("https://linear.app/x/issue/AB-3".into()))
             .data(json!({ "ticket": "AB-3", "notification": "n1" }));
-        let choices = notice_choices(&inbox, &[], &c);
+        let choices = notice_choices(&inbox, &c);
         assert_eq!(keys(&choices), "wsDvoyrx");
         assert!(matches!(&choices[7].act, Do::Dismiss { source, .. } if source == "inbox"));
         // A Slack message offers the Slack view's menu, its dismissing
@@ -1509,7 +1565,7 @@ mod tests {
             .target(Target::Url("https://slack.example/m".into()))
             .data(json!({ "kind": "dm", "old": false,
                 "message": { "channel": "D1", "ts": "1.5" } }));
-        let choices = notice_choices(&message, &[], &c);
+        let choices = notice_choices(&message, &c);
         assert_eq!(
             choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
             [
@@ -1523,35 +1579,27 @@ mod tests {
         assert_eq!(choices[2].act, Do::SlackDismiss(vec![own]));
         // One with no message to dismiss by keeps the plain way.
         let bare = Item::new("slack\tD1:1.6", "DM Ada · Slack");
-        assert_eq!(keys(&notice_choices(&bare, &[], &c)), "x");
-        // With more than one shown to put away, every one can go at once,
-        // suggestions left to their own choices.
+        assert_eq!(keys(&notice_choices(&bare, &c)), "x");
+        // Every one shown goes at once from the view's own menu, never a
+        // notification's, suggestions left to their own choices.
         let shown = [message.clone(), inbox.clone(), suggestion.clone()];
-        let every_one = Do::DismissAll(vec![
-            dismisses(&message).expect("a message"),
-            dismisses(&inbox).expect("an Inbox item"),
-        ]);
         for notice in [&message, &inbox] {
-            let choices = notice_choices(notice, &shown, &c);
-            let last = choices.last().expect("choices");
-            assert_eq!(
-                (last.key, last.label.as_str()),
-                ('X', "Dismiss every notification shown")
+            assert!(
+                !notice_choices(notice, &c)
+                    .iter()
+                    .any(|c| matches!(c.act, Do::DismissAll(_)))
             );
-            assert_eq!(last.act, every_one);
-            assert!(puts_away(&last.act));
         }
-        assert!(
-            !notice_choices(&suggestion, &shown, &c)
-                .iter()
-                .any(|c| matches!(c.act, Do::DismissAll(_)))
-        );
-        let one = [inbox.clone(), suggestion.clone()];
+        let all = dismiss_all(&shown).expect("two to put away");
         assert_eq!(
-            keys(&notice_choices(&inbox, &one, &c)),
-            "wsDvoyrx",
-            "one alone"
+            all,
+            Do::DismissAll(vec![
+                dismisses(&message).expect("a message"),
+                dismisses(&inbox).expect("an Inbox item"),
+            ])
         );
+        assert!(puts_away(&all));
+        assert_eq!(dismiss_all(std::slice::from_ref(&suggestion)), None);
     }
 
     // A view's new choice reaches its notifications by itself: for every
@@ -1625,17 +1673,17 @@ mod tests {
                     },
                 ));
             }
-            assert_eq!(notice_choices(&notice, &[], &c), in_its_view, "{source}");
+            assert_eq!(notice_choices(&notice, &c), in_its_view, "{source}");
             assert!(dismisses(&notice).is_some(), "{source} is put away after");
         }
         assert_eq!(with_a_view, 5);
         // A kind no view lists leads somewhere of its own and can be put away.
         let said = Item::new("autopilot\tsaid", "Nothing left to open");
-        let choices = notice_choices(&said, &[], &c);
+        let choices = notice_choices(&said, &c);
         assert_eq!(keys(&choices), "ox");
         assert!(matches!(&choices[1].act, Do::Dismiss { source, .. } if source == "autopilot"));
         let closed = Item::new("landed\tabc", "Landed: Make the thing");
-        assert_eq!(keys(&notice_choices(&closed, &[], &c)), "x");
+        assert_eq!(keys(&notice_choices(&closed, &c)), "x");
     }
 
     // The menu's body is the view's rule for the item, wherever it is opened.
@@ -1671,6 +1719,31 @@ mod tests {
     }
 
     #[test]
+    fn a_calendar_events_menu_joins_first_then_google_calendar_and_its_link() {
+        let tabs: Vec<TabModel> = Vec::new();
+        let repo = |_: &Path| Vec::new();
+        let c = ctx(&tabs, &repo);
+        let event = Item::new("e1", "Standup").data(json!({
+            "title": "Standup", "you": "yours",
+            "join": "https://meet.google.com/abc", "link": "https://calendar.example/e" }));
+        let choices = item_choices(&ViewId::Calendar, &event, &[], &c);
+        let labels: Vec<&str> = choices.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Join the Meet",
+                "Open in Google Calendar",
+                "Copy the Meet link"
+            ]
+        );
+        assert_eq!(keys(&choices), "ogc");
+        assert_eq!(
+            choices[2].act,
+            Do::Copy("https://meet.google.com/abc".into())
+        );
+    }
+
+    #[test]
     fn a_work_map_row_offers_its_diff_and_lazygit_and_merged_work_is_removed() {
         let tabs: Vec<TabModel> = vec![tab(3, "AB-1: Fix it")];
         let repo = |_: &Path| Vec::new();
@@ -1702,13 +1775,13 @@ mod tests {
         let c = ctx(&tabs, &repo);
         let note = Item::new("new-notes\tnote:Meetings/Standup.md", "Standup")
             .data(json!({ "kind": "note", "path": "Meetings/Standup.md" }));
-        let choices = notice_choices(&note, &[], &c);
+        let choices = notice_choices(&note, &c);
         assert_eq!(keys(&choices), "ox");
         assert_eq!(choices[0].label, "Open it in Notes");
         assert_eq!(choices[0].act, Do::OpenNote("Meetings/Standup.md".into()));
         let change = Item::new("calendar\tcalendar:k1", "Standup moved to 3pm")
             .data(json!({ "kind": "calendar-change", "key": "k1" }));
-        let choices = notice_choices(&change, &[], &c);
+        let choices = notice_choices(&change, &c);
         assert_eq!(keys(&choices), "ox");
         assert_eq!(choices[0].act, Do::OpenView("calendar".into()));
         assert_eq!(notice_opens("slack", &change), None);
@@ -1723,7 +1796,7 @@ mod tests {
         let c = ctx(&tabs, &repo);
         let landed = Item::new("autolanded\tabc1234", "Landed abc1234: Make the thing")
             .data(json!({ "tab": "@3" }));
-        let choices = notice_choices(&landed, &[], &c);
+        let choices = notice_choices(&landed, &c);
         assert_eq!(
             choices.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(),
             ["Go to its tab", "Dismiss it"]
@@ -1731,6 +1804,6 @@ mod tests {
         assert_eq!(choices[0].act, Do::GoTo(TabId(3)));
         let gone =
             Item::new("autolanded\tdef5678", "Landed def5678: Other").data(json!({ "tab": "@9" }));
-        assert_eq!(keys(&notice_choices(&gone, &[], &c)), "x", "its tab closed");
+        assert_eq!(keys(&notice_choices(&gone, &c)), "x", "its tab closed");
     }
 }

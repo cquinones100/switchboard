@@ -254,7 +254,7 @@ pub fn month(
     );
     let mut head = kit::label(&name, Tone::Text, None, month_w, theme);
     head.truncate(2);
-    let keys = kit::hints(&[("H L", "month"), ("t", "today")], theme);
+    let keys = kit::hints(&[("H L", "month")], theme);
     let gap = month_w.saturating_sub(kit::spans_width(&head) + kit::spans_width(&keys) + 1);
     if gap > 1 {
         head.push(Span::raw(" ".repeat(gap)));
@@ -635,24 +635,20 @@ fn pane_lines(view: &View, m: &Mission, w: usize, lists: bool) -> Vec<PaneLine> 
         remind::MONTHS[(day.month() - 1) as usize],
         day.day()
     );
-    let lit = |key: char| match (m.hover, m.focus) {
-        (Some(Spot::Key(k)), _) | (_, Some(super::Focus::Key(k))) => {
-            k == Key::new(KeyCode::Char(key), Mods::NONE)
-        }
+    let lit = |key: Key| match (m.hover, m.focus) {
+        (Some(Spot::Key(k)), _) | (_, Some(super::Focus::Key(k))) => k == key,
         _ => false,
     };
-    let keycaps = |pairs: &[(char, &str)]| -> PaneLine {
+    let keycaps = |pairs: &[(&str, KeyCode, &str)]| -> PaneLine {
         let mut line = PaneLine::default();
-        for (key, what) in pairs {
+        for (label, code, what) in pairs {
+            let key = Key::new(*code, Mods::NONE);
             let x = kit::spans_width(&line.spans);
-            let cap = kit::keycap(&key.to_string(), what, lit(*key), caps, theme);
+            let cap = kit::keycap(label, what, lit(key), caps, theme);
             let cw = kit::spans_width(&cap);
             line.spans.extend(cap);
-            line.hits.push((
-                x,
-                (x + cw).saturating_sub(2),
-                Spot::Key(Key::new(KeyCode::Char(*key), Mods::NONE)),
-            ));
+            line.hits
+                .push((x, (x + cw).saturating_sub(2), Spot::Key(key)));
         }
         line
     };
@@ -722,11 +718,11 @@ fn pane_lines(view: &View, m: &Mission, w: usize, lists: bool) -> Vec<PaneLine> 
                 );
             }
             out.push(PaneLine::default());
-            out.push(keycaps(&[
-                ('g', "Go there"),
-                ('e', "Change"),
-                ('x', "Clear"),
-            ]));
+            out.push(keycaps(&[(
+                "Enter",
+                KeyCode::Enter,
+                "Go there, change or clear it",
+            )]));
         }
         None => {
             let facts = vec![Span::styled(
@@ -750,7 +746,11 @@ fn pane_lines(view: &View, m: &Mission, w: usize, lists: bool) -> Vec<PaneLine> 
                 );
             }
             out.push(PaneLine::default());
-            out.push(keycaps(&[('e', "Remind me about a tab this day")]));
+            out.push(keycaps(&[(
+                "m",
+                KeyCode::Char('m'),
+                "Remind me about a tab this day",
+            )]));
         }
     }
     if !lists || items.is_empty() {
@@ -883,17 +883,9 @@ fn list_row(item: &Item, m: &Mission, w: usize, chosen: bool, i: usize) -> PaneL
     }
 }
 
-/// The view's keys, for the footer.
+/// The view's keys that move, for the footer, before its actions.
 pub fn hints() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("hjkl", "day, week"),
-        ("H L", "month"),
-        ("t", "today"),
-        ("↵", "actions"),
-        ("g", "go there"),
-        ("e", "change"),
-        ("x", "clear"),
-    ]
+    &[("hjkl", "day, week"), ("H L", "month")]
 }
 
 #[cfg(test)]

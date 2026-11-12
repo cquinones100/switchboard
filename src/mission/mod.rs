@@ -7,13 +7,16 @@
 //!
 //! Its own keys only move about: h j k l, g G, numbers, `[` `]` between
 //! views, Tab and Shift-Tab moving focus (with tab_focus), `v` to go to a
-//! view by name, `=` to show several views at once (`grid`), `/` to filter, `?` for its keys, Esc and q to close, M-w
-//! closing it whatever is open over it, `r` for a plugin's view, and a
-//! few views' own (the Calendar's `o` join and `y` `n` `m` reply, its `h`
-//! `l` a day back or forward, the Inbox's `o` go to the tab, `x` dismiss,
-//! M-l in Linear and `i` its ticket).
-//! Everything that acts on what is chosen is in the menu Enter opens on it,
-//! a box over the view; an option that takes a moment shows a box with a
+//! view by name, `/` to filter, `?` for its keys, Esc and q to close, M-w
+//! closing it whatever is open over it, and a few views' own that move or
+//! show (the Calendar's `h` `l` a day back or forward, the Work map's
+//! `z` fold, `i` a narrow screen's pane, the Slack view's `p` play).
+//! No view acts on an item by a key of its own: everything that acts on
+//! what is chosen is in the menu Enter opens on it, in every view, what
+//! Enter did before it first, and what acts on the view (a kind of
+//! notification, a sort, a scope, a day, several views at once with
+//! `grid`, this view's settings) in the menu `m` opens. Each is a box over
+//! the view; an option that takes a moment shows a box with a
 //! spinner until it is done. A click takes what it lands on, the wheel
 //! moves, and with hover_highlight the mouse lights what a click would
 //! press.
@@ -29,8 +32,8 @@
 //! - `keys_board`: with UX 2.0, the Keys view as a board: the groups, the
 //!   keyboard as a heatmap of the week's presses, the chosen key, the
 //!   group's table.
-//! - `find_key`: the Find a key box `?` opens on the Keys view: a key
-//!   pressed comes up with what it does.
+//! - `find_key`: the Find a key box the Keys view's `m` menu opens: a
+//!   key pressed comes up with what it does.
 //! - `render`: the screen, as lines, and where a click lands.
 //! - `slack_board`: the Slack view as UX 2.0's board, the chosen message's
 //!   thread beside the list.
@@ -39,8 +42,9 @@
 //! - `history`: the Notifications view as a history by day.
 //! - `inbox_board`: with UX 2.0, the Inbox as a board: the notifications
 //!   by day with who acted's photos, the chosen one in its ticket beside.
-//! - `grid`: several views at once, `=` picking them (`views_box`).
-//! - `views_box`: the "Views at once" box `=` opens.
+//! - `grid`: several views at once, picked from a view's `m` menu
+//!   (`views_box`).
+//! - `views_box`: the "Views at once" box a view's `m` menu opens.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
 //! - `ask`: a line to type in a box.
@@ -382,10 +386,6 @@ pub struct Mission {
     /// The day the Calendar view shows (YYYY-MM-DD), `h` and `l` moving
     /// it; `None` is today.
     pub calendar_day: Option<String>,
-    /// The event a Calendar keycap's focus was given on, by its item's id:
-    /// once another is chosen (a filter, a day, a view), the focus goes
-    /// back to the item rather than press its key on the new one.
-    pub keycap_for: Option<String>,
     /// On a screen too narrow for the Inbox's ticket beside its list, `i`
     /// shows it in the list's place until `i` or Esc.
     pub inbox_pane: bool,
@@ -409,7 +409,7 @@ pub struct Mission {
     /// With UX 2.0 on a screen with room for one column of cards, whether
     /// the shelf's Landing and Idle show their tabs or only their labels.
     pub shelf_open: bool,
-    /// Several views at once (`=`), the one with the focus being `view`.
+    /// Several views at once (from a view's `m` menu), the one with the focus being `view`.
     pub grid: Option<grid::Grid>,
     /// Each shown view's cell as last drawn, by its place in the grid: its
     /// columns and rows, which the keys lay out by.
@@ -452,7 +452,6 @@ impl Mission {
             unfolded: HashSet::new(),
             resources_sort: resources_board::Sort::default(),
             calendar_day: None,
-            keycap_for: None,
             inbox_pane: false,
             slack_thread_open: false,
             slack_clicked: None,
@@ -1018,6 +1017,10 @@ pub struct MissionState {
     /// in its overlay, for what goes to another view or closes it (Enter
     /// on a notification), which acts on the overlay itself.
     pub(crate) after_key: Option<AfterKey>,
+    /// The Slack message and its picture or video each client last played
+    /// from the Notifications window, with no mission control to keep it
+    /// (`Mission::slack_shown`), so playing again plays the next.
+    pub(crate) slack_shown: HashMap<crate::mux::server::ClientId, (String, String)>,
     /// Each tab's last turn in a sentence, as Haiku wrote it
     /// (`summary`).
     pub(crate) summaries: summary::Summaries,

@@ -2961,7 +2961,7 @@ impl Server {
             return;
         };
         // The Notifications window's list takes the mouse over its pane.
-        if self.notices_mouse(id, pane, row, m) {
+        if self.notices_mouse(id, pane, col, row, m) {
             return;
         }
         let modes = match self.panes.get(&pane) {

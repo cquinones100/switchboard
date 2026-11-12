@@ -158,6 +158,7 @@ impl Server {
         let w = &mut self.sidebar.windows;
         w.at.insert(session.to_string(), owner.clone());
         w.back.remove(session);
+        w.menu.remove(session);
         if !self.is_notices_tab(here) {
             self.sidebar.windows.from.insert(session.to_string(), here);
         }
@@ -203,6 +204,7 @@ impl Server {
             return;
         };
         self.sidebar.windows.back.remove(session);
+        self.sidebar.windows.menu.remove(session);
         if let Some(side) = self.sidebar.sides.get_mut(session)
             && side.focused
         {
@@ -224,6 +226,7 @@ impl Server {
             .at
             .insert(session.to_string(), owner.clone());
         self.sidebar.windows.back.remove(session);
+        self.sidebar.windows.menu.remove(session);
         self.sidebar.side(session).cursor = Some(owner);
         self.dirty_session(session);
     }
@@ -231,12 +234,41 @@ impl Server {
     /// The chosen notification's menu over the window, as its row's menu in
     /// mission control's Notifications view.
     fn notices_open(&mut self, client: ClientId, entries: &[(Owner, Item)], at: usize) {
+        // Opening one takes Tab's focus off "‹ tabs" and the footer.
+        if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
+            self.sidebar.windows.back.remove(&session);
+            self.sidebar.windows.menu.remove(&session);
+        }
         let Some((Owner::Notice { source, .. }, item)) = entries.get(at) else {
             return;
         };
         let mut item = item.clone();
         item.id = format!("{source}\t{}", item.id);
         self.notice_menu(client, item);
+    }
+
+    /// `m` in the window: the Notifications view's own menu, as mission
+    /// control's view has it: every notification shown dismissed, or the
+    /// view opened.
+    fn notices_view_menu(&mut self, client: ClientId) {
+        let menu = crate::ui::Menu::of(
+            "Notifications: view actions",
+            &[
+                "Dismiss every notification shown",
+                "Open mission control's Notifications view",
+            ],
+        );
+        self.choose(client, menu, move |server, client, chose| match chose {
+            Some(0) => match crate::mission::choices::dismiss_all(&server.sidebar_notice_items()) {
+                Some(all) => server.mission_do(client, all, ""),
+                None => server.say(Some(client), "Nothing in the sidebar to dismiss."),
+            },
+            Some(1) => server.open_mission(
+                client,
+                crate::mission::Opening::View("notifications".into()),
+            ),
+            _ => {}
+        });
     }
 
     /// A key with the window's pane in front and focused; gives whether the
@@ -255,6 +287,7 @@ impl Server {
         let entries = self.notice_entries();
         let at = self.notice_cursor(&session, &entries) as isize;
         let back = self.sidebar.windows.back.contains(&session);
+        let on_menu = self.sidebar.windows.menu.contains(&session);
         let k = key.normalized();
         let none = k.mods == Mods::NONE;
         let ctrl = k.mods == Mods::CTRL;
@@ -273,35 +306,48 @@ impl Server {
             KeyCode::Char('G') | KeyCode::End if none => {
                 self.notices_choose(&session, &entries, entries.len() as isize - 1)
             }
-            // Tab and Shift-Tab go round "‹ tabs", then each notification,
-            // as on a webpage.
+            // Tab and Shift-Tab go round "‹ tabs", each notification, then
+            // the footer's "m view actions", as on a webpage.
             KeyCode::Tab | KeyCode::BackTab if settings::is_on("tab_focus") => {
-                let forward = k.code == KeyCode::Tab;
-                let ends = if forward {
-                    at + 1 >= entries.len() as isize
+                // Where the focus is: "‹ tabs" (-1), a notification by its
+                // place, or the footer (past the last).
+                let n = entries.len() as isize;
+                let now = if back {
+                    -1
+                } else if on_menu {
+                    n
                 } else {
-                    at <= 0
+                    at.clamp(0, n)
                 };
-                if !back && (ends || entries.is_empty()) {
-                    self.sidebar.windows.back.insert(session.clone());
-                    self.dirty_session(&session);
-                } else if back {
-                    let to = if forward {
-                        0
-                    } else {
-                        entries.len() as isize - 1
-                    };
+                let to = if k.code == KeyCode::Tab {
+                    if now >= n { -1 } else { now + 1 }
+                } else if now < 0 {
+                    n
+                } else {
+                    now - 1
+                };
+                let w = &mut self.sidebar.windows;
+                w.back.remove(&session);
+                w.menu.remove(&session);
+                if to < 0 {
+                    w.back.insert(session.clone());
+                } else if to >= n {
+                    w.menu.insert(session.clone());
+                }
+                if (0..n).contains(&to) {
                     self.notices_choose(&session, &entries, to);
                 } else {
-                    self.notices_choose(&session, &entries, at + if forward { 1 } else { -1 });
+                    self.dirty_session(&session);
                 }
             }
+            KeyCode::Enter | KeyCode::Char(' ') if on_menu => self.notices_view_menu(client),
             KeyCode::Enter | KeyCode::Char(' ') if back => self.notices_back(&session),
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l')
                 if none || k.code == KeyCode::Enter =>
             {
                 self.notices_open(client, &entries, at.max(0) as usize)
             }
+            KeyCode::Char('m') if none => self.notices_view_menu(client),
             KeyCode::Esc | KeyCode::Left if none => self.notices_back(&session),
             KeyCode::Char('q' | 'h') if none => self.notices_back(&session),
             KeyCode::Char('c') if ctrl => self.notices_back(&session),
@@ -312,7 +358,14 @@ impl Server {
 
     /// The mouse over the window's pane (`row` in it); gives whether the
     /// window took it.
-    pub fn notices_mouse(&mut self, client: ClientId, pane: PaneId, row: u16, m: Mouse) -> bool {
+    pub fn notices_mouse(
+        &mut self,
+        client: ClientId,
+        pane: PaneId,
+        col: u16,
+        row: u16,
+        m: Mouse,
+    ) -> bool {
         if !self.is_notices_pane(pane) {
             return false;
         }
@@ -330,13 +383,20 @@ impl Server {
         let look = Look {
             cursor: at,
             back: false,
+            menu: false,
             hover: None,
             theme: &super::theme(),
             now: &crate::util::local_now(),
         };
         let items = self.notice_items(&entries);
         let (_, spots) = notices::list_lines(&items, &look, cols as usize, rows as usize);
-        let spot = spots.get(row as usize).copied().flatten();
+        // The footer's row takes a click on its "m view actions" alone.
+        let (from, to) = notices::view_actions_at();
+        let spot = spots
+            .get(row as usize)
+            .copied()
+            .flatten()
+            .filter(|s| *s != Spot::ViewActions || (from..to).contains(&(col as usize)));
         match (m.kind, m.button) {
             (MouseKind::Move, _) => {
                 let lit = spot.filter(|_| settings::is_on("hover_highlight"));
@@ -361,6 +421,7 @@ impl Server {
                 }
                 match spot {
                     Some(Spot::Back) => self.notices_back(&session),
+                    Some(Spot::ViewActions) => self.notices_view_menu(client),
                     Some(Spot::Item(i)) if i == at => self.notices_open(client, &entries, i),
                     Some(Spot::Item(i)) => self.notices_choose(&session, &entries, i as isize),
                     None => {}
@@ -377,6 +438,7 @@ impl Server {
         let look = Look {
             cursor: self.notice_cursor(session, &entries),
             back: self.sidebar.windows.back.contains(session),
+            menu: self.sidebar.windows.menu.contains(session),
             hover: self.sidebar.windows.hover.get(&client).copied(),
             theme: &super::theme(),
             now: &crate::util::local_now(),

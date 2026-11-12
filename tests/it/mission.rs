@@ -147,7 +147,7 @@ fn a_bracket_moves_to_the_next_view_and_round() {
     client.type_text("]");
     let screen = client.wait_text("INTEGRATIONS");
     assert!(
-        screen.last().unwrap().contains("↵ change"),
+        screen.last().unwrap().contains("Enter its choices"),
         "{:?}",
         screen.last()
     );
@@ -229,7 +229,7 @@ fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing(
 }
 
 #[test]
-fn with_ux2_a_number_on_a_waiting_card_answers_its_prompt() {
+fn with_ux2_a_waiting_cards_menu_answers_its_prompt_and_a_number_does_not() {
     let server = TestServer::start();
     settings(&server, json!({"ux2": true}));
     let mut client = server.attach(160, 50);
@@ -281,9 +281,22 @@ Do you want to proceed?
     client.wait_text("NEEDS YOU");
     client.wait_text("BASH COMMAND");
     client.wait_text("Yes, and don't ask again");
+    // A number is no answer from mission control: Enter's menu has them.
     client.type_text("2");
+    client.type_text("\r");
+    // The request whole above its answers.
+    client.wait_text("git push origin main");
+    pick(&mut client, "Answer: Yes, and don't ask again");
     client.type_text("q");
     client.wait_text("pressed-2");
+}
+
+#[test]
+fn space_opens_the_chosen_cards_menu_with_nothing_focused() {
+    let (_server, mut client) = two_tabs(json!({}));
+    open(&mut client);
+    client.type_text(" ");
+    client.wait_text("Go to tab 1");
 }
 
 #[test]
@@ -352,8 +365,9 @@ fn the_settings_view_changes_a_setting_in_the_settings_file() {
         screen.join("\n")
     );
     // The cursor rests on the first setting, GitHub, not on its category's
-    // heading; Enter turns it on.
+    // heading; Enter's menu turns it on.
     client.type_text("\r");
+    pick(&mut client, "Turn it on");
     let file = server.home.join(".config/switchboard/settings.json");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
     loop {
@@ -399,6 +413,7 @@ fn your_claude_md_row_names_where_the_rules_come_from_and_runs_setup() {
     client.wait_text("local file");
     // The cursor rests on the row, not its category's heading.
     client.type_text("\r");
+    pick(&mut client, "Change it");
     client.wait_text("Where your CLAUDE.md's rules come from");
     client.type_text("j\r");
     client.wait_text("Your CLAUDE.md: a file");
@@ -467,7 +482,7 @@ fn m_j_picks_an_open_tab_from_the_work_map() {
 }
 
 #[test]
-fn with_ux2_the_work_map_s_keys_scope_fold_and_go() {
+fn with_ux2_the_work_map_s_menus_scope_fold_and_go() {
     let server = TestServer::start();
     settings(&server, json!({ "ux2": true, "view_work_map": true }));
     let mut client = server.attach(140, 36);
@@ -484,25 +499,34 @@ fn with_ux2_the_work_map_s_keys_scope_fold_and_go() {
     // The tabs in no repository under a heading of their own, the keys on
     // the footer.
     client.wait_text("▾ Other tabs");
-    client.wait_text("o only open");
-    // n shows only the work with no tab, which leaves nothing; again, all.
-    client.type_text("n");
+    client.wait_text("m view actions");
+    // The view's menu shows only the work with no tab, which leaves
+    // nothing; then all.
+    client.type_text("m");
+    pick(&mut client, "Show only the rows with no tab");
     client.wait_for("nothing without a tab", |s| {
-        !s.iter().any(|l| l.contains("Other tabs")) && s.iter().any(|l| l.contains("n show all"))
+        !s.iter().any(|l| l.contains("Other tabs"))
     });
-    client.type_text("n");
+    client.type_text("m");
+    pick(&mut client, "Show every row");
     client.wait_text("▾ Other tabs");
-    client.type_text("o");
-    client.wait_text("o show all");
-    client.type_text("o");
-    client.wait_text("o only open");
-    // Enter on the heading folds it, z on it opens it again.
+    // Enter on the heading folds it and opens it again; z is no key.
     client.type_text("\r");
     client.wait_text("▸ Other tabs");
     client.type_text("z");
+    client.type_text("\r");
     client.wait_text("▾ Other tabs");
-    // Enter on a row goes to its tab, with no menu.
+    // A row's menu folds its repository too, the cursor on its heading,
+    // where Enter opens it again.
     client.type_text("j\r");
+    pick(&mut client, "Fold its repository");
+    client.wait_text("▸ Other tabs");
+    client.type_text("\r");
+    client.wait_text("▾ Other tabs");
+    // Enter on a row opens its menu, going to its tab first.
+    client.type_text("j\r");
+    client.wait_text("Go to tab");
+    client.type_text("\r");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
@@ -627,7 +651,15 @@ fn the_calendar_view_draws_today_as_a_day_down_the_hours() {
     assert!(has("Planning"));
     // The chosen event is the first: the all-day one; j goes to the next.
     client.type_text("j\r");
-    client.wait_text("Open it in Google Calendar");
+    client.wait_text("Open in Google Calendar");
+    // The view's own menu goes to today, a day back or a day on.
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open in Google Calendar"))
+    });
+    client.type_text("m");
+    pick(&mut client, "Go to today");
+    client.wait_text("Planning");
 }
 
 /// What a line of the screen shows right of the sidebar's edge, if any.
@@ -789,7 +821,10 @@ fn m_slash_opens_every_key_and_enter_presses_one_in_the_pane_below() {
     let screen = client.wait_text("MISSION CONTROL");
     let all = screen.join("\n");
     assert!(all.contains("PANES"), "the workspace's by tag: {all}");
-    assert!(all.contains("jk move  ↵ press it"), "{all}");
+    assert!(
+        all.contains("jk move  Enter actions  m view actions"),
+        "{all}"
+    );
     // The filter finds a key by what it does, the cursor on it rather than
     // on its group's heading.
     client.type_text("/split pane to the right\r");
@@ -798,8 +833,10 @@ fn m_slash_opens_every_key_and_enter_presses_one_in_the_pane_below() {
             .any(|l| l.contains("M-S-L") && l.contains("Split pane to the right"))
             && !s.iter().any(|l| l.contains("Split pane to the left"))
     });
-    // Enter presses it at once, with no menu, splitting the pane mission
-    // control was over.
+    // Enter opens its menu, pressing it first, so Enter twice splits the
+    // pane mission control was over.
+    client.type_text("\r");
+    client.wait_text("Press it here");
     client.type_text("\r");
     wait_list(&server, "the pane split", |l| {
         tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
@@ -854,9 +891,9 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     open(&mut client);
     client.type_text("]");
     client.wait_text("DM Ada");
-    // m opens a notification's menu; Enter does its first choice.
+    // Enter opens a notification's menu.
     client.type_text("j");
-    client.type_text("m");
+    client.type_text("\r");
     let screen = client.wait_text("Dismiss it, until its thread gets a reply");
     let all = screen.join("\n");
     let row = |text: &str| {
@@ -887,7 +924,7 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
 }
 
 #[test]
-fn a_notifications_menu_dismisses_every_notification_shown() {
+fn the_notifications_views_menu_dismisses_every_notification_shown() {
     let notes = common::TempDir::new("sbda");
     std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
     let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
@@ -1018,7 +1055,7 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
     client.type_text("]");
     client.wait_text("Landed abc1234: Make the thing");
     client.type_text("j");
-    client.type_text("m");
+    client.type_text("\r");
     let screen = client.wait_text("Dismiss it");
     let all = screen.join("\n");
     let row = |text: &str| {
@@ -1037,11 +1074,10 @@ fn a_notification_no_view_lists_is_whole_above_its_choices() {
 }
 
 // The Notifications view keeps every notification of the last two weeks by
-// day: the days before yesterday past the first screenful fold until Enter
-// shows them, x on one the sidebar no longer shows says so, and a number
-// narrows it to a kind.
+// day: the days before yesterday past the first screenful fold until their
+// menu's "Show them", and the view's menu narrows it to a kind.
 #[test]
-fn the_notifications_history_folds_old_days_and_x_says_what_is_out_of_the_sidebar() {
+fn the_notifications_history_folds_old_days_and_its_menu_narrows_it_to_a_kind() {
     let mut server = TestServer::start();
     settings(&server, json!({}));
     let now = switchboard::util::now_ms();
@@ -1073,18 +1109,21 @@ fn the_notifications_history_folds_old_days_and_x_says_what_is_out_of_the_sideba
     client.type_text("]");
     client.wait_text("Slack 0");
     client.type_text("G");
-    client.wait_text("folded · Enter shows them");
+    client.wait_text("1 more, folded");
     assert!(!client.screen().join("\n").contains("Old inbox one"));
+    // A folded day is an item: its menu shows it.
     client.type_text("\r");
+    pick(&mut client, "Show them");
     client.wait_text("Old inbox one");
-    client.type_text("x");
-    client.wait_text("It's already out of the sidebar.");
-    // Any key puts the message away.
-    client.type_text("q");
-    // 3 is the PRs, of which there are none; 5 the Inbox.
+    // The PRs, of which there are none, then the Inbox, from `m`'s menu;
+    // a number is no key of the view's.
     client.type_text("3");
+    client.type_text("m");
+    client.wait_text("Dismiss every notification shown");
+    pick(&mut client, "Show only PRs");
     client.wait_text("No notifications in the last two weeks.");
-    client.type_text("5");
+    client.type_text("m");
+    pick(&mut client, "Show only Inbox");
     let screen = client.wait_text("Old inbox one");
     assert!(
         !screen.join("\n").contains("Slack 0"),
@@ -1138,9 +1177,11 @@ fn with_ux2_resources_ends_a_tabs_busy_process_from_its_menu_after_a_yes() {
 fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_list() {
     let (server, mut client) = two_tabs(json!({"view_keys": true}));
     client.type_text(&format!("{ALT}/"));
-    client.wait_text("? find a key");
-    // `?` looks a key up without pressing it: j is the sidebar's.
-    client.type_text("?");
+    client.wait_text("PANES");
+    // The view's menu looks a key up without pressing it: j is the
+    // sidebar's.
+    client.type_text("m");
+    pick(&mut client, "Find a key by pressing it");
     client.wait_text("Find a key");
     client.type_text("j");
     client.wait_text("Sidebar: ");
@@ -1159,8 +1200,8 @@ fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_lis
         "{}",
         screen.join("\n")
     );
-    // Enter shows it in the list, where Enter presses it, splitting the
-    // pane. Nothing was pressed while the box was up.
+    // Enter shows it in the list, where Enter's menu presses it, splitting
+    // the pane. Nothing was pressed while the box was up.
     let panes = |server: &TestServer| {
         tabs(&server.list())[1]["panes"]
             .as_array()
@@ -1172,6 +1213,7 @@ fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_lis
         !s.iter().any(|l| l.contains("Find a key"))
     });
     client.type_text("\r");
+    pick(&mut client, "Press it here");
     wait_list(&server, "the pane split", |l| {
         tabs(l)[1]["panes"].as_array().is_some_and(|p| p.len() == 2)
     });
@@ -1179,11 +1221,12 @@ fn a_key_found_with_a_question_mark_is_not_pressed_and_enter_shows_it_in_the_lis
 
 /// With UX 2.0 the Inbox is a board: each notification by who acted, the
 /// chosen one in its ticket beside the list with its own comment marked
-/// new; `o` with no tab on its ticket says so, `x` takes it out of the
-/// view, and Enter offers the Tickets board's menu without "Mark it
-/// read", marking it read in Linear as the menu closes.
+/// new. Enter offers the Tickets board's menu without "Mark it read",
+/// marking it read in Linear as the menu closes, but for its last choice,
+/// which takes it out of the view and leaves it unread there; `o` and `x`
+/// are no keys of the view's.
 #[test]
-fn with_ux2_the_inbox_shows_each_in_its_ticket_and_o_x_and_enter_act_on_it() {
+fn with_ux2_the_inbox_shows_each_in_its_ticket_and_its_menu_acts_on_it() {
     use common::http::{Fake, Reply};
     let at = |minutes: i64| {
         (jiff::Timestamp::now() - jiff::SignedDuration::from_mins(minutes)).to_string()
@@ -1244,10 +1287,9 @@ fn with_ux2_the_inbox_shows_each_in_its_ticket_and_o_x_and_enter_act_on_it() {
     client.wait_text("Ben commented");
     client.wait_text("an earlier thought");
     client.wait_text("Ben  10m ago");
-    client.type_text("o");
-    client.wait_text("No tab works on ABC-7.");
-    client.type_text("q");
-    client.type_text("x");
+    client.type_text("ox");
+    client.type_text("\r");
+    pick(&mut client, "Dismiss it here: it stays unread in Linear");
     client.wait_for("ABC-7 out of the view", |s| {
         !s.join("\n").contains("Ben commented") && s.join("\n").contains("assigned to you by Ana")
     });
@@ -1369,7 +1411,7 @@ fn mission_when(text: &str, now: &jiff::Zoned) -> i64 {
 }
 
 #[test]
-fn with_ux2_the_reminders_view_moves_its_day_and_month_clears_and_goes() {
+fn with_ux2_the_reminders_view_moves_its_day_and_month_and_its_menu_goes() {
     let (server, mut client) = two_tabs_ux2();
     let id = first_tab_id(&server);
     let soon = (jiff::Timestamp::now().as_second() + 120).to_string();
@@ -1407,29 +1449,50 @@ fn with_ux2_the_reminders_view_moves_its_day_and_month_clears_and_goes() {
     client.wait_text(&month(step(today, 0, 1)));
     client.type_text("H");
     client.wait_text(&month(today));
+    // t is no key: the view's menu goes back to today.
     client.type_text("L");
     client.type_text("t");
+    client.type_text("m");
+    pick(&mut client, "Go to today");
     client.wait_text(&title(today));
     client.wait_text("look at the build");
-    client.type_text("x");
-    wait_list(&server, "the reminder cleared", |l| {
-        remind_at(l, 0).is_none()
-    });
-    client.wait_text("Reminder cleared for 1");
-
-    server.ok(&["set", "-t", &id, "@remind_at", &soon]);
-    client.wait_text("1 reminder");
-    client.type_text("g");
+    // x and g are no keys of the view's: Enter's menu is its tab's, going
+    // there first.
+    client.type_text("xg");
+    client.type_text("\r");
+    client.wait_text("Change or clear its reminder");
+    client.type_text("\r");
     wait_list(&server, "the first tab in front", |l| {
         tabs(l)[0]["current"] == true
     });
+    assert!(remind_at(&server.list(), 0).is_some(), "x cleared nothing");
     client.wait_for("mission control closed", |s| {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
 }
 
+// `m` opens the view's own menu in every view, ending with mission
+// control's: several views at once, and this view's settings, which shows
+// Settings filtered by the view's name.
 #[test]
-fn equals_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
+fn m_opens_the_views_menu_ending_with_its_settings() {
+    let (_server, mut client) = two_tabs_ux2();
+    open(&mut client);
+    client.type_text("m");
+    let screen = client.wait_text("This view's settings");
+    let at = |text: &str| {
+        screen
+            .iter()
+            .position(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("{text}: {}", screen.join("\n")))
+    };
+    assert!(at("Several views at once") < at("This view's settings"));
+    pick(&mut client, "This view's settings");
+    client.wait_text("/Tabs");
+}
+
+#[test]
+fn the_view_menu_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
     let server = TestServer::start();
     settings(&server, json!({ "ux2": true }));
     let mut client = server.attach(140, 36);
@@ -1439,8 +1502,10 @@ fn equals_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
     // UX 2.0 taken up: each tab has its header.
     client.wait_text("M-c Claude");
     open(&mut client);
-    // The box: none of board 11's four is on here, so nothing is picked.
-    client.type_text("=");
+    // The box, from the view's menu: none of board 11's four is on here,
+    // so nothing is picked.
+    client.type_text("m");
+    pick(&mut client, "Several views at once");
     client.wait_text("Views at once");
     client.wait_text("☐ Tabs");
     // The tabs, then the next view, picked and shown.
@@ -1462,8 +1527,9 @@ fn equals_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
     // Tab gives the focus to the other view and back.
     client.type_text("\t");
     client.type_text("\t");
-    // A second = shows the last choice.
-    client.type_text("=");
+    // Opened again, it shows the last choice.
+    client.type_text("m");
+    pick(&mut client, "Several views at once");
     let screen = client.wait_text("Views at once");
     assert!(
         screen

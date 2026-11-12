@@ -216,7 +216,8 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 }
 
 #[test]
-fn with_ux2_its_command_m_and_its_button_open_its_settings_box_whose_m_opens_the_menu() {
+fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose_m_opens_the_menu()
+{
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     client.wait_text("Waiting on you");
     client.type_text("\x1b");
@@ -244,8 +245,10 @@ fn with_ux2_its_command_m_and_its_button_open_its_settings_box_whose_m_opens_the
         );
     }
     closed(&mut client);
-    // m opens it.
+    // The view's menu, `m`, leads to it.
     client.type_text("m");
+    client.wait_text("Autopilot's settings");
+    client.type_text("\r");
     client.wait_text("Autopilot · Work");
     closed(&mut client);
     // So does a click on the heading's button.
@@ -630,9 +633,16 @@ fn mode(server: &TestServer) -> Value {
 
 /// Its settings box opened with `m` on the board, the focus moved `tabs`
 /// fields on from the note.
-fn open_box(client: &mut TestClient, tabs: usize) {
+/// Its settings box opened from the board's own menu (`m`).
+fn settings_box(client: &mut TestClient) {
     client.type_text("m");
+    client.wait_text("Autopilot's settings");
+    client.type_text("\r");
     client.wait_text("Autopilot · Work");
+}
+
+fn open_box(client: &mut TestClient, tabs: usize) {
+    settings_box(client);
     client.type_text(&"\t".repeat(tabs));
     std::thread::sleep(Duration::from_millis(100));
 }
@@ -690,8 +700,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(now["said"], "", "what it said of the limit passed goes");
 
     // u on a skipped item takes it back.
-    client.type_text("m");
-    client.wait_text("Autopilot · Work");
+    settings_box(&mut client);
     let screen = client.wait_text("skipped by you");
     assert!(
         screen.iter().any(|l| l.contains("Second thing")),
@@ -720,8 +729,7 @@ fn its_settings_box_saves_what_changed_at_once_and_asks_before_leaving_changes()
     assert_eq!(mode(&server)["landWithoutAsking"], true);
 
     // p pauses at once.
-    client.type_text("m");
-    client.wait_text("Autopilot · Work");
+    settings_box(&mut client);
     client.type_text("p");
     client.wait_text("Paused");
     assert_eq!(mode(&server)["paused"], true);

@@ -98,14 +98,6 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "h j k l",
         "choose a card or row; in the Calendar, j k walk the events and h l move a day",
     ),
-    (
-        "o y n m",
-        "Calendar: join the chosen event's call; answer it going, not going, maybe",
-    ),
-    (
-        "↵ m x p i",
-        "Slack with UX 2.0: open the message in Slack, its menu, dismiss it until its thread gets a reply, play its video or show its picture, show its thread on a narrow screen",
-    ),
     ("g G", "first, last"),
     (
         "J K",
@@ -113,39 +105,22 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     (
         "↵",
-        "what can be done with it (on a tab: go there first, so ↵↵ goes)",
+        "the chosen card's or row's actions, in every view, what ↵ did before them first (so ↵↵ does it: on a tab, go there)",
+    ),
+    (
+        "m",
+        "the view's own actions (a kind of notification, today or this week, a sort, which rows, finding a key, a day, autopilot's menu), then several views at once and this view's settings",
     ),
     (
         "↵ on a heading",
-        "Work map: fold or open a repository; on its merged line, show or hide its merged worktrees",
+        "Work map: fold or open a repository (a row's menu folds its own too); on its merged line, its menu shows or hides its merged worktrees",
     ),
     (
-        "↵ o n z m",
-        "Work map with UX 2.0: go to the row's tab or open one there, only rows with a tab, only rows without, fold its repository, its menu",
-    ),
-    (
-        "l o M-r",
-        "CI view, with UX 2.0: the chosen check's whole log beside, from its failing step; go to the PR's tab; the check in the browser",
-    ),
-    (
-        "↵ m x",
-        "Notifications: go to it (its menu's first choice; on a folded day, show it), its whole menu, put it out of the sidebar",
-    ),
-    ("1-7", "Notifications: show one kind (1 all)"),
-    (
-        "↵ o x M-l i",
-        "Inbox with UX 2.0: its menu, marking it read; go to the tab working on its ticket; dismiss it here, unread in Linear; its ticket in Linear; on a narrow screen, its ticket in the list's place (i or esc back)",
-    ),
-    ("s", "Resources view: sort the tabs by CPU or by memory"),
-    (
-        "s",
-        "Tabs with UX 2.0: the chosen card's screen in its place, until s again or the cursor moves",
+        "i",
+        "on a narrow screen, the Slack message's thread, the Inbox item's ticket or the landing's last output in the list's place (i or esc back)",
     ),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
-    (
-        "1-9",
-        "choose that tab; with UX 2.0, on a card waiting on you, answer with that option (or go to the tab when the card can't show it whole)",
-    ),
+    ("1-9", "choose that tab"),
     ("] [", "next, last view (with UX 2.0, in its group)"),
     (
         "M-] M-[",
@@ -153,18 +128,9 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ),
     (
         "tab ⇧tab",
-        "move focus through the groups' and views' names, the filter, the items and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
+        "move focus through the groups' and views' names, the filter, the items, the footer's keys and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
     ),
     ("v", "go to a view by typing its name (↵ go, esc cancel)"),
-    (
-        "=",
-        "with UX 2.0, pick up to four views to show at once (tab moves between them, esc back to one)",
-    ),
-    ("r", "refresh a plugin's view"),
-    (
-        "m",
-        "autopilot's menu, in its view or on its line above the tabs",
-    ),
     ("esc q", "close"),
     ("M-w", "close, whatever is open over it"),
     (
@@ -175,11 +141,76 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "M-p",
         "the palette over it: a view picked shows here, anything else runs in the pane once closed",
     ),
-    (
-        "?",
-        "these keys; in the Keys view, find a key by pressing it",
-    ),
+    ("?", "these keys"),
 ];
+
+/// The view menu's way to autopilot: its settings box with UX 2.0
+/// (`autopilot_menu`), else its menu.
+fn autopilot_label() -> &'static str {
+    if crate::sidebar::text::ux2() {
+        "Autopilot's settings…"
+    } else {
+        "Autopilot: pause, land, stop…"
+    }
+}
+
+/// What an option of a view's menu (`m`) does.
+enum ViewAct {
+    /// The Notifications view narrowed to a kind, by its key (1 all).
+    Kind(usize),
+    /// The Usage view between today and this week.
+    UsageWeek,
+    /// The Resources view sorted by the other of CPU and memory.
+    Sort,
+    FindKey,
+    /// A file opened in your editor: the Settings view's.
+    EditFile(PathBuf, String),
+    /// Autopilot's own menu.
+    Autopilot,
+    /// The Work map's rows narrowed to those with a tab, without, or all.
+    Scope(Option<Scope>),
+    /// The Work map's merged worktrees of a repository shown or folded.
+    Merged(String),
+    /// A day of the Notifications history unfolded.
+    Unfold(String),
+    /// The Calendar a day back or forward, or on today.
+    Day(i64),
+    Today,
+    /// A reminder for a tab on a day of the Reminders view, or its today.
+    RemindOn(jiff::civil::Date),
+    RemindToday,
+    /// Every notification the sidebar shows put away, as dismissing each
+    /// alone would.
+    DismissShown,
+    /// A plugin's view asked again.
+    AskAgain(String),
+    ViewsAtOnce,
+    /// The Settings view, filtered by the view's name.
+    Settings(String),
+}
+
+/// The file the Settings view opens for the chosen row: a file of yours
+/// for one of its settings (`repos.json` for a repository's landing), else
+/// the settings file, with the folder it is in.
+fn settings_file_of(item: Option<&Item>) -> (PathBuf, String) {
+    if let Some(file) = super::settings_board::file_of(item) {
+        return (crate::usage::own::own_dir(), file);
+    }
+    // A relative SWITCHBOARD_SETTINGS is the server's, not the editor's,
+    // which starts in the file's folder.
+    let path = settings::settings_file();
+    let path = std::path::absolute(&path).unwrap_or(path);
+    let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let file = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "settings.json".into());
+    (dir, file)
+}
+
+/// The columns "Answer: " takes before an option's label in a tab's menu,
+/// which offers an option only where both show whole.
+const ANSWER_PREFIX_W: usize = 8;
 
 /// The notification a menu is for: its source, its item under its own id,
 /// and whether to put it away after what is picked.
@@ -282,9 +313,9 @@ impl Server {
             // footer (a tip's corner box would sit over its bar).
             if how == Opening::Tabs && settings::is_on("tips") && !self.tip_was_seen("mission") {
                 m.note = Some(if settings::is_on("tab_focus") {
-                    "Tip: [ ] switch views · Tab moves focus · / filters · Enter goes · ? shows every key".into()
+                    "Tip: [ ] switch views · Tab moves focus · Enter acts on it · m on the view · ? every key".into()
                 } else {
-                    "Tip: Tab and [ ] switch views · / filters · Enter goes · ? shows every key"
+                    "Tip: Tab and [ ] switch views · Enter acts on it · m on the view · ? every key"
                         .into()
                 });
                 self.tip_seen("mission");
@@ -822,13 +853,22 @@ impl Server {
 
     /// Enter on the Inbox board: the Tickets board's menu for its ticket,
     /// with no "Mark it read", since closing the menu marks it read in
-    /// Linear, whatever was picked; it leaves the view once Linear answers.
+    /// Linear, whatever was picked but dismissing it here, which leaves it
+    /// unread there; it leaves the view once Linear answers.
     fn inbox_enter(&mut self, client: ClientId, item: Item) {
-        let list: Vec<Choice> = self
+        let mut list: Vec<Choice> = self
             .item_choices(&ViewId::Inbox, &item, &[])
             .into_iter()
             .filter(|c| !matches!(c.act, Do::MarkRead(_)))
             .collect();
+        list.push(Choice {
+            key: 'x',
+            label: "Dismiss it here: it stays unread in Linear".into(),
+            act: Do::Dismiss {
+                source: "inbox".into(),
+                item: Box::new(item.clone()),
+            },
+        });
         let id = crate::sources::inbox::notification_of(&item).to_string();
         let options: Vec<MenuOption> = list
             .iter()
@@ -836,8 +876,11 @@ impl Server {
             .collect();
         let menu = Menu::new(item.title.clone(), options);
         self.choose(client, menu, move |server, client, chose| {
-            server.inbox_mark_read(id);
-            if let Some(c) = chose.and_then(|i| list.into_iter().nth(i)) {
+            let c = chose.and_then(|i| list.into_iter().nth(i));
+            if !c.as_ref().is_some_and(|c| choices::puts_away(&c.act)) {
+                server.inbox_mark_read(id);
+            }
+            if let Some(c) = c {
                 if let Some(at) = server.clients.get_mut(&client) {
                     at.options_taken = at.options_taken.wrapping_add(1);
                 }
@@ -1118,14 +1161,6 @@ impl Server {
         fit_cursor(&mut m);
         if reminder_chosen {
             follow_reminder(&mut m);
-        }
-        // A keycap's focus goes with the Calendar event, or the waiting
-        // card, it was given on; a Reminders keycap's stays, acting on the
-        // chosen day's reminder.
-        let keycap_kept =
-            (m.keycap_for.is_some() && keycap_owner(&m) == m.keycap_for) || on_reminders(&m);
-        if matches!(m.focus, Some(Focus::Key(_))) && !keycap_kept {
-            m.focus = (keycaps_here(&m) || m.view == 0).then_some(Focus::Item);
         }
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
@@ -1934,25 +1969,6 @@ impl Server {
             jump_key(m, k);
             return;
         }
-        if k.code == KeyCode::Char('?')
-            && plain(&k)
-            && m.current().is_some_and(|v| v.id == ViewId::Keys)
-        {
-            self.find_key(client);
-            return;
-        }
-        if k.code == KeyCode::Char('?') && plain(&k) {
-            let rows = KEYS
-                .iter()
-                .map(|(k, what)| (k.to_string(), what.to_string()))
-                .collect();
-            self.open(
-                client,
-                Box::new(crate::ui::keylist::KeyList::new(rows)),
-                None,
-            );
-            return;
-        }
         // What the last action did stays in the footer until the next key.
         m.note = None;
         let mut k = k;
@@ -1971,22 +1987,39 @@ impl Server {
                 return;
             }
             Some(Focus::Filter) if press => k = Key::new(KeyCode::Char('/'), Mods::NONE),
-            Some(Focus::Key(key))
-                if press
-                    && (keycaps_here(m) || waiting_card(m).is_some())
-                    && keycap_owner(m) == m.keycap_for =>
-            {
+            // A footer key with Tab's focus presses it while it is drawn; one
+            // the view in front no longer shows (another view's) hands the
+            // focus back to the chosen item, which Enter or Space presses.
+            Some(Focus::Key(key)) if press && m.hits.iter().any(|h| h.spot == Spot::Key(key)) => {
                 k = key
             }
-            Some(Focus::Key(key)) if press && on_reminders(m) => k = key,
+            Some(Focus::Key(_)) if press => {
+                m.focus = Some(Focus::Item);
+                k = Key::new(KeyCode::Enter, Mods::NONE);
+            }
             Some(Focus::Close) if press => {
                 self.mission_close_from(client, m);
                 return;
             }
-            Some(Focus::Item) if k.code == KeyCode::Char(' ') => {
+            // Space presses the chosen item, as Enter does, whether Tab gave it
+            // the focus or nothing has the focus yet.
+            Some(Focus::Item) | None if k.code == KeyCode::Char(' ') && plain(&k) => {
                 k = Key::new(KeyCode::Enter, Mods::NONE)
             }
             _ => {}
+        }
+        // `?`, typed or pressed from the footer with Tab's focus on it.
+        if k.code == KeyCode::Char('?') && plain(&k) {
+            let rows = KEYS
+                .iter()
+                .map(|(k, what)| (k.to_string(), what.to_string()))
+                .collect();
+            self.open(
+                client,
+                Box::new(crate::ui::keylist::KeyList::new(rows)),
+                None,
+            );
+            return;
         }
         // Space changes a setting, as Enter does.
         if k.code == KeyCode::Char(' ')
@@ -1995,63 +2028,25 @@ impl Server {
         {
             k = Key::new(KeyCode::Enter, Mods::NONE);
         }
-        if self.reminders_key(client, m, k) {
+        // `m` is the view's own actions, in every view.
+        if k.code == KeyCode::Char('m') && plain(&k) {
+            self.view_menu(client, m);
             return;
         }
-        match ci_key(m, k) {
-            Some(CiKey::Moved) => return,
-            Some(CiKey::Do(act)) => {
-                let label = match &act {
-                    Do::Open(_) => "Opening the check",
-                    _ => "",
-                };
-                self.mission_do(client, act, label);
-                return;
-            }
-            Some(CiKey::Say(text)) => {
-                self.say(Some(client), &text);
-                return;
-            }
-            None => {}
+        if self.reminders_key(client, m, k) || ci_key(m, k) {
+            return;
         }
         if keys_board_key(m, k) || self.inbox_key(client, m, k) {
             return;
         }
-        if self.slack_board_key(client, m, k) {
+        if Self::slack_board_key(m, k) {
             return;
         }
-        match calendar_key(m, k) {
-            Some(CalendarKey::Day(by)) => {
-                self.calendar_day_step(client, m, by);
-                return;
-            }
-            Some(CalendarKey::Do(act, label)) => {
-                self.mission_do(client, act, &label);
-                return;
-            }
-            Some(CalendarKey::Say(text)) => {
-                self.say(Some(client), &text);
-                return;
-            }
-            None => {}
+        if let Some(by) = calendar_key(m, k) {
+            self.calendar_day_step(client, m, by);
+            return;
         }
-        match landing_key(m, k) {
-            Some(LandingKey::Done) => return,
-            Some(LandingKey::Do(act, label)) => {
-                self.mission_do(client, act, label);
-                return;
-            }
-            Some(LandingKey::Say(text)) => {
-                self.say(Some(client), text);
-                return;
-            }
-            None => {}
-        }
-        if k.code == KeyCode::Char('s')
-            && plain(&k)
-            && m.current().is_some_and(|v| v.id == ViewId::Resources)
-        {
-            m.resources_sort = m.resources_sort.next();
+        if landing_key(m, k) {
             return;
         }
         let count = match m.current() {
@@ -2061,13 +2056,6 @@ impl Server {
         let tab_focus = m.snap.tab_focus;
         let ctrl = k.mods == Mods::CTRL;
         let none = plain(&k);
-        if self.work_map_key(client, m, k) {
-            return;
-        }
-        if k.code == KeyCode::Char('=') && none && m.snap.rules.ux2 {
-            self.views_at_once(client, m);
-            return;
-        }
         if m.grid.is_some() {
             match k.code {
                 KeyCode::Tab => return m.next_cell(1),
@@ -2140,54 +2128,7 @@ impl Server {
                 }
             }
             KeyCode::Char('v') if none => m.jump = Some(Jump::default()),
-            KeyCode::Char('e')
-                if none
-                    && m.current().is_some_and(|v| v.id == ViewId::Settings)
-                    && super::render::settings_board_shown(m) =>
-            {
-                let (dir, file) = match super::settings_board::file_of(m.chosen_item()) {
-                    Some(file) => (crate::usage::own::own_dir(), file),
-                    None => {
-                        // A relative SWITCHBOARD_SETTINGS is the server's, not
-                        // the editor's, which starts in the file's folder.
-                        let path = settings::settings_file();
-                        let path = std::path::absolute(&path).unwrap_or(path);
-                        let dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
-                        let file = path
-                            .file_name()
-                            .map(|f| f.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "settings.json".into());
-                        (dir, file)
-                    }
-                };
-                self.edit_own_file(client, &dir, &file);
-            }
-            KeyCode::Char('w') if none && m.current().is_some_and(|v| v.id == ViewId::Usage) => {
-                m.usage_week = !m.usage_week;
-                settle(m);
-            }
-            KeyCode::Char('r') if none => {
-                if let Some(ViewId::Plugin(name)) = m.current().map(|v| v.id.clone()) {
-                    if let Some(p) = self.usage.plugins.iter_mut().find(|p| p.name == name) {
-                        p.fetched_at = None;
-                    }
-                    m.note = Some("Asked it again.".into());
-                }
-            }
             KeyCode::Enter if notice_history_here(m) => self.notice_enter(client, m),
-            KeyCode::Char('m') if none && notice_history_here(m) => {
-                if let Some(item) = m.chosen_item().cloned().filter(is_a_notice) {
-                    self.notice_entry_menu(client, item);
-                }
-            }
-            KeyCode::Char('x') if none && notice_history_here(m) => {
-                if let Some(item) = m.chosen_item().cloned().filter(is_a_notice) {
-                    self.notice_entry_dismiss(client, m, &item);
-                }
-            }
-            KeyCode::Char(c @ '1'..='7') if none && notice_history_here(m) => {
-                choose_kind(m, c.to_digit(10).unwrap_or(1) as usize);
-            }
             // With UX 2.0, the shelf folded to its labels opens on one.
             KeyCode::Enter if shelf_label_chosen(m) => {
                 // The cursor stays on the label's first tab as the rest
@@ -2199,66 +2140,6 @@ impl Server {
                 }
             }
             KeyCode::Enter => self.mission_enter(client, m),
-            KeyCode::Char('m') if none && pilot_menu_here(m) => self.autopilot_menu(client),
-            // With UX 2.0, s shows the chosen card's screen in its place,
-            // until s again or the cursor moves.
-            KeyCode::Char('s') if none && m.view == 0 && m.snap.rules.ux2 => {
-                let chosen = chosen_tab(m);
-                let shown = chosen.is_some_and(|t| m.card_screen == Some((t, m.cursor)));
-                m.card_screen = match (shown, chosen) {
-                    (false, Some(tab)) => Some((tab, m.cursor)),
-                    _ => None,
-                };
-            }
-            // A card waiting on you takes its option's number as the answer.
-            // Anything the card doesn't show whole goes to the tab instead,
-            // whose prompt is Claude Code's own and shows all of it.
-            KeyCode::Char(c @ '1'..='9') if none && waiting_card(m).is_some() => {
-                if let Some(tab) = waiting_card(m) {
-                    let n = c.to_digit(10).unwrap_or(0);
-                    let fits = m.snap.tabs.iter().find(|t| t.id == tab).is_some_and(|t| {
-                        let screen = m.snap.screens.get(&tab);
-                        super::render::ask_fits(t, screen)
-                            && super::render::option_answers(t, screen, n)
-                    });
-                    // Only an option the card shows whole, never one it lacks
-                    // (which would be taken as an answer of your own), nor
-                    // one whose line reached the pane's edge, which may go
-                    // on in a line the screen's reading leaves out; and not
-                    // while the card shows its screen, cut to its width. A
-                    // question of several choices, whose ticks the card
-                    // doesn't show, goes to the tab too.
-                    let pane_cols = self
-                        .claude_pane_of(tab)
-                        .and_then(|p| self.panes.get(&p))
-                        .map_or(0, |slot| slot.pane.size().0 as usize);
-                    let shown_whole = self.prompt_of(tab).is_some_and(|p| {
-                        !p.multi
-                            && p.free != Some(n)
-                            && p.options.iter().any(|o| {
-                                let w = crate::ui::draw::width(&o.label);
-                                o.n == n && w <= super::render::OPTION_W && w + 12 < pane_cols
-                            })
-                    });
-                    let on_screen = m
-                        .card_screen
-                        .is_some_and(|(t, at)| t == tab && at == m.cursor);
-                    // Drawn as the card was last drawn, not cut off at its
-                    // foot or past the screen's edge.
-                    let drawn = m
-                        .hits
-                        .iter()
-                        .any(|h| h.spot == Spot::Key(Key::new(KeyCode::Char(c), Mods::NONE)));
-                    // Its cards at their full width, which the checks above
-                    // are made for, not a cell among several views narrower.
-                    let card_whole = m.laid().0 as usize >= super::render::CARD_W;
-                    if fits && shown_whole && !on_screen && drawn && card_whole {
-                        self.answer_tab(client, tab, &c.to_string());
-                    } else {
-                        self.mission_do(client, Do::GoTo(tab), "");
-                    }
-                }
-            }
             KeyCode::Char(c @ '1'..='9') if none && m.view == 0 => {
                 let n = c.to_digit(10).unwrap_or(0) as usize;
                 let order = m.order();
@@ -2273,11 +2154,9 @@ impl Server {
         }
     }
 
-    /// The Inbox board's own keys: Enter its menu, marking it read; `o` to
-    /// the tab working on its ticket; `x` dismissing it, here alone; M-l
-    /// its ticket in Linear; on a screen too narrow for the ticket beside,
-    /// `i` showing it in the list's place, and `i` or Esc back. True when
-    /// it took the key.
+    /// The Inbox board's own keys: Enter its menu, marking it read; on a
+    /// screen too narrow for the ticket beside, `i` showing it in the
+    /// list's place, and `i` or Esc back. True when it took the key.
     fn inbox_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
         if !m.current().is_some_and(|v| inbox_board::shown(m, v)) {
             return false;
@@ -2285,35 +2164,10 @@ impl Server {
         let Some(item) = m.chosen_item().cloned() else {
             return false;
         };
-        let none = plain(&k);
         let narrow = !inbox_board::beside(m.laid().0 as usize);
-        let ticket = inbox_board::ticket_of(&item).to_string();
         match k.code {
             KeyCode::Enter => self.inbox_enter(client, item),
-            KeyCode::Char('o') if none => {
-                let tabs = if m.snap.all_tabs.is_empty() {
-                    &m.snap.tabs
-                } else {
-                    &m.snap.all_tabs
-                };
-                match choices::tab_naming(tabs, &ticket) {
-                    Some(t) => self.mission_go(client, t.id),
-                    None => self.say(Some(client), &format!("No tab works on {ticket}.")),
-                }
-            }
-            KeyCode::Char('x') if none => {
-                self.notice_dismiss("inbox", &item);
-                self.mission_changed();
-                m.note = Some(format!("Dismissed {ticket}: it stays unread in Linear."));
-            }
-            KeyCode::Char('l') if k.mods == Mods::ALT => {
-                let url = item.data["url"].as_str().unwrap_or("").to_string();
-                if url.is_empty() {
-                    return false;
-                }
-                self.mission_do(client, Do::Open(url), "Opening it in Linear");
-            }
-            KeyCode::Char('i') if none && narrow => {
+            KeyCode::Char('i') if plain(&k) && narrow => {
                 m.inbox_pane = !m.inbox_pane;
                 m.side = None;
             }
@@ -2326,20 +2180,17 @@ impl Server {
     /// `h` and `l` in the Calendar: the day before or after the one shown,
     /// from the feed's days; past them, or with /today's day alone, says
     /// why not.
-    /// The Slack board's own keys: Enter opens the chosen message in Slack
-    /// (seen, as acting on it is), `m` its menu, `x` dismisses it until
-    /// its thread gets a reply, `p` plays its video or shows its picture,
-    /// and `i` (or Esc) shows or hides the thread in the list's place on a
-    /// screen too narrow for both. True when it took the key.
-    fn slack_board_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+    /// The Slack board's own key: `i` (or Esc) shows or hides the thread in
+    /// the list's place on a screen too narrow for both. Enter opens the
+    /// message's menu, as in every view, which plays its video or shows its
+    /// picture. True when it took the key.
+    fn slack_board_key(m: &mut Mission, k: Key) -> bool {
         let shown = m
             .current()
             .is_some_and(|v| super::render::slack_board_shown(m, v));
         if !shown || !(plain(&k) || k.code == KeyCode::Enter) {
             return false;
         }
-        let item = m.chosen_item().cloned();
-        let clicked = m.slack_clicked.take();
         match k.code {
             KeyCode::Char('i') if !super::slack_board::beside(m.laid().0 as usize) => {
                 m.slack_thread_open = !m.slack_thread_open;
@@ -2350,75 +2201,83 @@ impl Server {
                 m.slack_thread_open = false;
                 true
             }
-            KeyCode::Enter => {
-                let Some(item) = item else {
-                    return true;
-                };
-                match &item.target {
-                    crate::items::Target::Url(url) => {
-                        let url = url.clone();
-                        self.slack_item_acted(&item);
-                        self.mission_do(client, Do::Open(url), "Opening it in Slack");
-                    }
-                    _ => self.mission_enter(client, m),
-                }
-                true
-            }
-            KeyCode::Char('m') => {
-                self.mission_enter(client, m);
-                true
-            }
-            KeyCode::Char('x') => {
-                if let Some(item) = item.filter(|i| i.data.get("message").is_some()) {
-                    self.slack_dismiss(std::slice::from_ref(&item));
-                    m.note = Some("Dismissed until its thread gets a reply.".into());
-                }
-                true
-            }
-            // Threads and pictures turned off in Settings show nothing.
-            KeyCode::Char('p') if settings::is_on("slack_threads") => {
-                let Some(item) = item else {
-                    return true;
-                };
-                let (files, clicked) = self.slack_playable(&item, clicked);
-                if files.is_empty() {
-                    self.say(
-                        Some(client),
-                        "No picture or video of it is on this computer yet: they are read once its thread is.",
-                    );
-                    return true;
-                }
-                // A click shows its picture; p again steps to the next of
-                // the thread's, so each is reached from the keyboard too.
-                let at = match (&clicked, &m.slack_shown) {
-                    (Some(id), _) => files.iter().position(|f| f.0 == *id),
-                    (None, Some((shown_on, id))) if *shown_on == item.id => files
-                        .iter()
-                        .position(|f| f.0 == *id)
-                        .map(|i| (i + 1) % files.len()),
-                    _ => None,
-                }
-                .unwrap_or(0);
-                let (id, name, file, video) = files[at].clone();
-                m.slack_shown = Some((item.id.clone(), id));
-                // Quick Look alone, never `open`: the file is whatever a
-                // message's sender uploaded.
-                tokio::task::spawn_blocking(move || {
-                    let _ = crate::platform::preview(&file);
-                });
-                let doing = if video { "Playing" } else { "Showing" };
-                m.note = Some(if files.len() > 1 {
-                    format!(
-                        "{doing} {name} ({} of {}): p for the next.",
-                        at + 1,
-                        files.len()
-                    )
-                } else {
-                    format!("{doing} {name}.")
-                });
-                true
-            }
             _ => false,
+        }
+    }
+
+    /// The chosen Slack message's video played or picture shown with Quick
+    /// Look: the one clicked in its thread (`slack_clicked`), else, picked
+    /// again from its menu, the thread's next after the one shown last, so
+    /// each is reached from the keyboard too. Threads and pictures turned
+    /// off in Settings show nothing.
+    fn slack_play(&mut self, client: ClientId, m: &mut Mission, item: Option<Item>) {
+        let clicked = m.slack_clicked.take();
+        if !settings::is_on("slack_threads") {
+            return;
+        }
+        let Some(item) = item.or_else(|| m.chosen_item().cloned()) else {
+            return;
+        };
+        let (files, clicked) = self.slack_playable(&item, clicked);
+        if files.is_empty() {
+            self.say(
+                Some(client),
+                "No picture or video of it is on this computer yet: they are read once its thread is.",
+            );
+            return;
+        }
+        let at = match (&clicked, &m.slack_shown) {
+            (Some(id), _) => files.iter().position(|f| f.0 == *id),
+            (None, Some((shown_on, id))) if *shown_on == item.id => files
+                .iter()
+                .position(|f| f.0 == *id)
+                .map(|i| (i + 1) % files.len()),
+            _ => None,
+        }
+        .unwrap_or(0);
+        let (id, name, file, video) = files[at].clone();
+        m.slack_shown = Some((item.id.clone(), id));
+        // Quick Look alone, never `open`: the file is whatever a message's
+        // sender uploaded.
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::platform::preview(&file);
+        });
+        let doing = if video { "Playing" } else { "Showing" };
+        m.note = Some(if files.len() > 1 {
+            format!(
+                "{doing} {name} ({} of {}): its menu again for the next.",
+                at + 1,
+                files.len()
+            )
+        } else {
+            format!("{doing} {name}.")
+        });
+    }
+
+    /// Runs `slack_play` once mission control is back in its overlay (a
+    /// pick from a message's menu, `item`, or a click on a picture of the
+    /// chosen one); from the Notifications window, with no mission control,
+    /// on a mission of its own, what it did said in a box.
+    fn slack_play_now(&mut self, client: ClientId, item: Option<Item>) {
+        let (mut m, open) = match self.take_mission(client) {
+            Some(m) => (m, true),
+            None => {
+                let mut m = Mission::new();
+                m.slack_shown = self.mission.slack_shown.get(&client).cloned();
+                (m, false)
+            }
+        };
+        self.slack_play(client, &mut m, item);
+        if open {
+            self.put_mission(client, m);
+            self.mission_redraw();
+        } else {
+            if let Some(shown) = m.slack_shown {
+                self.mission.slack_shown.insert(client, shown);
+            }
+            if let Some(note) = m.note {
+                self.say(Some(client), &note);
+            }
         }
     }
 
@@ -2436,61 +2295,6 @@ impl Server {
             }
             Err(why) => self.say(Some(client), &why),
         }
-    }
-
-    /// The Work map's own keys with UX 2.0, outside M-j's and M-o's
-    /// pickers: Enter on a row goes to its tab, or opens a tab in its
-    /// worktree resuming its Claude, with no menu; `o` shows only the rows
-    /// with a tab and `n` only those without, pressed again to show all;
-    /// `z` folds or opens the chosen row's repository; `m` opens the
-    /// row's menu, which Enter opens elsewhere. True when it took the key.
-    fn work_map_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
-        let Some(view) = m
-            .current()
-            .filter(|v| v.id == ViewId::WorkMap && m.snap.rules.ux2 && !m.picker)
-            .cloned()
-        else {
-            return false;
-        };
-        if !plain(&k) && k.code != KeyCode::Enter {
-            return false;
-        }
-        let chosen = m.chosen_item().cloned();
-        let scope = |m: &mut Mission, s: Scope| {
-            m.scope = if m.scope == Some(s) { None } else { Some(s) };
-            m.cursor = 0;
-        };
-        match k.code {
-            KeyCode::Enter => {
-                let Some(item) = chosen.filter(|i| !views::is_header(i)) else {
-                    return false;
-                };
-                match item.target {
-                    Target::Tab(t) => self.mission_go(client, t),
-                    Target::Dir(dir) => self.mission_do(client, Do::OpenHere(dir), "Opening a tab"),
-                    Target::Url(_) | Target::None => return false,
-                }
-            }
-            KeyCode::Char('o') => scope(m, Scope::Tabs),
-            KeyCode::Char('n') => scope(m, Scope::Untabbed),
-            KeyCode::Char('z') => {
-                let Some(repo) = chosen.as_ref().and_then(views::repo_key) else {
-                    return true;
-                };
-                let heading = format!("repo:{repo}");
-                if let Some(at) = view.data.items.iter().position(|i| i.id == heading) {
-                    m.cursor = at as isize;
-                }
-                m.folds.fold(repo);
-            }
-            KeyCode::Char('m') => {
-                if let Some(item) = chosen.filter(|i| !views::is_header(i)) {
-                    self.item_menu(client, &view.id, item, &view.data.items);
-                }
-            }
-            _ => return false,
-        }
-        true
     }
 
     /// Counts, in the background, the branch of the Work map's chosen row
@@ -2695,6 +2499,7 @@ impl Server {
                 self.mission_prepare(client);
                 self.mission_dirty(client);
             }
+            Then::SlackPlay => self.slack_play_now(client, None),
         }
     }
 
@@ -2710,26 +2515,140 @@ impl Server {
     /// Enter on what is chosen: a tab's menu; on an item, its own menu, or
     /// what it does by itself (a heading opening, a setting changing, a
     /// plugin's item opening).
-    /// A tab's menu, as Enter on its card opens it: going there, answering,
-    /// its reminder, its place in the landing queue.
-    fn tab_menu(&mut self, client: ClientId, tab: &crate::sidebar::model::TabModel) {
+    /// A tab's menu, as Enter on its card opens it: going there, the
+    /// options of the question it waits on, answering, its reminder, its
+    /// place in the landing queue. `screen` is whether the card shows its
+    /// screen in its place, on the Tabs view with UX 2.0, which the menu
+    /// offers to show or hide.
+    fn tab_menu(
+        &mut self,
+        client: ClientId,
+        tab: &crate::sidebar::model::TabModel,
+        screen: Option<bool>,
+    ) {
         let all = self.sidebar_all_tabs();
         let waiter = self.sources.landing_waiter(tab.id).cloned();
-        let list = choices::tab_choices(
+        let mut list = choices::tab_choices(
             tab,
             &all,
             waiter.as_ref(),
             settings::is_on("reminders"),
             settings::is_on("tab_title"),
         );
+        let (cols, rows) = self
+            .clients
+            .get(&client)
+            .map_or((80, 24), |c| (c.cols as usize, c.rows as usize));
+        // The menu's inside on this screen, at its least: its box two thirds
+        // of the screen or 72 columns, never narrower than its keys' row
+        // (src/ui/menu.rs); a label has five columns less.
+        let inner = ((cols * 2 / 3).min(72).saturating_sub(2))
+            .max(crate::ui::draw::width(crate::ui::menu::KEYS) + 3)
+            .min(cols.saturating_sub(2));
+        let mut after_go = self.answer_choices(tab, inner.saturating_sub(5));
+        // What its answers answer, whole above them, wherever the menu is
+        // opened (a card, a reminder): the request's kind and its words.
+        let body = (!after_go.is_empty())
+            .then_some(tab.ask.as_ref())
+            .flatten()
+            .map(|a| {
+                let kind = if a.header.is_empty() {
+                    &a.tool
+                } else {
+                    &a.header
+                };
+                format!("{kind}\n{}", a.words)
+            });
+        if let Some(shown) = screen.filter(|_| tab.claude.is_some()) {
+            after_go.push(Choice {
+                key: 's',
+                label: if shown {
+                    "Show its card again".into()
+                } else {
+                    "Show its screen in the card".into()
+                },
+                act: Do::CardScreen(tab.id),
+            });
+        }
+        let at = 1.min(list.len());
+        list.splice(at..at, after_go);
+        // Answers only with the request whole above them: the menu shows its
+        // options first and its text in the rows left (src/ui/menu.rs).
+        let room = rows.saturating_sub(6).max(1);
+        let body_room = room.saturating_sub(list.len().min(room) + 1);
+        // A command is shown character for character: answers only where
+        // the menu lays it out unchanged, each of its lines whole, none
+        // broken or trimmed.
+        let shown_as_is = tab.ask.as_ref().is_none_or(|a| {
+            a.kind != crate::agent::WaitKind::Permission
+                || crate::ui::draw::wrap(&a.words, inner.saturating_sub(2))
+                    == a.words.split('\n').collect::<Vec<_>>()
+        });
+        let body_fits = shown_as_is
+            && body.as_ref().is_some_and(|b| {
+                crate::ui::draw::wrap(b.trim(), inner.saturating_sub(2)).len() <= body_room
+            });
+        let body = if body_fits {
+            body
+        } else {
+            list.retain(|c| !matches!(c.act, Do::AnswerWith { .. }));
+            None
+        };
         self.mission_menu(
             client,
             format!("{} {}", tab.index, tab.name),
-            None,
+            body,
             list,
             None,
             None,
+            false,
         );
+    }
+
+    /// A waiting tab's question's options, each answering it as its number
+    /// typed into the tab, only where what is answered is known whole: a
+    /// request its card shows all of (`ask_fits`: a question asking one
+    /// thing, or a Bash command, never an edit whose change it doesn't
+    /// show), a question of one choice, never the option that takes words of
+    /// your own, one whose screen shows more than its label (`more`: words
+    /// cut or lines under it), one wider than the menu shows whole, or one
+    /// whose line reached the pane's edge, which may go on in a line the
+    /// screen's reading leaves out. Anything else is answered in the tab, or
+    /// with "Answer it here", which shows all of it.
+    fn answer_choices(
+        &self,
+        tab: &crate::sidebar::model::TabModel,
+        label_room: usize,
+    ) -> Vec<Choice> {
+        if tab.state != crate::sidebar::model::TabState::Waiting
+            || !super::render::ask_fits(tab, None)
+        {
+            return Vec::new();
+        }
+        let Some(prompt) = self.prompt_of(tab.id).filter(|p| !p.multi) else {
+            return Vec::new();
+        };
+        let pane_cols = self
+            .claude_pane_of(tab.id)
+            .and_then(|p| self.panes.get(&p))
+            .map_or(0, |slot| slot.pane.size().0 as usize);
+        prompt
+            .options
+            .iter()
+            .filter(|o| prompt.free != Some(o.n) && !prompt.more.contains(&o.n))
+            .filter(|o| {
+                let w = crate::ui::draw::width(&o.label);
+                w + ANSWER_PREFIX_W <= label_room && w + 12 < pane_cols
+            })
+            .map(|o| Choice {
+                key: char::from_digit(o.n, 10).unwrap_or('9'),
+                label: format!("Answer: {}", o.label),
+                act: Do::AnswerWith {
+                    tab: tab.id,
+                    reply: o.n.to_string(),
+                },
+            })
+            .collect()
     }
 
     fn mission_enter(&mut self, client: ClientId, m: &mut Mission) {
@@ -2747,7 +2666,12 @@ impl Server {
             else {
                 return;
             };
-            self.tab_menu(client, &tab);
+            let screen = m
+                .snap
+                .rules
+                .ux2
+                .then(|| m.card_screen == Some((tab.id, m.cursor)));
+            self.tab_menu(client, &tab, screen);
             return;
         };
         let Some(item) = m.chosen_item().cloned() else {
@@ -2758,13 +2682,24 @@ impl Server {
             && let Target::Tab(id) = item.target
             && let Some(tab) = self.sidebar_all_tabs().into_iter().find(|t| t.id == id)
         {
-            self.tab_menu(client, &tab);
+            self.tab_menu(client, &tab, None);
             return;
         }
+        // A folded line is an item too: its menu shows what it folds.
         if views::is_fold_line(&item)
             && let Some(repo) = views::repo_key(&item)
         {
-            m.folds.merged(repo);
+            let label = if item.data["open"] == true {
+                "Fold them again"
+            } else {
+                "Show them"
+            };
+            self.small_view_menu(
+                client,
+                &item.title,
+                label,
+                ViewAct::Merged(repo.to_string()),
+            );
             return;
         }
         if views::is_repo_heading(&item)
@@ -2782,62 +2717,23 @@ impl Server {
         if views::is_header(&item) {
             return;
         }
-        // A workspace key is pressed at once; an app's own only says so.
-        if view.id == ViewId::Keys {
-            match super::keymap::press_of(&item) {
-                // Pressed once mission control is back in its overlay, since
-                // a key may open mission control again (M-j).
-                Some(action) => {
-                    self.mission.after_key = Some(Box::new(move |server| {
-                        server.mission_do(client, Do::Press(action), "");
-                    }));
-                }
-                None => self.say(Some(client), &super::keymap::only_there(&item)),
-            }
+        // An app's own key only says so: a workspace key's menu presses it.
+        if view.id == ViewId::Keys && super::keymap::press_of(&item).is_none() {
+            self.say(Some(client), &super::keymap::only_there(&item));
             return;
         }
-        if view.id == ViewId::Usage {
-            if item.data.get("tab_key").is_some() {
-                match item.target {
-                    Target::Tab(t) if self.tabs.contains_key(&t) => self.mission_go(client, t),
-                    _ => self.say(Some(client), "That tab has closed."),
-                }
-            }
+        if view.id == ViewId::Usage
+            && item.data.get("tab_key").is_some()
+            && !matches!(item.target, Target::Tab(t) if self.tabs.contains_key(&t))
+        {
+            self.say(Some(client), "That tab has closed.");
             return;
         }
-        if let Some(key) = item.data.get("setting").and_then(Value::as_str) {
-            let key = key.to_string();
-            if let Some(note) = self.change_setting(&key) {
-                m.note = Some(note);
-            } else if key == crate::setup::way::SETTING {
-                let on = settings::is_on(&key);
-                self.claude_plugin_setup(
-                    client,
-                    format!(
-                        "Load Switchboard as a plugin: {}",
-                        if on { "on" } else { "off" }
-                    ),
-                );
-            }
-            return;
-        }
-        if item.data.get("own").is_some() {
-            self.change_own(client, m, &item);
-            return;
-        }
-        if item.data.get("repo_setting").is_some() {
-            self.change_repo(client, m, &item);
-            return;
-        }
-        if let ViewId::Plugin(_) = view.id {
-            match item.target.clone() {
-                Target::Tab(t) => self.mission_go(client, t),
-                Target::Url(url) => self.mission_do(client, Do::Open(url), "Opening it"),
-                Target::Dir(dir) => self.mission_do(client, Do::OpenHere(dir), "Opening a tab"),
-                Target::None => {}
-            }
-            return;
-        }
+        // The CI view's menu is for the failed check chosen under its PR.
+        let item = match m.chosen_check() {
+            Some(n) if view.id == ViewId::Ci => with_check(item, n),
+            _ => item,
+        };
         self.item_menu(client, &view.id, item, &view.data.items);
     }
 
@@ -2857,7 +2753,18 @@ impl Server {
             .then(|| notice_for(&item, true))
             .flatten();
         let title = item.title.clone();
-        self.mission_menu(client, title, body, list, seen.then_some(item), notice);
+        // A calendar event's choices show their keys, which take them (board
+        // 54).
+        let keyed = *view == ViewId::Calendar;
+        self.mission_menu(
+            client,
+            title,
+            body,
+            list,
+            seen.then_some(item),
+            notice,
+            keyed,
+        );
     }
 
     /// What an item's menu offers, with what the menus need to know of the
@@ -2889,21 +2796,293 @@ impl Server {
             home: paths::home(),
             habit: &habit,
         };
-        // A notification's menu dismisses every one the sidebar shows,
-        // whichever list it was opened from.
-        let sidebars = (*view == ViewId::Notifications).then(|| {
-            self.notice_entries()
-                .into_iter()
-                .filter_map(|(owner, mut item)| match owner {
-                    crate::sidebar::Owner::Notice { source, .. } => {
-                        item.id = format!("{source}\t{}", item.id);
-                        Some(item)
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
+        if *view == ViewId::Settings {
+            return self.setting_choices(item);
+        }
+        let mut list = choices::item_choices(view, item, shown, &ctx);
+        // A message with a picture or video in its thread plays it, in the
+        // Slack view and in its notification's menu alike, after opening it.
+        let message = match view {
+            ViewId::Slack => Some(item.clone()),
+            ViewId::Notifications if choices::is_slack_message(view, item) => {
+                let (source, id) = choices::notice_of(item);
+                let mut own = item.clone();
+                own.id = id;
+                Some(crate::sidebar::notices::as_its_view_has_it(&source, &own))
+            }
+            _ => None,
+        };
+        let playable = message.filter(|m| {
+            settings::is_on("slack_threads") && !self.slack_playable(m, None).0.is_empty()
         });
-        choices::item_choices(view, item, sidebars.as_deref().unwrap_or(shown), &ctx)
+        if let Some(message) = playable {
+            let at = 1.min(list.len());
+            list.insert(
+                at,
+                Choice {
+                    key: 'p',
+                    label: "Play its video or show its picture".into(),
+                    act: Do::SlackPlay(Box::new(message)),
+                },
+            );
+        }
+        // A Work map row folds its repository, as its heading does.
+        if *view == ViewId::WorkMap
+            && !views::is_header(item)
+            && let Some(repo) = views::repo_key(item)
+        {
+            list.push(Choice {
+                key: 'z',
+                label: "Fold its repository".into(),
+                act: Do::FoldRepo(repo.to_string()),
+            });
+        }
+        list
+    }
+
+    /// `m`: the menu of the view's own actions, as board 55 draws it (what
+    /// the view shows, how it is sorted, a day, finding a key), then
+    /// mission control's: several views at once, and this view's settings.
+    fn view_menu(&mut self, client: ClientId, m: &mut Mission) {
+        let mut list: Vec<(String, ViewAct)> = Vec::new();
+        let mut add = |label: &str, act: ViewAct| list.push((label.to_string(), act));
+        let view = m.current().cloned();
+        match view.as_ref().map(|v| &v.id) {
+            None => {
+                if m.snap.pilot.is_some() {
+                    add(autopilot_label(), ViewAct::Autopilot);
+                }
+            }
+            Some(ViewId::Notifications) => {
+                use crate::sidebar::history::Kind;
+                add("Dismiss every notification shown", ViewAct::DismissShown);
+                if m.snap.notice_counts.is_none() {
+                    // The view lists only what the sidebar shows: no kinds.
+                } else {
+                    for key in 1..=7 {
+                        let name = Kind::of_key(key).map_or("All", Kind::name);
+                        let label = if key == 1 {
+                            "Show every kind".to_string()
+                        } else {
+                            format!("Show only {name}")
+                        };
+                        if key != m.notice_kind {
+                            add(&label, ViewAct::Kind(key));
+                        }
+                    }
+                }
+            }
+            Some(ViewId::Usage) => add(
+                if m.usage_week {
+                    "Show today"
+                } else {
+                    "Show this week"
+                },
+                ViewAct::UsageWeek,
+            ),
+            Some(ViewId::Resources) => add(
+                match m.resources_sort {
+                    super::resources_board::Sort::Cpu => "Sort by memory",
+                    super::resources_board::Sort::Memory => "Sort by CPU",
+                },
+                ViewAct::Sort,
+            ),
+            Some(ViewId::Keys) => add("Find a key by pressing it", ViewAct::FindKey),
+            Some(ViewId::Settings) => {
+                let (dir, file) = settings_file_of(m.chosen_item());
+                add(
+                    &format!("Open {file} in your editor"),
+                    ViewAct::EditFile(dir, file),
+                );
+            }
+            Some(ViewId::Autopilot) => {
+                add(autopilot_label(), ViewAct::Autopilot);
+            }
+            Some(ViewId::WorkMap) if m.snap.rules.ux2 && !m.picker => {
+                for (label, scope) in [
+                    ("Show only the rows with a tab", Some(Scope::Tabs)),
+                    ("Show only the rows with no tab", Some(Scope::Untabbed)),
+                    ("Show every row", None),
+                ] {
+                    if m.scope != scope {
+                        add(label, ViewAct::Scope(scope));
+                    }
+                }
+            }
+            Some(ViewId::Calendar) if view.as_ref().is_some_and(|v| v.data.setup.is_none()) => {
+                add("Go to today", ViewAct::Today);
+                add("The day before", ViewAct::Day(-1));
+                add("The day after", ViewAct::Day(1));
+            }
+            Some(ViewId::Reminders) if on_reminders(m) => {
+                let day = super::reminders::chosen_day(m);
+                add(
+                    &format!(
+                        "Remind me about a tab on {} {} {}",
+                        remind::short_day(day.weekday()),
+                        remind::short_month(day.month()),
+                        day.day()
+                    ),
+                    ViewAct::RemindOn(day),
+                );
+                add("Go to today", ViewAct::RemindToday);
+            }
+            Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
+            _ => {}
+        }
+        if m.snap.rules.ux2 {
+            add("Several views at once…", ViewAct::ViewsAtOnce);
+        }
+        let title = view.as_ref().map_or("Tabs", views::bar_title).to_string();
+        if view.as_ref().is_none_or(|v| v.id != ViewId::Settings) {
+            add("This view's settings", ViewAct::Settings(title.clone()));
+        }
+        let options: Vec<MenuOption> = list.iter().map(|(l, _)| MenuOption::new(l)).collect();
+        let menu = Menu::new(format!("{title}: view actions"), options);
+        self.choose(client, menu, move |server, client, chose| {
+            let Some((_, act)) = chose.and_then(|i| list.into_iter().nth(i)) else {
+                return;
+            };
+            server.view_act(client, act);
+        });
+    }
+
+    /// The notifications the sidebar shows, each under the id the
+    /// Notifications view gives it (`<source>\t<id>`), for dismissing every
+    /// one shown (`choices::dismiss_all`) from the view's and the window's
+    /// own menus, whichever list they were opened from.
+    pub(crate) fn sidebar_notice_items(&self) -> Vec<Item> {
+        self.notice_entries()
+            .into_iter()
+            .filter_map(|(owner, mut item)| match owner {
+                crate::sidebar::Owner::Notice { source, .. } => {
+                    item.id = format!("{source}\t{}", item.id);
+                    Some(item)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A menu of one choice over mission control, done as a view's is.
+    fn small_view_menu(&mut self, client: ClientId, title: &str, label: &str, act: ViewAct) {
+        let menu = Menu::new(title.to_string(), vec![MenuOption::new(label)]);
+        self.choose(client, menu, move |server, client, chose| {
+            if chose == Some(0) {
+                server.view_act(client, act);
+            }
+        });
+    }
+
+    /// What was picked in a view's menu, done on mission control once it
+    /// is back in its overlay.
+    fn view_act(&mut self, client: ClientId, act: ViewAct) {
+        match act {
+            ViewAct::FindKey => return self.find_key(client),
+            ViewAct::Autopilot => return self.autopilot_menu(client),
+            ViewAct::EditFile(dir, file) => return self.edit_own_file(client, &dir, &file),
+            ViewAct::RemindOn(day) => return self.remind_on_day(client, day),
+            ViewAct::DismissShown => {
+                match choices::dismiss_all(&self.sidebar_notice_items()) {
+                    Some(all) => self.mission_do(client, all, ""),
+                    None => self.mission_note(client, "Nothing in the sidebar to dismiss."),
+                }
+                return;
+            }
+            ViewAct::AskAgain(name) => {
+                if let Some(p) = self.usage.plugins.iter_mut().find(|p| p.name == name) {
+                    p.fetched_at = None;
+                }
+                self.mission_note(client, "Asked it again.");
+                return;
+            }
+            _ => {}
+        }
+        let Some(mut m) = self.take_mission(client) else {
+            return;
+        };
+        match act {
+            ViewAct::Kind(key) => choose_kind(&mut m, key),
+            ViewAct::UsageWeek => {
+                m.usage_week = !m.usage_week;
+                settle(&mut m);
+            }
+            ViewAct::Sort => m.resources_sort = m.resources_sort.next(),
+            ViewAct::Scope(scope) => {
+                m.scope = scope;
+                m.cursor = 0;
+            }
+            ViewAct::Day(by) => self.calendar_day_step(client, &mut m, by),
+            ViewAct::Today => {
+                m.calendar_day = None;
+                m.cursor = 0;
+                m.side = None;
+            }
+            ViewAct::RemindToday => {
+                let today = super::reminders::today(&m);
+                choose_day(&mut m, today);
+            }
+            ViewAct::Merged(repo) => m.folds.merged(&repo),
+            ViewAct::Unfold(day) => {
+                // On its first notification, under its heading.
+                m.unfolded.insert(day);
+                m.cursor += 1;
+            }
+            ViewAct::ViewsAtOnce => {
+                self.views_at_once(client, &mut m);
+            }
+            ViewAct::Settings(title) => {
+                if let Some(at) = m.place_of("settings") {
+                    m.grid = None;
+                    show_view(&mut m, at);
+                    m.filter = Some(Filter {
+                        text: title,
+                        typing: false,
+                    });
+                    m.cursor = 0;
+                    settle(&mut m);
+                }
+            }
+            _ => {}
+        }
+        m.taken_at = None;
+        self.put_mission(client, m);
+        self.mission_prepare(client);
+        self.mission_redraw();
+    }
+
+    /// Mission control on its Notifications view, the cursor on the
+    /// notification `id` of `source` where the view lists it, and its menu
+    /// open over it, as the sidebar leads to it with the Notifications
+    /// window off: nothing picked yet, and never a view that doesn't show it
+    /// (its history lists what the sidebar shows only once written).
+    pub(crate) fn mission_on_notice(&mut self, client: ClientId, source: &str, id: &str) {
+        self.open_mission(client, Opening::View("notifications".into()));
+        let wanted = (source.to_string(), id.to_string());
+        if let Some(m) = self.mission_mut(client)
+            && let Some(at) = m
+                .current()
+                .filter(|v| v.id == ViewId::Notifications)
+                .and_then(|v| {
+                    v.data
+                        .items
+                        .iter()
+                        .position(|i| choices::notice_of(i) == wanted)
+                })
+        {
+            m.cursor = at as isize;
+        }
+        self.mission_redraw();
+        // A kind's row names its first notification.
+        let item = self
+            .notices
+            .get(source)
+            .and_then(|items| items.iter().find(|i| i.id == id).or(items.first()))
+            .cloned();
+        if let Some(mut item) = item {
+            item.id = format!("{source}\t{}", item.id);
+            self.notice_menu(client, item);
+        }
     }
 
     /// A notification's menu, over whatever is in front (the Notifications
@@ -2914,34 +3093,24 @@ impl Server {
     }
 
     /// Enter in the Notifications view's history: on a fold, its day
-    /// unfolded, the cursor on its first notification; on a notification, the first of its menu's choices done
-    /// (`notice_menu_choices`), as picking it would.
+    /// unfolded, the cursor on its first notification; on a notification,
+    /// its menu (`notice_menu_choices`), what Enter did before it first.
     fn notice_enter(&mut self, client: ClientId, m: &mut Mission) {
         let Some(item) = m.chosen_item().cloned() else {
             return;
         };
         if let Some(day) = super::history::fold_of(&item) {
-            // On its first notification, under its heading.
-            m.unfolded.insert(day.to_string());
-            m.cursor += 1;
+            self.small_view_menu(
+                client,
+                &item.title,
+                "Show them",
+                ViewAct::Unfold(day.to_string()),
+            );
             return;
         }
-        if !is_a_notice(&item) {
-            return;
+        if is_a_notice(&item) {
+            self.notice_entry_menu(client, item);
         }
-        if self.notice_service_off(client, &item) {
-            return;
-        }
-        let Some(first) = self.notice_menu_choices(&item).into_iter().next() else {
-            return;
-        };
-        let notice = kept_notice(&item);
-        let seen = choices::is_slack_message(&ViewId::Notifications, &item).then_some(item);
-        // Done once mission control is back in its overlay, since going to
-        // a view or a tab acts on it.
-        self.mission.after_key = Some(Box::new(move |server| {
-            server.mission_pick(client, first, seen, notice);
-        }));
     }
 
     /// A kept notification's menu: its menu as the sidebar's has it, but
@@ -2974,7 +3143,7 @@ impl Server {
         true
     }
 
-    /// `m` on a kept notification: its whole menu.
+    /// A kept notification's whole menu, which Enter opens.
     fn notice_entry_menu(&mut self, client: ClientId, item: Item) {
         if self.notice_service_off(client, &item) {
             return;
@@ -2987,28 +3156,25 @@ impl Server {
         let seen = choices::is_slack_message(&ViewId::Notifications, &item);
         let notice = kept_notice(&item);
         let title = item.title.clone();
-        self.mission_menu(client, title, body, list, seen.then_some(item), notice);
-    }
-
-    /// `x` on a kept notification: put out of the sidebar, when the
-    /// sidebar still shows it.
-    fn notice_entry_dismiss(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
-        if !super::history::shown(item) {
-            self.say(Some(client), "It's already out of the sidebar.");
-            return;
-        }
-        if let Some((source, own)) = choices::dismisses(item) {
-            self.notice_dismiss(&source, &own);
-            m.note = Some("Dismissed.".into());
-        }
+        self.mission_menu(
+            client,
+            title,
+            body,
+            list,
+            seen.then_some(item),
+            notice,
+            false,
+        );
     }
 
     /// A menu of choices over mission control; the one taken is done. Its
     /// options have no keys of their own, as the daemon's menus had none:
-    /// j and k move, Enter takes. `seen` is a Slack message seen whatever
+    /// j and k move, Enter takes; with `keyed`, each shows its key at the
+    /// right, which takes it. `seen` is a Slack message seen whatever
     /// is picked, and `notice` the notification it is the menu of, what
     /// is picked recorded as what it led to, and dismissed after it when
     /// its flag says so.
+    #[allow(clippy::too_many_arguments)]
     fn mission_menu(
         &mut self,
         client: ClientId,
@@ -3017,10 +3183,20 @@ impl Server {
         list: Vec<Choice>,
         seen: Option<Item>,
         notice: Notice,
+        keyed: bool,
     ) {
         let options: Vec<MenuOption> = list
             .iter()
-            .map(|c| MenuOption::new(c.label.clone()))
+            .map(|c| {
+                let option = MenuOption::new(c.label.clone());
+                // A number takes the option with that number in every menu,
+                // and j k g G q move or close it, so none of them is shown.
+                if keyed && c.key.is_ascii_alphabetic() && !"jkgGq".contains(c.key) {
+                    option.key(c.key)
+                } else {
+                    option
+                }
+            })
             .collect();
         let mut menu = Menu::new(title, options);
         if let Some(body) = body {
@@ -3044,7 +3220,11 @@ impl Server {
     fn mission_pick(&mut self, client: ClientId, c: Choice, seen: Option<Item>, notice: Notice) {
         let label = c.label.clone();
         let dismissed = choices::puts_away(&c.act);
-        if let Some(item) = &seen {
+        // Playing its picture or video leaves it unseen and its notification
+        // in place, as `p` did, so the list keeps its order and its next is
+        // played from the same row.
+        let playing = matches!(c.act, Do::SlackPlay(_));
+        if let Some(item) = seen.as_ref().filter(|_| !playing) {
             self.slack_item_acted(item);
         }
         if let Some((source, item, _)) = &notice {
@@ -3057,7 +3237,7 @@ impl Server {
             Some((source, item, _)) if dismissed => {
                 self.notice_history_mark(&source, &item.id, Sidebar::Dismissed, true);
             }
-            Some((source, item, true)) => self.notice_dismiss(&source, &item),
+            Some((source, item, true)) if !playing => self.notice_dismiss(&source, &item),
             // A suggestion's choice says what becomes of it, which puts it
             // out of the sidebar as you dismissing it.
             Some((source, item, false)) if source == "habits" => {
@@ -3144,7 +3324,7 @@ impl Server {
         );
     }
 
-    /// `=`: the "Views at once" box, from the views shown now, else the
+    /// "Several views at once…": the "Views at once" box, from the views shown now, else the
     /// choice kept last time (board 11's four the first time); its Enter
     /// shows them at once, kept for next time, and its Esc, or fewer than
     /// two picked, goes back to one view.
@@ -3192,7 +3372,8 @@ impl Server {
             return;
         };
         let mut came = Vec::new();
-        // What Enter took is kept for the next `=`, whatever it shows.
+        // What Enter took is kept for the box's next opening, whatever it
+        // shows.
         if let (Outcome::Yes, Some(choice)) = (&outcome, &choice)
             && let Err(e) = super::grid::save(&paths::state_dir(), choice)
         {
@@ -3588,6 +3769,45 @@ impl Server {
                 self.new_note_open(client, &rel);
             }
             Do::OpenView(slug) => self.open_mission(client, Opening::View(slug)),
+            Do::AnswerWith { tab, reply } => self.answer_tab(client, tab, &reply),
+            Do::SlackPlay(item) => self.slack_play_now(client, Some(*item)),
+            Do::FoldRepo(repo) => {
+                let Some(mut m) = self.take_mission(client) else {
+                    return;
+                };
+                let heading = format!("repo:{repo}");
+                if let Some(at) = m
+                    .current()
+                    .and_then(|v| v.data.items.iter().position(|i| i.id == heading))
+                {
+                    m.cursor = at as isize;
+                }
+                m.folds.fold(&repo);
+                m.taken_at = None;
+                self.put_mission(client, m);
+                self.mission_prepare(client);
+                self.mission_redraw();
+            }
+            Do::EditFile { dir, file } => self.edit_own_file(client, &dir, &file),
+            Do::CardScreen(tab) => {
+                let Some(mut m) = self.take_mission(client) else {
+                    return;
+                };
+                let shown = m.card_screen.is_some_and(|(t, _)| t == tab);
+                m.card_screen = (!shown && chosen_tab(&m) == Some(tab)).then_some((tab, m.cursor));
+                self.put_mission(client, m);
+                self.mission_redraw();
+            }
+            Do::Change(item) => {
+                let Some(mut m) = self.take_mission(client) else {
+                    return;
+                };
+                self.change_item(client, &mut m, &item);
+                m.taken_at = None;
+                self.put_mission(client, m);
+                self.mission_prepare(client);
+                self.mission_redraw();
+            }
             Do::Press(action) => {
                 self.mission_close(client);
                 self.act(client, action);
@@ -3959,9 +4179,9 @@ impl Server {
 
     /// The Reminders view's keys with its month drawn: h and l a day, j
     /// and k a week, H and L a month, t today; Enter the chosen day's
-    /// reminder's menu, g its tab, e its box, x clearing it, and on a day
-    /// with none, e a reminder for a tab on that day; i the pane's lists
-    /// under a narrow month. True when it took the key.
+    /// reminder's menu (its tab's), or on a day with none, says `m`
+    /// sets one; i the pane's lists under a narrow month. True when it
+    /// took the key.
     fn reminders_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
         if !on_reminders(m) || !plain(&k) {
             return false;
@@ -3978,7 +4198,6 @@ impl Server {
             KeyCode::Char('k') | KeyCode::Up => Some(step(day, -7, 0)),
             KeyCode::Char('H') => Some(step(day, 0, -1)),
             KeyCode::Char('L') => Some(step(day, 0, 1)),
-            KeyCode::Char('t') => Some(super::reminders::today(m)),
             _ => None,
         };
         if let Some(to) = to {
@@ -4004,21 +4223,9 @@ impl Server {
                 m.cursor = chosen.unwrap_or(0) as isize;
                 self.mission_enter(client, m);
             }
-            (KeyCode::Char('g'), Some(t)) => self.mission_go(client, t),
-            (KeyCode::Char('e'), Some(t)) => self.remind_tab(client, t),
-            (KeyCode::Char('x'), Some(t)) => {
-                // Mission control is out of its overlay while its key is
-                // handled, so what was done goes in its footer here.
-                self.clear_reminder(client, t);
-                m.note = Some(format!(
-                    "Reminder cleared for {}.",
-                    self.remind_name(t).unwrap_or_default()
-                ));
-            }
-            (KeyCode::Char('e'), None) => self.remind_on_day(client, day),
-            (KeyCode::Enter | KeyCode::Char('g' | 'x'), None) => {
+            (KeyCode::Enter, None) => {
                 let words = format!(
-                    "No reminder on {} {} {}. e sets one.",
+                    "No reminder on {} {} {}. m sets one.",
                     remind::short_day(day.weekday()),
                     remind::short_month(day.month()),
                     day.day()
@@ -4233,6 +4440,68 @@ impl Server {
     }
 
     // ── Settings ────────────────────────────────────────────────────────────
+
+    /// A Settings row changed, as its menu's first choice: an on/off
+    /// flipped or a choice to the next, a setting kept in a file of yours,
+    /// or a repository's landing.
+    fn change_item(&mut self, client: ClientId, m: &mut Mission, item: &Item) {
+        if let Some(key) = item.data.get("setting").and_then(Value::as_str) {
+            let key = key.to_string();
+            if let Some(note) = self.change_setting(&key) {
+                m.note = Some(note);
+            } else if key == crate::setup::way::SETTING {
+                let on = settings::is_on(&key);
+                self.claude_plugin_setup(
+                    client,
+                    format!(
+                        "Load Switchboard as a plugin: {}",
+                        if on { "on" } else { "off" }
+                    ),
+                );
+            }
+        } else if item.data.get("own").is_some() {
+            self.change_own(client, m, item);
+        } else if item.data.get("repo_setting").is_some() {
+            self.change_repo(client, m, item);
+        }
+    }
+
+    /// A Settings row's menu: changing it, then its file in your editor.
+    fn setting_choices(&self, item: &Item) -> Vec<Choice> {
+        let mut out = Vec::new();
+        let change = |label: String| Choice {
+            key: 'c',
+            label,
+            act: Do::Change(Box::new(item.clone())),
+        };
+        if let Some(key) = item.data.get("setting").and_then(Value::as_str) {
+            let option = settings::read_settings().into_iter().find(|o| o.key == key);
+            out.push(change(match option {
+                Some(o) if o.choices.is_none() && o.is_on() => "Turn it off".into(),
+                Some(o) if o.choices.is_none() => "Turn it on".into(),
+                Some(o) => {
+                    let next = o.next_value();
+                    let words = o
+                        .choices
+                        .iter()
+                        .flatten()
+                        .find(|c| c.value == next)
+                        .map_or_else(|| util::js_string(&next), |c| c.label.clone());
+                    format!("Change it to {words}")
+                }
+                None => "Change it".into(),
+            }));
+        } else if item.data.get("own").is_some() || item.data.get("repo_setting").is_some() {
+            out.push(change("Change it".into()));
+        }
+        let (dir, file) = settings_file_of(Some(item));
+        out.push(Choice {
+            key: 'e',
+            label: format!("Open {file} in your editor"),
+            act: Do::EditFile { dir, file },
+        });
+        out
+    }
 
     /// A setting to its next value, written to the settings file and taken
     /// up at once; what went wrong, if anything.
@@ -4763,6 +5032,8 @@ enum Then {
     Press(Key),
     /// A view or the cursor changed: shown again.
     Prepare,
+    /// A picture in a Slack thread clicked: shown.
+    SlackPlay,
 }
 
 /// What a count with no upstream watches: the repository's config file.
@@ -4909,16 +5180,18 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A key on the footer is pressed as typed, the focus kept for it.
             if let Spot::Key(key) = spot {
                 m.hover = None;
-                // A Calendar keycap acts on its event, a Landing keycap on its row, a Reminders keycap on
-                // its reminder, a waiting card's option on its card, and the
-                // Inbox ticket's tab line on its notification: a filter being
-                // typed is kept, done typing, rather than given the key.
-                if (keycaps_here(m)
-                    || on_reminders(m)
-                    || waiting_card(m).is_some()
-                    || m.current().is_some_and(|v| inbox_board::shown(m, v)))
-                    && let Some(f) = m.filter.as_mut()
-                {
+                // The click is the key, never the one Tab's focus is on.
+                m.focus = None;
+                // A key acts on the chosen row or the view: a filter being
+                // typed is kept, done typing, rather than given the key; the
+                // filter's own footer (the arrows move, Enter keeps it, esc
+                // clears it) takes its key as typed, the filter typing on.
+                let filters_own = m.filter.as_ref().is_some_and(|f| f.typing)
+                    && matches!(
+                        key.code,
+                        KeyCode::Enter | KeyCode::Esc | KeyCode::Up | KeyCode::Down
+                    );
+                if !filters_own && let Some(f) = m.filter.as_mut() {
                     f.typing = false;
                 }
                 return Then::Press(key);
@@ -4996,13 +5269,14 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     }
                     Then::Prepare
                 }
-                // A filter being typed ends first, so p reaches the board.
+                // A picture clicked in the thread shows, a filter being
+                // typed ending first.
                 Spot::Picture(n) => {
                     if let Some(f) = m.filter.as_mut() {
                         f.typing = false;
                     }
                     m.slack_clicked = Some(n);
-                    Then::Press(Key::new(KeyCode::Char('p'), Mods::NONE))
+                    Then::SlackPlay
                 }
             }
         }
@@ -5037,15 +5311,6 @@ fn keys_board_key(m: &mut Mission, k: Key) -> bool {
     true
 }
 
-/// Whether `m` opens autopilot's menu: in its view while it shows the
-/// mode, or on the Tabs view with its line chosen.
-fn pilot_menu_here(m: &Mission) -> bool {
-    match m.current() {
-        Some(v) => v.id == ViewId::Autopilot && super::render::pilot_menu_shown(v),
-        None => m.cursor < 0 && m.snap.pilot.is_some(),
-    }
-}
-
 // ── Moving about ────────────────────────────────────────────────────────────
 
 /// Chooses the chosen CI item's failed check `n`, or its own row with
@@ -5061,15 +5326,6 @@ fn choose_check(m: &mut Mission, n: Option<usize>) {
     if m.chosen_check() != was {
         m.side = None;
     }
-}
-
-/// What a key in the CI view did: moved, or asks for something done or
-/// said.
-#[derive(Debug, PartialEq)]
-enum CiKey {
-    Moved,
-    Do(Do),
-    Say(String),
 }
 
 /// The day `by` days from the one the Calendar shows (`None` is today):
@@ -5134,179 +5390,85 @@ fn follow_reminder(m: &mut Mission) {
     }
 }
 
-/// What a key in UX 2.0's Landing view does, when it is one of its own.
-enum LandingKey {
-    /// Done in mission control itself (`i`, Esc over the output).
-    Done,
-    Do(Do, &'static str),
-    /// Why the key can't do it.
-    Say(&'static str),
+/// A CI item as its failed check `n` would be its only one: the check's
+/// job, name and link in its place, so its menu reads that check's log
+/// and opens that check.
+fn with_check(mut item: Item, n: usize) -> Item {
+    let Some(check) = views::ci_checks(&item).get(n).map(|c| (*c).clone()) else {
+        return item;
+    };
+    if let Some(ci) = item.data.get_mut("ci").and_then(Value::as_object_mut) {
+        let logged = check.get("step").is_some_and(Value::is_object);
+        ci.insert(
+            "job".into(),
+            check.get("job").cloned().unwrap_or(Value::Null),
+        );
+        ci.insert(
+            "jobName".into(),
+            check.get("name").cloned().unwrap_or(Value::Null),
+        );
+        ci.insert("logged".into(), Value::Bool(logged));
+        ci.insert("check".into(), check);
+    }
+    item
 }
 
-/// UX 2.0's Landing view's own keys on the chosen worktree, as its detail
-/// lists them: `g` goes to its tab (Home still goes to the top), `J` and
-/// `K` move it down and up the landing queue, `x` takes it out, `o`
-/// pages all of its last output beside, and `i` shows that output over
-/// the list on a screen too narrow to show it under the rows, until `i`
-/// or Esc. `g` takes a merge queue's PR to its tab too. `None` leaves
-/// the key to the rest.
-fn landing_key(m: &mut Mission, k: Key) -> Option<LandingKey> {
+/// UX 2.0's Landing view's own key: `i` shows the chosen worktree's last
+/// output over the list on a screen too narrow to show it under the rows,
+/// until `i` or Esc. What acts on the worktree is in its menu, which Enter
+/// opens. True when it took the key.
+fn landing_key(m: &mut Mission, k: Key) -> bool {
     if !m.snap.rules.ux2 || !m.current().is_some_and(|v| v.id == ViewId::Landing) {
-        return None;
+        return false;
     }
     if m.landing_output && (k.code == KeyCode::Esc || (k.code == KeyCode::Char('i') && plain(&k))) {
         m.landing_output = false;
-        return Some(LandingKey::Done);
+        return true;
     }
-    if !plain(&k) {
-        return None;
+    let narrow = (m.laid().0 as usize) < super::render::LANDING_OUTPUT_AT;
+    let has_output = m
+        .chosen_item()
+        .is_some_and(|i| i.data["landing"]["record"]["output"].is_object());
+    if k.code == KeyCode::Char('i') && plain(&k) && narrow && has_output {
+        m.landing_output = true;
+        return true;
     }
-    let item = m.chosen_item()?;
-    // Every open tab, not only those a filter left showing.
-    let tabs = if m.snap.all_tabs.is_empty() {
-        &m.snap.tabs
-    } else {
-        &m.snap.all_tabs
-    };
-    let tab_of = |v: &Value| {
-        let id = v.get("tab").and_then(Value::as_str)?;
-        tabs.iter().find(|t| t.id.to_string() == id).map(|t| t.id)
-    };
-    if let Some(queue) = item.data.get("queue").filter(|q| q.is_object()) {
-        return match k.code {
-            KeyCode::Char('g') => Some(match tab_of(queue) {
-                Some(tab) => LandingKey::Do(Do::GoTo(tab), "Going to its tab"),
-                None => LandingKey::Say("No tab has its PR open."),
-            }),
-            _ => None,
-        };
-    }
-    let landing = item.data.get("landing").filter(|l| l.is_object())?.clone();
-    let flag = |key: &str| landing.get(key).and_then(Value::as_bool) == Some(true);
-    let root = PathBuf::from(landing["root"].as_str().unwrap_or_default());
-    let holds = "It holds the lock: it lands next whatever the queue says.";
-    Some(match k.code {
-        KeyCode::Char('g') => match tab_of(&landing) {
-            Some(tab) => LandingKey::Do(Do::GoTo(tab), "Going to its tab"),
-            None => LandingKey::Say("No tab is on it."),
-        },
-        KeyCode::Char('J' | 'K') if flag("holding") => LandingKey::Say(holds),
-        KeyCode::Char('J') if flag("last") => LandingKey::Say("It is last in the landing queue."),
-        KeyCode::Char('K') if flag("first") => LandingKey::Say("It is next in the landing queue."),
-        KeyCode::Char(c @ ('J' | 'K')) => LandingKey::Do(
-            Do::Land {
-                root,
-                way: if c == 'J' { "down" } else { "up" },
-            },
-            if c == 'J' {
-                "Moving it down the landing queue"
-            } else {
-                "Moving it up the landing queue"
-            },
-        ),
-        KeyCode::Char('x') if flag("holding") => LandingKey::Say(holds),
-        KeyCode::Char('x') => {
-            LandingKey::Do(Do::LeaveQueue(root), "Taking it out of the landing queue")
-        }
-        KeyCode::Char('o' | 'i') if !landing["record"]["output"].is_object() => LandingKey::Say(
-            "It has no output kept: queue-and-clean records it as it tests and reviews.",
-        ),
-        KeyCode::Char('o') => LandingKey::Do(
-            Do::ReadOutput(PathBuf::from(
-                landing["output"].as_str().unwrap_or_default(),
-            )),
-            "",
-        ),
-        KeyCode::Char('i') if (m.laid().0 as usize) < super::render::LANDING_OUTPUT_AT => {
-            m.landing_output = true;
-            LandingKey::Done
-        }
-        _ => return None,
-    })
-}
-
-/// Whether the view in front has keycaps on its chosen row that Tab stops
-/// at: the Calendar's, and UX 2.0's Landing's detail.
-fn keycaps_here(m: &Mission) -> bool {
-    on_calendar(m) || (m.snap.rules.ux2 && m.current().is_some_and(|v| v.id == ViewId::Landing))
-}
-
-/// Whether the Calendar view is in front.
-fn on_calendar(m: &Mission) -> bool {
-    m.current().is_some_and(|v| v.id == ViewId::Calendar)
-}
-
-/// What a key in the Calendar view does, when it is one of its own.
-enum CalendarKey {
-    /// `h` or `l`: a day back or forward.
-    Day(i64),
-    /// `o` joins the chosen event's call; `y`, `n`, `m` answer it.
-    Do(Do, String),
-    /// Why the key can't do it.
-    Say(String),
+    false
 }
 
 /// The Calendar's own keys, with its day drawn: `h` and `l` move a day
-/// (`j` and `k` still walk every event); `o` joins the chosen event's
-/// call; `y`, `n`, `m` answer it going, not going or maybe when its menu
-/// offers that answer, else say why not. `None` leaves the key to the
-/// rest.
-fn calendar_key(m: &Mission, k: Key) -> Option<CalendarKey> {
+/// (`j` and `k` still walk every event), the days back or forward they
+/// move. What acts on the chosen event is in its menu, which Enter opens.
+fn calendar_key(m: &Mission, k: Key) -> Option<i64> {
     // A day shown as a list (an empty one the feed failed since, today or
     // another) still moves a day, or there would be no way past it.
-    let view = m
-        .current()
+    m.current()
         .filter(|v| v.id == ViewId::Calendar && v.data.setup.is_none())?;
     if !plain(&k) {
         return None;
     }
     match k.code {
-        KeyCode::Char('h') | KeyCode::Left => return Some(CalendarKey::Day(-1)),
-        KeyCode::Char('l') | KeyCode::Right => return Some(CalendarKey::Day(1)),
-        KeyCode::Char('o' | 'y' | 'n' | 'm') if super::calendar::is_day(view) => {}
-        _ => return None,
+        KeyCode::Char('h') | KeyCode::Left => Some(-1),
+        KeyCode::Char('l') | KeyCode::Right => Some(1),
+        _ => None,
     }
-    let event: crate::day::calendar::CalEvent =
-        serde_json::from_value(m.chosen_item()?.data.clone()).ok()?;
-    use crate::day::calendar::Rsvp;
-    let answer = match k.code {
-        KeyCode::Char('o') => {
-            return Some(match event.join {
-                Some(join) => CalendarKey::Do(Do::Open(join), "Join its call".into()),
-                None => CalendarKey::Say("It has no call to join.".into()),
-            });
-        }
-        KeyCode::Char('y') => Rsvp::Yes,
-        KeyCode::Char('n') => Rsvp::No,
-        _ => Rsvp::Maybe,
-    };
-    if crate::day::calendar::rsvp_choices(&event).contains(&answer) {
-        let label = answer.choice().1.to_string();
-        return Some(CalendarKey::Do(Do::Rsvp(Box::new(event), answer), label));
-    }
-    let why = if !settings::is_on("calendar_rsvp") {
-        "Answering invitations is off in Settings (calendar_rsvp).".to_string()
-    } else if event.id.is_none() {
-        "Not from the calendar feed, so it can't be answered here.".to_string()
-    } else if event.you == "yours" {
-        "It's yours.".to_string()
-    } else {
-        format!("You already said {}.", answer.words())
-    };
-    Some(CalendarKey::Say(why))
 }
 
 /// What a key does in the CI view with UX 2.0, before mission control's
 /// own keys: `j` and `k` move through the PRs and their failed checks'
-/// lines; `l` reads the chosen check's whole log beside, from its failing
-/// step; `o` goes to the PR's tab; M-r opens the chosen check in the
-/// browser. `None` leaves the key to the rest.
-fn ci_key(m: &mut Mission, k: Key) -> Option<CiKey> {
-    let view = m
+/// lines. What acts on the chosen check is in its menu, which Enter opens.
+/// True when it took the key.
+fn ci_key(m: &mut Mission, k: Key) -> bool {
+    let Some(view) = m
         .current()
-        .filter(|v| v.id == ViewId::Ci && m.snap.rules.ux2)?;
+        .filter(|v| v.id == ViewId::Ci && m.snap.rules.ux2)
+    else {
+        return false;
+    };
     let count = view.data.items.len() as isize;
-    let item = m.chosen_item()?.clone();
+    let Some(item) = m.chosen_item().cloned() else {
+        return false;
+    };
     let checks: Vec<Value> = views::ci_checks(&item).into_iter().cloned().collect();
     let check = m.chosen_check();
     let none = plain(&k);
@@ -5314,7 +5476,6 @@ fn ci_key(m: &mut Mission, k: Key) -> Option<CiKey> {
         || (k.code == KeyCode::Char('n') && k.mods == Mods::CTRL);
     let up = matches!(k.code, KeyCode::Char('k') | KeyCode::Up) && none
         || (k.code == KeyCode::Char('p') && k.mods == Mods::CTRL);
-    let chosen_check = checks.get(check.unwrap_or(0));
     if (down || up) && m.focus.is_some() {
         // Moving takes the focus Tab gave a name or the filter back to the
         // items, as moving between rows does.
@@ -5334,7 +5495,7 @@ fn ci_key(m: &mut Mission, k: Key) -> Option<CiKey> {
                 }
             }
         }
-        return Some(CiKey::Moved);
+        return true;
     }
     if up {
         match check {
@@ -5352,50 +5513,9 @@ fn ci_key(m: &mut Mission, k: Key) -> Option<CiKey> {
                 choose_check(m, last);
             }
         }
-        return Some(CiKey::Moved);
+        return true;
     }
-    let (number, repo) = super::render::ci_pr(&item);
-    match k.code {
-        KeyCode::Char('l') if none => {
-            let Some(c) = chosen_check else {
-                return Some(CiKey::Say(format!("Nothing is failing on {}.", item.title)));
-            };
-            let name = c["name"].as_str().unwrap_or("check").to_string();
-            // A log is kept once the view has read its step; one not read
-            // yet (past the look's `MAX_LOGS`) is said so here, since the
-            // key's own note would be lost with mission control taken out.
-            let read = c.pointer("/step").is_some_and(Value::is_object);
-            Some(match c["job"].as_str() {
-                Some(_) if !read => CiKey::Say(format!(
-                    "{name}'s log isn't read yet: the CI view reads up to 15 logs a look."
-                )),
-                Some(job) => CiKey::Do(Do::ReadLog {
-                    job: job.to_string(),
-                    name,
-                    line: c
-                        .pointer("/step/first")
-                        .and_then(Value::as_u64)
-                        .map(|n| n as usize),
-                }),
-                None => CiKey::Say(format!(
-                    "{name} has no log to read here: M-r opens it in the browser."
-                )),
-            })
-        }
-        KeyCode::Char('o') if none => Some(match m.pr_tab(number, repo) {
-            Some(t) => CiKey::Do(Do::GoTo(t.id)),
-            None if number > 0 => CiKey::Say(format!("No tab has #{number} open.")),
-            None => CiKey::Say("No tab is on it.".into()),
-        }),
-        KeyCode::Char('r') if k.mods == Mods::ALT => {
-            let url = chosen_check
-                .and_then(|c| c["url"].as_str())
-                .or_else(|| item.data.pointer("/ci/url").and_then(Value::as_str))
-                .filter(|u| !u.is_empty())?;
-            Some(CiKey::Do(Do::Open(url.to_string())))
-        }
-        _ => None,
-    }
+    false
 }
 
 /// The first place the cursor can be: -1, the line of the note worked
@@ -5457,18 +5577,8 @@ fn only_moves(m: &Mission, key: Key) -> bool {
         KeyCode::Char('n' | 'p') => ctrl,
         KeyCode::Char('G') | KeyCode::End => true,
         KeyCode::Tab | KeyCode::BackTab => m.snap.tab_focus,
-        KeyCode::Char('1'..='9') => none && m.view == 0 && waiting_card(m).is_none(),
+        KeyCode::Char('1'..='9') => none && m.view == 0,
         _ => false,
-    }
-}
-
-/// What a keycap's focus is given on: the Calendar's chosen event, or the
-/// waiting card's tab, which its options' numbers answer.
-fn keycap_owner(m: &Mission) -> Option<String> {
-    if m.view == 0 {
-        waiting_card(m).map(|t| format!("tab {}", t.0))
-    } else {
-        m.chosen_item().map(|i| i.id.clone())
     }
 }
 
@@ -5479,20 +5589,6 @@ fn chosen_tab(m: &Mission) -> Option<TabId> {
     }
     let at = usize::try_from(m.cursor).ok()?;
     m.order().get(at).copied()
-}
-
-/// With UX 2.0, the chosen card's tab while it waits on you, whose options
-/// 1-9 answer.
-fn waiting_card(m: &Mission) -> Option<TabId> {
-    if !m.snap.rules.ux2 {
-        return None;
-    }
-    let tab = chosen_tab(m)?;
-    m.snap
-        .tabs
-        .iter()
-        .any(|t| t.id == tab && t.state == crate::sidebar::model::TabState::Waiting)
-        .then_some(tab)
 }
 
 /// Whether the chosen place is a label of the shelf folded on a narrow
@@ -5851,40 +5947,30 @@ fn move_focus(m: &mut Mission, by: isize) {
             .filter(|i| !heading(*i))
             .map(Stop::Item),
     );
-    // The Calendar's keycaps beside the chosen event, and the Landing
-    // view's in the chosen worktree's detail, after it.
-    let keycaps: Vec<Key> = m
+    // The keys drawn: the Reminders pane's after the chosen row, the
+    // footer's, on the last row, at the end.
+    let mut seen = Vec::new();
+    let keys: Vec<(u16, Key)> = m
         .hits
         .iter()
         .filter_map(|h| match h.spot {
-            Spot::Key(k) if keycaps_here(m) || on_reminders(m) => Some(k),
-            // A waiting card's options, by their numbers.
-            Spot::Key(k)
-                if waiting_card(m).is_some()
-                    && matches!(k.code, KeyCode::Char(d) if d.is_ascii_digit()) =>
-            {
-                Some(k)
-            }
+            Spot::Key(k) => Some((h.y, k)),
             _ => None,
         })
-        .filter(|k| {
-            !matches!(k.code, KeyCode::Char('h' | 'j' | 'k' | 'l')) && k.code != KeyCode::Enter
+        .filter(|(_, k)| {
+            let new = !seen.contains(k);
+            seen.push(*k);
+            new
         })
         .collect();
+    let foot = keys.iter().map(|(y, _)| *y).max();
+    let (footer, pane): (Vec<_>, Vec<_>) = keys.into_iter().partition(|(y, _)| Some(*y) == foot);
     if let Some(at) = stops.iter().position(|s| *s == Stop::Item(m.cursor)) {
-        let mut seen = Vec::new();
-        for (n, k) in keycaps
-            .into_iter()
-            .filter(|k| {
-                let new = !seen.contains(k);
-                seen.push(*k);
-                new
-            })
-            .enumerate()
-        {
+        for (n, (_, k)) in pane.into_iter().enumerate() {
             stops.insert(at + 1 + n, Stop::Key(k));
         }
     }
+    stops.extend(footer.into_iter().map(|(_, k)| Stop::Key(k)));
     if m.snap.close {
         stops.push(Stop::Close);
     }
@@ -5915,10 +6001,7 @@ fn move_focus(m: &mut Mission, by: isize) {
             follow_reminder(m);
         }
         Stop::Close => m.focus = Some(Focus::Close),
-        Stop::Key(k) => {
-            m.focus = Some(Focus::Key(k));
-            m.keycap_for = keycap_owner(m);
-        }
+        Stop::Key(k) => m.focus = Some(Focus::Key(k)),
     }
 }
 
@@ -5928,8 +6011,7 @@ fn notice_board(m: &Mission) -> bool {
     m.snap.rules.ux2 && notice_history_here(m)
 }
 
-/// Whether the Notifications view in front shows the history, whose keys
-/// 1-7, x and m are its own.
+/// Whether the Notifications view in front shows the history, by day.
 fn notice_history_here(m: &Mission) -> bool {
     m.snap.notice_counts.is_some() && m.current().is_some_and(|v| v.id == ViewId::Notifications)
 }
@@ -6025,33 +6107,19 @@ mod tests {
     }
 
     #[test]
-    fn the_calendars_keys_move_a_day_join_and_answer() {
+    fn the_calendars_keys_move_a_day_and_leave_its_actions_to_its_menu() {
         let key = |c: char| Key::new(KeyCode::Char(c), Mods::NONE);
-        let mut m = calendar_mission();
-        assert!(matches!(
-            calendar_key(&m, key('l')),
-            Some(CalendarKey::Day(1))
-        ));
-        assert!(matches!(
-            calendar_key(&m, key('h')),
-            Some(CalendarKey::Day(-1))
-        ));
+        let m = calendar_mission();
+        assert_eq!(calendar_key(&m, key('l')), Some(1));
+        assert_eq!(calendar_key(&m, key('h')), Some(-1));
         assert!(
             calendar_key(&m, key('j')).is_none(),
             "j walks the events, as everywhere"
         );
         assert_eq!(row_step(&m, 1), 1, "j moves to the next event, not joining");
-        match calendar_key(&m, key('o')) {
-            Some(CalendarKey::Do(Do::Open(url), _)) => assert_eq!(url, "https://meet.google.com/x"),
-            _ => panic!("o joins the call"),
+        for c in ['o', 'y', 'n', 'm'] {
+            assert_eq!(calendar_key(&m, key(c)), None, "{c} is in the event's menu");
         }
-        m.cursor = 1;
-        assert!(
-            matches!(calendar_key(&m, key('o')), Some(CalendarKey::Say(s)) if s.contains("no call")),
-        );
-        assert!(
-            matches!(calendar_key(&m, key('y')), Some(CalendarKey::Say(s)) if s == "It's yours." || s.contains("calendar_rsvp")),
-        );
     }
 
     #[test]
@@ -6090,21 +6158,17 @@ mod tests {
         let mut m = calendar_mission();
         m.snap.views[0].data.items.clear();
         m.snap.views[0].data.error = Some("Google answered 500".into());
-        assert!(
-            matches!(
-                calendar_key(&m, Key::new(KeyCode::Char('l'), Mods::NONE)),
-                Some(CalendarKey::Day(1))
-            ),
+        assert_eq!(
+            calendar_key(&m, Key::new(KeyCode::Char('l'), Mods::NONE)),
+            Some(1),
             "an empty today the feed failed since moves on too"
         );
         m.calendar_day = Some("2026-11-03".into());
         m.snap.views[0].data.items.clear();
         m.snap.views[0].data.error = Some("Google answered 500".into());
-        assert!(
-            matches!(
-                calendar_key(&m, Key::new(KeyCode::Char('h'), Mods::NONE)),
-                Some(CalendarKey::Day(-1))
-            ),
+        assert_eq!(
+            calendar_key(&m, Key::new(KeyCode::Char('h'), Mods::NONE)),
+            Some(-1),
             "an empty day the feed failed since still moves back"
         );
         let mut gone = feed.clone();
@@ -6184,7 +6248,7 @@ mod tests {
         let mut m = ci_mission();
         let at = |m: &Mission| (m.cursor, m.chosen_check());
         m.focus = Some(Focus::Filter);
-        assert_eq!(ci_key(&mut m, key("j")), Some(CiKey::Moved));
+        assert!(ci_key(&mut m, key("j")));
         assert_eq!(at(&m), (1, Some(0)));
         assert_eq!(m.focus, Some(Focus::Item), "the focus back on the items");
         ci_key(&mut m, key("j"));
@@ -6227,9 +6291,10 @@ mod tests {
         ci_key(&mut m, key("j"));
         ci_key(&mut m, key("j"));
         assert_eq!(m.chosen_check(), Some(1), "the second, by its own page");
+        let item = m.chosen_item().cloned().unwrap();
         assert_eq!(
-            ci_key(&mut m, key("M-r")),
-            Some(CiKey::Do(Do::Open("https://ci.example/2".into())))
+            with_check(item, 1).data["ci"]["check"]["url"],
+            "https://ci.example/2"
         );
         // And two of one page, by their names.
         let checks = &mut m.snap.views[0].data.items[1].data["ci"]["checks"];
@@ -6243,51 +6308,40 @@ mod tests {
     }
 
     #[test]
-    fn in_the_ci_view_l_reads_the_log_from_its_step_o_goes_to_the_tab_and_m_r_opens_the_check() {
+    fn in_the_ci_view_the_menu_is_the_chosen_checks_and_its_keys_are_gone() {
         let key = |k: &str| Key::parse(k).unwrap();
         let mut m = ci_mission();
-        assert_eq!(
-            ci_key(&mut m, key("l")),
-            Some(CiKey::Do(Do::ReadLog {
-                job: "77".into(),
-                name: "test".into(),
-                line: Some(40),
-            }))
-        );
-        let step = m.snap.views[0].data.items[1].data["ci"]["checks"][0]["step"].take();
-        assert!(
-            matches!(ci_key(&mut m, key("l")), Some(CiKey::Say(s)) if s.contains("isn't read yet")),
-            "a log not read yet says so"
-        );
-        m.snap.views[0].data.items[1].data["ci"]["checks"][0]["step"] = step;
-        assert_eq!(
-            ci_key(&mut m, key("o")),
-            Some(CiKey::Say("No tab has #12 open.".into()))
-        );
-        m.snap.tabs[0].pr = Some(12);
-        m.snap.tabs[0].pr_repo = Some("acme/app".into());
-        assert_eq!(
-            ci_key(&mut m, key("o")),
-            Some(CiKey::Do(Do::GoTo(m.snap.tabs[0].id)))
-        );
-        // A filter that leaves the tab out of the shown ones still finds it.
-        m.snap.all_tabs = std::mem::take(&mut m.snap.tabs);
-        assert_eq!(
-            ci_key(&mut m, key("o")),
-            Some(CiKey::Do(Do::GoTo(m.snap.all_tabs[0].id)))
-        );
-        m.ci_check = Some(("f".into(), "deploy\thttps://ci.example/2".into()));
-        assert_eq!(
-            ci_key(&mut m, key("M-r")),
-            Some(CiKey::Do(Do::Open("https://ci.example/2".into())))
-        );
-        assert!(
-            matches!(ci_key(&mut m, key("l")), Some(CiKey::Say(s)) if s.contains("no log")),
-            "a check with no Actions job has no log"
-        );
-        assert_eq!(ci_key(&mut m, key("v")), None, "the rest's keys");
-        m.snap.rules.ux2 = false;
-        assert_eq!(ci_key(&mut m, key("o")), None, "only with UX 2.0");
+        for k in ["l", "o", "M-r", "v"] {
+            assert!(!ci_key(&mut m, key(k)), "{k} is no key of the view's");
+        }
+        let repos_of = |_: &Path| Vec::new();
+        let habit = |_: &str| Vec::new();
+        let ctx = Ctx {
+            tabs: &[],
+            repos_of: &repos_of,
+            home: PathBuf::from("/home"),
+            habit: &habit,
+        };
+        let item = m.snap.views[0].data.items[1].clone();
+        let acts = |item: Item| -> Vec<Do> {
+            choices::item_choices(&ViewId::Ci, &item, &[], &ctx)
+                .into_iter()
+                .map(|c| c.act)
+                .collect()
+        };
+        let first = acts(with_check(item.clone(), 0));
+        assert!(first.contains(&Do::ReadLog {
+            job: "77".into(),
+            name: "test".into(),
+            line: Some(40),
+        }));
+        assert!(first.contains(&Do::Open(
+            "https://github.com/acme/app/actions/runs/1/job/77".into()
+        )));
+        // A check with no Actions job has no log, and opens its own page.
+        let second = acts(with_check(item, 1));
+        assert!(!second.iter().any(|a| matches!(a, Do::ReadLog { .. })));
+        assert!(second.contains(&Do::Open("https://ci.example/2".into())));
     }
 
     #[test]
@@ -6703,6 +6757,33 @@ mod tests {
         assert_eq!(mouse_in(&mut m, click, true), Then::Enter);
         assert_eq!(m.cursor, 2);
         assert!(m.filter.as_ref().is_some_and(|f| !f.typing));
+    }
+
+    #[test]
+    fn a_click_on_a_slack_threads_picture_plays_it_with_no_key() {
+        let mut m = mission(1, vec![list("Closed", 1)]);
+        m.view = 1;
+        m.size = (120, 20);
+        m.filter = Some(Filter {
+            text: "x".into(),
+            typing: true,
+        });
+        m.hits = vec![crate::mission::HitBox {
+            y: 5,
+            x0: 10,
+            x1: 20,
+            spot: Spot::Picture(2),
+        }];
+        let click = Mouse {
+            kind: MouseKind::Press,
+            button: MouseButton::Left,
+            col: 12,
+            row: 5,
+            mods: Mods::NONE,
+        };
+        assert_eq!(mouse_in(&mut m, click, true), Then::SlackPlay);
+        assert_eq!(m.slack_clicked, Some(2));
+        assert!(!m.filter.as_ref().unwrap().typing, "the filter done typing");
     }
 
     #[test]

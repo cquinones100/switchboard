@@ -22,7 +22,8 @@
 //! chip, the next one saying how soon it starts, now a red line with its
 //! time; and, where the screen is wide enough for both, the chosen event
 //! beside the day: its time,
-//! where to join and your reply, its keys as keycaps (o join, y n m reply),
+//! where to join and your reply, what Enter's menu on it offers (join,
+//! reply going, not going or maybe),
 //! who is going with their photos (`Run::Avatar`, drawn as images over the
 //! text by mission control), its agenda, what of your work it concerns (the
 //! tickets and PRs it names, with their state from those boards, and the
@@ -41,7 +42,6 @@ use super::render::{Image, Shape};
 use super::views::{View, ViewId};
 use super::{HitBox, Spot};
 use crate::day::calendar::{self, CalEvent, NextDay, Ref};
-use crate::mux::input::Key;
 use crate::photos::Who;
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, width};
@@ -171,8 +171,6 @@ pub struct Look<'a> {
     pub work: &'a [View],
     /// The note items that name the chosen event or what it names.
     pub notes: &'a [NoteLine],
-    /// The keycap under the mouse or Tab's focus, lit.
-    pub lit: Option<Key>,
     /// The first line of the pane beside the day shown, as `J`, `K` and
     /// the wheel over it have scrolled it (`Mission::side_top`).
     pub side_top: usize,
@@ -1046,22 +1044,6 @@ fn timeline(
                         });
                         x += 2;
                     }
-                    Run::Key(key, spans) => {
-                        let start = x;
-                        for span in spans {
-                            let words = text::cut(&span.content, cols.saturating_sub(x + 1));
-                            grid[r].put(x, &words, span.style, cols);
-                            x += width(&words);
-                        }
-                        if x > start + 1 {
-                            hits.push(HitBox {
-                                y,
-                                x0: start as u16,
-                                x1: (x - 2) as u16,
-                                spot: Spot::Key(key),
-                            });
-                        }
-                    }
                 }
             }
         }
@@ -1104,13 +1086,11 @@ pub fn people(e: &CalEvent) -> Vec<Who> {
 /// How many of those going the pane shows, the rest as "+N".
 const GOING_SHOWN: usize = 4;
 
-/// A piece of a line of the pane beside the day: text, someone's avatar
-/// (two columns, their photo drawn over the initial), or a keycap a click
-/// presses.
+/// A piece of a line of the pane beside the day: text, or someone's
+/// avatar (two columns, their photo drawn over the initial).
 enum Run {
     Text(Span<'static>),
     Avatar { who: Option<Who>, name: String },
-    Key(Key, Vec<Span<'static>>),
 }
 
 fn texts_of(spans: Vec<Span<'static>>) -> Vec<Run> {
@@ -1159,23 +1139,27 @@ fn event_detail(chosen: Option<&CalEvent>, look: &Look, w: usize) -> Vec<Vec<Run
     if let Some(j) = &e.join {
         when.push_str(&format!(" · {}", place(j)));
     }
-    let facts = vec![
-        Span::styled(format!("{when} · "), dim),
-        Span::styled(
-            reply(e).to_string(),
-            if e.going() { fg(GOING_BAR) } else { fg(STALE) },
-        ),
-    ];
+    let facts = vec![Span::styled(when, dim)];
     let mut out: Vec<Vec<Run>> = vec![Vec::new()];
     out.extend(
         kit::pane(&e.title, facts, w, theme)
             .into_iter()
             .map(texts_of),
     );
-    let keys = keycaps(e, look);
-    if !keys.is_empty() {
-        out.push(keys);
-    }
+    // You, your reply as a chip, and what Enter's menu does, with no
+    // keycaps (board 54).
+    let tone = if e.going() { Tone::Accent } else { Tone::Dim };
+    let mut you = vec![Run::Text(Span::styled("You ", Tone::Text.style(theme)))];
+    you.extend(
+        kit::chip(reply(e), tone, look.caps, theme)
+            .into_iter()
+            .map(Run::Text),
+    );
+    you.push(Run::Text(Span::styled(
+        format!("  {}", enter_words(e)),
+        Tone::Dim.style(theme),
+    )));
+    out.push(you);
     let going: Vec<&calendar::Attendee> =
         e.attendees.iter().filter(|a| a.reply == "going").collect();
     if !going.is_empty() {
@@ -1342,34 +1326,14 @@ fn work_line(r: &Ref, work: &[View], theme: &Theme) -> Vec<Span<'static>> {
     }
 }
 
-/// The event's keys as keycaps, each a click that presses it: `o` Join
-/// (lit) when it has a call, then the answers `rsvp_choices` offers.
-fn keycaps(e: &CalEvent, look: &Look) -> Vec<Run> {
-    let theme = look.theme;
-    let mut out = vec![Run::Text(Span::raw(" "))];
-    let mut cap = |k: &str, what: &str, always: bool| {
-        if let Some(key) = Key::parse(k) {
-            let lit = always || look.lit == Some(key);
-            out.push(Run::Key(key, kit::keycap(k, what, lit, look.caps, theme)));
-        }
-    };
-    if e.join.is_some() {
-        cap("o", "Join", true);
+/// What Enter's menu on the event does, said after your reply: joining
+/// or replying when it offers either, else its other actions.
+fn enter_words(e: &CalEvent) -> &'static str {
+    if e.join.is_some() || !calendar::rsvp_choices(e).is_empty() {
+        "Enter: join or reply"
+    } else {
+        "Enter: its actions"
     }
-    let offered = calendar::rsvp_choices(e);
-    for (answer, label) in [
-        (calendar::Rsvp::Yes, "Going"),
-        (calendar::Rsvp::No, "Not going"),
-        (calendar::Rsvp::Maybe, "Maybe"),
-    ] {
-        if offered.contains(&answer) {
-            cap(answer.choice().0, label, false);
-        }
-    }
-    if out.len() == 1 {
-        return Vec::new();
-    }
-    out
 }
 
 /// Under the pane, the next working day: its weekday and date, and that a
@@ -1498,7 +1462,6 @@ mod tests {
             next: None,
             work: &[],
             notes: &[],
-            lit: None,
             side_top: 0,
         }
     }
@@ -1669,23 +1632,16 @@ mod tests {
             .map(|l| l.chars().skip(edge).collect())
             .collect();
         assert_eq!(right[3].trim(), "│ Design review");
-        assert_eq!(right[4].trim(), "│ 3 – 4 PM · Google Meet · not replied");
+        assert_eq!(right[4].trim(), "│ 3 – 4 PM · Google Meet");
         assert!(right[5].contains("────"), "{right:?}");
-        // Its keys as keycaps, join lit, and no "in Enter menu".
-        assert_eq!(
-            right[6].trim(),
-            "│   o Join   y  Going  n  Not going  m  Maybe"
+        // You, your reply as a chip, and what Enter does, with no keycaps.
+        assert!(right[6].contains("You"), "{right:?}");
+        assert!(right[6].contains("not replied"), "{right:?}");
+        assert!(
+            right[6].trim_end().ends_with("Enter: join or reply"),
+            "{right:?}"
         );
-        assert!(!text.join("\n").contains("Enter menu"));
-        let join = lines[6].spans.iter().find(|s| s.content == "o").unwrap();
-        assert_eq!(join.style.bg, Some(Tone::Accent.fg(&Theme::DARK)));
-        let key = |k: &str| Spot::Key(Key::parse(k).unwrap());
-        for k in ["o", "y", "n", "m"] {
-            assert!(
-                hits.iter().any(|h| h.y == 7 && h.spot == key(k)),
-                "{k} is a click"
-            );
-        }
+        assert!(!hits.iter().any(|h| matches!(h.spot, Spot::Key(_))));
         // Who is going: four by first name with their photos, and how
         // many more.
         assert!(right[8].contains("GOING"), "{right:?}");
@@ -1761,7 +1717,7 @@ mod tests {
         assert_eq!(chip.style.fg, Some(Tone::Needs.fg(&Theme::DARK)));
         assert!(
             text.iter()
-                .any(|l| l.contains("3 – 4 PM · moved from 2:00 by Ana · going")),
+                .any(|l| l.contains("3 – 4 PM · moved from 2:00 by Ana")),
             "{text:?}"
         );
     }

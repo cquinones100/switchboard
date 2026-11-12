@@ -104,7 +104,7 @@ impl Menu {
 }
 
 /// The keys a menu takes, on its bottom row.
-const KEYS: &str = "jk or tab move  ↵ or click choose  esc back";
+pub(crate) const KEYS: &str = "jk or tab move  ↵ or click choose  esc back";
 
 /// The widest a menu's inside is on a screen `cols` wide: its box 72
 /// columns or two thirds of the screen, whichever is less.

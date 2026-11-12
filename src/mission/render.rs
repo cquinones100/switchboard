@@ -32,7 +32,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use regex::Regex;
 
-use super::views::{self, Scope, View, ViewId};
+use super::views::{self, View, ViewId};
 use super::{Focus, HitBox, Mission, Spot};
 use crate::items::{Item, State};
 use crate::sidebar::model::{self, Rules, TabModel, TabState};
@@ -793,8 +793,6 @@ fn turn_words(tab: &TabModel) -> Option<String> {
 /// which of its lines are a numbered option (its line, its number).
 struct Inside {
     lines: Vec<Vec<Span<'static>>>,
-    /// Each option's first and last line (its description's), and number.
-    options: Vec<(usize, usize, char)>,
 }
 
 /// Where a card is and how it is drawn.
@@ -803,8 +801,6 @@ struct CardLook<'a> {
     h: usize,
     chosen: bool,
     hovered: bool,
-    /// The option lit by the mouse or Tab, on the chosen card.
-    lit: Option<char>,
     /// Whether the chips under Now have room.
     chips: bool,
     screen: Option<&'a super::Screen>,
@@ -921,14 +917,11 @@ fn ask_words(tab: &TabModel, screen: Option<&super::Screen>) -> (String, String,
     (kind, words, options)
 }
 
-/// The widest option a card shows whole, at a card's least width.
-pub const OPTION_W: usize = CARD_W - 4 - 5;
-
 /// The most lines of an option's description a card shows.
 const DETAIL_LINES: usize = 2;
 
 /// Whether a waiting card shows all of what its tab asks, at a card's
-/// least width, so a number on it can answer: a question asking one thing,
+/// least width, else it says the tab has all of it: a question asking one thing,
 /// its options' descriptions short enough to show, or a Bash command,
 /// which its words are whole. Any other permission (an edit's change, a
 /// connector's input), or a call of several questions (whose later
@@ -944,20 +937,6 @@ pub fn ask_fits(tab: &TabModel, screen: Option<&super::Screen>) -> bool {
         .iter()
         .all(|(_, d, _)| text::wrap(d, CARD_W - 4 - 3).len() <= DETAIL_LINES);
     whole && details_fit && ask_lines(tab, &words, CARD_W - 4).is_some_and(|l| l.len() <= ASK_LINES)
-}
-
-/// Whether a waiting card's option `n` (from 1) is known whole and shown
-/// uncut at a card's least width, its label and its description, so its
-/// number answers it; any other goes to the tab.
-pub fn option_answers(tab: &TabModel, screen: Option<&super::Screen>, n: u32) -> bool {
-    let (_, _, options) = ask_words(tab, screen);
-    options
-        .get((n as usize).wrapping_sub(1))
-        .is_some_and(|(option, detail, known)| {
-            *known
-                && width(option) <= OPTION_W
-                && text::wrap(detail, CARD_W - 4 - 3).len() <= DETAIL_LINES
-        })
 }
 
 /// What a tab asks laid out in `cols`: a command character for character,
@@ -1018,22 +997,21 @@ fn asks_inside(tab: &TabModel, look: &CardLook, rows: usize, theme: &Theme) -> I
                 .map(|l| vec![Span::styled(l, style)]),
         );
         lines.push(vec![Span::styled(
-            "a number goes to the tab for all of it",
+            "the tab shows all of it",
             Tone::Dim.style(theme),
         )]);
     }
-    let mut at = Vec::new();
+    // The options as the question lists them, with no numbers: Enter's
+    // menu answers with one.
     if !options.is_empty() {
         lines.push(Vec::new());
-        for (i, (option, detail, _)) in options.iter().enumerate() {
-            let n = char::from_digit(i as u32 + 1, 10).unwrap_or('9');
+        for (option, detail, _) in &options {
             let text = text::cut(option, inner.saturating_sub(5));
-            let first = lines.len();
             lines.push(kit::option(
                 &text,
-                Some(n),
+                None,
                 inner.saturating_sub(1),
-                look.chosen && look.lit == Some(n),
+                false,
                 theme,
             ));
             // Its description under it, dim, as the prompt shows it.
@@ -1050,9 +1028,6 @@ fn asks_inside(tab: &TabModel, look: &CardLook, rows: usize, theme: &Theme) -> I
                 indented.extend(line);
                 lines.push(indented);
             }
-            // Every option shown takes a click, as its number; the number
-            // answers only one `option_answers` finds whole.
-            at.push((first, lines.len() - 1, n));
         }
     }
     if !before.is_empty() {
@@ -1061,7 +1036,7 @@ fn asks_inside(tab: &TabModel, look: &CardLook, rows: usize, theme: &Theme) -> I
         let room = rows.saturating_sub(lines.len()).clamp(1, 5);
         lines.extend(wrapped(&before, inner, room, Tone::Dim.style(theme)));
     }
-    Inside { lines, options: at }
+    Inside { lines }
 }
 
 /// A working card: this turn so far, then the call it is on now and for
@@ -1174,10 +1149,7 @@ fn doing_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> In
             lines.push(chips);
         }
     }
-    Inside {
-        lines,
-        options: Vec::new(),
-    }
+    Inside { lines }
 }
 
 /// A card neither waiting nor working: what its last turn did, and its
@@ -1202,10 +1174,7 @@ fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Ins
         2,
         Tone::Dim.style(theme),
     ));
-    Inside {
-        lines,
-        options: Vec::new(),
-    }
+    Inside { lines }
 }
 
 /// A tab's card with UX 2.0, drawn open: its mark, number and name on the
@@ -1213,14 +1182,13 @@ fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Ins
 /// its left in its group's tone (the accent when chosen), what it is about inside by what it is
 /// doing (or, with `s` or no Claude in it, its screen's last lines), and
 /// its branch and checks at its foot.
-/// Gives its lines and its options' lines.
 fn card_2(
     tab: &TabModel,
     tone: Tone,
     look: &CardLook,
     frame: usize,
     m: &Mission,
-) -> (Vec<Vec<Span<'static>>>, Vec<(usize, char)>) {
+) -> Vec<Vec<Span<'static>>> {
     let snap = &m.snap;
     let (r, theme) = (&snap.rules, &snap.theme);
     let inner = look.w.saturating_sub(4);
@@ -1243,10 +1211,7 @@ fn card_2(
         let shown = &lines[lines.len().saturating_sub(rows)..];
         let mut out = vec![Vec::new(); rows - shown.len()];
         out.extend(shown.iter().cloned());
-        Inside {
-            lines: out,
-            options: Vec::new(),
-        }
+        Inside { lines: out }
     } else {
         match tab.state {
             TabState::Waiting => asks_inside(tab, look, rows, theme),
@@ -1260,26 +1225,16 @@ fn card_2(
     lines.resize(rows, Vec::new());
     let branch = look.screen.and_then(|s| s.branch.as_deref());
     lines.push(card_foot(tab, branch, inner, snap.caps, theme));
-    // An option counts as shown only with its description whole.
-    let options = inside
-        .options
-        .into_iter()
-        .filter(|(_, last, _)| *last < rows)
-        .map(|(at, _, n)| (at, n))
-        .collect();
-    (
-        kit::open_card(
-            look.w,
-            look.h,
-            title,
-            right,
-            &lines,
-            tone,
-            look.chosen,
-            hover,
-            theme,
-        ),
-        options,
+    kit::open_card(
+        look.w,
+        look.h,
+        title,
+        right,
+        &lines,
+        tone,
+        look.chosen,
+        hover,
+        theme,
     )
 }
 
@@ -1425,7 +1380,6 @@ fn cards_ux2(
     // Each card's or line's place: its first and last line, its columns,
     // its place in the order.
     let mut at: Vec<(usize, usize, usize, usize, usize)> = Vec::new();
-    let mut option_hits: Vec<(usize, usize, usize, char)> = Vec::new();
     let mut place = 0usize;
     let (mut cursor_top, mut cursor_bottom) = (0, 0);
     for (stage, tabs_in) in &groups {
@@ -1490,26 +1444,18 @@ fn cards_ux2(
                 let tab = &snap.tabs[i];
                 let (x, w) = xs[c];
                 let chosen = m.cursor == place as isize;
-                let lit = match (m.hover, m.focus) {
-                    (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => match k.code {
-                        crate::mux::input::KeyCode::Char(d) if d.is_ascii_digit() => Some(d),
-                        _ => None,
-                    },
-                    _ => None,
-                };
                 let look = CardLook {
                     w,
                     h: card_h,
                     chosen,
                     hovered: m.hover == Some(Spot::Index(place as isize)),
-                    lit,
                     chips: n >= 3,
                     screen: snap.screens.get(&tab.id),
                     // A tab with no Claude is about what its screen shows.
                     shows_screen: tab.claude.is_none()
                         || (m.card_screen == Some((tab.id, m.cursor)) && chosen),
                 };
-                let (card, options) = card_2(tab, tone, &look, snap.frame, m);
+                let card = card_2(tab, tone, &look, snap.frame, m);
                 for (line, spans) in row_lines.iter_mut().zip(card) {
                     kit::place(line, spans, (x, w));
                 }
@@ -1521,9 +1467,6 @@ fn cards_ux2(
                         top
                     };
                     cursor_bottom = top + card_h;
-                    for (line, digit) in options {
-                        option_hits.push((top + 1 + line, x + 1, x + w - 2, digit));
-                    }
                 }
                 place += 1;
             }
@@ -1539,19 +1482,6 @@ fn cards_ux2(
     let end = start + body;
     lines.extend(drawn.iter().skip(start).take(body).cloned());
     let shown = |y: usize| y >= start && y < end;
-    for (y, x0, x1, digit) in option_hits {
-        if shown(y) {
-            hits.push(HitBox {
-                y: (y - start + top_row) as u16,
-                x0: x0 as u16,
-                x1: x1 as u16,
-                spot: Spot::Key(crate::mux::input::Key::new(
-                    crate::mux::input::KeyCode::Char(digit),
-                    crate::mux::input::Mods::NONE,
-                )),
-            });
-        }
-    }
     for (top, bottom, x0, x1, index) in at {
         for y in (top..=bottom).filter(|y| shown(*y)) {
             hits.push(HitBox {
@@ -3128,12 +3058,7 @@ fn work_map_rows(
         let spans = if views::is_repo_heading(item) {
             work_heading(item, cols, theme)
         } else if views::is_fold_line(item) {
-            let open = item.data["open"] == true;
-            let mut s = vec![Span::styled(format!("   {}", item.title), fg(theme.dim))];
-            if chosen && !open {
-                s.push(Span::styled(" · Enter shows them", fg(theme.faint)));
-            }
-            s
+            vec![Span::styled(format!("   {}", item.title), fg(theme.dim))]
         } else {
             work_row(item, &widths, chosen, m)
         };
@@ -3887,28 +3812,15 @@ fn review_line(review: &serde_json::Value, now_ms: i64) -> String {
     printable(&parts.join(" · "))
 }
 
-/// The keys the chosen worktree's detail offers, as the Landing view takes
-/// them (`serve::landing_key`).
+/// The keys the chosen worktree's detail offers: Enter its menu, and on a
+/// narrow screen `i` its last output over the list (`serve::landing_key`).
 fn landing_keys(landing: &serde_json::Value, narrow: bool) -> Vec<(&'static str, &'static str)> {
-    let flag = |k: &str| landing.get(k).and_then(serde_json::Value::as_bool) == Some(true);
-    let mut keys = Vec::new();
-    if landing["tab"].as_str().is_some() {
-        keys.push(("g", "go to its tab"));
-    }
-    if !flag("holding") {
-        if !flag("last") {
-            keys.push(("J", "down the queue"));
-        }
-        if !flag("first") {
-            keys.push(("K", "up the queue"));
-        }
-        keys.push(("x", "out of the queue"));
-    }
-    if landing["record"]["output"].is_object() {
-        keys.push(("o", "all of its last output"));
-        if narrow {
-            keys.push(("i", "its last output here"));
-        }
+    let mut keys = vec![(
+        "Enter",
+        "go to its tab, move it in the queue, read its output",
+    )];
+    if narrow && landing["record"]["output"].is_object() {
+        keys.push(("i", "its last output here"));
     }
     keys
 }
@@ -3956,7 +3868,7 @@ fn landing_detail(
         let mut spans = vec![Span::raw(" ".repeat(DETAIL_LABEL))];
         for (key, what) in keys {
             let x0 = spans_width(&spans);
-            let parsed = crate::mux::input::Key::parse(key);
+            let parsed = footer_key(key);
             let pointed = parsed
                 .is_some_and(|k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k)));
             let lit = pointed || (key == "i" && m.landing_output);
@@ -5326,15 +5238,15 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         return pairs(&[
             ("tab", "next view"),
             ("jk", "move"),
-            ("↵", "menu"),
-            ("=", "views at once"),
+            ("Enter", "actions"),
+            ("m", "view actions"),
             ("esc", "one view"),
         ]);
     }
     if m.jump.is_some() {
         return pairs(&[
             ("", "type a view's name"),
-            ("↵", "go there"),
+            ("Enter", "go there"),
             ("esc", "cancel"),
         ]);
     }
@@ -5344,9 +5256,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         let mut out = vec![(format!("/{}▏", f.text), String::new())];
         out.extend(pairs(&[("↑↓", "move")]));
         out.extend(if m.picker {
-            pairs(&[("↵", "actions"), ("esc", "close")])
+            pairs(&[("Enter", "actions"), ("esc", "close")])
         } else {
-            pairs(&[("↵", "keep it"), ("esc", "clear")])
+            pairs(&[("Enter", "keep it"), ("esc", "clear")])
         });
         return out;
     }
@@ -5368,188 +5280,101 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         out.extend(pairs(close));
         out
     };
+    // Every view: Enter the chosen item's actions, `m` the view's, after
+    // the keys that move, in the canvas's words where it words them for
+    // the view.
+    let with_acts = |moves: &[(&str, &str)], enter: &str, view: &str, rest: &[(&str, &str)]| {
+        let mut first = moves.to_vec();
+        first.extend([("Enter", enter), ("m", view)]);
+        first.extend_from_slice(rest);
+        with(&first)
+    };
+    const ACTS: &str = "actions";
+    const VIEW: &str = "view actions";
+    let filter: &[(&str, &str)] = &[("/", "filter")];
     let Some(view) = view else {
-        if m.snap.rules.ux2 {
-            let waiting = usize::try_from(m.cursor)
-                .ok()
-                .and_then(|at| m.order().get(at).copied())
-                .and_then(|id| m.snap.tabs.iter().find(|t| t.id == id))
-                .is_some_and(|t| t.state == TabState::Waiting);
-            let answer: &[(&str, &str)] = if waiting { &[("1 2 3", "answer")] } else { &[] };
-            let mut first = vec![("hjkl", "move")];
-            first.extend_from_slice(answer);
-            first.extend([
-                ("↵", "actions (↵↵ go to tab)"),
-                ("s", "its screen"),
-                ("/", "filter"),
-            ]);
-            return with(&first);
-        }
-        return with(&[
-            ("hjkl", "move"),
-            ("↵", "actions (↵↵ go to tab)"),
-            ("/", "filter"),
-        ]);
+        return with_acts(&[("hjkl", "move")], ACTS, VIEW, filter);
     };
     match view.id {
-        ViewId::Reminders if super::reminders::is_month(m) => with(super::reminders::hints()),
-        ViewId::Settings if settings_board_shown(m) => with(&[
-            ("hl", "category"),
-            ("jk", "option"),
-            ("↵", "change"),
-            ("/", "search every category"),
-            ("e", "open the file"),
-        ]),
-        ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
-        ViewId::Keys if keys_board_shown(m, view, m.laid().0 as usize) => {
-            let mut out = pairs(&[
-                ("hl", "group"),
-                ("jk", "key"),
-                ("↵", "press it here"),
-                ("/", "filter keys, words, tags"),
-                ("?", "press a key to find it"),
-            ]);
-            out.extend(pairs(next));
-            out.extend(pairs(&[("esc", "close")]));
-            out
+        ViewId::Reminders if super::reminders::is_month(m) => {
+            with_acts(super::reminders::hints(), ACTS, VIEW, &[])
         }
-        ViewId::Keys => {
-            let mut out = pairs(&[
-                ("jk", "move"),
-                ("↵", "press it"),
-                ("/", "filter"),
-                ("?", "find a key"),
-            ]);
-            out.extend(pairs(next));
-            out.extend(pairs(&[("esc", "close")]));
-            out
-        }
+        ViewId::Settings if settings_board_shown(m) => with_acts(
+            &[("hl", "category"), ("jk", "option")],
+            "its choices",
+            VIEW,
+            &[("/", "search every category")],
+        ),
+        ViewId::Settings => with_acts(&[("jk", "move")], "its choices", VIEW, &[("/", "search")]),
+        ViewId::Keys if keys_board_shown(m, view, m.laid().0 as usize) => with_acts(
+            &[("hl", "group"), ("jk", "key")],
+            ACTS,
+            VIEW,
+            &[("/", "filter keys, words, tags")],
+        ),
         ViewId::Slack if slack_board_shown(m, view) => {
-            let mut keys = vec![
-                ("jk", "move"),
-                ("↵", "open in Slack"),
-                ("m", "menu"),
-                ("x", "dismiss"),
-            ];
+            let mut keys = Vec::new();
             let threads = crate::settings::is_on("slack_threads");
-            if threads {
-                keys.push(("p", "play"));
-            }
             if threads && !super::slack_board::beside(m.laid().0 as usize) {
                 keys.push(("i", "thread"));
             }
             keys.push(("/", "filter"));
-            with(&keys)
+            with_acts(&[("jk", "move")], ACTS, VIEW, &keys)
         }
-        ViewId::Landing if m.snap.rules.ux2 => with(&[
-            ("jk", "move"),
-            ("g", "its tab"),
-            ("J K", "down or up the queue"),
-            ("x", "out of the queue"),
-            ("o", "its last output"),
-            ("↵", "menu"),
-        ]),
-        ViewId::Calendar => with(&[
-            ("jk", "events"),
-            ("hl", "day"),
-            ("↵", "menu"),
-            ("o", "join"),
-            ("y n m", "reply"),
-        ]),
+        ViewId::Landing if m.snap.rules.ux2 => {
+            let narrow = (m.laid().0 as usize) < LANDING_OUTPUT_AT;
+            let output = m
+                .chosen_item()
+                .is_some_and(|i| i.data["landing"]["record"]["output"].is_object());
+            let rest: &[(&str, &str)] = match (narrow && output, m.landing_output) {
+                (true, true) => &[("i", "back to the list")],
+                (true, false) => &[("i", "its last output")],
+                _ => &[],
+            };
+            with_acts(&[("jk", "move")], ACTS, VIEW, rest)
+        }
+        ViewId::Calendar => with_acts(&[("jk", "events"), ("hl", "day")], ACTS, VIEW, &[]),
+        ViewId::Autopilot if m.snap.rules.ux2 && m.laid().0 as usize >= PILOT_BOARD_AT => {
+            with_acts(
+                &[("hl", "column"), ("jk", "move")],
+                ACTS,
+                "view actions: its settings, pause",
+                &[],
+            )
+        }
+        ViewId::Autopilot => with_acts(
+            &[("jk", "move")],
+            ACTS,
+            "view actions: its settings, pause",
+            filter,
+        ),
+        ViewId::Inbox if super::inbox_board::shown(m, view) => {
+            let ticket: &[(&str, &str)] = if super::inbox_board::beside(m.laid().0 as usize) {
+                &[]
+            } else if m.inbox_pane {
+                &[("i", "back to the list")]
+            } else {
+                &[("i", "its ticket")]
+            };
+            let mut rest = ticket.to_vec();
+            rest.extend_from_slice(filter);
+            with_acts(&[("jk", "move")], "actions, marks read", VIEW, &rest)
+        }
+        ViewId::Resources => with_acts(
+            &[("jk", "move")],
+            "actions: go to the tab, end a process",
+            VIEW,
+            filter,
+        ),
+        ViewId::Prs | ViewId::Tickets => {
+            with_acts(&[("hl", "column"), ("jk", "move")], ACTS, VIEW, &[])
+        }
         ViewId::Usage
             if m.snap.rules.ux2 && m.laid().0 as usize >= super::usage_board::BOARD_AT =>
         {
-            with(&[
-                ("jk", "tab or service"),
-                ("↵", "go to the tab"),
-                ("w", if m.usage_week { "today" } else { "this week" }),
-                ("/", "filter"),
-            ])
+            with_acts(&[("jk", "tab or service")], ACTS, VIEW, filter)
         }
-        ViewId::Autopilot if m.snap.rules.ux2 && m.laid().0 as usize >= PILOT_BOARD_AT => with(&[
-            ("hl", "column"),
-            ("jk", "move"),
-            ("↵", "actions"),
-            ("m", "menu"),
-        ]),
-        ViewId::Autopilot if pilot_menu_shown(view) => with(&[
-            ("jk", "move"),
-            ("↵", "actions"),
-            ("m", "menu"),
-            ("/", "filter"),
-        ]),
-        ViewId::Ci if m.snap.rules.ux2 => with(&[
-            ("jk", "move"),
-            ("l", "log"),
-            ("o", "tab"),
-            ("M-r", "browser"),
-            ("↵", "actions"),
-            ("/", "filter"),
-        ]),
-        ViewId::Inbox if super::inbox_board::shown(m, view) => {
-            let ticket = if super::inbox_board::beside(m.laid().0 as usize) {
-                &[][..]
-            } else if m.inbox_pane {
-                &[("i", "back to the list")][..]
-            } else {
-                &[("i", "its ticket")][..]
-            };
-            let mut first = vec![
-                ("jk", "move"),
-                ("↵", "menu, marks read"),
-                ("o", "go to its tab"),
-                ("x", "dismiss"),
-                ("M-l", "in Linear"),
-            ];
-            first.extend_from_slice(ticket);
-            first.push(("/", "filter"));
-            with(&first)
-        }
-        ViewId::Notifications if m.snap.notice_counts.is_some() => with(&[
-            ("jk", "move"),
-            ("↵", "go to it"),
-            ("m", "menu"),
-            ("x", "dismiss"),
-            ("1-7", "kind"),
-            ("/", "filter"),
-        ]),
-        ViewId::Resources => with(&[
-            ("jk", "move"),
-            ("↵", "menu: go to the tab, end a process"),
-            ("s", "sort by CPU or memory"),
-            ("/", "filter"),
-        ]),
-        ViewId::Prs | ViewId::Tickets => with(&[
-            ("hl", "column"),
-            ("jk", "move"),
-            ("↵", "what to do with it"),
-        ]),
-        ViewId::Plugin(_) => with(&[("jk", "move"), ("↵", "open"), ("r", "refresh")]),
-        // A scope set says so on its key, which clears it.
-        ViewId::WorkMap if m.snap.rules.ux2 && !m.picker => with(&[
-            ("↵", "go"),
-            (
-                "o",
-                if m.scope == Some(Scope::Tabs) {
-                    "show all"
-                } else {
-                    "only open"
-                },
-            ),
-            (
-                "n",
-                if m.scope == Some(Scope::Untabbed) {
-                    "show all"
-                } else {
-                    "only no tab"
-                },
-            ),
-            ("z", "fold"),
-            ("/", "filter"),
-            ("m", "menu"),
-        ]),
-        ViewId::WorkMap => with(&[("jk", "move"), ("↵", "actions, or fold"), ("/", "filter")]),
-        _ => with(&[("jk", "move"), ("↵", "actions"), ("/", "filter")]),
+        _ => with_acts(&[("jk", "move")], ACTS, VIEW, filter),
     }
 }
 
@@ -5573,20 +5398,21 @@ fn notice_board(
     use crate::sidebar::history::Kind;
     let theme = &m.snap.theme;
     let caps = m.snap.caps;
-    // The keycaps.
+    // A chip for each kind, which a click shows alone (as `m`'s menu does).
     let mut spans = vec![Span::raw(" ")];
     let mut x = 1;
     for key in 1..=7 {
         let name = Kind::of_key(key).map_or("All", Kind::name);
         let lit = m.notice_kind == key;
         let under = m.hover == Some(Spot::Kind(key)) || m.focus == Some(Focus::Kind(key));
-        let mut cap = kit::keycap(
-            &key.to_string(),
+        let tone = if lit { Tone::Accent } else { Tone::Dim };
+        let mut cap = kit::chip(
             &format!("{name} {}", counts.keys[key - 1]),
-            lit,
+            tone,
             caps,
             theme,
         );
+        cap.push(Span::raw(" "));
         if under && !lit {
             cap = cap
                 .into_iter()
@@ -5760,20 +5586,12 @@ fn notice_board(
     }
 }
 
-/// Whether the Autopilot view shows the mode, whose menu `m` opens.
-pub(super) fn pilot_menu_shown(view: &View) -> bool {
-    view.data
-        .items
-        .iter()
-        .any(|i| i.id == crate::autopilot::view::HEADING)
-}
-
 /// The key a footer's label names: its arrows and words as the keys
 /// they are, a single key as it is written; none for a pair (`jk`, `J K`),
 /// whose rows and pane take the click themselves.
 fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
     let name = match label {
-        "↵" => "Enter",
+        "↵" | "Enter" => "Enter",
         "esc" => "Escape",
         "tab" => "Tab",
         l if l.chars().count() == 1 || l.starts_with("M-") => l,
@@ -5782,62 +5600,112 @@ fn footer_key(label: &str) -> Option<crate::mux::input::Key> {
     crate::mux::input::Key::parse(name)
 }
 
-/// UX 2.0's footer whose keys take a click (the CI, Work map and Resources views'): the kit's
-/// hints, each key that names one a spot (`Spot::Key`) at row `y`, lit
+/// The footer, whose keys take a click and a Tab stop: the kit's hints
+/// with UX 2.0, dim words without, each key that names one a spot (`Spot::Key`) at row `y`, lit
 /// under the mouse.
 fn key_footer(
     pairs: &[(String, String)],
     m: &Mission,
     theme: &Theme,
-    y: u16,
+    (y, cols): (u16, usize),
     hits: &mut Vec<HitBox>,
 ) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut x = 1;
     for (key, what) in pairs {
         let p: [(&str, &str); 1] = [(key.as_str(), what.as_str())];
-        let mut spans = kit::hints(&p, theme);
+        // With UX 2.0 the kit's hints, each key in the accent; else dim
+        // words, as before, the key its own span so it lights alone.
+        let mut spans = if m.snap.rules.ux2 {
+            kit::hints(&p, theme)
+        } else {
+            let dim = fg(theme.dim);
+            match (key.is_empty(), what.is_empty()) {
+                (true, _) => vec![Span::styled(what.clone(), dim)],
+                (_, true) => vec![Span::styled(key.clone(), dim)],
+                _ => vec![
+                    Span::styled(key.clone(), dim),
+                    Span::styled(format!(" {what}"), dim),
+                ],
+            }
+        };
         if !out.is_empty() {
             out.push(Span::raw("  "));
             x += 2;
         }
-        if let Some(k) = footer_key(key) {
-            let w = width(key);
-            hits.push(HitBox {
-                y,
-                x0: x as u16,
-                x1: (x + w).saturating_sub(1) as u16,
-                spot: Spot::Key(k),
-            });
-            if m.hover == Some(Spot::Key(k)) {
-                spans[0].style = spans[0].style.add_modifier(Modifier::REVERSED);
+        // Only a key the line shows whole takes a click and a Tab stop: one
+        // past the screen's edge, cut off, is no control to reach, though
+        // what it does may run past it.
+        let shown = |end: usize| x + end < cols;
+        // The keys it names, each with the byte it starts at and its length
+        // in bytes: the label's one key, or each key of a group (`jk`,
+        // `H L`, `[ ]`, `↑↓`), as long as every one of them is a key. Words
+        // with nothing said of them (a filter being typed) are no keys.
+        let keys: Vec<(crate::mux::input::Key, usize, usize)> = match footer_key(key) {
+            _ if what.is_empty() => Vec::new(),
+            Some(k) => vec![(k, 0, key.len())],
+            None => {
+                let named = |c: char| {
+                    let name = match c {
+                        '↑' => "Up".to_string(),
+                        '↓' => "Down".to_string(),
+                        c => c.to_string(),
+                    };
+                    crate::mux::input::Key::parse(&name)
+                };
+                let each: Vec<_> = key
+                    .char_indices()
+                    .filter(|(_, c)| *c != ' ')
+                    .map(|(at, c)| named(c).map(|k| (k, at, c.len_utf8())))
+                    .collect();
+                if each.iter().all(Option::is_some) {
+                    each.into_iter().flatten().collect()
+                } else {
+                    Vec::new()
+                }
             }
+        };
+        let keys: Vec<_> = keys
+            .into_iter()
+            .filter(|&(_, at, w)| shown(width(&key[..at + w])))
+            .collect();
+        if !keys.is_empty() {
+            let style = spans[0].style;
+            let lit = |k| m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k));
+            // A group's letters are spans of their own, so the one a click
+            // or Tab's focus is on lights alone.
+            let mut parts: Vec<Span<'static>> = Vec::new();
+            let mut done = 0;
+            for &(k, at, w) in &keys {
+                if at > done {
+                    parts.push(Span::styled(key[done..at].to_string(), style));
+                }
+                let mut part_style = style;
+                // Lit under the mouse, and with Tab's focus on it, so Enter
+                // and Space show what they press.
+                if lit(k) {
+                    part_style = part_style.add_modifier(Modifier::REVERSED);
+                }
+                parts.push(Span::styled(key[at..at + w].to_string(), part_style));
+                // Its columns: what is before it, then its own width.
+                let from = x + width(&key[..at]);
+                hits.push(HitBox {
+                    y,
+                    x0: from as u16,
+                    x1: (from + width(&key[at..at + w])).saturating_sub(1) as u16,
+                    spot: Spot::Key(k),
+                });
+                done = at + w;
+            }
+            if done < key.len() {
+                parts.push(Span::styled(key[done..].to_string(), style));
+            }
+            spans.splice(0..1, parts);
         }
         x += spans_width(&spans);
         out.extend(spans);
     }
     out
-}
-
-/// The footer's keys: with UX 2.0 the kit's hints, each key in the accent;
-/// else one dim line, as before.
-fn footer(pairs: &[(String, String)], ux2: bool, theme: &Theme) -> Vec<Span<'static>> {
-    if ux2 {
-        let p: Vec<(&str, &str)> = pairs
-            .iter()
-            .map(|(k, w)| (k.as_str(), w.as_str()))
-            .collect();
-        return kit::hints(&p, theme);
-    }
-    let said: Vec<String> = pairs
-        .iter()
-        .map(|(k, w)| match (k.is_empty(), w.is_empty()) {
-            (true, _) => w.clone(),
-            (_, true) => k.clone(),
-            _ => format!("{k} {w}"),
-        })
-        .collect();
-    vec![Span::styled(said.join("  "), fg(theme.dim))]
 }
 
 /// The bar's first row, with easy mode's × at its right end when it has
@@ -6344,10 +6212,6 @@ pub(super) fn body(
             } else if v.id == ViewId::Reminders && super::reminders::is_month(m) {
                 super::reminders::month(v, m, cols, rows, lines, hits);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
-                let lit = match (m.hover, m.focus) {
-                    (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => Some(k),
-                    _ => None,
-                };
                 let look = super::calendar::Look {
                     cols,
                     rows: rows.saturating_sub(1 + lines.len()),
@@ -6362,7 +6226,6 @@ pub(super) fn body(
                     next: snap.calendar_next.as_ref(),
                     work: &snap.views,
                     notes: &snap.calendar_notes,
-                    lit,
                     side_top: m.side_top(),
                 };
                 let (day, at, avatars) = super::calendar::day(v, &look);
@@ -6404,25 +6267,11 @@ pub(super) fn finish(
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             let pairs = hints(m, view, beside);
-            if m.grid.is_some()
-                || snap.rules.ux2
-                    && view.is_some_and(|v| {
-                        matches!(
-                            v.id,
-                            ViewId::Ci | ViewId::WorkMap | ViewId::Resources | ViewId::Reminders
-                        ) || super::inbox_board::shown(m, v)
-                            || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
-                            || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
-                            || keys_board_shown(m, v, cols)
-                            || slack_board_shown(m, v)
-                    })
-            {
-                let y = rows.saturating_sub(1) as u16;
-                row.spans
-                    .extend(key_footer(&pairs, m, theme, y, &mut keys_hit));
-            } else {
-                row.spans.extend(footer(&pairs, snap.rules.ux2, theme));
-            }
+            // Every footer's keys take a click and a Tab stop, with UX 2.0
+            // or without.
+            let y = rows.saturating_sub(1) as u16;
+            row.spans
+                .extend(key_footer(&pairs, m, theme, (y, cols), &mut keys_hit));
             row
         }
     };
@@ -6578,8 +6427,8 @@ mod tests {
         }
         let z = hits
             .iter()
-            .find(|h| h.spot == Spot::Key(crate::mux::input::Key::parse("z").unwrap()))
-            .expect("z on the footer is a click");
+            .find(|h| h.spot == Spot::Key(crate::mux::input::Key::parse("m").unwrap()))
+            .expect("m on the footer is a click");
         assert!(
             hits.iter().any(|h| matches!(h.spot, Spot::Side(_))),
             "the pane scrolls with J and K"
@@ -6590,7 +6439,7 @@ mod tests {
                 .skip(z.x0 as usize)
                 .take(1)
                 .collect::<String>(),
-            "z"
+            "m"
         );
     }
 
@@ -6603,11 +6452,14 @@ mod tests {
         });
         let (lines, _) = screen(&m, 60, 20);
         let keys = texts(&lines).last().cloned().unwrap();
-        assert!(keys.starts_with(" /tw▏  ↑↓ move  ↵ keep it"), "{keys:?}");
+        assert!(
+            keys.starts_with(" /tw▏  ↑↓ move  Enter keep it"),
+            "{keys:?}"
+        );
         m.picker = true;
         let (lines, _) = screen(&m, 60, 20);
         let keys = texts(&lines).last().cloned().unwrap();
-        assert!(keys.contains("↵ actions  esc close"), "{keys:?}");
+        assert!(keys.contains("Enter actions  esc close"), "{keys:?}");
         assert!(!keys.contains("jk"), "j and k are typed: {keys:?}");
     }
 
@@ -6878,16 +6730,16 @@ mod tests {
             .unwrap();
         assert_eq!(chosen_bar.style.fg, Some(Tone::Accent.fg(&Theme::DARK)));
         // The waiting card: how long on its edge, its question word for
-        // word under its kind, its options numbered, and why it asked.
+        // word under its kind, its options with no numbers, and why it asked.
         assert!(text[needs + 1].contains("waiting 4m"), "{text:#?}");
         assert!(text[row("QUESTION · LAYOUT")].starts_with("▎ "));
         row("Which layout should the cards use?");
         let cards = row("Cards");
         assert!(
-            text[cards].contains("Cards") && text[cards].trim_end().ends_with(" 1"),
+            text[cards].contains("Cards") && !text[cards].trim_end().ends_with(" 1"),
             "{text:#?}"
         );
-        assert!(text[row("Rows")].trim_end().ends_with(" 2"), "{text:#?}");
+        assert!(!text[row("Rows")].trim_end().ends_with(" 2"), "{text:#?}");
         // An option's description under it, as the prompt shows it.
         assert_eq!(row("one line a tab, as the sidebar"), row("Rows") + 1);
         row("BEFORE IT ASKED");
@@ -6973,8 +6825,7 @@ mod tests {
         assert!(!ask_fits(&m.snap.tabs[0], None));
         let text = texts(&screen(&m, 160, 60).0);
         assert!(
-            text.iter()
-                .any(|l| l.contains("a number goes to the tab for all of it")),
+            text.iter().any(|l| l.contains("the tab shows all of it")),
             "{text:#?}"
         );
         assert!(!text.iter().any(|l| l.contains("step 12")));
@@ -7017,10 +6868,7 @@ mod tests {
             text.iter().any(|l| l.contains("Which colors?")),
             "{text:#?}"
         );
-        assert!(
-            text.iter()
-                .any(|l| l.contains("Vivid") && l.trim_end().ends_with(" 2"))
-        );
+        assert!(text.iter().any(|l| l.contains("Vivid")));
         assert!(
             !text
                 .iter()
@@ -7029,24 +6877,17 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_a_waiting_card_s_options_take_a_click_when_it_is_chosen() {
+    fn with_ux2_a_waiting_card_s_options_have_no_numbers_or_clicks_of_their_own() {
         let m = board_3();
         let (lines, hits) = screen(&m, 160, 60);
         let text = texts(&lines);
-        let rows_line = text.iter().position(|l| l.contains("Rows")).unwrap();
-        let two = crate::mux::input::Key::new(
-            crate::mux::input::KeyCode::Char('2'),
-            crate::mux::input::Mods::NONE,
+        let rows = text.iter().find(|l| l.contains("Rows")).unwrap();
+        assert!(!rows.contains(" 2 "), "{rows}");
+        assert!(
+            !hits.iter().any(|h| matches!(h.spot, Spot::Key(k)
+                if matches!(k.code, crate::mux::input::KeyCode::Char(d) if d.is_ascii_digit()))),
+            "Enter's menu answers it"
         );
-        let top = hits.iter().position(|h| h.spot == Spot::Key(two)).unwrap();
-        // The option's hit comes before its card's, which a click finds first.
-        assert!(hits[top].y as usize == rows_line + 1 || hits[top].y as usize == rows_line);
-        let card = hits
-            .iter()
-            .position(|h| h.y == hits[top].y && h.spot == Spot::Index(0))
-            .unwrap();
-        assert!(top < card);
-        assert!(option_answers(&m.snap.tabs[0], None, 2));
     }
 
     #[test]
@@ -7060,28 +6901,6 @@ mod tests {
         let text = texts(&screen(&m, 160, 40).0);
         assert!(text.iter().any(|l| l.contains("LAST TURN")), "{text:#?}");
         assert!(!text.iter().any(|l| l.contains("thinking")), "{text:#?}");
-    }
-
-    #[test]
-    fn with_ux2_an_option_a_card_lacks_takes_a_click_that_goes_to_the_tab() {
-        let mut m = board_3();
-        m.snap.screens.insert(
-            TabId(1),
-            crate::mission::Screen {
-                options: vec!["Rows".into(), "Something of my own".into()],
-                ..Default::default()
-            },
-        );
-        let (_, hits) = screen(&m, 160, 60);
-        let two = crate::mux::input::Key::new(
-            crate::mux::input::KeyCode::Char('2'),
-            crate::mux::input::Mods::NONE,
-        );
-        // Its click presses its number, which an option the hook didn't give
-        // never answers.
-        assert!(hits.iter().any(|h| h.spot == Spot::Key(two)));
-        let screen = m.snap.screens.get(&TabId(1));
-        assert!(!option_answers(&m.snap.tabs[0], screen, 2));
     }
 
     #[test]
@@ -7268,9 +7087,7 @@ mod tests {
         assert!(text.contains("Monday, January 18"), "{text}");
         assert!(text.contains("in 3 days"), "{text}");
         assert!(text.contains("pick the handoff back up"), "{text}");
-        for cap in ["Go there", "Change", "Clear"] {
-            assert!(text.contains(cap), "{cap}: {text}");
-        }
+        assert!(text.contains("Go there, change or clear it"), "{text}");
         assert!(
             text.contains("THIS MONTH") && text.contains("LATER"),
             "{text}"
@@ -7304,10 +7121,121 @@ mod tests {
         let (lines, _) = draw_at(120, 24);
         let text = texts(&lines).join("\n");
         assert!(
-            text.contains("Go there") && text.contains("Clear"),
+            text.contains("Go there") && text.contains("clear"),
             "{text}"
         );
         assert!(text.contains("▌1"), "the chosen day's week: {text}");
+    }
+
+    #[test]
+    fn a_footer_key_with_tabs_focus_is_lit() {
+        let mut m = mission(vec![tab(1, "one")], Vec::new());
+        m.snap.rules.ux2 = true;
+        let menu = crate::mux::input::Key::parse("m").unwrap();
+        let lit = |m: &Mission| {
+            let (lines, _) = screen(m, 120, 20);
+            lines.last().unwrap().spans.iter().any(|s| {
+                s.content.trim() == "m" && s.style.add_modifier.contains(Modifier::REVERSED)
+            })
+        };
+        assert!(!lit(&m));
+        m.focus = Some(Focus::Key(menu));
+        assert!(lit(&m));
+        // A click, with UX 2.0 off as on.
+        for ux2 in [false, true] {
+            m.snap.rules.ux2 = ux2;
+            let (_, hits) = screen(&m, 120, 20);
+            assert!(hits.iter().any(|h| h.spot == Spot::Key(menu)), "ux2 {ux2}");
+        }
+        // Each key of a group is a key of its own, symbols too.
+        m.snap.rules.ux2 = false;
+        m.snap.tab_focus = true;
+        let (_, hits) = screen(&m, 120, 20);
+        for c in ["[", "]"] {
+            let k = crate::mux::input::Key::parse(c).unwrap();
+            assert!(hits.iter().any(|h| h.spot == Spot::Key(k)), "{c}");
+        }
+        m.snap.tab_focus = false;
+        // A filter being typed is no key, whatever its letters.
+        m.filter = Some(crate::sidebar::render::Filter {
+            text: "queue".into(),
+            typing: true,
+        });
+        let (_, typed) = screen(&m, 120, 20);
+        let q = crate::mux::input::Key::parse("q").unwrap();
+        assert!(!typed.iter().any(|h| h.spot == Spot::Key(q)));
+        m.filter = None;
+        let (_, hits) = screen(&m, 120, 20);
+        for c in ["h", "j", "k", "l"] {
+            let k = crate::mux::input::Key::parse(c).unwrap();
+            assert_eq!(
+                hits.iter().filter(|h| h.spot == Spot::Key(k)).count(),
+                1,
+                "{c}"
+            );
+        }
+        // A key cut off at the screen's edge is no click or Tab stop.
+        m.snap.rules.ux2 = false;
+        let esc = crate::mux::input::Key::parse("Escape").unwrap();
+        let (_, hits) = screen(&m, 60, 20);
+        assert!(!hits.iter().any(|h| h.spot == Spot::Key(esc)));
+        assert!(hits.iter().any(|h| h.spot == Spot::Key(menu)));
+    }
+
+    #[test]
+    fn every_views_footer_names_its_actions_and_the_views() {
+        let has = |pairs: &[(String, String)], key: &str, what: &str| {
+            pairs.iter().any(|(k, w)| k == key && w == what)
+        };
+        for ux2 in [false, true] {
+            let mut m = mission(vec![tab(1, "one")], Vec::new());
+            m.snap.rules.ux2 = ux2;
+            let pairs = hints(&m, None, false);
+            assert!(has(&pairs, "Enter", "actions") && has(&pairs, "m", "view actions"));
+            for id in [
+                ViewId::Closed,
+                ViewId::Calendar,
+                ViewId::Settings,
+                ViewId::Keys,
+                ViewId::Notifications,
+                ViewId::Inbox,
+                ViewId::Landing,
+                ViewId::Resources,
+                ViewId::Usage,
+                ViewId::WorkMap,
+                ViewId::Ci,
+                ViewId::Prs,
+                ViewId::Slack,
+                ViewId::Reminders,
+            ] {
+                let mut m = mission(
+                    vec![tab(1, "one")],
+                    vec![list_view(id.clone(), "V", Vec::new())],
+                );
+                m.snap.rules.ux2 = ux2;
+                m.view = 1;
+                let pairs = hints(&m, m.current(), false);
+                let enter = pairs
+                    .iter()
+                    .any(|(k, w)| k == "Enter" && w.starts_with("actions"))
+                    || (id == ViewId::Settings && has(&pairs, "Enter", "its choices"));
+                assert!(
+                    enter
+                        && pairs
+                            .iter()
+                            .any(|(k, w)| k == "m" && w.starts_with("view actions")),
+                    "{id:?}: {pairs:?}"
+                );
+                for gone in [
+                    "=", "o", "x", "e", "s", "w", "z", "t", "M-r", "y n m", "1-7", "g", "↵",
+                ] {
+                    assert!(
+                        !pairs.iter().any(|(k, _)| k == gone),
+                        "{id:?} names {gone}: {pairs:?}"
+                    );
+                }
+            }
+        }
     }
 
     fn list_view(id: ViewId, title: &str, items: Vec<Item>) -> View {
@@ -8427,10 +8355,10 @@ mod tests {
         super::super::resources_board::Sort::Cpu.sort(&mut m.snap.views[0].data.items);
         m.cursor = 0;
         let (lines, hits, images, _) = drawn(&m, 160, 30);
-        let s = crate::mux::input::Key::parse("s").unwrap();
+        let menu = crate::mux::input::Key::parse("m").unwrap();
         assert!(
-            hits.iter().any(|h| h.spot == Spot::Key(s)),
-            "the footer's s takes a click"
+            hits.iter().any(|h| h.spot == Spot::Key(menu)),
+            "the footer's m takes a click"
         );
         let text = texts(&lines);
         let all = text.join("\n");
@@ -8837,7 +8765,7 @@ mod tests {
         let (lines, hits) = screen(&m, 140, 30);
         let text = texts(&lines).join("\n");
         for want in [
-            "1 All 3",
+            "All 3",
             "PRs 1",
             "Slack 1",
             "Inbox 1",
@@ -8851,7 +8779,7 @@ mod tests {
             "you went to tab 5",
             "dismissed",
             "shown",
-            "more, folded · Enter shows them",
+            "more, folded",
         ] {
             assert!(text.contains(want), "{want}: {text}");
         }
@@ -9142,13 +9070,13 @@ mod tests {
             "No issues left.",
             "round 1 found The lock leaks on Esc · fixed by abc1234",
             "test line 30 ... ok",
-            "o  all of its last output",
+            "go to its tab, move it in the queue",
             "✓ 412",
             "✓ 2 clean",
         ] {
             assert!(text.contains(words), "{words:?} in {text}");
         }
-        let o = crate::mux::input::Key::parse("o").unwrap();
+        let o = crate::mux::input::Key::parse("Enter").unwrap();
         assert!(hits.iter().any(|h| h.spot == Spot::Key(o)));
         // Under the mouse, or with Tab's focus on it, a keycap is lit.
         let lit = |m: &Mission| {
@@ -9157,7 +9085,7 @@ mod tests {
                 .iter()
                 .flat_map(|l| l.spans.clone())
                 .any(|s| {
-                    s.content.contains(" all of its last output")
+                    s.content.contains(" go to its tab")
                         && s.style.add_modifier.contains(Modifier::BOLD)
                 })
         };
@@ -9176,8 +9104,8 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("J  down the queue") && !text.contains("K  up the queue"),
-            "{text}"
+            !text.contains("down the queue"),
+            "J and K are no keys: {text}"
         );
         // Under 140 columns the output is behind i, shown over the list.
         m.cursor = 1;

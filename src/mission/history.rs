@@ -3,7 +3,7 @@
 //! then the weekday), narrowed to one kind by 2-7 (1 all), each carrying
 //! what it led to and whether the sidebar still shows it. The days before
 //! yesterday past the first screenful fold into one row each ("▸ WEDNESDAY
-//! 7 more, folded · Enter shows them") until Enter unfolds one.
+//! 7 more, folded") until "Show them" in its Enter menu unfolds one.
 //!
 //! Its items keep the shape the view's menus read: a notification's id is
 //! `<source>\t<id>` and its data its source's, with the history's own
@@ -150,7 +150,7 @@ pub fn rows(
         let before_yesterday = (today - day).get_days() >= 2;
         if before_yesterday && out.len() >= screenful && !unfolded.contains(&date) {
             let mut fold = Item::new(format!("{FOLD}{date}"), name);
-            fold.detail = format!("{} more, folded · Enter shows them", list.len());
+            fold.detail = format!("{} more, folded", list.len());
             fold.data = json!({ "fold": date });
             out.push(fold);
             continue;
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(folded.len(), 3);
         assert_eq!(fold_of(&folded[2]), Some("2026-11-08"));
         assert_eq!(folded[2].title, "Sunday");
-        assert_eq!(folded[2].detail, "2 more, folded · Enter shows them");
+        assert_eq!(folded[2].detail, "2 more, folded");
         let open: HashSet<String> = ["2026-11-08".to_string()].into();
         assert_eq!(rows(&all, None, &open, today(), &UTC, 2).len(), 5);
     }

@@ -824,6 +824,14 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     client.wait_for("the menu closed", |s| {
         !s.iter().any(|l| l.contains("Open it in Notes"))
     });
+    // m opens the view's own menu, as in mission control's view.
+    client.type_text("m");
+    client.wait_text("Dismiss every notification shown");
+    client.type_text("\x1b");
+    client.wait_for("the view's menu closed", |s| {
+        !s.iter()
+            .any(|l| l.contains("Dismiss every notification shown"))
+    });
     client.type_text("\x1b");
     wait_list(&server, "back on the tab it came from", |l| {
         tabs(l)[0]["current"] == true && !focused(l)

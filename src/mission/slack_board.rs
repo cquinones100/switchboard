@@ -931,12 +931,12 @@ fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> 
                     let why = look.files_failed.get(&f.id).map_or("", String::as_str);
                     format!("  {sign} {} · couldn't read it: {why}", f.name)
                 }
-                (true, _) => format!("  ▶ {} · p plays it", f.name),
-                (false, true) => format!("  {} · p shows it", f.name),
+                (true, _) => format!("  ▶ {} · a click or Enter's menu plays it", f.name),
+                (false, true) => format!("  {} · a click or Enter's menu shows it", f.name),
                 (false, false) if look.graphics && !look.files_kept.contains(&f.id) => {
                     format!("  ▣ {} · loading", f.name)
                 }
-                (false, false) => format!("  ▣ {} · p shows it", f.name),
+                (false, false) => format!("  ▣ {} · a click or Enter's menu shows it", f.name),
             };
             out.push(vec![mark_again(&mark), Run::Text(Span::styled(words, dim))]);
         }

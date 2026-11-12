@@ -496,7 +496,8 @@ fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
         &server,
         json!({"ux2": true, "notifications": false, "github": false, "linear": false}),
     );
-    // The editor `e` starts: one that says what it was given and waits.
+    // The editor the view's menu starts: one that says what it was given
+    // and waits.
     let opened = server.home.join("opened");
     common::stand_in::install(
         &server.home.join("bin/vi"),
@@ -519,7 +520,10 @@ fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
         s.iter().any(|l| l.contains("│ Notifications"))
             && s.iter().any(|l| l.contains("1 changed from its default"))
     });
-    // Enter turns it back on: its default, so the file no longer names it.
+    // Enter's menu turns it back on: its default, so the file no longer
+    // names it.
+    client.type_text("\r");
+    client.wait_text("Turn it on");
     client.type_text("\r");
     let file = server.home.join(".config/switchboard/settings.json");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
@@ -532,8 +536,11 @@ fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
         assert!(std::time::Instant::now() < deadline, "not written: {saved}");
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    // e: the settings file in your editor, in a tab of its own.
-    client.type_text("e");
+    // The view's menu: the settings file in your editor, in a tab of its
+    // own.
+    client.type_text("m");
+    client.wait_text("Open settings.json in your editor");
+    client.type_text("\r");
     let deadline = common::deadline(std::time::Duration::from_secs(10));
     while std::fs::read_to_string(&opened).unwrap_or_default() != file.to_string_lossy() {
         assert!(

@@ -121,6 +121,15 @@ impl Rig {
     }
 }
 
+/// Enter on the sidebar's chosen notification, with the Notifications
+/// window off: mission control's Notifications view, its menu open over
+/// it, whose first choice opens it in Notes.
+fn open_from_the_view(client: &mut TestClient) {
+    client.type_text("\r");
+    client.wait_text("Open it in Notes");
+    client.type_text("\r");
+}
+
 fn tabs(list: &Value) -> Vec<Value> {
     list["sessions"][0]["tabs"].as_array().unwrap().clone()
 }
@@ -168,6 +177,7 @@ fn notes_open(rig: &Rig) -> (TestClient, String, String) {
 fn m_e_brings_notes_beside_a_pane_and_home_again_with_a_pane_left_in_its_place() {
     let rig = Rig::new();
     let (mut client, first, notes) = notes_open(&rig);
+    let _ = &rig;
     let first_tab = tabs(&rig.list())[0]["id"].as_str().unwrap().to_string();
     rig.server
         .ok(&["set", "-t", &first_tab, "@tab_note", "Plan.md"]);
@@ -343,7 +353,8 @@ fn note_written(rig: &Rig, rel: &str, title: &str) {
 
 #[test]
 fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
-    // With the Notifications window off, Enter in the sidebar acts at once.
+    // With the Notifications window off, Enter in the sidebar leads to
+    // mission control's Notifications view, whose menu opens it.
     let rig = Rig::with(json!({ "notice_list": false }));
     note_written(&rig, "Plan.md", "Plan");
     let mut client = rig.server.attach(140, 36);
@@ -351,7 +362,7 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
     // M-s into the sidebar, n to the notifications, Enter on the first.
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
-    client.type_text("\r");
+    open_from_the_view(&mut client);
     rig.wait("Notes in a tab of its own", |l| {
         marked(l, "@notes_pane").is_some()
     });
@@ -372,7 +383,7 @@ fn enter_on_a_new_notes_notification_opens_the_note_in_notes() {
     client.wait_text("● New note: Later");
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
-    client.type_text("\r");
+    open_from_the_view(&mut client);
     rig.wait_heard("open Work/Later.md");
     rig.wait("Notes in front", |l| {
         marked(l, "@notes_pane").is_some_and(|(i, _)| tabs(l)[i]["current"] == true)
@@ -403,7 +414,7 @@ fn a_new_notes_notification_takes_notes_home_from_beside_a_tab_before_opening_it
     client.wait_text("● New note: Later");
     client.type_text(&format!("{ALT}s"));
     client.type_text("n");
-    client.type_text("\r");
+    open_from_the_view(&mut client);
     // Home, in the place of the pane left there, and gone to; the first tab
     // has its pane alone again.
     let list = rig.wait("Notes home and in front", |l| {

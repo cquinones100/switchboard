@@ -583,7 +583,7 @@ fn from_your_work(
                 Span::styled(t.name.clone(), Tone::Text.style(theme)),
                 Span::styled(format!("  {}", model::state_words(t, &snap.rules)), dim),
             ];
-            let spot = Spot::Key(Key::new(KeyCode::Char('o'), Mods::NONE));
+            let spot = Spot::Key(Key::new(KeyCode::Enter, Mods::NONE));
             out.push(Drawn {
                 spans: if m.hover == Some(spot) {
                     super::render::lit(spans, theme)
@@ -980,7 +980,7 @@ mod tests {
             .position(|l| l.contains(" tab 4 ABC-138"))
             .unwrap();
         assert!(hits.iter().any(|h| h.y as usize == tab_row
-            && h.spot == Spot::Key(Key::new(KeyCode::Char('o'), Mods::NONE))));
+            && h.spot == Spot::Key(Key::new(KeyCode::Enter, Mods::NONE))));
         let writers: Vec<String> = images
             .iter()
             .filter_map(|i| match &i.shape {

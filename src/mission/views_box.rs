@@ -1,5 +1,5 @@
 //! The "Views at once" box (board 32 of the UX 2.0 canvas, new with the
-//! port): `=` in mission control opens it to pick the views shown together
+//! port): "Several views at once…" in a view's `m` menu opens it to pick the views shown together
 //! (`grid`). At the left, every view under its group, Work and Code in one
 //! column and Day and System in the next, each ticked with its place when
 //! picked; at the right, the layouts as keycaps and the one in use drawn

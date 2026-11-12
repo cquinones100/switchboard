@@ -172,12 +172,25 @@ pub fn summary(source: &str, items: &[Item]) -> (String, String) {
 /// The yellow of the notifications.
 const YELLOW: Color = Color::Indexed(220);
 
+/// The footer's words before "m view actions", and those words, which a
+/// click on alone opens the window's own menu.
+const FOOTER_BEFORE: &str = " jk move  ↵ actions  ";
+const VIEW_ACTIONS: &str = "m view actions";
+
+/// The columns of the footer's "m view actions", first and past the last.
+pub fn view_actions_at() -> (usize, usize) {
+    let from = crate::ui::draw::width(FOOTER_BEFORE);
+    (from, from + crate::ui::draw::width(VIEW_ACTIONS))
+}
+
 /// What a line of the list is, for a click: the "‹ tabs" at its top, which
 /// goes back, or a notification, by its place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Spot {
     Back,
     Item(usize),
+    /// The footer's "m view actions": the window's own menu.
+    ViewActions,
 }
 
 /// How the list is being looked at: the chosen notification, whether Tab
@@ -186,6 +199,8 @@ pub enum Spot {
 pub struct Look<'a> {
     pub cursor: usize,
     pub back: bool,
+    /// Whether Tab has put the focus on the footer's "m view actions".
+    pub menu: bool,
     pub hover: Option<Spot>,
     pub theme: &'a Theme,
     /// Now, in the time zone each notification's time is read in.
@@ -203,6 +218,9 @@ pub struct Windows {
     pub from: HashMap<String, TabId>,
     /// The sessions whose window has Tab's focus on "‹ tabs".
     pub back: HashSet<String>,
+    /// The sessions whose window has Tab's focus on the footer's "m view
+    /// actions".
+    pub menu: HashSet<String>,
     /// What the mouse is over in a client's window.
     pub hover: HashMap<ClientId, Spot>,
 }
@@ -355,12 +373,23 @@ pub fn list_lines(
         lines.push(line(Vec::new(), cols, None));
         spots.push(None);
     }
+    // "m view actions" takes a click (`VIEW_ACTIONS_AT`) and Tab's focus,
+    // lit under either.
+    let menu_style = if look.menu || look.hover == Some(Spot::ViewActions) {
+        fg(theme.dim).add_modifier(Modifier::REVERSED)
+    } else {
+        fg(theme.dim)
+    };
     lines.push(line(
-        vec![Span::styled(" jk move  ↵ actions  esc back", fg(theme.dim))],
+        vec![
+            Span::styled(FOOTER_BEFORE, fg(theme.dim)),
+            Span::styled(VIEW_ACTIONS, menu_style),
+            Span::styled("  esc back", fg(theme.dim)),
+        ],
         cols,
         None,
     ));
-    spots.push(None);
+    spots.push(Some(Spot::ViewActions));
     lines.truncate(rows);
     spots.truncate(rows);
     (lines, spots)
@@ -404,6 +433,7 @@ mod tests {
         Look {
             cursor,
             back: false,
+            menu: false,
             hover: None,
             theme: &Theme::DARK,
             now: &NOW,
@@ -464,7 +494,15 @@ mod tests {
                 "   • a point",
             ]
         );
-        assert_eq!(text[11], " jk move  ↵ actions  esc back");
+        assert!(
+            text[11].starts_with(" jk move  ↵ actions  m view actions"),
+            "{}",
+            text[11]
+        );
+        assert_eq!(spots[11], Some(Spot::ViewActions));
+        let (from, to) = view_actions_at();
+        let words: String = text[11].chars().skip(from).take(to - from).collect();
+        assert_eq!(words, "m view actions", "only its words take the click");
         assert_eq!(lines[5].fill, Some(Theme::DARK.highlight));
         assert_eq!(lines[2].fill, None);
         assert_eq!(spots[0], Some(Spot::Back));
@@ -541,6 +579,7 @@ mod tests {
         assert_eq!(texts(&lines)[2], "   Nothing new.");
         let back = Look {
             back: true,
+            menu: false,
             ..look(0)
         };
         let (lines, _) = list_lines(&[], &back, 30, 10);

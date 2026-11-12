@@ -27,7 +27,6 @@ use super::walk::{Next, Place, Stop, Why};
 use super::{Drawn, PaneRead, SidebarEvent, claude, config, notices, text};
 use crate::agent::State;
 use crate::facts::{Merge, PrState};
-use crate::items::Target;
 use crate::mux::compose::colors;
 use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::mux::keys::Action;
@@ -1278,6 +1277,7 @@ impl Server {
         let w = &mut self.sidebar.windows;
         w.at.insert(session.to_string(), owner.clone());
         w.back.remove(session);
+        w.menu.remove(session);
         self.sidebar.side(session).cursor = Some(owner.clone());
         self.dirty_session(session);
     }
@@ -2019,12 +2019,9 @@ impl Server {
         );
     }
 
-    /// A kind of notification, chosen with the Notifications window off
-    /// (daemon.js's `openNotice`): the next meeting joins its call (with
-    /// none, the Calendar view opens), the newest note written for you
-    /// opens in Notes, a calendar change opens the Calendar view, a
-    /// suggestion Settings, autopilot mission control's tabs,
-    /// where its line is, and the others mission control on their view.
+    /// A notification chosen with the Notifications window off: mission
+    /// control's Notifications view, on it, doing nothing else; its menu,
+    /// dismissing and every other choice are the view's and the window's.
     fn sidebar_open_notice(&mut self, client: ClientId, owner: &Owner) {
         let Owner::Notice { source, id } = owner else {
             return;
@@ -2032,56 +2029,19 @@ impl Server {
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
             return;
         };
-        let item = self
-            .notices
-            .get(source)
-            .and_then(|items| items.iter().find(|i| &i.id == id).or(items.first()))
-            .cloned();
+        // The landings made without asking and the landed tabs closed unseen
+        // show the newest on their line (`notices::summary`), which is the
+        // one it leads to.
+        let id = match source.as_str() {
+            "autolanded" | "landed" => self
+                .notices
+                .get(source)
+                .and_then(|items| items.last())
+                .map_or(id.clone(), |i| i.id.clone()),
+            _ => id.clone(),
+        };
         self.sidebar_leave(&session);
-        let view = |slug: &str| crate::mission::Opening::View(slug.to_string());
-        match source.as_str() {
-            "new-notes" => {
-                if let Some(open) = item
-                    .as_ref()
-                    .and_then(|i| crate::mission::choices::notice_opens(source, i))
-                {
-                    self.mission_do(client, open, "Opening it");
-                }
-            }
-            "meeting" => match item.map(|i| i.target) {
-                Some(Target::Url(url)) => self.open_link(client, url),
-                _ => self.open_mission(client, view("calendar")),
-            },
-            "calendar" => self.open_mission(client, view("calendar")),
-            "habits" => self.open_mission(client, crate::mission::Opening::Settings),
-            "autopilot" => self.open_mission(client, crate::autopilot::opening()),
-            // The landed tabs closed unseen are only to be read: Enter
-            // dismisses them.
-            "landed" => self.autopilot_dismiss_closed(None),
-            // A restart is only to be read: Enter dismisses it.
-            "restarted" => self.set_notices("restarted", Vec::new()),
-            // The newest landing made without asking: its tab, while it is
-            // open, which dismisses it.
-            "autolanded" => {
-                let Some(last) = self
-                    .notices
-                    .get("autolanded")
-                    .and_then(|i| i.last())
-                    .cloned()
-                else {
-                    return;
-                };
-                self.autopilot_dismiss_autolanded(Some(&last.id));
-                match self.autopilot_landed_tab(&last) {
-                    Some(tab) => self.mission_go(client, tab),
-                    None => self.say(
-                        Some(client),
-                        &format!("Landed {}; its tab has closed", last.id),
-                    ),
-                }
-            }
-            other => self.open_mission(client, view(other)),
-        }
+        self.mission_on_notice(client, source, &id);
     }
 
     /// The view mission control shows a kind of notification in, while that

@@ -682,11 +682,14 @@ fn a_landing_without_asking_marks_its_tab_and_shows_in_the_notifications_until_a
     assert_eq!(kept[0]["notApplied"], "Build Switchboard");
     assert_eq!(kept[0]["item"], "Make the thing");
 
-    // A second tab in front; Enter on the notification goes back to the
-    // landing's tab and dismisses it.
+    // A second tab in front; Enter on the notification opens mission
+    // control's Notifications view with its menu over it, which goes back
+    // to the landing's tab first and dismisses it.
     server.ok(&["new-tab"]);
     client.type_text("\x1bs");
     client.type_text("n");
+    client.type_text("\r");
+    client.wait_text("Go to its tab");
     client.type_text("\r");
     let deadline = common::deadline(std::time::Duration::from_secs(20));
     while server.list()["sessions"][0]["tabs"][0]["current"] != true {
@@ -908,8 +911,24 @@ fn only_the_tab_whose_pane_took_the_lock_is_landing_among_tabs_in_its_directory(
     );
 }
 
+/// The option `label` of the menu open, reached by moving down to it, and
+/// taken.
+fn pick(client: &mut common::TestClient, label: &str) {
+    for _ in 0..20 {
+        let screen = client.wait_text(label);
+        if screen.iter().any(|l| l.contains('›') && l.contains(label)) {
+            client.type_text("\r");
+            return;
+        }
+        let before = screen.join("\n");
+        client.type_text("j");
+        client.wait_for("the cursor to move", |s| s.join("\n") != before);
+    }
+    panic!("{label} not reached");
+}
+
 #[test]
-fn with_ux2_j_in_the_landing_view_moves_the_chosen_waiter_down_the_queue() {
+fn with_ux2_the_landing_views_menu_moves_the_chosen_waiter_down_the_queue() {
     let server = TestServer::start();
     common::write_settings(
         &server.home,
@@ -947,26 +966,33 @@ fn with_ux2_j_in_the_landing_view_moves_the_chosen_waiter_down_the_queue() {
     client.type_text("j");
     client.wait_text("▌ two");
     client.wait_text("takes the lock at its turn");
+    // J is no key of the view's: Enter's menu moves it.
     client.type_text("J");
+    client.type_text("\r");
+    pick(&mut client, "Move it down in the landing queue");
     let deadline = common::deadline(Duration::from_secs(20));
     while paths() != vec![s(&one), s(&three), s(&two)] {
         assert!(
             std::time::Instant::now() < deadline,
-            "J never moved it down: {:?}",
+            "its menu never moved it down: {:?}",
             paths()
         );
         std::thread::sleep(Duration::from_millis(100) * common::patience());
     }
-    // The cursor follows the moved waiter, so K moves the same one back up,
-    // rather than the one now where it was, which is first and stays.
-    // Last now, its detail offers only K: the view has read the new order.
-    client.wait_text("go to its tab  K  up the queue");
-    client.type_text("K");
+    // The cursor follows the moved waiter, so its menu moves the same one
+    // back up, rather than the one now where it was, which is first and
+    // stays, once the view has read the new order.
+    client.wait_for("three listed before two", |screen| {
+        let at = |name: &str| screen.iter().position(|l| l.contains(name));
+        matches!((at("three"), at("▌ two")), (Some(t), Some(w)) if t < w)
+    });
+    client.type_text("\r");
+    pick(&mut client, "Move it up in the landing queue");
     let deadline = common::deadline(Duration::from_secs(20));
     while paths() != vec![s(&one), s(&two), s(&three)] {
         assert!(
             std::time::Instant::now() < deadline,
-            "K never moved it back up: {:?}",
+            "its menu never moved it back up: {:?}",
             paths()
         );
         std::thread::sleep(Duration::from_millis(100) * common::patience());
