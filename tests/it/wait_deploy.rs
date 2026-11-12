@@ -199,6 +199,9 @@ fn github_turned_off_in_settings_is_asked_still_and_a_refusal_ends_it_at_once() 
 
 #[test]
 fn nothing_settling_in_time_is_a_timeout_and_a_failed_request_is_retried() {
+    // Long enough for a poll after the first, the first token being gh's,
+    // which starts a process.
+    let timeout = (0.02 * f64::from(common::patience())).to_string();
     let asked = Arc::new(AtomicUsize::new(0));
     let count = asked.clone();
     let fake = Fake::start(move |_, _| {
@@ -215,7 +218,7 @@ fn nothing_settling_in_time_is_a_timeout_and_a_failed_request_is_retried() {
             "--environment",
             "prod",
             "--timeout",
-            "0.005",
+            &timeout,
         ],
     );
     assert_eq!(said(&out), "timeout\n");
