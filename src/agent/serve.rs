@@ -48,6 +48,27 @@ impl Server {
     /// tab of autopilot's hands-free mode, where a question box or a turn
     /// ending on a question is answered for Claude Code to read
     /// (`hands_free_answer`).
+    /// `context <percent> [model]`: the calling pane's statusline says how
+    /// full its Claude's context is, which the tab's header and its card
+    /// show. Says nothing back, as a hook doesn't.
+    pub fn agent_context(&mut self, rest: &[String], caller: Option<PaneId>) -> Reply {
+        let (Some(pane), Some(used)) = (caller, rest.first().and_then(|u| u.parse::<f64>().ok()))
+        else {
+            return Reply::ok("");
+        };
+        let Some(tab) = self.panes.get(&pane).map(|s| s.tab) else {
+            return Reply::ok("");
+        };
+        let context = super::Context {
+            used: used.round().clamp(0.0, 100.0) as u8,
+            model: rest[1..].join(" "),
+        };
+        if self.agents.set_context(pane, context) {
+            self.redraw_tab(tab);
+        }
+        Reply::ok("")
+    }
+
     pub fn agent_hook(
         &mut self,
         args: &[String],
@@ -319,7 +340,11 @@ impl Server {
     fn sweep(&mut self, panes: &[PaneId]) -> bool {
         let mut changed = false;
         for pane in panes {
-            if self.agents.state(*pane).is_some() && !self.runs_claude(*pane) {
+            let held = self
+                .agents
+                .get(*pane)
+                .is_some_and(|a| a.state.is_some() || a.context.is_some());
+            if held && !self.runs_claude(*pane) {
                 changed |= self.agents.drop_state(*pane);
             }
         }

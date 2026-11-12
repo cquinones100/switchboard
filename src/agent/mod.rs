@@ -30,4 +30,4 @@ pub mod sessions;
 mod state;
 
 pub use serve::SEEN_DELAY;
-pub use state::{Agents, Doing, Hook, PaneAgent, QUESTION_KINDS, State, Wait, WaitKind};
+pub use state::{Agents, Context, Doing, Hook, PaneAgent, QUESTION_KINDS, State, Wait, WaitKind};

@@ -11,6 +11,11 @@
 //! control's Sessions view (`view_sessions`) are both on, where that view
 //! shows it; a plain terminal has no Sessions view, so there it stays.
 //!
+//! In a pane it tells the server the context used (`context`, over the
+//! socket as a hook does, waiting at most a second), which the server keeps
+//! beside the pane's Claude for the tab's header and its card, since
+//! nothing on the drawing path reads a file.
+//!
 //! It also keeps what Claude Code tells the statusline alone, for mission
 //! control's Sessions and Usage views (src/usage/sessions.rs), under
 //! `paths::state_dir()`: `context/<session>` (`<percent>\t<model>`), and
@@ -66,6 +71,9 @@ pub fn main(_args: Vec<String>) -> ExitCode {
         &paths::state_dir(),
         &util::ymd(&util::local_now()),
     );
+    if in_workspace {
+        tell_server(&payload);
+    }
     let hide_context = !crate::settings::is_on("statusline_context")
         && crate::settings::is_on("ux2")
         && crate::settings::is_on("view_sessions");
@@ -78,6 +86,27 @@ pub fn main(_args: Vec<String>) -> ExitCode {
     let _ = out.write_all(line.as_bytes());
     let _ = out.flush();
     ExitCode::SUCCESS
+}
+
+/// Tells the server how full this pane's Claude's context is, for the tab's
+/// header and its card, which read only what the server holds. A headless
+/// Claude in the pane draws no statusline, so it is always the tab's own.
+fn tell_server(payload: &Value) {
+    let Some(pane) = std::env::var("SWITCHBOARD_PANE")
+        .ok()
+        .filter(|p| !p.is_empty())
+    else {
+        return;
+    };
+    let Some(used) = used(payload) else {
+        return;
+    };
+    let model = or_empty(&payload["model"]["display_name"]).unwrap_or_default();
+    let _ = crate::mux::socket::ask_quiet(
+        vec!["context".into(), format!("{used}"), model],
+        Some(pane),
+        None,
+    );
 }
 
 /// A field as `jq -r` printed it: a string as it is, anything else as JSON,

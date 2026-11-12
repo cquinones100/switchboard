@@ -214,7 +214,8 @@ fn product() -> Value {
 }
 
 #[test]
-fn a_statusline_script_of_your_own_stays_and_the_tmux_version_s_gives_way() {
+fn a_statusline_script_of_your_own_stays_outside_switchboard_s_panes_and_the_tmux_version_s_gives_way()
+ {
     let h = Home::new("setup-statusline");
     let file = h.path(".claude/settings.json");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -224,12 +225,42 @@ fn a_statusline_script_of_your_own_stays_and_the_tmux_version_s_gives_way() {
     let settings = json!({ "statusLine": { "type": "command", "command": command } });
     fs::write(&file, settings.to_string()).unwrap();
 
-    // A script of your own, as /statusline makes it: kept.
+    // A script of your own, as /statusline makes it: kept outside
+    // Switchboard's panes, with Switchboard's in them.
     let script = h.path(".claude/statusline-command.sh");
     fs::write(&script, "#!/bin/bash\necho mine\n").unwrap();
     ok(&h.run(&["setup", "claude"]));
     let merged: Value = serde_json::from_str(&read(&file)).unwrap();
-    assert_eq!(merged["statusLine"]["command"], command, "yours stays");
+    let wrapped = merged["statusLine"]["command"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        wrapped,
+        format!("{}{command}", switchboard::setup::claude_settings::IN_PANES)
+    );
+    // Run as Claude Code runs it: yours outside a pane, Switchboard's in one.
+    common::stand_in::install(&h.path("bin/switchboard"), "#!/bin/sh\necho ours\n");
+    let draw = |pane: Option<&str>| {
+        let mut sh = Command::new("sh");
+        sh.args(["-c", &wrapped])
+            .env("HOME", &h.home)
+            .env("PATH", format!("{}:/usr/bin:/bin", h.path("bin").display()))
+            .env_remove("SWITCHBOARD");
+        if let Some(socket) = pane {
+            sh.env("SWITCHBOARD", socket);
+        }
+        String::from_utf8(sh.output().unwrap().stdout).unwrap()
+    };
+    assert_eq!(draw(None), "mine\n");
+    assert_eq!(draw(Some("/tmp/sock")), "ours\n");
+    ok(&h.run(&["setup", "claude"]));
+    let again: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(
+        again["statusLine"]["command"],
+        wrapped.as_str(),
+        "a second run changes nothing"
+    );
     assert!(
         merged["permissions"]["allow"]
             .as_array()
@@ -273,8 +304,12 @@ fn claude_merges_switchboard_s_settings_into_yours_once_and_makes_a_linked_file_
     let product = product();
     assert_eq!(merged["model"], "sonnet");
     assert_eq!(
-        merged["statusLine"], yours["statusLine"],
-        "a statusline of your own stays"
+        merged["statusLine"]["command"],
+        format!(
+            "{}my-statusline",
+            switchboard::setup::claude_settings::IN_PANES
+        ),
+        "a statusline of your own stays outside Switchboard's panes"
     );
     let mut allow = vec![json!("Bash(make *)"), json!("Bash(git log *)")];
     allow.extend(

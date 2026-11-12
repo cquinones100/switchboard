@@ -180,6 +180,10 @@ pub const USAGE: &[(&str, &str)] = &[
         "hook <event> [--parked pids]: from switchboard hook, its JSON on stdin",
     ),
     (
+        "context",
+        "context <percent> [model]: from switchboard statusline, how full the calling pane's Claude's context is",
+    ),
+    (
         "press",
         "press <action> [arg]: an action run as its key would be, by its name in keys.json",
     ),
@@ -297,6 +301,7 @@ impl Server {
                 self.sidebar.stale = true;
                 Ok(self.agent_hook(rest, caller, stdin))
             }
+            "context" => Ok(self.agent_context(rest, caller)),
             "new-tab" => self.cmd_new_tab(rest, cwd, caller),
             "split" => self.cmd_split(rest, cwd, caller),
             "respawn-pane" => self.cmd_respawn(rest, cwd, caller),

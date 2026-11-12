@@ -619,6 +619,7 @@ impl Server {
         t.doing = agent
             .filter(|a| a.state == Some(crate::agent::State::Working))
             .and_then(|a| a.doing.clone());
+        t.context = agent.and_then(|a| a.context.as_ref()).map(|c| c.used);
         t.loop_skill = agent.and_then(|a| some(&a.loop_name));
         t.phase = agent.and_then(|a| some(&a.phase));
         t.since = since;

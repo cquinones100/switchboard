@@ -5,7 +5,9 @@
 //!
 //! Its first row is filled with the tab's own color (the one its number
 //! has in the sidebar, src/tabs/color.rs), and on it, dark, the state's
-//! mark, the tab's name in bold, where it works and what Claude is doing;
+//! mark, the tab's name in bold, where it works, what Claude is doing and
+//! how full its context is (`ctx 62%`, as its statusline last told the
+//! server);
 //! while the tab's history shows a past moment, which ("viewing 13:41, 51
 //! minutes ago") in place of where M-a goes next;
 //! under a blank row, the keys of what the tab can show in Claude's place
@@ -158,6 +160,9 @@ pub struct Header {
     pub history_open: bool,
     /// The moment the history shows, as "viewing 13:41, 51 minutes ago".
     pub viewing: Option<String>,
+    /// How full its Claude's context is, in percent, once its statusline
+    /// has said.
+    pub context: Option<u8>,
 }
 
 /// A state's mark in the kit.
@@ -243,6 +248,9 @@ pub fn draw(
         } else {
             format!("{} {}", s.name(), h.age)
         });
+    }
+    if let Some(used) = h.context {
+        facts.push(format!("ctx {used}%"));
     }
     // The moment a tab's history shows, at the right end in place of where
     // M-a goes next, its room kept: the facts give way to it.
@@ -373,6 +381,7 @@ mod tests {
             history: false,
             history_open: false,
             viewing: None,
+            context: None,
         }
     }
 
@@ -398,6 +407,22 @@ mod tests {
         assert!(text(&buf, 3).starts_with("───"));
         let shown: Vec<Button> = keys.iter().map(|(_, s)| *s).collect();
         assert_eq!(shown, Shown::ALL.map(Button::Show).to_vec());
+    }
+
+    #[test]
+    fn says_how_full_the_context_is_after_the_state() {
+        let area = Rect::new(0, 0, 90, ROWS);
+        let mut buf = Buffer::empty(area);
+        let h = Header {
+            context: Some(62),
+            ..header(Shown::Claude)
+        };
+        draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
+        assert!(
+            text(&buf, 0).starts_with(" ⠹ planning   ~/switchboard · working 2m · ctx 62%"),
+            "{}",
+            text(&buf, 0)
+        );
     }
 
     #[test]
@@ -641,6 +666,7 @@ mod history_tests {
             history: true,
             history_open: true,
             viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            context: None,
         };
         let keys = draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let row: String = (0..120).map(|x| buf[(x, 2)].symbol().to_string()).collect();
@@ -674,6 +700,7 @@ mod viewing_tests {
             history: true,
             history_open: true,
             viewing: Some("viewing 13:41, 51 minutes ago".into()),
+            context: None,
         };
         draw(&mut buf, area, &h, None, &Palette::DARK, false, false);
         let first: String = (0..70).map(|x| buf[(x, 0)].symbol().to_string()).collect();

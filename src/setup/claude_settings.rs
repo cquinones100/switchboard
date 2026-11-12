@@ -19,7 +19,10 @@
 //! Your file is never a link and stays yours: Claude Code writes `/model`
 //! and "always allow" there, and nothing else in it is touched. The
 //! statusline takes the place of none, of the old `statusline-command.sh`
-//! or of Switchboard's own; the permissions are added to yours. So running
+//! or of Switchboard's own; a statusline of yours is kept for every Claude
+//! outside Switchboard's panes, with `switchboard statusline` run in them
+//! (`IN_PANES`), since Claude Code gives a session's context, cost and
+//! limits to its statusline alone; the permissions are added to yours. So running
 //! it again changes nothing, and a copy of the file before is left beside
 //! it. A settings file that is a link into a clone's `claude/settings.json`,
 //! as the whole setup once made it, becomes your own file with what it held
@@ -71,6 +74,31 @@ fn hook_commands(hooks: &Value) -> Vec<String> {
     commands
 }
 
+/// What runs `switchboard statusline` in Switchboard's panes, put before a
+/// statusline of yours, which runs everywhere else. A command list rather
+/// than `&& ... ||`, so yours can be a pipeline or a list of its own.
+pub const IN_PANES: &str = "if [ -n \"$SWITCHBOARD\" ] && command -v switchboard >/dev/null; then exec switchboard statusline; fi; ";
+
+/// Whether a statusline command is Switchboard's: its own, or one that runs
+/// it in its panes, as `with_yours` writes it or as written by hand in any
+/// shape (`exec`, or piped through a formatter of yours).
+fn is_ours(command: &str) -> bool {
+    command.contains("switchboard statusline")
+}
+
+/// Your statusline, run outside Switchboard's panes, with Switchboard's in
+/// them, so the Sessions and Usage views get what Claude Code gives a
+/// statusline alone; your other fields (`padding`) kept.
+fn with_yours(yours: &Value) -> Value {
+    let mut out = yours.clone();
+    if let Some(command) = yours["command"].as_str()
+        && !is_ours(command)
+    {
+        out["command"] = Value::String(format!("{IN_PANES}{command}"));
+    }
+    out
+}
+
 /// Whether `settings` has Switchboard's part, or what an earlier version
 /// added: set up before, so the guided setup and a new build bring it up to
 /// date without asking. Its statusline, a permission naming a `switchboard`
@@ -80,7 +108,7 @@ pub fn has_ours(settings: &Value) -> bool {
     let hooks = hook_commands(&ours["hooks"]);
     let statusline = settings["statusLine"]["command"]
         .as_str()
-        .is_some_and(|c| c.starts_with("switchboard statusline"));
+        .is_some_and(is_ours);
     let allowed = settings["permissions"]["allow"]
         .as_array()
         .is_some_and(|mine| {
@@ -230,14 +258,19 @@ pub fn merge(current: &Map<String, Value>, ours: &Value, way: Way) -> Map<String
         }
     }
 
-    // The statusline: Switchboard's, unless you have one of your own.
+    // The statusline: Switchboard's, or yours run outside its panes.
     let command = out
         .get("statusLine")
         .and_then(|s| s.get("command"))
         .and_then(Value::as_str)
         .unwrap_or("statusline-command.sh");
-    if command.contains("statusline-command.sh") || command.starts_with("switchboard statusline") {
+    let yours = command.strip_prefix(IN_PANES).unwrap_or(command);
+    let is_old = !is_ours(yours) && yours.contains("statusline-command.sh");
+    if command.trim() == "switchboard statusline" || is_old {
         out.insert("statusLine".into(), ours["statusLine"].clone());
+    } else if let Some(yours) = out.get("statusLine") {
+        let wrapped = with_yours(yours);
+        out.insert("statusLine".into(), wrapped);
     }
 
     // Permissions: yours first, then each of Switchboard's you don't have.
@@ -361,13 +394,13 @@ pub fn run(r: &mut Report) -> Result<()> {
     };
     let way = super::way::current();
     let mut merged = merge(&current, &ours(), way);
-    // A statusline-command.sh of your own stays yours: Claude Code's
-    // /statusline writes its script under that name, which only the tmux
-    // version's had as a link into its clone.
+    // A statusline-command.sh of your own stays yours outside Switchboard's
+    // panes: Claude Code's /statusline writes its script under that name,
+    // which only the tmux version's had as a link into its clone.
     if own_statusline_script()
         && let Some(own) = current.get("statusLine")
     {
-        merged.insert("statusLine".into(), own.clone());
+        merged.insert("statusLine".into(), with_yours(own));
     }
     if merged == current {
         return Ok(());
@@ -438,8 +471,9 @@ mod tests {
     fn statusline_and_permissions_merged(merged: &Map<String, Value>, product: &Value) {
         assert_eq!(merged["model"], "sonnet");
         assert_eq!(
-            merged["statusLine"]["command"], "my-statusline",
-            "a statusline of your own stays"
+            merged["statusLine"]["command"],
+            format!("{IN_PANES}my-statusline"),
+            "a statusline of your own stays outside Switchboard's panes"
         );
         let mut allow = vec![json!("Bash(make *)"), json!("Bash(git log *)")];
         allow.extend(
@@ -533,6 +567,38 @@ mod tests {
                 assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
             }
         }
+    }
+
+    #[test]
+    fn a_statusline_that_already_runs_switchboard_s_in_its_panes_is_left_alone() {
+        let product = ours();
+        let by_hand = "[ -n \"$SWITCHBOARD\" ] && command -v switchboard >/dev/null && exec switchboard statusline || exec bash ~/.claude/statusline-command.sh";
+        let piped = "if [ -n \"$SWITCHBOARD\" ]; then switchboard statusline | my-formatter; else my-statusline; fi";
+        for command in [
+            by_hand.to_string(),
+            piped.to_string(),
+            "switchboard statusline | my-formatter".to_string(),
+            format!("{IN_PANES}my-statusline"),
+        ] {
+            let before = object(json!({
+                "statusLine": { "type": "command", "command": command, "padding": 0 }
+            }));
+            let merged = merge(&before, &product, Way::Plugin);
+            assert_eq!(merged["statusLine"], before["statusLine"]);
+            assert!(has_ours(&Value::Object(before)));
+        }
+    }
+
+    #[test]
+    fn a_statusline_of_yours_keeps_its_other_fields() {
+        let before = object(json!({
+            "statusLine": { "type": "command", "command": "a | b", "padding": 2 }
+        }));
+        let merged = merge(&before, &ours(), Way::Plugin);
+        assert_eq!(
+            merged["statusLine"],
+            json!({ "type": "command", "command": format!("{IN_PANES}a | b"), "padding": 2 })
+        );
     }
 
     #[test]

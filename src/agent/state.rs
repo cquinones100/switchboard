@@ -142,6 +142,16 @@ pub struct Doing {
     pub call: String,
 }
 
+/// How full a session's context is, in percent, and its model, as its
+/// statusline last told the server (`switchboard statusline`), which Claude
+/// Code tells nothing else.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Context {
+    pub used: u8,
+    pub model: String,
+}
+
 /// One pane's Claude: its state and what goes with it. Serialized only to
 /// hand it to a new build with its pane (src/mux/upgrade.rs).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +199,9 @@ pub struct PaneAgent {
     pub doing: Option<Doing>,
     /// The calls started before `doing` and still running, oldest first.
     pub others: Vec<Doing>,
+    /// Its context, from its statusline, until its session starts anew or
+    /// ends.
+    pub context: Option<Context>,
 }
 
 impl PaneAgent {
@@ -204,6 +217,7 @@ impl PaneAgent {
             && self.ask.is_none()
             && self.doing.is_none()
             && self.others.is_empty()
+            && self.context.is_none()
     }
 
     /// The pane's record, as `switchboard list` shows it.
@@ -521,12 +535,13 @@ impl Agents {
         }
     }
 
-    /// The panes that have a state.
+    /// The panes that have a state, or a context an idle Claude's
+    /// statusline gave: what a Claude ending without SessionEnd leaves.
     pub fn marked(&self) -> Vec<PaneId> {
         let mut panes: Vec<PaneId> = self
             .panes
             .iter()
-            .filter(|(_, a)| a.state.is_some())
+            .filter(|(_, a)| a.state.is_some() || a.context.is_some())
             .map(|(p, _)| *p)
             .collect();
         panes.sort();
@@ -850,8 +865,9 @@ impl Agents {
     }
 
     /// Drops the state of a pane no longer running Claude, so a session that
-    /// died without its SessionEnd hook leaves no mark behind. What it was
-    /// doing is kept, as agent-state.sh kept it.
+    /// died without its SessionEnd hook leaves no mark behind, nor its
+    /// context. What it was doing is kept, as agent-state.sh kept it. Gives
+    /// whether its state or context went.
     pub fn drop_state(&mut self, pane: PaneId) -> bool {
         let Some(agent) = self.panes.get_mut(&pane) else {
             return false;
@@ -863,10 +879,22 @@ impl Agents {
         agent.asked = None;
         agent.doing = None;
         agent.others.clear();
+        let changed = agent.context.take().is_some() || changed;
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
         changed
+    }
+
+    /// What a pane's statusline says of its context. Gives whether it
+    /// changed.
+    pub fn set_context(&mut self, pane: PaneId, context: Context) -> bool {
+        let agent = self.panes.entry(pane).or_default();
+        if agent.context.as_ref() == Some(&context) {
+            return false;
+        }
+        agent.context = Some(context);
+        true
     }
 
     /// One of a pane's `@agent_` options, by its tmux name, as `show` reads
@@ -990,6 +1018,10 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook, now: i64) {
         // A loop's step is set again by the loop as it goes on.
         agent.phase = None;
     }
+    // A new session's statusline says its own once it draws.
+    if matches!(hook.event.as_str(), "SessionStart" | "SessionEnd") {
+        agent.context = None;
+    }
     // A request kept aside ends with its call going on, or the turn.
     let tool_event = matches!(
         hook.event.as_str(),
@@ -1102,6 +1134,42 @@ mod tests {
 
     fn on(agents: &mut Agents, event: &str, payload: Value, now: i64) -> bool {
         agents.apply(P, &hook(event, payload), now, false)
+    }
+
+    #[test]
+    fn a_pane_keeps_its_context_until_its_session_starts_anew_and_hands_it_over() {
+        let mut a = Agents::default();
+        let ctx = |used| Context {
+            used,
+            model: "Opus".into(),
+        };
+        assert!(a.set_context(P, ctx(40)));
+        assert!(!a.set_context(P, ctx(40)), "the same again changes nothing");
+        on(&mut a, "UserPromptSubmit", json!({}), 100);
+        on(&mut a, "Stop", json!({}), 101);
+        assert_eq!(
+            a.get(P).unwrap().context,
+            Some(ctx(40)),
+            "kept through turns"
+        );
+        // Handed to a new build with its pane, and read with none from an
+        // older one's record.
+        let mut b = Agents::default();
+        for (p, agent) in a.records() {
+            let text = serde_json::to_string(&agent).unwrap();
+            b.put(p, serde_json::from_str(&text).unwrap());
+        }
+        assert_eq!(b.get(P).unwrap().context, Some(ctx(40)));
+        let old: PaneAgent = serde_json::from_str(r#"{"state":"Working","since":5}"#).unwrap();
+        assert_eq!(old.context, None);
+        on(&mut a, "SessionStart", json!({"source": "clear"}), 102);
+        assert!(a.get(P).is_none_or(|p| p.context.is_none()));
+        assert!(a.set_context(P, ctx(3)));
+        assert!(a.drop_state(P) || a.get(P).is_none_or(|p| p.context.is_none()));
+        assert!(
+            a.get(P).is_none_or(|p| p.context.is_none()),
+            "a Claude gone takes it"
+        );
     }
 
     #[test]
@@ -1887,6 +1955,17 @@ mod tests {
         assert_eq!(a.state(P), None);
         assert!(a.marked().is_empty());
         assert!(!a.drop_state(P));
+        // An idle Claude's context alone is checked too, and goes with it.
+        a.set_context(
+            P,
+            Context {
+                used: 12,
+                model: "Opus".into(),
+            },
+        );
+        assert_eq!(a.marked(), vec![P]);
+        assert!(a.drop_state(P));
+        assert!(a.marked().is_empty());
     }
 
     #[test]

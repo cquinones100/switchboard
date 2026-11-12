@@ -671,7 +671,27 @@ fn checks_chip(tab: &TabModel, caps: bool, theme: &Theme) -> Vec<Span<'static>> 
     chip
 }
 
-/// A card's foot: its branch dim, its checks' chip at the right edge.
+/// The cells of a card's context meter.
+const CONTEXT_CELLS: usize = 10;
+
+/// A card's context meter, `ctx` and its cells, in the needs-you tone once
+/// it is as full as the Sessions view calls full.
+fn context_meter(tab: &TabModel, theme: &Theme) -> Vec<Span<'static>> {
+    let Some(used) = tab.context else {
+        return Vec::new();
+    };
+    let tone = if f64::from(used) >= crate::usage::sessions::FULL {
+        Tone::Needs
+    } else {
+        Tone::Dim
+    };
+    let mut out = vec![Span::styled("ctx ", Tone::Dim.style(theme))];
+    out.extend(kit::meter(used, CONTEXT_CELLS, tone, theme));
+    out
+}
+
+/// A card's foot: its branch dim, its context meter, its checks' chip at
+/// the right edge; the meter goes first where the card is too narrow.
 fn card_foot(
     tab: &TabModel,
     branch: Option<&str>,
@@ -681,12 +701,19 @@ fn card_foot(
 ) -> Vec<Span<'static>> {
     let chip = checks_chip(tab, caps, theme);
     let chip_w = spans_width(&chip);
+    let meter = context_meter(tab, theme);
+    let meter_w = spans_width(&meter);
     let at = kit::columns(
         &[
             Col::Stretch {
                 weight: 1,
                 min: 1,
                 max: None,
+            },
+            Col::Fixed {
+                min: meter_w,
+                natural: meter_w,
+                cap: meter_w,
             },
             Col::Right {
                 natural: chip_w,
@@ -695,7 +722,7 @@ fn card_foot(
         ],
         inner,
         1,
-        &[],
+        &[1],
     );
     let mut line = Vec::new();
     if let Some(Some(place)) = at.first() {
@@ -708,7 +735,12 @@ fn card_foot(
             *place,
         );
     }
-    if let Some(Some(place)) = at.get(1) {
+    if let Some(Some(place)) = at.get(1)
+        && !meter.is_empty()
+    {
+        kit::place(&mut line, meter, *place);
+    }
+    if let Some(Some(place)) = at.get(2) {
         kit::place(&mut line, chip, *place);
     }
     line
@@ -6948,6 +6980,23 @@ mod tests {
         assert!(hits.iter().any(|h| h.spot == Spot::Key(two)));
         let screen = m.snap.screens.get(&TabId(1));
         assert!(!option_answers(&m.snap.tabs[0], screen, 2));
+    }
+
+    #[test]
+    fn with_ux2_a_card_s_foot_meters_its_context_beside_its_branch() {
+        let mut t = tab(1, "work 1");
+        t.state = TabState::Working;
+        t.context = Some(62);
+        let mut m = mission(vec![t], Vec::new());
+        m.snap.rules.ux2 = true;
+        let text = texts(&screen(&m, 120, 40).0);
+        assert!(
+            text.iter().any(|l| l.contains("ctx ▰▰▰▰▰▰▱▱▱▱")),
+            "{text:#?}"
+        );
+        m.snap.tabs[0].context = None;
+        let text = texts(&screen(&m, 120, 40).0);
+        assert!(!text.iter().any(|l| l.contains("ctx ")), "{text:#?}");
     }
 
     #[test]

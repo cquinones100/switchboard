@@ -546,3 +546,46 @@ fn with_ux2_settings_moves_by_category_flips_an_option_and_opens_the_file() {
     let tabs = list["sessions"][0]["tabs"].as_array().unwrap();
     assert_eq!(tabs.len(), 2, "{list}");
 }
+
+#[test]
+fn with_ux2_the_header_says_how_full_the_context_is_once_the_statusline_draws() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(120, 24);
+    client.wait_for("the header", |s| s[2].contains("M-c Claude"));
+    let pane = server.list()["sessions"][0]["tabs"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // The statusline as Claude Code runs it in the pane: the process is
+    // what this tests, its telling the server.
+    let mut child = Command::new(common::BIN)
+        .arg("statusline")
+        .env("HOME", &server.home)
+        .env("SWITCHBOARD_STATE_DIR", &server.state)
+        .env("SWITCHBOARD", server.socket())
+        .env("SWITCHBOARD_PANE", &pane)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("switchboard runs");
+    let payload = json!({
+        "session_id": "s1",
+        "model": {"display_name": "Opus"},
+        "workspace": {"current_dir": server.home},
+        "context_window": {"used_percentage": 61.6}
+    });
+    let _ = child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(payload.to_string().as_bytes());
+    assert!(child.wait().expect("the statusline ends").success());
+    client.wait_for("the context in the header", |s| s[0].contains("ctx 62%"));
+    // A new session's context is its own: gone until its statusline draws.
+    hook(&server, &pane, "SessionStart", json!({"source": "clear"}));
+    client.wait_for("the context gone", |s| !s[0].contains("ctx"));
+}

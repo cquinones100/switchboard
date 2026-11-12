@@ -199,6 +199,9 @@ pub struct TabModel {
     pub ask: Option<crate::agent::Wait>,
     /// The tool call its Claude is on, while it works.
     pub doing: Option<crate::agent::Doing>,
+    /// How full its Claude's context is, in percent, as its statusline
+    /// last told the server.
+    pub context: Option<u8>,
     /// Its last turn in a sentence, as Haiku wrote it once the turn ended
     /// (src/mission/summary.rs).
     pub summary: Option<String>,
@@ -273,6 +276,7 @@ impl TabModel {
             wait: None,
             ask: None,
             doing: None,
+            context: None,
             summary: None,
             round: 0,
             loop_skill: None,

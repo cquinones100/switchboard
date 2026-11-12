@@ -3347,7 +3347,16 @@ impl Server {
             history: crate::settings::is_on("tab_history"),
             history_open: false,
             viewing: None,
+            context: self.tab_context(tab).map(|c| c.used),
         }
+    }
+
+    /// What the statusline of the tab's Claude last said of its context.
+    pub fn tab_context(&self, tab: TabId) -> Option<&crate::agent::Context> {
+        self.tab_panes(tab)
+            .into_iter()
+            .filter_map(|p| self.agents.get(p))
+            .find_map(|a| a.context.as_ref())
     }
 }
 

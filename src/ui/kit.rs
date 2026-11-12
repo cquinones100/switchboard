@@ -552,6 +552,16 @@ pub fn chip(text: &str, tone: Tone, caps: bool, theme: &Theme) -> Vec<Span<'stat
     out
 }
 
+/// A meter of `cells` cells, as many filled as `used` percent reaches
+/// (rounded), filled ones in `tone` and the rest faint.
+pub fn meter(used: u8, cells: usize, tone: Tone, theme: &Theme) -> Vec<Span<'static>> {
+    let filled = ((used.min(100) as usize * cells + 50) / 100).min(cells);
+    vec![
+        Span::styled("▰".repeat(filled), tone.style(theme)),
+        Span::styled("▱".repeat(cells - filled), Tone::Faint.style(theme)),
+    ]
+}
+
 /// A stage's cell, `cols` wide with its ends: the text centered on its
 /// tone's tint, bold while working or failed; a waiting one dim on the
 /// neutral tint (`Tone::Dim`).
