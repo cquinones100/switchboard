@@ -6,7 +6,9 @@
 //! Notifications window opens it; anywhere else, the sidebar's own menu:
 //! a new tab, the repository filter, the notifications, with folding or
 //! unfolding first on a group's heading or the notifications'. It follows Settings' "Click in menus", off
-//! leaving a right click on a tab the peek it was.
+//! leaving a right click on a tab the peek it was. `m` in the sidebar and
+//! the context-menu key (S-F10) open the same menu for the cursor's row,
+//! beside it, whatever that setting says, since a key is no click.
 
 use super::super::model::Stage;
 use super::super::render::Owner;
@@ -39,6 +41,58 @@ impl Server {
             }
             return;
         }
+        self.sidebar_menu(client, session, owner);
+    }
+
+    /// `m` or the context-menu key with the focus in the sidebar: the menu
+    /// a right click on the cursor's row would open, beside that row. A
+    /// cursor on a tab the sidebar doesn't list (filtered out, or under a
+    /// folded group) is on no row, so the sidebar's own menu opens.
+    pub(super) fn sidebar_menu_key(&mut self, client: ClientId, session: &str) {
+        let Some(here) = self.session(session).map(|s| s.current) else {
+            return;
+        };
+        // In select mode, the selection's menu, as m opens there.
+        let selecting = settings::is_on("sidebar_select")
+            && self
+                .sidebar
+                .sides
+                .get(session)
+                .is_some_and(|s| s.select.is_some());
+        if selecting {
+            self.sidebar_select_menu(client, session);
+            return;
+        }
+        let cursor = self
+            .sidebar
+            .sides
+            .get(session)
+            .and_then(|s| s.cursor.clone())
+            .unwrap_or(Owner::Tab(here));
+        let owner = match cursor {
+            Owner::Tab(t) if !self.sidebar_order(session).contains(&t) => None,
+            other => Some(other),
+        };
+        let row = self.sidebar.drawn.get(&client).and_then(|d| {
+            let on = owner.as_ref()?;
+            let i = d
+                .owners
+                .iter()
+                .position(|o| o.as_ref().is_some_and(|o| o.same_row(on)))?;
+            Some((d.area.x, d.area.y + u16::try_from(i).ok()?))
+        });
+        let pressed = self.clients.get_mut(&client).map(|c| &mut c.pressed_at);
+        let Some(pressed) = pressed else {
+            return;
+        };
+        let before = std::mem::replace(pressed, row);
+        self.sidebar_menu(client, session, owner);
+        if let Some(c) = self.clients.get_mut(&client) {
+            c.pressed_at = before;
+        }
+    }
+
+    fn sidebar_menu(&mut self, client: ClientId, session: &str, owner: Option<Owner>) {
         match owner {
             Some(Owner::Tab(t)) => self.sidebar_tab_menu(client, t),
             Some(notice @ Owner::Notice { .. }) => self.sidebar_notice_menu(client, &notice),

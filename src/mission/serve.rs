@@ -112,6 +112,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "the view's own actions (a kind of notification, today or this week, a sort, which rows, finding a key, a day, autopilot's menu), then several views at once and this view's settings",
     ),
     (
+        "⇧F10",
+        "what a right click opens: the chosen item's actions, as ↵, or the view's, as m",
+    ),
+    (
         "↵ on a heading",
         "Work map: fold or open a repository (a row's menu folds its own too); on its merged line, its menu shows or hides its merged worktrees",
     ),
@@ -1933,8 +1937,24 @@ impl Server {
         }
     }
 
+    /// The context-menu action picked from the palette over mission
+    /// control: what its key (S-F10) does there.
+    pub fn mission_context_menu(&mut self, client: ClientId) {
+        let Some(m) = self.mission_mut(client) else {
+            return;
+        };
+        let key = context_menu_key(m);
+        self.mission_key(client, key);
+    }
+
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
-        let k = key.normalized();
+        let context_menu =
+            self.bindings.root.get(&key) == Some(&crate::mux::keys::Action::ContextMenu);
+        let k = if context_menu {
+            context_menu_key(m)
+        } else {
+            key.normalized()
+        };
         // The workspace's own keys for going to a tab and the palette, as
         // keys.json binds them: a tab by its number closes mission control
         // and goes there; the palette opens over it. Before a filter or a
@@ -5557,6 +5577,29 @@ fn calendar_step(
 /// Whether the Routines view is in front.
 fn on_routines(m: &Mission) -> bool {
     m.current().is_some_and(|v| v.id == ViewId::Routines)
+}
+
+/// What the context-menu key (S-F10) presses in mission control, as a right
+/// click opens: Enter, the chosen item's menu, or with none chosen m, the
+/// view's. A filter or a view's name being typed ends first, as for the
+/// palette, so the key isn't typed into it.
+fn context_menu_key(m: &mut Mission) -> Key {
+    m.jump = None;
+    if let Some(f) = m.filter.as_mut() {
+        f.typing = false;
+    }
+    let an_item_is_chosen = matches!(m.focus, None | Some(Focus::Item))
+        && match m.current() {
+            // The Reminders month chooses within its chosen day alone.
+            Some(v) if on_reminders(m) => super::reminders::chosen(m, v).is_some(),
+            Some(_) => m.chosen_item().is_some(),
+            None => !m.order().is_empty(),
+        };
+    if an_item_is_chosen {
+        Key::new(KeyCode::Enter, Mods::NONE)
+    } else {
+        Key::new(KeyCode::Char('m'), Mods::NONE)
+    }
 }
 
 fn on_reminders(m: &Mission) -> bool {

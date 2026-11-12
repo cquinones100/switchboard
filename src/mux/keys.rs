@@ -153,6 +153,9 @@ pub enum Action {
     /// The computer kept awake whatever runs, until pressed again
     /// (src/awake).
     KeepAwake,
+    /// The menu a right click would open, for what is chosen: the
+    /// sidebar's row, mission control's item (S-F10).
+    ContextMenu,
     /// Notes in the workspace: M-N, M-e, a note's tab and a tab's note
     /// (src/notes/serve.rs).
     Notes(crate::notes::serve::Command),
@@ -267,6 +270,7 @@ impl Action {
             "tab-title" => Action::TabTitle,
             "upgrade" => Action::Upgrade,
             "keep-awake" => Action::KeepAwake,
+            "context-menu" => Action::ContextMenu,
             _ => {
                 if let Some(d) = name.strip_prefix("select-pane-") {
                     Action::SelectPane(dir(d)?)
@@ -346,6 +350,7 @@ impl Action {
             Action::Update(command) => command.name().into(),
             Action::Upgrade => "upgrade".into(),
             Action::KeepAwake => "keep-awake".into(),
+            Action::ContextMenu => "context-menu".into(),
             Action::Notes(command) => command.name().into(),
             Action::Extra(command) => command.name(),
             Action::Autopilot(command) => command.name().into(),
@@ -445,6 +450,9 @@ impl Action {
             Action::Upgrade => "Restart Switchboard on the latest build on disk".into(),
             Action::KeepAwake => {
                 "Keep the computer awake until I say, or back to only while tabs work".into()
+            }
+            Action::ContextMenu => {
+                "Open the menu a right click would, for what is chosen: the sidebar's row, mission control's item".into()
             }
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about(),
@@ -607,6 +615,9 @@ impl Action {
             Action::KeepAwake => {
                 "Held whatever the tabs do, through a restart on a new build too, until chosen again, which goes back to Settings' \"Keep the computer awake while tabs work\" (keep_awake). A ☕ shows while it holds; the display still sleeps.".into()
             }
+            Action::ContextMenu => {
+                "The context-menu key of desktops and browsers. In the sidebar it opens the chosen row's menu, as m there does; in mission control the chosen item's, as Enter does, or the view's, as m does; in a pane the key goes on to the pane's program.".into()
+            }
             Action::Notes(command) => command.detail().into(),
             Action::Extra(command) => command.detail().into(),
             Action::Autopilot(command) => command.detail().into(),
@@ -670,6 +681,7 @@ impl Action {
             Action::Update(command) => command.tags(),
             Action::Upgrade => &["switchboard", "update", "restart", "upgrade"],
             Action::KeepAwake => &["system", "sleep", "awake"],
+            Action::ContextMenu => &["mouse", "menus"],
             Action::Notes(command) => command.tags(),
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
@@ -723,6 +735,7 @@ impl Action {
                     | Action::ReviveWorktree
                     | Action::Extra(Extra::Mission(_))
                     | Action::Autopilot(_)
+                    | Action::ContextMenu
             ),
         }
     }
@@ -828,6 +841,7 @@ impl Default for Bindings {
         bind("M-I", WorkOnNote);
         bind("M-a", NextNeedsYou);
         bind("M-A", NextIdle);
+        bind("S-F10", ContextMenu);
         bind("M-c", FocusClaude);
         bind("M-y", CopyReply);
         bind("M-h", History);
@@ -1027,6 +1041,7 @@ mod tests {
             Action::TabTitle,
             Action::Upgrade,
             Action::KeepAwake,
+            Action::ContextMenu,
             Action::ShapeNote,
             Action::ShapeNewTicket,
             Action::PrImage,
@@ -1052,6 +1067,15 @@ mod tests {
         );
         assert_eq!(Action::parse("select-tab-0"), None);
         assert_eq!(Action::parse("fly"), None);
+    }
+
+    #[test]
+    fn shift_f10_opens_the_context_menu() {
+        let b = Bindings::default();
+        assert_eq!(
+            b.root.get(&Key::parse("S-F10").unwrap()),
+            Some(&Action::ContextMenu)
+        );
     }
 
     #[test]

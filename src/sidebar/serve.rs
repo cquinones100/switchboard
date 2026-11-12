@@ -67,6 +67,7 @@ pub const KEYS: &[(&str, &str)] = &[
     ),
     ("M-space", "mission control"),
     ("space", "peek at it"),
+    ("m ⇧F10", "its menu, as a right click opens"),
     ("a", "answer it, or send it a message"),
     (
         "n",
@@ -1225,6 +1226,10 @@ impl Server {
         if !self.sidebar.focused(&session) {
             return (false, false);
         }
+        if *action == Action::ContextMenu && !self.mission_open(client) {
+            self.sidebar_menu_key(client, &session);
+            return (true, true);
+        }
         // M-f and the reply copy act on the tab in front, which on a folded
         // group's line, a tab the sidebar leaves out, or a cursor left on
         // another tab, is no tab under the cursor: there they do nothing.
@@ -1731,6 +1736,8 @@ impl Server {
                     self.dirty_session(session);
                 }
             }
+            // m: the menu a right click on the cursor's row opens.
+            KeyCode::Char('m') if none => self.sidebar_menu_key(client, session),
             // Its Claude answered from here, in mission control's box, as
             // the sidebar's `a` answered the chosen tab in a popup.
             KeyCode::Char('a') if none => {

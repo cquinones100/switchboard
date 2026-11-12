@@ -66,7 +66,7 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 | `M-t` | New tab running Claude, in a directory you pick |
 | `M-j` | Find a tab by typing its name |
 | `M-F` | Search your notes, Linear, GitHub and Slack at once |
-| `M-s` | Into the sidebar and back out |
+| `M-s` | Into the sidebar and back out; there, `m` (or `S-F10` anywhere) opens the chosen row's menu, as a right click does |
 | `M-c` | Into the pane running Claude in this tab |
 | `M-y` | Copy the latest reply of this tab's Claude |
 | `M-h` | This tab's history: its Claude session on a timeline, the screen as it was at the moment you move to |

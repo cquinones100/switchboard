@@ -1540,6 +1540,72 @@ fn a_search_matching_nothing_keeps_the_sidebar_focused() {
     });
 }
 
+// m in the sidebar, and the context-menu key (S-F10), open the menu a right
+// press on the cursor's row would, beside the row: a tab's with peeking
+// first, a folded group's line the sidebar's own with unfolding first, a
+// notification's own.
+#[test]
+fn m_and_shift_f10_in_the_sidebar_open_the_chosen_rows_menu() {
+    let notes = common::TempDir::new("sbmk");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("● New note: Plan");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    let close = |client: &mut TestClient, text: &str| {
+        client.type_text("\x1b");
+        client.wait_for("the menu closed", |s| !s.iter().any(|l| l.contains(text)));
+    };
+
+    // On a tab: its menu, beside its row, by m and by S-F10.
+    let tab = row_of(&mut client, "  1 ");
+    for key in ["m", "\x1b[21;2~"] {
+        client.type_text(key);
+        let screen = client.wait_text("Peek at its screen");
+        let at = screen
+            .iter()
+            .position(|l| l.contains("Peek at its screen"))
+            .unwrap();
+        assert!(
+            at.abs_diff(tab) < 8,
+            "the menu by the tab on row {tab}:\n{}",
+            screen.join("\n")
+        );
+        close(&mut client, "Peek at its screen");
+    }
+
+    // On a folded group's line: the sidebar's own menu, unfolding first.
+    let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
+    client.type_text("z");
+    wait_list(&server, "Other folded", |l| folded(l) == json!(["other"]));
+    client.type_text("m");
+    client.wait_text("Unfold Other");
+    client.type_text("\r");
+    wait_list(&server, "Other unfolded", |l| folded(l) == json!([]));
+
+    // On a notification: its own menu.
+    client.type_text("n");
+    client.wait_text("NOTIFICATIONS 1");
+    client.type_text("m");
+    client.wait_text("Open it in Notes");
+    close(&mut client, "Open it in Notes");
+    assert!(focused(&server.list()), "still in the sidebar");
+
+    // Into the Notifications window: S-F10 there opens the chosen one's.
+    client.type_text("\r");
+    wait_list(&server, "the focus in the window", |l| !focused(l));
+    client.type_text("\x1b[21;2~");
+    client.wait_text("Open it in Notes");
+}
+
 // A right press in the sidebar opens a menu by it: a notification's own, as
 // the Notifications window opens it, and the sidebar's own elsewhere, whose
 // "Dismiss every notification shown" empties the notifications; with

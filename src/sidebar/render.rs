@@ -1032,14 +1032,19 @@ pub fn sidebar_lines(
         }
     }
 
-    // UX 2.0's last row: the keys that start, find and walk tabs.
+    // UX 2.0's last row: the keys that start, find and walk tabs, or with
+    // the focus in the sidebar, start, find and open the chosen row's menu.
     if r.ux2 {
         let mut hint = Row::default();
         hint.put(" ", Style::new());
-        hint.spans.extend(kit::hints(
-            &[("M-t", "new"), ("M-j", "jump"), ("M-a", "next")],
-            theme,
-        ));
+        // The four don't fit the default width, so the menu's key takes
+        // M-a's place while the sidebar has the focus.
+        let keys = if view.focused {
+            [("M-t", "new"), ("M-j", "jump"), ("m", "menu")]
+        } else {
+            [("M-t", "new"), ("M-j", "jump"), ("M-a", "next")]
+        };
+        hint.spans.extend(kit::hints(&keys, theme));
         notice_lines.push(hint.fit(cols, None));
         notice_owners.push(None);
     }
@@ -1612,6 +1617,24 @@ mod tests {
         assert_eq!(text[6], "▌○ 1 work");
         assert_eq!(out.owners[6], Some(Owner::Tab(TabId(1))));
         assert_eq!(text[19], " M-t new  M-j jump  M-a next");
+        // With the focus in it, the menu's key in M-a's place, whole at the
+        // default width.
+        let focused = texts(&sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            std::slice::from_ref(&notice),
+            &[],
+            "s",
+            34,
+            20,
+            &View {
+                focused: true,
+                ..view(1)
+            },
+            &r,
+            &Theme::DARK,
+        ));
+        assert_eq!(focused[19], " M-t new  M-j jump  m menu");
         assert_eq!(
             out.lines[19].spans[1].style.fg,
             Some(crate::mux::compose::colors::ACCENT)

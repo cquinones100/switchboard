@@ -289,6 +289,13 @@ impl Server {
         let at = self.notice_cursor(&session, &entries) as isize;
         let back = self.sidebar.windows.back.contains(&session);
         let on_menu = self.sidebar.windows.menu.contains(&session);
+        // The context-menu key (S-F10), which reaches the window as a
+        // pane's key: the chosen notification's menu, as a right click on
+        // it opens, else the window's own, as m does.
+        if self.bindings.root.get(&key) == Some(&crate::mux::keys::Action::ContextMenu) {
+            self.notices_context_menu(client, pane);
+            return true;
+        }
         let k = key.normalized();
         let none = k.mods == Mods::NONE;
         let ctrl = k.mods == Mods::CTRL;
@@ -353,6 +360,28 @@ impl Server {
             KeyCode::Char('q' | 'h') if none => self.notices_back(&session),
             KeyCode::Char('c') if ctrl => self.notices_back(&session),
             _ => {}
+        }
+        true
+    }
+
+    /// The context-menu key or action in the window (`pane`): the chosen
+    /// notification's menu, as a right click on it opens, else, on "‹ tabs",
+    /// the footer or an empty window, the window's own, as m does. Gives
+    /// whether `pane` is the window's.
+    pub fn notices_context_menu(&mut self, client: ClientId, pane: PaneId) -> bool {
+        if !self.is_notices_pane(pane) {
+            return false;
+        }
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return true;
+        };
+        let entries = self.notice_entries();
+        let at = self.notice_cursor(&session, &entries);
+        let w = &self.sidebar.windows;
+        if w.back.contains(&session) || w.menu.contains(&session) || entries.is_empty() {
+            self.notices_view_menu(client);
+        } else {
+            self.notices_open(client, &entries, at);
         }
         true
     }

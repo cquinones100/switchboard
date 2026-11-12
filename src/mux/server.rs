@@ -2505,8 +2505,18 @@ impl Server {
         if fate == crate::extras::KeyFate::Taken {
             return;
         }
+        // The context-menu key opens a menu only for a sidebar row chosen;
+        // in a pane it is the pane's program's.
+        let menu_key_for_a_pane = |s: &Self, action: &Action| {
+            *action == Action::ContextMenu
+                && !s
+                    .clients
+                    .get(&id)
+                    .is_some_and(|c| s.sidebar.focused(&c.session))
+        };
         if fate == crate::extras::KeyFate::Bindings
             && let Some(action) = self.bindings.root.get(&key).cloned()
+            && !menu_key_for_a_pane(self, &action)
         {
             // C-w, pressed all the time in shells and editors, isn't one of
             // the habits' keys, as tmux.conf counted it nowhere.
@@ -2754,6 +2764,17 @@ impl Server {
             Action::Extra(command) => self.extras_command(id, command, pane),
             Action::Autopilot(command) => self.autopilot_command(id, command, pane),
             Action::Routines(command) => self.routines_command(id, command),
+            // The context-menu key is the sidebar's (`sidebar_before_action`)
+            // or passed on to the pane by `key`; picked from the palette, it
+            // opens mission control's or the Notifications window's menu, as
+            // its key does there, and a pane has none.
+            Action::ContextMenu => {
+                if self.mission_open(id) {
+                    self.mission_context_menu(id);
+                } else if !pane.is_some_and(|p| self.notices_context_menu(id, p)) {
+                    self.say(Some(id), "Nothing chosen here has a menu.");
+                }
+            }
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

@@ -302,6 +302,28 @@ fn space_opens_the_chosen_cards_menu_with_nothing_focused() {
     client.wait_text("Go to tab 1");
 }
 
+// The context-menu key (S-F10, sent as its CSI form) opens what a right
+// click would: the chosen card's menu, as Enter does.
+#[test]
+fn shift_f10_opens_the_chosen_cards_menu() {
+    let (_server, mut client) = two_tabs(json!({}));
+    open(&mut client);
+    client.send(b"\x1b[21;2~");
+    client.wait_text("Go to tab 1");
+    // Picked from the palette over it, the same, mission control kept.
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Go to tab 1"))
+    });
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("action>");
+    client.type_text("menu a right click would");
+    client.wait_text("› Open the menu a right click would");
+    client.type_text("\r");
+    let screen = client.wait_text("Go to tab 1");
+    assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+}
+
 #[test]
 fn enter_on_a_tabs_card_and_go_to_tab_goes_there() {
     let (server, mut client) = two_tabs(json!({}));
