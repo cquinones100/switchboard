@@ -3,6 +3,8 @@
   "handles": ["you"],
   "ticketPrefixes": ["OPS", "SWB", "WEB"],
   "channels": ["#alerts-sync", "#alerts-web", "#deploys", "#design", "#landing", "#oncall", "#web-app", "#claude", "#close", "#copy", "#find", "#git", "#github", "#help", "#linear", "#links", "#navigate", "#new", "#notes", "#overview", "#panes", "#pin", "#pr", "#reminder", "#reopen", "#restart", "#sidebar", "#slack", "#switchboard", "#tabs", "#tickets", "#views", "#worktree"],
+  "prNumbers": [208, 219, 318, 2009, 2012, 2016, 2019, 2021, 2024, 2027, 2031, 2040],
+  "colors": ["565856"],
   "organizations": ["acme"],
-  "hosts": ["github.com", "raw.githubusercontent.com"]
+  "hosts": ["github.com", "raw.githubusercontent.com", "fonts.googleapis.com", "fonts.gstatic.com"]
 }

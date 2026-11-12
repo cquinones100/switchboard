@@ -22,11 +22,14 @@ body{margin:0}
 class Component extends DCLogic {
 renderVals() {
 const rows = [];
-for (let y = 0; y < 45; y++) rows.push({ runs: [
+for (let y = 0; y < 45; y++) rows.push(y === 3 ? { runs: [{ text: 'meter:', style: 'display:inline-block;height:17px;vertical-align:top;color:#000;background:#ff00ff' }] } : { runs: [
   { text: ' ' + String(y + 1).padStart(2) + ' ', style: 'color:#8d93a8;background:#11121a' },
   { text: (y % 3 === 0 ? '● needs you <tab ' + y + '>' : '⠹ working on tab ' + y).padEnd(155), style: 'color:' + (y % 3 === 0 ? '#f2c56b' : '#82aaff') + ';background:#15161e' }
 ] });
-return { rows: rows, imgs: [{ pos: 'position:absolute;left:calc(100ch);top:170px;width:calc(40ch);height:170px', style: 'width:100%;height:100%;border-radius:7px;background:#262b40', text: '' }] };
+return { rows: rows, imgs: [
+  { pos: 'position:absolute;left:calc(100ch);top:170px;width:calc(40ch);height:170px', style: 'width:100%;height:100%;border-radius:7px;background:#262b40', text: '' },
+  { pos: 'position:absolute;left:calc(10ch);top:51px;width:calc(20ch);height:17px', style: 'width:100%;height:100%;background:#00ff00', text: '' }
+] };
 }
 }
 </script>

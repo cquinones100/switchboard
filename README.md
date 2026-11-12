@@ -115,7 +115,7 @@ Settings lists each setting in these files under the file's name, and Enter chan
 
 ## More
 
-[docs/guide.md](docs/guide.md) describes every feature, key and command, and [docs/design](docs/design/README.md) shows the design of UX 2.0, board by board. [ARCHITECTURE.md](ARCHITECTURE.md) describes the code, and [CLAUDE.md](CLAUDE.md) how it is worked on.
+[docs/guide.md](docs/guide.md) describes every feature, key and command, and [the design site](https://cquinones100.github.io/switchboard/design/) shows the design of UX 2.0, board by board ([its list](docs/design/README.md)). [ARCHITECTURE.md](ARCHITECTURE.md) describes the code, and [CLAUDE.md](CLAUDE.md) how it is worked on.
 
 ## Contributing
 

@@ -1,0 +1,100 @@
+<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:"><title>51. Proposed: landing in the tab's thread, queue-and-clean's steps and its push question as buttons</title><style>html{background:#0b0c12}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700;900&amp;family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.board{width:420px;height:880px;box-sizing:border-box;background:#0b0c12;position:relative;font-family:Lato,-apple-system,'Helvetica Neue',sans-serif;-webkit-font-smoothing:antialiased}
+.idx{position:absolute;top:0;right:12px;font:11px/16px 'JetBrains Mono',monospace;color:#8d93a8;text-decoration:none;z-index:3}
+.phone{position:absolute;left:10px;top:12px;width:400px;height:856px;border-radius:52px;background:#000;box-shadow:0 0 0 2px #2a2c33}
+.screen{position:absolute;inset:8px;border-radius:44px;overflow:hidden;background:#1a1d21;color:#d1d2d3;display:flex;flex-direction:column;font-size:15px;line-height:21px}
+.status{height:44px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 30px 4px 34px;font-size:15px;color:#fff}
+.status .sig{font-size:11px;letter-spacing:1px}
+.top{flex:none;display:flex;align-items:center;gap:10px;padding:6px 14px 8px;border-bottom:1px solid #2b2d31}
+.top .back{font-size:30px;line-height:26px;color:#d1d2d3;width:16px}
+.top .title{flex:1;display:flex;align-items:center;gap:8px}
+.top .title b{display:block;font-size:16px;line-height:19px;color:#fff}
+.top .sub{display:block;font-size:12px;line-height:15px;color:#ababad}
+.top .icons{color:#ababad;font-size:17px;letter-spacing:8px}
+.tabs{flex:none;display:flex;gap:22px;padding:0 16px;border-bottom:1px solid #2b2d31;font-size:14px;color:#ababad}
+.tabs span{padding:9px 0 8px}
+.tabs .on{color:#fff;font-weight:700;box-shadow:inset 0 -2px #fff}
+.feed{flex:1;overflow:hidden;padding:4px 0 6px;display:flex;flex-direction:column;justify-content:flex-end}
+.feed.top-aligned{justify-content:flex-start}
+.m{display:flex;gap:10px;padding:7px 14px}
+.m.cont{padding-top:1px}
+.av{flex:none;width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px}
+.av.app{background:#5fd7ff;color:#11131a}
+.av.me{background:#c98a6b;color:#fff;font-size:16px}
+.av.none{height:0}
+.av.sm{width:26px;height:26px;border-radius:6px;font-size:14px}
+.av.mini{display:inline-block;width:18px;height:18px;border-radius:4px;margin-right:2px;vertical-align:middle}
+.m-body{flex:1;min-width:0}
+.m-head{display:flex;align-items:baseline;gap:6px;margin-bottom:1px}
+.m-head b{color:#fff;font-size:15px}
+.tag{font-size:10px;line-height:14px;font-weight:700;color:#ababad;background:#2c2d30;border-radius:3px;padding:0 4px}
+.time{font-size:12px;color:#ababad}
+.m-rep{font-size:12px;color:#ababad;margin-bottom:1px}
+.link{color:#1d9bd1}
+code{font-family:'JetBrains Mono',Menlo,monospace;font-size:12.5px;color:#e8912d;background:#222529;border:1px solid #35373b;border-radius:3px;padding:0 3px}
+.b-sec{margin:1px 0 3px;word-wrap:break-word}
+.b-head{font-weight:900;font-size:17px;line-height:23px;color:#fff;margin:4px 0 2px}
+.b-ctx{font-size:12.5px;line-height:17px;color:#ababad;margin:3px 0}
+.b-ctx code{font-size:11px}
+.b-div{height:1px;background:#35373b;margin:9px 0}
+.b-code{font-family:'JetBrains Mono',Menlo,monospace;font-size:11.5px;line-height:16px;background:#222529;border:1px solid #35373b;border-radius:4px;padding:6px 8px;margin:4px 0;white-space:pre-wrap;color:#d1d2d3}
+.b-list{margin:2px 0 4px;padding-left:20px}
+.b-act{display:flex;flex-wrap:wrap;gap:7px;margin:7px 0 4px}
+.b-acc{display:flex;align-items:flex-start;gap:10px}
+.b-acc .b-sec{flex:1}
+.btn{display:inline-block;max-width:100%;box-sizing:border-box;overflow:hidden;text-overflow:ellipsis;font-size:14px;font-weight:700;line-height:18px;padding:6px 12px;border-radius:8px;border:1px solid #565856;color:#d1d2d3;background:#1a1d21;white-space:nowrap}
+.btn.primary{background:#007a5a;border-color:#007a5a;color:#fff}
+.btn.danger{color:#e01e5a;border-color:#e01e5a55}
+.reacts{display:flex;gap:5px;margin:5px 0 2px}
+.react{font-size:13px;border-radius:12px;padding:1px 8px;background:#2c2d30;border:1px solid #2c2d30}
+.react.mine{background:#1d9bd122;border-color:#1d9bd1}
+.react small{font-size:11px;color:#d1d2d3}
+.edited{font-size:11px;color:#868686;margin-left:4px}
+.day{display:flex;align-items:center;gap:8px;margin:6px 14px;font-size:12px;font-weight:700;color:#d1d2d3}
+.day:before,.day:after{content:'';flex:1;height:1px;background:#35373b}
+.day span{border:1px solid #35373b;border-radius:12px;padding:1px 10px}
+.replies{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;margin:3px 0}
+.rlast{font-weight:400;color:#868686;font-size:12px}
+.compose{flex:none;margin:6px 10px 26px;border:1px solid #35373b;border-radius:10px;display:flex;align-items:center;gap:10px;padding:9px 12px;color:#868686}
+.compose .field{flex:1}
+.compose .plus,.compose .mic{color:#ababad}
+.home{flex:1;overflow:hidden;padding:8px 16px}
+.dim-under{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+.sheet{position:absolute;left:0;right:0;bottom:0;top:54px;background:#1a1d21;border-radius:14px 14px 0 0;display:flex;flex-direction:column;box-shadow:0 -8px 30px rgba(0,0,0,.5)}
+.grab{width:38px;height:5px;border-radius:3px;background:#4a4c52;margin:7px auto 2px}
+.mtop{display:flex;align-items:center;justify-content:space-between;padding:6px 16px 10px;border-bottom:1px solid #2b2d31;font-size:15px}
+.mtop b{color:#fff;font-size:16px}
+.mclose{color:#d1d2d3}
+.msub{color:#1d9bd1;font-weight:700;min-width:44px;text-align:right}
+.mbody{flex:1;overflow:hidden;padding:10px 16px}
+.in{margin:8px 0 12px}
+.in-l{font-weight:700;color:#fff;margin-bottom:5px}
+.in-f{border:1px solid #565856;border-radius:8px;padding:8px 10px;color:#d1d2d3}
+.in-f.ph{color:#868686}
+.in-f.multi{min-height:66px}
+.in-f.sel{display:flex;justify-content:space-between}
+.in-h{font-size:12.5px;color:#ababad;margin-top:4px}
+.note{position:absolute;left:14px;right:14px;bottom:-2px;font:11px/14px 'JetBrains Mono',monospace;color:#565b6e}
+</style>
+</head><body>
+
+<div class="board">
+<a href="index.html" class="idx">index</a>
+<div class="phone"><div class="screen">
+<div class="status"><b>2:15</b><span class="sig">▂▄▆ ᯤ ▮</span></div>
+<div class="top"><span class="back">‹</span><div class="title"><div><b>Thread</b><span class="sub">Switchboard</span></div></div><span class="icons">⋯</span></div>
+<div class="feed">
+<div class="m"><div class="av app">⌁</div><div class="m-body"><div class="m-head"><b>Switchboard</b><span class="tag">APP</span><span class="time">11:20 AM</span></div><div class="b-sec">🤖 <b>Tab 5, benchmark harness</b><br>🟣 <b>Landing</b> since 2:12 PM · 1st in the queue<br><span class="link">PR #57</span> · ✓ 9 checks · approved by Ben</div><div class="b-ctx">✓ rebased  ·  ✓ tests  ·  ✓ review, 2 rounds clean  ·  ✓ leak-check  ·  🟡 <b>push</b></div><div class="b-act"><span class="btn">Progress</span><span class="btn">Skill</span><span class="btn">Rename</span><span class="btn danger">Close</span></div><span class="edited">(edited)</span></div></div>
+<div class="replies"><span class="ravs"><i class="av mini app"></i></span><span class="link">6 replies</span><span class="rlast">Last reply today at 2:14 PM</span></div>
+<div class="m"><div class="av app">⌁</div><div class="m-body"><div class="m-head"><b>Switchboard</b><span class="tag">APP</span><span class="time">2:12 PM</span></div><div class="b-sec">🤖 tab 5, benchmark harness took the landing lock from tab 2, stable note IDs.</div></div></div>
+<div class="m"><div class="av app">⌁</div><div class="m-body"><div class="m-head"><b>Switchboard</b><span class="tag">APP</span><span class="time">2:14 PM</span></div><div class="b-sec">🤖 tab 5, benchmark harness: review round 2 came back clean; leak-check found nothing.</div></div></div>
+<div class="m"><div class="av app">⌁</div><div class="m-body"><div class="m-head"><b>Switchboard</b><span class="tag">APP</span><span class="time">2:15 PM</span></div><div class="b-sec">🤖 <b>Tab 5, benchmark harness</b> asks: <b>Push to main?</b><br><br>Push 1 commit, <code>9c41d07</code> Add the harness's warm-up runs, to <code>origin/main</code>. Reviewed clean twice; leak-check found none.</div><div class="b-act"><span class="btn primary">Yes, push it</span><span class="btn">No</span></div><div class="b-ctx">As the desktop's [Y/n]: no answer is no, so nothing pushes by itself.</div></div></div>
+</div>
+<div class="compose"><span class="plus">＋</span><span class="field">Reply…</span><span class="mic">◉</span></div>
+</div></div>
+</div>
+</body></html>
