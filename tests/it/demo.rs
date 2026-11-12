@@ -8,6 +8,8 @@
 
 use crate::common;
 
+use std::io::Write;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -256,4 +258,98 @@ fn the_tour_saves_a_board_for_each_step() {
                 && e["description"].as_str().is_some_and(|t| !t.is_empty())),
         "{calendar}"
     );
+}
+
+#[test]
+fn the_demo_runs_on_the_build_it_was_started_from() {
+    let d = Demo::new();
+    let detached = |d: &Demo| {
+        let out = d.run(&["demo", "--detached"]);
+        assert!(
+            out.status.success(),
+            "demo --detached failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    detached(&d);
+
+    // A server of this build is kept as it is.
+    demo::ask(&d.home, &["set", "-t", "@1", "@kept", "yes"]).unwrap();
+    detached(&d);
+    assert_eq!(
+        demo::ask(&d.home, &["show", "-t", "@1", "@kept"])
+            .unwrap()
+            .trim(),
+        "yes"
+    );
+
+    // One answering another build is ended and started again on this one,
+    // the demo's data kept.
+    let note = d.home.join("Notes/Demo Notes.md");
+    let mut text = std::fs::read_to_string(&note).unwrap();
+    text.push_str("- [ ] Kept across the restart\n");
+    std::fs::write(&note, &text).unwrap();
+    demo::ask(&d.home, &["kill-server"]).unwrap();
+    let socket = demo::socket_of(&d.home);
+    let deadline = common::deadline(Duration::from_secs(10));
+    while UnixStream::connect(&socket).is_ok() {
+        assert!(Instant::now() < deadline, "the demo's server never ended");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = std::fs::remove_file(&socket);
+    let old = old_server(&socket);
+    let said = detached(&d);
+    assert!(
+        said.contains("started by another build (0.0.1 (000000000000))"),
+        "{said}"
+    );
+    assert!(
+        old.join().unwrap(),
+        "the old build's server was never ended"
+    );
+    assert_eq!(
+        demo::ask(&d.home, &["server-version"]).unwrap().trim(),
+        switchboard::update::version_line()
+    );
+    let kept = std::fs::read_to_string(&note).unwrap();
+    assert!(kept.contains("Kept across the restart"), "{kept}");
+}
+
+/// A stand-in for a demo server an older build started on `socket`: it
+/// answers `version` with an old one, and ends on `kill-server`, giving
+/// whether it was asked to.
+fn old_server(socket: &Path) -> std::thread::JoinHandle<bool> {
+    use switchboard::mux::proto::{self, ClientMsg, ServerMsg};
+    let listener = UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let socket = socket.to_path_buf();
+    std::thread::spawn(move || {
+        let deadline = common::deadline(Duration::from_secs(60));
+        while Instant::now() < deadline {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            };
+            stream.set_nonblocking(false).unwrap();
+            let Ok(Some(ClientMsg::Command { args, .. })) = proto::read_client(&mut stream) else {
+                continue;
+            };
+            let (code, stdout) = match args.first().map(String::as_str) {
+                Some("server-version") => (0, b"0.0.1 (000000000000)\n".to_vec()),
+                Some("kill-server") => (0, Vec::new()),
+                _ => (1, Vec::new()),
+            };
+            let _ = stream.write_all(&proto::encode_server(&ServerMsg::Reply {
+                code,
+                stdout,
+                stderr: Vec::new(),
+            }));
+            if args.first().is_some_and(|a| a == "kill-server") {
+                let _ = std::fs::remove_file(&socket);
+                return true;
+            }
+        }
+        false
+    })
 }

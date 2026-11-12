@@ -99,6 +99,7 @@ pub const NAMES: &[&str] = &[
     "tip",
     "press",
     "sidebar-repo",
+    "server-version",
 ];
 
 /// How each command is used, which `--help` (or `-h`) after its name prints.
@@ -190,6 +191,10 @@ pub const USAGE: &[(&str, &str)] = &[
     (
         "sidebar-repo",
         "sidebar-repo [-s session] <dir> | --all: the sidebar filtered to the repository dir is in (its main clone), every other one's tabs under Other repos; --all clears it",
+    ),
+    (
+        "server-version",
+        "server-version: the build the server runs, as switchboard --version names it",
     ),
 ];
 
@@ -375,6 +380,7 @@ impl Server {
                     Reply::ok("")
                 })
             }
+            "server-version" => Ok(Reply::ok(format!("{}\n", crate::update::version_line()))),
             "kill-server" => {
                 self.quit = true;
                 Ok(Reply::ok(""))

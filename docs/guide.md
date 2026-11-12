@@ -1927,7 +1927,7 @@ switchboard demo --tour <dir> [--size <cols>x<rows>]
                                picture of each in <dir>, at 200x56 by default
 ```
 
-Its home is `/tmp/sb-demo-<uid>`, made only you can read, and refused when something else is there (a link, or a folder that isn't yours). It links nothing of yours: no Keychain, gh sign-in, `~/.config`, Claude sign-in, dotfiles or `~/.local/share`, and its server runs with an environment made from nothing but your terminal's own variables, so no token or agent socket of yours comes along. It runs the binary you ran, building nothing.
+Its home is `/tmp/sb-demo-<uid>`, made only you can read, and refused when something else is there (a link, or a folder that isn't yours). It links nothing of yours: no Keychain, gh sign-in, `~/.config`, Claude sign-in, dotfiles or `~/.local/share`, and its server runs with an environment made from nothing but your terminal's own variables, so no token or agent socket of yours comes along. It runs the binary you ran, building nothing: a demo server another build started (one left running while you rebuilt) is ended and started again on this one, its data kept, so a tour or a script always reaches the build it was run from.
 
 What it shows is made up: three repositories under `acme/`, each in `~/code` with a short history, an origin of its own in the home and a worktree for each open PR; three Claude tabs on those worktrees, a shell, and Notes on a notes folder with a checklist and its plan. GitHub, Linear and Slack are stand-ins on this computer (`switchboard demo-services`, beside the server), answering with the demo's PRs (in each of the PR board's columns, with checks passing, failing and running), tickets (`ABC-…`), Linear inbox and Slack's sign-in, as strict as the real ones about how they are asked, so a lookup the demo answers wrong is kept in its `~/.local/state/demo/refused.log`; a view whose lookup the demo has no answer for shows nothing. The calendar and Slack views read what `/today` and `/slack-updates` would have saved: today's meetings, one about to start, each with who is invited and an agenda and one naming a demo tab's ticket, and a mention, a direct message and a thread. The Usage view has a made-up week: each Claude tab's spend through today and the six days before (and a tab closed since), the 5-hour and weekly limits, and the request audit to GitHub, Linear, Slack and Anthropic by hour, all timed from when the demo was laid out.
 
@@ -2230,6 +2230,8 @@ switchboard sidebar-repo [-s session] <dir> | --all
 switchboard sources [refresh [view]]     mission control's GitHub and Linear
                                          data as JSON, or looked up again now
 switchboard list-keys                    every key and what it does
+switchboard server-version               the build the server runs, as
+                                         switchboard --version names it
 switchboard save                         save the layout now; prints its file
 switchboard detach [-s session]          detach every terminal, or a session's
 switchboard kill-server                  save, then end the server and its panes

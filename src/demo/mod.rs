@@ -829,12 +829,29 @@ pub fn tabs(home: &Path, bin: &Path) -> Vec<(String, PathBuf, Vec<String>)> {
     ]
 }
 
-/// Starts the demo's server with no client, unless it answers, gives it a
-/// session and opens the demo's tabs.
+/// Starts the demo's server with no client, unless one of this build
+/// answers, gives it a session and opens the demo's tabs. One another build
+/// started (a demo left running while you rebuilt) is ended first, since
+/// what it does is that build's: a tour of this one would press keys it
+/// doesn't know. A server from before the `server-version` command answers none.
 pub fn start_server(home: &Path, bin: &Path, env: &[(String, String)]) -> Result<()> {
     let socket = socket_of(home);
     if UnixStream::connect(&socket).is_ok() {
-        return Ok(());
+        let running = ask(home, &["server-version"]).map(|v| v.trim().to_string());
+        let ours = crate::update::version_line();
+        if running.as_deref().is_ok_and(|v| v == ours) {
+            return Ok(());
+        }
+        let theirs = running.unwrap_or_else(|_| "an older one".into());
+        eprintln!(
+            "The demo was started by another build ({theirs}); starting it again on this one ({ours})."
+        );
+        crate::cmd::try_::stop_server(&socket);
+        if UnixStream::connect(&socket).is_ok() {
+            bail!(
+                "the demo's server from another build didn't end; switchboard demo --clean ends it"
+            );
+        }
     }
     let state = home.join(".local/state/switchboard");
     let log = fs::OpenOptions::new()
