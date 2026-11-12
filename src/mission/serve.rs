@@ -147,7 +147,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "choose that tab; with UX 2.0, on a card waiting on you, answer with that option (or go to the tab when the card can't show it whole)",
     ),
     ("] [", "next, last view (with UX 2.0, in its group)"),
-    ("} {", "with UX 2.0, the next, last group of views"),
+    (
+        "M-] M-[",
+        "with UX 2.0, the next, last group of views (outside mission control, the next, last tab)",
+    ),
     (
         "tab ⇧tab",
         "move focus through the groups' and views' names, the filter, the items and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
@@ -2118,8 +2121,8 @@ impl Server {
             KeyCode::BackTab => switch_view(m, -1, false),
             KeyCode::Char(']') if none => switch_view(m, 1, true),
             KeyCode::Char('[') if none => switch_view(m, -1, true),
-            KeyCode::Char('}') if m.snap.rules.ux2 => switch_group(m, 1),
-            KeyCode::Char('{') if m.snap.rules.ux2 => switch_group(m, -1),
+            KeyCode::Char(']') if k.mods == Mods::ALT && m.snap.rules.ux2 => switch_group(m, 1),
+            KeyCode::Char('[') if k.mods == Mods::ALT && m.snap.rules.ux2 => switch_group(m, -1),
             KeyCode::Esc if m.filter.is_some() => {
                 // Esc clears a filter before it closes mission control.
                 m.filter = None;
@@ -5735,7 +5738,7 @@ fn switch_view(m: &mut Mission, by: isize, in_group: bool) {
     show_view(m, to);
 }
 
-/// `}` and `{` with UX 2.0: the first view of the next or last group,
+/// M-] and M-[ with UX 2.0: the first view of the next or last group,
 /// round; Tab's focus on a group's name follows.
 fn switch_group(m: &mut Mission, by: isize) {
     let Some(groups) = m.groups() else {

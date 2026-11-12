@@ -84,7 +84,7 @@ pub fn mission_names(lines: &[String]) -> (Vec<String>, Vec<String>) {
         line.split("   ")
             .map(str::trim)
             .filter(|w| !w.is_empty())
-            .take_while(|w| !w.starts_with('/') && !w.starts_with('{'))
+            .take_while(|w| !w.starts_with('/') && !w.starts_with("M-["))
             .filter(|w| w.chars().all(|c| c.is_alphanumeric() || c == ' '))
             .map(str::to_string)
             .collect()
@@ -158,7 +158,7 @@ pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String
     for (g, group) in groups.iter().take(MOST).enumerate() {
         if g > 0 {
             // The next group's views in place of this one's.
-            press_until(&mut client, "}", |s| mission_names(&s.lines()))?;
+            press_until(&mut client, "M-]", |s| mission_names(&s.lines()))?;
         }
         let (_, views) = client.read(|s| mission_names(&s.lines()));
         for (v, view) in views.iter().take(MOST).enumerate() {
@@ -188,7 +188,7 @@ mod tests {
     fn mission_controls_groups_and_views_are_read_off_its_first_lines() {
         let lines: Vec<String> = [
             " 5 tabs     / filter │ MISSION CONTROL   Work   Code   Day   System   ✗ 1  ! 2  ✓ 1",
-            "                     │  PRs   Tickets   CI     / filter        { } groups  [ ] views",
+            "                     │  PRs   Tickets   CI     / filter      M-[ ] groups  [ ] views",
         ]
         .iter()
         .map(|l| l.to_string())
@@ -199,7 +199,7 @@ mod tests {
 
         let chosen: Vec<String> = [
             " 5 tabs     / filter │ MISSION CONTROL   \u{E0B6}Work\u{E0B4}   Code   Day   System",
-            "                     │ PRs   \u{E0B6}Tickets\u{E0B4}   CI     { } groups",
+            "                     │ PRs   \u{E0B6}Tickets\u{E0B4}   CI   M-[ ] groups",
         ]
         .iter()
         .map(|l| l.to_string())
