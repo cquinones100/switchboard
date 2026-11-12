@@ -3451,7 +3451,7 @@ fn story_entries(change: &Change) -> Vec<story::Entry> {
 /// changes not yet committed, and those its commits change, each in the
 /// kinds' order, then A to Z (diffview.lua's `look_uncommitted`); none in
 /// any other change.
-fn uncommitted_orders(change: &Change) -> (Vec<String>, Vec<String>) {
+pub fn uncommitted_orders(change: &Change) -> (Vec<String>, Vec<String>) {
     let Some(u) = &change.uncommitted else {
         return (Vec::new(), Vec::new());
     };

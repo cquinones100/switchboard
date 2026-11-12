@@ -11,6 +11,8 @@
       "Bash(switchboard skill-path *)",
       "Bash(switchboard slack-relay notify *)",
       "Bash(switchboard tabs)",
+      "Bash(switchboard diff-story)",
+      "Bash(switchboard diff-story *)",
       "Bash(switchboard show *)",
       "Bash(switchboard set *)",
       "Bash(switchboard setting review_security)",

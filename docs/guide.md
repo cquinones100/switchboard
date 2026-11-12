@@ -1082,6 +1082,8 @@ switchboard diff --ahead [dir]          # tell the story and keep it for M-d, dr
 
 With `--ahead` it compares with the base `M-d` would, and exits 0 once the story is told (or there was none to tell), or 2 or 3 with why on its error output; a second run on the same commit does nothing.
 
+`switchboard diff-story [--path] [dir]` prints the story `M-d` tells of the branch's change as Markdown, as `yS` copies it, so the tab's Claude can read the story you are looking at; Switchboard's instructions to Claude name it, and Claude Code may run it without asking. Without a directory it reads the pane's, as `M-d` would, else the current one. It only reads what the diff kept: the base `M-d` last compared the branch's commit with, never fetched, and the story kept under the change's key, never asked of Haiku, so with neither it prints "No story told for this change yet: open M-d and press its story key." and exits 0; while Settings' "Diff told as a story" or "Files in reading order" is off, it says `M-d` tells no story. With "Uncommitted changes in M-d" on, the files changed only since the last commit follow in a last "Not committed yet" chapter, as `M-d` shows them. `--path` prints the story's file in `~/.cache/switchboard/diff-story/` instead.
+
 ## The notes app
 
 The notes app keeps your notes as Markdown files and shows them in the terminal the way the macOS Notes app does, edited with Vim's keys.

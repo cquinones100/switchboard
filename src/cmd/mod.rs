@@ -16,6 +16,7 @@ pub mod claude_plugin_dirs;
 pub mod claude_reply;
 pub mod codex_review;
 pub mod demo;
+pub mod diff_story;
 pub mod headless;
 pub mod land_lock;
 pub mod landing;
@@ -129,6 +130,11 @@ pub const COMMANDS: &[Command] = &[
         name: "tabs",
         run: tabs::main,
         about: "A line per pane of every tab: its number, place, name, Claude's state, program and directory, then its Claude's session, pid, name and address (--json for objects)",
+    },
+    Command {
+        name: "diff-story",
+        run: diff_story::main,
+        about: "The story M-d tells of the branch's change, as Markdown, from what it kept (--path for its file)",
     },
     Command {
         name: "respawn",
@@ -348,6 +354,7 @@ pub const COMMANDS: &[Command] = &[
 /// rather than taking `--help` for a file, a link, a tab or a note.
 const OWN_HELP: &[&str] = &[
     "demo",
+    "diff-story",
     "respawn",
     "setting",
     "platform",

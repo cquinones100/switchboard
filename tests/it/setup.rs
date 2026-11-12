@@ -1448,6 +1448,14 @@ fn claude_context_gives_an_interactive_session_switchboard_s_instructions_and_a_
         child.wait_with_output().unwrap()
     };
     let part = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/switchboard.md"));
+    assert!(
+        part.contains("# What I see in the workspace") && part.contains("switchboard diff-story")
+    );
+    let allowed = read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/claude-settings.json"));
+    assert!(
+        allowed.contains(r#""Bash(switchboard diff-story)""#),
+        "diff-story runs without asking"
+    );
     let start = r#"{"session_id":"s1","hook_event_name":"SessionStart","source":"startup"}"#;
 
     let out = run(Some("cli"), start);

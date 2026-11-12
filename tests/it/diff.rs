@@ -437,6 +437,79 @@ fn the_story_is_told_ahead_once_per_commit_where_m_d_finds_it() {
 }
 
 #[test]
+fn diff_story_prints_the_story_kept_for_the_branch_and_says_when_there_is_none() {
+    let dir = common::TempDir::new("sbs");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".config/switchboard")).unwrap();
+    std::fs::write(
+        home.join(".config/switchboard/settings.json"),
+        json!({"github": false}).to_string(),
+    )
+    .unwrap();
+    stand_in_claude(&home);
+    let work = repository(dir.path());
+    let path = std::env::var("PATH").unwrap_or_default();
+    let run = |args: &[&str]| {
+        Command::new(BIN)
+            .args(args)
+            .current_dir(&work)
+            .env("HOME", &home)
+            .env("PATH", format!("{}:{path}", home.join("bin").display()))
+            .env("SWITCHBOARD_STATE_DIR", dir.path().join("s"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env_remove("SWITCHBOARD")
+            .env_remove("SWITCHBOARD_PANE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let text = |out: &std::process::Output| String::from_utf8_lossy(&out.stdout).into_owned();
+
+    // Nothing told yet: said so, nothing asked of Claude.
+    let none = run(&["diff-story"]);
+    assert!(none.status.success(), "{none:?}");
+    assert!(
+        text(&none).starts_with("No story told for this change yet"),
+        "{}",
+        text(&none)
+    );
+    assert!(!home.join("claude-asked").exists());
+
+    let told = run(&["diff", "--ahead"]);
+    assert!(told.status.success(), "{told:?}");
+    let story = run(&["diff-story"]);
+    assert!(story.status.success(), "{story:?}");
+    let story = text(&story);
+    assert!(story.contains("### 1. Change the core"), "{story}");
+    assert!(story.contains("`src/a.js:1` Check a."), "{story}");
+    assert!(story.contains("### 2. Follow it"), "{story}");
+
+    // A file changed since the last commit: in a last chapter, as M-d shows it.
+    std::fs::write(work.join("src/c.js"), "export const c = 1;\n").unwrap();
+    let with_new = text(&run(&["diff-story"]));
+    assert!(
+        with_new.contains("### 3. Not committed yet") && with_new.contains("`src/c.js`"),
+        "{with_new}"
+    );
+
+    let file = run(&["diff-story", "--path"]);
+    assert!(file.status.success(), "{file:?}");
+    let file = text(&file);
+    let file = Path::new(file.trim());
+    assert!(
+        file.starts_with(home.join(".cache/switchboard/diff-story")) && file.is_file(),
+        "{file:?}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.join("claude-asked"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn lazygit_and_the_diff_take_the_panes_place_from_the_palette_and_a_tabs_menu() {
     let server = TestServer::start();
     settings(&server);

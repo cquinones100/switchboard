@@ -36,6 +36,16 @@ To name a tab, set its `@tab_name`; never `switchboard rename-tab`, whose name s
 switchboard set @tab_name 'Review loop: settings page layout'
 ```
 
+# What I see in the workspace
+
+When I name one of these, I mean what Switchboard shows me:
+
+- The diff (`M-d`, "the diff", "the diff view"): the tab's branch against its PR's base, side by side, in place of a pane, with its story ("the story"), Haiku's walk through the change in chapters. `switchboard diff-story` prints the story as Markdown (`--path` its file), from what the diff kept, never telling a new one.
+- Mission control (`M-Space`): views of my day and work (Tabs, Work map, PRs, Tickets, Inbox, Slack, Calendar, Notifications, Usage, Settings), from what the workspace already holds.
+- The sidebar: every tab, grouped by what its Claude is doing, as `switchboard tabs` lists them.
+- The PR view (`M-v`) and the ticket view (`M-i`): the tab's PR description and its Linear ticket.
+- Notes (`M-e`): see "# Notes".
+
 # Skills
 
 - When a skill exists both in the repository (`.claude/skills/<name>/`, in the worktree or its main clone) and as my personal one or Switchboard's (`/switchboard:<name>`), use the repository's: read its SKILL.md and follow it instead. `switchboard skill-path <name>` prints which copy to follow (the repository's, else Switchboard's own: my personal copy of it, else the plugin's, never a skill of mine that only shares its name), and a skill handing off to another reads the file it prints.
