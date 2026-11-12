@@ -131,9 +131,8 @@ fn state_mark(state: &str) -> Mark {
 /// Markdown and its conversation's comments, with its checks, reviewers,
 /// open review threads and files beside them.
 pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
-    let author = Some(str_at(pr, "/author/login"))
-        .filter(|a| !a.is_empty())
-        .unwrap_or("someone");
+    let login = str_at(pr, "/author/login");
+    let author = Some(login).filter(|a| !a.is_empty()).unwrap_or("someone");
     let (state, tone) = match (
         pr.get("isDraft").and_then(Value::as_bool),
         str_at(pr, "/state"),
@@ -145,6 +144,25 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
     };
     let number = pr.get("number").map(util::js_string).unwrap_or_default();
     let commits = count(pr, "/commits/totalCount");
+    let mut wants = Vec::new();
+    if !login.is_empty() {
+        wants.extend([avatar(login), Piece::Text(" ".into(), Tone::Text)]);
+    }
+    wants.extend([
+        Piece::Text(
+            format!(
+                "{author} wants to merge {commits} commit{} into ",
+                if commits == 1 { "" } else { "s" }
+            ),
+            Tone::Dim,
+        ),
+        Piece::Name(str_at(pr, "/baseRefName").into(), Tone::Text),
+        Piece::Text(" from ".into(), Tone::Dim),
+        Piece::Name(str_at(pr, "/headRefName").into(), Tone::Text),
+        Piece::Text(" · ".into(), Tone::Dim),
+        Piece::Text(format!("+{}", count(pr, "/additions")), Tone::Done),
+        Piece::Text(format!(" −{}", count(pr, "/deletions")), Tone::Failed),
+    ]);
     let mut main = vec![
         Part::Row(vec![
             Piece::Chip(state.into(), tone),
@@ -152,21 +170,7 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
             Piece::Text(" ".into(), Tone::Text),
             Piece::Name(str_at(pr, "/title").into(), Tone::Text),
         ]),
-        Part::Row(vec![
-            Piece::Text(
-                format!(
-                    "{author} wants to merge {commits} commit{} into ",
-                    if commits == 1 { "" } else { "s" }
-                ),
-                Tone::Dim,
-            ),
-            Piece::Name(str_at(pr, "/baseRefName").into(), Tone::Text),
-            Piece::Text(" from ".into(), Tone::Dim),
-            Piece::Name(str_at(pr, "/headRefName").into(), Tone::Text),
-            Piece::Text(" · ".into(), Tone::Dim),
-            Piece::Text(format!("+{}", count(pr, "/additions")), Tone::Done),
-            Piece::Text(format!(" −{}", count(pr, "/deletions")), Tone::Failed),
-        ]),
+        Part::Row(wants),
         Part::Rule,
         Part::Blank,
     ];
@@ -568,6 +572,32 @@ mod tests {
             pager.top(),
             0,
             "the column stays while the cursor is in sight"
+        );
+    }
+
+    #[test]
+    fn the_wants_to_merge_line_starts_with_the_authors_avatar() {
+        let now = "2026-11-08T12:00:00Z".parse().unwrap();
+        let wants = |pr: &Value| match &board(pr, now).main[1] {
+            Part::Row(pieces) => pieces.clone(),
+            other => panic!("not a row: {other:?}"),
+        };
+        let pieces = wants(&rich());
+        assert_eq!(
+            pieces[0],
+            Piece::Avatar(Some(Who::new(Service::GitHub, "priya")), "priya".into())
+        );
+        assert_eq!(
+            pieces[2],
+            Piece::Text("priya wants to merge 4 commits into ".into(), Tone::Dim)
+        );
+        let mut nameless = rich();
+        nameless["author"] = Value::Null;
+        let pieces = wants(&nameless);
+        assert!(!pieces.iter().any(|p| matches!(p, Piece::Avatar(..))));
+        assert_eq!(
+            pieces[0],
+            Piece::Text("someone wants to merge 4 commits into ".into(), Tone::Dim)
         );
     }
 
