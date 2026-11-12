@@ -886,6 +886,46 @@ fn a_slack_notifications_menu_is_the_slack_views_with_the_message_whole() {
     assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
 }
 
+#[test]
+fn a_notifications_menu_dismisses_every_notification_shown() {
+    let notes = common::TempDir::new("sbda");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    let ts = format!("{}.000100", switchboard::util::now_ms() / 1000);
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": 1, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Ada", "where": "Ada",
+            "text": "a question", "ts": ts, "link": "https://slack.example/m",
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom",
+            "at": switchboard::util::now_ms() }])
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "view_slack": true, "new_notes": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    client.wait_text("DM Ada");
+    client.wait_text("Plan");
+    client.type_text("j");
+    client.type_text("m");
+    pick(&mut client, "Dismiss every notification shown");
+    client.wait_text("Dismissed 2 notifications.");
+    let gone = std::fs::read_to_string(server.state.join("slack-dismissed.json")).unwrap();
+    assert!(gone.contains(&format!("D1:{ts}")), "{gone}");
+    let left = std::fs::read_to_string(server.state.join("new-notes.json")).unwrap();
+    assert!(!left.contains("Plan.md"), "{left}");
+}
+
 // With UX 2.0 the Slack view is board 21: the chosen message's thread,
 // read through the connector once when it isn't kept, beside the list.
 #[test]

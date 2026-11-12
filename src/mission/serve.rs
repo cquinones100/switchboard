@@ -2885,7 +2885,21 @@ impl Server {
             home: paths::home(),
             habit: &habit,
         };
-        choices::item_choices(view, item, shown, &ctx)
+        // A notification's menu dismisses every one the sidebar shows,
+        // whichever list it was opened from.
+        let sidebars = (*view == ViewId::Notifications).then(|| {
+            self.notice_entries()
+                .into_iter()
+                .filter_map(|(owner, mut item)| match owner {
+                    crate::sidebar::Owner::Notice { source, .. } => {
+                        item.id = format!("{source}\t{}", item.id);
+                        Some(item)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        });
+        choices::item_choices(view, item, sidebars.as_deref().unwrap_or(shown), &ctx)
     }
 
     /// A notification's menu, over whatever is in front (the Notifications
@@ -3539,6 +3553,21 @@ impl Server {
             Do::Dismiss { source, item } => {
                 self.notice_dismiss(&source, &item);
                 self.mission_note(client, "Dismissed.");
+            }
+            Do::DismissAll(notices) => {
+                for (source, item) in &notices {
+                    self.notice_dismiss(source, item);
+                }
+                // Dismissed in the history too, though one put away before
+                // it took it out of its list on the way (a Slack thread's
+                // older message), as `slack_dismiss` marks its own.
+                for (source, item) in &notices {
+                    self.notice_history_mark(source, &item.id, Sidebar::Dismissed, true);
+                }
+                self.mission_note(
+                    client,
+                    format!("Dismissed {} notifications.", notices.len()),
+                );
             }
             Do::Autopilot(act) => self.autopilot_act(client, act),
             Do::ReadLog { job, name, line } => self.read_ci_log(client, &job, &name, line),
