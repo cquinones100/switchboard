@@ -30,6 +30,13 @@
 //! wasn't there. A call you start (a search, a link opened, an answer to an
 //! invitation) is always made, so it is how you try again at once after
 //! connecting one with `/mcp`.
+//!
+//! A reconnect in `/mcp` is noticed sooner than that (`Watch`, which the
+//! server runs from its tick): `/mcp` writes Claude Code's config
+//! (`~/.claude.json`), so while a connector is down a change to that file
+//! has each one down asked about once, at most every `CONFIG_CHECK_MS`; and
+//! while a view that shows one missing is in front, it is asked about every
+//! `SHOWN_CHECK_EVERY_MS`. One found connected is marked so at once.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -76,6 +83,15 @@ fn not_connected(service: &str) -> ConnectorError {
 /// How long a background call leaves a connector found not connected before
 /// asking Claude Code again whether it is connected now.
 pub const CHECK_EVERY_MS: i64 = 15 * 60 * 1000;
+
+/// How often a connector down is asked about while a view that shows it
+/// missing is in front.
+pub const SHOWN_CHECK_EVERY_MS: i64 = 60 * 1000;
+
+/// How soon after asking about the connectors down a change to Claude
+/// Code's config has them asked about again: Claude Code writes it often,
+/// and `/mcp` more than once as you reconnect.
+pub const CONFIG_CHECK_MS: i64 = 10 * 1000;
 
 /// What `claude mcp get` says of a connector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +209,79 @@ fn record(service: &str, ok: bool, message: Option<&str>) {
     let _ = util::write_atomic(dir.join("connectors-down"), down);
 }
 
+/// The services down, each with when Claude Code was last asked whether it
+/// is connected now (`None` when it hasn't been since it went down).
+pub fn down() -> Vec<(String, Option<i64>)> {
+    read_status()
+        .into_iter()
+        .filter(|(_, s)| s.get("ok").and_then(Value::as_bool) != Some(true))
+        .map(|(name, s)| (name, s.get("checked").and_then(Value::as_i64)))
+        .collect()
+}
+
+/// Claude Code's config, which `/mcp` writes as you reconnect a connector.
+pub fn claude_config() -> std::path::PathBuf {
+    paths::home_join(".claude.json")
+}
+
+/// When to ask again about the connectors down, as the module's comment
+/// says, from what the server's tick sees.
+#[derive(Debug, Default)]
+pub struct Watch {
+    /// Claude Code's config's modified time when last taken in.
+    seen: Option<std::time::SystemTime>,
+    /// Whether `seen` has been taken in once, the first sight being where
+    /// changes count from rather than one.
+    started: bool,
+    /// When the watch last asked about them all for a change.
+    asked: Option<i64>,
+}
+
+impl Watch {
+    /// Takes in the config's first sight without asking anything, while the
+    /// server can't ask (you are away), so a change made before it can
+    /// counts on your return.
+    pub fn first_sight(&mut self, config: Option<std::time::SystemTime>) {
+        if !self.started {
+            self.started = true;
+            self.seen = config;
+        }
+    }
+
+    /// The services to ask about now: every one down when the config has
+    /// changed since last taken in (once `CONFIG_CHECK_MS` have passed since
+    /// the last such ask, the change kept for then otherwise), else those of
+    /// `shown` down and not asked about within `SHOWN_CHECK_EVERY_MS`.
+    pub fn due(
+        &mut self,
+        down: &[(String, Option<i64>)],
+        config: Option<std::time::SystemTime>,
+        shown: &[&str],
+        now: i64,
+    ) -> Vec<String> {
+        if !self.started || down.is_empty() {
+            self.started = true;
+            self.seen = config;
+            if down.is_empty() {
+                return Vec::new();
+            }
+        }
+        let changed = config != self.seen;
+        if changed && self.asked.is_none_or(|at| now - at >= CONFIG_CHECK_MS) {
+            self.seen = config;
+            self.asked = Some(now);
+            return down.iter().map(|(s, _)| s.clone()).collect();
+        }
+        down.iter()
+            .filter(|(s, checked)| {
+                shown.contains(&s.as_str())
+                    && checked.is_none_or(|at| now - at >= SHOWN_CHECK_EVERY_MS)
+            })
+            .map(|(s, _)| s.clone())
+            .collect()
+    }
+}
+
 /// What a view shows when its service is down, or `None`.
 pub fn connector_down(service: &str) -> Option<String> {
     let status = read_status();
@@ -254,6 +343,26 @@ pub async fn check(service: &str) -> Connection {
     ))
 }
 
+/// Asks Claude Code whether a connector down is connected now, noting when
+/// it was asked, and marks it connected when it is, which takes it out of
+/// `connectors-down` and lets its background calls go out again.
+pub async fn check_again(service: &str) -> Connection {
+    let now = util::now_ms();
+    let connection = check(service).await;
+    took(service, now, connection);
+    connection
+}
+
+/// What Claude Code said of a connector down, asked at `at`, kept: when it
+/// was asked, and connected when it is. The server keeps its own asks'
+/// answers on its task, one at a time, since each rewrites `connectors.json`.
+pub fn took(service: &str, at: i64, connection: Connection) {
+    mark_checked(service, at);
+    if connection == Connection::Connected {
+        record(service, true, None);
+    }
+}
+
 /// A call nobody waits on, as the module's comment says: made while its
 /// connector isn't known to be down, else only once Claude Code says it is
 /// connected now, asked at most every `CHECK_EVERY_MS`.
@@ -272,9 +381,7 @@ pub async fn call_in_background(
         Gate::Call => {}
         Gate::Skip(message) => return Err(down(message)),
         Gate::Check(message) => {
-            let connection = check(&service).await;
-            mark_checked(&service, now);
-            if connection != Connection::Connected {
+            if check_again(&service).await != Connection::Connected {
                 return Err(down(message));
             }
         }
@@ -567,6 +674,71 @@ mod tests {
         assert_eq!(gate(Some(&asked), now), Gate::Skip("m".into()));
         let asked_long_ago = json!({"ok": false, "message": "m", "checked": now - CHECK_EVERY_MS});
         assert_eq!(gate(Some(&asked_long_ago), now), Gate::Check("m".into()));
+    }
+
+    #[test]
+    fn a_change_to_claude_codes_config_asks_about_the_connectors_down() {
+        use std::time::{Duration, SystemTime};
+        let at = |s: u64| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
+        let now = 1_000_000_000;
+        let down = vec![("Slack".to_string(), Some(now))];
+        let mut watch = Watch::default();
+        assert!(
+            watch.due(&down, at(1), &[], now).is_empty(),
+            "the first sight is where changes count from"
+        );
+        assert_eq!(watch.due(&down, at(2), &[], now + 1000), ["Slack"]);
+        assert!(
+            watch.due(&down, at(3), &[], now + 5000).is_empty(),
+            "a second change within CONFIG_CHECK_MS waits"
+        );
+        assert_eq!(
+            watch.due(&down, at(3), &[], now + 1000 + CONFIG_CHECK_MS),
+            ["Slack"],
+            "and is asked about once it has passed"
+        );
+        let mut calm = Watch::default();
+        assert!(calm.due(&[], at(1), &[], now).is_empty());
+        assert!(
+            calm.due(&[], at(2), &[], now + 1000).is_empty(),
+            "with nothing down, a change asks nothing"
+        );
+        assert!(
+            calm.due(&down, at(2), &[], now + 2000).is_empty(),
+            "nor once something goes down after it"
+        );
+    }
+
+    #[test]
+    fn a_change_made_before_the_watch_can_ask_counts_once_it_can() {
+        use std::time::{Duration, SystemTime};
+        let at = |s: u64| Some(SystemTime::UNIX_EPOCH + Duration::from_secs(s));
+        let now = 1_000_000_000;
+        let down = vec![("Fathom".to_string(), Some(now))];
+        let mut watch = Watch::default();
+        watch.first_sight(at(1));
+        watch.first_sight(at(2));
+        assert_eq!(watch.due(&down, at(2), &[], now), ["Fathom"]);
+    }
+
+    #[test]
+    fn a_view_showing_a_connector_missing_asks_every_minute() {
+        let now = 1_000_000_000;
+        let mut watch = Watch::default();
+        let asked_now = vec![("Slack".to_string(), Some(now))];
+        assert!(
+            watch
+                .due(&asked_now, None, &["Slack"], now + 1000)
+                .is_empty()
+        );
+        let asked_before = vec![("Slack".to_string(), Some(now - SHOWN_CHECK_EVERY_MS))];
+        assert_eq!(watch.due(&asked_before, None, &["Slack"], now), ["Slack"]);
+        assert!(
+            watch.due(&asked_before, None, &[], now).is_empty(),
+            "not while no view shows it"
+        );
+        let never = vec![("Fathom".to_string(), None)];
+        assert_eq!(watch.due(&never, None, &["Fathom"], now), ["Fathom"]);
     }
 
     #[test]

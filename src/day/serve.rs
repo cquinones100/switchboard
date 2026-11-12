@@ -10,6 +10,10 @@
 //! their first look after starting (`Server::away`), and both run on your
 //! return; the notes (standup, meetings) carry on, and today's to-do list
 //! waits for you, as before.
+//!
+//! The connectors down are asked about again here too, as soon as `/mcp`
+//! writes Claude Code's config, and every minute while the Slack view shows
+//! Slack missing (`connector::Watch`), so a reconnect shows in seconds.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -23,6 +27,7 @@ use super::{
     Claude, ClaudeAsk, Dirs, changes, log, meetings, new_notes, slack, slack_look, slack_thread,
     standup, todo,
 };
+use crate::connector::Connection;
 use crate::items::{Item, ViewData};
 use crate::mux::server::{ClientId, Event, Server};
 use crate::{connector, settings, util};
@@ -54,6 +59,14 @@ pub enum DayEvent {
     ),
     /// A kept Slack picture decoded, by its file's ID.
     SlackPicture(String, Option<image::RgbaImage>),
+    /// A connector down asked about again at `at`, with what Claude Code
+    /// said of it; `client` the one that asked by hand, else the watch did.
+    Connector {
+        service: String,
+        at: i64,
+        connection: Connection,
+        client: Option<ClientId>,
+    },
     /// A note's writing ended: what to log, and whether it should be tried
     /// again later.
     Noted {
@@ -127,6 +140,12 @@ pub struct Day {
     slack_thread_failed: HashMap<String, (i64, String)>,
     /// The files that failed to read, until one is read.
     slack_file_failed: HashMap<String, String>,
+    /// When to ask about the connectors down again, whether the watch's
+    /// asking is under way, and when a view showing each service missing
+    /// was last in front.
+    connectors: connector::Watch,
+    connectors_busy: usize,
+    connector_shown: HashMap<String, i64>,
 }
 
 /// A Slack file `p` can show: its ID, its name, where it is kept, and
@@ -162,6 +181,9 @@ const MINUTE_MS: i64 = 60_000;
 const TODO_WAIT_MS: i64 = 30 * 60_000;
 // Going to the Slack view asks for a look when the last is older than this.
 const SLACK_NOW_MS: i64 = 60_000;
+/// How long a view showing a connector missing counts as in front after
+/// mission control last made it ready.
+const SHOWN_FOR_MS: i64 = 10_000;
 
 fn due(last: Option<i64>, every: i64, started: i64, first: i64, now: i64) -> bool {
     match last {
@@ -248,6 +270,7 @@ impl Server {
         {
             self.look_at_slack();
         }
+        self.connectors_tick(ms);
         if due(self.day.minute, MINUTE_MS, started, 9_000, ms) {
             self.day.minute = Some(ms);
             self.day_minute(&dirs, &now);
@@ -359,6 +382,52 @@ impl Server {
                     while self.day.slack_picture_order.len() > SLACK_PICTURES {
                         if let Some(old) = self.day.slack_picture_order.pop_front() {
                             self.day.slack_pictures.remove(&old);
+                        }
+                    }
+                }
+            }
+            DayEvent::Connector {
+                service,
+                at,
+                connection,
+                client,
+            } => {
+                if client.is_none() {
+                    self.day.connectors_busy = self.day.connectors_busy.saturating_sub(1);
+                }
+                connector::took(&service, at, connection);
+                log(&dirs.state, &format!("connector: {service} {connection:?}"));
+                match connection {
+                    Connection::Connected => {
+                        let words = format!("{service} is connected again.");
+                        match client {
+                            Some(c) => self.mission_note(c, words),
+                            None => self.say(None, &words),
+                        }
+                        if service == "Slack" {
+                            // The threads that failed for it are read
+                            // again, rather than after their wait.
+                            self.day.slack_thread_failed.clear();
+                            self.day.slack_reading.clear();
+                            if settings::is_on("slack_background") && !self.away() {
+                                self.look_at_slack();
+                            }
+                        }
+                    }
+                    Connection::NotConnected => {
+                        if let Some(c) = client {
+                            self.mission_note(
+                                c,
+                                format!("{service} still isn't connected: run /mcp in Claude."),
+                            );
+                        }
+                    }
+                    Connection::Unknown => {
+                        if let Some(c) = client {
+                            self.mission_note(
+                                c,
+                                format!("Claude Code didn't say whether {service} is connected."),
+                            );
                         }
                     }
                 }
@@ -820,6 +889,76 @@ impl Server {
                 .await
                 .map_err(|e| e.to_string());
             let _ = tx.send(Event::Day(DayEvent::SlackThreadsRead(result)));
+        });
+    }
+
+    /// A view showing `service`'s connector missing is in front, so while it
+    /// stays it is asked about every `connector::SHOWN_CHECK_EVERY_MS`.
+    pub fn connector_shown(&mut self, service: &str) {
+        self.day
+            .connector_shown
+            .insert(service.to_string(), util::now_ms());
+    }
+
+    /// Asks Claude Code now whether `service` is connected, saying to
+    /// `client` what it found.
+    pub fn connector_check_now(&mut self, client: ClientId, service: &str) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        self.ask_about_connector(service.to_string(), Some(client));
+    }
+
+    // The connectors down asked about again when `connector::Watch` says
+    // so, one ask at a time, off the task; not while you are away, a change
+    // to Claude Code's config kept for your return.
+    fn connectors_tick(&mut self, now: i64) {
+        if self.day.connectors_busy > 0 {
+            return;
+        }
+        let config = std::fs::metadata(connector::claude_config())
+            .and_then(|m| m.modified())
+            .ok();
+        if self.away() {
+            self.day.connectors.first_sight(config);
+            return;
+        }
+        self.day
+            .connector_shown
+            .retain(|_, at| now - *at < SHOWN_FOR_MS);
+        let shown: Vec<&str> = self
+            .day
+            .connector_shown
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let services = self
+            .day
+            .connectors
+            .due(&connector::down(), config, &shown, now);
+        if services.is_empty() {
+            return;
+        }
+        // Each on its own, so one that stalls holds up none of the others.
+        self.day.connectors_busy = services.len();
+        for service in services {
+            self.ask_about_connector(service, None);
+        }
+    }
+
+    // Asks Claude Code about one connector off the task, its answer kept on
+    // the task as it comes (`DayEvent::Connector`).
+    fn ask_about_connector(&mut self, service: String, client: Option<ClientId>) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let at = util::now_ms();
+            let connection = connector::check(&service).await;
+            let _ = tx.send(Event::Day(DayEvent::Connector {
+                service,
+                at,
+                connection,
+                client,
+            }));
         });
     }
 

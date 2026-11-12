@@ -1969,3 +1969,101 @@ fn a_right_press_opens_an_items_menu_or_the_views() {
         screen.join("\n")
     );
 }
+
+// The Slack view with Slack's connector down offers to ask Claude Code
+// again from its menu, and once it says Slack is connected the view leaves
+// the connector's line and its menu the option.
+#[test]
+fn the_slack_views_menu_checks_a_connector_down_again() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let now = switchboard::util::now_ms();
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": now, "items": [{
+            "kind": "dm", "channel": "D1", "from": "Lin", "user": "ULIN",
+            "where": "DM", "text": "a message", "ts": format!("{}.000100", now / 1000 - 60),
+        }] })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        server.state.join("connectors.json"),
+        json!({ "Slack": { "ok": false, "at": now, "checked": now,
+            "message": "Slack isn't connected in Claude: run /mcp in Claude and sign in to Slack." } })
+        .to_string(),
+    )
+    .unwrap();
+    let asked = server.home.join("mcp-gets");
+    Claude::new()
+        .answer(&format!(
+            "case $CLAUDE_CALL in\n  'mcp get')\n    echo asked >> {}\n    printf 'claude.ai Slack:\\n  Status: \\342\\234\\224 Connected\\n' ;;\n  *) exit 1 ;;\nesac",
+            common::stand_in::sh_quote(&asked.to_string_lossy()),
+        ))
+        .install(&server.home.join("bin"));
+    settings(
+        &server,
+        json!({ "view_slack": true, "ux2": true, "slack_background": true, "photos": false }),
+    );
+    let mut client = server.attach(160, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("vslack\r");
+    client.wait_text("Slack isn't connected in Claude");
+    client.type_text("m");
+    pick(&mut client, "Check Slack again");
+    client.wait_text("Slack is connected again.");
+    client.wait_for("the connector's line gone", |s| {
+        !s.join("\n").contains("isn't connected in Claude")
+    });
+    let status = std::fs::read_to_string(server.state.join("connectors-down")).unwrap();
+    assert_eq!(status, "", "Slack is no longer down");
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 1);
+    client.type_text("m");
+    let menu = client.wait_text("view actions");
+    assert!(
+        !menu.join("\n").contains("Check Slack again"),
+        "{}",
+        menu.join("\n")
+    );
+}
+
+// A reconnect in /mcp writes Claude Code's config, which has the server ask
+// about the connectors down at once rather than after fifteen minutes.
+#[test]
+fn a_change_to_claude_codes_config_asks_about_a_connector_down() {
+    let server = TestServer::start();
+    std::fs::create_dir_all(&server.state).unwrap();
+    let now = switchboard::util::now_ms();
+    std::fs::write(
+        server.state.join("connectors.json"),
+        json!({ "Fathom": { "ok": false, "at": now, "checked": now, "message": "m" } }).to_string(),
+    )
+    .unwrap();
+    std::fs::write(server.state.join("connectors-down"), "Fathom\t1\n").unwrap();
+    Claude::new()
+        .answer(
+            "case $CLAUDE_CALL in\n  'mcp get') printf 'claude.ai Fathom:\\n  Status: \\342\\234\\224 Connected\\n' ;;\n  *) exit 1 ;;\nesac",
+        )
+        .install(&server.home.join("bin"));
+    settings(&server, json!({}));
+    let config = server.home.join(".claude.json");
+    std::fs::write(&config, "{}").unwrap();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    // Changed until the server, past its first sight of it, asks.
+    let deadline = common::deadline(Duration::from_secs(30));
+    let mut second = 0;
+    loop {
+        second += 1;
+        let file = std::fs::File::options().write(true).open(&config).unwrap();
+        file.set_modified(std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(second))
+            .unwrap();
+        if std::fs::read_to_string(server.state.join("connectors-down")).unwrap() == "" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "Fathom is still down");
+        std::thread::sleep(Duration::from_millis(500) * common::patience());
+    }
+    client.wait_text("Fathom is connected again.");
+}

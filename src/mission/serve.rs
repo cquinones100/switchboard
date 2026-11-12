@@ -190,6 +190,8 @@ enum ViewAct {
     DismissShown,
     /// A plugin's view asked again.
     AskAgain(String),
+    /// Claude Code asked now whether a connector down is connected.
+    CheckConnector(String),
     ViewsAtOnce,
     /// The Settings view, filtered by the view's name.
     Settings(String),
@@ -1228,6 +1230,9 @@ impl Server {
                 ViewId::Sessions => self.want_view(ViewKind::Sessions),
                 ViewId::Usage => self.want_view(ViewKind::Usage),
                 ViewId::Keys => self.want_key_counts(),
+                ViewId::Slack if settings::is_on("slack_background") => {
+                    self.connector_shown("Slack")
+                }
                 ViewId::WorkMap => {
                     self.mission_worktrees(false);
                     self.mission_revived(false);
@@ -2976,6 +2981,12 @@ impl Server {
                 add("Go to today", ViewAct::RemindToday);
             }
             Some(ViewId::Routines) => add("New routine…", ViewAct::NewRoutine),
+            Some(ViewId::Slack)
+                if settings::is_on("slack_background")
+                    && crate::connector::connector_down("Slack").is_some() =>
+            {
+                add("Check Slack again", ViewAct::CheckConnector("Slack".into()));
+            }
             Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
             _ => {}
         }
@@ -3037,6 +3048,11 @@ impl Server {
                     Some(all) => self.mission_do(client, all, ""),
                     None => self.mission_note(client, "Nothing in the sidebar to dismiss."),
                 }
+                return;
+            }
+            ViewAct::CheckConnector(service) => {
+                self.mission_note(client, format!("Asking Claude Code about {service}…"));
+                self.connector_check_now(client, &service);
                 return;
             }
             ViewAct::AskAgain(name) => {
