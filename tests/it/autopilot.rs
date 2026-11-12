@@ -203,7 +203,8 @@ fn with_ux2_its_command_opens_the_board_and_m_or_its_button_opens_the_menu() {
     client.type_text("\x1bp");
     client.wait_text("Actions");
     client.type_text("autopilot");
-    client.wait_text("Autopilot: work a note");
+    // Named for changing or stopping the mode while it is on.
+    client.wait_text("Autopilot: work a note: change or stop working");
     client.type_text("\r");
     client.wait_text("☰ Menu");
     std::thread::sleep(Duration::from_millis(300));

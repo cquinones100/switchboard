@@ -162,6 +162,20 @@ pub fn entries(bindings: &Bindings, github: bool, linear: bool) -> Vec<Entry> {
     by_action
 }
 
+/// While autopilot works `note` (its path), its command's words say what
+/// picking it does then: change or stop the mode, after the command's name,
+/// so typing the name still finds it. Its action, tags and keys stay as they
+/// are, since the recent picks and its key go by the action.
+pub fn autopilot_on(entries: &mut [Entry], note: &str) {
+    let work_note = Action::Autopilot(crate::autopilot::Command::WorkNote);
+    for entry in entries.iter_mut().filter(|e| e.action == work_note) {
+        entry.words = format!(
+            "Autopilot: work a note: change or stop working {}: its tabs at once, the most open, the spend limit, the branch it lands on, pause or stop",
+            crate::autopilot::mode::note_title(note)
+        );
+    }
+}
+
 /// The entries with the ones picked last first, newest first.
 pub fn recent_first(mut entries: Vec<Entry>, recent: &[String]) -> Vec<Entry> {
     let rank = |e: &Entry| {
@@ -421,5 +435,38 @@ mod tests {
         let ordered = recent_first(all, &["zoom".into(), "detach".into()]);
         assert_eq!(ordered[0].action, Action::Zoom);
         assert_eq!(ordered[1].action, Action::Detach);
+    }
+
+    #[test]
+    fn autopilot_on_names_the_note_and_keeps_the_rest() {
+        let work_note = Action::Autopilot(crate::autopilot::Command::WorkNote);
+        let all = entries(&Bindings::default(), true, true);
+        let before = all.iter().find(|e| e.action == work_note).unwrap();
+        assert_eq!(before.words, crate::autopilot::Command::WorkNote.about());
+
+        let mut on = all.clone();
+        autopilot_on(&mut on, "Work/Ship it.md");
+        let entry = on.iter().find(|e| e.action == work_note).unwrap();
+        assert!(
+            entry
+                .words
+                .starts_with("Autopilot: work a note: change or stop working Ship it:"),
+            "{}",
+            entry.words
+        );
+        assert_eq!(
+            (&entry.action, &entry.tags, &entry.keys, &entry.item().value),
+            (
+                &before.action,
+                &before.tags,
+                &before.keys,
+                &before.item().value
+            )
+        );
+        for (a, b) in all.iter().zip(&on) {
+            if a.action != work_note {
+                assert_eq!(a, b);
+            }
+        }
     }
 }

@@ -597,6 +597,9 @@ impl Server {
             .and_then(|p| self.pane_dir(p))
             .is_some_and(|dir| crate::cmd::work::review_repo(&dir).is_some());
         entries.retain(|e| reviews || e.action != crate::mux::keys::Action::ReviewPr);
+        if self.autopilot.mode.on {
+            palette::autopilot_on(&mut entries, &self.autopilot.mode.note);
+        }
         let entries = palette::recent_first(entries, &palette::read_recent());
         let picks = if learn {
             palette::read_queries()

@@ -141,7 +141,7 @@ impl Command {
     pub fn detail(self) -> &'static str {
         match self {
             Command::WorkNote => {
-                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With the mode on, it opens its menu, to pause, skip or stop it."
+                "Asked from a pane in the note's repository, it asks which note, the branch to land on, how many tabs work at once and a spend limit. With the mode on, it opens mission control on the mode, whose menu (m) changes or stops it."
             }
         }
     }
