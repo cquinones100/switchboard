@@ -605,7 +605,15 @@ mod tests {
         };
         let by_key = views::shown(&view, "m-s-h", None, &views::Folds::default());
         let names = titles(&by_key.data.items);
-        assert_eq!(names, ["panes", "Split pane to the left"]);
+        assert_eq!(
+            names,
+            [
+                "panes",
+                "Move the pane's divider left",
+                "Move the pane's divider left by 1",
+                "Split pane to the left"
+            ]
+        );
         let by_tag = views::shown(&view, "#split", None, &views::Folds::default());
         assert!(by_tag.data.items.iter().filter(|i| !is_header(i)).count() >= 4);
         assert!(

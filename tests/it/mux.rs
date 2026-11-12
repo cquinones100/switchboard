@@ -111,6 +111,32 @@ fn dragging_the_line_between_panes_resizes_them() {
 }
 
 #[test]
+fn ctrl_alt_shift_h_shrinks_the_left_pane() {
+    let server = TestServer::start();
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}L"));
+    client.wait_for("a second pane", |_| panes(&server.list()) == 2);
+    let width = |list: &serde_json::Value| {
+        list["sessions"][0]["tabs"][0]["panes"][0]["cols"]
+            .as_u64()
+            .unwrap()
+    };
+    let before = width(&server.list());
+    // Into the left pane, which has no divider on its left: C-M-S-h, as the
+    // kitty protocol sends it, moves its right one left.
+    client.send(format!("{ALT}[1;3D").as_bytes());
+    client.send(b"\x1b[104;8u");
+    client.wait_for("the left pane narrower by five", |_| {
+        width(&server.list()) == before - 5
+    });
+    client.send(b"\x1b[108;8u");
+    client.wait_for("the left pane back as it was", |_| {
+        width(&server.list()) == before
+    });
+}
+
+#[test]
 fn an_old_tmux_conf_and_keys_json_s_mistakes_are_said_on_attaching() {
     let mut server = TestServer::start();
     let config = server.home.join(".config/switchboard");

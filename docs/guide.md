@@ -86,7 +86,7 @@ A link a program in a pane writes as a hyperlink (OSC 8), as Claude Code, `ls --
 
 ### Panes and tabs
 
-A tab is split into panes with `M-H`, `M-J`, `M-K` and `M-L`, each opening a shell in the current pane's directory on that side. `M-S-Left`, `M-S-Down`, `M-S-Up` and `M-S-Right` grow the current pane toward that side, five cells at a time, and `M-=` zooms it to the whole tab and back. Resizing your terminal keeps each pane's share of the tab. `M-w` closes a pane, and the last pane closes its tab (see "Closing a busy pane" below).
+A tab is split into panes with `M-H`, `M-J`, `M-K` and `M-L`, each opening a shell in the current pane's directory on that side. `C-M-S-h`, `C-M-S-j`, `C-M-S-k` and `C-M-S-l` (Ctrl+Alt+Shift with a Vim direction) move the current pane's divider that way, five cells at a time: its divider on that side when it has one, growing it, else the one on the other side, shrinking it, as tmux's `resize-pane` did. They need a terminal that reports Ctrl+Alt+Shift letters apart, as Ghostty and kitty do; in another, bind `resize-left-5` and the rest to keys it sends in `keys.json` (see "Changing the keys"). `M-=` zooms the pane to the whole tab and back. Resizing your terminal keeps each pane's share of the tab. `M-w` closes a pane, and the last pane closes its tab (see "Closing a busy pane" below).
 
 A tab something you did opens (a key, a palette command, a menu's choice, a card's action, `switchboard new-tab` without `-d`) comes to the front, so it is what you see; when one choice opens several, the first comes to the front. A tab the workspace opens on its own stays behind the one in front: autopilot's tabs, the Calendar and Slack loop tabs a view opens when it is out of date, the Notifications window, and the Slack relay's.
 
@@ -140,7 +140,7 @@ Each notification Claude Code sends (it waits on your permission or an answer, o
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to the left, below, above or to the right |
 | `M-w` | Close the pane, asking first when a program runs in it |
 | `M-=` | Zoom the pane in or out |
-| `M-S-Left` `M-S-Down` `M-S-Up` `M-S-Right` | Grow the pane toward that side |
+| `C-M-S-h` `C-M-S-j` `C-M-S-k` `C-M-S-l` | Move the pane's divider left, down, up or right, growing or shrinking it (a terminal that reports Ctrl+Alt+Shift letters, such as Ghostty or kitty) |
 | `M-[` `M-]` | Previous tab, next tab (in mission control with UX 2.0, the previous or next group of views) |
 | `M-Tab` | Go back to the tab you were on before |
 | `M-1` … `M-9` | Go to the tab with that number |
@@ -194,7 +194,7 @@ The rest follow the prefix, `M-b`. While it waits for the next key, a `^` shows 
 | `M-b &` | Close the tab, after asking |
 | `M-b o`, `M-b ;` | The next pane of the tab, going round; the pane you were in before |
 | `M-b` and an arrow | The pane on that side |
-| `M-b` and Ctrl with an arrow | Grow the pane a cell that way |
+| `M-b` then `C-M-S-h` `C-M-S-j` `C-M-S-k` `C-M-S-l` | Move the pane's divider a cell that way |
 
 `M-b ?` shows every key bound now, yours included, in a box that `j` and `k` scroll and any other key closes. `switchboard list-keys` prints the same list, a key and what it does on each line. `M-/` shows them all with the keys of the sidebar, mission control, the diff and Notes, in mission control's Keys view.
 

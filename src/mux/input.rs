@@ -1700,6 +1700,7 @@ mod tests {
             (b"\x1b[97;6u", "C-S-a"),
             (b"\x1b[115;8u", "C-M-S-s"),
             (b"\x1b[122;8u", "C-M-S-z"),
+            (b"\x1b[104;8u", "C-M-S-h"),
             (b"\x1b[9;2u", "BTab"),
             (b"\x1b[9;5u", "C-Tab"),
             (b"\x1b[27u", "Escape"),
@@ -1721,6 +1722,7 @@ mod tests {
             (b"\x1b[27;2;13~", "S-Enter"),
             (b"\x1b[27;5;105~", "C-i"),
             (b"\x1b[27;3;106~", "M-j"),
+            (b"\x1b[27;8;104~", "C-M-S-h"),
         ] {
             let got = all(bytes);
             assert_eq!(names_of(&got), [want], "{bytes:?}");

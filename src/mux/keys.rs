@@ -373,8 +373,8 @@ impl Action {
             Action::NextPane => "Move to the next pane in the tab".into(),
             Action::LastPane => "Go back to the pane you were in before".into(),
             Action::Zoom => "Zoom the pane in or out".into(),
-            Action::Resize(d, 5) => format!("Grow pane {}", toward(d)),
-            Action::Resize(d, n) => format!("Grow pane {} by {n}", toward(d)),
+            Action::Resize(d, 5) => format!("Move the pane's divider {}", toward(d)),
+            Action::Resize(d, n) => format!("Move the pane's divider {} by {n}", toward(d)),
             Action::Detach => "Detach, leaving everything running".into(),
             Action::CopyMode => "Copy mode: scroll back through the pane's history, select and copy with the keyboard".into(),
             Action::SendPrefix => "Send the prefix key to the pane".into(),
@@ -475,7 +475,7 @@ impl Action {
                 "The pane covers the tab, the sidebar too, until zoomed out again; the others keep running behind it.".into()
             }
             Action::Resize(..) => {
-                "The pane's edge moves that way, the panes beside giving up the room. Resizing the terminal keeps each pane's share.".into()
+                "The pane's divider on that side moves that way, growing the pane; with none there, its divider on the other side does, shrinking it. Resizing the terminal keeps each pane's share.".into()
             }
             Action::Detach => {
                 "This terminal leaves the workspace, and every pane's program goes on running. Run switchboard again to attach.".into()
@@ -792,10 +792,10 @@ impl Default for Bindings {
         bind("M-L", Split(Right));
         bind("M-w", ClosePane);
         bind("M-=", Zoom);
-        bind("M-S-Left", Resize(Left, 5));
-        bind("M-S-Right", Resize(Right, 5));
-        bind("M-S-Up", Resize(Up, 5));
-        bind("M-S-Down", Resize(Down, 5));
+        bind("C-M-S-h", Resize(Left, 5));
+        bind("C-M-S-j", Resize(Down, 5));
+        bind("C-M-S-k", Resize(Up, 5));
+        bind("C-M-S-l", Resize(Right, 5));
         bind("M-t", NewClaudeTab);
         bind("M-n", NewClaudeTab);
         bind("M-W", WorkOnTickets);
@@ -868,10 +868,10 @@ impl Default for Bindings {
         pbind("Right", SelectPane(Right));
         pbind("Up", SelectPane(Up));
         pbind("Down", SelectPane(Down));
-        pbind("C-Left", Resize(Left, 1));
-        pbind("C-Right", Resize(Right, 1));
-        pbind("C-Up", Resize(Up, 1));
-        pbind("C-Down", Resize(Down, 1));
+        pbind("C-M-S-h", Resize(Left, 1));
+        pbind("C-M-S-j", Resize(Down, 1));
+        pbind("C-M-S-k", Resize(Up, 1));
+        pbind("C-M-S-l", Resize(Right, 1));
         Bindings {
             prefix_key: key("M-b"),
             root,
@@ -1027,6 +1027,25 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_alt_shift_with_a_vim_direction_moves_the_divider() {
+        let b = Bindings::default();
+        assert_eq!(
+            b.root.get(&key("C-M-S-h")),
+            Some(&Action::Resize(Direction::Left, 5))
+        );
+        assert_eq!(
+            b.root.get(&key("C-M-S-j")),
+            Some(&Action::Resize(Direction::Down, 5))
+        );
+        assert_eq!(
+            b.prefix.get(&key("C-M-S-l")),
+            Some(&Action::Resize(Direction::Right, 1))
+        );
+        assert_eq!(b.root.get(&key("M-S-Left")), None);
+        assert_eq!(b.prefix.get(&key("C-Left")), None);
+    }
+
+    #[test]
     fn the_keys_keys_json_binds_are_yours_and_the_defaults_are_not() {
         let mut b = Bindings::default();
         let problems = b.apply(&serde_json::json!({
@@ -1054,11 +1073,11 @@ mod tests {
         );
         assert_eq!(
             Action::Resize(Direction::Down, 5).note(),
-            "Grow pane down #panes #resize"
+            "Move the pane's divider down #panes #resize"
         );
         assert_eq!(
             Action::Resize(Direction::Up, 2).about(),
-            "Grow pane up by 2"
+            "Move the pane's divider up by 2"
         );
         assert_eq!(
             Action::SelectTab(1).palette_note().unwrap().0,

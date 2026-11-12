@@ -74,6 +74,7 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 | `M-T` | This tab's whole title, which the sidebar and status line cut, in a box (`y` copies it) |
 | `M-Left` `M-Down` `M-Up` `M-Right` | To the pane on that side |
 | `M-H` `M-J` `M-K` `M-L` | Split the pane to that side |
+| `C-M-S-h` `C-M-S-j` `C-M-S-k` `C-M-S-l` | Move the pane's divider that way, growing or shrinking it (Ghostty, kitty) |
 | `M-[` `M-]`, `M-1` … `M-9` | The previous or next tab, or a tab by number |
 | `M-w` | Close the pane, asking first when something runs in it |
 | `M-v` / `M-i` | The branch's PR description / its Linear ticket, in a pane to the right |

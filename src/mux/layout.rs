@@ -362,16 +362,19 @@ impl Layout {
             .map(|(id, ..)| id)
     }
 
-    /// Grows `pane` by `cells` toward `dir`, taking from its neighbor there;
-    /// false when it has no edge that way.
+    /// Moves one of `pane`'s edges by `cells` toward `dir`, as tmux's
+    /// `resize-pane` did: its edge on that side when it has one, growing it
+    /// and taking from its neighbor there, else its edge on the other side,
+    /// shrinking it and giving to its neighbor there; false when it has no
+    /// edge running that way at all.
     ///
     /// The edge is the line of the nearest split running that way in which
-    /// the pane's part has a sibling on that side; the cells come from that
-    /// sibling alone, which keeps what its own panes need, so a resize past
-    /// that stops there rather than shrinking anything further on. The
-    /// split's shares are written from its children's cells in `area`, so
-    /// the edge moves by exactly the cells it could; true even when the
-    /// sibling had nothing to give.
+    /// the pane's part has a sibling on that side; the cells come from the
+    /// side that shrinks alone, which keeps what its own panes need, so a
+    /// resize past that stops there rather than shrinking anything further
+    /// on. The split's shares are written from its children's cells in
+    /// `area`, so the edge moves by exactly the cells it could; true even
+    /// when that side had nothing to give.
     pub fn resize(&mut self, area: Rect, pane: PaneId, dir: Direction, cells: u16) -> bool {
         let Some(path) = self.path_to(pane) else {
             return false;
@@ -401,20 +404,26 @@ impl Layout {
             node = child;
         }
 
-        let edge = (0..path.len()).rev().find_map(|depth| {
-            let Layout::Split {
-                across: runs,
-                children,
-                ..
-            } = self.node_at(&path[..depth])?
-            else {
-                return None;
-            };
-            let i = path[depth];
-            let j = if forward { i + 1 } else { i.checked_sub(1)? };
-            (*runs == across && j < children.len()).then_some((depth, i, j))
-        });
-        let Some((depth, i, j)) = edge else {
+        let edge_toward = |forward: bool| {
+            (0..path.len()).rev().find_map(|depth| {
+                let Layout::Split {
+                    across: runs,
+                    children,
+                    ..
+                } = self.node_at(&path[..depth])?
+                else {
+                    return None;
+                };
+                let i = path[depth];
+                let j = if forward { i + 1 } else { i.checked_sub(1)? };
+                (*runs == across && j < children.len()).then_some((depth, i, j))
+            })
+        };
+        // The pane's part `i` and its sibling `j` across the edge: the one
+        // that grows, then the one that shrinks.
+        let Some((depth, grows, shrinks)) = edge_toward(forward)
+            .or_else(|| edge_toward(!forward).map(|(depth, i, j)| (depth, j, i)))
+        else {
             return false;
         };
         let Some(&rect) = rects.get(depth) else {
@@ -429,17 +438,17 @@ impl Layout {
             return false;
         };
         let mut sizes = child_sizes(*runs, rect, children, shares);
-        let (Some(&size_i), Some(&size_j), Some(sibling)) =
-            (sizes.get(i), sizes.get(j), children.get(j))
+        let (Some(&size_grows), Some(&size_shrinks), Some(shrinking)) =
+            (sizes.get(grows), sizes.get(shrinks), children.get(shrinks))
         else {
             return false;
         };
-        let moved = u32::from(cells).min(size_j.saturating_sub(sibling.min_extent(across)));
+        let moved = u32::from(cells).min(size_shrinks.saturating_sub(shrinking.min_extent(across)));
         if moved == 0 {
             return true;
         }
-        sizes[i] = size_i + moved;
-        sizes[j] = size_j - moved;
+        sizes[grows] = size_grows + moved;
+        sizes[shrinks] = size_shrinks - moved;
         // A child with no cells would get no share, and never come back; in
         // an area that small there is nothing worth moving.
         let total: u32 = sizes.iter().sum();
@@ -1454,12 +1463,59 @@ mod tests {
         assert_eq!(widths(&layout, area), vec![37, 43]);
         let sum: f32 = shares_of(&layout).iter().sum();
         assert!(close(sum, 1.0));
-        // A pane with no edge that way.
-        assert!(!layout.resize(area, p(2), Direction::Right, 3));
-        assert!(!layout.resize(area, p(1), Direction::Left, 3));
+        // A pane with no edge running that way, or not in the layout.
         assert!(!layout.resize(area, p(1), Direction::Up, 3));
         assert!(!layout.resize(area, p(9), Direction::Right, 3));
         assert_eq!(widths(&layout, area), vec![37, 43]);
+        let mut alone = pane(1);
+        assert!(!alone.resize(area, p(1), Direction::Left, 3));
+    }
+
+    #[test]
+    fn resize_with_no_edge_that_way_moves_the_other_edge() {
+        let area = rect(0, 0, 81, 24);
+        let mut layout = even(true, vec![pane(1), pane(2)]);
+        // The left pane's Left moves the line left, shrinking it.
+        assert!(layout.resize(area, p(1), Direction::Left, 5));
+        assert_eq!(widths(&layout, area), vec![35, 45]);
+        assert!(layout.resize(area, p(1), Direction::Right, 5));
+        assert_eq!(widths(&layout, area), vec![40, 40]);
+        // The right pane's Right moves the line right, shrinking it.
+        assert!(layout.resize(area, p(2), Direction::Right, 3));
+        assert_eq!(widths(&layout, area), vec![43, 37]);
+
+        let heights = |layout: &Layout| -> Vec<u16> {
+            layout
+                .place(area)
+                .panes
+                .iter()
+                .map(|(_, r)| r.height)
+                .collect()
+        };
+        let mut layout = even(false, vec![pane(1), pane(2)]);
+        assert_eq!(heights(&layout), vec![12, 11]);
+        assert!(layout.resize(area, p(1), Direction::Up, 4));
+        assert_eq!(heights(&layout), vec![8, 15]);
+        assert!(layout.resize(area, p(1), Direction::Down, 2));
+        assert_eq!(heights(&layout), vec![10, 13]);
+        assert!(layout.resize(area, p(2), Direction::Down, 3));
+        assert_eq!(heights(&layout), vec![13, 10]);
+
+        // In a row of three, the middle one's Left grows it; the last one's
+        // Right shrinks it.
+        let mut layout = even(true, vec![pane(1), pane(2), pane(3)]);
+        let before = widths(&layout, area);
+        assert!(layout.resize(area, p(2), Direction::Left, 4));
+        assert_eq!(
+            widths(&layout, area),
+            vec![before[0] - 4, before[1] + 4, before[2]]
+        );
+        assert!(layout.resize(area, p(3), Direction::Right, 6));
+        assert_eq!(
+            widths(&layout, area),
+            vec![before[0] - 4, before[1] + 10, before[2] - 6]
+        );
+        assert_covers(&layout, area);
     }
 
     #[test]
@@ -1509,12 +1565,14 @@ mod tests {
         assert_eq!(placed.rect(p(1)).unwrap().width, 30);
         assert_eq!(placed.rect(p(2)).unwrap().width, 50);
         assert_eq!(placed.rect(p(3)).unwrap().width, 50);
-        // Down from 2 is the column's own line; up from 2 there is none.
+        // Down from 2 is the column's own line; up from 2 there is none, so
+        // Up moves that same line up.
         let before = placed.rect(p(2)).unwrap().height;
         assert!(layout.resize(area, p(2), Direction::Down, 4));
         assert_eq!(layout.place(area).rect(p(2)).unwrap().height, before + 4);
-        assert!(!layout.resize(area, p(2), Direction::Up, 4));
-        assert!(layout.resize(area, p(3), Direction::Up, 2));
+        assert!(layout.resize(area, p(2), Direction::Up, 1));
+        assert_eq!(layout.place(area).rect(p(2)).unwrap().height, before + 3);
+        assert!(layout.resize(area, p(3), Direction::Up, 1));
         assert_eq!(layout.place(area).rect(p(2)).unwrap().height, before + 2);
         assert_minimal(&layout, None);
     }
