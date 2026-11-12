@@ -144,6 +144,7 @@ impl Server {
             slot.opts.insert(PANE.into(), "1".into());
         }
         self.notices_last(session);
+        self.number_tabs();
         self.name_tab(tab);
         Some(tab)
     }

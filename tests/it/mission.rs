@@ -222,10 +222,10 @@ fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing(
     client.wait_for("the third tab's card gone", |s| {
         !s.iter().any(|l| l.contains("tab3"))
     });
-    // The last card, now tab 5, the tabs after the closed one renumbered.
+    // The last card, still tab 6: a tab keeps its number when another closes.
     client.type_text("G");
     client.type_text("\r");
-    client.wait_text("Go to tab 5");
+    client.wait_text("Go to tab 6");
 }
 
 #[test]

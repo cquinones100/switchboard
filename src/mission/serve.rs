@@ -4319,10 +4319,8 @@ impl Server {
 
     /// A tab's number and name, as its reminder's words name it.
     fn remind_name(&self, tab: TabId) -> Option<String> {
-        let index = self
-            .session_of_tab(tab)
-            .and_then(|s| s.tabs.iter().position(|t| *t == tab))?;
-        Some(format!("{} {}", index + 1, self.tab_label(tab)))
+        self.session_of_tab(tab)?;
+        Some(format!("{} {}", self.tab_number(tab), self.tab_label(tab)))
     }
 
     /// "Remind me about this tab": with UX 2.0, the reminder's box (board

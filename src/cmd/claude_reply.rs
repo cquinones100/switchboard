@@ -52,12 +52,17 @@ fn find_tab<'a>(list: &'a Value, target: &str, session: &str) -> Option<&'a Valu
             .flat_map(tabs)
             .find(|t| t.get("id").and_then(Value::as_str) == Some(target));
     }
+    // A tab's number is its own in every session; the caller's session is
+    // looked in first for a list from before numbers were.
     let index: i64 = target.parse().ok()?;
+    let numbered = |t: &&Value| t.get("index").and_then(Value::as_i64) == Some(index);
     let own = sessions
         .iter()
         .find(|s| s.get("name").and_then(Value::as_str) == Some(session))
         .or_else(|| sessions.first())?;
-    tabs(own).find(|t| t.get("index").and_then(Value::as_i64) == Some(index))
+    tabs(own)
+        .find(numbered)
+        .or_else(|| sessions.iter().flat_map(tabs).find(numbered))
 }
 
 /// Every process under `pid`, each before its own children.

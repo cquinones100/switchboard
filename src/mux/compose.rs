@@ -525,7 +525,12 @@ pub fn draw_status(
             } else {
                 base.fg(color.unwrap_or(p.tab_fg))
             };
-            let mut pieces = vec![(format!(" {}:", tab.index), style)];
+            // The Notifications window, numbered 0, shows no number.
+            let number = match tab.index {
+                0 => " ".to_string(),
+                n => format!(" {n}:"),
+            };
+            let mut pieces = vec![(number, style)];
             if let Some(state) = tab.agent {
                 let (symbol, marker) = badge(state);
                 pieces.push((format!("  {symbol}  "), marker));

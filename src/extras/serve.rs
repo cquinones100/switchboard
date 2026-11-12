@@ -296,12 +296,7 @@ impl Server {
                     server.say(Some(client), &said);
                     return;
                 };
-                let count = server
-                    .clients
-                    .get(&client)
-                    .and_then(|c| server.session(&c.session))
-                    .map_or(0, |s| s.tabs.len());
-                if n > count {
+                if server.tab_numbered(n).is_none() {
                     server.say(Some(client), &format!("There is no tab {n}."));
                     return;
                 }

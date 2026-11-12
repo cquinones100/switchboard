@@ -452,3 +452,77 @@ fn a_tab_with_a_tab_dir_is_named_from_it_and_forgets_it_when_handed_over() {
         "forgotten"
     );
 }
+
+/// Every tab's number, the sessions and their tabs in order.
+fn numbers(server: &TestServer) -> Vec<i64> {
+    server.list()["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["tabs"].as_array().unwrap().clone())
+        .map(|t| t["index"].as_i64().unwrap())
+        .collect()
+}
+
+/// The current tab's number in the first session.
+fn current_number(server: &TestServer) -> i64 {
+    server.list()["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["current"] == true)
+        .unwrap()["index"]
+        .as_i64()
+        .unwrap()
+}
+
+#[test]
+fn a_tab_keeps_its_number_while_open_and_a_new_one_takes_the_smallest_free() {
+    let mut server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    let second = server.ok(&["new-tab", "-d"]);
+    let second = second.split_whitespace().next().unwrap().to_string();
+    server.ok(&["new-tab", "-d"]);
+    server.ok(&["new-tab", "-d"]);
+    assert_eq!(
+        numbers(&server),
+        [1, 4, 3, 2],
+        "each opened after the first"
+    );
+    server.ok(&["kill-tab", "-t", &second]);
+    assert_eq!(numbers(&server), [1, 4, 3], "the others keep theirs");
+
+    // M-3 goes to the tab numbered 3, wherever it is; M-2, numbering none,
+    // stays.
+    server.ok(&["press", "select-tab-3"]);
+    client.wait_for("tab 3 in front", |_| current_number(&server) == 3);
+    server.ok(&["press", "select-tab-2"]);
+    assert_eq!(current_number(&server), 3, "no tab is numbered 2");
+
+    // The next tab takes the smallest number free, 2.
+    server.ok(&["new-tab", "-d"]);
+    assert_eq!(numbers(&server), [1, 4, 3, 2]);
+    // A tab in a second session takes a number no tab in the first has.
+    let mut other = common::TestClient::attach(&server.socket(), Some("work"), 80, 24);
+    other.wait_text("$");
+    other.detach();
+    assert_eq!(numbers(&server), [1, 4, 3, 2, 5]);
+
+    // An upgrade and a restart keep every number, the gap left by a closed
+    // tab too.
+    let fourth = server.list()["sessions"][0]["tabs"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.ok(&["kill-tab", "-t", &fourth]);
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(numbers(&server), [1, 3, 2, 5], "after an upgrade");
+    server.ok(&["save"]);
+    drop(client);
+    server.restart();
+    assert_eq!(numbers(&server), [1, 3, 2, 5], "after a restore");
+    server.ok(&["new-tab", "-d"]);
+    assert!(numbers(&server).contains(&4), "4 is free for the next");
+}

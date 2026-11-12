@@ -97,12 +97,12 @@ impl Server {
         // Notifications window, which is no tab (note-tab.sh's `choose`).
         let mut items = vec![PickItem::new("+ New tab, in a directory you pick", "new")];
         for s in &self.sessions {
-            for (i, t) in s.tabs.iter().enumerate() {
+            for t in &s.tabs {
                 if self.tab_opt(*t, "@notes").as_deref() == Some("1") || self.is_notices_tab(*t) {
                     continue;
                 }
                 items.push(PickItem::new(
-                    format!("{} {}", i + 1, self.tab_label(*t)),
+                    format!("{} {}", self.tab_number(*t), self.tab_label(*t)),
                     t.to_string(),
                 ));
             }

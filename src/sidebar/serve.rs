@@ -419,7 +419,11 @@ impl Server {
             .iter()
             .enumerate()
             .filter(|(_, id)| !self.is_notices_tab(**id))
-            .filter_map(|(i, id)| self.tab_model(s, attached, *id, i + 1))
+            .filter_map(|(i, id)| {
+                let mut tab = self.tab_model(s, attached, *id, self.tab_number(*id))?;
+                tab.place = i + 1;
+                Some(tab)
+            })
             .collect()
     }
 

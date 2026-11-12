@@ -770,8 +770,8 @@ impl Server {
         if self.pane_count(tab) < 2 {
             return None;
         }
-        let s = self.session(session)?;
-        let index = s.tabs.iter().position(|t| *t == tab)? + 1;
+        self.session(session)?.tabs.contains(&tab).then_some(())?;
+        let index = self.tab_number(tab);
         let label = self.tab_label(tab);
         let name = label
             .strip_prefix('#')

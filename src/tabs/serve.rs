@@ -236,12 +236,10 @@ impl Server {
             );
             return;
         }
-        let Some(index) = self
-            .session_of_tab(tab)
-            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
-        else {
+        if self.session_of_tab(tab).is_none() {
             return;
-        };
+        }
+        let number = self.tab_number(tab);
         let label = self.tab_label(tab);
         let path = self.tab_path(tab).map(Path::to_path_buf);
         let place = path.as_deref().and_then(git::locate);
@@ -271,7 +269,7 @@ impl Server {
             ticket.as_deref(),
         );
         let menu = Menu::new(
-            format!("Tab {}", index + 1),
+            format!("Tab {number}"),
             vec![
                 MenuOption::new("Copy the title").key('y'),
                 MenuOption::new("Close"),

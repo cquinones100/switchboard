@@ -708,6 +708,7 @@ pub fn restore(server: &mut Server) {
     let mut p = std::mem::take(&mut server.persist);
     p.restore(server, saved);
     server.persist = p;
+    server.number_tabs();
 }
 
 impl Persist {
@@ -1079,6 +1080,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
     for id in server.panes.keys() {
         server.next_pane = server.next_pane.max(id.0.saturating_add(1));
     }
+    server.number_tabs();
     let tabs: Vec<TabId> = server.tabs.keys().copied().collect();
     for t in tabs {
         server.relayout(t);

@@ -534,7 +534,7 @@ fn with_half_page_scrolling_off_the_wheel_moves_a_tab_at_a_time() {
     std::thread::sleep(Duration::from_millis(100) * common::patience());
     assert_eq!(in_front(&server.list()), 1);
     let screen = client.wait_for("the cursor on t8", |s| {
-        s.iter().any(|l| left(l, 34).contains("▌ ○  2 t8"))
+        s.iter().any(|l| left(l, 34).contains("▌ ○  8 t8"))
     });
     assert!(!left(&screen[1], 34).contains("▲"), "{}", screen.join("\n"));
 }

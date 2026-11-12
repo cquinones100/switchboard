@@ -463,7 +463,7 @@ impl Action {
                 "Pressed again, it goes back the other way, so two tabs can be swapped between with one key.".into()
             }
             Action::SelectTab(_) => {
-                "M-1 goes to the first tab and M-9 to the ninth, by the numbers the sidebar shows; M-0 asks for a number, for the tabs past 9.".into()
+                "M-1 to M-9 go to the tab with that number, the one the tab bar and the sidebar show, in whichever session it is; a tab keeps its number while it is open, so with no tab numbered that, nothing happens. M-0 asks for a number, for the tabs past 9.".into()
             }
             Action::NewTab => {
                 "The tab runs your shell in the current pane's directory and goes right after the current one.".into()

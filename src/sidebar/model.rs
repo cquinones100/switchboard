@@ -137,8 +137,12 @@ impl TabLoop {
 #[derive(Clone, Debug)]
 pub struct TabModel {
     pub id: TabId,
-    /// Its number in its session, from 1, as the status line shows it.
+    /// Its number (`@tab_number`), kept while it is open, as the status
+    /// line shows it.
     pub index: usize,
+    /// Its place among its session's tabs, from 1, the order the sidebar
+    /// keeps them in, which their numbers needn't follow.
+    pub place: usize,
     /// Its session's name.
     pub session: String,
     /// Whether a client shows its session.
@@ -247,6 +251,7 @@ impl TabModel {
         TabModel {
             id,
             index,
+            place: index,
             session: String::new(),
             attached: false,
             current: false,
@@ -352,7 +357,7 @@ pub fn needs_tab(tab: &TabModel, r: &Rules) -> bool {
 }
 
 /// Most in need of you first: by state, then waiting or finished longest,
-/// then by number.
+/// then by place.
 pub fn by_need(a: &TabModel, b: &TabModel) -> Ordering {
     a.state
         .rank()
@@ -364,7 +369,7 @@ pub fn by_need(a: &TabModel, b: &TabModel) -> Ordering {
                 Ordering::Equal
             }
         })
-        .then(a.index.cmp(&b.index))
+        .then(a.place.cmp(&b.place))
 }
 
 /// In Needs you, the tabs you pinned come first (you marked them yourself),
@@ -1100,13 +1105,15 @@ pub(crate) mod tests {
     fn the_idle_tabs_are_the_idle_group_in_its_order() {
         let r = rules();
         let mut later = tab(1, "later", TabState::Idle);
-        later.index = 7;
+        later.place = 7;
         let mut working = tab(2, "working", TabState::Working);
-        working.index = 1;
+        working.place = 1;
         let mut bare = tab(3, "no claude", TabState::Idle);
         bare.claude = None;
+        // In their places, whatever their numbers.
         let mut first = tab(4, "first", TabState::Idle);
-        first.index = 2;
+        first.place = 2;
+        first.index = 9;
         let tabs = vec![later, working, bare, first];
         let idle: Vec<&str> = idle_tabs(&tabs, &r)
             .iter()

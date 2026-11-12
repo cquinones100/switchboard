@@ -74,7 +74,7 @@ pub const VIEWS: [&str; 5] = [PRS, CI, LANDING, TICKETS, INBOX];
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabInfo {
     pub id: TabId,
-    /// Its place in its session, from 1, as the views say "tab 3".
+    /// Its number (`@tab_number`), as the views say "tab 3".
     pub index: usize,
     /// Its label, as the tab bar shows it.
     pub name: String,

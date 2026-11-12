@@ -459,13 +459,14 @@ impl Server {
             .collect()
     }
 
-    /// Every tab with its number in its session, the sessions in order.
+    /// Every tab with its number, the sessions in order.
     fn usage_tab_list(&self) -> Vec<(TabId, usize)> {
         // The Notifications window is no tab (src/sidebar/notices.rs).
         self.sessions
             .iter()
-            .flat_map(|s| s.tabs.iter().enumerate().map(|(i, t)| (*t, i + 1)))
-            .filter(|(t, _)| !self.is_notices_tab(*t))
+            .flat_map(|s| s.tabs.iter().copied())
+            .filter(|t| !self.is_notices_tab(*t))
+            .map(|t| (t, self.tab_number(t)))
             .collect()
     }
 
@@ -605,10 +606,7 @@ impl Server {
         if self.is_notices_tab(tab) {
             return;
         }
-        let index = self
-            .session_of_tab(tab)
-            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
-            .map_or(0, |i| i + 1);
+        let index = self.tab_number(tab);
         let now = util::now_ms();
         let seen = self.usage_tab_now(tab, index);
         self.usage.closed.seen(seen, now);

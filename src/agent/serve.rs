@@ -420,10 +420,10 @@ impl Server {
         if !setting_on("notifications") {
             return;
         }
-        let Some(s) = self.session_of_tab(tab) else {
+        if self.session_of_tab(tab).is_none() {
             return;
-        };
-        let index = s.tabs.iter().position(|t| *t == tab).unwrap_or(0) + 1;
+        }
+        let index = self.tab_number(tab);
         let name = self
             .tabs
             .get(&tab)

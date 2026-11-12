@@ -479,8 +479,7 @@ impl Server {
                 let tabs: Vec<Value> = s
                     .tabs
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, id)| {
+                    .filter_map(|id| {
                         let tab = self.tabs.get(id)?;
                         let panes: Vec<Value> = tab
                             .layout
@@ -527,7 +526,7 @@ impl Server {
                             .collect();
                         Some(json!({
                             "id": id.to_string(),
-                            "index": i + 1,
+                            "index": self.tab_number(*id),
                             "name": tab.display_name(),
                             "own": self.tab_own_name(*id),
                             "label": self.tab_label(*id),

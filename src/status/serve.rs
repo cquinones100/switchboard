@@ -175,11 +175,10 @@ impl Server {
         let tabs: Vec<TabStatus> = s
             .tabs
             .iter()
-            .enumerate()
-            .filter(|(_, t)| **t == s.current || !self.is_notices_tab(**t))
-            .filter_map(|(i, t)| {
+            .filter(|t| **t == s.current || !self.is_notices_tab(**t))
+            .filter_map(|t| {
                 self.tabs.get(t).map(|_| TabStatus {
-                    index: i + 1,
+                    index: self.tab_number(*t),
                     name: self.tab_label(*t),
                     current: *t == s.current,
                     agent: self.tab_agent(*t),

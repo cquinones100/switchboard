@@ -672,10 +672,7 @@ impl Server {
         let Some(panes) = self.tabs.get(&tab).map(|t| t.layout.panes()) else {
             return;
         };
-        let index = self
-            .session_of_tab(tab)
-            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
-            .map_or(0, |i| i + 1);
+        let index = self.tab_number(tab);
         let list: Vec<String> = panes
             .into_iter()
             .filter_map(|p| self.running(p))

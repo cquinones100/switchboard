@@ -43,6 +43,10 @@ pub const HISTORY: usize = 10_000;
 /// whose Claude stays in the main clone. Saved with the tab's options, and
 /// taken away when a pane of the tab is handed over (`respawn`).
 pub const TAB_DIR: &str = "@tab_dir";
+/// A tab's number, the one it shows everywhere and `M-1` to `M-9` go to:
+/// the smallest no other open tab had when it opened, kept while it is open
+/// (saved with the layout and handed over with the tab's other options).
+pub const TAB_NUMBER: &str = "@tab_number";
 /// How often tab names are read again from their panes' directories.
 const TICK: Duration = Duration::from_secs(2);
 /// Two clicks this close together are a double click.
@@ -1363,6 +1367,51 @@ impl Server {
         self.sessions.iter().find(|s| s.tabs.contains(&tab))
     }
 
+    /// A tab's number (`TAB_NUMBER`), 0 for the Notifications window, which
+    /// takes none.
+    pub fn tab_number(&self, tab: TabId) -> usize {
+        self.tabs
+            .get(&tab)
+            .and_then(|t| t.opts.get(TAB_NUMBER))
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// The open tab numbered `n`, in any session.
+    pub fn tab_numbered(&self, n: usize) -> Option<TabId> {
+        if n == 0 {
+            return None;
+        }
+        self.sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter().copied())
+            .find(|t| self.tab_number(*t) == n)
+    }
+
+    /// Gives every tab without a number (one just opened, or one from a
+    /// build before numbers) the smallest no other open tab has, as
+    /// `fill_numbers` says. The Notifications window takes none.
+    pub fn number_tabs(&mut self) {
+        let (notices, order): (Vec<TabId>, Vec<TabId>) = self
+            .sessions
+            .iter()
+            .flat_map(|s| s.tabs.iter().copied())
+            .partition(|t| self.is_notices_tab(*t));
+        for t in notices {
+            if let Some(tab) = self.tabs.get_mut(&t) {
+                tab.opts.remove(TAB_NUMBER);
+            }
+        }
+        let have: Vec<usize> = order.iter().map(|t| self.tab_number(*t)).collect();
+        for ((tab, had), n) in order.into_iter().zip(&have).zip(fill_numbers(&have)) {
+            if *had != n
+                && let Some(t) = self.tabs.get_mut(&tab)
+            {
+                t.opts.insert(TAB_NUMBER.into(), n.to_string());
+            }
+        }
+    }
+
     fn alloc_pane(&mut self) -> PaneId {
         let id = PaneId(self.next_pane);
         self.next_pane += 1;
@@ -1502,6 +1551,7 @@ impl Server {
         let pane = self.spawn_pane(tab, Some(dir), None, area.width, area.height)?;
         self.tabs.insert(tab, new_tab(tab, pane));
         self.sessions.push(session);
+        self.number_tabs();
         self.refresh_name(tab);
         Ok(())
     }
@@ -1536,6 +1586,10 @@ impl Server {
             .map(|i| i + 1)
             .unwrap_or(s.tabs.len());
         s.tabs.insert(at, tab);
+        self.number_tabs();
+        let s = self
+            .session_mut(session)
+            .expect("the session was just found");
         if opened == Opened::Front {
             s.last = Some(s.current);
             s.trail.visited(s.current);
@@ -1636,6 +1690,7 @@ impl Server {
                 .map_or(s.tabs.len(), |i| i + 1);
             s.tabs.insert(at, id);
         }
+        self.number_tabs();
         self.relayout(from);
         self.refresh_name(from);
         if select {
@@ -2518,11 +2573,8 @@ impl Server {
                 }
             }
             Action::SelectTab(n) => {
-                if let Some(t) = tabs
-                    .get(n.wrapping_sub(1))
-                    .filter(|t| !self.is_notices_tab(**t))
-                {
-                    self.select_tab(&session, *t);
+                if let Some(t) = self.tab_numbered(n) {
+                    self.go_to_tab(id, t);
                 }
             }
             Action::NewTab => {
@@ -2892,10 +2944,7 @@ impl Server {
                 Some(crate::status::Hit::Tab(i)) => Some(i),
                 _ => None,
             };
-            if let Some(tab) = hit.and_then(|i| {
-                self.session(&session)
-                    .and_then(|s| s.tabs.get(i - 1).copied())
-            }) {
+            if let Some(tab) = hit.and_then(|n| self.tab_numbered(n)) {
                 self.select_tab(&session, tab);
             }
             return;
@@ -3397,6 +3446,29 @@ impl Server {
     }
 }
 
+/// The tabs' numbers, given the ones they have in order (0 for none): a
+/// tab keeps its own, of two with the same one the first keeps it, and the
+/// rest take the smallest free, in order, so the tabs of a build before
+/// numbers go by their places as they did.
+fn fill_numbers(have: &[usize]) -> Vec<usize> {
+    let mut used = std::collections::HashSet::new();
+    let kept: Vec<bool> = have.iter().map(|n| *n > 0 && used.insert(*n)).collect();
+    let mut next = 1;
+    have.iter()
+        .zip(kept)
+        .map(|(n, kept)| {
+            if kept {
+                return *n;
+            }
+            while used.contains(&next) {
+                next += 1;
+            }
+            used.insert(next);
+            next
+        })
+        .collect()
+}
+
 pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
     Tab {
         id,
@@ -3407,5 +3479,22 @@ pub(super) fn new_tab(id: TabId, pane: PaneId) -> Tab {
         last_pane: None,
         zoomed: false,
         opts: BTreeMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fill_numbers;
+
+    #[test]
+    fn tabs_keep_their_numbers_and_the_rest_take_the_smallest_free() {
+        assert_eq!(fill_numbers(&[0, 0, 0]), [1, 2, 3], "by place, as before");
+        assert_eq!(fill_numbers(&[1, 0, 4]), [1, 2, 4]);
+        assert_eq!(fill_numbers(&[0, 1]), [2, 1], "a kept one is never moved");
+        assert_eq!(
+            fill_numbers(&[3, 3, 0]),
+            [3, 1, 2],
+            "the first keeps a twice-held one"
+        );
     }
 }

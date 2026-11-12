@@ -531,7 +531,7 @@ impl Server {
     pub(crate) fn source_tabs(&mut self) -> Vec<TabInfo> {
         let mut tabs = Vec::new();
         for session in &self.sessions {
-            for (i, id) in session.tabs.iter().enumerate() {
+            for id in &session.tabs {
                 let Some(tab) = self.tabs.get(id) else {
                     continue;
                 };
@@ -582,7 +582,7 @@ impl Server {
                 }
                 tabs.push(TabInfo {
                     id: *id,
-                    index: i + 1,
+                    index: self.tab_number(*id),
                     name: self.tab_label(*id),
                     path,
                     pr: self.tab_pr(*id),
