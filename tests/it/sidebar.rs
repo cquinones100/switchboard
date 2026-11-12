@@ -769,6 +769,112 @@ fn the_cursor_onto_a_notification_brings_the_notifications_window_to_the_front()
     assert!(!out.contains("Notifications"), "no tab for `tabs`: {out}");
 }
 
+/// Two Slack messages and a note written for you, in the state and notes
+/// directories of a server started with `settings`.
+fn two_kinds_of_notification(settings: &str) -> (TestServer, common::TempDir) {
+    let notes = common::TempDir::new("sbnk");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env_and_settings(
+        &[("NOTES_DIR", notes.path().to_str().unwrap())],
+        settings,
+    );
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let now = switchboard::util::now_ms() / 1000;
+    let message = |from: &str, text: &str, ts: String| {
+        json!({
+            "kind": "dm", "channel": "D1", "from": from, "where": from,
+            "text": text, "ts": ts, "link": "https://slack.example/m",
+        })
+    };
+    std::fs::write(
+        server.state.join("slack.json"),
+        json!({ "checked": switchboard::util::now_ms(), "items": [
+            message("Ada", "first-message", format!("{now}.000100")),
+            message("Grace", "second-message", format!("{now}.000200")),
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    (server, notes)
+}
+
+/// The Notifications window in front, its chosen notification's line
+/// holding `chosen`.
+fn wait_chosen(client: &mut TestClient, chosen: &str) {
+    client.wait_for(&format!("{chosen} chosen in the window"), |s| {
+        s.iter().any(|l| l.contains("│▌") && l.contains(chosen))
+    });
+}
+
+#[test]
+fn j_and_k_in_the_sidebar_step_over_the_notifications_a_kind_at_a_time() {
+    let (server, _notes) = two_kinds_of_notification(r#"{"notifications": false, "tips": false}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+
+    // j from the tab: onto the Slack line, the window on its first message.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("j");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    wait_chosen(&mut client, "DM Ada");
+    // One more j: past the second message, onto the note's line.
+    client.type_text("j");
+    wait_chosen(&mut client, "Plan");
+    // k: back onto the Slack line, on its first message again.
+    client.type_text("k");
+    wait_chosen(&mut client, "DM Ada");
+    // k again: back up to the tab.
+    client.type_text("k");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+
+    // Inside the window, j still chooses one by one.
+    client.type_text("j");
+    wait_chosen(&mut client, "DM Ada");
+    client.type_text("\r");
+    wait_list(&server, "the focus in the window", |l| !focused(l));
+    client.type_text("j");
+    wait_chosen(&mut client, "DM Grace");
+}
+
+#[test]
+fn with_ux2_j_from_the_last_kind_of_notification_goes_onto_the_first_tab() {
+    let (server, _notes) =
+        two_kinds_of_notification(r#"{"notifications": false, "tips": false, "ux2": true}"#);
+    let mut client = server.attach(140, 36);
+    client.wait_text("2 new on Slack");
+    client.wait_text("New note: Plan");
+
+    // k from the tab: onto the last kind, the note's.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("k");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true) && focused(l)
+    });
+    wait_chosen(&mut client, "Plan");
+    // k: onto the Slack line's first message, past the second.
+    client.type_text("k");
+    wait_chosen(&mut client, "DM Ada");
+    // j, j: the note, then the first tab.
+    client.type_text("j");
+    wait_chosen(&mut client, "Plan");
+    client.type_text("j");
+    wait_list(&server, "the tab in front", |l| {
+        tabs(l)[0]["current"] == true && focused(l)
+    });
+}
+
 #[test]
 fn with_ux2_k_from_the_first_tab_goes_up_onto_the_notifications() {
     let notes = common::TempDir::new("sbnu");

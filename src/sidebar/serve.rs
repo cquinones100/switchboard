@@ -1203,9 +1203,9 @@ impl Server {
         self.dirty_session(session);
     }
 
-    /// j and k on the notifications with the Notifications window: the
-    /// next or last of them one by one, the window following; up from the
-    /// first goes back to the last tab, and down from the last stays.
+    /// Tab and Shift-Tab on the notifications with the Notifications
+    /// window: the next or last of them one by one, the window following; up
+    /// from the first goes back to the last tab, and down from the last stays.
     fn sidebar_notice_step(&mut self, session: &str, tabs: usize, cursor: &Owner, by: isize) {
         let entries = self.notice_entries();
         let at = entries
@@ -1223,44 +1223,27 @@ impl Server {
     }
 
     /// j and k with UX 2.0, whose notifications sit above the tabs: up
-    /// from the first tab onto the last notification, down from the last
-    /// notification onto the first tab, and no further either way (one by
-    /// one with the Notifications window, else a kind's row at a time).
+    /// from the first tab onto the last kind of notification, down from the
+    /// last kind onto the first tab, and no further either way, a kind's row
+    /// at a time, the Notifications window on that kind's first.
     fn sidebar_step_ux2(
         &mut self,
         session: &str,
         tabs: usize,
-        cursor: &Owner,
         on_notice: Option<usize>,
         at: isize,
         by: isize,
     ) {
         let notices = self.sidebar_notices().len();
-        let by_item = settings::is_on("notice_list");
         match on_notice {
             None if by < 0 && at == 0 && notices > 0 => {
                 self.sidebar_move(session, (tabs + notices) as isize - 1);
-                if by_item && let Some((owner, _)) = self.notice_entries().last() {
-                    self.sidebar_notice_to(session, owner);
-                }
             }
             None => self.sidebar_move(session, (at + by).clamp(0, tabs.max(1) as isize - 1)),
             Some(i) => {
-                let entries = self.notice_entries();
-                let (now, count) = if by_item {
-                    let now = entries
-                        .iter()
-                        .position(|(o, _)| o == cursor)
-                        .unwrap_or_else(|| self.notice_cursor(session, &entries));
-                    (now as isize, entries.len() as isize)
-                } else {
-                    (i as isize, notices as isize)
-                };
-                let to = now + by;
-                if to >= count {
+                let to = i as isize + by;
+                if to >= notices as isize {
                     self.sidebar_move(session, 0);
-                } else if to >= 0 && by_item {
-                    self.sidebar_notice_to(session, &entries[to as usize].0);
                 } else if to >= 0 {
                     self.sidebar_move(session, tabs as isize + to);
                 }
@@ -1392,7 +1375,7 @@ impl Server {
             _ => None,
         };
         if ux2 && let Some(by) = up_down {
-            self.sidebar_step_ux2(session, stops, &cursor, on_notice, at, by);
+            self.sidebar_step_ux2(session, stops, on_notice, at, by);
             return;
         }
         // On a folded Other repos, Enter, l or the right arrow unfolds it.
@@ -1404,20 +1387,8 @@ impl Server {
             return;
         }
         match k.code {
-            // On the notifications with the Notifications window, j and k go
-            // through them one by one, the window following.
-            KeyCode::Char('j') | KeyCode::Down if none && by_item => {
-                self.sidebar_notice_step(session, stops, &cursor, 1)
-            }
-            KeyCode::Char('n') if ctrl && by_item => {
-                self.sidebar_notice_step(session, stops, &cursor, 1)
-            }
-            KeyCode::Char('k') | KeyCode::Up if none && by_item => {
-                self.sidebar_notice_step(session, stops, &cursor, -1)
-            }
-            KeyCode::Char('p') if ctrl && by_item => {
-                self.sidebar_notice_step(session, stops, &cursor, -1)
-            }
+            // On the notifications, j and k step a kind at a time, the
+            // Notifications window following onto the kind's first.
             KeyCode::Char('j') | KeyCode::Down if none => self.sidebar_move(session, at + 1),
             KeyCode::Char('n') if ctrl => self.sidebar_move(session, at + 1),
             KeyCode::Char('k') | KeyCode::Up if none => self.sidebar_move(session, at - 1),
