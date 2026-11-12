@@ -2089,8 +2089,8 @@ impl Server {
 
     /// Folds a session's group to one line, or unfolds it: Other repos by
     /// `repo_open`, any other in `folded`. The cursor goes onto the first
-    /// of its tabs as it unfolds under the cursor, and onto its line as it
-    /// folds over the cursor.
+    /// of its tabs as it unfolds under the cursor, leaving the tab in front
+    /// as it was, and onto its line as it folds over the cursor.
     fn sidebar_fold(&mut self, session: &str, stage: Stage, fold: bool) {
         let side = self.sidebar.side(session);
         if stage == Stage::OtherRepos {
@@ -2100,15 +2100,16 @@ impl Server {
         } else {
             side.folded.remove(&stage);
         }
-        // Unfolded under the cursor, its first tab comes to the front as
-        // the cursor reaches it, as j and k bring a tab.
+        // Unfolded under the cursor, the cursor goes onto its first tab
+        // without bringing it to the front: opening a group to look at its
+        // tabs keeps you on the tab you were on until j, k or Enter moves.
         if !fold && self.sidebar.side(session).cursor == Some(Owner::Group(stage)) {
-            let first = self.sidebar_stops(session).iter().position(|o| {
+            let first = self.sidebar_stops(session).into_iter().find(|o| {
                 o.tab()
                     .is_some_and(|t| self.sidebar_group_of(session, t) == Some(stage))
             });
-            if let Some(at) = first {
-                self.sidebar_move(session, at as isize);
+            if let Some(first) = first {
+                self.sidebar.side(session).cursor = Some(first);
             }
         }
         if fold {

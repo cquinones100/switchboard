@@ -1262,13 +1262,18 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     wait_list(&server, "Other repos unfolded", |l| {
         l["sessions"][0]["sidebar"]["repo_open"] == true
     });
-    // Its tab, now under the cursor, comes to the front.
-    wait_list(&server, "the unfolded tab in front", |l| {
-        tabs(l)[1]["current"] == true && focused(l)
-    });
+    // Its tab is under the cursor but stays behind the one in front, until
+    // Enter goes into it.
     row_of(&mut client, "bee");
-    client.type_text("q");
-    wait_list(&server, "back out", |l| !focused(l));
+    let list = server.list();
+    assert!(
+        tabs(&list)[0]["current"] == true && focused(&list),
+        "{list}"
+    );
+    client.type_text("\r");
+    wait_list(&server, "into the unfolded tab", |l| {
+        tabs(l)[1]["current"] == true && !focused(l)
+    });
 
     // A click on the chip clears the filter.
     client.send(b"\x1b[<0;4;1M\x1b[<0;4;1m");
@@ -1303,7 +1308,7 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
             && l["sessions"][0]["sidebar"]["repo_open"] == true
     });
 
-    // A click on the folded line unfolds it and brings its tab to the front.
+    // A click on the folded line unfolds it, the tab in front kept.
     server.ok(&[
         "select-tab",
         "-t",
@@ -1312,9 +1317,11 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
     let fold = row_of(&mut client, "1 tab · beta");
     client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", fold + 1, fold + 1).as_bytes());
-    wait_list(&server, "unfolded by a click, its tab in front", |l| {
-        tabs(l)[1]["current"] == true && l["sessions"][0]["sidebar"]["repo_open"] == true
+    wait_list(&server, "unfolded by a click", |l| {
+        l["sessions"][0]["sidebar"]["repo_open"] == true && focused(l)
     });
+    let list = server.list();
+    assert!(tabs(&list)[0]["current"] == true, "{list}");
 
     // A digit for a folded tab unfolds it, the cursor there in the sidebar.
     server.ok(&["sidebar-repo", &alpha.to_string_lossy()]);
@@ -1425,7 +1432,8 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
 }
 
 // Any group folds: `z` on a tab folds its group to its heading and a line
-// of its tabs' marks, the cursor onto that line, where Enter unfolds it; a
+// of its tabs' marks, the cursor onto that line, where Enter unfolds it,
+// the cursor onto its first tab and the tab in front kept; a
 // click on a heading folds it; the fold outlives an upgrade; and M-1 to a
 // tab under it from the sidebar unfolds it again.
 #[test]
@@ -1437,6 +1445,11 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
     server.ok(&["new-tab", "-d", "-n", "bee"]);
     row_of(&mut client, "bee");
     let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
+    server.ok(&[
+        "select-tab",
+        "-t",
+        tabs(&server.list())[1]["id"].as_str().unwrap(),
+    ]);
 
     client.type_text(&format!("{ALT}s"));
     wait_list(&server, "the sidebar focused", focused);
@@ -1448,12 +1461,20 @@ fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
         !s.iter().any(|l| left(l, 34).contains("bee"))
     });
 
-    // On the folded line, Enter unfolds it.
+    // On the folded line, Enter unfolds it, the cursor onto its first tab
+    // and bee still in front; Enter again goes into the first tab.
     client.type_text("\r");
     wait_list(&server, "Other unfolded", |l| folded(l) == json!([]));
     row_of(&mut client, "bee");
-    client.type_text("q");
-    wait_list(&server, "back out", |l| !focused(l));
+    let list = server.list();
+    assert!(
+        tabs(&list)[1]["current"] == true && focused(&list),
+        "{list}"
+    );
+    client.type_text("\r");
+    wait_list(&server, "into the first tab", |l| {
+        tabs(l)[0]["current"] == true && !focused(l)
+    });
 
     // A click on its heading folds it.
     let heading = row_of(&mut client, "OTHER 2");
