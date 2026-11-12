@@ -589,7 +589,12 @@ impl Server {
         };
         let learn = on("palette_learn");
         // The diff's commands only where they can act (src/diff).
-        let mut entries = palette::entries(&self.bindings, on("github"), on("linear"));
+        let mut entries = palette::entries(
+            &self.bindings,
+            on("github"),
+            on("linear"),
+            &self.plugin_views(),
+        );
         let listed = self.diff_palette(client);
         entries.retain(|e| listed(&e.action));
         // Reviewing a contributor's PR only in a repository with the skill.

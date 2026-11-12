@@ -17,9 +17,9 @@ use std::process::{Command as Process, Stdio};
 use serde_json::Value;
 
 use super::text::{TextBox, Tone};
-use super::{Command, MissionView, OPTION_CHARS, PrTyped, TicketTyped};
+use super::{Command, OPTION_CHARS, PrTyped, TicketTyped};
 use crate::mission::ask::Ask;
-use crate::mission::{Mission, Opening};
+use crate::mission::{Mission, Opening, ViewId};
 use crate::mux::input::{self, Key, KeyCode, Mods};
 use crate::mux::keys::Action;
 use crate::mux::server::{ClientId, Server};
@@ -354,8 +354,20 @@ impl Server {
     // ── Mission control ─────────────────────────────────────────────────────
 
     /// Mission control on one of its views; said when that view is off.
-    fn mission_view(&mut self, client: ClientId, view: MissionView) {
-        let slug = view.slug();
+    fn mission_view(&mut self, client: ClientId, view: ViewId) {
+        if view == ViewId::Settings {
+            self.open_mission(client, Opening::Settings);
+            return;
+        }
+        // A plugin's view goes by the title its plugin gives it now.
+        let slug = match &view {
+            ViewId::Plugin(name) => self
+                .plugin_views()
+                .into_iter()
+                .find(|p| p.name == *name)
+                .map_or_else(|| view.slug(), |p| p.title.to_lowercase().replace(' ', "-")),
+            _ => view.slug(),
+        };
         self.open_mission(client, Opening::View(slug.clone()));
         let shown = self
             .clients

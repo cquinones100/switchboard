@@ -190,7 +190,7 @@ fn shared_keys(bindings: &Bindings, e: &palette::Entry) -> Vec<String> {
 /// first, each group's in the order of what they do; then the commands no
 /// key is bound to, under "Through M-p".
 fn workspace(bindings: &Bindings, shown: Shown, counts: &HashMap<String, u64>) -> Vec<Item> {
-    let mut entries = palette::entries(bindings, shown.github, shown.linear);
+    let mut entries = palette::entries(bindings, shown.github, shown.linear, &[]);
     // M-p itself, which the palette leaves out of its own list.
     if let Some((words, tags)) = Action::Palette.palette_note() {
         entries.push(palette::Entry {

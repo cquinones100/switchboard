@@ -441,7 +441,7 @@ impl Action {
                 "Keep the computer awake until I say, or back to only while tabs work".into()
             }
             Action::Notes(command) => command.about().into(),
-            Action::Extra(command) => command.about().into(),
+            Action::Extra(command) => command.about(),
             Action::Autopilot(command) => command.about().into(),
         }
     }
@@ -733,7 +733,7 @@ impl Action {
             .into_iter()
             .filter(|c| c.key().is_none())
             .map(Action::Notes);
-        let extras = crate::extras::Command::ALL
+        let extras = crate::extras::Command::all()
             .into_iter()
             .filter(|c| c.key().is_none())
             .map(Action::Extra);
@@ -844,7 +844,7 @@ impl Default for Bindings {
                 bind(k, Notes(command));
             }
         }
-        for command in crate::extras::Command::ALL {
+        for command in crate::extras::Command::all() {
             if let Some(k) = command.key() {
                 bind(k, Extra(command));
             }
@@ -1029,7 +1029,7 @@ mod tests {
             Action::Notes(crate::notes::serve::Command::NoteTab),
             Action::Extra(crate::extras::Command::GoToTab),
             Action::Extra(crate::extras::Command::Mission(
-                crate::extras::MissionView::Landing,
+                crate::mission::ViewId::Landing,
             )),
             Action::Autopilot(crate::autopilot::Command::WorkNote),
         ] {

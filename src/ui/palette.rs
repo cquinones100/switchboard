@@ -18,7 +18,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::mission::ViewId;
 use crate::mux::keys::{Action, Bindings};
+use crate::usage::serve::PluginView;
 use crate::{paths, util};
 
 use super::picker::PickItem;
@@ -96,8 +98,15 @@ pub fn shown_key(keys: &str) -> String {
 /// Every command the palette offers, by description: the bound actions
 /// with a note and the actions with no key of their own, leaving out the
 /// palette itself (picking it would only open it again) and a command
-/// tagged `#github` or `#linear` while that service is off.
-pub fn entries(bindings: &Bindings, github: bool, linear: bool) -> Vec<Entry> {
+/// tagged `#github` or `#linear` while that service is off; and a
+/// "Mission control: <view>" for each sidebar plugin's view in `plugins`
+/// (the server's), by the title its plugin gives it now.
+pub fn entries(
+    bindings: &Bindings,
+    github: bool,
+    linear: bool,
+    plugins: &[PluginView],
+) -> Vec<Entry> {
     let mut by_action: Vec<Entry> = Vec::new();
     let mut add = |action: &Action, key: Option<String>, root: bool| {
         if *action == Action::Palette {
@@ -151,6 +160,18 @@ pub fn entries(bindings: &Bindings, github: bool, linear: bool) -> Vec<Entry> {
     for action in Action::palette_only() {
         add(&action, None, false);
     }
+    by_action.extend(plugins.iter().map(|p| {
+        let action = Action::Extra(crate::extras::Command::Mission(ViewId::Plugin(
+            p.name.clone(),
+        )));
+        let (_, tags) = action.palette_note().unwrap_or_default();
+        Entry {
+            words: format!("Mission control: {}, a sidebar plugin's view", p.title),
+            action,
+            tags,
+            keys: Vec::new(),
+        }
+    }));
     let off = |tags: &str, tag: &str| tags.split(' ').any(|t| t == tag);
     by_action
         .retain(|e| (github || !off(&e.tags, "#github")) && (linear || !off(&e.tags, "#linear")));
@@ -382,7 +403,7 @@ mod tests {
 
     #[test]
     fn the_palette_lists_each_command_once_with_its_keys() {
-        let all = entries(&Bindings::default(), true, true);
+        let all = entries(&Bindings::default(), true, true, &[]);
         assert!(all.iter().all(|e| e.action != Action::Palette));
         let split = all
             .iter()
@@ -411,7 +432,7 @@ mod tests {
 
     #[test]
     fn every_command_previews_more_than_its_words_and_its_key() {
-        let all = entries(&Bindings::default(), true, true);
+        let all = entries(&Bindings::default(), true, true, &[]);
         for e in &all {
             let detail = e.action.detail();
             assert!(!detail.is_empty(), "{} has no detail", e.action.name());
@@ -430,8 +451,38 @@ mod tests {
     }
 
     #[test]
+    fn every_built_in_view_and_each_plugins_view_is_one_pick_away() {
+        let plugin = PluginView {
+            name: "deploys".into(),
+            title: "Deploys".into(),
+            sidebar: 0,
+            loaded: true,
+            data: Default::default(),
+        };
+        let all = entries(&Bindings::default(), true, true, &[plugin]);
+        let mission = |id: ViewId| Action::Extra(crate::extras::Command::Mission(id));
+        for id in ViewId::BUILT_IN.into_iter().filter(|v| v.shows()) {
+            let entry = all.iter().find(|e| e.action == mission(id.clone()));
+            assert!(entry.is_some(), "no entry for {}", id.title());
+            assert!(entry.unwrap().tags.contains("#mission"));
+        }
+        let deploys = all
+            .iter()
+            .find(|e| e.action == mission(ViewId::Plugin("deploys".into())))
+            .unwrap();
+        assert_eq!(
+            deploys.words,
+            "Mission control: Deploys, a sidebar plugin's view"
+        );
+        let words: Vec<_> = all.iter().map(|e| e.words.clone()).collect();
+        let mut sorted = words.clone();
+        sorted.sort();
+        assert_eq!(words, sorted, "the plugin's in its place by description");
+    }
+
+    #[test]
     fn recent_picks_lead() {
-        let all = entries(&Bindings::default(), true, true);
+        let all = entries(&Bindings::default(), true, true, &[]);
         let ordered = recent_first(all, &["zoom".into(), "detach".into()]);
         assert_eq!(ordered[0].action, Action::Zoom);
         assert_eq!(ordered[1].action, Action::Detach);
@@ -440,7 +491,7 @@ mod tests {
     #[test]
     fn autopilot_on_names_the_note_and_keeps_the_rest() {
         let work_note = Action::Autopilot(crate::autopilot::Command::WorkNote);
-        let all = entries(&Bindings::default(), true, true);
+        let all = entries(&Bindings::default(), true, true, &[]);
         let before = all.iter().find(|e| e.action == work_note).unwrap();
         assert_eq!(before.words, crate::autopilot::Command::WorkNote.about());
 

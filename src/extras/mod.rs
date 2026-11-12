@@ -32,157 +32,11 @@ use regex::Regex;
 
 pub use serve::{Extras, KeyFate};
 
-/// A mission control view M-p opens it on (tmux.conf's `view:<name>`
-/// bindings), by the name the view shows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum MissionView {
-    WorkMap,
-    Calendar,
-    Slack,
-    Closed,
-    Prs,
-    Tickets,
-    Inbox,
-    Ci,
-    Landing,
-    Sessions,
-    Usage,
-    Resources,
-}
-
-impl MissionView {
-    pub const ALL: [MissionView; 12] = [
-        MissionView::WorkMap,
-        MissionView::Calendar,
-        MissionView::Slack,
-        MissionView::Closed,
-        MissionView::Prs,
-        MissionView::Tickets,
-        MissionView::Inbox,
-        MissionView::Ci,
-        MissionView::Landing,
-        MissionView::Sessions,
-        MissionView::Usage,
-        MissionView::Resources,
-    ];
-
-    /// The view's title in mission control.
-    pub fn title(self) -> &'static str {
-        match self {
-            MissionView::WorkMap => "Work map",
-            MissionView::Calendar => "Calendar",
-            MissionView::Slack => "Slack",
-            MissionView::Closed => "Closed",
-            MissionView::Prs => "PRs",
-            MissionView::Tickets => "Tickets",
-            MissionView::Inbox => "Inbox",
-            MissionView::Ci => "CI",
-            MissionView::Landing => "Landing",
-            MissionView::Sessions => "Sessions",
-            MissionView::Usage => "Usage",
-            MissionView::Resources => "Resources",
-        }
-    }
-
-    /// Its title lowercased with dashes for spaces, as mission control's
-    /// `View::slug` and sidebar.sh's `view:<name>` name it.
-    pub fn slug(self) -> String {
-        self.title().to_lowercase().replace(' ', "-")
-    }
-
-    fn about(self) -> &'static str {
-        match self {
-            MissionView::WorkMap => {
-                "Mission control: Work map, every piece of work in your repositories"
-            }
-            MissionView::Calendar => "Mission control: Calendar, today's meetings",
-            MissionView::Slack => "Mission control: Slack, what is new for you on Slack",
-            MissionView::Closed => "Mission control: Closed, the tabs closed last, to reopen",
-            MissionView::Prs => "Mission control: PRs, your pull requests by where they stand",
-            MissionView::Tickets => "Mission control: Tickets, your Linear issues by state",
-            MissionView::Inbox => {
-                "Mission control: Inbox, your unread Linear mentions, comments and assignments"
-            }
-            MissionView::Ci => {
-                "Mission control: CI, your pull requests failing, running and passing"
-            }
-            MissionView::Landing => {
-                "Mission control: Landing, what is landing in each repository, its landing queue or merge queue, and which tabs have them"
-            }
-            MissionView::Sessions => {
-                "Mission control: Sessions, each Claude session's context and age"
-            }
-            MissionView::Usage => {
-                "Mission control: Usage, today's Claude spend and the rate limits"
-            }
-            MissionView::Resources => {
-                "Mission control: Resources, the CPU and memory each tab uses"
-            }
-        }
-    }
-
-    fn detail(self) -> &'static str {
-        match self {
-            MissionView::WorkMap => {
-                "A row for each worktree and tab in your tabs' repositories, with its ticket, its tab and where its PR stands, what needs you first. Enter goes to it or reopens it. Settings' \"Work map\" (view_work_map)."
-            }
-            MissionView::Calendar => {
-                "Today laid out as Google Calendar's Day view, read from its iCal feed every five minutes, else from what /today last saved. Enter joins a call or answers an invitation. Settings' \"Calendar\" (view_calendar)."
-            }
-            MissionView::Slack => {
-                "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json. Enter opens one in Slack or a tab for its thread. Settings' \"Slack\" (view_slack)."
-            }
-            MissionView::Closed => {
-                "Newest first, one per Claude conversation. Enter reopens it where it was, with its name and its Claude resumed, or a shell when it had none. The newest 200 outlive a restart. Settings' \"Closed tabs\" (view_closed)."
-            }
-            MissionView::Prs => {
-                "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
-            }
-            MissionView::Tickets => {
-                "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
-            }
-            MissionView::Inbox => {
-                "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
-            }
-            MissionView::Ci => {
-                "Failing, running and passing, each failed check with the log line that says why; with UX 2.0 the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
-            }
-            MissionView::Landing => {
-                "There only while something lands. A landing queue's row moves up, down or out from its menu; merge queues are asked of GitHub and hold everyone's PRs. Settings' \"Landing view\" (view_landing)."
-            }
-            MissionView::Sessions => {
-                "The fullest context first, with its model, how long it has run and since it last did anything; one at 80% or more is marked as needing you. Settings' \"Sessions\" (view_sessions)."
-            }
-            MissionView::Usage => {
-                "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer. Settings' \"Usage\" (usage)."
-            }
-            MissionView::Resources => {
-                "Every process under a tab's panes counted, the heaviest tab first, read every three seconds only while the view is in front. Enter goes to the tab. Settings' \"Resources\" (view_resources)."
-            }
-        }
-    }
-
-    fn tags(self) -> &'static [&'static str] {
-        match self {
-            MissionView::WorkMap => &["mission", "worktree"],
-            MissionView::Calendar => &["mission", "calendar"],
-            MissionView::Slack => &["mission", "slack"],
-            MissionView::Closed => &["mission", "tabs"],
-            MissionView::Prs => &["mission", "github", "pr"],
-            MissionView::Tickets => &["mission", "linear", "ticket"],
-            MissionView::Inbox => &["mission", "linear", "inbox"],
-            MissionView::Ci => &["mission", "github", "ci"],
-            MissionView::Landing => &["mission", "queue", "landing"],
-            MissionView::Sessions => &["mission", "claude", "context"],
-            MissionView::Usage => &["mission", "claude", "usage", "cost"],
-            MissionView::Resources => &["mission", "cpu", "memory", "processes"],
-        }
-    }
-}
+use crate::mission::ViewId;
 
 /// The commands, each with its key in tmux.conf, or none for one in the
 /// palette alone (`mux::keys::Action::Extra`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     /// "Rename the tab": a name typed in, empty for its own name back.
     RenameTab,
@@ -190,8 +44,9 @@ pub enum Command {
     GoToTab,
     /// C-w: the next key h, j, k or l moves to the pane on that side.
     PaneNav,
-    /// "Mission control: <view>".
-    Mission(MissionView),
+    /// "Mission control: <view>", one for every view mission control has
+    /// (`ViewId::BUILT_IN`, and each plugin's while M-p is open).
+    Mission(ViewId),
     /// "Go to the notifications".
     Notifications,
     /// "How you use Switchboard".
@@ -223,44 +78,38 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 29] = [
-        Command::RenameTab,
-        Command::GoToTab,
-        Command::PaneNav,
-        Command::Mission(MissionView::WorkMap),
-        Command::Mission(MissionView::Calendar),
-        Command::Mission(MissionView::Slack),
-        Command::Mission(MissionView::Closed),
-        Command::Mission(MissionView::Prs),
-        Command::Mission(MissionView::Tickets),
-        Command::Mission(MissionView::Inbox),
-        Command::Mission(MissionView::Ci),
-        Command::Mission(MissionView::Landing),
-        Command::Mission(MissionView::Sessions),
-        Command::Mission(MissionView::Usage),
-        Command::Mission(MissionView::Resources),
-        Command::Notifications,
-        Command::Habits,
-        Command::SendReply,
-        Command::UpdateMain,
-        Command::CheckSetup,
-        Command::SetupPart,
-        Command::CalendarTab,
-        Command::SlackTab,
-        Command::OpenPrNumber,
-        Command::OpenTicketId,
-        Command::AwsLogin,
-        Command::Keys,
-        Command::SidebarRepo,
-        Command::SidebarAll,
-    ];
+    /// Every command, a "Mission control: <view>" for each built-in view in
+    /// mission control's order among them.
+    pub fn all() -> Vec<Command> {
+        [Command::RenameTab, Command::GoToTab, Command::PaneNav]
+            .into_iter()
+            .chain(ViewId::BUILT_IN.into_iter().map(Command::Mission))
+            .chain([
+                Command::Notifications,
+                Command::Habits,
+                Command::SendReply,
+                Command::UpdateMain,
+                Command::CheckSetup,
+                Command::SetupPart,
+                Command::CalendarTab,
+                Command::SlackTab,
+                Command::OpenPrNumber,
+                Command::OpenTicketId,
+                Command::AwsLogin,
+                Command::Keys,
+                Command::SidebarRepo,
+                Command::SidebarAll,
+            ])
+            .collect()
+    }
 
     /// Its name in keys.json.
-    pub fn name(self) -> String {
+    pub fn name(&self) -> String {
         match self {
             Command::RenameTab => "rename-tab".into(),
             Command::GoToTab => "go-to-tab".into(),
             Command::PaneNav => "pane-nav".into(),
+            Command::Mission(ViewId::Plugin(name)) => format!("mission-plugin:{name}"),
             Command::Mission(view) => format!("mission-{}", view.slug()),
             Command::Notifications => "notifications".into(),
             Command::Habits => "habits-report".into(),
@@ -287,18 +136,21 @@ impl Command {
         } else {
             name
         };
-        Command::ALL.into_iter().find(|c| c.name() == name)
+        if let Some(plugin) = name.strip_prefix("mission-plugin:") {
+            return Some(Command::Mission(ViewId::Plugin(plugin.to_string())));
+        }
+        Command::all().into_iter().find(|c| c.name() == name)
     }
 
     /// What it does, as tmux.conf described its binding.
-    pub fn about(self) -> &'static str {
-        match self {
+    pub fn about(&self) -> String {
+        let words = match self {
+            Command::Mission(view) => return view.about(),
             Command::RenameTab => "Rename the tab",
             Command::GoToTab => "Go to a tab by number, for tabs past 9",
             Command::PaneNav => {
                 "Then h, j, k or l: move to the pane on that side, as C-w does in Vim"
             }
-            Command::Mission(view) => view.about(),
             Command::Notifications => {
                 "Go to the notifications, in the sidebar or the Notifications view"
             }
@@ -323,11 +175,12 @@ impl Command {
             Command::Keys => "Every key, by what it is about, with / to filter",
             Command::SidebarRepo => "Filter the sidebar to a repository",
             Command::SidebarAll => "Show every repository's tabs in the sidebar",
-        }
+        };
+        words.to_string()
     }
 
     /// More on what it does than `about`, for the palette's preview of the chosen command.
-    pub fn detail(self) -> &'static str {
+    pub fn detail(&self) -> &'static str {
         match self {
             Command::RenameTab => {
                 "Typed in a box that starts from the name it has, its PR number kept in front. An empty name gives the tab its own name back."
@@ -386,7 +239,7 @@ impl Command {
 
     /// tmux.conf's tags: `#github` and `#linear` take a command out of the
     /// palette while that service is off.
-    pub fn tags(self) -> &'static [&'static str] {
+    pub fn tags(&self) -> &'static [&'static str] {
         match self {
             Command::RenameTab => &["tabs", "name"],
             Command::GoToTab => &["tabs", "navigate"],
@@ -408,7 +261,7 @@ impl Command {
     }
 
     /// The key tmux.conf bound it to, or `None` for one only in the palette.
-    pub fn key(self) -> Option<&'static str> {
+    pub fn key(&self) -> Option<&'static str> {
         match self {
             Command::GoToTab => Some("M-0"),
             Command::PaneNav => Some("C-w"),
@@ -419,9 +272,10 @@ impl Command {
 
     /// Whether the palette lists it: `C-w` had no description in tmux.conf,
     /// since it does nothing alone.
-    pub fn in_palette(self) -> bool {
+    pub fn in_palette(&self) -> bool {
         match self {
             Command::PaneNav => false,
+            Command::Mission(view) => view.shows(),
             Command::SidebarRepo | Command::SidebarAll => {
                 crate::settings::is_on("sidebar_repo_filter")
             }
@@ -565,37 +419,29 @@ mod tests {
 
     #[test]
     fn names_round_trip_and_only_three_have_keys() {
-        for c in Command::ALL {
-            assert_eq!(Command::parse(&c.name()), Some(c), "{}", c.name());
+        for c in Command::all() {
+            assert_eq!(Command::parse(&c.name()), Some(c.clone()), "{}", c.name());
         }
-        assert_eq!(
-            Command::Mission(MissionView::Landing).name(),
-            "mission-landing"
-        );
+        let plugin = Command::Mission(ViewId::Plugin("deploys".into()));
+        assert_eq!(plugin.name(), "mission-plugin:deploys");
+        assert_eq!(Command::parse(&plugin.name()), Some(plugin));
+        assert_eq!(Command::Mission(ViewId::Landing).name(), "mission-landing");
         assert_eq!(
             Command::parse("mission-merge-queues"),
-            Some(Command::Mission(MissionView::Landing)),
+            Some(Command::Mission(ViewId::Landing)),
             "the Merge queues view's old name opens the Landing view"
         );
-        let keyed: Vec<_> = Command::ALL.iter().filter_map(|c| c.key()).collect();
+        let keyed: Vec<_> = Command::all().iter().filter_map(|c| c.key()).collect();
         assert_eq!(keyed, ["M-0", "C-w", "M-/"]);
         assert!(!Command::PaneNav.in_palette());
     }
 
     #[test]
     fn views_are_named_as_mission_control_names_them() {
-        assert_eq!(MissionView::WorkMap.slug(), "work-map");
-        assert_eq!(MissionView::Prs.slug(), "prs");
-        assert!(
-            Command::Mission(MissionView::Prs)
-                .tags()
-                .contains(&"github")
-        );
-        assert!(
-            Command::Mission(MissionView::Inbox)
-                .tags()
-                .contains(&"linear")
-        );
+        assert_eq!(ViewId::WorkMap.slug(), "work-map");
+        assert_eq!(ViewId::Prs.slug(), "prs");
+        assert!(Command::Mission(ViewId::Prs).tags().contains(&"github"));
+        assert!(Command::Mission(ViewId::Inbox).tags().contains(&"linear"));
     }
 
     #[test]

@@ -1577,6 +1577,26 @@ fn m_p_opens_the_palette_over_it_and_a_pick_runs_there_or_in_the_pane() {
 }
 
 #[test]
+fn m_p_lists_views_beyond_the_old_twelve_and_opens_or_switches_to_them() {
+    let (_server, mut client) = two_tabs(json!({"reminders": true}));
+    // Closed, it opens mission control on the view picked.
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("action>");
+    client.type_text("mission control: reminders");
+    client.wait_text("› Mission control: Reminders");
+    client.type_text("\r");
+    client.wait_text("No reminders.");
+    // Open, it switches to the one picked.
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("action>");
+    client.type_text("mission control: notifications");
+    client.wait_text("› Mission control: Notifications");
+    client.type_text("\r");
+    let screen = client.wait_text("No notifications");
+    assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+}
+
+#[test]
 fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
     let server = TestServer::start();
     settings(&server, json!({"ux2": true, "sidebar": true}));

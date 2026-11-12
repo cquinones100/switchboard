@@ -130,6 +130,196 @@ impl View {
     }
 }
 
+/// What M-p says of each view: its "Mission control: <view>" command
+/// (`extras::Command::Mission`) lists every view here while it shows, so a
+/// view added to `ViewId` is one pick away once it is in `BUILT_IN`.
+impl ViewId {
+    /// Every view but the plugins', in mission control's order.
+    pub const BUILT_IN: [ViewId; 17] = [
+        ViewId::Notifications,
+        ViewId::WorkMap,
+        ViewId::Calendar,
+        ViewId::Reminders,
+        ViewId::Slack,
+        ViewId::Closed,
+        ViewId::Prs,
+        ViewId::Ci,
+        ViewId::Landing,
+        ViewId::Autopilot,
+        ViewId::Tickets,
+        ViewId::Inbox,
+        ViewId::Sessions,
+        ViewId::Resources,
+        ViewId::Usage,
+        ViewId::Keys,
+        ViewId::Settings,
+    ];
+
+    /// Its title in mission control; a plugin's view by the plugin's name,
+    /// since the title it shows can come from what the plugin answers.
+    pub fn title(&self) -> &str {
+        match self {
+            ViewId::Notifications => "Notifications",
+            ViewId::WorkMap => "Work map",
+            ViewId::Calendar => "Calendar",
+            ViewId::Reminders => "Reminders",
+            ViewId::Slack => "Slack",
+            ViewId::Closed => "Closed",
+            ViewId::Prs => "PRs",
+            ViewId::Ci => "CI",
+            ViewId::Landing => "Landing",
+            ViewId::Autopilot => "Autopilot",
+            ViewId::Tickets => "Tickets",
+            ViewId::Inbox => "Inbox",
+            ViewId::Sessions => "Sessions",
+            ViewId::Resources => "Resources",
+            ViewId::Usage => "Usage",
+            ViewId::Keys => "Keys",
+            ViewId::Settings => "Settings",
+            ViewId::Plugin(name) => name,
+        }
+    }
+
+    /// Its title lowercased with dashes for spaces, as `View::slug` and
+    /// sidebar.sh's `view:<name>` name it.
+    pub fn slug(&self) -> String {
+        self.title().to_lowercase().replace(' ', "-")
+    }
+
+    /// Whether mission control shows it with the settings as they are: its
+    /// own setting on (`usage::habits::VIEWS`), and the service it needs.
+    /// Landing shows only while something lands, but opening it keeps it.
+    pub fn shows(&self) -> bool {
+        self.shows_with(settings::is_on)
+    }
+
+    /// `shows`, with `on` saying whether a setting is on.
+    pub fn shows_with(&self, on: impl Fn(&str) -> bool) -> bool {
+        match self {
+            ViewId::Notifications => on("sidebar_notifications"),
+            ViewId::Reminders => on("reminders"),
+            ViewId::Autopilot => on("ux2") && on("view_autopilot") && on("autopilot"),
+            ViewId::Settings | ViewId::Plugin(_) => true,
+            built_in => crate::usage::habits::VIEWS
+                .iter()
+                .find(|v| v.title == built_in.title())
+                .is_some_and(|v| on(v.key) && v.needs.is_none_or(&on)),
+        }
+    }
+
+    /// M-p's words for it.
+    pub fn about(&self) -> String {
+        let what = match self {
+            ViewId::Notifications => "the sidebar's notifications, each one whole",
+            ViewId::WorkMap => "every piece of work in your repositories",
+            ViewId::Calendar => "today's meetings",
+            ViewId::Reminders => "every tab's reminder, by when it comes due",
+            ViewId::Slack => "what is new for you on Slack",
+            ViewId::Closed => "the tabs closed last, to reopen",
+            ViewId::Prs => "your pull requests by where they stand",
+            ViewId::Ci => "your pull requests failing, running and passing",
+            ViewId::Landing => {
+                "what is landing in each repository, its landing queue or merge queue, and which tabs have them"
+            }
+            ViewId::Autopilot => "the note autopilot works, a card for each item",
+            ViewId::Tickets => "your Linear issues by state",
+            ViewId::Inbox => "your unread Linear mentions, comments and assignments",
+            ViewId::Sessions => "each Claude session's context and age",
+            ViewId::Resources => "the CPU and memory each tab uses",
+            ViewId::Usage => "today's Claude spend and the rate limits",
+            ViewId::Keys => "every key, by what it is about",
+            ViewId::Settings => "turn the workspace's options on and off",
+            ViewId::Plugin(_) => "a sidebar plugin's view",
+        };
+        format!("Mission control: {}, {what}", self.title())
+    }
+
+    /// More on it than `about`, for the palette's preview.
+    pub fn detail(&self) -> &'static str {
+        match self {
+            ViewId::Notifications => {
+                "Newest first, Enter opening one's actions; with Settings' \"Notifications' history\" (notification_history) on, every one of the last two weeks by day, with what it led to. Settings' \"Notifications\" (sidebar_notifications)."
+            }
+            ViewId::WorkMap => {
+                "A row for each worktree and tab in your tabs' repositories, with its ticket, its tab and where its PR stands, what needs you first. Enter goes to it or reopens it. Settings' \"Work map\" (view_work_map)."
+            }
+            ViewId::Calendar => {
+                "Today laid out as Google Calendar's Day view, read from its iCal feed every five minutes, else from what /today last saved. Enter joins a call or answers an invitation. Settings' \"Calendar\" (view_calendar)."
+            }
+            ViewId::Reminders => {
+                "Each tab M-p's \"Remind me about this tab later\" set, with the time left, on a month with UX 2.0. Enter goes to the tab. Settings' \"Reminders\" (reminders)."
+            }
+            ViewId::Slack => {
+                "From the last day: direct messages and mentions first, then replies in your threads and the channels in slack-updates.json. Enter opens one in Slack or a tab for its thread. Settings' \"Slack\" (view_slack)."
+            }
+            ViewId::Closed => {
+                "Newest first, one per Claude conversation. Enter reopens it where it was, with its name and its Claude resumed, or a shell when it had none. The newest 200 outlive a restart. Settings' \"Closed tabs\" (view_closed)."
+            }
+            ViewId::Prs => {
+                "Columns Draft, In review, Approved, In merge queue and Merged in the last 7 days, from the repositories your tabs are in, with checks and reviews. Needs GitHub; Settings' \"PR board\" (pr_board)."
+            }
+            ViewId::Ci => {
+                "Failing, running and passing, each failed check with the log line that says why; with UX 2.0 the chosen check's failing step beside, l its whole log, o its tab, M-r the browser. Enter starts a CI loop on it. Needs GitHub; Settings' \"CI\" (view_ci)."
+            }
+            ViewId::Landing => {
+                "There only while something lands. A landing queue's row moves up, down or out from its menu; merge queues are asked of GitHub and hold everyone's PRs. Settings' \"Landing view\" (view_landing)."
+            }
+            ViewId::Autopilot => {
+                "With UX 2.0, the note's tabs working and open against its slots and cap, today's spend, and a card for each item in the column where it stands. Settings' \"Autopilot\" (autopilot) and \"Autopilot view\" (view_autopilot)."
+            }
+            ViewId::Tickets => {
+                "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
+            }
+            ViewId::Inbox => {
+                "Newest first, each in the sidebar's notifications too; status changes are left out. Enter offers what the Tickets board does, and marks it read in Linear. Needs Linear; Settings' \"Inbox\" (view_inbox)."
+            }
+            ViewId::Sessions => {
+                "The fullest context first, with its model, how long it has run and since it last did anything; one at 80% or more is marked as needing you. Settings' \"Sessions\" (view_sessions)."
+            }
+            ViewId::Resources => {
+                "Every process under a tab's panes counted, the heaviest tab first, read every three seconds only while the view is in front. Enter goes to the tab. Settings' \"Resources\" (view_resources)."
+            }
+            ViewId::Usage => {
+                "Spend at API prices as Claude Code estimates it, interactive sessions only, and when each limit resets; below, today's requests to services outside the computer. Settings' \"Usage\" (usage)."
+            }
+            ViewId::Keys => {
+                "The same as M-/: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p, with / to filter. Settings' \"Keys\" (view_keys)."
+            }
+            ViewId::Settings => {
+                "The same as M-p's \"Settings\": every option under its category, then your own files' settings."
+            }
+            ViewId::Plugin(_) => {
+                "The items its source last answered, as sidebar.json and sidebar-plugins/ set it up; r looks again."
+            }
+        }
+    }
+
+    /// Its tags in M-p: `#github` and `#linear` take it out while that
+    /// service is off.
+    pub fn tags(&self) -> &'static [&'static str] {
+        match self {
+            ViewId::Notifications => &["mission", "notifications"],
+            ViewId::WorkMap => &["mission", "worktree"],
+            ViewId::Calendar => &["mission", "calendar"],
+            ViewId::Reminders => &["mission", "remind", "tabs"],
+            ViewId::Slack => &["mission", "slack"],
+            ViewId::Closed => &["mission", "tabs"],
+            ViewId::Prs => &["mission", "github", "pr"],
+            ViewId::Ci => &["mission", "github", "ci"],
+            ViewId::Landing => &["mission", "queue", "landing"],
+            ViewId::Autopilot => &["mission", "autopilot"],
+            ViewId::Tickets => &["mission", "linear", "ticket"],
+            ViewId::Inbox => &["mission", "linear", "inbox"],
+            ViewId::Sessions => &["mission", "claude", "context"],
+            ViewId::Resources => &["mission", "cpu", "memory", "processes"],
+            ViewId::Usage => &["mission", "claude", "usage", "cost"],
+            ViewId::Keys => &["mission", "help", "keys"],
+            ViewId::Settings => &["mission", "settings"],
+            ViewId::Plugin(_) => &["mission", "plugin"],
+        }
+    }
+}
+
 /// With UX 2.0, the bar's groups of views by feature, in its order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
@@ -1754,5 +1944,54 @@ mod tests {
                 "Port the board"
             ]
         );
+    }
+
+    #[test]
+    fn every_view_says_what_it_is_and_shows_under_its_own_settings() {
+        for id in ViewId::BUILT_IN {
+            assert!(
+                id.about()
+                    .starts_with(&format!("Mission control: {}, ", id.title())),
+                "{}",
+                id.about()
+            );
+            assert!(!id.detail().is_empty(), "{}", id.title());
+            assert!(
+                id.shows_with(|_| true),
+                "{} shows with everything on",
+                id.title()
+            );
+        }
+        let off = |off: &'static [&'static str]| move |k: &str| !off.contains(&k);
+        let shown = |on: &dyn Fn(&str) -> bool| -> Vec<&str> {
+            ViewId::BUILT_IN
+                .iter()
+                .filter(|v| v.shows_with(on))
+                .map(|v| v.title())
+                .collect::<Vec<_>>()
+        };
+        assert!(!shown(&off(&["usage"])).contains(&"Usage"));
+        let linear_off = shown(&off(&["linear"]));
+        assert!(!linear_off.contains(&"Tickets") && !linear_off.contains(&"Inbox"));
+        assert!(linear_off.contains(&"PRs"));
+        assert!(!shown(&off(&["reminders"])).contains(&"Reminders"));
+        assert!(!shown(&off(&["ux2"])).contains(&"Autopilot"));
+        assert!(!shown(&off(&["sidebar_notifications"])).contains(&"Notifications"));
+        assert!(ViewId::Plugin("deploys".into()).shows_with(|_| false));
+        assert_eq!(ViewId::Plugin("deploys".into()).title(), "deploys");
+        assert!(ViewId::Prs.tags().contains(&"github"));
+        assert!(ViewId::Inbox.tags().contains(&"linear"));
+        assert_eq!(ViewId::WorkMap.slug(), "work-map");
+    }
+
+    #[test]
+    fn every_view_with_a_setting_is_one_of_the_built_in_views() {
+        for v in crate::usage::habits::VIEWS {
+            assert!(
+                ViewId::BUILT_IN.iter().any(|id| id.title() == v.title),
+                "{} is in mission control but not in ViewId::BUILT_IN",
+                v.title
+            );
+        }
     }
 }
