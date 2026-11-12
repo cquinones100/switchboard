@@ -5253,6 +5253,12 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ViewId::Reminders if super::reminders::is_month(m) => {
             with_acts(super::reminders::hints(), ACTS, VIEW, &[])
         }
+        ViewId::Routines if crate::routines::view::is_board(m) => with_acts(
+            &[("jk", "move")],
+            ACTS,
+            VIEW,
+            crate::routines::view::hints((m.size.0 as usize) < crate::routines::view::BESIDE_AT),
+        ),
         ViewId::Settings if settings_board_shown(m) => with_acts(
             &[("hl", "category"), ("jk", "option")],
             "its choices",
@@ -5925,7 +5931,19 @@ pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line>
         ));
     }
     // With the Reminders view in front, the bar's right counts them.
-    let counts = match view.filter(|v| v.id == ViewId::Reminders && snap.rules.ux2) {
+    // And with Routines, them and when the next runs.
+    let counts = match view
+        .filter(|v| matches!(v.id, ViewId::Reminders | ViewId::Routines) && snap.rules.ux2)
+    {
+        Some(v) if v.id == ViewId::Routines => {
+            let now = jiff::Timestamp::from_second(snap.now_secs)
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+                .to_zoned(snap.tz.clone());
+            vec![Span::styled(
+                crate::routines::view::bar_words(v, &now),
+                fg(theme.dim),
+            )]
+        }
         Some(v) => vec![Span::styled(super::reminders::bar_words(v), fg(theme.dim))],
         None => tally(&snap.tabs, &snap.rules, theme),
     };
@@ -6165,6 +6183,8 @@ pub(super) fn body(
                 meters.extend(images);
             } else if v.id == ViewId::Reminders && super::reminders::is_month(m) {
                 super::reminders::month(v, m, cols, rows, lines, hits);
+            } else if v.id == ViewId::Routines && crate::routines::view::is_board(m) {
+                crate::routines::view::board(v, m, cols, rows, lines, hits);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let look = super::calendar::Look {
                     cols,
@@ -7190,6 +7210,174 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_routines_view_draws_its_rows_week_and_pane_at_any_width() {
+        use crate::routines::routine::{Outcome, Routine, Run};
+        use crate::routines::schedule::{Days, Schedule};
+        use std::collections::HashMap;
+        let now_secs = rules().now_secs();
+        let now = jiff::Timestamp::from_second(now_secs)
+            .unwrap()
+            .to_zoned(jiff::tz::TimeZone::UTC);
+        let routine = |id: &str, name: &str, schedule| Routine {
+            id: id.into(),
+            name: name.into(),
+            dir: "/work/api".into(),
+            when: String::new(),
+            schedule,
+            tab_policy: crate::routines::TabPolicy::SameTab,
+            when_busy: crate::routines::WhenBusy::Wait,
+            when_missed: crate::routines::WhenMissed::OnWaking,
+            prompt: "Read the new issues and sort them by area.".into(),
+            model: String::new(),
+            paused: false,
+            session: "s1".into(),
+            session_dir: "/work/api".into(),
+            handled: now_secs - 60,
+        };
+        let triage = routine(
+            "r1",
+            "Morning triage",
+            Schedule::Days {
+                days: Days::ALL,
+                at: 8 * 60 + 45,
+            },
+        );
+        let once = routine(
+            "r2",
+            "Ship notes",
+            Schedule::Once {
+                at: now_secs + 7200,
+            },
+        );
+        let runs = HashMap::from([(
+            "r1".to_string(),
+            vec![
+                Run {
+                    due: now_secs - 600,
+                    ran: now_secs - 600,
+                    tab: "9".into(),
+                    secs: 95,
+                    cost: 0.12,
+                    outcome: Outcome::Ran,
+                    words: "Sorted four new issues".into(),
+                },
+                Run {
+                    due: now_secs - 300,
+                    ran: 0,
+                    tab: String::new(),
+                    secs: 0,
+                    cost: 0.0,
+                    outcome: Outcome::Missed,
+                    words: "asleep past 8:45 AM, so skipped".into(),
+                },
+            ],
+        )]);
+        let live = HashMap::new();
+        let facts = crate::routines::view::Facts {
+            now,
+            tabs: vec![("r1".into(), Some(TabId(9)), "9".into())],
+            live: &live,
+            runs: &runs,
+        };
+        let items = crate::routines::view::items(&[triage, once], &facts);
+        let view = list_view(ViewId::Routines, "Routines", items);
+        let mut nine = tab(9, "Morning triage");
+        nine.index = 9;
+        let draw = |cols: usize, pane: bool| {
+            let mut m = mission(vec![nine.clone()], vec![view.clone()]);
+            m.snap.rules.ux2 = true;
+            m.snap.all_tabs = vec![nine.clone()];
+            m.view = 1;
+            m.size = (cols as u16, 44);
+            m.routines_pane = pane;
+            let (lines, hits, _, _) = drawn(&m, cols, 44);
+            (texts(&lines).join("\n"), hits)
+        };
+        let (text, hits) = draw(240, false);
+        for want in [
+            "RECURRING",
+            "ONCE",
+            "Morning triage",
+            "Every day at 8:45 AM",
+            "tab 9 · open",
+            "THIS WEEK",
+            "PROMPT",
+            "added to Claude's system prompt",
+            "Run now",
+            "WHERE IT RUNS",
+            "RUNS TODAY",
+            "Sorted four new issues",
+            "tab 9  1m  $0.12",
+            "2 routines · next at",
+            "– missed or busy, so skipped",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(
+            text.lines()
+                .any(|l| l.contains("AM  │") || l.contains("PM  │")),
+            "when it runs next at the list's right edge: {text}"
+        );
+        assert!(hits.iter().any(|h| matches!(h.spot, Spot::Index(0))));
+        assert!(hits.iter().any(|h| matches!(h.spot, Spot::Key(_))));
+
+        assert!(
+            hits.iter().any(|h| matches!(h.spot, Spot::Side(_))),
+            "the pane scrolls"
+        );
+
+        // Many routines: the chosen one's rows stay in sight.
+        let many: Vec<Routine> = (0..20)
+            .map(|i| {
+                routine(
+                    &format!("m{i:02}"),
+                    &format!("Routine {i:02}"),
+                    Schedule::Days {
+                        days: Days::ALL,
+                        at: 9 * 60 + i,
+                    },
+                )
+            })
+            .collect();
+        let items = crate::routines::view::items(&many, &facts);
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Routines, "Routines", items)],
+        );
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.size = (240, 30);
+        m.cursor = 19;
+        let (lines, _, _, _) = drawn(&m, 240, 30);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("▌↻  Routine 19"), "{text}");
+        assert!(
+            text.contains("THIS WEEK"),
+            "the last chosen shows the week: {text}"
+        );
+
+        // Under 160: each run's tab, then the rows' schedule go.
+        let (text, _) = draw(150, false);
+        assert!(
+            text.contains("1m  $0.12") && !text.contains("tab 9  1m"),
+            "{text}"
+        );
+        assert!(!text.contains("Every day at 8:45 AM  "), "{text}");
+        assert!(text.contains("PROMPT"), "{text}");
+
+        // Under 140 the pane is behind i.
+        let (text, _) = draw(120, false);
+        assert!(!text.contains("PROMPT"), "{text}");
+        assert!(text.contains("i the chosen routine"), "{text}");
+        let (text, _) = draw(120, true);
+        assert!(
+            text.contains("PROMPT") && text.contains("Run now"),
+            "{text}"
+        );
+        assert!(!text.contains("THIS WEEK"), "{text}");
     }
 
     fn list_view(id: ViewId, title: &str, items: Vec<Item>) -> View {

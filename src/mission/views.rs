@@ -6,7 +6,8 @@
 //! Notifications (the sidebar's, whole), the Work map, the Calendar,
 //! Reminders (while `reminders` is on), Slack,
 //! Closed, the PR board, CI, Landing (while something lands), Autopilot
-//! (with UX 2.0, while it is on, src/autopilot/view.rs), the ticket
+//! (with UX 2.0, while it is on, src/autopilot/view.rs), Routines (while
+//! `routines` is on, src/routines/view.rs), the ticket
 //! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
 //! then each plugin's. With UX 2.0 the bar shows them by feature in groups
 //! (`groups`): Work, Code, Day and System.
@@ -57,6 +58,8 @@ pub enum ViewId {
     Landing,
     /// Autopilot's own view, with UX 2.0 on (src/autopilot/view.rs).
     Autopilot,
+    /// Your prompts run on a schedule (src/routines/view.rs).
+    Routines,
     Tickets,
     Inbox,
     Sessions,
@@ -112,6 +115,7 @@ impl View {
             ViewId::Ci => "ci",
             ViewId::Landing => "landing",
             ViewId::Autopilot => "autopilot",
+            ViewId::Routines => "routines",
             ViewId::Tickets => "tickets",
             ViewId::Inbox => "inbox",
             ViewId::Sessions => "sessions",
@@ -135,7 +139,7 @@ impl View {
 /// view added to `ViewId` is one pick away once it is in `BUILT_IN`.
 impl ViewId {
     /// Every view but the plugins', in mission control's order.
-    pub const BUILT_IN: [ViewId; 17] = [
+    pub const BUILT_IN: [ViewId; 18] = [
         ViewId::Notifications,
         ViewId::WorkMap,
         ViewId::Calendar,
@@ -146,6 +150,7 @@ impl ViewId {
         ViewId::Ci,
         ViewId::Landing,
         ViewId::Autopilot,
+        ViewId::Routines,
         ViewId::Tickets,
         ViewId::Inbox,
         ViewId::Sessions,
@@ -169,6 +174,7 @@ impl ViewId {
             ViewId::Ci => "CI",
             ViewId::Landing => "Landing",
             ViewId::Autopilot => "Autopilot",
+            ViewId::Routines => "Routines",
             ViewId::Tickets => "Tickets",
             ViewId::Inbox => "Inbox",
             ViewId::Sessions => "Sessions",
@@ -222,6 +228,7 @@ impl ViewId {
                 "what is landing in each repository, its landing queue or merge queue, and which tabs have them"
             }
             ViewId::Autopilot => "the note autopilot works, a card for each item",
+            ViewId::Routines => "your prompts run on a schedule, their runs this week",
             ViewId::Tickets => "your Linear issues by state",
             ViewId::Inbox => "your unread Linear mentions, comments and assignments",
             ViewId::Sessions => "each Claude session's context and age",
@@ -267,6 +274,9 @@ impl ViewId {
             ViewId::Autopilot => {
                 "With UX 2.0, the note's tabs working and open against its slots and cap, today's spend, and a card for each item in the column where it stands. Settings' \"Autopilot\" (autopilot) and \"Autopilot view\" (view_autopilot)."
             }
+            ViewId::Routines => {
+                "Each routine with when it runs next, where it runs and how its last run went, then this week's runs by day; beside, the chosen one's prompt, today's runs and its next ones. n makes one, r runs it now, e changes it, p pauses it. Settings' \"Routines\" (routines)."
+            }
             ViewId::Tickets => {
                 "Columns Todo, In progress, In review and Done in the last 7 days, an urgent one marked as needing you. Enter starts work or shapes it in a new tab. Needs Linear; Settings' \"Ticket board\" (ticket_board)."
             }
@@ -308,6 +318,7 @@ impl ViewId {
             ViewId::Ci => &["mission", "github", "ci"],
             ViewId::Landing => &["mission", "queue", "landing"],
             ViewId::Autopilot => &["mission", "autopilot"],
+            ViewId::Routines => &["mission", "routines", "schedule"],
             ViewId::Tickets => &["mission", "linear", "ticket"],
             ViewId::Inbox => &["mission", "linear", "inbox"],
             ViewId::Sessions => &["mission", "claude", "context"],
@@ -347,9 +358,10 @@ fn place(id: &ViewId) -> (Group, u8) {
     match id {
         ViewId::Landing => (Group::Work, 1),
         ViewId::Autopilot => (Group::Work, 2),
-        ViewId::WorkMap => (Group::Work, 3),
-        ViewId::Closed => (Group::Work, 4),
-        ViewId::Sessions => (Group::Work, 5),
+        ViewId::Routines => (Group::Work, 3),
+        ViewId::WorkMap => (Group::Work, 4),
+        ViewId::Closed => (Group::Work, 5),
+        ViewId::Sessions => (Group::Work, 6),
         ViewId::Prs => (Group::Code, 0),
         ViewId::Tickets => (Group::Code, 1),
         ViewId::Ci => (Group::Code, 2),

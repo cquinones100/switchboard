@@ -266,6 +266,7 @@ pub const VIEWS: &[View] = &[
     view("Calendar", "view_calendar"),
     view("Slack", "view_slack"),
     view("Closed", "view_closed"),
+    view("Routines", "routines"),
     service_view("PRs", "pr_board", "github"),
     service_view("CI", "view_ci", "github"),
     View {
@@ -335,6 +336,19 @@ pub const TRIES: &[Try] = &[
         body: |n| {
             format!(
                 "You went to Notes {n} times this week. Each weekday morning a note Todos/Today's Todo <date> would gather your notes' unticked items, today's calendar, and your PRs, tickets and Slack. It sends your notes' unticked items to Claude (Sonnet) to write it."
+            )
+        },
+    },
+    // On by default; suggested to one who turned it off and keeps setting
+    // reminders to come back to the same work.
+    Try {
+        key: "routines",
+        keys: &["@palette remind-tab"],
+        times: 5,
+        title: "Turn Routines back on?",
+        body: |n| {
+            format!(
+                "You set a reminder {n} times this week. A routine runs a prompt of yours on a schedule (weekdays at 8:45, every 30m 9-6) in a Claude tab of its own, its runs and their cost in mission control's Routines view."
             )
         },
     },

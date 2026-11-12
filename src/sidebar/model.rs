@@ -176,6 +176,9 @@ pub struct TabModel {
     /// A reminder set on it (`@remind_at`, seconds, and `@remind_note`).
     pub remind_at: Option<i64>,
     pub remind_note: Option<String>,
+    /// A routine's tab: when the routine runs next (`@routine_next`,
+    /// seconds), for "routine · next 2:30 PM" while it is idle.
+    pub routine_next: Option<i64>,
     /// Opened by the mode that works a note continuously (`@autopilot`).
     pub autopilot: bool,
     /// Landed and back in the main clone, closing soon (`@autopilot_left`).
@@ -268,6 +271,7 @@ impl TabModel {
             pinned: false,
             remind_at: None,
             remind_note: None,
+            routine_next: None,
             autopilot: false,
             autopilot_landed: false,
             autopilot_autoland: false,
@@ -947,6 +951,13 @@ pub fn state_only(tab: &TabModel, r: &Rules) -> String {
             } else {
                 opt(&tab.command)
             };
+            // A routine's tab says when it runs next in place of how long
+            // it has been idle.
+            if let Some(at) = tab.routine_next {
+                let next =
+                    crate::routines::view::when_words(at, &crate::util::local_at_ms(r.now_ms));
+                return joined([format!("routine · next {next}"), command]);
+            }
             let idle = if since.is_empty() {
                 String::new()
             } else {
@@ -1542,6 +1553,23 @@ pub(crate) mod tests {
         pinned.claude = None;
         pinned.pinned = false;
         assert_eq!(stage_of(&pinned, &r), Stage::Other);
+    }
+
+    #[test]
+    fn a_routines_idle_tab_says_when_it_runs_next() {
+        let r = rules();
+        let mut t = tab(1, "Triage", TabState::Idle);
+        t.routine_next = Some(r.now_secs() + 3600);
+        let next = crate::routines::view::when_words(
+            r.now_secs() + 3600,
+            &crate::util::local_at_ms(r.now_ms),
+        );
+        assert_eq!(state_words(&t, &r), format!("routine · next {next}"));
+        t.state = TabState::Working;
+        assert!(
+            !state_words(&t, &r).contains("routine"),
+            "a run says it works"
+        );
     }
 
     #[test]

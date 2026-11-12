@@ -155,6 +155,8 @@ pub enum Event {
     Sixel(super::sixel::SixelEvent),
     /// The hold keeping the computer awake taken, off the task (src/awake).
     Awake(crate::awake::serve::AwakeEvent),
+    /// A routine's directory checked, off the task (src/routines).
+    Routines(crate::routines::RoutinesEvent),
     Tick,
     Quit,
 }
@@ -443,6 +445,8 @@ pub struct Server {
     pub autopilot: crate::autopilot::Autopilot,
     /// The computer kept awake while tabs work (src/awake).
     pub awake: crate::awake::Awake,
+    /// The routines and their runs (src/routines).
+    pub routines: crate::routines::Routines,
     /// What the terminal attached last says of itself: its cell's size
     /// (src/mux/terminal.rs).
     pub terminal: super::terminal::Terminal,
@@ -1065,6 +1069,7 @@ impl Server {
             terminal: Default::default(),
             autopilot: Default::default(),
             awake: Default::default(),
+            routines: Default::default(),
             history: Default::default(),
             upgrade: Default::default(),
             sixel: super::sixel::Sixel::new(),
@@ -1150,6 +1155,7 @@ impl Server {
             Event::History(event) => self.history_event(event),
             Event::Sixel(event) => self.sixel_event(event),
             Event::Awake(event) => self.awake_event(event),
+            Event::Routines(event) => self.routines_event(event),
             Event::Tick => {
                 self.reload_settings_if_changed();
                 self.sixel_tick();
@@ -1166,6 +1172,7 @@ impl Server {
                 self.diff_tick();
                 self.update_tick();
                 self.autopilot_tick();
+                self.routines_tick();
                 self.awake_check();
                 self.history_tick();
                 self.notice_history_tick();
@@ -2703,6 +2710,7 @@ impl Server {
             Action::Notes(command) => self.notes_command(id, command, pane),
             Action::Extra(command) => self.extras_command(id, command, pane),
             Action::Autopilot(command) => self.autopilot_command(id, command, pane),
+            Action::Routines(command) => self.routines_command(id, command),
             // Taken by `sidebar_before_action`.
             Action::FocusSidebar | Action::ToggleSidebar => {}
         }

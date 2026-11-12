@@ -272,6 +272,18 @@ fn is_shell(name: &str) -> bool {
             .is_some_and(|s| !s.is_empty() && program_name(&s) == name)
 }
 
+/// Whether a pane sits at its own shell's prompt: the process in front
+/// is the pane's own, and a shell (not a tool started in its place, as
+/// the diff is, nor an editor a shell `exec`ed).
+pub(crate) fn at_its_shell(pane: &Pane) -> bool {
+    match (pane.foreground_pgid(), pane.pid()) {
+        (Some(front), Some(own)) if front == own => {
+            procinfo::command_of(front).is_some_and(|c| is_shell(program_name(&c)))
+        }
+        _ => false,
+    }
+}
+
 /// The program in front and its arguments, unless it is the pane's shell:
 /// the one a shell started, else the pane's own when that isn't a shell
 /// (a tab opened with a command).
@@ -695,6 +707,18 @@ fn run_job(job: Job) {
 }
 
 // ── Restoring ───────────────────────────────────────────────────────────────
+
+impl Server {
+    /// Whether a restore has commands still to type into its panes (a
+    /// Claude to resume, a program to start again), for what would start
+    /// something in a pane to wait on (src/routines).
+    pub(crate) fn restore_typing(&self) -> bool {
+        self.persist
+            .restored
+            .as_ref()
+            .is_some_and(|r| !r.typing.is_empty())
+    }
+}
 
 /// When the server starts: brings back the last save, if the server has no
 /// sessions yet and `auto_restore` is on.

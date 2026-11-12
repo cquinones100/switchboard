@@ -587,6 +587,7 @@ impl Server {
             .and_then(|v| v.trim().parse::<i64>().ok())
             .filter(|n| *n != 0);
         t.remind_note = opt("@remind_note");
+        t.routine_next = opt(crate::routines::TAB_NEXT).and_then(|v| v.trim().parse::<i64>().ok());
         // A landed tab made yours (`@autopilot_yours`) is a plain tab here.
         t.autopilot = opt("@autopilot")
             .and_then(|v| v.trim().parse::<f64>().ok())

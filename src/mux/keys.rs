@@ -161,6 +161,8 @@ pub enum Action {
     Extra(crate::extras::Command),
     /// Autopilot (src/autopilot).
     Autopilot(crate::autopilot::Command),
+    /// Routines (src/routines).
+    Routines(crate::routines::Command),
 }
 
 impl Action {
@@ -213,6 +215,9 @@ impl Action {
         }
         if let Some(command) = crate::autopilot::Command::parse(name) {
             return Some(Action::Autopilot(command));
+        }
+        if let Some(command) = crate::routines::Command::parse(name) {
+            return Some(Action::Routines(command));
         }
         Some(match name {
             "prev-tab" => Action::PrevTab,
@@ -344,6 +349,7 @@ impl Action {
             Action::Notes(command) => command.name().into(),
             Action::Extra(command) => command.name(),
             Action::Autopilot(command) => command.name().into(),
+            Action::Routines(command) => command.name().into(),
         }
     }
 
@@ -443,6 +449,7 @@ impl Action {
             Action::Notes(command) => command.about().into(),
             Action::Extra(command) => command.about(),
             Action::Autopilot(command) => command.about().into(),
+            Action::Routines(command) => command.about().into(),
         }
     }
 
@@ -603,6 +610,7 @@ impl Action {
             Action::Notes(command) => command.detail().into(),
             Action::Extra(command) => command.detail().into(),
             Action::Autopilot(command) => command.detail().into(),
+            Action::Routines(command) => command.detail().into(),
         }
     }
 
@@ -665,6 +673,7 @@ impl Action {
             Action::Notes(command) => command.tags(),
             Action::Extra(command) => command.tags(),
             Action::Autopilot(command) => command.tags(),
+            Action::Routines(command) => command.tags(),
         }
     }
 
@@ -761,6 +770,7 @@ impl Action {
         .chain(extras)
         .chain(crate::update::Command::ALL.map(Action::Update))
         .chain(crate::autopilot::Command::ALL.map(Action::Autopilot))
+        .chain(crate::routines::Command::ALL.map(Action::Routines))
         .collect()
     }
 }
@@ -1032,6 +1042,7 @@ mod tests {
                 crate::mission::ViewId::Landing,
             )),
             Action::Autopilot(crate::autopilot::Command::WorkNote),
+            Action::Routines(crate::routines::Command::New),
         ] {
             assert_eq!(Action::parse(&a.name()), Some(a));
         }

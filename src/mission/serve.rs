@@ -179,6 +179,8 @@ enum ViewAct {
     /// A reminder for a tab on a day of the Reminders view, or its today.
     RemindOn(jiff::civil::Date),
     RemindToday,
+    /// The box for a new routine (src/routines).
+    NewRoutine,
     /// Every notification the sidebar shows put away, as dismissing each
     /// alone would.
     DismissShown,
@@ -1050,6 +1052,7 @@ impl Server {
                     | ViewId::Resources
                     | ViewId::Usage
                     | ViewId::Reminders
+                    | ViewId::Routines
                     | ViewId::Landing
             )
         };
@@ -1324,6 +1327,15 @@ impl Server {
                 ..ViewData::default()
             };
             out.push(view(ViewId::WorkMap, "Work map", data, true));
+        }
+        if on("routines") {
+            let data = ViewData {
+                items: self.routines_items(),
+                empty: Some(crate::routines::view::EMPTY.into()),
+                at: Some(1),
+                ..ViewData::default()
+            };
+            out.push(view(ViewId::Routines, "Routines", data, true));
         }
         if on("view_calendar") {
             let d = self.day.calendar.clone();
@@ -2033,7 +2045,7 @@ impl Server {
             self.view_menu(client, m);
             return;
         }
-        if self.reminders_key(client, m, k) || ci_key(m, k) {
+        if self.reminders_key(client, m, k) || self.routines_key(client, m, k) || ci_key(m, k) {
             return;
         }
         if keys_board_key(m, k) || self.inbox_key(client, m, k) {
@@ -2927,6 +2939,7 @@ impl Server {
                 );
                 add("Go to today", ViewAct::RemindToday);
             }
+            Some(ViewId::Routines) => add("New routine…", ViewAct::NewRoutine),
             Some(ViewId::Plugin(name)) => add("Ask it again", ViewAct::AskAgain(name.clone())),
             _ => {}
         }
@@ -2982,6 +2995,7 @@ impl Server {
             ViewAct::Autopilot => return self.autopilot_menu(client),
             ViewAct::EditFile(dir, file) => return self.edit_own_file(client, &dir, &file),
             ViewAct::RemindOn(day) => return self.remind_on_day(client, day),
+            ViewAct::NewRoutine => return self.routine_new(client),
             ViewAct::DismissShown => {
                 match choices::dismiss_all(&self.sidebar_notice_items()) {
                     Some(all) => self.mission_do(client, all, ""),
@@ -3260,6 +3274,7 @@ impl Server {
             "autopilot" => self.autopilot_dismiss(),
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
+            "routines" => self.routines_dismiss(item),
             "habits" => {}
             "restarted" => self.set_notices("restarted", Vec::new()),
             _ => self.day_dismiss(source, item),
@@ -3812,6 +3827,29 @@ impl Server {
                 self.mission_close(client);
                 self.act(client, action);
             }
+            Do::Routine { id, act } => {
+                use crate::routines::Act;
+                let note = match act {
+                    Act::RunNow => self.routine_run_now(client, &id),
+                    Act::GoToTab => {
+                        self.routine_go(client, &id);
+                        None
+                    }
+                    Act::Edit => {
+                        self.routine_edit(client, &id);
+                        None
+                    }
+                    Act::Pause => self.routine_pause(&id, Some(true)),
+                    Act::Resume => self.routine_pause(&id, Some(false)),
+                    Act::Delete => {
+                        self.routine_delete(client, &id);
+                        None
+                    }
+                };
+                if let Some(note) = note {
+                    self.mission_note(client, note);
+                }
+            }
         }
     }
 
@@ -4173,6 +4211,64 @@ impl Server {
                 self.mission_note(client, "Sent.");
             }
         }
+    }
+
+    // ── Routines ────────────────────────────────────────────────────────────
+
+    /// The Routines view's keys: n a new routine; on the chosen one, r
+    /// runs it now, e changes it, p pauses or resumes it, o goes to its
+    /// tab, x deletes it after asking; i the chosen one in the list's
+    /// place on a narrow screen, Esc back. True when it took the key.
+    fn routines_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+        if !on_routines(m) || !plain(&k) {
+            return false;
+        }
+        let Some(view) = m.current().cloned() else {
+            return false;
+        };
+        if k.code == KeyCode::Char('n') {
+            self.routine_new(client);
+            return true;
+        }
+        if k.code == KeyCode::Char('i') && crate::routines::view::is_board(m) {
+            m.routines_pane = !m.routines_pane;
+            return true;
+        }
+        if k.code == KeyCode::Esc && m.routines_pane {
+            m.routines_pane = false;
+            return true;
+        }
+        let chosen = crate::routines::view::chosen(m, &view);
+        let Some(id) = chosen
+            .and_then(|i| crate::routines::view::id_of(&view.data.items[i]))
+            .map(str::to_string)
+        else {
+            return false;
+        };
+        if let Some(i) = chosen {
+            m.cursor = i as isize;
+        }
+        let note = match k.code {
+            KeyCode::Char('r') => self.routine_run_now(client, &id),
+            KeyCode::Char('e') => {
+                self.routine_edit(client, &id);
+                None
+            }
+            KeyCode::Char('p') => self.routine_pause(&id, None),
+            KeyCode::Char('o') => {
+                self.routine_go(client, &id);
+                None
+            }
+            KeyCode::Char('x') => {
+                self.routine_delete(client, &id);
+                None
+            }
+            _ => return false,
+        };
+        if note.is_some() {
+            m.note = note;
+        }
+        true
     }
 
     // ── Reminders ───────────────────────────────────────────────────────────
@@ -5351,6 +5447,11 @@ fn calendar_step(
 }
 
 /// Whether the Reminders view is in front, drawn as its month.
+/// Whether the Routines view is in front.
+fn on_routines(m: &Mission) -> bool {
+    m.current().is_some_and(|v| v.id == ViewId::Routines)
+}
+
 fn on_reminders(m: &Mission) -> bool {
     m.current().is_some_and(|v| v.id == ViewId::Reminders) && super::reminders::is_month(m)
 }

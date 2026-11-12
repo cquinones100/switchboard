@@ -66,6 +66,8 @@
 //!   each item as the last lands.
 //! - `awake`: keeping the computer awake while tabs work or autopilot has
 //!   tabs open, or until you say.
+//! - `routines`: a prompt of yours run on a schedule, each run in a Claude
+//!   tab of its own.
 //!
 //! - `demo`: `switchboard demo`, a workspace of made-up data reaching no
 //!   service, with the strict stand-in services the tests share
@@ -100,6 +102,7 @@ pub mod presence;
 pub mod relay;
 pub mod repos;
 pub mod requests;
+pub mod routines;
 pub mod settings;
 pub mod setup;
 pub mod sidebar;

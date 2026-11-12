@@ -41,7 +41,7 @@ pub const MARK: &str = "@notices_window";
 /// what autopilot has to say, the landed tabs it closed
 /// without your seeing them, the restart M-p made, and suggestions. A source not named here goes
 /// after them.
-pub const ORDER: [&str; 12] = [
+pub const ORDER: [&str; 13] = [
     "meeting",
     "slack",
     "calendar",
@@ -53,13 +53,15 @@ pub const ORDER: [&str; 12] = [
     "autopilot",
     "landed",
     "restarted",
+    "routines",
     "habits",
 ];
 
 /// The view a kind of notification is an item of, by its source: a Slack
 /// message is the Slack view's, an Inbox notification the Inbox's, the
 /// meeting about to start an event of the Calendar's, a PR's news the PR
-/// board's, a failing default branch the CI view's. Its menu is that
+/// board's, a failing default branch the CI view's, a routine's run that
+/// failed or was skipped the Routines view's routine. Its menu is that
 /// item's menu there (`mission::choices::notice_choices`), so a new kind
 /// that a view lists names its view here and lists no choices of its own.
 /// The kinds no view lists as an item are `NO_VIEW`'s.
@@ -70,6 +72,7 @@ pub fn view_of(source: &str) -> Option<ViewId> {
         "meeting" => Some(ViewId::Calendar),
         "ci" => Some(ViewId::Ci),
         "prs" => Some(ViewId::Prs),
+        "routines" => Some(ViewId::Routines),
         _ => None,
     }
 }

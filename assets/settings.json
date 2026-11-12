@@ -687,6 +687,13 @@
     "default": true
   },
   {
+    "key": "routines",
+    "category": "Mission control",
+    "label": "Routines",
+    "description": "Prompts of yours on a schedule, each run in a Claude tab of its own, and the Routines view in mission control; off, no routine runs and the view is gone, the routines kept",
+    "default": true
+  },
+  {
     "key": "view_autopilot",
     "category": "Mission control",
     "label": "Autopilot view",

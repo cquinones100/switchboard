@@ -403,6 +403,9 @@ pub struct Mission {
     /// With the pane under the month, its This month and Later lists shown
     /// (`i`).
     pub reminders_lists: bool,
+    /// Under a narrow Routines view, the chosen routine shown in the
+    /// list's place (`i`).
+    pub routines_pane: bool,
     /// With UX 2.0, the tab whose card shows its screen (`s`), and the
     /// cursor it was asked at: moving the cursor puts the card back.
     pub card_screen: Option<(TabId, isize)>,
@@ -458,6 +461,7 @@ impl Mission {
             slack_shown: None,
             reminders_day: None,
             reminders_lists: false,
+            routines_pane: false,
             card_screen: None,
             shelf_open: false,
             grid: None,

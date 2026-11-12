@@ -319,7 +319,7 @@ impl Server {
 
     /// Draws again every client of a tab's session, whichever tab it shows:
     /// the sidebar lists them all.
-    fn dirty_everywhere(&mut self, tab: TabId) {
+    pub(crate) fn dirty_everywhere(&mut self, tab: TabId) {
         if let Some(name) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.dirty_session(&name);
         }

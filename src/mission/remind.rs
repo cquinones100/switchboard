@@ -217,7 +217,7 @@ fn dated(text: &str, now: &Zoned) -> Option<Option<i64>> {
 /// A clock time, lowercased and without spaces: `3pm`, `15:30`, `9:15am`;
 /// a bare hour (`9`) only where `bare` says one can be, since alone a
 /// number is a count of something, not a time.
-fn clock(text: &str, bare: bool) -> Option<Time> {
+pub(crate) fn clock(text: &str, bare: bool) -> Option<Time> {
     static CLOCK: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^([0-9]{1,2})(:([0-9]{2}))?(am|pm)?$").expect("a regex"));
     let m = CLOCK.captures(text)?;

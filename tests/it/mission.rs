@@ -141,9 +141,11 @@ fn m_space_opens_it_over_the_screen_and_q_closes_it() {
 fn a_bracket_moves_to_the_next_view_and_round() {
     let (_server, mut client) = two_tabs(json!({}));
     open(&mut client);
-    // After the tabs: the notifications, then Settings.
+    // After the tabs: the notifications, Routines, then Settings.
     client.type_text("]");
     client.wait_text("No notifications");
+    client.type_text("]");
+    client.wait_text("No routines yet");
     client.type_text("]");
     let screen = client.wait_text("INTEGRATIONS");
     assert!(
@@ -151,6 +153,8 @@ fn a_bracket_moves_to_the_next_view_and_round() {
         "{:?}",
         screen.last()
     );
+    client.type_text("[");
+    client.wait_text("No routines yet");
     client.type_text("[");
     client.wait_text("No notifications");
     client.type_text("[");
@@ -168,12 +172,11 @@ fn the_landing_view_opens_with_nothing_landing_saying_so_and_goes_once_left() {
         "kept while in front: {:?}",
         screen[0]
     );
-    // Left for Settings, it goes, nothing landing: back is the
-    // notifications.
+    // Left for Settings, it goes, nothing landing: back is Routines.
     client.type_text("]");
     client.wait_text("INTEGRATIONS");
     client.type_text("[");
-    let screen = client.wait_text("No notifications");
+    let screen = client.wait_text("No routines yet");
     assert!(!screen[0].contains("Landing"), "{:?}", screen[0]);
 }
 

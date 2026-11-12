@@ -167,6 +167,11 @@ pub enum Do {
         dir: PathBuf,
         file: String,
     },
+    /// What a routine's menu does, by its id (src/routines).
+    Routine {
+        id: String,
+        act: crate::routines::Act,
+    },
 }
 
 /// What a tab opened from a menu works on: what `wt`, `wtpr` and `shape`
@@ -670,12 +675,40 @@ fn target_choices(item: &Item, ctx: &Ctx<'_>) -> Vec<Choice> {
     }
 }
 
+/// A routine's menu in the Routines view: run it now, its tab while it
+/// is open, change, pause or resume, delete.
+fn routine_choices(item: &Item) -> Vec<Choice> {
+    use crate::routines::Act;
+    let Some(id) = crate::routines::view::id_of(item).map(str::to_string) else {
+        return Vec::new();
+    };
+    let act = |act: Act| Do::Routine {
+        id: id.clone(),
+        act,
+    };
+    let mut out = vec![choice('r', "Run it now", act(Act::RunNow))];
+    if matches!(item.target, Target::Tab(_)) {
+        out.push(choice('o', "Go to its tab", act(Act::GoToTab)));
+    }
+    out.push(choice('e', "Change it", act(Act::Edit)));
+    let paused = item.data.get("paused").and_then(Value::as_bool) == Some(true);
+    out.push(if paused {
+        choice('p', "Resume it", act(Act::Resume))
+    } else {
+        choice('p', "Pause it", act(Act::Pause))
+    });
+    // Not x, which puts its notification away.
+    out.push(choice('d', "Delete it", act(Act::Delete)));
+    out
+}
+
 /// An item's menu in a view after the tabs.
 pub fn item_choices(view: &ViewId, item: &Item, shown: &[Item], ctx: &Ctx<'_>) -> Vec<Choice> {
     let mut out = Vec::new();
     match view {
         ViewId::Resources => return resource_choices(item, ctx),
         ViewId::Prs | ViewId::Tickets => return board_choices(item, ctx),
+        ViewId::Routines => return routine_choices(item),
         ViewId::Inbox => {
             out = board_choices(item, ctx);
             let id = text(&item.data, "/notification");
@@ -1270,6 +1303,14 @@ pub fn led_to_words(
             crate::util::local_now().strftime("%-H:%M")
         ),
         Do::OpenView(_) => "you opened its view".into(),
+        Do::Routine {
+            act: crate::routines::Act::RunNow,
+            ..
+        } => "you ran it again".into(),
+        Do::Routine {
+            act: crate::routines::Act::GoToTab,
+            ..
+        } => "you went to its tab".into(),
         _ => format!("you chose \"{label}\""),
     };
     Some(words)
@@ -1646,6 +1687,9 @@ mod tests {
                 };
                 crate::sources::mainci::item_of(&w, "abc1234def", &failed, Some(&step)).unwrap()
             }
+            "routines" => Item::new("routine:r1", "Routine Daily check")
+                .detail("tab 9 was busy, so skipped")
+                .data(json!({ "routine": "r1" })),
             other => panic!("{other} names a view: give this test an item of its kind"),
         };
         let mut with_a_view = 0;
@@ -1676,7 +1720,7 @@ mod tests {
             assert_eq!(notice_choices(&notice, &c), in_its_view, "{source}");
             assert!(dismisses(&notice).is_some(), "{source} is put away after");
         }
-        assert_eq!(with_a_view, 5);
+        assert_eq!(with_a_view, 6);
         // A kind no view lists leads somewhere of its own and can be put away.
         let said = Item::new("autopilot\tsaid", "Nothing left to open");
         let choices = notice_choices(&said, &c);
