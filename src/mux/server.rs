@@ -1803,6 +1803,12 @@ impl Server {
     fn remove_tab(&mut self, tab: TabId) {
         self.tab_closing(tab);
         self.tabs.remove(&tab);
+        // A tab closed drops out of the sidebar's select mode.
+        for side in self.sidebar.sides.values_mut() {
+            if let Some(picked) = side.select.as_mut() {
+                picked.remove(&tab);
+            }
+        }
         let Some(si) = self.sessions.iter().position(|s| s.tabs.contains(&tab)) else {
             return;
         };

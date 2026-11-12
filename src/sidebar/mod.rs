@@ -33,7 +33,7 @@ mod serve;
 pub mod text;
 pub mod walk;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
@@ -81,9 +81,10 @@ pub struct PaneRead {
 /// last shown, which the next tab in front holds to while it is in sight
 /// there (render.rs's `View::keep`); the repository it is filtered
 /// to, every other one's tabs under Other repos, and whether that group
-/// was unfolded, both kept with the layout until cleared; and the groups
+/// was unfolded, both kept with the layout until cleared; the groups
 /// and the notifications folded with `z` or a click on a heading, kept
-/// with the layout too.
+/// with the layout too; and, in select mode, the tabs selected, never
+/// saved with the layout.
 #[derive(Clone, Debug, Default)]
 pub struct Side {
     pub focused: bool,
@@ -101,6 +102,9 @@ pub struct Side {
     pub folded: std::collections::BTreeSet<Stage>,
     /// The notifications folded to one line of their kinds.
     pub notices_folded: bool,
+    /// Select mode (`v`, a Shift-click): the tabs selected, to close at
+    /// once from one menu; `None` out of it.
+    pub select: Option<BTreeSet<TabId>>,
 }
 
 /// Where a client's sidebar was last drawn, for the mouse and C-d.

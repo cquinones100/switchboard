@@ -75,6 +75,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("t", "new tab running Claude there (M-t)"),
     ("i", "its full title (M-T)"),
     ("d L", "its diff, or lazygit, in its pane's place"),
+    (
+        "v",
+        "select several tabs (space or v each, ↵ m what to do, esc)",
+    ),
     ("M-x C-x", "run that key there"),
     ("M-s", "back to your pane"),
     ("?", "these keys"),
@@ -987,6 +991,9 @@ impl Server {
             notices_folded: side.is_some_and(|x| x.notices_folded),
             reminders: self.sidebar_reminders_hidden(&s.name),
             build: build.as_ref(),
+            selected: side
+                .and_then(|x| x.select.as_ref())
+                .filter(|_| focused && settings::is_on("sidebar_select")),
         };
         let out = render::sidebar_lines(
             &tabs,
@@ -1125,6 +1132,7 @@ impl Server {
         side.frozen = None;
         side.filter = None;
         side.top = None;
+        side.select = None;
         self.dirty_session(session);
     }
 
@@ -1495,6 +1503,14 @@ impl Server {
                     let by = if k.code == KeyCode::Tab { 1 } else { -1 };
                     self.sidebar_move(session, (at + by).rem_euclid(n));
                 }
+                // In select mode, Enter keeps the filter and goes back to
+                // select mode's keys, the tabs still selected.
+                KeyCode::Enter if side.select.is_some() && settings::is_on("sidebar_select") => {
+                    if let Some(f) = self.sidebar.side(session).filter.as_mut() {
+                        f.typing = false;
+                    }
+                    self.dirty_session(session);
+                }
                 KeyCode::Enter => {
                     let go = order
                         .iter()
@@ -1531,6 +1547,45 @@ impl Server {
                 _ => {}
             }
             return;
+        }
+
+        // Select mode: Space or v selects or unselects the tab under the
+        // cursor, Enter or m opens what to do with them, Esc leaves it; j,
+        // k and the rest move as ever.
+        if let Some(picked) = side
+            .select
+            .as_ref()
+            .filter(|_| settings::is_on("sidebar_select"))
+        {
+            match k.code {
+                KeyCode::Char(' ' | 'v') if none => {
+                    if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
+                        let mut picked = picked.clone();
+                        if !picked.remove(&t) {
+                            picked.insert(t);
+                        }
+                        self.sidebar.side(session).select = Some(picked);
+                        self.dirty_session(session);
+                    }
+                    return;
+                }
+                KeyCode::Enter | KeyCode::Char('m') if none => {
+                    self.sidebar_select_menu(client, session);
+                    return;
+                }
+                // Esc clears a kept filter first, then leaves select mode.
+                KeyCode::Esc if none && side.filter.is_some() => {
+                    self.sidebar.side(session).filter = None;
+                    self.sidebar_refilter(session);
+                    return;
+                }
+                KeyCode::Esc if none => {
+                    self.sidebar.side(session).select = None;
+                    self.dirty_session(session);
+                    return;
+                }
+                _ => {}
+            }
         }
 
         let ux2 = settings::is_on("ux2");
@@ -1655,6 +1710,13 @@ impl Server {
                     self.sidebar_peek(client, t);
                 }
             }
+            // v: select mode, the chosen tab selected.
+            KeyCode::Char('v') if none && settings::is_on("sidebar_select") => {
+                if let Some(t) = chosen.filter(|_| on_notice.is_none()) {
+                    self.sidebar.side(session).select = Some([t].into());
+                    self.dirty_session(session);
+                }
+            }
             // Its Claude answered from here, in mission control's box, as
             // the sidebar's `a` answered the chosen tab in a popup.
             KeyCode::Char('a') if none => {
@@ -1736,6 +1798,96 @@ impl Server {
             }
             _ => {}
         }
+    }
+
+    /// Whether a session's sidebar is in select mode.
+    fn sidebar_selecting(&self, session: &str) -> bool {
+        self.sidebar
+            .sides
+            .get(session)
+            .is_some_and(|s| s.focused && s.select.is_some())
+            && settings::is_on("sidebar_select")
+    }
+
+    /// A tab selected, or unselected, by a click: the focus into the
+    /// sidebar on it, starting select mode when it isn't on.
+    fn sidebar_select_toggle(&mut self, session: &str, tab: TabId) {
+        if !self.sidebar.focused(session) {
+            self.sidebar_enter(session, Some(Owner::Tab(tab)));
+        }
+        let side = self.sidebar.side(session);
+        side.cursor = Some(Owner::Tab(tab));
+        // A / filter being typed is kept but no longer typed, so select
+        // mode's keys reach it.
+        if let Some(f) = side.filter.as_mut() {
+            f.typing = false;
+        }
+        let picked = side.select.get_or_insert_default();
+        if !picked.remove(&tab) {
+            picked.insert(tab);
+        }
+        self.dirty_session(session);
+    }
+
+    /// M-p's "Select several tabs in the sidebar": the focus into the
+    /// sidebar, select mode on with the tab in front selected when the
+    /// sidebar lists it. M-p has
+    /// already taken the focus out, clearing any / filter, as every M-p
+    /// command that acts on the pane does.
+    pub(crate) fn sidebar_select_start(&mut self, client: ClientId) {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return;
+        };
+        if !self.sidebar_shown(&session) {
+            self.say(Some(client), "The sidebar isn't shown here.");
+            return;
+        }
+        let Some(here) = self.session(&session).map(|s| s.current) else {
+            return;
+        };
+        // Only a tab the sidebar lists, never the Notifications window:
+        // with none in front, select mode starts on the first, nothing
+        // selected.
+        let order = self.sidebar_order(&session);
+        let listed = order.contains(&here);
+        let start = if listed {
+            Some(here)
+        } else {
+            order.first().copied()
+        };
+        self.sidebar_enter(&session, start.map(Owner::Tab));
+        self.sidebar.side(&session).select = Some(start.filter(|_| listed).into_iter().collect());
+        self.dirty_session(&session);
+    }
+
+    /// Enter or m in select mode, or a click on its chip: what to do with
+    /// the tabs selected, as one menu.
+    fn sidebar_select_menu(&mut self, client: ClientId, session: &str) {
+        let picked: Vec<TabId> = self
+            .sidebar
+            .sides
+            .get(session)
+            .and_then(|s| s.select.as_ref())
+            .map(|p| {
+                p.iter()
+                    .copied()
+                    .filter(|t| self.tabs.contains_key(t))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if picked.is_empty() {
+            self.say(Some(client), "No tabs selected: Space or v selects one.");
+            return;
+        }
+        let n = picked.len();
+        let title = format!("{n} {} selected", if n == 1 { "tab" } else { "tabs" });
+        let menu = crate::ui::Menu::of(title, &["Close these tabs"]);
+        let session = session.to_string();
+        self.choose(client, menu, move |server, client, chose| {
+            if chose == Some(0) {
+                server.close_tabs(client, &session, picked);
+            }
+        });
     }
 
     /// C-d and C-u: the list half a screen on, and the cursor onto the tab
@@ -2177,7 +2329,16 @@ impl Server {
                 }
             }
             (MouseKind::Press, MouseButton::Left) => match owner {
+                // In select mode a click selects or unselects a tab, and a
+                // Shift-click starts it.
+                Some(Owner::Tab(t))
+                    if m.mods.shift && settings::is_on("sidebar_select")
+                        || self.sidebar_selecting(&session) =>
+                {
+                    self.sidebar_select_toggle(&session, t)
+                }
                 Some(Owner::Tab(t)) => self.sidebar_go(&session, t),
+                Some(Owner::SelectChip) => self.sidebar_select_menu(client, &session),
                 // A notification clicked: the Notifications window, on it.
                 Some(notice @ Owner::Notice { .. }) if settings::is_on("notice_list") => {
                     self.sidebar_enter(&session, Some(notice.clone()));

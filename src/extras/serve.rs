@@ -227,6 +227,13 @@ impl Server {
                 );
             }
             Command::SidebarRepo => self.sidebar_pick_repo(client),
+            Command::SidebarSelect if is_off("sidebar_select") => {
+                self.say(
+                    Some(client),
+                    "Selecting several tabs is off in Settings (sidebar_select).",
+                );
+            }
+            Command::SidebarSelect => self.sidebar_select_start(client),
             Command::SidebarAll => {
                 if let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) {
                     self.sidebar_set_repo(&session, None);

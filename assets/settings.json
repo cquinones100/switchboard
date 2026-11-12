@@ -80,6 +80,13 @@
     "default": true
   },
   {
+    "key": "sidebar_select",
+    "category": "Sidebar",
+    "label": "Select several tabs",
+    "description": "v in the sidebar, or a Shift-click on a tab, selects several tabs to close at once from one menu. Off, v does nothing, a Shift-click on a tab goes there as a click does, and the sidebar acts on one tab at a time",
+    "default": true
+  },
+  {
     "key": "reminders",
     "category": "Sidebar",
     "label": "Reminders",

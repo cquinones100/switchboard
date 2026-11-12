@@ -187,6 +187,8 @@ pub enum Mark {
     Comment,
     /// The computer held awake while tabs work (src/awake).
     Awake,
+    /// A tab selected in the sidebar's select mode.
+    Selected,
 }
 
 impl Mark {
@@ -228,6 +230,7 @@ impl Mark {
             Mark::Note => ("✎", Tone::Landing),
             Mark::Comment => ("◇", Tone::Working),
             Mark::Awake => ("☕", Tone::Dim),
+            Mark::Selected => ("◆", Tone::Accent),
         }
     }
 }
@@ -1899,6 +1902,7 @@ mod tests {
             Mark::Note,
             Mark::Comment,
             Mark::Awake,
+            Mark::Selected,
         ];
         let glyphs: Vec<&str> = marks.iter().map(|m| m.look().0).collect();
         let mut unique = glyphs.clone();

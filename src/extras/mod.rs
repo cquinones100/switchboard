@@ -75,6 +75,8 @@ pub enum Command {
     SidebarRepo,
     /// "Show every repository's tabs in the sidebar".
     SidebarAll,
+    /// "Select several tabs in the sidebar".
+    SidebarSelect,
 }
 
 impl Command {
@@ -99,6 +101,7 @@ impl Command {
                 Command::Keys,
                 Command::SidebarRepo,
                 Command::SidebarAll,
+                Command::SidebarSelect,
             ])
             .collect()
     }
@@ -125,6 +128,7 @@ impl Command {
             Command::Keys => "keys-view".into(),
             Command::SidebarRepo => "sidebar-repo".into(),
             Command::SidebarAll => "sidebar-all".into(),
+            Command::SidebarSelect => "sidebar-select".into(),
         }
     }
 
@@ -175,6 +179,7 @@ impl Command {
             Command::Keys => "Every key, by what it is about, with / to filter",
             Command::SidebarRepo => "Filter the sidebar to a repository",
             Command::SidebarAll => "Show every repository's tabs in the sidebar",
+            Command::SidebarSelect => "Select several tabs in the sidebar",
         };
         words.to_string()
     }
@@ -231,6 +236,9 @@ impl Command {
             Command::SidebarAll => {
                 "Clears the sidebar's repository filter, every tab back in the group of what it is doing, as a click on the filter's chip does."
             }
+            Command::SidebarSelect => {
+                "v in the sidebar; Space or a click selects each, Enter opens what to do with them. The focus goes into the sidebar with the tab in front selected, and Close these tabs asks once before closing them all. Settings' \"Select several tabs\" (sidebar_select)."
+            }
             Command::Keys => {
                 "Mission control's Keys view: the workspace's keys by their first tag, then the sidebar's, mission control's, the diff's and Notes', then those only through M-p; Enter presses a workspace key and ? finds one by pressing it. With UX 2.0, a board with a heatmap of the Alt keys pressed this week. Settings' \"Keys\" (view_keys) off hands M-/ to the pane."
             }
@@ -256,7 +264,9 @@ impl Command {
             Command::OpenTicketId => &["linear", "ticket", "browser"],
             Command::AwsLogin => &["aws", "login", "sso"],
             Command::Keys => &["help", "keys"],
-            Command::SidebarRepo | Command::SidebarAll => &["sidebar", "tabs"],
+            Command::SidebarRepo | Command::SidebarAll | Command::SidebarSelect => {
+                &["sidebar", "tabs"]
+            }
         }
     }
 
@@ -279,6 +289,7 @@ impl Command {
             Command::SidebarRepo | Command::SidebarAll => {
                 crate::settings::is_on("sidebar_repo_filter")
             }
+            Command::SidebarSelect => crate::settings::is_on("sidebar_select"),
             _ => true,
         }
     }

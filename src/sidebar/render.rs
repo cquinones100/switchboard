@@ -41,7 +41,8 @@ const YELLOW: Color = Color::Indexed(220);
 /// or the notifications' heading and folded line, which a click folds
 /// or unfolds; or the top line's ⏰ chip while the sidebar leaves the
 /// Reminders group out, which a click opens mission control's Reminders
-/// view from.
+/// view from; or, in select mode, its chip on the top line, which a click
+/// opens the menu of.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
@@ -55,6 +56,7 @@ pub enum Owner {
     Group(Stage),
     Notices,
     Reminders,
+    SelectChip,
     /// M-p's restart as it goes (src/mux/build_row.rs), whose steps a
     /// click opens.
     BuildRow,
@@ -159,6 +161,9 @@ pub struct View<'a> {
     /// M-p's restart as it goes, on the line under the count with UX 2.0
     /// (board 56's build row).
     pub build: Option<&'a crate::mux::build_row::Row>,
+    /// Select mode: the tabs selected, each drawn with the selected mark, and how
+    /// many on the top line's chip.
+    pub selected: Option<&'a std::collections::BTreeSet<TabId>>,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -474,10 +479,34 @@ pub fn sidebar_lines(
         }
         counts(&mut pill_row, tabs, r, theme);
     }
+    // In select mode, the top line is how many are selected, a chip a
+    // click on opens their menu, and the keys.
+    if let Some(picked) = view.selected {
+        // Every tab selected, a / filter hiding some or not, as the menu
+        // closes them all; a closed tab has dropped out already.
+        let n = picked.len();
+        pill_row = Row::default();
+        reminders_at = None;
+        pill_row.put(" ", Style::new());
+        pill_row.spans.extend(kit::chip(
+            &format!("{n} selected"),
+            Tone::Accent,
+            false,
+            theme,
+        ));
+        pill_row
+            .spans
+            .extend(kit::hints(&[("↵", "actions"), ("esc", "")], theme));
+    }
     // The filter's chip clears it on a click, so its line lights under
-    // the mouse as a tab does.
-    let chip_lit = view.repo.is_some() && view.hover == Some(&Owner::RepoChip)
-        || reminders_at.is_some() && view.hover == Some(&Owner::Reminders);
+    // the mouse as a tab does; select mode's opens its menu.
+    let chip_lit = match view.selected {
+        Some(_) => view.hover == Some(&Owner::SelectChip),
+        None => {
+            view.repo.is_some() && view.hover == Some(&Owner::RepoChip)
+                || reminders_at.is_some() && view.hover == Some(&Owner::Reminders)
+        }
+    };
     head.push(pill_row.fit(cols, chip_lit.then_some(theme.panel)));
     // Only the columns of it the line kept are a target.
     let reminders_at = reminders_at
@@ -614,6 +643,19 @@ pub fn sidebar_lines(
             continue;
         }
         let last = group.tabs.len().saturating_sub(1);
+        // In select mode, the selected mark in the accent before a selected tab's
+        // mark, and room for one before every other's, so the marks line up.
+        let tick_cols = if view.selected.is_some() { 2 } else { 0 };
+        let tick = |row: &mut Row, id: TabId| match view.selected {
+            Some(picked) if picked.contains(&id) => {
+                row.spans.push(kit::mark(Mark::Selected, 0, theme));
+                row.put(" ", Style::new());
+            }
+            Some(_) => {
+                row.put("  ", Style::new());
+            }
+            None => {}
+        };
         for (i, tab) in group.tabs.iter().enumerate() {
             let chosen = selected == Some(tab.id);
             if chosen {
@@ -639,8 +681,9 @@ pub fn sidebar_lines(
                 } else {
                     fg(theme.text)
                 };
-                let room = cols.saturating_sub(4 + width(&number));
+                let room = cols.saturating_sub(4 + width(&number) + tick_cols);
                 let mut first = Row::default();
+                tick(&mut first, tab.id);
                 first
                     .spans
                     .push(kit::mark(Mark::of_badge(state), view.frame, theme));
@@ -706,7 +749,7 @@ pub fn sidebar_lines(
                 fg(theme.text)
             };
             // The name wraps under itself, up to NAME_LINES lines.
-            let indent = 6 + tab.index.to_string().len();
+            let indent = 6 + tab.index.to_string().len() + tick_cols;
             let room = cols.saturating_sub(indent);
             let wrapped = text::wrap(&tab.name, room);
             let name: Vec<String> = if wrapped.len() > NAME_LINES {
@@ -719,10 +762,9 @@ pub fn sidebar_lines(
             let state = model::badge_state(tab, r);
             spins |= state.spins();
             let mut first = Row::default();
-            first
-                .put(bar.0, bar.1)
-                .spans
-                .push(badge(state, view.frame, theme));
+            first.put(bar.0, bar.1);
+            tick(&mut first, tab.id);
+            first.spans.push(badge(state, view.frame, theme));
             first
                 .put(" ", Style::new())
                 .put(tab.index.to_string(), fg(theme.faint))
@@ -1062,7 +1104,9 @@ pub fn sidebar_lines(
     };
     let mut head_owners: Vec<Option<Owner>> = vec![None; head.len() - top_owners.len()];
     head_owners.extend(top_owners);
-    if view.repo.is_some() {
+    if view.selected.is_some() {
+        head_owners[0] = Some(Owner::SelectChip);
+    } else if view.repo.is_some() {
         head_owners[0] = Some(Owner::RepoChip);
     }
     if build_row {
@@ -1201,6 +1245,7 @@ mod tests {
             notices_folded: false,
             reminders: 0,
             build: None,
+            selected: None,
         }
     }
 
@@ -1883,6 +1928,48 @@ mod tests {
             tall(20, Some(front)) > front,
             "and a tab out of sight still scrolls it"
         );
+    }
+
+    #[test]
+    fn in_select_mode_selected_tabs_are_ticked_and_the_top_line_counts_them() {
+        let tabs: Vec<TabModel> = (1..=4)
+            .map(|n| tab(n, &format!("tab {n}"), TabState::Idle))
+            .collect();
+        let picked: std::collections::BTreeSet<TabId> = [TabId(1), TabId(2), TabId(4)].into();
+        for ux2 in [false, true] {
+            let r = Rules { ux2, ..rules() };
+            let draw = |selected| {
+                sidebar_lines(
+                    &tabs,
+                    None,
+                    &[],
+                    &[],
+                    "s",
+                    34,
+                    30,
+                    &View {
+                        focused: true,
+                        selected,
+                        ..view(1)
+                    },
+                    &r,
+                    &Theme::DARK,
+                )
+            };
+            let on = draw(Some(&picked));
+            let text = texts(&on);
+            assert!(text[0].contains("3 selected"), "{:?}", text[0]);
+            assert_eq!(on.owners[0], Some(Owner::SelectChip));
+            let ticked: Vec<&String> = text.iter().filter(|l| l.contains('◆')).collect();
+            assert_eq!(ticked.len(), 3, "{text:?}");
+            assert!(!ticked.iter().any(|l| l.contains("tab 3")), "{text:?}");
+
+            let off = texts(&draw(None));
+            assert!(
+                !off.iter()
+                    .any(|l| l.contains('◆') || l.contains("selected"))
+            );
+        }
     }
 
     #[test]

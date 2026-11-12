@@ -764,9 +764,10 @@ impl Server {
     /// `confirm-before kill-window`, the programs running in its panes
     /// listed under the question.
     pub fn close_tab(&mut self, client: ClientId, tab: TabId) {
-        let Some(panes) = self.tabs.get(&tab).map(|t| t.layout.panes()) else {
+        if !self.tabs.contains_key(&tab) {
             return;
-        };
+        }
+        let panes = self.panes_with_parked(tab);
         let index = self.tab_number(tab);
         let list: Vec<String> = panes
             .into_iter()
@@ -781,6 +782,76 @@ impl Server {
                 if yes && server.tabs.contains_key(&tab) {
                     server.kill_tab(tab);
                 }
+            },
+        );
+    }
+
+    /// The sidebar's select mode's "Close these tabs": asked once, each
+    /// tab's number and name listed with the programs running in its panes;
+    /// yes closes each still open, the one in front last, so the focus goes
+    /// where closing it alone would, and leaves select mode and the
+    /// sidebar. No keeps the selection.
+    pub fn close_tabs(&mut self, client: ClientId, session: &str, mut tabs: Vec<TabId>) {
+        let front = self.session(session).map(|s| s.current);
+        tabs.sort_by_key(|t| Some(*t) == front);
+        // A line a tab, its programs after its name (a program parked
+        // behind the diff too, which closing it ends), and no more lines
+        // than a box fits on a small screen, so Yes and No stay in sight.
+        const SHOWN: usize = 8;
+        let mut list: Vec<String> = Vec::new();
+        for &tab in &tabs {
+            if !self.tabs.contains_key(&tab) {
+                continue;
+            }
+            let index = self.tab_number(tab);
+            let running: Vec<String> = self
+                .panes_with_parked(tab)
+                .into_iter()
+                .filter_map(|p| self.running_name(p))
+                .collect();
+            // The programs by name, whole, and the tab's name cut to what
+            // is left of the line, so no program is cut away.
+            let programs = running.join(", ");
+            let room = 70usize.saturating_sub(draw::width(&programs) + 3).max(20);
+            let mut line = draw::cut(&format!("{index} {}", self.tab_label(tab)), room);
+            if !running.is_empty() {
+                line.push_str(" · ");
+                line.push_str(&programs);
+            }
+            list.push(line);
+        }
+        if list.len() > SHOWN {
+            let more = list.len() - (SHOWN - 1);
+            list.truncate(SHOWN - 1);
+            list.push(format!("… and {more} more"));
+        }
+        let n = tabs.len();
+        let session = session.to_string();
+        self.ask(
+            client,
+            Confirm::new(format!("Close {n} tabs?")).list(list),
+            move |server, client, yes| {
+                if !yes {
+                    return;
+                }
+                let mut closed = 0;
+                for tab in tabs {
+                    if server.tabs.contains_key(&tab) {
+                        server.kill_tab(tab);
+                        closed += 1;
+                    }
+                }
+                // Back to the pane of the tab now in front, select mode and
+                // any / filter ended, as leaving the sidebar ends them, so
+                // no cursor is left on a tab that is gone or hidden.
+                server.sidebar.side(&session).select = None;
+                server.sidebar_leave(&session);
+                server.dirty_session(&session);
+                let said = format!(
+                    "Closed {closed} {}.",
+                    if closed == 1 { "tab" } else { "tabs" }
+                );
+                server.say(Some(client), &said);
             },
         );
     }
@@ -829,6 +900,23 @@ impl Server {
             .filter(|l| !l.trim().is_empty())
             .unwrap_or(command);
         Some(draw::cut(&line, 60))
+    }
+
+    /// What a pane runs in front, by its program's name alone (`claude`
+    /// for `/usr/local/bin/claude --resume`), from its first argument as
+    /// the kernel has it, never from a command line cut short; `None` as
+    /// for `running`.
+    fn running_name(&self, pane: PaneId) -> Option<String> {
+        self.running(pane)?;
+        let slot = self.panes.get(&pane)?;
+        let first = slot
+            .pane
+            .foreground_pgid()
+            .and_then(crate::mux::procinfo::args_of)
+            .and_then(|args| args.into_iter().next())
+            .filter(|a| !a.trim().is_empty())
+            .or_else(|| slot.pane.foreground_command())?;
+        Some(program_name(&first))
     }
 
     // ── Commands ─────────────────────────────────────────────────────────────
@@ -891,6 +979,12 @@ impl Server {
     }
 }
 
+/// A program's name without its folder: `claude` for
+/// `/usr/local/bin/claude`.
+fn program_name(path: &str) -> String {
+    path.rsplit('/').next().unwrap_or(path).to_string()
+}
+
 /// Whether a program is a shell, by its name (a login shell's has a `-`
 /// before it).
 fn is_shell(command: &str) -> bool {
@@ -906,6 +1000,16 @@ fn is_shell(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_program_is_named_without_its_folder() {
+        assert_eq!(program_name("/usr/local/bin/claude"), "claude");
+        assert_eq!(
+            program_name("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+            "Electron"
+        );
+        assert_eq!(program_name("sleep"), "sleep");
+    }
 
     #[test]
     fn shells_are_known_by_name() {

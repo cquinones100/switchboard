@@ -1625,3 +1625,117 @@ fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
         std::thread::sleep(Duration::from_millis(200));
     }
 }
+
+/// Five tabs, the first in front, the focus in the sidebar.
+fn five_tabs_in_the_sidebar(server: &TestServer) -> TestClient {
+    let mut client = server.attach(120, 40);
+    client.wait_text("$");
+    for n in 2..=5 {
+        server.ok(&["new-tab", "-d", "-n", &format!("t{n}")]);
+    }
+    client.type_text(&format!("{ALT}s"));
+    wait_list(server, "the sidebar focused", focused);
+    client
+}
+
+#[test]
+fn v_selects_several_tabs_in_the_sidebar_and_one_menu_closes_them() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = five_tabs_in_the_sidebar(&server);
+    // v on a tab, then j and Space twice: three selected.
+    client.type_text("j");
+    client.type_text("v");
+    client.wait_text("1 selected");
+    client.type_text("j");
+    client.type_text(" ");
+    client.wait_text("2 selected");
+    client.type_text("j");
+    client.type_text(" ");
+    client.wait_text("3 selected");
+    client.wait_for("three rows ticked", |s| {
+        s.iter().filter(|l| left(l, 34).contains('◆')).count() == 3
+    });
+
+    // A / filter typed in select mode: Enter keeps it and the selection.
+    client.type_text("/t");
+    client.type_text("\r");
+    client.wait_text("/t ");
+    client.wait_text("3 selected");
+    client.type_text("\x1b");
+    client.wait_for("the filter cleared", |s| {
+        !s.iter().any(|l| left(l, 34).contains("/t"))
+    });
+    client.wait_text("3 selected");
+
+    // Enter: the menu, then its question; no closes none and keeps them.
+    client.type_text("\r");
+    client.wait_text("Close these tabs");
+    client.type_text("\r");
+    client.wait_text("Close 3 tabs?");
+    client.type_text("n");
+    client.wait_for("the question closed", |s| {
+        !s.iter().any(|l| l.contains("Close 3 tabs?"))
+    });
+    assert_eq!(tabs(&server.list()).len(), 5);
+    client.wait_text("3 selected");
+
+    // Yes closes the three and leaves the other two.
+    client.type_text("m");
+    client.wait_text("Close these tabs");
+    client.type_text("\r");
+    client.wait_text("Close 3 tabs?");
+    client.type_text("y");
+    client.wait_text("Closed 3 tabs.");
+    wait_list(&server, "two tabs left", |l| tabs(l).len() == 2);
+    // Select mode and the sidebar left, back in the pane in front.
+    wait_list(&server, "back out of the sidebar", |l| !focused(l));
+    client.wait_for("select mode left", |s| {
+        !s.iter().any(|l| left(l, 34).contains("selected"))
+    });
+}
+
+#[test]
+fn esc_leaves_select_mode_and_a_shift_click_starts_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = five_tabs_in_the_sidebar(&server);
+    client.type_text("v");
+    client.wait_text("1 selected");
+    // Esc: out of select mode, nothing selected, the focus still here.
+    client.type_text("\x1b");
+    client.wait_for("select mode left", |s| {
+        !s.iter().any(|l| left(l, 34).contains("selected"))
+    });
+    assert!(focused(&server.list()));
+    assert!(!client.screen().iter().any(|l| left(l, 34).contains('◆')));
+
+    // A Shift-click on a tab's row selects it, a plain click another.
+    client.type_text("\x1b");
+    wait_list(&server, "back out", |l| !focused(l));
+    let row = row_of(&mut client, "  2 ");
+    client.send(format!("\x1b[<4;6;{}M\x1b[<4;6;{}m", row + 1, row + 1).as_bytes());
+    client.wait_text("1 selected");
+    let row = row_of(&mut client, "  3 ");
+    client.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", row + 1, row + 1).as_bytes());
+    client.wait_text("2 selected");
+    assert_eq!(tabs(&server.list()).len(), 5);
+}
+
+#[test]
+fn with_sidebar_select_off_v_does_nothing() {
+    // Off from the start, so v can't come before the settings are read.
+    let server = TestServer::start_with_settings(
+        r#"{"notifications": false, "tips": false, "sidebar_select": false}"#,
+    );
+    let mut client = five_tabs_in_the_sidebar(&server);
+    client.type_text("v");
+    client.type_text("j");
+    wait_list(&server, "the second tab in front", |l| in_front(l) != 0);
+    assert!(
+        !client
+            .screen()
+            .iter()
+            .any(|l| left(l, 34).contains("selected"))
+    );
+}
