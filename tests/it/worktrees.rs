@@ -976,6 +976,92 @@ fn a_ticket_gets_a_worktree_on_linears_branch_name_its_prompt_saying_its_closed_
     assert!(stderr(&usage).starts_with("Usage: worktree-from-ticket"));
 }
 
+fn started_answer(body: &Value) -> Value {
+    let number = body["variables"]["number"].as_f64().unwrap_or(0.0) as u64;
+    let branch = match number {
+        1 => "eng-1-new",
+        2 => "eng-2-started",
+        3 => "eng-3-local",
+        _ => "eng-4-offline",
+    };
+    json!({ "data": { "issues": { "nodes": [{ "identifier": format!("ENG-{number}"), "title": "Work", "branchName": branch, "state": { "name": "Todo", "type": "unstarted" } }] } } })
+}
+
+#[test]
+fn a_tickets_branch_starts_from_origins_fetched_main_or_its_branch_on_origin_and_an_origin_that_cant_be_fetched_stops_it()
+ {
+    let mut w = World::new("wt-origin");
+    let fake = Fake::linear(started_answer);
+    w.set("SWITCHBOARD_LINEAR_API", &fake.graphql());
+    w.set("LINEAR_API_KEY", "lin_test");
+    let (origin, clone) = w.origin_and_clone();
+    let other = w.path("other");
+    w.clone_into(origin.to_str().unwrap(), &other);
+    w.git(
+        &other,
+        &["commit", "-q", "--allow-empty", "-m", "pushed elsewhere"],
+    );
+    w.git(&other, &["push", "-q", "origin", "main"]);
+    let origin_main = w.git(&other, &["rev-parse", "HEAD"]);
+    w.git(&other, &["checkout", "-q", "-b", "eng-2-started"]);
+    w.git(&other, &["commit", "-q", "--allow-empty", "-m", "started"]);
+    w.git(&other, &["push", "-q", "origin", "eng-2-started"]);
+    let started = w.git(&other, &["rev-parse", "HEAD"]);
+    w.git(
+        &clone,
+        &["commit", "-q", "--allow-empty", "-m", "not pushed"],
+    );
+    let unpushed = w.git(&clone, &["rev-parse", "HEAD"]);
+    w.git(&clone, &["branch", "eng-3-local"]);
+
+    let open = |ticket: &str| {
+        let cd = w.path("cd");
+        w.ok(
+            &clone,
+            &[
+                "worktree-from-ticket",
+                "--no-claude",
+                "--cd-file",
+                cd.to_str().unwrap(),
+                ticket,
+            ],
+        );
+        PathBuf::from(read(&cd).lines().next().unwrap())
+    };
+
+    let new = open("ENG-1");
+    assert_eq!(
+        w.git(&new, &["rev-parse", "HEAD"]),
+        origin_main,
+        "from origin's main as fetched, without the clone's unpushed commit"
+    );
+    assert!(w.git_fails(&new, &["rev-parse", "--abbrev-ref", "@{upstream}"]));
+
+    let resumed = open("ENG-2");
+    assert_eq!(w.git(&resumed, &["rev-parse", "HEAD"]), started);
+    assert_eq!(
+        w.git(&resumed, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+        "origin/eng-2-started"
+    );
+
+    let local = open("ENG-3");
+    assert_eq!(
+        w.git(&local, &["rev-parse", "HEAD"]),
+        unpushed,
+        "a local branch is reused"
+    );
+
+    std::fs::remove_dir_all(&origin).unwrap();
+    let offline = w.run(&clone, &["worktree-from-ticket", "--no-claude", "ENG-4"]);
+    assert_ne!(offline.status.code(), Some(0));
+    assert!(
+        stderr(&offline).contains("couldn't fetch origin's"),
+        "{}",
+        stderr(&offline)
+    );
+    assert!(!clone.join(".claude/worktrees/eng-4-offline").exists());
+}
+
 // ── worktree-resume and worktree-done ───────────────────────────────────────
 
 #[test]

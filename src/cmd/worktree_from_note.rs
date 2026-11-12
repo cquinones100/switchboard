@@ -736,30 +736,7 @@ fn start_point(root: &Path, target: Option<&str>) -> Result<String, String> {
     if let Some(target) = target {
         return target_start(root, target);
     }
-    if !worktree::remotes(root).iter().any(|r| r == "origin") {
-        return worktree::git_at(root, &["rev-parse", "HEAD"]).map_err(|e| e.to_string());
-    }
-    let fetched = |base: &str| worktree::fetch_branch(root, "origin", base, "wtn: fetch the base");
-    let named = worktree::git_at(
-        root,
-        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .ok()
-    .map(|n| n.strip_prefix("origin/").unwrap_or(&n).to_string());
-    let base = match &named {
-        Some(name) => fetched(name).then(|| name.clone()),
-        None => ["main", "master"]
-            .into_iter()
-            .find(|b| fetched(b))
-            .map(str::to_string),
-    };
-    match base {
-        Some(base) => Ok(format!("origin/{base}")),
-        None => Err(format!(
-            "couldn't fetch origin's {}, which the item's branch starts from",
-            named.as_deref().unwrap_or("main or master")
-        )),
-    }
+    worktree::default_start(root, "wtn: fetch the base")
 }
 
 /// The commit an item's branch starts from when it lands on `target`, a
@@ -1194,7 +1171,7 @@ fn push_rule(path: &Path, root: &Path, start: &str, target: Option<&str>) -> Opt
         Some(target) => tracked(root, target)?,
         None => (
             "origin".to_string(),
-            start.strip_prefix("origin/")?.to_string(),
+            start.strip_prefix("refs/remotes/origin/")?.to_string(),
         ),
     };
     let settings = push_settings(&remote, &branch)?;

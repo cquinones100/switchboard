@@ -524,6 +524,39 @@ pub fn fetch_branch(root: &Path, remote: &str, branch: &str, source: &str) -> bo
     )
 }
 
+/// The commit a new branch starts from: origin's default branch (from
+/// `refs/remotes/origin/HEAD`, else main or master) as it is now, fetched
+/// first, as `refs/remotes/origin/<name>` (in full, so no local ref named
+/// `origin/<name>` stands in for it); the main clone's HEAD only with no origin. A
+/// fetch that fails is an error rather than the clone's HEAD, whose unpushed
+/// commits would otherwise land with the new branch's work.
+pub fn default_start(root: &Path, source: &str) -> Result<String, String> {
+    if !remotes(root).iter().any(|r| r == "origin") {
+        return git_at(root, &["rev-parse", "HEAD"]).map_err(|e| e.to_string());
+    }
+    let fetched = |base: &str| fetch_branch(root, "origin", base, source);
+    let named = git_at(
+        root,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    )
+    .ok()
+    .map(|n| n.strip_prefix("origin/").unwrap_or(&n).to_string());
+    let base = match &named {
+        Some(name) => fetched(name).then(|| name.clone()),
+        None => ["main", "master"]
+            .into_iter()
+            .find(|b| fetched(b))
+            .map(str::to_string),
+    };
+    match base {
+        Some(base) => Ok(format!("refs/remotes/origin/{base}")),
+        None => Err(format!(
+            "couldn't fetch origin's {}, which the new branch starts from",
+            named.as_deref().unwrap_or("main or master")
+        )),
+    }
+}
+
 /// The upstream written by hand rather than with `worktree add --track`:
 /// `--track` insists the start point be covered by the remote's fetch
 /// refspec, which a single-branch or partial clone's is not.

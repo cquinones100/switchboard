@@ -190,6 +190,31 @@ pub fn prompt_for(issue: &Issue, extra: &str) -> String {
     prompt
 }
 
+/// Where a new ticket branch starts, and whether it tracks origin's.
+struct Start {
+    commit: String,
+    tracks: bool,
+}
+
+/// The ticket's branch on origin, fetched, when someone started it before
+/// (a teammate, or another computer), tracking it; else origin's default
+/// branch as it is now (`worktree::default_start`), never the main clone's
+/// checked-out HEAD, whose unpushed commits would land with the ticket's.
+fn ticket_start(root: &Path, branch: &str) -> Result<Start, String> {
+    const SOURCE: &str = "wt: fetch the base";
+    let has_origin = worktree::remotes(root).iter().any(|r| r == "origin");
+    if has_origin && worktree::fetch_branch(root, "origin", branch, SOURCE) {
+        return Ok(Start {
+            commit: format!("refs/remotes/origin/{branch}"),
+            tracks: true,
+        });
+    }
+    Ok(Start {
+        commit: worktree::default_start(root, SOURCE)?,
+        tracks: false,
+    })
+}
+
 pub fn main(args: Vec<String>) -> ExitCode {
     // A program you run asks the services whatever Settings says.
     crate::integrations::run_by_you();
@@ -255,13 +280,27 @@ pub fn main(args: Vec<String>) -> ExitCode {
     eprintln!("Branch:   {branch}");
     eprintln!("Worktree: {}", path.display());
 
+    // A worktree or local branch already there is the ticket's own work,
+    // reused as it is, so only a new branch needs a start point.
+    let is_new = !path.exists() && !worktree::branch_exists(&root, &branch);
+    let start = if is_new {
+        match ticket_start(&root, &branch) {
+            Ok(start) => Some(start),
+            Err(e) => return worktree::fail(&e),
+        }
+    } else {
+        None
+    };
     let purpose = Purpose {
         work: "ticket",
         command: "wt",
-        start: None,
+        start: start.as_ref().map(|s| s.commit.as_str()),
     };
     if let Err(e) = worktree::ensure_worktree(&path, &branch, &purpose) {
         return worktree::fail(&e.to_string());
+    }
+    if start.is_some_and(|s| s.tracks) {
+        worktree::set_upstream(&root, &branch, "origin", &branch);
     }
     if let Err(e) = worktree::link_local_settings(&root, &path) {
         return worktree::fail(&e.to_string());
