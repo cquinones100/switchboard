@@ -80,6 +80,12 @@ pub enum Command {
     OpenLink,
     /// A link the pane shows, copied (or opened in the browser).
     CopyLink,
+    /// A tab the pane's text names by number ("tab 15"), gone to (or its
+    /// number copied).
+    GoToMentionedTab,
+    /// A tab the pane's text names by number, its number copied (or gone
+    /// to).
+    CopyMentionedTab,
     /// An image or video the pane shows, opened in its app (or shown in
     /// its folder).
     OpenMedia,
@@ -101,7 +107,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Command; 19] = [
+    pub const ALL: [Command; 21] = [
         Command::PrView,
         Command::TicketView,
         Command::OpenPr,
@@ -113,6 +119,8 @@ impl Command {
         Command::OpenLinkRead,
         Command::OpenLink,
         Command::CopyLink,
+        Command::GoToMentionedTab,
+        Command::CopyMentionedTab,
         Command::OpenMedia,
         Command::OpenMergeQueue,
         Command::OpenProject,
@@ -137,6 +145,8 @@ impl Command {
             Command::OpenLinkRead => "open-link-being-read",
             Command::OpenLink => "open-link",
             Command::CopyLink => "copy-link",
+            Command::GoToMentionedTab => "go-to-mentioned-tab",
+            Command::CopyMentionedTab => "copy-mentioned-tab",
             Command::OpenMedia => "open-media",
             Command::OpenMergeQueue => "open-merge-queue",
             Command::OpenProject => "open-linear-project",
@@ -178,6 +188,8 @@ impl Command {
             Command::CopyLink => {
                 "Copy a link from this pane to the clipboard, or open it in the browser"
             }
+            Command::GoToMentionedTab => "Go to a tab this pane mentions, or copy its number",
+            Command::CopyMentionedTab => "Copy the number of a tab this pane mentions, or go to it",
             Command::OpenMedia => {
                 "Open an image or video from this pane in its app, or show it in its folder"
             }
@@ -229,6 +241,12 @@ impl Command {
             Command::CopyLink => {
                 "The list is the links the pane shows and has scrolled past, newest first, or the note's links in the notes pane. It goes to your terminal's clipboard and the computer's; Ctrl-O opens it instead."
             }
+            Command::GoToMentionedTab => {
+                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out, and goes to the one picked; with one named it goes there at once. Ctrl-O copies its number instead."
+            }
+            Command::CopyMentionedTab => {
+                "Lists the open tabs the pane's text names (tab 15, Tab #3, tabs 3, 5 and 7), newest first, this tab left out, and copies the picked one's number. Ctrl-O goes to it instead."
+            }
             Command::OpenMedia => {
                 "The list is the picture and video files the pane names that exist, then its links ending in one, newest first. A link opens in the browser, and Ctrl-O shows a file in its folder. With none, a box says so."
             }
@@ -271,6 +289,8 @@ impl Command {
             Command::OpenLinkRead => &["links", "browser"],
             Command::OpenLink => &["links", "browser"],
             Command::CopyLink => &["links", "copy"],
+            Command::GoToMentionedTab => &["tabs", "links"],
+            Command::CopyMentionedTab => &["tabs", "links", "copy"],
             Command::OpenMedia => &["links", "image", "video", "media"],
             Command::OpenMergeQueue => &["github", "merge", "browser"],
             Command::OpenProject => &["linear", "project", "browser"],
@@ -294,6 +314,8 @@ impl Command {
             | Command::OpenLinkRead
             | Command::OpenLink
             | Command::CopyLink
+            | Command::GoToMentionedTab
+            | Command::CopyMentionedTab
             | Command::OpenMedia
             | Command::OpenMergeQueue
             | Command::OpenProject

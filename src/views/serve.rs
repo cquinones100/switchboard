@@ -131,6 +131,8 @@ impl Server {
             Command::OpenLinkRead => self.open_link_read(client),
             Command::OpenLink => self.pick_link(client, false),
             Command::CopyLink => self.pick_link(client, true),
+            Command::GoToMentionedTab => self.pick_mentioned_tab(client, false),
+            Command::CopyMentionedTab => self.pick_mentioned_tab(client, true),
             Command::OpenMedia => self.open_media(client),
             Command::OpenMergeQueue => self.open_merge_queue(client),
             Command::OpenProject => self.open_project(client),
@@ -959,6 +961,94 @@ impl Server {
                 }
                 (true, true) => server.link_picked(client, pane, &url, true),
                 (false, other) => server.link_picked(client, pane, &url, !other),
+            }
+        });
+    }
+
+    /// The open tabs a pane's text names by number, newest first, its own
+    /// tab left out: the note's in the notes pane while it shows one, else
+    /// the screen's and its scrollback's, as `pane_links` reads them.
+    fn mentioned_tabs(&self, pane: PaneId) -> Vec<TabId> {
+        let Some(slot) = self.panes.get(&pane) else {
+            return Vec::new();
+        };
+        let notes = slot
+            .opts
+            .get("@notes_pane")
+            .is_some_and(|v| !v.is_empty() && v != "0");
+        let note = crate::notes::serve::shown()
+            .filter(|_| notes)
+            .and_then(|rel| util::read_text(crate::notes::store::notes_dir().join(rel)));
+        let text = note.unwrap_or_else(|| slot.pane.text_and_links(3000).0);
+        shown::tabs_in(&text)
+            .into_iter()
+            .filter_map(|n| self.tab_numbered(n))
+            .filter(|t| *t != slot.tab)
+            .collect()
+    }
+
+    /// M-p's "Go to a tab this pane mentions" (`copy` false) and "Copy the
+    /// number of a tab this pane mentions" (`copy`), each list's Ctrl-O
+    /// doing the other; with one tab named, going there needs no list.
+    fn pick_mentioned_tab(&mut self, client: ClientId, copy: bool) {
+        let Some((pane, _, _)) = self.here(client) else {
+            return;
+        };
+        let tabs = self.mentioned_tabs(pane);
+        if tabs.is_empty() {
+            return self.say(Some(client), "No tabs named in this pane");
+        }
+        if let [tab] = tabs[..]
+            && !copy
+        {
+            let n = self.tab_number(tab);
+            self.go_to_tab(client, tab);
+            let label = self.tab_label(tab);
+            return self.say(Some(client), &format!("Went to tab {n} {label}"));
+        }
+        let items: Vec<PickItem> = tabs
+            .iter()
+            .map(|t| PickItem {
+                text: format!("{} {}", self.tab_number(*t), self.tab_label(*t)),
+                tags: self.tab_agent(*t).map(|a| a.name()).unwrap_or("").into(),
+                key: String::new(),
+                // The tab itself, since a number freed while the list is
+                // open is given to the next tab opened.
+                value: t.to_string(),
+            })
+            .collect();
+        let (title, prompt, enter, other) = if copy {
+            (
+                "Copy a tab's number",
+                "Copy: ",
+                "copy its number",
+                "go to it",
+            )
+        } else {
+            ("Go to a tab", "Go to: ", "go to it", "copy its number")
+        };
+        let picker = Picker::new(title, items)
+            .named("mentioned-tabs")
+            .prompt(prompt)
+            .also(enter, other);
+        self.pick_also(client, picker, move |server, client, picked| {
+            let Some((picked, other)) = picked else {
+                return;
+            };
+            let Some(tab) = picked
+                .value
+                .parse::<TabId>()
+                .ok()
+                .filter(|t| server.tabs.contains_key(t))
+            else {
+                return server.say(Some(client), "That tab has closed");
+            };
+            if copy != other {
+                let n = server.tab_number(tab).to_string();
+                server.to_clipboard(Some(client), &n);
+                server.say(Some(client), &format!("Copied tab {n}"));
+            } else {
+                server.go_to_tab(client, tab);
             }
         });
     }

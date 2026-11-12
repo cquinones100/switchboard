@@ -1103,3 +1103,63 @@ fn opening_a_link_says_where_it_is_going_until_the_browser_shows_it() {
     );
     stand_in::assert_none_refused(&server.home.join("bin"));
 }
+
+/// The current tab's number in the first session.
+fn current_number(server: &TestServer) -> i64 {
+    server.list()["sessions"][0]["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["current"] == true)
+        .unwrap()["index"]
+        .as_i64()
+        .unwrap()
+}
+
+#[test]
+fn the_tab_commands_go_to_or_copy_the_open_tabs_a_pane_names() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar": false}));
+    let did = server.dir.path().join("did");
+    desktop_stand_ins(&server.home, &did);
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    for _ in 0..3 {
+        server.ok(&["new-tab", "-d"]);
+    }
+
+    // Tab 9 isn't open, so tab 3 is the one named: gone to at once.
+    client.type_text("printf 'see tab 3 and tab 9\\n'\r");
+    client.wait_text("see tab 3 and tab 9");
+    server.ok(&["press", "go-to-mentioned-tab"]);
+    client.wait_text("Went to tab 3");
+    client.wait_for("tab 3 in front", |_| current_number(&server) == 3);
+    close_message(&mut client, "Went to tab 3");
+
+    client.wait_text("$");
+    client.type_text("printf 'tab 2 and Tab #4\\n'\r");
+    client.wait_text("tab 2 and Tab #4");
+
+    // Copy: the newest first, Enter copying its number.
+    server.ok(&["press", "copy-mentioned-tab"]);
+    client.wait_text("Copy a tab's number");
+    client.wait_text("ctrl-o go to it");
+    client.type_text("\r");
+    client.wait_text("Copied tab 4");
+    let raw = String::from_utf8_lossy(&client.raw).into_owned();
+    assert!(
+        raw.contains("\x1b]52;c;NA=="),
+        "to the terminal's clipboard"
+    );
+    close_message(&mut client, "Copied tab 4");
+
+    // Go: both listed, the second picked.
+    server.ok(&["press", "go-to-mentioned-tab"]);
+    client.wait_text("Go to a tab");
+    client.type_text("\x1b[B\r");
+    client.wait_for("tab 2 in front", |_| current_number(&server) == 2);
+
+    // Tab 2's pane names none.
+    server.ok(&["press", "go-to-mentioned-tab"]);
+    client.wait_text("No tabs named in this pane");
+}

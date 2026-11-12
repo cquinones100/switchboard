@@ -2,7 +2,8 @@
 //! its links, newest first, each once, a hyperlink's text before its
 //! address; the links of the note the notes pane shows, top to bottom,
 //! since Notes draws a link as its text alone; and the images and videos it
-//! shows, files and links. Ported from tmux/link-view.sh's `links_of` and
+//! shows, files and links; and the tabs it names by number ("tab 15"),
+//! which a tab keeps while it is open. Ported from tmux/link-view.sh's `links_of` and
 //! `media_of`, which read `capture-pane`'s text (with `-e` for the
 //! hyperlinks) through perl; here the pane gives its text and its
 //! hyperlinks' places in it (`Pane::text_and_links`).
@@ -105,6 +106,34 @@ pub fn links_in(text: &str, hyperlinks: &[(Range<usize>, String)]) -> Vec<Shown>
             Some(seen) if seen.text.is_empty() => seen.text = text,
             Some(_) => {}
             None => out.push(Shown { text, url }),
+        }
+    }
+    out
+}
+
+static TAB_NAMED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\btabs?\s+#?\d+\b(?:(?:\s*,\s*(?:and\s+|&\s*)?|\s+(?:and|&)\s+)#?\d+\b)*")
+        .expect("a regex")
+});
+
+static NUMBER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").expect("a regex"));
+
+/// The tab numbers a pane's text names ("tab 15", "Tab #3", "tabs 3, 5
+/// and 7"), any case and as whole words, newest (lowest) first, each once.
+/// Whether a tab has that number now is the server's to say.
+pub fn tabs_in(text: &str) -> Vec<usize> {
+    let mut found: Vec<usize> = Vec::new();
+    for m in TAB_NAMED.find_iter(text) {
+        for n in NUMBER.find_iter(m.as_str()) {
+            if let Ok(n) = n.as_str().parse() {
+                found.push(n);
+            }
+        }
+    }
+    let mut out: Vec<usize> = Vec::new();
+    for n in found.into_iter().rev() {
+        if !out.contains(&n) {
+            out.push(n);
         }
     }
     out
@@ -239,6 +268,16 @@ pub fn media_in(text: &str, dir: &Path, home: &Path, links: &[Shown]) -> Vec<Sho
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tabs_in_finds_the_tabs_named_newest_first_each_once() {
+        let text =
+            "see tab 15\nTab #3 (design) and tabs 3, 5 and 7\ntab 12's table 4 stab 9 tab 15x\n";
+        assert_eq!(tabs_in(text), vec![12, 7, 5, 3, 15]);
+        assert_eq!(tabs_in("tab 3 and tab 9"), vec![9, 3]);
+        assert_eq!(tabs_in("tabs 2 & 4"), vec![4, 2]);
+        assert!(tabs_in("the table 4, stab 9, tabby 2").is_empty());
+    }
+
     use super::*;
 
     fn urls(found: &[Shown]) -> Vec<&str> {
