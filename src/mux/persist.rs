@@ -121,6 +121,31 @@ pub struct SavedSession {
     pub sidebar_repo: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sidebar_repo_open: bool,
+    /// The sidebar's groups folded with `z` or a click, by their stages'
+    /// keys, and whether its notifications were.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_folded: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sidebar_notices_folded: bool,
+}
+
+/// A session's sidebar folds as they are kept (`SavedSession`).
+fn folds_of(side: Option<&crate::sidebar::Side>) -> (Vec<String>, bool) {
+    side.map_or((Vec::new(), false), |x| {
+        (
+            x.folded.iter().map(|s| s.key().to_string()).collect(),
+            x.notices_folded,
+        )
+    })
+}
+
+/// A session's sidebar folds taken back from what was kept.
+fn restore_folds(side: &mut crate::sidebar::Side, folded: &[String], notices_folded: bool) {
+    side.folded = folded
+        .iter()
+        .filter_map(|k| crate::sidebar::Stage::from_key(k))
+        .collect();
+    side.notices_folded = notices_folded;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -640,6 +665,8 @@ impl Persist {
                 tabs,
                 sidebar_repo: side.and_then(|x| x.repo.clone()),
                 sidebar_repo_open: side.is_some_and(|x| x.repo.is_some() && x.repo_open),
+                sidebar_folded: folds_of(side).0,
+                sidebar_notices_folded: folds_of(side).1,
             });
         }
         Saved {
@@ -786,6 +813,7 @@ impl Persist {
             let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
             let sidebar = server.sidebar_columns(cols);
             let side = server.sidebar.side(&ss.name);
+            restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
             side.repo = ss.sidebar_repo;
             side.repo_open = ss.sidebar_repo_open;
             server.sessions.push(Session {
@@ -935,6 +963,8 @@ pub fn layout_now(server: &Server) -> Saved {
                 .sides
                 .get(&s.name)
                 .is_some_and(|x| x.repo.is_some() && x.repo_open),
+            sidebar_folded: folds_of(server.sidebar.sides.get(&s.name)).0,
+            sidebar_notices_folded: folds_of(server.sidebar.sides.get(&s.name)).1,
             tabs: s
                 .tabs
                 .iter()
@@ -1053,6 +1083,7 @@ pub fn adopt_layout(server: &mut Server, saved: Saved) {
         let last = ss.last.filter(|t| tabs.contains(t) && *t != current);
         let sidebar = server.sidebar_columns(cols);
         let side = server.sidebar.side(&ss.name);
+        restore_folds(side, &ss.sidebar_folded, ss.sidebar_notices_folded);
         side.repo = ss.sidebar_repo;
         side.repo_open = ss.sidebar_repo_open;
         let trail = ss.trail.keeping(&tabs);
@@ -1133,6 +1164,8 @@ mod tests {
                 trail: Default::default(),
                 sidebar_repo: None,
                 sidebar_repo_open: false,
+                sidebar_folded: Vec::new(),
+                sidebar_notices_folded: false,
                 tabs: vec![
                     SavedTab {
                         id: TabId(1),

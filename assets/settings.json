@@ -87,6 +87,13 @@
     "default": true
   },
   {
+    "key": "sidebar_reminders",
+    "category": "Sidebar",
+    "label": "Reminders in the sidebar",
+    "description": "Tabs waiting on a reminder sit under Reminders in the sidebar. Off, they are left out of the sidebar, the top line counts them (⏰ 3) and a click there opens mission control's Reminders view; a tab comes back under Needs you when its reminder comes due",
+    "default": true
+  },
+  {
     "key": "build_failing",
     "category": "Sidebar",
     "label": "Build failing",

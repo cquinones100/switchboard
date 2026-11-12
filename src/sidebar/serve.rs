@@ -13,6 +13,7 @@
 //! layout held still (`frozen`) so tabs don't jump about as you look at
 //! them. Leaving the sidebar keeps the tab you are on.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use ratatui::buffer::Buffer;
@@ -20,7 +21,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use serde_json::Value;
 
-use super::model::{self, MergeState, Rules, TabLoop, TabModel, TabState};
+use super::model::{self, MergeState, Rules, Stage, TabLoop, TabModel, TabState};
 use super::peek::Peek;
 use super::render::{self, Filter, Notice, Owner, View};
 use super::walk::{Next, Place, Stop, Why};
@@ -50,6 +51,10 @@ const SPIN: Duration = Duration::from_millis(text::SPINNER_MS);
 pub const KEYS: &[(&str, &str)] = &[
     ("j k", "show a tab"),
     ("g G", "first, last"),
+    (
+        "z",
+        "fold its group, or the notifications; unfold a folded one",
+    ),
     ("^d ^u", "half a screen down, up"),
     ("↵ l", "go to the tab"),
     ("h esc q ^c", "back to your pane"),
@@ -62,7 +67,10 @@ pub const KEYS: &[(&str, &str)] = &[
     ("M-space", "mission control"),
     ("space", "peek at it"),
     ("a", "answer it, or send it a message"),
-    ("n", "to the notifications, when there are any"),
+    (
+        "n",
+        "to the notifications, when there are any, unfolding them",
+    ),
     ("t", "new tab running Claude there (M-t)"),
     ("i", "its full title (M-T)"),
     ("d L", "its diff, or lazygit, in its pane's place"),
@@ -154,6 +162,33 @@ impl Server {
             if columns == 0 {
                 self.sidebar_leave(&name);
             }
+            self.dirty_session(&name);
+        }
+        // A setting that changes what the sidebar lists (sidebar_reminders)
+        // may leave a focused cursor on a tab it no longer lists.
+        let focused: Vec<String> = self
+            .sidebar
+            .sides
+            .iter()
+            .filter(|(_, s)| s.focused)
+            .map(|(n, _)| n.clone())
+            .collect();
+        for name in focused {
+            // And a held layout keeps no place for a tab now left out for
+            // its reminder, so it shows under Needs you once it comes due.
+            if !settings::is_on("sidebar_reminders") {
+                let r = Rules::now();
+                let hidden: Vec<TabId> = self
+                    .sidebar_marked(&name)
+                    .iter()
+                    .filter(|t| model::own_stage(t, &r) == Stage::Later)
+                    .map(|t| t.id)
+                    .collect();
+                if let Some(frozen) = self.sidebar.side(&name).frozen.as_mut() {
+                    frozen.retain(|id, _| !hidden.contains(id));
+                }
+            }
+            self.sidebar_cursor_back(&name);
             self.dirty_session(&name);
         }
     }
@@ -465,31 +500,43 @@ impl Server {
             .collect()
     }
 
-    /// Whether a session's Other repos is folded to one line: while its
-    /// filter is on, draws an Other repos group (the held layout's
-    /// included), and wasn't unfolded;
-    /// never while a / search is on, so its matches are all reachable.
-    pub(crate) fn sidebar_folded(&self, session: &str, tabs: &[TabModel]) -> bool {
-        let searching = self
-            .sidebar
-            .sides
-            .get(session)
+    /// The groups a session's sidebar draws folded to one line, of those
+    /// it draws (the held layout's included): each folded with `z` or a
+    /// click, and Other repos while its filter is on and it wasn't
+    /// unfolded; none while a / search is on, from the / that starts it,
+    /// so its matches are all reachable.
+    pub(crate) fn sidebar_folded(&self, session: &str, tabs: &[TabModel]) -> BTreeSet<Stage> {
+        let side = self.sidebar.sides.get(session);
+        let searching = side
             .filter(|s| s.focused)
-            .and_then(|s| s.filter.as_ref())
-            .is_some_and(|f| !f.text.trim().is_empty());
-        self.sidebar_repo(session).is_some()
-            && !searching
-            && !self.sidebar.sides.get(session).is_some_and(|s| s.repo_open)
-            && {
-                let frozen = self
-                    .sidebar
-                    .sides
-                    .get(session)
-                    .and_then(|s| s.frozen.as_ref());
-                model::grouped(tabs, frozen, &Rules::now())
-                    .iter()
-                    .any(|g| g.stage == model::Stage::OtherRepos)
-            }
+            .is_some_and(|s| s.filter.is_some());
+        if searching {
+            return BTreeSet::new();
+        }
+        let filtered = self.sidebar_repo(session).is_some();
+        let frozen = side.and_then(|s| s.frozen.as_ref());
+        model::grouped(tabs, frozen, &Rules::now())
+            .iter()
+            .map(|g| g.stage)
+            .filter(|stage| match stage {
+                Stage::OtherRepos => filtered && !side.is_some_and(|s| s.repo_open),
+                _ => side.is_some_and(|s| s.folded.contains(stage)),
+            })
+            .collect()
+    }
+
+    /// How many tabs wait on a reminder while the sidebar leaves its
+    /// Reminders group out (sidebar_reminders off), for the top line's
+    /// chip; 0 while the group shows.
+    fn sidebar_reminders_hidden(&self, session: &str) -> usize {
+        if settings::is_on("sidebar_reminders") {
+            return 0;
+        }
+        let r = Rules::now();
+        self.sidebar_marked(session)
+            .iter()
+            .filter(|t| model::own_stage(t, &r) == Stage::Later)
+            .count()
     }
 
     /// One tab (model.js's `tabsFrom` for one window).
@@ -760,7 +807,8 @@ impl Server {
     }
 
     /// A session's tabs as its sidebar lists them: all, or those whose name
-    /// has its / filter's text.
+    /// has its / filter's text; those waiting on a reminder left out while
+    /// the sidebar leaves its Reminders group out (sidebar_reminders off).
     fn sidebar_listed(&self, session: &str) -> Vec<TabModel> {
         let text = self
             .sidebar
@@ -770,7 +818,11 @@ impl Server {
             .and_then(|s| s.filter.as_ref())
             .map(|f| f.text.trim().to_lowercase())
             .unwrap_or_default();
-        let tabs = self.sidebar_marked(session);
+        let mut tabs = self.sidebar_marked(session);
+        if !settings::is_on("sidebar_reminders") {
+            let r = Rules::now();
+            tabs.retain(|t| model::own_stage(t, &r) != Stage::Later);
+        }
         if text.is_empty() {
             return tabs;
         }
@@ -779,10 +831,22 @@ impl Server {
             .collect()
     }
 
-    /// The tabs in the order a session's sidebar lists them, those under
-    /// a folded Other repos left out.
-    fn sidebar_order(&self, session: &str) -> Vec<TabId> {
-        let r = Rules::now();
+    /// The layout to hold while you browse: every tab where it is now,
+    /// those the sidebar leaves out for their reminders aside, so one that
+    /// comes due meanwhile shows under Needs you rather than Reminders.
+    fn sidebar_frozen_now(&self, session: &str, r: &Rules) -> model::Frozen {
+        let mut tabs = self.sidebar_marked(session);
+        if !settings::is_on("sidebar_reminders") {
+            tabs.retain(|t| model::own_stage(t, r) != Stage::Later);
+        }
+        model::frozen_from(&tabs, r)
+    }
+
+    /// What j and k step through in a session's sidebar, in the order it
+    /// draws them, by the groups as drawn, the held layout's included, so
+    /// a tab that moved while you browse is where it shows: each tab, and
+    /// a folded group's line in its tabs' place.
+    fn sidebar_stops(&self, session: &str) -> Vec<Owner> {
         let tabs = self.sidebar_listed(session);
         let folded = self.sidebar_folded(session, &tabs);
         let frozen = self
@@ -790,19 +854,30 @@ impl Server {
             .sides
             .get(session)
             .and_then(|s| s.frozen.as_ref());
-        // By the groups as drawn, the held layout's included, so a tab
-        // that moved repository while you browse is where it shows.
-        model::grouped(&tabs, frozen, &r)
+        model::grouped(&tabs, frozen, &Rules::now())
             .into_iter()
-            .filter(|g| !(folded && g.stage == model::Stage::OtherRepos))
-            .flat_map(|g| g.tabs)
-            .map(|t| t.id)
+            .flat_map(|g| {
+                if folded.contains(&g.stage) {
+                    vec![Owner::Group(g.stage)]
+                } else {
+                    g.tabs.iter().map(|t| Owner::Tab(t.id)).collect()
+                }
+            })
             .collect()
     }
 
-    /// Whether a tab is under a session's Other repos as the sidebar draws
-    /// it, the held layout's group included, whatever a / search shows.
-    fn sidebar_in_other_repos(&self, session: &str, tab: TabId) -> bool {
+    /// The tabs in the order a session's sidebar lists them, those under
+    /// a folded group left out.
+    fn sidebar_order(&self, session: &str) -> Vec<TabId> {
+        self.sidebar_stops(session)
+            .iter()
+            .filter_map(Owner::tab)
+            .collect()
+    }
+
+    /// The group a tab is under as the sidebar draws it, the held layout's
+    /// included, whatever a / search shows.
+    fn sidebar_group_of(&self, session: &str, tab: TabId) -> Option<Stage> {
         let tabs = self.sidebar_marked(session);
         let frozen = self
             .sidebar
@@ -811,14 +886,48 @@ impl Server {
             .and_then(|s| s.frozen.as_ref());
         model::grouped(&tabs, frozen, &Rules::now())
             .iter()
-            .any(|g| g.stage == model::Stage::OtherRepos && g.tabs.iter().any(|t| t.id == tab))
+            .find(|g| g.tabs.iter().any(|t| t.id == tab))
+            .map(|g| g.stage)
     }
 
-    /// Whether a session's sidebar draws Other repos folded, a stop of
-    /// its own after the last tab.
-    fn sidebar_fold_stop(&self, session: &str) -> bool {
-        let tabs = self.sidebar_listed(session);
-        self.sidebar_folded(session, &tabs)
+    /// Unfolds the group a tab is under, so a tab gone to (M-a, M-1, a
+    /// / search's match) is listed.
+    fn sidebar_unfold_to(&mut self, session: &str, tab: TabId) {
+        // The group it shows under while you browse, and the one it is in
+        // now, which it goes back to when the held layout is let go.
+        let held = self.sidebar_group_of(session, tab);
+        let live = model::grouped(&self.sidebar_marked(session), None, &Rules::now())
+            .iter()
+            .find(|g| g.tabs.iter().any(|t| t.id == tab))
+            .map(|g| g.stage);
+        let side = self.sidebar.side(session);
+        let mut changed = false;
+        for stage in [held, live].into_iter().flatten() {
+            changed |= match stage {
+                Stage::OtherRepos => !std::mem::replace(&mut side.repo_open, true),
+                _ => side.folded.remove(&stage),
+            };
+        }
+        if changed {
+            self.dirty_session(session);
+        }
+    }
+
+    /// The notifications j, k and Tab step through: none while they are
+    /// folded.
+    fn sidebar_notice_stops(&self, session: &str) -> Vec<Owner> {
+        if self
+            .sidebar
+            .sides
+            .get(session)
+            .is_some_and(|s| s.notices_folded)
+        {
+            return Vec::new();
+        }
+        self.sidebar_notices()
+            .into_iter()
+            .map(|n| n.owner)
+            .collect()
     }
 
     // ── Drawing ─────────────────────────────────────────────────────────────
@@ -873,7 +982,9 @@ impl Server {
             hover: self.sidebar.hover.get(&client),
             awake: self.awake.holding(),
             repo: repo_name.as_deref(),
-            folded,
+            folded: &folded,
+            notices_folded: side.is_some_and(|x| x.notices_folded),
+            reminders: self.sidebar_reminders_hidden(&s.name),
             build: build.as_ref(),
         };
         let out = render::sidebar_lines(
@@ -904,6 +1015,7 @@ impl Server {
             owners: out.owners,
             scroll: out.scroll,
             spins: out.spins,
+            reminders_at: out.reminders_at,
         })
     }
 
@@ -971,7 +1083,7 @@ impl Server {
             return;
         };
         let r = Rules::now();
-        let frozen = model::frozen_from(&self.sidebar_marked(session), &r);
+        let frozen = self.sidebar_frozen_now(session, &r);
         let side = self.sidebar.side(session);
         if !side.focused {
             side.frozen = Some(frozen);
@@ -983,6 +1095,13 @@ impl Server {
             .is_notices_tab(here)
             .then(|| self.sidebar.windows.at.get(session).cloned())
             .flatten();
+        // A tab or a notification brought into the sidebar (M-a, M-A, a
+        // click) unfolds what it is under, so the cursor is on it.
+        match &cursor {
+            Some(Owner::Tab(t)) => self.sidebar_unfold_to(session, *t),
+            Some(Owner::Notice { .. }) => self.sidebar.side(session).notices_folded = false,
+            _ => {}
+        }
         let side = self.sidebar.side(session);
         side.cursor = Some(cursor.or(shown).unwrap_or(Owner::Tab(here)));
         self.sidebar_cursor_back(session);
@@ -1083,6 +1202,23 @@ impl Server {
         if !self.sidebar.focused(&session) {
             return (false, false);
         }
+        // M-f and the reply copy act on the tab in front, which on a folded
+        // group's line, a tab the sidebar leaves out, or a cursor left on
+        // another tab, is no tab under the cursor: there they do nothing.
+        let current = self.session(&session).map(|s| s.current);
+        let off_a_listed_tab = match self
+            .sidebar
+            .sides
+            .get(&session)
+            .and_then(|s| s.cursor.as_ref())
+        {
+            Some(Owner::Group(_)) => true,
+            Some(Owner::Tab(t)) => Some(*t) != current || !self.sidebar_order(&session).contains(t),
+            _ => false,
+        };
+        if matches!(action, Action::TogglePin | Action::CopyReply) && off_a_listed_tab {
+            return (true, true);
+        }
         match action {
             Action::SelectPane(dir) => {
                 if *dir == crate::mux::Direction::Right {
@@ -1111,10 +1247,11 @@ impl Server {
         }
     }
 
-    /// After a key's action: M-1 to M-9 pressed from the sidebar leave its
-    /// cursor on the tab they went to (sidebar.sh refocus).
+    /// After a key's action: M-1 to M-9 unfold the group of the tab they
+    /// went to, and pressed from the sidebar leave its cursor on that tab
+    /// (sidebar.sh refocus).
     pub fn sidebar_after_action(&mut self, client: ClientId, was_focused: bool, action: &Action) {
-        if !was_focused || !matches!(action, Action::SelectTab(_)) {
+        if !matches!(action, Action::SelectTab(_)) {
             return;
         }
         let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
@@ -1123,14 +1260,30 @@ impl Server {
         let Some(here) = self.session(&session).map(|s| s.current) else {
             return;
         };
-        if let Some(side) = self.sidebar.sides.get_mut(&session)
+        // A tab under a folded group unfolds it, so the sidebar lists it.
+        self.sidebar_unfold_to(&session, here);
+        if was_focused
+            && let Some(side) = self.sidebar.sides.get_mut(&session)
             && side.focused
         {
             side.cursor = Some(Owner::Tab(here));
-            // A tab under a folded Other repos unfolds it, so the cursor
-            // is on a tab the sidebar lists.
-            if self.sidebar_in_other_repos(&session, here) {
-                self.sidebar.side(&session).repo_open = true;
+            // One the sidebar leaves out (a hidden reminder) is gone to: the
+            // focus into its pane, as the sidebar has no row for it.
+            let r = Rules::now();
+            let hidden = !settings::is_on("sidebar_reminders")
+                && self
+                    .sidebar_marked(&session)
+                    .iter()
+                    .any(|t| t.id == here && model::own_stage(t, &r) == Stage::Later);
+            if hidden {
+                self.sidebar_leave(&session);
+            } else {
+                // One a search leaves out clears the search, so the cursor
+                // stays on the tab gone to.
+                if !self.sidebar_order(&session).contains(&here) {
+                    self.sidebar.side(&session).filter = None;
+                }
+                self.sidebar_cursor_back(&session);
             }
             self.dirty_session(&session);
         }
@@ -1179,30 +1332,26 @@ impl Server {
         if let Some(t) = first.or(here) {
             self.sidebar.side(session).cursor = Some(Owner::Tab(t));
         }
+        // A cleared search folds its groups again, so the tab in front may
+        // be folded away: onto its group's line, or a stop listed.
+        self.sidebar_cursor_back(session);
         self.dirty_session(session);
     }
 
     /// Moves the cursor to the `to`th stop: a tab, which comes to the front
-    /// with the focus still in the sidebar, or past the last tab, one of the
-    /// notifications.
+    /// with the focus still in the sidebar, or a folded group's line; or
+    /// past the last of them, one of the notifications.
     fn sidebar_move(&mut self, session: &str, to: isize) {
-        let order = self.sidebar_order(session);
-        let notices: Vec<Owner> = self
-            .sidebar_notices()
-            .into_iter()
-            .map(|n| n.owner)
-            .collect();
+        let stops = self.sidebar_stops(session);
+        let notices = self.sidebar_notice_stops(session);
         let typing = self
             .sidebar
             .sides
             .get(session)
             .and_then(|s| s.filter.as_ref())
             .is_some_and(|f| f.typing);
-        // A folded Other repos is a stop of its own after the last tab.
-        let fold = !typing && self.sidebar_fold_stop(session);
-        let stops = order.len() + usize::from(fold);
-        if to >= stops as isize && !notices.is_empty() && !typing {
-            let i = ((to - stops as isize) as usize).min(notices.len() - 1);
+        if to >= stops.len() as isize && !notices.is_empty() && !typing {
+            let i = ((to - stops.len() as isize) as usize).min(notices.len() - 1);
             self.sidebar.side(session).cursor = Some(notices[i].clone());
             // Onto a notification, the Notifications window comes to the
             // front on it, as a tab would (notice_list setting).
@@ -1212,17 +1361,14 @@ impl Server {
             self.dirty_session(session);
             return;
         }
-        if fold && to >= order.len() as isize {
-            self.sidebar.side(session).cursor = Some(Owner::OtherRepos);
-            self.dirty_session(session);
+        if stops.is_empty() {
             return;
         }
-        if order.is_empty() {
-            return;
-        }
-        let tab = order[to.clamp(0, order.len() as isize - 1) as usize];
-        self.sidebar.side(session).cursor = Some(Owner::Tab(tab));
-        if self.session(session).is_some_and(|s| s.current != tab) {
+        let stop = stops[to.clamp(0, stops.len() as isize - 1) as usize].clone();
+        self.sidebar.side(session).cursor = Some(stop.clone());
+        if let Owner::Tab(tab) = stop
+            && self.session(session).is_some_and(|s| s.current != tab)
+        {
             self.select_tab(session, tab);
         }
         self.dirty_session(session);
@@ -1259,7 +1405,7 @@ impl Server {
         at: isize,
         by: isize,
     ) {
-        let notices = self.sidebar_notices().len();
+        let notices = self.sidebar_notice_stops(session).len();
         match on_notice {
             None if by < 0 && at == 0 && notices > 0 => {
                 self.sidebar_move(session, (tabs + notices) as isize - 1);
@@ -1289,24 +1435,20 @@ impl Server {
 
     /// Goes to a tab from the sidebar, the focus into its pane.
     fn sidebar_go(&mut self, session: &str, tab: TabId) {
-        // A tab of Other repos gone to (a / search's match) keeps the
-        // group unfolded, so the tab in front stays listed.
-        if self.sidebar_in_other_repos(session, tab) {
-            self.sidebar.side(session).repo_open = true;
-        }
+        // A tab of a folded group gone to (a / search's match) unfolds
+        // it, so the tab in front stays listed: the group it is in now,
+        // once the layout held while browsing is let go.
         self.sidebar_leave(session);
+        self.sidebar_unfold_to(session, tab);
         if let Some(s) = self.session_of_tab(tab).map(|s| s.name.clone()) {
             self.select_tab(&s, tab);
         }
     }
 
     fn sidebar_key_in(&mut self, client: ClientId, session: &str, key: Key, raw: &[u8]) {
-        let order = self.sidebar_order(session);
-        let notices: Vec<Owner> = self
-            .sidebar_notices()
-            .into_iter()
-            .map(|n| n.owner)
-            .collect();
+        let stop_list = self.sidebar_stops(session);
+        let order: Vec<TabId> = stop_list.iter().filter_map(Owner::tab).collect();
+        let notices = self.sidebar_notice_stops(session);
         let Some(here) = self.session(session).map(|s| s.current) else {
             return;
         };
@@ -1320,25 +1462,23 @@ impl Server {
         // notifications, as the Notifications window goes through them.
         let on_notice = notices.iter().position(|o| o.same_row(&cursor));
         let by_item = on_notice.is_some() && settings::is_on("notice_list");
-        // A folded Other repos is a stop after the last tab, before the
-        // notifications.
-        let typing = side.filter.as_ref().is_some_and(|f| f.typing);
-        let fold = !typing && self.sidebar_fold_stop(session);
-        let stops = order.len() + usize::from(fold);
-        let on_fold = fold && cursor == Owner::OtherRepos;
+        // A folded group's line is a stop in its tabs' place.
+        let stops = stop_list.len();
+        let on_fold = match &cursor {
+            Owner::Group(stage) if stop_list.contains(&cursor) => Some(*stage),
+            _ => None,
+        };
         let at = match on_notice {
             Some(i) => stops + i,
-            None if on_fold => order.len(),
-            None => order
-                .iter()
-                .position(|t| Owner::Tab(*t) == cursor)
-                .unwrap_or(0),
+            None => stop_list.iter().position(|o| *o == cursor).unwrap_or(0),
         } as isize;
         let k = key.normalized();
         let none = k.mods.is_empty();
         let ctrl = k.mods == Mods::CTRL;
         let tab_focus = settings::is_on("tab_focus");
-        let chosen = order.get(at.max(0) as usize).copied();
+        // The tab under the cursor, only while the sidebar lists it, so a
+        // key never acts on another tab in its place.
+        let chosen = cursor.tab().filter(|t| order.contains(t));
 
         // Typing a / filter: letters go into it and the cursor to the first
         // tab it leaves; the arrows move, Enter goes to the chosen tab, and
@@ -1349,8 +1489,8 @@ impl Server {
                 KeyCode::Down if none => self.sidebar_move(session, at + 1),
                 KeyCode::Char('p') if ctrl => self.sidebar_move(session, at - 1),
                 KeyCode::Char('n') if ctrl => self.sidebar_move(session, at + 1),
-                KeyCode::Tab | KeyCode::BackTab if tab_focus && !order.is_empty() => {
-                    let n = order.len() as isize;
+                KeyCode::Tab | KeyCode::BackTab if tab_focus && stops > 0 => {
+                    let n = stops as isize;
                     let by = if k.code == KeyCode::Tab { 1 } else { -1 };
                     self.sidebar_move(session, (at + by).rem_euclid(n));
                 }
@@ -1364,7 +1504,7 @@ impl Server {
                         self.sidebar_go(session, t);
                     } else {
                         self.sidebar.side(session).filter = None;
-                        self.dirty_session(session);
+                        self.sidebar_refilter(session);
                     }
                 }
                 KeyCode::Esc => {
@@ -1404,12 +1544,12 @@ impl Server {
             self.sidebar_step_ux2(session, stops, on_notice, at, by);
             return;
         }
-        // On a folded Other repos, Enter, l or the right arrow unfolds it.
-        if on_fold
+        // On a folded group's line, Enter, l or the right arrow unfolds it.
+        if let Some(stage) = on_fold
             && (matches!(k.code, KeyCode::Right | KeyCode::Char('l')) && none
                 || k.code == KeyCode::Enter)
         {
-            self.sidebar_fold(session, false);
+            self.sidebar_fold(session, stage, false);
             return;
         }
         match k.code {
@@ -1421,7 +1561,18 @@ impl Server {
             KeyCode::Char('p') if ctrl => self.sidebar_move(session, at - 1),
             KeyCode::Char('g') | KeyCode::Home if none => self.sidebar_move(session, 0),
             KeyCode::Char('G') | KeyCode::End if none => {
-                self.sidebar_move(session, order.len() as isize - 1)
+                self.sidebar_move(session, stops as isize - 1)
+            }
+            // z folds the chosen tab's group to one line, or the
+            // notifications; on a folded line, unfolds it.
+            KeyCode::Char('z') if none => {
+                if on_notice.is_some() {
+                    self.sidebar_fold_notices(session, true);
+                } else if let Some(stage) = on_fold {
+                    self.sidebar_fold(session, stage, false);
+                } else if let Some(stage) = chosen.and_then(|t| self.sidebar_group_of(session, t)) {
+                    self.sidebar_fold(session, stage, true);
+                }
             }
             KeyCode::Char('d' | 'u') if ctrl => {
                 self.sidebar_half_page(client, session, k, raw, &order, on_notice.is_some())
@@ -1489,7 +1640,9 @@ impl Server {
                     // From the first tab round to the last notification,
                     // the last one by one with the Notifications window.
                     self.sidebar_move(session, last);
+                    // Folded notifications are no stop, so none is gone to.
                     if settings::is_on("notice_list")
+                        && !notices.is_empty()
                         && let Some((owner, _)) = entries.last()
                     {
                         self.sidebar_notice_to(session, owner);
@@ -1508,10 +1661,12 @@ impl Server {
                     self.open_answer(client, t, None);
                 }
             }
+            // n unfolds folded notifications as it goes to them.
             KeyCode::Char('n') if none => {
-                if notices.is_empty() {
+                if self.sidebar_notices().is_empty() {
                     self.say(Some(client), "No notifications");
                 } else {
+                    self.sidebar.side(session).notices_folded = false;
                     self.sidebar_move(session, stops as isize);
                 }
             }
@@ -1555,18 +1710,13 @@ impl Server {
                 let n = c.to_digit(10).unwrap_or(0) as usize;
                 let tabs = self.sidebar_tabs(session);
                 let target = tabs.iter().find(|t| t.index == n).map(|t| t.id);
-                // One folded under Other repos unfolds it, the cursor
-                // onto it in the sidebar.
-                let folded_away = target.is_some_and(|t| {
-                    !order.contains(&t) && self.sidebar_in_other_repos(session, t)
-                });
-                let order = if folded_away {
-                    self.sidebar.side(session).repo_open = true;
-                    self.sidebar_order(session)
-                } else {
-                    order.clone()
-                };
-                match target.and_then(|id| order.iter().position(|t| *t == id)) {
+                // One under a folded group unfolds it, the cursor onto it
+                // in the sidebar.
+                if let Some(t) = target.filter(|t| !order.contains(t)) {
+                    self.sidebar_unfold_to(session, t);
+                }
+                let stop_list = self.sidebar_stops(session);
+                match target.and_then(|id| stop_list.iter().position(|o| *o == Owner::Tab(id))) {
                     Some(i) => self.sidebar_move(session, i as isize),
                     None => {
                         if let Some(t) = target {
@@ -1603,22 +1753,25 @@ impl Server {
         let down = key.code == KeyCode::Char('d');
         let cursor = self.sidebar.side(session).cursor.clone();
         if !settings::is_on("sidebar_half_page") {
-            let at = cursor
-                .as_ref()
-                .and_then(Owner::tab)
-                .or(order.first().copied());
+            // Only to a tab the cursor is on and the sidebar lists, never
+            // another in its place (a folded group's line has none).
+            let at = match cursor.as_ref() {
+                Some(c) => c.tab().filter(|t| order.contains(t)),
+                None => order.first().copied(),
+            };
             if let Some(t) = at {
                 self.sidebar_go(session, t);
                 self.press_key(client, key, raw);
             }
             return;
         }
-        if order.is_empty() {
+        let stops = self.sidebar_stops(session);
+        if stops.is_empty() {
             return;
         }
         if on_notice {
             if !down {
-                self.sidebar_move(session, order.len() as isize - 1);
+                self.sidebar_move(session, stops.len() as isize - 1);
             }
             return;
         }
@@ -1628,10 +1781,11 @@ impl Server {
         let by = (scroll.room / 2).max(1) as isize * if down { 1 } else { -1 };
         let most = scroll.length.saturating_sub(scroll.room) as isize;
         self.sidebar.side(session).top = Some((scroll.top as isize + by).clamp(0, most) as usize);
-        // The tab on the line half a screen on, else the nearest one past
-        // it, never the tab the cursor is on, which a tab taller than half
-        // the list would otherwise hold it on press after press.
-        let here = cursor.as_ref().and_then(Owner::tab);
+        // The stop (a tab, or a folded group's line) on the line half a
+        // screen on, else the nearest one past it, never the one the cursor
+        // is on, which a tab taller than half the list would otherwise hold
+        // it on press after press.
+        let here = cursor.as_ref();
         let line = scroll.cursor_at as isize + by;
         let found = if down {
             scroll
@@ -1639,8 +1793,8 @@ impl Server {
                 .iter()
                 .skip(line.max(0) as usize)
                 .flatten()
-                .find(|t| Some(**t) != here)
-                .copied()
+                .find(|o| Some(*o) != here && stops.contains(o))
+                .cloned()
         } else {
             scroll
                 .owners
@@ -1648,15 +1802,14 @@ impl Server {
                 .take((line + 1).max(0) as usize)
                 .rev()
                 .flatten()
-                .find(|t| Some(**t) != here)
-                .copied()
+                .find(|o| Some(*o) != here && stops.contains(o))
+                .cloned()
         };
-        let id = found.unwrap_or(if down {
-            order[order.len() - 1]
-        } else {
-            order[0]
-        });
-        let to = order.iter().position(|t| *t == id).unwrap_or(0);
+        let to = match found {
+            Some(o) => stops.iter().position(|s| *s == o).unwrap_or(0),
+            None if down => stops.len() - 1,
+            None => 0,
+        };
         self.sidebar_move(session, to as isize);
     }
 
@@ -1704,7 +1857,7 @@ impl Server {
         side.repo = repo;
         side.repo_open = false;
         if side.focused {
-            let frozen = model::frozen_from(&self.sidebar_marked(session), &Rules::now());
+            let frozen = self.sidebar_frozen_now(session, &Rules::now());
             self.sidebar.side(session).frozen = Some(frozen);
         }
         self.sidebar_cursor_back(session);
@@ -1781,18 +1934,26 @@ impl Server {
         });
     }
 
-    /// Folds a session's Other repos to one line, or unfolds it, the
-    /// cursor onto its first tab as it unfolds and onto its line as it
+    /// Folds a session's group to one line, or unfolds it: Other repos by
+    /// `repo_open`, any other in `folded`. The cursor goes onto the first
+    /// of its tabs as it unfolds under the cursor, and onto its line as it
     /// folds over the cursor.
-    fn sidebar_fold(&mut self, session: &str, fold: bool) {
-        self.sidebar.side(session).repo_open = !fold;
+    fn sidebar_fold(&mut self, session: &str, stage: Stage, fold: bool) {
+        let side = self.sidebar.side(session);
+        if stage == Stage::OtherRepos {
+            side.repo_open = !fold;
+        } else if fold {
+            side.folded.insert(stage);
+        } else {
+            side.folded.remove(&stage);
+        }
         // Unfolded under the cursor, its first tab comes to the front as
         // the cursor reaches it, as j and k bring a tab.
-        if !fold && self.sidebar.side(session).cursor == Some(Owner::OtherRepos) {
-            let order = self.sidebar_order(session);
-            let first = order
-                .iter()
-                .position(|id| self.sidebar_in_other_repos(session, *id));
+        if !fold && self.sidebar.side(session).cursor == Some(Owner::Group(stage)) {
+            let first = self.sidebar_stops(session).iter().position(|o| {
+                o.tab()
+                    .is_some_and(|t| self.sidebar_group_of(session, t) == Some(stage))
+            });
             if let Some(at) = first {
                 self.sidebar_move(session, at as isize);
             }
@@ -1806,32 +1967,113 @@ impl Server {
                 .and_then(Owner::tab)
                 .is_some_and(|t| !self.sidebar_order(session).contains(&t));
             if on_folded {
-                self.sidebar.side(session).cursor = Some(Owner::OtherRepos);
+                self.sidebar.side(session).cursor = Some(Owner::Group(stage));
+            }
+        }
+        self.dirty_session(session);
+    }
+
+    /// Folds a session's notifications to one line of their kinds, or
+    /// unfolds them; a cursor on one as they fold goes to the last stop
+    /// above them, else the tab in front.
+    fn sidebar_fold_notices(&mut self, session: &str, fold: bool) {
+        self.sidebar.side(session).notices_folded = fold;
+        let on_notice = matches!(
+            self.sidebar.side(session).cursor,
+            Some(Owner::Notice { .. })
+        );
+        if fold && on_notice && self.sidebar.focused(session) {
+            // Onto the last stop as j and k bring it, its tab to the front.
+            let stops = self.sidebar_stops(session).len();
+            if stops > 0 {
+                self.sidebar_move(session, stops as isize - 1);
+            } else {
+                self.sidebar.side(session).cursor =
+                    self.session(session).map(|s| Owner::Tab(s.current));
+                self.sidebar_cursor_back(session);
             }
         }
         self.dirty_session(session);
     }
 
     /// The cursor back to the tab in front when it is on a tab or a line
-    /// the sidebar no longer lists.
+    /// the sidebar no longer lists; on a tab of a folded group, onto that
+    /// group's line.
     fn sidebar_cursor_back(&mut self, session: &str) {
-        let order = self.sidebar_order(session);
-        let fold = self.sidebar_fold_stop(session);
-        let filtered = self.sidebar_repo(session).is_some();
-        let gone = match self.sidebar.side(session).cursor.as_ref() {
-            Some(Owner::Tab(t)) => filtered && !order.contains(t),
-            Some(Owner::OtherRepos) => !fold,
+        let stops = self.sidebar_stops(session);
+        // With every tab left out for its reminder, the cursor goes onto a
+        // notification, or with none, the sidebar gives the focus back.
+        // A search matching nothing isn't that: it keeps the focus.
+        let searching = self
+            .sidebar
+            .sides
+            .get(session)
+            .is_some_and(|s| s.filter.is_some());
+        if stops.is_empty() && !searching && self.sidebar.focused(session) {
+            let notices = self.sidebar_notice_stops(session);
+            let cursor = self.sidebar.side(session).cursor.clone();
+            let on_notice = cursor
+                .as_ref()
+                .is_some_and(|c| notices.iter().any(|n| n.same_row(c)));
+            match notices.first() {
+                _ if on_notice => {}
+                Some(first) => self.sidebar.side(session).cursor = Some(first.clone()),
+                None => self.sidebar_leave(session),
+            }
+            return;
+        }
+        // A tab a / search leaves out stays under the cursor; one the
+        // repository filter or hidden reminders leave out does not.
+        let searching = self
+            .sidebar
+            .sides
+            .get(session)
+            .and_then(|s| s.filter.as_ref())
+            .is_some_and(|f| !f.text.trim().is_empty());
+        let filtered = self.sidebar_repo(session).is_some() || !searching;
+        let cursor = self.sidebar.side(session).cursor.clone();
+        let folded_over = cursor
+            .as_ref()
+            .and_then(Owner::tab)
+            .and_then(|t| self.sidebar_group_of(session, t))
+            .map(Owner::Group)
+            .filter(|g| stops.contains(g));
+        if let Some(group) = folded_over {
+            self.sidebar.side(session).cursor = Some(group);
+            return;
+        }
+        let gone = match cursor.as_ref() {
+            Some(Owner::Tab(t)) => filtered && !stops.contains(&Owner::Tab(*t)),
+            Some(group @ Owner::Group(_)) => !stops.contains(group),
+            // A notification the Notifications window kept, while they are
+            // folded.
+            Some(Owner::Notice { .. }) => self
+                .sidebar
+                .sides
+                .get(session)
+                .is_some_and(|s| s.notices_folded),
             _ => false,
         };
         if !gone {
             return;
         }
-        // A tab folded away leaves the cursor on Other repos' line.
-        let on_tab = matches!(self.sidebar.side(session).cursor, Some(Owner::Tab(_)));
-        if fold && on_tab {
-            self.sidebar.side(session).cursor = Some(Owner::OtherRepos);
-        } else if let Some(here) = self.session(session).map(|s| s.current) {
-            self.sidebar.side(session).cursor = Some(Owner::Tab(here));
+        // The tab in front when the sidebar lists it, else its first stop.
+        let here = self.session(session).map(|s| Owner::Tab(s.current));
+        let back = here
+            .clone()
+            .filter(|h| stops.contains(h))
+            .or_else(|| stops.first().cloned())
+            .or(here);
+        // Onto another tab than the one in front, it comes to the front, as
+        // j and k bring one, so the cursor and the pane agree.
+        let focused = self.sidebar.focused(session);
+        let current = self.session(session).map(|s| s.current);
+        self.sidebar.side(session).cursor = back.clone();
+        if focused
+            && let Some(Owner::Tab(t)) = back
+            && Some(t) != current
+        {
+            self.select_tab(session, t);
         }
     }
 
@@ -1865,9 +2107,18 @@ impl Server {
             }
             return false;
         };
-        let owner = (m.col < d.area.right())
-            .then(|| d.owners.get((m.row - d.area.y) as usize).cloned().flatten())
-            .flatten();
+        // The top line's ⏰ chip is a target of its own on a line the
+        // repository filter's chip may share.
+        let on_reminders = m.row == d.area.y
+            && d.reminders_at
+                .is_some_and(|(from, to)| (from..to).contains(&usize::from(m.col - d.area.x)));
+        let owner = if on_reminders {
+            Some(Owner::Reminders)
+        } else {
+            (m.col < d.area.right())
+                .then(|| d.owners.get((m.row - d.area.y) as usize).cloned().flatten())
+                .flatten()
+        };
         match (m.kind, m.button) {
             (MouseKind::Move, _) => {
                 let lit = owner.filter(|_| settings::is_on("hover_highlight"));
@@ -1909,10 +2160,11 @@ impl Server {
                     }
                     self.sidebar.wheel.insert(client, (down, now));
                 }
-                let order = self.sidebar_order(&session);
-                let edge = if down { order.last() } else { order.first() };
+                let stops = self.sidebar_stops(&session);
+                let edge = if down { stops.last() } else { stops.first() };
+                // On a tab or a folded group's line short of the edge.
                 let on_tab_short_of_the_edge = match &self.sidebar.side(&session).cursor {
-                    Some(Owner::Tab(t)) => Some(t) != edge,
+                    Some(c @ (Owner::Tab(_) | Owner::Group(_))) => Some(c) != edge,
                     _ => false,
                 };
                 if half_page && on_tab_short_of_the_edge {
@@ -1939,19 +2191,30 @@ impl Server {
                     self.sidebar_set_repo(&session, None);
                     self.say(Some(client), "Sidebar: every repository");
                 }
-                // Folded, a click unfolds it as Enter on its line does, the
-                // focus coming into the sidebar and its first tab to the
-                // front; unfolded, a click on its heading folds it.
-                Some(Owner::OtherRepos) => {
-                    let open = self
+                // A group folded: a click unfolds it as Enter on its line
+                // does, the focus coming into the sidebar and its first tab
+                // to the front; unfolded, a click on its heading folds it.
+                Some(group @ Owner::Group(stage)) => {
+                    let folded = self.sidebar_stops(&session).contains(&group);
+                    if folded {
+                        self.sidebar_enter(&session, Some(group));
+                    }
+                    self.sidebar_fold(&session, stage, !folded);
+                }
+                // The notifications' heading or folded line folds or
+                // unfolds them.
+                Some(Owner::Notices) => {
+                    let folded = self
                         .sidebar
                         .sides
                         .get(&session)
-                        .is_some_and(|s| s.repo_open);
-                    if !open {
-                        self.sidebar_enter(&session, Some(Owner::OtherRepos));
-                    }
-                    self.sidebar_fold(&session, open);
+                        .is_some_and(|s| s.notices_folded);
+                    self.sidebar_fold_notices(&session, !folded);
+                }
+                // The ⏰ chip: mission control's Reminders view.
+                Some(Owner::Reminders) => {
+                    self.sidebar_leave(&session);
+                    self.open_mission(client, crate::mission::Opening::View("reminders".into()));
                 }
                 None => {}
             },
@@ -2193,6 +2456,8 @@ impl Server {
                     if let Some(pane) = tab.claude_pane.or(tab.active) {
                         self.focus_pane(pane);
                     }
+                    // A folded group it is under unfolds, so it is listed.
+                    self.sidebar_unfold_to(&tab.session, t);
                     if tab.session != session {
                         self.switch_client(client, &tab.session);
                     }
@@ -2234,6 +2499,7 @@ impl Server {
                 if let Some(pane) = tab.claude_pane.or(tab.active) {
                     self.focus_pane(pane);
                 }
+                self.sidebar_unfold_to(&tab.session, tab.id);
                 if tab.session != session {
                     self.switch_client(client, &tab.session);
                 }

@@ -79,9 +79,11 @@ pub struct PaneRead {
 /// its cursor, the layout held still while you browse, a / filter, where
 /// its list was scrolled to while it has the focus, and where its list was
 /// last shown, which the next tab in front holds to while it is in sight
-/// there (render.rs's `View::keep`); and the repository it is filtered
+/// there (render.rs's `View::keep`); the repository it is filtered
 /// to, every other one's tabs under Other repos, and whether that group
-/// was unfolded, both kept with the layout until cleared.
+/// was unfolded, both kept with the layout until cleared; and the groups
+/// and the notifications folded with `z` or a click on a heading, kept
+/// with the layout too.
 #[derive(Clone, Debug, Default)]
 pub struct Side {
     pub focused: bool,
@@ -94,6 +96,11 @@ pub struct Side {
     pub repo: Option<PathBuf>,
     /// Other repos unfolded, its tabs listed one by one.
     pub repo_open: bool,
+    /// The groups folded to one line, Other repos aside, which folds by
+    /// `repo_open`.
+    pub folded: std::collections::BTreeSet<Stage>,
+    /// The notifications folded to one line of their kinds.
+    pub notices_folded: bool,
 }
 
 /// Where a client's sidebar was last drawn, for the mouse and C-d.
@@ -106,6 +113,8 @@ pub struct Drawn {
     pub scroll: render::Scroll,
     /// Whether a badge on it spins.
     pub spins: bool,
+    /// The columns of its top line the ⏰ chip takes, while it shows.
+    pub reminders_at: Option<(usize, usize)>,
 }
 
 /// What the server keeps for the sidebar.

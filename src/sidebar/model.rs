@@ -431,7 +431,7 @@ fn landing_order(a: &TabModel, b: &TabModel) -> Ordering {
 /// Where a tab is, in this order: the sidebar's groups and mission control's
 /// stages. Each loop skill at work (a review loop, a CI loop,
 /// queue-and-clean) is a stage of its own rather than part of Working.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Stage {
     Needs,
     Failing,
@@ -491,6 +491,11 @@ impl Stage {
             Stage::Other => "other",
             Stage::OtherRepos => "other-repos",
         }
+    }
+
+    /// The stage a key names (`key`), for the folds kept with the layout.
+    pub fn from_key(key: &str) -> Option<Stage> {
+        Stage::ALL.into_iter().find(|s| s.key() == key)
     }
 
     pub fn title(self) -> &'static str {
@@ -574,7 +579,7 @@ pub fn stage_of(tab: &TabModel, r: &Rules) -> Stage {
 /// The stage a tab is in by what it is doing: Needs you first, then its
 /// PR's place, then the loop it is running, then its state, so a
 /// queue-and-clean watching a queued PR shows the PR's place.
-fn own_stage(tab: &TabModel, r: &Rules) -> Stage {
+pub fn own_stage(tab: &TabModel, r: &Rules) -> Stage {
     if needs_tab(tab, r) {
         return Stage::Needs;
     }

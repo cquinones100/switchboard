@@ -36,8 +36,12 @@ const YELLOW: Color = Color::Indexed(220);
 /// source and its item's id), for the cursor and a click; or the row saying
 /// how many tabs are out of sight above or below, which a click scrolls;
 /// or, while the sidebar is filtered to a repository, its chip on the top
-/// line, which a click clears, and Other repos, which a click or Enter on
-/// its folded line unfolds and a click on its heading folds again.
+/// line, which a click clears; or a group, whose heading folds or unfolds
+/// it on a click and whose folded line unfolds it on a click or Enter;
+/// or the notifications' heading and folded line, which a click folds
+/// or unfolds; or the top line's ⏰ chip while the sidebar leaves the
+/// Reminders group out, which a click opens mission control's Reminders
+/// view from.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
@@ -48,7 +52,9 @@ pub enum Owner {
     ScrollUp,
     ScrollDown,
     RepoChip,
-    OtherRepos,
+    Group(Stage),
+    Notices,
+    Reminders,
     /// M-p's restart as it goes (src/mux/build_row.rs), whose steps a
     /// click opens.
     BuildRow,
@@ -141,9 +147,15 @@ pub struct View<'a> {
     /// The repository the tabs are filtered to, by its folder's name, its
     /// chip on the top line; every other one's tabs are under Other repos.
     pub repo: Option<&'a str>,
-    /// Other repos folded to one line: its tabs' marks, their count and
-    /// their repositories.
-    pub folded: bool,
+    /// The groups folded to one line: its tabs' marks and their count,
+    /// Other repos' with their repositories.
+    pub folded: &'a std::collections::BTreeSet<Stage>,
+    /// The notifications folded to one line of their kinds.
+    pub notices_folded: bool,
+    /// How many tabs wait on a reminder while the sidebar leaves the
+    /// Reminders group out (sidebar_reminders off), counted on the top
+    /// line's ⏰ chip; 0 shows no chip.
+    pub reminders: usize,
     /// M-p's restart as it goes, on the line under the count with UX 2.0
     /// (board 56's build row).
     pub build: Option<&'a crate::mux::build_row::Row>,
@@ -237,7 +249,8 @@ pub struct Scroll {
     pub top: usize,
     pub room: usize,
     pub length: usize,
-    pub owners: Vec<Option<TabId>>,
+    /// Each line's stop: a tab, or a folded group's line.
+    pub owners: Vec<Option<Owner>>,
     pub cursor_at: usize,
 }
 
@@ -249,6 +262,9 @@ pub struct Lines {
     pub owners: Vec<Option<Owner>>,
     pub scroll: Scroll,
     pub spins: bool,
+    /// The columns the top line's ⏰ chip takes, from and to, while it
+    /// shows, which a click there takes for `Owner::Reminders`.
+    pub reminders_at: Option<(usize, usize)>,
 }
 
 /// A tab's badge: a colored pill three columns wide, the spinner turning
@@ -399,6 +415,20 @@ pub fn sidebar_lines(
         row.put(said, fg(theme.dim));
         used
     };
+    // The tabs waiting on a reminder, while the Reminders group is left
+    // out: their chip, which a click opens the Reminders view from; gives
+    // the columns it took.
+    let reminders_chip = |row: &mut Row| -> Option<(usize, usize)> {
+        if view.reminders == 0 {
+            return None;
+        }
+        let from: usize = row.spans.iter().map(|s| width(&s.content)).sum();
+        let chip = kit::chip(&format!("⏰ {}", view.reminders), Tone::Dim, false, theme);
+        let to = from + chip.iter().map(|s| width(&s.content)).sum::<usize>();
+        row.spans.extend(chip);
+        Some((from, to))
+    };
+    let mut reminders_at = None;
     if r.ux2 {
         // The count, a ☕ while the computer is held awake, and on the
         // right how to filter; the groups' own headings say how many need
@@ -406,11 +436,16 @@ pub fn sidebar_lines(
         let n = tabs.len();
         let said = format!("{n} {}", if n == 1 { "tab" } else { "tabs" });
         pill_row.put(" ", Style::new());
-        let mut used = 1 + repo_chip(&mut pill_row);
+        // The ⏰ chip first, so a long repository chip never pushes it off.
+        if view.reminders > 0 {
+            reminders_at = reminders_chip(&mut pill_row);
+            pill_row.put(" ", Style::new());
+        }
+        repo_chip(&mut pill_row);
         if view.repo.is_none() {
             pill_row.put(said.clone(), fg(theme.dim));
-            used += width(&said);
         }
+        let mut used: usize = pill_row.spans.iter().map(|s| width(&s.content)).sum();
         if view.awake {
             let cup = kit::mark(Mark::Awake, 0, theme);
             used += 2 + width(&cup.content);
@@ -428,6 +463,12 @@ pub fn sidebar_lines(
             .put(" ", Style::new())
             .put(format!(" {session} "), pill)
             .put("  ", Style::new());
+        // The ⏰ chip first, so the counts after it are what a narrow
+        // sidebar cuts.
+        if view.reminders > 0 {
+            reminders_at = reminders_chip(&mut pill_row);
+            pill_row.put(" ", Style::new());
+        }
         if repo_chip(&mut pill_row) > 0 {
             pill_row.put("  ", Style::new());
         }
@@ -435,8 +476,13 @@ pub fn sidebar_lines(
     }
     // The filter's chip clears it on a click, so its line lights under
     // the mouse as a tab does.
-    let chip_lit = view.repo.is_some() && view.hover == Some(&Owner::RepoChip);
+    let chip_lit = view.repo.is_some() && view.hover == Some(&Owner::RepoChip)
+        || reminders_at.is_some() && view.hover == Some(&Owner::Reminders);
     head.push(pill_row.fit(cols, chip_lit.then_some(theme.panel)));
+    // Only the columns of it the line kept are a target.
+    let reminders_at = reminders_at
+        .filter(|(from, _)| *from < cols)
+        .map(|(from, to)| (from, to.min(cols)));
     // A / filter being typed, or kept, in the line under it.
     match view.filter {
         Some(f) => {
@@ -492,25 +538,30 @@ pub fn sidebar_lines(
         if !r.ux2 {
             heading.put(format!(" {}", group.tabs.len()), fg(theme.faint));
         }
-        let other_repos = group.stage == Stage::OtherRepos;
-        // Other repos' heading folds or unfolds it on a click, so it lights
+        let owner = Owner::Group(group.stage);
+        // A heading folds or unfolds its group on a click, so it lights
         // under the mouse.
-        let heading_lit = other_repos && view.hover == Some(&Owner::OtherRepos);
+        let heading_lit = view.hover == Some(&owner);
         lines.push(heading.fit(cols, heading_lit.then_some(theme.panel)));
-        owners.push(other_repos.then_some(Owner::OtherRepos));
-        if other_repos && view.folded {
+        owners.push(Some(owner.clone()));
+        if view.folded.contains(&group.stage) {
             // Folded: one line of its tabs' marks, so a waiting one still
-            // shows, their count and their repositories by name.
-            let chosen = view.focused && view.cursor == Some(&Owner::OtherRepos);
+            // shows, and their count; Other repos' with their
+            // repositories by name.
+            let chosen = view.focused && view.cursor == Some(&owner);
             let fill = if chosen {
                 Some(theme.highlight)
-            } else if view.hover == Some(&Owner::OtherRepos) {
+            } else if view.hover == Some(&owner) {
                 Some(theme.panel)
             } else {
                 None
             };
             let mut names: Vec<String> = Vec::new();
-            for t in &group.tabs {
+            for t in group
+                .tabs
+                .iter()
+                .filter(|_| group.stage == Stage::OtherRepos)
+            {
                 let name = t
                     .repo_dir
                     .as_deref()
@@ -536,7 +587,10 @@ pub fn sidebar_lines(
                 said.push_str(&names.join(", "));
             }
             row.put(said, fg(theme.dim));
-            if chosen {
+            // Its line holds the list's place as the chosen tab would: the
+            // cursor on it, or the tab in front folded into it.
+            let holds_here = selected.is_some_and(|s| group.tabs.iter().any(|t| t.id == s));
+            if chosen || holds_here {
                 cursor_at = lines.len();
                 cursor_end = lines.len();
             }
@@ -554,7 +608,7 @@ pub fn sidebar_lines(
                 row.fit(cols, fill)
             };
             lines.push(line);
-            owners.push(Some(Owner::OtherRepos));
+            owners.push(Some(owner));
             lines.push(Line::blank(cols));
             owners.push(None);
             continue;
@@ -815,6 +869,14 @@ pub fn sidebar_lines(
     // each, and are gone when there are none; they never scroll away
     // either.
     let mut top_owners: Vec<Option<Owner>> = Vec::new();
+    // Their heading folds or unfolds them on a click, so it lights under
+    // the mouse; folded, they are one line of their kinds.
+    let notices_lit = view.hover == Some(&Owner::Notices);
+    let kinds = notices
+        .iter()
+        .map(|n| n.title.as_str())
+        .collect::<Vec<_>>()
+        .join(" · ");
     if r.ux2 && !notices.is_empty() {
         let heading = Line {
             spans: kit::label(
@@ -824,11 +886,26 @@ pub fn sidebar_lines(
                 cols,
                 theme,
             ),
-            fill: None,
+            fill: notices_lit.then_some(theme.panel),
         };
         head.push(heading);
-        top_owners.push(None);
-        for n in notices {
+        top_owners.push(Some(Owner::Notices));
+        if view.notices_folded {
+            let mut row = Row::default();
+            row.put("▸ ", fg(theme.dim))
+                .put(kinds.clone(), fg(theme.text));
+            head.push(Line {
+                spans: kit::row(
+                    row.fit(cols.saturating_sub(1), None).spans,
+                    cols,
+                    false,
+                    theme,
+                ),
+                fill: notices_lit.then_some(theme.panel),
+            });
+            top_owners.push(Some(Owner::Notices));
+        }
+        for n in notices.iter().filter(|_| !view.notices_folded) {
             let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
                 Some(theme.highlight)
             } else if view.hover == Some(&n.owner) {
@@ -873,9 +950,16 @@ pub fn sidebar_lines(
         heading
             .put(" ", Style::new())
             .put("NOTIFICATIONS", bold(YELLOW));
-        notice_lines.push(heading.fit(cols, None));
-        notice_owners.extend([None, None, None]);
-        for n in notices {
+        notice_lines.push(heading.fit(cols, notices_lit.then_some(theme.panel)));
+        notice_owners.extend([None, None, Some(Owner::Notices)]);
+        if view.notices_folded {
+            let mut row = Row::default();
+            row.put(" ▸ ", fg(theme.dim))
+                .put(kinds.clone(), fg(theme.text));
+            notice_lines.push(row.fit(cols, notices_lit.then_some(theme.panel)));
+            notice_owners.push(Some(Owner::Notices));
+        }
+        for n in notices.iter().filter(|_| !view.notices_folded) {
             // The sidebar's cursor on it, as on a tab.
             let fill = if view.focused && view.cursor.is_some_and(|c| c.same_row(&n.owner)) {
                 Some(theme.highlight)
@@ -1034,11 +1118,15 @@ pub fn sidebar_lines(
             length,
             owners: owners
                 .iter()
-                .map(|o| o.as_ref().and_then(Owner::tab))
+                .map(|o| {
+                    o.clone()
+                        .filter(|o| matches!(o, Owner::Tab(_) | Owner::Group(_)))
+                })
                 .collect(),
             cursor_at,
         },
         spins,
+        reminders_at,
     }
 }
 
@@ -1095,6 +1183,8 @@ mod tests {
     use crate::sidebar::model::tests::{NOW_MS, rules, tab};
     use crate::sidebar::model::{MergeState, TabLoop};
 
+    static NONE_FOLDED: std::collections::BTreeSet<Stage> = std::collections::BTreeSet::new();
+
     fn view(here: u32) -> View<'static> {
         View {
             focused: false,
@@ -1107,7 +1197,9 @@ mod tests {
             hover: None,
             awake: false,
             repo: None,
-            folded: false,
+            folded: &NONE_FOLDED,
+            notices_folded: false,
+            reminders: 0,
             build: None,
         }
     }
@@ -1875,5 +1967,100 @@ mod tests {
         assert_eq!(buf[(4, 0)].symbol(), "b");
         assert_eq!(buf[(6, 0)].bg, Color::Indexed(238));
         assert_eq!(buf[(7, 0)].symbol(), " ", "nothing past its area");
+    }
+    #[test]
+    fn a_folded_group_is_its_heading_and_one_line_of_its_tabs_marks() {
+        let mut waiting = tab(1, "asks", TabState::Waiting);
+        waiting.wait = Some("permission".into());
+        let tabs = vec![
+            waiting,
+            tab(2, "busy", TabState::Working),
+            tab(3, "also busy", TabState::Working),
+        ];
+        let folded = std::collections::BTreeSet::from([Stage::Working]);
+        let v = View {
+            folded: &folded,
+            ..view(1)
+        };
+        let out = lines(&tabs, 34, 20, &v);
+        let text = texts(&out);
+        let heading = text
+            .iter()
+            .position(|l| l.starts_with(" WORKING 2"))
+            .expect("Working's heading with its count");
+        assert!(text[heading + 1].contains("2 tabs"), "{text:?}");
+        assert!(!text.iter().any(|l| l.contains("busy")), "{text:?}");
+        assert_eq!(out.owners[heading], Some(Owner::Group(Stage::Working)));
+        assert_eq!(out.owners[heading + 1], Some(Owner::Group(Stage::Working)));
+        // Needs you, unfolded, still lists its tab, its heading a click
+        // target of its own.
+        let needs = text
+            .iter()
+            .position(|l| l.starts_with(" NEEDS YOU 1"))
+            .unwrap();
+        assert_eq!(out.owners[needs], Some(Owner::Group(Stage::Needs)));
+        assert!(text.iter().any(|l| l.contains("asks")), "{text:?}");
+    }
+
+    #[test]
+    fn folded_notifications_are_their_heading_and_one_line_of_their_kinds() {
+        let notice = |source: &str, title: &str| Notice {
+            owner: Owner::Notice {
+                source: source.into(),
+                id: "n1".into(),
+            },
+            title: title.into(),
+            detail: "detail".into(),
+            time: None,
+        };
+        let notices = [
+            notice("slack", "3 new on Slack"),
+            notice("prs", "2 PR updates"),
+        ];
+        let v = View {
+            notices_folded: true,
+            ..view(1)
+        };
+        let out = sidebar_lines(
+            &[tab(1, "work", TabState::Idle)],
+            None,
+            &notices,
+            &[],
+            "s",
+            50,
+            20,
+            &v,
+            &rules(),
+            &Theme::DARK,
+        );
+        let text = texts(&out);
+        assert_eq!(
+            text[18..],
+            [
+                " NOTIFICATIONS".to_string(),
+                " ▸ 3 new on Slack · 2 PR updates".to_string(),
+            ]
+        );
+        assert_eq!(out.owners[18], Some(Owner::Notices));
+        assert_eq!(out.owners[19], Some(Owner::Notices));
+        assert!(!text.iter().any(|l| l.contains("detail")), "{text:?}");
+    }
+
+    #[test]
+    fn tabs_left_out_for_their_reminders_are_counted_on_the_top_lines_chip() {
+        let v = View {
+            reminders: 3,
+            ..view(1)
+        };
+        let out = lines(&[tab(1, "work", TabState::Idle)], 40, 10, &v);
+        let top = out.lines[0].text();
+        let (from, to) = out.reminders_at.expect("the chip's columns");
+        let chip: String = top.chars().skip(from).take(to - from).collect();
+        assert!(chip.contains("⏰ 3"), "{top:?} {from}..{to}");
+        assert!(
+            lines(&[tab(1, "work", TabState::Idle)], 40, 10, &view(1))
+                .reminders_at
+                .is_none()
+        );
     }
 }

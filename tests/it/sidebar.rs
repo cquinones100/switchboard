@@ -1421,3 +1421,98 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
         !s.iter().any(|l| l.contains("r capture again"))
     });
 }
+
+// Any group folds: `z` on a tab folds its group to its heading and a line
+// of its tabs' marks, the cursor onto that line, where Enter unfolds it; a
+// click on a heading folds it; the fold outlives an upgrade; and M-1 to a
+// tab under it from the sidebar unfolds it again.
+#[test]
+fn z_or_a_click_on_its_heading_folds_a_group_and_enter_unfolds_it() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "bee"]);
+    row_of(&mut client, "bee");
+    let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
+
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("z");
+    wait_list(&server, "Other folded", |l| folded(l) == json!(["other"]));
+    let line = row_of(&mut client, "2 tabs");
+    assert!(row_of(&mut client, "OTHER 2") < line);
+    client.wait_for("bee folded away", |s| {
+        !s.iter().any(|l| left(l, 34).contains("bee"))
+    });
+
+    // On the folded line, Enter unfolds it.
+    client.type_text("\r");
+    wait_list(&server, "Other unfolded", |l| folded(l) == json!([]));
+    row_of(&mut client, "bee");
+    client.type_text("q");
+    wait_list(&server, "back out", |l| !focused(l));
+
+    // A click on its heading folds it.
+    let heading = row_of(&mut client, "OTHER 2");
+    client.send(format!("\x1b[<0;4;{}M\x1b[<0;4;{}m", heading + 1, heading + 1).as_bytes());
+    wait_list(&server, "folded by a click", |l| {
+        folded(l) == json!(["other"])
+    });
+
+    // Kept through an upgrade.
+    let (code, out, err) = server.run(&["upgrade"]);
+    assert_eq!(code, 0, "{out}{err}\nserver log: {}", server.log());
+    wait_list(&server, "the fold kept", |l| folded(l) == json!(["other"]));
+
+    // A digit for a tab under it, from the sidebar, unfolds it.
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused again", focused);
+    client.type_text("2");
+    wait_list(&server, "unfolded for the digit's tab", |l| {
+        folded(l) == json!([]) && tabs(l)[1]["current"] == true && focused(l)
+    });
+}
+
+// With sidebar_reminders off, a tab waiting on a reminder is left out of
+// the sidebar and counted on the top line's chip.
+#[test]
+fn with_sidebar_reminders_off_the_reminders_group_is_a_chip_on_the_top_line() {
+    let server = TestServer::start();
+    settings(&server, json!({"sidebar_reminders": false}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-d", "-n", "later"]);
+    row_of(&mut client, "later");
+    let second = tabs(&server.list())[1]["id"].as_str().unwrap().to_string();
+    let at = jiff::Timestamp::now().as_second() + 3600;
+    server.ok(&["set", "-t", &second, "@remind_at", &at.to_string()]);
+    client.wait_for("the chip, and no Reminders group", |s| {
+        left(&s[0], 34)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .ends_with(&["⏰", "1"])
+            && !s.iter().any(|l| left(l, 34).contains("REMINDERS"))
+            && !s.iter().any(|l| left(l, 34).contains("later"))
+    });
+}
+
+// A / search that matches no tab keeps the focus in the sidebar, so
+// Backspace can still fix it.
+#[test]
+fn a_search_matching_nothing_keeps_the_sidebar_focused() {
+    let server = TestServer::start();
+    settings(&server, json!({}));
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("/zzzq");
+    client.wait_for("the search typed", |s| left(&s[1], 34).contains("/zzzq"));
+    std::thread::sleep(Duration::from_millis(100) * common::patience());
+    assert!(focused(&server.list()), "the search left the sidebar");
+    client.type_text("\x7f");
+    client.wait_for("Backspace in the search", |s| {
+        left(&s[1], 34).contains("/zzz") && !left(&s[1], 34).contains("/zzzq")
+    });
+}
