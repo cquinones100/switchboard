@@ -157,6 +157,65 @@ impl Server {
 
     // ── Reading ─────────────────────────────────────────────────────────────
 
+    /// Asks Haiku for a sentence on each pane's last turn that has ended
+    /// (a reply, no call waiting, its Claude neither working nor waiting),
+    /// once a turn, in a task of its own, with Settings' `turn_summaries`
+    /// and `ux2` on, the cards that show it being UX 2.0's
+    /// (src/mission/summary.rs). A turn begun over a day ago is left as
+    /// it is, so a server starting doesn't send every old tab's.
+    fn summarize_turns(&mut self, reads: &std::collections::HashMap<PaneId, PaneRead>) {
+        if !settings::is_on("turn_summaries") || !settings::is_on("ux2") {
+            return;
+        }
+        let day_ago = util::now_ms() - 86_400_000;
+        let away = self.away();
+        for (pane, read) in reads {
+            let (Some(session), Some(turn)) = (&read.session, &read.turn) else {
+                continue;
+            };
+            // What was kept for the session shows whatever the turn's age.
+            self.mission.summaries.load(&session.session_id);
+            let (Some(at), Some(reply)) = (turn.at, &turn.reply) else {
+                continue;
+            };
+            let ended = turn.pending.is_none()
+                && !matches!(
+                    self.agents.state(*pane),
+                    Some(State::Working | State::Waiting)
+                );
+            // Held while you're away (`pause_when_away`), as the lookups
+            // are, and asked once you're back.
+            if !ended
+                || at < day_ago
+                || away
+                || !self.mission.summaries.ask_now(&session.session_id, at)
+            {
+                continue;
+            }
+            let program = util::which("claude").unwrap_or_else(|| "claude".into());
+            let (session, prompt, reply) = (
+                session.session_id.clone(),
+                turn.prompt.clone(),
+                reply.clone(),
+            );
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let text = crate::mission::summary::ask(
+                    &program,
+                    &crate::mission::summary::dir(),
+                    &prompt,
+                    &reply,
+                )
+                .await;
+                let _ = tx.send(Event::Mission(crate::mission::MissionEvent::Summary {
+                    session,
+                    turn_at: at,
+                    text,
+                }));
+            });
+        }
+    }
+
     /// Reads, for every pane, the Claude conversation in front of it and what
     /// it runs in the background, from Claude Code's files: the session files
     /// (each read again only when it changed), each process's group (one
@@ -238,6 +297,7 @@ impl Server {
             })
             .collect();
         let changed = reads != self.sidebar.panes;
+        self.summarize_turns(&reads);
         self.sidebar.panes = reads;
         self.sidebar.stale = false;
         self.sidebar_hand_back(&interrupted);
@@ -468,6 +528,9 @@ impl Server {
             Some(r) if session.is_some() && base != TabState::Waiting => r.work.clone(),
             _ => claude::Work::default(),
         };
+        // A working tab's loop counts only for its round, which its card
+        // shows.
+        let round = work.loop_run.as_ref().map_or(0, |r| r.round);
         if base == TabState::Working {
             work = claude::Work {
                 api_error: work.api_error,
@@ -539,6 +602,7 @@ impl Server {
         }
         t.background = work.count;
         t.monitors = work.monitors.clone();
+        t.round = round;
         t.tab_loop = work
             .loop_run
             .clone()
@@ -549,6 +613,12 @@ impl Server {
         t.wait = stopped
             .map(|(text, _)| text)
             .or_else(|| agent.and_then(|a| some(&a.wait)));
+        t.ask = agent
+            .filter(|a| a.wait.is_some())
+            .and_then(|a| a.ask.clone());
+        t.doing = agent
+            .filter(|a| a.state == Some(crate::agent::State::Working))
+            .and_then(|a| a.doing.clone());
         t.loop_skill = agent.and_then(|a| some(&a.loop_name));
         t.phase = agent.and_then(|a| some(&a.phase));
         t.since = since;
@@ -565,6 +635,12 @@ impl Server {
         t.claude_pane = claude_pane;
         t.claude = session;
         t.turn = read.and_then(|r| r.turn.clone());
+        // Shown only while the setting is on, whatever was kept before.
+        t.summary = read
+            .filter(|_| settings::is_on("turn_summaries"))
+            .and_then(|r| Some((r.session.as_ref()?, r.turn.as_ref()?.at?)))
+            .and_then(|(s, at)| self.mission.summaries.get(&s.session_id, at))
+            .map(str::to_string);
         // The PR its label shows, else the one GitHub says its branch has.
         t.pr = pr;
         t.pr_repo = self.tab_pr_repo(id).map(ToString::to_string);

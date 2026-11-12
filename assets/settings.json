@@ -372,6 +372,13 @@
     "default": true
   },
   {
+    "key": "turn_summaries",
+    "category": "Mission control",
+    "label": "Summaries of each turn",
+    "description": "With UX 2.0, each card says what its tab's last turn did, in a sentence Haiku writes as the turn ends from the turn's prompt and last reply, which this sends to Claude; off, as it is by default, nothing is sent and a card shows the reply's first line",
+    "default": false
+  },
+  {
     "key": "view_work_map",
     "category": "Mission control",
     "label": "Work map",

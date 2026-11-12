@@ -195,6 +195,16 @@ pub struct TabModel {
     pub activity: Option<String>,
     /// What it waits on: a permission, a question, an API error.
     pub wait: Option<String>,
+    /// The same word for word, when its hook said it.
+    pub ask: Option<crate::agent::Wait>,
+    /// The tool call its Claude is on, while it works.
+    pub doing: Option<crate::agent::Doing>,
+    /// Its last turn in a sentence, as Haiku wrote it once the turn ended
+    /// (src/mission/summary.rs).
+    pub summary: Option<String>,
+    /// The round its review loop is on, working or between rounds; 0 with
+    /// none.
+    pub round: usize,
     /// The loop skill its session runs, from when the skill was asked for.
     pub loop_skill: Option<String>,
     /// The loop's step, when it says (queue-and-clean's landing).
@@ -261,6 +271,10 @@ impl TabModel {
             tab_loop: None,
             activity: None,
             wait: None,
+            ask: None,
+            doing: None,
+            summary: None,
+            round: 0,
             loop_skill: None,
             phase: None,
             since: None,

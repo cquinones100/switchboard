@@ -117,6 +117,7 @@ impl Server {
             }
             hook.tool.clear();
             hook.wait.clear();
+            hook.ask = None;
         }
         // A prompt given in a tab whose work landed is new work, so the
         // landing no longer files it under Merged.

@@ -1207,6 +1207,9 @@ pub struct Turn {
     /// The question it is stopped on, when the call it is stopped on is
     /// one (AskUserQuestion), when it was asked (ms) and the call's id.
     pub asks: Option<(String, i64, String)>,
+    /// What Claude said last before the call it is stopped on, the reason
+    /// it gives for asking; `None` with no call unanswered or nothing said.
+    pub before: Option<String>,
 }
 
 /// The prompt as you typed it: a slash command as `/name args`, pasted text
@@ -1296,7 +1299,9 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         .iter()
         .rposition(|e| str_of(e.get("type")) == "user" && prompt_text(e).is_some())?;
     let mut said: Vec<String> = Vec::new();
-    let mut calls: IndexMap<String, (Value, bool, i64)> = IndexMap::new();
+    // Each call: whether it was answered, when it was made, and how many
+    // of the turn's texts had been said by then.
+    let mut calls: IndexMap<String, (Value, bool, i64, usize)> = IndexMap::new();
     for entry in &entries[start + 1..] {
         let parts = entry
             .pointer("/message/content")
@@ -1315,7 +1320,8 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
                         }
                         "tool_use" => {
                             let at = timestamp_ms(entry);
-                            calls.insert(str_of(part.get("id")).to_string(), (part, false, at));
+                            let id = str_of(part.get("id")).to_string();
+                            calls.insert(id, (part, false, at, said.len()));
                         }
                         _ => {}
                     }
@@ -1334,14 +1340,15 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
             _ => {}
         }
     }
-    let stopped_on = calls.values().rev().find(|(_, answered, _)| !answered);
-    let pending = stopped_on.map(|(part, _, _)| tool_text(part));
+    let stopped_on = calls.values().rev().find(|(_, answered, _, _)| !answered);
+    let pending = stopped_on.map(|(part, _, _, _)| tool_text(part));
     let pending_call = stopped_on
-        .map(|(part, _, _)| str_of(part.get("id")).to_string())
+        .map(|(part, _, _, _)| str_of(part.get("id")).to_string())
         .unwrap_or_default();
     let asks = stopped_on
-        .filter(|(part, _, at)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
-        .map(|(part, _, at)| (tool_text(part), *at, str_of(part.get("id")).to_string()));
+        .filter(|(part, _, at, _)| str_of(part.get("name")) == "AskUserQuestion" && *at != 0)
+        .map(|(part, _, at, _)| (tool_text(part), *at, str_of(part.get("id")).to_string()));
+    let before = stopped_on.and_then(|(_, _, _, said_by)| said[..*said_by].last().cloned());
     let at = timestamp_ms(&entries[start]);
     Some(Turn {
         prompt: prompt_text(&entries[start]).unwrap_or_default(),
@@ -1350,8 +1357,12 @@ pub fn parse_turn(text: &str) -> Option<Turn> {
         tools: calls.len(),
         pending,
         pending_call,
-        unanswered: calls.values().filter(|(_, answered, _)| !answered).count(),
+        unanswered: calls
+            .values()
+            .filter(|(_, answered, _, _)| !answered)
+            .count(),
         asks,
+        before,
     })
 }
 
@@ -2280,6 +2291,22 @@ mod tests {
         assert_eq!(turn.tools, 2);
         assert_eq!(turn.pending.as_deref(), Some("Bash: npm test"));
         assert_eq!(turn.asks, None, "a command waiting is no question");
+        assert_eq!(turn.before.as_deref(), Some("Ready to run the tests."));
+        // Said after the call it waits on is no reason for asking it.
+        let later = format!(
+            "{text}\n{}",
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "While that waits."}]}})
+        );
+        assert_eq!(
+            parse_turn(&later).unwrap().before.as_deref(),
+            Some("Ready to run the tests.")
+        );
+        // With every call answered, there is nothing it asks.
+        let answered = format!(
+            "{text}\n{}",
+            json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "b", "content": "ok"}]}})
+        );
+        assert_eq!(parse_turn(&answered).unwrap().before, None);
         assert_eq!(
             turn.at,
             Some(

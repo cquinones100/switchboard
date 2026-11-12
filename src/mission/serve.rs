@@ -137,8 +137,15 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "Inbox with UX 2.0: its menu, marking it read; go to the tab working on its ticket; dismiss it here, unread in Linear; its ticket in Linear; on a narrow screen, its ticket in the list's place (i or esc back)",
     ),
     ("s", "Resources view: sort the tabs by CPU or by memory"),
+    (
+        "s",
+        "Tabs with UX 2.0: the chosen card's screen in its place, until s again or the cursor moves",
+    ),
     ("/", "filter the cards and rows (↵ keep, esc clear)"),
-    ("1-9", "choose that tab"),
+    (
+        "1-9",
+        "choose that tab; with UX 2.0, on a card waiting on you, answer with that option (or go to the tab when the card can't show it whole)",
+    ),
     ("] [", "next, last view (with UX 2.0, in its group)"),
     ("} {", "with UX 2.0, the next, last group of views"),
     (
@@ -511,7 +518,34 @@ impl Server {
                 .tab_path(id)
                 .and_then(|p| self.tab_names.names.branch(p))
                 .map(str::to_string);
-            out.insert(id, super::Screen { lines, branch });
+            // A waiting Claude's numbered options, as its screen shows them,
+            // read from its own pane, parked behind a tool in its place too.
+            let asking = self
+                .tab_panes(id)
+                .into_iter()
+                .find(|p| self.agents.state(*p) == Some(crate::agent::State::Waiting));
+            let (options, question, more) = match asking.and_then(|p| self.panes.get(&p)) {
+                Some(slot) => answer::options_in(&slot.pane.text(60))
+                    .map(|p| {
+                        (
+                            p.options.into_iter().map(|o| o.label).collect(),
+                            p.question,
+                            p.more,
+                        )
+                    })
+                    .unwrap_or_default(),
+                _ => Default::default(),
+            };
+            out.insert(
+                id,
+                super::Screen {
+                    lines,
+                    branch,
+                    options,
+                    question,
+                    more,
+                },
+            );
         }
         self.mission.screens = kept;
         out
@@ -1022,14 +1056,13 @@ impl Server {
         if reminder_chosen {
             follow_reminder(&mut m);
         }
-        // A Calendar keycap's focus goes with the event it was given on; a
-        // Reminders keycap's stays, acting on the chosen day's reminder.
-        let keycap_kept = (on_calendar(&m)
-            && m.keycap_for.is_some()
-            && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref())
-            || on_reminders(&m);
+        // A keycap's focus goes with the Calendar event, or the waiting
+        // card, it was given on; a Reminders keycap's stays, acting on the
+        // chosen day's reminder.
+        let keycap_kept =
+            (m.keycap_for.is_some() && keycap_owner(&m) == m.keycap_for) || on_reminders(&m);
         if matches!(m.focus, Some(Focus::Key(_))) && !keycap_kept {
-            m.focus = on_calendar(&m).then_some(Focus::Item);
+            m.focus = (on_calendar(&m) || m.view == 0).then_some(Focus::Item);
         }
         self.calendar_extras(&mut m);
         self.inbox_extras(&mut m);
@@ -1566,6 +1599,16 @@ impl Server {
                     self.mission_redraw();
                 }
             }
+            MissionEvent::Summary {
+                session,
+                turn_at,
+                text,
+            } => {
+                if self.mission.summaries.got(&session, turn_at, text) {
+                    self.mission_changed();
+                    self.mission_redraw();
+                }
+            }
             MissionEvent::Counted(tree, counts) => {
                 self.mission.counting = None;
                 self.mission.counts.insert(tree, counts);
@@ -1807,8 +1850,8 @@ impl Server {
             Some(Focus::Filter) if press => k = Key::new(KeyCode::Char('/'), Mods::NONE),
             Some(Focus::Key(key))
                 if press
-                    && on_calendar(m)
-                    && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref() =>
+                    && (on_calendar(m) || waiting_card(m).is_some())
+                    && keycap_owner(m) == m.keycap_for =>
             {
                 k = key
             }
@@ -1878,7 +1921,7 @@ impl Server {
         }
         let count = match m.current() {
             Some(v) => v.data.items.len(),
-            None => m.snap.tabs.len(),
+            None => m.order().len(),
         } as isize;
         let tab_focus = m.snap.tab_focus;
         let ctrl = k.mods == Mods::CTRL;
@@ -1995,8 +2038,74 @@ impl Server {
             KeyCode::Char(c @ '1'..='7') if none && notice_history_here(m) => {
                 choose_kind(m, c.to_digit(10).unwrap_or(1) as usize);
             }
+            // With UX 2.0, the shelf folded to its labels opens on one.
+            KeyCode::Enter if shelf_label_chosen(m) => {
+                // The cursor stays on the label's first tab as the rest
+                // of the shelf comes out around it.
+                let chosen = chosen_tab(m);
+                m.shelf_open = true;
+                if let Some(at) = chosen.and_then(|t| m.order().iter().position(|x| *x == t)) {
+                    m.cursor = at as isize;
+                }
+            }
             KeyCode::Enter => self.mission_enter(client, m),
             KeyCode::Char('m') if none && pilot_menu_here(m) => self.autopilot_menu(client),
+            // With UX 2.0, s shows the chosen card's screen in its place,
+            // until s again or the cursor moves.
+            KeyCode::Char('s') if none && m.view == 0 && m.snap.rules.ux2 => {
+                let chosen = chosen_tab(m);
+                let shown = chosen.is_some_and(|t| m.card_screen == Some((t, m.cursor)));
+                m.card_screen = match (shown, chosen) {
+                    (false, Some(tab)) => Some((tab, m.cursor)),
+                    _ => None,
+                };
+            }
+            // A card waiting on you takes its option's number as the answer.
+            // Anything the card doesn't show whole goes to the tab instead,
+            // whose prompt is Claude Code's own and shows all of it.
+            KeyCode::Char(c @ '1'..='9') if none && waiting_card(m).is_some() => {
+                if let Some(tab) = waiting_card(m) {
+                    let n = c.to_digit(10).unwrap_or(0);
+                    let fits = m.snap.tabs.iter().find(|t| t.id == tab).is_some_and(|t| {
+                        let screen = m.snap.screens.get(&tab);
+                        super::render::ask_fits(t, screen)
+                            && super::render::option_answers(t, screen, n)
+                    });
+                    // Only an option the card shows whole, never one it lacks
+                    // (which would be taken as an answer of your own), nor
+                    // one whose line reached the pane's edge, which may go
+                    // on in a line the screen's reading leaves out; and not
+                    // while the card shows its screen, cut to its width. A
+                    // question of several choices, whose ticks the card
+                    // doesn't show, goes to the tab too.
+                    let pane_cols = self
+                        .claude_pane_of(tab)
+                        .and_then(|p| self.panes.get(&p))
+                        .map_or(0, |slot| slot.pane.size().0 as usize);
+                    let shown_whole = self.prompt_of(tab).is_some_and(|p| {
+                        !p.multi
+                            && p.free != Some(n)
+                            && p.options.iter().any(|o| {
+                                let w = crate::ui::draw::width(&o.label);
+                                o.n == n && w <= super::render::OPTION_W && w + 12 < pane_cols
+                            })
+                    });
+                    let on_screen = m
+                        .card_screen
+                        .is_some_and(|(t, at)| t == tab && at == m.cursor);
+                    // Drawn as the card was last drawn, not cut off at its
+                    // foot or past the screen's edge.
+                    let drawn = m
+                        .hits
+                        .iter()
+                        .any(|h| h.spot == Spot::Key(Key::new(KeyCode::Char(c), Mods::NONE)));
+                    if fits && shown_whole && !on_screen && drawn {
+                        self.answer_tab(client, tab, &c.to_string());
+                    } else {
+                        self.mission_do(client, Do::GoTo(tab), "");
+                    }
+                }
+            }
             KeyCode::Char(c @ '1'..='9') if none && m.view == 0 => {
                 let n = c.to_digit(10).unwrap_or(0) as usize;
                 let order = m.order();
@@ -4500,11 +4609,12 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             if let Spot::Key(key) = spot {
                 m.hover = None;
                 // A Calendar keycap acts on its event, a Reminders keycap on
-                // its reminder, and the Inbox ticket's tab line on its
-                // notification: a filter being typed is kept, done typing,
-                // rather than given the key.
+                // its reminder, a waiting card's option on its card, and the
+                // Inbox ticket's tab line on its notification: a filter being
+                // typed is kept, done typing, rather than given the key.
                 if (on_calendar(m)
                     || on_reminders(m)
+                    || waiting_card(m).is_some()
                     || m.current().is_some_and(|v| inbox_board::shown(m, v)))
                     && let Some(f) = m.filter.as_mut()
                 {
@@ -4909,7 +5019,7 @@ fn spin_frame(m: &mut Mission, boxed: bool) -> usize {
 fn fit_cursor(m: &mut Mission) {
     let count = match m.current() {
         Some(v) => v.data.items.len(),
-        None => m.snap.tabs.len(),
+        None => m.order().len(),
     } as isize;
     m.cursor = m.cursor.min(count - 1).max(floor(m));
     settle(m);
@@ -4947,9 +5057,62 @@ fn only_moves(m: &Mission, key: Key) -> bool {
         KeyCode::Char('n' | 'p') => ctrl,
         KeyCode::Char('G') | KeyCode::End => true,
         KeyCode::Tab | KeyCode::BackTab => m.snap.tab_focus,
-        KeyCode::Char('1'..='9') => none && m.view == 0,
+        KeyCode::Char('1'..='9') => none && m.view == 0 && waiting_card(m).is_none(),
         _ => false,
     }
+}
+
+/// What a keycap's focus is given on: the Calendar's chosen event, or the
+/// waiting card's tab, which its options' numbers answer.
+fn keycap_owner(m: &Mission) -> Option<String> {
+    if m.view == 0 {
+        waiting_card(m).map(|t| format!("tab {}", t.0))
+    } else {
+        m.chosen_item().map(|i| i.id.clone())
+    }
+}
+
+/// The tab of the chosen card on the Tabs view.
+fn chosen_tab(m: &Mission) -> Option<TabId> {
+    if m.view != 0 {
+        return None;
+    }
+    let at = usize::try_from(m.cursor).ok()?;
+    m.order().get(at).copied()
+}
+
+/// With UX 2.0, the chosen card's tab while it waits on you, whose options
+/// 1-9 answer.
+fn waiting_card(m: &Mission) -> Option<TabId> {
+    if !m.snap.rules.ux2 {
+        return None;
+    }
+    let tab = chosen_tab(m)?;
+    m.snap
+        .tabs
+        .iter()
+        .any(|t| t.id == tab && t.state == crate::sidebar::model::TabState::Waiting)
+        .then_some(tab)
+}
+
+/// Whether the chosen place is a label of the shelf folded on a narrow
+/// screen, which Enter opens.
+fn shelf_label_chosen(m: &Mission) -> bool {
+    if m.view != 0 || !m.snap.rules.ux2 || m.shelf_open {
+        return false;
+    }
+    if super::render::across(m.size.0 as usize) > 1 {
+        return false;
+    }
+    chosen_tab(m).is_some_and(|tab| {
+        m.snap.tabs.iter().any(|t| {
+            t.id == tab
+                && matches!(
+                    crate::sidebar::model::stage_of(t, &m.snap.rules),
+                    crate::sidebar::model::Stage::Landing | crate::sidebar::model::Stage::Idle
+                )
+        })
+    })
 }
 
 fn settle(m: &mut Mission) {
@@ -5012,13 +5175,7 @@ fn row_step(m: &Mission, by: isize) -> isize {
         }
         return to;
     }
-    let cols = m.size.0 as usize;
-    let g = super::render::grid(
-        &m.snap.tabs,
-        &m.snap.rules,
-        cols,
-        super::render::card_width(cols, m.snap.card),
-    );
+    let g = super::render::tabs_grid(m, m.size.0 as usize);
     // The line of the note worked continuously, above the first row: j goes
     // down to the first card, and k from the first row up to it.
     if m.cursor < 0 {
@@ -5238,7 +5395,7 @@ fn move_focus(m: &mut Mission, by: isize) {
     let board = m.current().and_then(View::columns).is_some();
     let count = match m.current() {
         Some(v) => v.data.items.len(),
-        None => m.snap.tabs.len(),
+        None => m.order().len(),
     };
     let mut stops: Vec<Stop> = match m.groups() {
         Some(groups) => {
@@ -5279,6 +5436,13 @@ fn move_focus(m: &mut Mission, by: isize) {
         .iter()
         .filter_map(|h| match h.spot {
             Spot::Key(k) if on_calendar(m) || on_reminders(m) => Some(k),
+            // A waiting card's options, by their numbers.
+            Spot::Key(k)
+                if waiting_card(m).is_some()
+                    && matches!(k.code, KeyCode::Char(d) if d.is_ascii_digit()) =>
+            {
+                Some(k)
+            }
             _ => None,
         })
         .filter(|k| {
@@ -5331,7 +5495,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         Stop::Close => m.focus = Some(Focus::Close),
         Stop::Key(k) => {
             m.focus = Some(Focus::Key(k));
-            m.keycap_for = m.chosen_item().map(|i| i.id.clone());
+            m.keycap_for = keycap_owner(m);
         }
     }
 }

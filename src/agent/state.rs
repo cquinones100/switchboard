@@ -101,6 +101,45 @@ pub struct Asked {
     pub wait: String,
     pub by: Waiter,
     pub call: Option<String>,
+    #[serde(default)]
+    pub ask: Option<Wait>,
+}
+
+/// Whether a wait is a permission prompt or a question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WaitKind {
+    Permission,
+    Question,
+}
+
+/// What a pane waits on, word for word, for mission control's cards: the
+/// tool, a question's header, the whole command, path or question, and a
+/// question's options (a permission's are Claude Code's own, read off the
+/// screen).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wait {
+    pub kind: WaitKind,
+    pub tool: String,
+    pub header: String,
+    pub words: String,
+    pub options: Vec<String>,
+    /// Each option's description, a question's, by its place.
+    #[serde(default)]
+    pub details: Vec<String>,
+    /// How many questions the call asks, one at a time; the card follows
+    /// the one the screen shows past the first.
+    #[serde(default)]
+    pub questions: usize,
+}
+
+/// The tool call a working pane is on: the tool's name, its command, path
+/// or pattern, when it started (seconds) and its call's id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Doing {
+    pub tool: String,
+    pub arg: String,
+    pub since: i64,
+    pub call: String,
 }
 
 /// One pane's Claude: its state and what goes with it. Serialized only to
@@ -142,6 +181,14 @@ pub struct PaneAgent {
     /// A permission request made in auto mode while the pane works, until
     /// its Notification says it reached you or the call goes on.
     pub asked: Option<Asked>,
+    /// The wait word for word, while its hook said it (`wait` holds it in
+    /// a few words).
+    pub ask: Option<Wait>,
+    /// The tool call it is on, from its PreToolUse until it ends or the
+    /// turn does.
+    pub doing: Option<Doing>,
+    /// The calls started before `doing` and still running, oldest first.
+    pub others: Vec<Doing>,
 }
 
 impl PaneAgent {
@@ -154,6 +201,9 @@ impl PaneAgent {
             && self.loop_name.is_none()
             && self.phase.is_none()
             && self.asked.is_none()
+            && self.ask.is_none()
+            && self.doing.is_none()
+            && self.others.is_empty()
     }
 
     /// The pane's record, as `switchboard list` shows it.
@@ -179,6 +229,10 @@ pub struct Hook {
     pub activity: String,
     /// What a permission request or a question waits on.
     pub wait: String,
+    /// The same word for word, for one or the other.
+    pub ask: Option<Wait>,
+    /// The tool call's command, path or pattern, whole.
+    pub arg: String,
     /// The loop a prompt or the Skill tool asks for.
     pub loop_name: String,
     /// What started a session (startup, resume, clear, compact) or a
@@ -255,6 +309,65 @@ impl Hook {
         } else {
             String::new()
         };
+        let arg = [
+            "command",
+            "file_path",
+            "notebook_path",
+            "path",
+            "pattern",
+            "url",
+            "query",
+            "skill",
+            "description",
+        ]
+        .iter()
+        .find_map(|k| field(k).filter(|v| !v.is_empty()))
+        .unwrap_or_default();
+        let ask = if event == "PermissionRequest" {
+            Some(Wait {
+                kind: WaitKind::Permission,
+                tool: tool.clone(),
+                header: String::new(),
+                words: arg.clone(),
+                options: Vec::new(),
+                details: Vec::new(),
+                questions: 0,
+            })
+        } else if tool == "AskUserQuestion" {
+            let first = input
+                .pointer("/questions/0")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let listed: Vec<&Value> = first
+                .get("options")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|o| o.get("label").and_then(Value::as_str).is_some())
+                .collect();
+            let options = listed
+                .iter()
+                .map(|o| one_line(&text(o, "label").unwrap_or_default()))
+                .collect();
+            let details = listed
+                .iter()
+                .map(|o| one_line(&text(o, "description").unwrap_or_default()))
+                .collect();
+            Some(Wait {
+                kind: WaitKind::Question,
+                tool: tool.clone(),
+                header: one_line(&text(&first, "header").unwrap_or_default()),
+                words: text(&first, "question").unwrap_or_default(),
+                options,
+                details,
+                questions: input
+                    .get("questions")
+                    .and_then(Value::as_array)
+                    .map_or(1, Vec::len),
+            })
+        } else {
+            None
+        };
         let skill = if event == "UserPromptSubmit" {
             text(payload, "prompt")
                 .map(|p| slash_command(&p))
@@ -279,6 +392,8 @@ impl Hook {
             tool: one_line(&tool),
             activity: one_line(&short(&activity, 60)),
             wait: one_line(&wait),
+            ask,
+            arg,
             loop_name,
             source: one_line(&source),
             kind: text(payload, "notification_type").unwrap_or_default(),
@@ -495,6 +610,15 @@ impl Agents {
             hook.event.as_str(),
             "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
         );
+        // A call that ended is no longer running behind the one shown,
+        // whatever the wait makes of its ending.
+        let call_ended = matches!(hook.event.as_str(), "PostToolUse" | "PostToolUseFailure");
+        if call_ended
+            && !hook.call.is_empty()
+            && let Some(agent) = self.panes.get_mut(&pane)
+        {
+            agent.others.retain(|d| d.call != hook.call);
+        }
         if tool_event
             && !asks
             && let Some(agent) = self.panes.get(&pane)
@@ -508,7 +632,6 @@ impl Agents {
         }
         // Nor is another call ending while the wait is on one: the
         // conversation's own backgrounded agent returning, a monitor firing.
-        let call_ended = matches!(hook.event.as_str(), "PostToolUse" | "PostToolUseFailure");
         if call_ended
             && !hook.call.is_empty()
             && let Some(agent) = self.panes.get(&pane)
@@ -528,9 +651,10 @@ impl Agents {
                 wait: hook.wait.clone(),
                 by: hook.waiter(),
                 call: (!hook.call.is_empty()).then(|| hook.call.clone()),
+                ask: hook.ask.clone(),
             });
             let changed = set_state(agent, Some(State::Working), now, front);
-            details(agent, Some(State::Working), hook);
+            details(agent, Some(State::Working), hook, now);
             return changed;
         }
         if hook.event == "PostCompact" && hook.source == "manual" {
@@ -546,7 +670,7 @@ impl Agents {
             agent.wait_by = Some(hook.waiter());
             agent.wait_call = (!hook.call.is_empty()).then(|| hook.call.clone());
         }
-        details(agent, state, hook);
+        details(agent, state, hook, now);
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -567,6 +691,7 @@ impl Agents {
             agent.wait = Some(asked.wait);
             agent.wait_by = Some(asked.by);
             agent.wait_call = asked.call;
+            agent.ask = asked.ask;
         }
         if agent.is_empty() {
             self.panes.remove(&pane);
@@ -633,6 +758,7 @@ impl Agents {
         agent.wait_by = Some(Waiter::Conversation);
         agent.wait_call = (!call.is_empty()).then(|| call.to_string());
         agent.wait = Some(one_line(&short(&format!("asks: {question}"), 80)));
+        agent.ask = None;
         changed
     }
 
@@ -677,6 +803,8 @@ impl Agents {
         agent.state = None;
         agent.since = 0;
         agent.asked = None;
+        agent.doing = None;
+        agent.others.clear();
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -712,6 +840,9 @@ impl Agents {
         agent.wait_by = None;
         agent.wait_call = None;
         agent.asked = None;
+        agent.ask = None;
+        agent.doing = None;
+        agent.others.clear();
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -730,6 +861,8 @@ impl Agents {
         agent.wait_by = None;
         agent.wait_call = None;
         agent.asked = None;
+        agent.doing = None;
+        agent.others.clear();
         if agent.is_empty() {
             self.panes.remove(&pane);
         }
@@ -800,6 +933,7 @@ impl Agents {
             }
             "@agent_wait" => {
                 agent.wait = text;
+                agent.ask = None;
                 Ok(())
             }
             "@agent_loop" => {
@@ -846,7 +980,7 @@ fn set_state(agent: &mut PaneAgent, state: Option<State>, now: i64, front: bool)
 /// records the tool call, and a wait records what it is for. `state` is the
 /// one the hook asked for, before "done" in front of you became nothing,
 /// since either way the turn is over.
-fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
+fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook, now: i64) {
     if !hook.loop_name.is_empty() {
         agent.loop_name = Some(hook.loop_name.clone());
     } else if hook.begins_anew() {
@@ -881,16 +1015,51 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
             agent.wait = None;
             agent.wait_by = None;
             agent.wait_call = None;
+            agent.ask = None;
+            agent.doing = None;
+            agent.others.clear();
         }
         Some(State::Working) => {
             agent.wait = None;
             agent.wait_by = None;
             agent.wait_call = None;
+            agent.ask = None;
             match hook.event.as_str() {
-                "UserPromptSubmit" | "PostCompact" => agent.activity = None,
+                "UserPromptSubmit" | "PostCompact" => {
+                    agent.activity = None;
+                    agent.doing = None;
+                    agent.others.clear();
+                }
                 "PreCompact" => agent.activity = Some("compacting context".into()),
                 "PreToolUse" if !hook.activity.is_empty() => {
                     agent.activity = Some(hook.activity.clone());
+                }
+                _ => {}
+            }
+            // The call it is on, until that call ends, when the latest of
+            // those still running before it is shown again: another ending
+            // (a backgrounded agent's, one run beside it) leaves it.
+            match hook.event.as_str() {
+                "PreToolUse" if !hook.tool.is_empty() => {
+                    if let Some(before) = agent.doing.take() {
+                        agent.others.push(before);
+                    }
+                    agent.doing = Some(Doing {
+                        tool: hook.tool.clone(),
+                        arg: hook.arg.clone(),
+                        since: now,
+                        call: hook.call.clone(),
+                    });
+                }
+                "PostToolUse" | "PostToolUseFailure"
+                    if agent.doing.as_ref().is_some_and(|d| {
+                        d.call.is_empty() || hook.call.is_empty() || d.call == hook.call
+                    }) =>
+                {
+                    agent.doing = agent.others.pop();
+                }
+                "PostToolUse" | "PostToolUseFailure" if !hook.call.is_empty() => {
+                    agent.others.retain(|d| d.call != hook.call);
                 }
                 _ => {}
             }
@@ -898,6 +1067,7 @@ fn details(agent: &mut PaneAgent, state: Option<State>, hook: &Hook) {
         Some(State::Waiting) => {
             if !hook.wait.is_empty() {
                 agent.wait = Some(hook.wait.clone());
+                agent.ask = hook.ask.clone();
             }
         }
     }
@@ -932,6 +1102,117 @@ mod tests {
 
     fn on(agents: &mut Agents, event: &str, payload: Value, now: i64) -> bool {
         agents.apply(P, &hook(event, payload), now, false)
+    }
+
+    #[test]
+    fn a_wait_is_kept_word_for_word_and_a_working_pane_says_its_call() {
+        let mut a = Agents::default();
+        let push = json!({"tool_name": "Bash", "tool_use_id": "b1",
+            "tool_input": {"command": "git push origin main\n  --force-with-lease", "description": "Push"}});
+        on(&mut a, "PreToolUse", push.clone(), 100);
+        let doing = a.get(P).unwrap().doing.clone().unwrap();
+        assert_eq!(
+            (doing.tool.as_str(), doing.since, doing.call.as_str()),
+            ("Bash", 100, "b1")
+        );
+        assert_eq!(doing.arg, "git push origin main\n  --force-with-lease");
+        on(&mut a, "PermissionRequest", push, 101);
+        let agent = a.get(P).unwrap();
+        let ask = agent.ask.clone().unwrap();
+        assert_eq!(ask.kind, WaitKind::Permission);
+        assert_eq!(ask.tool, "Bash");
+        assert_eq!(ask.words, "git push origin main\n  --force-with-lease");
+        // Going on ends the wait and its words.
+        on(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "Bash", "tool_use_id": "b1"}),
+            102,
+        );
+        assert_eq!(a.get(P).unwrap().ask, None);
+
+        let question = json!({"tool_name": "AskUserQuestion", "tool_use_id": "q1",
+            "tool_input": {"questions": [{"header": "Layout", "question": "Which layout?",
+                "options": [{"label": "Cards"}, {"label": "Rows", "description": "a list"}]}]}});
+        on(&mut a, "PreToolUse", question, 110);
+        let ask = a.get(P).unwrap().ask.clone().unwrap();
+        assert_eq!(ask.kind, WaitKind::Question);
+        assert_eq!(
+            (ask.header.as_str(), ask.words.as_str()),
+            ("Layout", "Which layout?")
+        );
+        assert_eq!(ask.options, ["Cards", "Rows"]);
+        assert_eq!(ask.details, ["", "a list"]);
+
+        // A call ending ends what it was on; another call's ending doesn't.
+        on(&mut a, "UserPromptSubmit", json!({"prompt": "go"}), 120);
+        on(
+            &mut a,
+            "PreToolUse",
+            json!({"tool_name": "Grep", "tool_use_id": "g", "tool_input": {"pattern": "fn card"}}),
+            121,
+        );
+        on(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "Agent", "tool_use_id": "other"}),
+            122,
+        );
+        assert_eq!(
+            a.get(P).unwrap().doing.as_ref().map(|d| d.arg.as_str()),
+            Some("fn card")
+        );
+        on(
+            &mut a,
+            "PostToolUse",
+            json!({"tool_name": "Grep", "tool_use_id": "g"}),
+            123,
+        );
+        assert_eq!(a.get(P).unwrap().doing, None);
+
+        // Calls run side by side: the one started before shows again once
+        // the later ends, until it ends too.
+        let pre = |a: &mut Agents, id: &str, cmd: &str, at: i64| {
+            on(
+                a,
+                "PreToolUse",
+                json!({"tool_name": "Bash", "tool_use_id": id, "tool_input": {"command": cmd}}),
+                at,
+            );
+        };
+        let arg = |a: &Agents| a.get(P).unwrap().doing.as_ref().map(|d| d.arg.clone());
+        pre(&mut a, "long", "cargo test", 123);
+        pre(&mut a, "short", "ls", 123);
+        assert_eq!(arg(&a).as_deref(), Some("ls"));
+        on(&mut a, "PostToolUse", json!({"tool_use_id": "short"}), 123);
+        assert_eq!(arg(&a).as_deref(), Some("cargo test"));
+        pre(&mut a, "next", "git status", 123);
+        on(&mut a, "PostToolUse", json!({"tool_use_id": "long"}), 123);
+        assert_eq!(arg(&a).as_deref(), Some("git status"));
+        on(&mut a, "PostToolUse", json!({"tool_use_id": "next"}), 123);
+        assert_eq!(a.get(P).unwrap().doing, None);
+        assert!(a.get(P).unwrap().others.is_empty());
+        // One ending while another waits on you is gone once that ends.
+        pre(&mut a, "long", "cargo test", 123);
+        pre(&mut a, "asks", "git push", 123);
+        on(
+            &mut a,
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "tool_use_id": "asks", "tool_input": {"command": "git push"}}),
+            123,
+        );
+        on(&mut a, "PostToolUse", json!({"tool_use_id": "long"}), 123);
+        on(&mut a, "PostToolUse", json!({"tool_use_id": "asks"}), 123);
+        assert_eq!(a.get(P).unwrap().doing, None);
+        assert!(a.get(P).unwrap().others.is_empty());
+        on(
+            &mut a,
+            "PreToolUse",
+            json!({"tool_name": "Read", "tool_input": {"file_path": "/x"}}),
+            124,
+        );
+        on(&mut a, "Stop", json!({}), 125);
+        assert_eq!(a.get(P).unwrap().doing, None);
     }
 
     #[test]

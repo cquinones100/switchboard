@@ -6,7 +6,8 @@
 //! Work map as a picker of the open tabs, and q closes it. With UX 2.0 and
 //! many tabs, moving about leaves what it shows standing, while a tab's new
 //! output and a tab closing still show. With UX 2.0, the Resources board ends
-//! a tab's busy process from its menu after a yes.
+//! a tab's busy process from its menu after a yes, and a number on a card
+//! waiting on you answers its prompt.
 
 use crate::common;
 
@@ -225,6 +226,64 @@ fn with_ux2_moving_through_many_tabs_still_shows_their_output_and_a_tab_closing(
     client.type_text("G");
     client.type_text("\r");
     client.wait_text("Go to tab 5");
+}
+
+#[test]
+fn with_ux2_a_number_on_a_waiting_card_answers_its_prompt() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true}));
+    let mut client = server.attach(160, 50);
+    client.wait_text("$");
+    let tab = &tabs(&server.list())[0];
+    let pane = tab["panes"][0]["id"].as_str().unwrap().to_string();
+    let pid = tab["panes"][0]["pid"].as_u64().unwrap();
+    // The pane's shell counts as its Claude: a session file names it.
+    let sessions = server.home.join(".claude/sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    std::fs::write(
+        sessions.join(format!("{pid}.json")),
+        json!({"pid": pid, "sessionId": "s-1", "entrypoint": "cli"}).to_string(),
+    )
+    .unwrap();
+    // A permission prompt on its screen, then one key read as it comes.
+    let prompt = server.dir.path().join("prompt.txt");
+    std::fs::write(
+        &prompt,
+        "Bash command
+
+  git push origin main
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again
+  3. No
+",
+    )
+    .unwrap();
+    server.ok(&[
+        "send-keys",
+        "-t",
+        &pane,
+        &format!(
+            "clear; cat {}; stty -icanon min 1; x=$(dd bs=1 count=1 2>/dev/null); stty icanon; echo pressed-$x",
+            prompt.display()
+        ),
+        "Enter",
+    ]);
+    client.wait_text("3. No");
+    hook(
+        &server,
+        &pane,
+        "PermissionRequest",
+        json!({"tool_name": "Bash", "tool_input": {"command": "git push origin main"}}),
+    );
+    open(&mut client);
+    client.wait_text("NEEDS YOU");
+    client.wait_text("BASH COMMAND");
+    client.wait_text("Yes, and don't ask again");
+    client.type_text("2");
+    client.type_text("q");
+    client.wait_text("pressed-2");
 }
 
 #[test]

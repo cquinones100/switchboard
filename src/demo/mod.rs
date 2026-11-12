@@ -75,6 +75,7 @@ pub const SETTINGS: &[(&str, &str)] = &[
     ("meeting_notes", "false"),
     ("todo_note", "false"),
     ("haiku_summaries", "false"),
+    ("turn_summaries", "false"),
     ("diff_story", "false"),
     ("diff_ask", "false"),
     ("photos", "false"),

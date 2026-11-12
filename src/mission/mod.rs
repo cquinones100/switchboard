@@ -77,6 +77,7 @@ pub mod resources_board;
 mod serve;
 pub mod settings_board;
 pub mod slack_board;
+pub mod summary;
 pub mod usage_board;
 pub mod views;
 
@@ -287,6 +288,13 @@ pub type Lines = Arc<[Vec<ratatui::text::Span<'static>>]>;
 pub struct Screen {
     pub lines: Lines,
     pub branch: Option<String>,
+    /// The options a waiting Claude shows, numbered from 1 (a permission
+    /// prompt's are Claude Code's own).
+    pub options: Vec<String>,
+    /// The question over those options, as the screen shows it.
+    pub question: String,
+    /// The options the screen shows more of than their label, by number.
+    pub more: Vec<u32>,
 }
 
 /// One client's mission control.
@@ -384,6 +392,12 @@ pub struct Mission {
     /// With the pane under the month, its This month and Later lists shown
     /// (`i`).
     pub reminders_lists: bool,
+    /// With UX 2.0, the tab whose card shows its screen (`s`), and the
+    /// cursor it was asked at: moving the cursor puts the card back.
+    pub card_screen: Option<(TabId, isize)>,
+    /// With UX 2.0 on a screen with room for one column of cards, whether
+    /// the shelf's Landing and Idle show their tabs or only their labels.
+    pub shelf_open: bool,
 }
 
 impl Mission {
@@ -425,6 +439,8 @@ impl Mission {
             slack_shown: None,
             reminders_day: None,
             reminders_lists: false,
+            card_screen: None,
+            shelf_open: false,
         }
     }
 
@@ -528,8 +544,7 @@ impl Mission {
 
     /// The tabs in the order the cards show them.
     pub fn order(&self) -> Vec<TabId> {
-        let cw = render::card_width(self.size.0 as usize, self.snap.card);
-        let g = render::grid(&self.snap.tabs, &self.snap.rules, self.size.0 as usize, cw);
+        let g = render::tabs_grid(self, self.size.0 as usize);
         g.order.iter().map(|&i| self.snap.tabs[i].id).collect()
     }
 
@@ -563,6 +578,10 @@ impl Overlay for Mission {
     }
 
     fn draw(&mut self, buf: &mut Buffer, _look: &Look) {
+        // A card's screen (`s`) ends once the cursor has moved off it.
+        if self.card_screen.is_some_and(|(_, at)| at != self.cursor) {
+            self.card_screen = None;
+        }
         let whole = buf.area;
         let left = self.left.min(whole.width.saturating_sub(1));
         let area =
@@ -744,6 +763,13 @@ pub enum MissionEvent {
         light: bool,
         image: Option<image::RgbaImage>,
     },
+    /// Haiku's sentence on a turn, by its session and when its prompt was
+    /// given; `None` when the run failed.
+    Summary {
+        session: String,
+        turn_at: i64,
+        text: Option<String>,
+    },
 }
 
 /// What the server keeps for mission control across clients.
@@ -791,6 +817,9 @@ pub struct MissionState {
     /// in its overlay, for what goes to another view or closes it (Enter
     /// on a notification), which acts on the overlay itself.
     pub(crate) after_key: Option<AfterKey>,
+    /// Each tab's last turn in a sentence, as Haiku wrote it
+    /// (`summary`).
+    pub(crate) summaries: summary::Summaries,
 }
 
 /// See `MissionState::after_key`.

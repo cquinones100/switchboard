@@ -68,6 +68,7 @@ pub const QUIET: &[(&str, bool)] = &[
     ("todo_note", false),
     ("slack_background", false),
     ("keep_awake", false),
+    ("turn_summaries", false),
 ];
 
 /// Writes `home`'s `settings.json` whole: `QUIET` with `settings` (a JSON

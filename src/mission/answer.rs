@@ -70,6 +70,9 @@ pub struct Prompt {
     pub multi: bool,
     pub free: Option<u32>,
     pub cursor: Option<Cursor>,
+    /// The options whose screen shows more than their label: words cut
+    /// from its end, or lines under it (a description, a wrapped label).
+    pub more: Vec<u32>,
 }
 
 /// The numbered choices a waiting tab is showing (a permission prompt, or a
@@ -101,6 +104,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         checked: Option<bool>,
         line: usize,
         marked: bool,
+        cut: bool,
     }
     let mut options: Vec<Found> = Vec::new();
     let mut first: Option<usize> = None;
@@ -110,6 +114,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         };
         let n: u32 = m[1].parse().unwrap_or(0);
         if !options.iter().any(|o| o.n == n) {
+            let cut = LABEL_TAIL.is_match(&m[2]);
             let label = LABEL_TAIL.replace(&m[2], "").to_string();
             let (label, checked) = match CHECKBOX.captures(&label) {
                 Some(b) => (b[2].to_string(), Some(&b[1] != " ")),
@@ -122,6 +127,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
                 checked,
                 line: i,
                 marked,
+                cut,
             });
         }
         first = Some(i);
@@ -135,6 +141,25 @@ pub fn options_in(text: &str) -> Option<Prompt> {
     }
     let first = first?;
     let last = options.last()?.line;
+    // A line between an option and the next is more of it; under the last,
+    // only a line set in past its number is, the screen's hints below
+    // starting further out.
+    let number_at = |l: &str| l.find(|c: char| c.is_ascii_digit()).unwrap_or(0);
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    let more: Vec<u32> = options
+        .iter()
+        .enumerate()
+        .filter(|(at, o)| {
+            o.cut
+                || match options.get(at + 1) {
+                    Some(next) => next.line > o.line + 1,
+                    None => lines
+                        .get(o.line + 1)
+                        .is_some_and(|l| indent(l) > number_at(lines[o.line])),
+                }
+        })
+        .map(|(_, o)| o.n)
+        .collect();
     let between = |re: &Regex| (first + 1..last).find(|&i| re.is_match(lines[i]));
     let rule = between(&RULE);
     let submit = between(&SUBMIT_ROW);
@@ -179,6 +204,7 @@ pub fn options_in(text: &str) -> Option<Prompt> {
         multi,
         free,
         cursor: free.and(cursor),
+        more,
     })
 }
 
@@ -674,6 +700,32 @@ mod tests {
         );
         assert_eq!(options_in("$ ls\nfoo bar\n$ "), None);
         assert_eq!(options_in("1. only one"), None);
+        assert!(found.more.is_empty(), "every label shown whole");
+    }
+
+    #[test]
+    fn an_option_with_more_on_screen_than_its_label_is_marked() {
+        let screen = "\
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for cargo test
+      commands in this project
+   3. No  (esc)
+      and tell Claude what to do
+   4. Later
+
+ Esc to cancel · Tab to amend";
+        let found = options_in(screen).expect("a prompt");
+        assert_eq!(
+            found.more,
+            vec![2, 3],
+            "a line under 2, and 3 cut and under"
+        );
+        let last_wrapped = "\
+ ❯ 1. Yes
+   2. No, and tell Claude what
+      to do differently";
+        assert_eq!(options_in(last_wrapped).expect("a prompt").more, vec![2]);
     }
 
     #[test]
