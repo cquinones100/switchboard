@@ -4371,6 +4371,30 @@ impl Image {
         }
     }
 
+    /// Someone's avatar at `x`, `y`, as large as `size` (`kit::avatar`,
+    /// board 0d): their photo over the kit's text form, else that text, its
+    /// color from their name whatever service `who` is from.
+    pub fn avatar(
+        name: String,
+        (x, y): (usize, usize),
+        who: Option<crate::photos::Who>,
+        person: &str,
+        size: kit::AvatarSize,
+    ) -> Image {
+        Image {
+            name,
+            x: x as u16,
+            y: y as u16,
+            width: size.cols() as u16,
+            height: size.rows() as u16,
+            shape: Shape::Avatar {
+                who,
+                label: person.to_string(),
+                color: Color::Indexed(kit::avatar_color(person)),
+            },
+        }
+    }
+
     /// How full a meter is; `None` for any other shape.
     pub fn frac(&self) -> Option<f32> {
         match self.shape {

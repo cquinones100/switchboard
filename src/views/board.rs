@@ -21,9 +21,11 @@
 //!
 //! An avatar is someone's photo where the view draws pictures
 //! (`super::pictures`, with Settings' `photos` on), from the cache Photos
-//! keeps (src/photos), cropped to a circle two columns wide; until it is
-//! had, and wherever it can't be, it is their initial on a color of their
-//! own.
+//! keeps (src/photos), cropped to a circle; until it is had, and wherever
+//! it can't be, it is the kit's text form, their initial on a color of
+//! their own (`kit::avatar`, board 0d). It is Large (`Part::Said`, 4 by 2)
+//! beside what someone wrote or did, Small (`Piece::Avatar`, 2 by 1) in a
+//! run of names.
 
 use ratatui::style::{Color, Modifier};
 
@@ -72,6 +74,17 @@ pub enum Part {
         markdown: String,
         indent: usize,
     },
+    /// What someone wrote or did, `indent` columns in (board 0d): their
+    /// Large avatar, `head` (their name, when) beside its first row and
+    /// `body`'s Markdown from its second, both `kit::SAID_INDENT` past
+    /// it; with no body, the second row is left blank.
+    Said {
+        who: Option<Who>,
+        name: String,
+        head: Vec<Piece>,
+        body: String,
+        indent: usize,
+    },
     Rule,
     Blank,
 }
@@ -84,8 +97,8 @@ pub enum Piece {
     Name(String, Tone),
     Chip(String, Tone),
     Mark(Mark),
-    /// Someone's photo, two columns wide: who (none for a team), and the
-    /// name whose initial stands in for it.
+    /// Someone's Small avatar (`kit::avatar`), two columns wide: who (none
+    /// for a team), and the name whose initial stands in for it.
     Avatar(Option<Who>, String),
     /// Text that opens a link.
     Link(String, Tone, String),
@@ -143,6 +156,13 @@ impl Board {
             match part {
                 Part::Text { markdown, .. } => {
                     out.extend(Markdown::parse(markdown, place).wanted())
+                }
+                Part::Said {
+                    who, head, body, ..
+                } => {
+                    out.extend(who.iter().map(|w| Wanted::Photo(w.clone())));
+                    out.extend(photos(head));
+                    out.extend(Markdown::parse(body, place).wanted());
                 }
                 Part::Row(pieces) | Part::Ends(pieces, _) => out.extend(photos(pieces)),
                 Part::Flow(groups) => groups.iter().for_each(|g| out.extend(photos(g))),
@@ -258,44 +278,139 @@ pub fn lay_out(
             }
             Part::Text { markdown, indent } => {
                 let width = (inner + 2 * MARGIN).saturating_sub(*indent);
-                let doc = Markdown::parse(markdown, place).layout_with(width, images);
-                let from = doc
-                    .lines
-                    .iter()
-                    .position(|l| !l.plain().trim().is_empty() || l.picture.is_some());
-                let to = doc
-                    .lines
-                    .iter()
-                    .rposition(|l| !l.plain().trim().is_empty() || l.picture.is_some());
-                let (Some(from), Some(to)) = (from, to) else {
-                    continue;
-                };
-                let offset = out.links.len();
-                out.links.extend(doc.links);
-                for p in doc.placed {
-                    if !out.placed.iter().any(|q| q.id == p.id) {
-                        out.placed.push(p);
-                    }
-                }
-                for mut line in doc.lines.into_iter().take(to + 1).skip(from) {
-                    for s in &mut line.spans {
-                        s.link = s.link.map(|l| l + offset);
-                    }
-                    if let Some(p) = &mut line.picture {
-                        p.link = p.link.map(|l| l + offset);
-                    }
+                for mut line in text_lines(markdown, width, place, images, &mut out, base) {
                     if *indent > 0 {
                         line.spans
                             .insert(0, Span::new(" ".repeat(*indent), Style::default()));
                     }
-                    let (block, at, n) = line.anchor;
-                    line.anchor = (base + block, at, n);
+                    out.lines.push(line);
+                }
+            }
+            Part::Said {
+                who,
+                name,
+                head,
+                body,
+                indent,
+            } => {
+                let face = avatar(who.as_ref(), name, kit::AvatarSize::Large, &mut out, images);
+                let mut rows = face.into_iter();
+                let past = indent + kit::SAID_INDENT;
+                // The avatar's rows, each beside the next line: the head's,
+                // wrapped (a review thread's place kept whole), then the
+                // body's; a row with nothing beside it on a line of its own.
+                let beside = |rows: &mut std::vec::IntoIter<Vec<Span>>| {
+                    let mut s = vec![Span::new(" ".repeat(indent + MARGIN), Style::default())];
+                    match rows.next() {
+                        Some(row) => s.extend(row),
+                        None => s.push(Span::new(
+                            " ".repeat(kit::AvatarSize::Large.cols()),
+                            Style::default(),
+                        )),
+                    }
+                    s.push(Span::new(" ", Style::default()));
+                    s
+                };
+                let head = spans_of(head, &mut out, images, look);
+                for (at, line) in wrap(head, inner.saturating_sub(past), 0)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let mut all = beside(&mut rows);
+                    all.extend(line);
+                    out.lines.push(Line::of(all, (base, at, 1)));
+                }
+                let width = (inner + 2 * MARGIN).saturating_sub(past);
+                let mut lines = text_lines(body, width, place, images, &mut out, base);
+                let mut first_beside = false;
+                if rows.len() > 0 {
+                    if lines.first_mut().is_some_and(|l| drop_margin(&mut l.spans)) {
+                        lines[0].spans.splice(0..0, beside(&mut rows));
+                        first_beside = true;
+                    } else {
+                        out.lines
+                            .push(Line::of(beside(&mut rows), (base, 1 << 16, 1)));
+                    }
+                }
+                for (n, mut line) in lines.into_iter().enumerate() {
+                    if !(first_beside && n == 0) {
+                        line.spans
+                            .insert(0, Span::new(" ".repeat(past), Style::default()));
+                    }
                     out.lines.push(line);
                 }
             }
         }
     }
     out
+}
+
+/// Takes the Markdown's margin, its first `MARGIN` columns of spaces,
+/// off a line's start; false, leaving it as it was, where they aren't spaces.
+fn drop_margin(spans: &mut Vec<Span>) -> bool {
+    let blank: String = spans
+        .iter()
+        .take_while(|s| s.picture.is_none())
+        .flat_map(|s| s.text.chars())
+        .take(MARGIN)
+        .collect();
+    if blank != " ".repeat(MARGIN) {
+        return false;
+    }
+    let mut left = MARGIN;
+    while left > 0 {
+        let first = &mut spans[0];
+        let n = first.text.len().min(left);
+        first.text.drain(..n);
+        left -= n;
+        if first.text.is_empty() {
+            spans.remove(0);
+        }
+    }
+    true
+}
+
+/// `markdown` laid out `width` wide, its blank ends dropped, its links and
+/// pictures taken into `out` and its lines anchored in the part at `base`.
+fn text_lines(
+    markdown: &str,
+    width: usize,
+    place: &str,
+    images: Option<&Images>,
+    out: &mut Doc,
+    base: usize,
+) -> Vec<Line> {
+    let doc = Markdown::parse(markdown, place).layout_with(width, images);
+    let shown = |l: &Line| !l.plain().trim().is_empty() || l.picture.is_some();
+    let (Some(from), Some(to)) = (
+        doc.lines.iter().position(shown),
+        doc.lines.iter().rposition(shown),
+    ) else {
+        return Vec::new();
+    };
+    let offset = out.links.len();
+    out.links.extend(doc.links);
+    for p in doc.placed {
+        if !out.placed.iter().any(|q| q.id == p.id) {
+            out.placed.push(p);
+        }
+    }
+    doc.lines
+        .into_iter()
+        .take(to + 1)
+        .skip(from)
+        .map(|mut line| {
+            for s in &mut line.spans {
+                s.link = s.link.map(|l| l + offset);
+            }
+            if let Some(p) = &mut line.picture {
+                p.link = p.link.map(|l| l + offset);
+            }
+            let (block, at, n) = line.anchor;
+            line.anchor = (base + block, at, n);
+            line
+        })
+        .collect()
 }
 
 /// A row with `right` at its right edge, `left` cut to the room left.
@@ -514,15 +629,6 @@ fn tone(t: Tone, bold: bool, look: &Look) -> Style {
     }
 }
 
-/// A person's color for their initial, from their name.
-pub fn color_of(name: &str) -> u8 {
-    const COLORS: [u8; 8] = [67, 96, 66, 137, 61, 101, 72, 131];
-    let h = name.bytes().fold(2_166_136_261u32, |h, b| {
-        (h ^ b as u32).wrapping_mul(16_777_619)
-    });
-    COLORS[h as usize % COLORS.len()]
-}
-
 fn spans_of(pieces: &[Piece], out: &mut Doc, images: Option<&Images>, look: &Look) -> Vec<Span> {
     let mut spans = Vec::new();
     for piece in pieces {
@@ -540,52 +646,60 @@ fn spans_of(pieces: &[Piece], out: &mut Doc, images: Option<&Images>, look: &Loo
                 span.link = Some(at);
                 spans.push(span);
             }
-            Piece::Avatar(who, name) => spans.push(avatar(who.as_ref(), name, out, images)),
+            Piece::Avatar(who, name) => spans.extend(
+                avatar(who.as_ref(), name, kit::AvatarSize::Small, out, images)
+                    .into_iter()
+                    .flatten(),
+            ),
         }
     }
     spans
 }
 
-/// Someone's photo, where it is ready, else their initial on their color.
-fn avatar(who: Option<&Who>, name: &str, out: &mut Doc, images: Option<&Images>) -> Span {
+/// Someone's avatar as large as `size`, a row a line: their photo where
+/// it is ready, else the kit's text form, their initial on their color.
+fn avatar(
+    who: Option<&Who>,
+    name: &str,
+    size: kit::AvatarSize,
+    out: &mut Doc,
+    images: Option<&Images>,
+) -> Vec<Vec<Span>> {
+    let (cols, rows) = (size.cols() as u16, size.rows() as u16);
     let ready = who.and_then(|w| {
         let key = markdown::photo_key(w);
         images
             .and_then(|i| i.ready.get(&key))
             .map(|(id, _)| (key, *id))
     });
-    if let Some((key, id)) = ready {
-        if !out.placed.iter().any(|p| p.id == id) {
-            out.placed.push(Placement {
-                key,
-                id,
-                cols: 2,
-                rows: 1,
-            });
-        }
-        let mut span = Span::new("  ", Style::default());
-        span.picture = Some(PictureRow {
+    let Some((key, id)) = ready else {
+        return kit::avatar(name, size).into_iter().map(from_kit).collect();
+    };
+    // The same photo Small and Large is two images, each its own size.
+    let id = match size {
+        kit::AvatarSize::Small => id,
+        kit::AvatarSize::Large => markdown::sized_id(id, cols, rows),
+    };
+    if !out.placed.iter().any(|p| p.id == id) {
+        out.placed.push(Placement {
+            key,
             id,
-            row: 0,
-            cols: 2,
-            link: None,
+            cols,
+            rows,
         });
-        return span;
     }
-    let initial: String = name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().collect())
-        .unwrap_or_else(|| "?".into());
-    Span::new(
-        format!("{initial} "),
-        Style {
-            fg: Some(255),
-            bg: Some(color_of(name)),
-            bold: true,
-            ..Style::default()
-        },
-    )
+    (0..rows)
+        .map(|row| {
+            let mut span = Span::new(" ".repeat(cols as usize), Style::default());
+            span.picture = Some(PictureRow {
+                id,
+                row,
+                cols,
+                link: None,
+            });
+            vec![span]
+        })
+        .collect()
 }
 
 /// How long ago an ISO time was, as the boards say it: "just now", "4m
@@ -792,6 +906,70 @@ mod tests {
             "the photo's cells: {drawn:?}"
         );
         assert!(drawn.contains("ana"));
+    }
+
+    #[test]
+    fn what_someone_said_has_a_large_avatar_and_its_words_five_in() {
+        let who = Who::new(Service::Linear, "u-ana");
+        let said = |body: &str| {
+            vec![Part::Said {
+                who: Some(who.clone()),
+                name: "ana".into(),
+                head: vec![Piece::Name("ana".into(), Tone::Text)],
+                body: body.into(),
+                indent: 0,
+            }]
+        };
+        // Without the photo: the initial on the first row, the words 5 in
+        // from the second; with no words, the second row blank.
+        let text = lay_out(&said("Looks good."), 40, "", None, &Look::default());
+        assert_eq!(plain(&text), vec!["  A    ana", "       Looks good."]);
+        let alone = lay_out(&said(""), 40, "", None, &Look::default());
+        assert_eq!(alone.lines.len(), 2);
+        assert_eq!(alone.lines[1].plain().trim(), "");
+        // With it: one 4 by 2 picture over both rows, its own image beside
+        // the Small one.
+        let mut images = Images::default();
+        images
+            .ready
+            .insert(markdown::photo_key(&who), (77, (128, 128)));
+        let doc = lay_out(
+            &said("Looks good."),
+            40,
+            "",
+            Some(&images),
+            &Look::default(),
+        );
+        assert_eq!((doc.placed[0].cols, doc.placed[0].rows), (4, 2));
+        assert_ne!(doc.placed[0].id, 77);
+        let rows: Vec<u16> = doc
+            .lines
+            .iter()
+            .flat_map(|l| l.spans.iter().filter_map(|s| s.picture.map(|p| p.row)))
+            .collect();
+        assert_eq!(rows, vec![0, 1]);
+        assert!(plain(&doc)[1].ends_with("   Looks good."));
+        // A head too long for its line wraps, a review thread's place kept
+        // whole, the avatar's second row beside its second line.
+        let place = vec![Part::Said {
+            who: None,
+            name: "ana".into(),
+            head: vec![
+                Piece::Name("ana".into(), Tone::Text),
+                Piece::Text("  tests/notes_bench.rs:38".into(), Tone::Dim),
+            ],
+            body: "Looks good.".into(),
+            indent: 0,
+        }];
+        let narrow = lay_out(&place, 34, "", None, &Look::default());
+        assert_eq!(
+            plain(&narrow),
+            vec![
+                "  A    ana",
+                "       tests/notes_bench.rs:38",
+                "       Looks good."
+            ]
+        );
     }
 
     #[test]

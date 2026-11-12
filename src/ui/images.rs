@@ -701,7 +701,7 @@ fn put_text(frame: &mut Frame, x: u16, y: u16, text: &str, style: Style, room: u
 
 /// Someone's avatar in `area`: their photo cropped to a circle where the
 /// terminal draws images and there is a photo, else their initial on their
-/// color.
+/// color in the first row's two columns (`kit::avatar`'s text form).
 pub fn avatar(
     frame: &mut Frame,
     name: &str,
@@ -733,36 +733,20 @@ pub fn avatar(
         );
         return;
     }
-    let initial: String = who
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().collect())
-        .unwrap_or_else(|| "?".into());
-    let [r, g, b] = rgb(color);
-    let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
-    let fg = if lum > 140.0 {
-        Color::Indexed(232)
-    } else {
-        Color::Indexed(255)
-    };
-    for y in area.top()..area.bottom() {
-        for x in area.left()..area.right() {
-            frame.buf[(x, y)]
-                .set_symbol(" ")
-                .set_style(Style::new().bg(color));
-        }
+    // Without the photo, the kit's text form (board 0d): the initial on
+    // the color in the first row's two columns, the rest left as it is.
+    let mut x = area.x;
+    for span in crate::ui::kit::initial(who, color) {
+        let room = area.right().saturating_sub(x);
+        put_text(frame, x, area.y, &span.content, span.style, room);
+        x += crate::ui::draw::width(&span.content) as u16;
     }
-    frame.links.clear_area(area);
-    let mid = area.y + area.height.saturating_sub(1) / 2;
-    let x = area.x + area.width.saturating_sub(1) / 2;
-    put_text(
-        frame,
-        x,
-        mid,
-        &initial,
-        Style::new().fg(fg).bg(color).bold(),
-        area.right() - x,
-    );
+    frame.links.clear_area(Rect::new(
+        area.x,
+        area.y,
+        area.width.min(2),
+        area.height.min(1),
+    ));
 }
 
 /// A picture in `area`, scaled to fit inside its border; as text, its name

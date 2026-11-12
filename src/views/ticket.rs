@@ -27,7 +27,7 @@ use super::board::{self, Board, Part, Piece};
 use super::pager::{self, Content};
 use crate::integrations::linear;
 use crate::photos::{Service, Who};
-use crate::ui::kit::{Mark, Tone};
+use crate::ui::kit::{self, Mark, Tone};
 use crate::{paths, settings, util};
 
 const SOURCE: &str = "M-i ticket view";
@@ -275,10 +275,9 @@ pub fn markdown(issue: &Value) -> String {
     out
 }
 
-/// A Linear user's avatar.
-fn avatar(user: &Value, name: &str) -> Piece {
-    let who = name_at(user, "/id").map(|id| Who::new(Service::Linear, &id));
-    Piece::Avatar(who, name.to_string())
+/// A Linear user, for their avatar.
+fn who_of(user: &Value) -> Option<Who> {
+    name_at(user, "/id").map(|id| Who::new(Service::Linear, &id))
 }
 
 /// A ticket's state as the kit marks it, by the kind Linear gives it.
@@ -305,16 +304,19 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
             Piece::Name(text("/identifier"), Tone::Accent),
             Piece::Name(format!("  {}", text("/title")), Tone::Text),
         ]),
-        Part::Row(vec![
-            avatar(issue.get("creator").unwrap_or(&Value::Null), &creator),
-            Piece::Text(
+        Part::Said {
+            who: who_of(issue.get("creator").unwrap_or(&Value::Null)),
+            name: creator.clone(),
+            head: vec![Piece::Text(
                 format!(
-                    " {creator} opened it {}",
+                    "{creator} opened it {}",
                     board::when(&text("/createdAt"), now)
                 ),
                 Tone::Dim,
-            ),
-        ]),
+            )],
+            body: String::new(),
+            indent: 0,
+        },
         Part::Rule,
         Part::Blank,
     ];
@@ -369,36 +371,34 @@ pub fn board(issue: &Value, now: jiff::Timestamp) -> Board {
         let name = name_at(c, "/user/name")
             .or_else(|| name_at(c, "/botActor/name"))
             .unwrap_or_else(|| "Someone".into());
-        let mut head = vec![Piece::Text(" ".repeat(indent), Tone::Text)];
-        head.extend([
-            avatar(c.get("user").unwrap_or(&Value::Null), &name),
-            Piece::Name(format!(" {name}"), Tone::Text),
-            Piece::Text(
-                format!(
-                    "  {}",
-                    board::when(&name_at(c, "/createdAt").unwrap_or_default(), now)
+        Part::Said {
+            who: who_of(c.get("user").unwrap_or(&Value::Null)),
+            name: name.clone(),
+            head: vec![
+                Piece::Name(name, Tone::Text),
+                Piece::Text(
+                    format!(
+                        "  {}",
+                        board::when(&name_at(c, "/createdAt").unwrap_or_default(), now)
+                    ),
+                    Tone::Dim,
                 ),
-                Tone::Dim,
-            ),
-        ]);
-        [
-            Part::Row(head),
-            Part::Text {
-                markdown: tidy(c.get("body").and_then(Value::as_str).unwrap_or("")),
-                indent: indent + 3,
-            },
-        ]
+            ],
+            body: tidy(c.get("body").and_then(Value::as_str).unwrap_or("")),
+            indent,
+        }
     };
     for c in comments.iter().filter(|c| parent_of(c).is_none()) {
         main.push(Part::Blank);
-        main.extend(comment(c, 0));
+        main.push(comment(c, 0));
         let id = name_at(c, "/id");
         for r in comments
             .iter()
             .filter(|r| parent_of(r).is_some() && parent_of(r) == id)
         {
             main.push(Part::Blank);
-            main.extend(comment(r, 3));
+            // A reply's avatar at its parent's words.
+            main.push(comment(r, kit::SAID_INDENT));
         }
     }
 
@@ -684,24 +684,25 @@ mod tests {
         let screen = pager.screen().join("\n");
         for want in [
             "AB-1  Make it faster",
-            "S  Sam opened it 3 days ago",
+            "S    Sam opened it 3 days ago",
             "It is slow. See AB-2 for more.",
             "SUB-ISSUES",
             "1 of 2 done",
             "✓ AB-3  Cache it",
             "○ AB-5  Warm it",
             "COMMENTS",
-            "B  Bot  3 days ago",
-            "Where is it slow?",
-            "   J  Jo  2 days ago",
-            "      Agreed.",
+            "  B    Bot  3 days ago",
+            "       Where is it slow?",
+            "       J    Jo  2 days ago",
+            "            Agreed.",
+            "  S    Sam  yesterday",
+            "       Found it.",
             "Status      In Review",
             "Priority    High",
             "Assignee    Jo",
             "Cycle       Cycle 7",
             "Labels      perf · backend",
             "Parent      AB-0",
-            "S  Sam  yesterday",
             "PULL REQUESTS",
             "#12 Cache the login  ✓ merged",
             "RELATED",

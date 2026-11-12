@@ -38,7 +38,7 @@ use ratatui::text::Span;
 
 use std::path::Path;
 
-use super::render::{Image, Shape};
+use super::render::Image;
 use super::views::{View, ViewId};
 use super::{HitBox, Spot};
 use crate::day::calendar::{self, CalEvent, NextDay, Ref};
@@ -1019,30 +1019,17 @@ fn timeline(
                         if x + 2 >= cols {
                             continue;
                         }
-                        let color = crate::views::board::color_of(&name);
-                        let initial: String = name
-                            .chars()
-                            .find(|c| c.is_alphanumeric())
-                            .map(|c| c.to_uppercase().collect())
-                            .unwrap_or_else(|| "?".into());
-                        let style = Style::new()
-                            .bg(Color::Indexed(color))
-                            .fg(Color::Indexed(255))
-                            .add_modifier(Modifier::BOLD);
-                        grid[r].put(x, &format!("{initial} "), style, cols);
-                        images.push(Image {
-                            name: format!("calendar-avatar-{r}-{x}"),
-                            x: x as u16,
-                            y,
-                            width: 2,
-                            height: 1,
-                            shape: Shape::Avatar {
-                                who,
-                                label: name,
-                                color: Color::Indexed(color),
-                            },
-                        });
-                        x += 2;
+                        images.push(Image::avatar(
+                            format!("calendar-avatar-{r}-{x}"),
+                            (x, y as usize),
+                            who,
+                            &name,
+                            kit::AvatarSize::Small,
+                        ));
+                        for span in kit::avatar(&name, kit::AvatarSize::Small).remove(0) {
+                            grid[r].put(x, &span.content, span.style, cols);
+                            x += width(&span.content);
+                        }
                     }
                 }
             }
@@ -1406,6 +1393,7 @@ fn next_day_lines(look: &Look, w: usize) -> Vec<Vec<Run>> {
 mod tests {
     use super::*;
     use crate::items::{Item, ViewData};
+    use crate::mission::render::Shape;
     use crate::mission::views::ViewId;
     use serde_json::json;
 
@@ -1652,10 +1640,14 @@ mod tests {
             Shape::Avatar {
                 who: Some(Who::address("ana@example.com")),
                 label: "Ana Ruiz".into(),
-                color: Color::Indexed(crate::views::board::color_of("Ana Ruiz")),
+                color: Color::Indexed(kit::avatar_color("Ana Ruiz")),
             }
         );
-        assert_eq!((avatars[0].y, avatars[0].width), (10, 2));
+        // Small in a run of names.
+        assert_eq!(
+            (avatars[0].y, avatars[0].width, avatars[0].height),
+            (10, 2, 1)
+        );
         assert_eq!(
             people(&serde_json::from_value(v.data.items[2].data.clone()).unwrap()).len(),
             1

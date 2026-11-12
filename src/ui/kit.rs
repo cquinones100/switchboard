@@ -12,7 +12,11 @@
 //! `option`, the `pane` beside a list, an `input`, a calendar's `event`,
 //! a two-row bar's `bar_name`, the key `hints` of every footer and bar
 //! (the key in the accent, what it does dim, two spaces between), and a
-//! log's line that says why it failed, `marked`.
+//! log's line that says why it failed, `marked`; and a person's `avatar`
+//! (board 0d), `Large` (4 by 2) beside what they wrote, their name and
+//! words `SAID_INDENT` columns in, or `Small` (2 by 1) in a run of names,
+//! its initial on the color `avatar_color` gives their name whatever
+//! service they are from, under the photo the image atom draws.
 //!
 //! A row's parts are laid out by `columns` (board 45, "Layout: how a view
 //! fills a screen of any size"): fixed columns at their natural width up
@@ -1305,6 +1309,81 @@ pub fn event(
         .collect()
 }
 
+/// How large a person's avatar is: `Large` (4 columns by 2 rows) beside
+/// what they wrote or did, its name on the first row and their words
+/// `SAID_INDENT` columns in; `Small` (2 by 1) in a run of names.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AvatarSize {
+    Small,
+    Large,
+}
+
+impl AvatarSize {
+    pub const fn cols(self) -> usize {
+        match self {
+            AvatarSize::Small => 2,
+            AvatarSize::Large => 4,
+        }
+    }
+
+    pub const fn rows(self) -> usize {
+        match self {
+            AvatarSize::Small => 1,
+            AvatarSize::Large => 2,
+        }
+    }
+}
+
+/// Where a person's name and words start beside a Large avatar: its four
+/// columns and a space.
+pub const SAID_INDENT: usize = AvatarSize::Large.cols() + 1;
+
+/// A person's color for their initial, from their name, the same whatever
+/// service the person is from.
+pub fn avatar_color(name: &str) -> u8 {
+    const COLORS: [u8; 8] = [67, 96, 66, 137, 61, 101, 72, 131];
+    let h = name.bytes().fold(2_166_136_261u32, |h, b| {
+        (h ^ b as u32).wrapping_mul(16_777_619)
+    });
+    COLORS[h as usize % COLORS.len()]
+}
+
+/// Someone's avatar as text, a row a line, `size` wide (board 0d, "The
+/// kit: a person"): their initial, bold, on their color (`avatar_color`)
+/// across the first row's two columns, the rest blank. It is what shows
+/// under the photo (`ui::images::avatar`, a view's picture) and in its
+/// place until the photo is had, or wherever it can't be drawn, so the
+/// text beside it never moves when photos arrive.
+pub fn avatar(name: &str, size: AvatarSize) -> Vec<Vec<Span<'static>>> {
+    let mut rows = vec![initial(name, Color::Indexed(avatar_color(name)))];
+    rows[0].push(Span::raw(" ".repeat(size.cols() - 2)));
+    rows.extend((1..size.rows()).map(|_| vec![Span::raw(" ".repeat(size.cols()))]));
+    rows
+}
+
+/// A person's initial on `color`, two columns wide: dark on a light
+/// color and white on a dark one.
+pub fn initial(name: &str, color: Color) -> Vec<Span<'static>> {
+    let initial: String = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect())
+        .filter(|i: &String| width(i) <= 2)
+        .unwrap_or_else(|| "?".into());
+    let [r, g, b] = super::images::rgb(color);
+    let lum = 0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32;
+    let fg = if lum > 140.0 {
+        Color::Indexed(232)
+    } else {
+        Color::Indexed(255)
+    };
+    let fill = Style::new().bg(color);
+    vec![
+        Span::styled(initial.clone(), fill.fg(fg).add_modifier(Modifier::BOLD)),
+        Span::styled(" ".repeat(2 - width(&initial)), fill),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1883,5 +1962,23 @@ mod tests {
         assert_eq!(text(&p[0]), "api       ");
         assert_eq!(text(&p[1]), "main · 2m ");
         assert_eq!(text(&p[2]), "─".repeat(10));
+    }
+
+    #[test]
+    fn a_large_avatar_is_four_by_two_and_a_small_one_two_by_one() {
+        let large = avatar("ana", AvatarSize::Large);
+        assert_eq!(large.len(), 2);
+        assert!(large.iter().all(|r| spans_width(r) == 4));
+        assert_eq!(text(&large[0]), "A   ");
+        assert_eq!(text(&large[1]), "    ");
+        let color = Color::Indexed(avatar_color("ana"));
+        assert_eq!(large[0][0].style.bg, Some(color));
+        assert!(large[0][0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(large[1][0].style.bg, None);
+        let small = avatar("ana", AvatarSize::Small);
+        assert_eq!(small.len(), 1);
+        assert_eq!(text(&small[0]), "A ");
+        assert_eq!(text(&avatar("", AvatarSize::Small)[0]), "? ");
+        assert_eq!(SAID_INDENT, 5);
     }
 }

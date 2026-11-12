@@ -1,10 +1,10 @@
 //! With UX 2.0, the Inbox view as a board (board 22 of the canvas, new with
 //! the port; the tmux version, and this view with UX 2.0 off, list the
 //! notifications as `render::list` does): the notifications grouped by day
-//! with their counts, each two rows, the photo of who acted (the avatar
-//! atom, their Linear photo drawn over their initial), its kind's mark, the
-//! ticket, what happened and when, then the ticket's title; and beside the
-//! list the chosen one in its ticket: the ticket's state, a priority chip,
+//! with their counts, each two rows beside the Large avatar of who acted
+//! (`kit::avatar`, their Linear photo drawn over their initial), its kind's
+//! mark, the ticket, what happened and when, then the ticket's title under
+//! the ticket; and beside the list the chosen one in its ticket: the ticket's state, a priority chip,
 //! its project and the tab working on it, the comments up to the
 //! notification's own, which is marked new (or, for an assignment or a
 //! mention in the description, the description's start), then "From your
@@ -18,11 +18,11 @@
 
 use std::collections::HashMap;
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 use serde_json::Value;
 
-use super::render::{Image, Shape};
+use super::render::Image;
 use super::views::{View, ViewId};
 use super::{HitBox, Mission, Spot};
 use crate::items::Item;
@@ -152,7 +152,7 @@ fn when(ms: i64, now_ms: i64, tz: &jiff::tz::TimeZone) -> String {
     }
 }
 
-/// An avatar placed in a line: its column and whose it is.
+/// A Large avatar placed in a line: its column and whose it is.
 struct Face {
     x: usize,
     who: Option<Who>,
@@ -177,22 +177,10 @@ impl Drawn {
     }
 }
 
-/// Someone's initial on their color, under the photo the avatar atom
-/// draws, two columns wide.
-fn initial(name: &str) -> Span<'static> {
-    let color = crate::views::board::color_of(name);
-    let letter: String = name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().collect())
-        .unwrap_or_else(|| "?".into());
-    Span::styled(
-        format!("{letter} "),
-        Style::new()
-            .bg(Color::Indexed(color))
-            .fg(Color::Indexed(255))
-            .add_modifier(Modifier::BOLD),
-    )
+/// The first row of someone's Large avatar, under the photo the avatar
+/// atom draws.
+fn initial(name: &str) -> Vec<Span<'static>> {
+    kit::avatar(name, kit::AvatarSize::Large).remove(0)
 }
 
 /// The list's columns in a notification's first row, as board 45 lays a
@@ -202,9 +190,9 @@ fn row_columns(w: usize, ticket: usize, what: usize, when: usize) -> Vec<Option<
     kit::columns(
         &[
             Col::Fixed {
-                min: 2,
-                natural: 2,
-                cap: 2,
+                min: kit::AvatarSize::Large.cols(),
+                natural: kit::AvatarSize::Large.cols(),
+                cap: kit::AvatarSize::Large.cols(),
             },
             Col::Fixed {
                 min: 1,
@@ -297,7 +285,7 @@ fn list_lines(view: &View, w: usize, m: &Mission, roomy: bool) -> (Vec<Drawn>, u
                 who: actor_of(item),
                 name: actor.clone(),
             });
-            kit::place(&mut first, vec![initial(&actor)], col);
+            kit::place(&mut first, initial(&actor), col);
         }
         if let Some(col) = at_cols[1] {
             kit::place(&mut first, vec![kit::mark(mark_of(item), 0, theme)], col);
@@ -464,13 +452,13 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                 )]));
                 return from_your_work(out, item, w, m, roomy, tab);
             };
-            let body_w = w.saturating_sub(2).min(kit::WRAP_MAX);
+            let body_w = w.saturating_sub(kit::SAID_INDENT).min(kit::WRAP_MAX);
             let place = crate::views::ticket::PLACE;
             if comments.is_empty() {
                 let about = super::render::markdown_lines(
                     t.get("description").and_then(Value::as_str).unwrap_or(""),
                     place,
-                    body_w,
+                    w.saturating_sub(2).min(kit::WRAP_MAX),
                     theme,
                     None,
                 );
@@ -510,11 +498,11 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                         .map(|ms| ms / 1000),
                     now_ms / 1000,
                 );
-                let mut head = vec![
-                    initial(&name),
+                let mut head = initial(&name);
+                head.extend([
                     Span::raw(" "),
                     Span::styled(name.clone(), Tone::Text.bold(theme)),
-                ];
+                ]);
                 if !ago.is_empty() {
                     head.push(Span::styled(format!("  {ago} ago"), dim));
                 }
@@ -534,11 +522,18 @@ fn ticket_lines(item: &Item, w: usize, m: &Mission, roomy: bool) -> Vec<Drawn> {
                     theme,
                     None,
                 );
-                for line in about.lines {
+                // Its words beside the avatar's second row, which stays
+                // blank when there are none; a new one's bar just before them.
+                let mut lines = about.lines;
+                if lines.is_empty() {
+                    lines.push(Vec::new());
+                }
+                for line in lines {
+                    let gap = " ".repeat(kit::SAID_INDENT - 1);
                     let bar = if is_new {
-                        Span::styled("▌ ", Tone::Accent.style(theme))
+                        Span::styled(format!("{gap}▌"), Tone::Accent.style(theme))
                     } else {
-                        Span::raw("  ")
+                        Span::raw(format!("{gap} "))
                     };
                     let mut spans = vec![bar];
                     spans.extend(line);
@@ -768,7 +763,7 @@ pub fn board(
         if let Some(d) = list.get(i) {
             spans = kit::fit(d.spans.clone(), list_w, Style::new());
             if let Some(f) = &d.face {
-                images.push(avatar_image(f, y, "inbox-list"));
+                images.push(avatar_image(f, y, body - i, "inbox-list"));
             }
             if let Some(spot) = d.spot {
                 hits.push(HitBox {
@@ -795,7 +790,7 @@ pub fn board(
                     who: f.who.clone(),
                     name: f.name.clone(),
                 };
-                images.push(avatar_image(&placed, y, "inbox-ticket"));
+                images.push(avatar_image(&placed, y, body - i, "inbox-ticket"));
             }
             if let Some(spot) = d.spot {
                 hits.push(HitBox {
@@ -821,25 +816,24 @@ pub fn board(
     }
 }
 
-fn avatar_image(f: &Face, y: usize, kind: &str) -> Image {
-    Image {
-        name: format!("{kind}-avatar-{y}"),
-        x: f.x as u16,
-        y: y as u16,
-        width: 2,
-        height: 1,
-        shape: Shape::Avatar {
-            who: f.who.clone(),
-            label: f.name.clone(),
-            color: Color::Indexed(crate::views::board::color_of(&f.name)),
-        },
-    }
+/// A Large avatar at row `y`, cut to the `left` rows that show.
+fn avatar_image(f: &Face, y: usize, left: usize, kind: &str) -> Image {
+    let mut image = Image::avatar(
+        format!("{kind}-avatar-{y}"),
+        (f.x, y),
+        f.who.clone(),
+        &f.name,
+        kit::AvatarSize::Large,
+    );
+    image.height = image.height.min(left as u16);
+    image
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::items::ViewData;
+    use crate::mission::render::Shape;
     use crate::mux::TabId;
     use crate::sidebar::model::TabModel;
     use crate::sidebar::model::tests::{NOW_MS, rules};
@@ -951,6 +945,19 @@ mod tests {
             })
             .collect();
         assert_eq!(faces, vec!["u-Ben", "u-Ana", "u-Priya"]);
+        // Each a Large avatar on its notification's two rows, the mark 5 in
+        // and the title under the ticket.
+        let ben = images
+            .iter()
+            .find(|i| matches!(&i.shape, Shape::Avatar { label, .. } if label == "Ben"))
+            .unwrap();
+        assert_eq!((ben.width, ben.height), (4, 2));
+        let first = &texts[ben.y as usize];
+        let col = |l: &str, s: &str| width(&l[..l.find(s).unwrap()]);
+        assert_eq!(col(first, "◇"), ben.x as usize + 5, "{first}");
+        let title = &texts[ben.y as usize + 1];
+        let starts = width(title) - width(title.trim_start_matches([' ', '▌']));
+        assert_eq!(starts, col(first, "ABC-138"), "{title}");
         line_with(&texts, FOOT);
     }
 
@@ -989,6 +996,20 @@ mod tests {
             })
             .collect();
         assert_eq!(writers, vec!["u-Ana", "u-Kai", "u-Ben"]);
+        // A comment's Large avatar at its writer's name, the words 5 past it.
+        let kai = images
+            .iter()
+            .find(|i| {
+                i.x >= 80 && matches!(&i.shape, Shape::Avatar { label, .. } if label == "Kai")
+            })
+            .unwrap();
+        assert_eq!((kai.width, kai.height), (4, 2));
+        let col = |l: &str, s: &str| width(&l[..l.find(s).unwrap()]);
+        let head = &texts[kai.y as usize];
+        assert_eq!(col(head, "Kai"), kai.x as usize + 5, "{head}");
+        let words = &texts[kai.y as usize + 1];
+        let at = col(words, "second thought");
+        assert_eq!(at, kai.x as usize + 5, "{words}");
     }
 
     #[test]

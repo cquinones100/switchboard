@@ -1,10 +1,10 @@
 //! UX 2.0's Slack view, board 21 of the UX 2.0 canvas ("Slack: the chosen
 //! message beside its thread"): the messages grouped as Mentions, Direct,
-//! Your threads and Channels, each with its sender's photo, where and how
-//! long ago, its reply count or "↩ replied", two lines of its text and its
-//! pictures; and beside the list, the chosen message's whole thread, each
-//! message with its sender's photo, replies since you last looked marked
-//! with a bar and a "new" chip, its pictures and videos' first frames, then
+//! Your threads and Channels, each with its sender's Large avatar
+//! (`kit::avatar`), where and how long ago, its reply count or "↩
+//! replied", two lines of its text and its pictures; and beside the list,
+//! the chosen message's whole thread, each message with its sender's Large
+//! avatar, replies since you last looked marked with a bar and a "new" chip, its pictures and videos' first frames, then
 //! "From your work": the tickets the thread names, with their state and the
 //! tab on them, and today's events it names, with how soon. New with UX
 //! 2.0, with no tmux-version file behind it.
@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use jiff::tz::TimeZone;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 use serde_json::Value;
 
@@ -107,13 +107,15 @@ pub struct Look<'a> {
     pub hover: Option<usize>,
 }
 
-/// A piece of a line: text, someone's avatar, or a picture placed with its
-/// top-left corner here.
+/// A piece of a line: text, someone's avatar (`kit::avatar`, `rows` of
+/// it showing), or a picture placed with its top-left corner here.
 enum Run {
     Text(Span<'static>),
     Avatar {
         who: Option<Who>,
         name: String,
+        size: kit::AvatarSize,
+        rows: usize,
     },
     Picture {
         id: String,
@@ -349,6 +351,13 @@ fn window(lines: Vec<Vec<Run>>, top: usize, rows: usize) -> Vec<Vec<Run>> {
         for run in &mut lines[i] {
             let at = x;
             x += run_width(run);
+            // An avatar running past the last row shows in the rows left.
+            if let Run::Avatar { rows: high, .. } = run
+                && i >= top
+                && i + *high > end
+            {
+                *high = end - i;
+            }
             let Run::Picture {
                 id,
                 cols,
@@ -410,8 +419,19 @@ fn place_picture(row: &mut Vec<Run>, at: usize, picture: Run) {
 fn run_width(run: &Run) -> usize {
     match run {
         Run::Text(s) => width(&s.content),
-        Run::Avatar { .. } => 2,
+        Run::Avatar { size, .. } => size.cols(),
         Run::Picture { cols, .. } => *cols,
+    }
+}
+
+/// A Large avatar on a message's first line, its name and words
+/// `kit::SAID_INDENT` columns in.
+fn large_avatar(who: Option<Who>, name: &str) -> Run {
+    Run::Avatar {
+        who,
+        name: name.to_string(),
+        size: kit::AvatarSize::Large,
+        rows: kit::AvatarSize::Large.rows(),
     }
 }
 
@@ -458,36 +478,26 @@ fn put(
                 x += width(&span.content);
                 spans.push(span);
             }
-            Run::Avatar { who, name: person } => {
-                if x + 2 > w {
+            Run::Avatar {
+                who,
+                name: person,
+                size,
+                rows,
+            } => {
+                if x + size.cols() > w {
                     continue;
                 }
-                let color = crate::views::board::color_of(&person);
-                let initial: String = person
-                    .chars()
-                    .find(|c| c.is_alphanumeric())
-                    .map(|c| c.to_uppercase().collect())
-                    .unwrap_or_else(|| "?".into());
-                spans.push(Span::styled(
-                    format!("{initial} "),
-                    Style::new()
-                        .bg(Color::Indexed(color))
-                        .fg(Color::Indexed(255))
-                        .add_modifier(Modifier::BOLD),
-                ));
-                images.push(Image {
-                    name: format!("{name}-avatar-{y}-{}", x0 + x),
-                    x: (x0 + x) as u16,
-                    y: y as u16,
-                    width: 2,
-                    height: 1,
-                    shape: Shape::Avatar {
-                        who,
-                        label: person,
-                        color: Color::Indexed(color),
-                    },
-                });
-                x += 2;
+                let mut image = Image::avatar(
+                    format!("{name}-avatar-{y}-{}", x0 + x),
+                    (x0 + x, y),
+                    who,
+                    &person,
+                    size,
+                );
+                image.height = rows as u16;
+                images.push(image);
+                spans.extend(kit::avatar(&person, size).remove(0));
+                x += size.cols();
             }
             Run::Picture { id, cols, rows } => {
                 let cols = cols.min(w.saturating_sub(x));
@@ -650,9 +660,9 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     let at = kit::columns(
         &[
             Col::Fixed {
-                min: 2,
-                natural: 2,
-                cap: 2,
+                min: kit::AvatarSize::Large.cols(),
+                natural: kit::AvatarSize::Large.cols(),
+                cap: kit::AvatarSize::Large.cols(),
             },
             Col::Fixed {
                 min: 4,
@@ -689,11 +699,11 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     };
     if let Some((ax, _)) = at[0] {
         pad_to(&mut first, ax, &mut x);
-        first.push(Run::Avatar {
-            who: (!user.is_empty()).then(|| Who::new(Service::Slack, user)),
-            name: from.to_string(),
-        });
-        x += 2;
+        first.push(large_avatar(
+            (!user.is_empty()).then(|| Who::new(Service::Slack, user)),
+            from,
+        ));
+        x += kit::AvatarSize::Large.cols();
     }
     if let Some((fx, fw)) = at[1] {
         pad_to(&mut first, fx, &mut x);
@@ -719,7 +729,14 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
     }
     let mut out = vec![first];
     let text = item.lines.join("\n");
-    for line in body(&text, inner, 2, 3, tone, theme) {
+    // Its words beside the avatar's second row, which stays blank when
+    // there are none.
+    let indent = at[1].map_or(kit::SAID_INDENT, |(fx, _)| fx);
+    let mut words = body(&text, inner, 2, indent, tone, theme);
+    if words.is_empty() {
+        words.push(Vec::new());
+    }
+    for line in words {
         let mut runs = vec![bar(chosen, theme)];
         runs.extend(line);
         out.push(runs);
@@ -793,8 +810,8 @@ fn message_lines(item: &Item, look: &Look, w: usize, chosen: bool, lit: bool) ->
                         let style = s.style.bg(bg);
                         Run::Text(Span::styled(s.content, style))
                     }
-                    Run::Avatar { .. } => {
-                        used += 2;
+                    Run::Avatar { size, .. } => {
+                        used += size.cols();
                         r
                     }
                     Run::Picture { cols, .. } => {
@@ -891,10 +908,10 @@ fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> 
         };
         let mut head = vec![
             mark_again(&mark),
-            Run::Avatar {
-                who: (!m.user.is_empty()).then(|| Who::new(Service::Slack, &m.user)),
-                name: from.to_string(),
-            },
+            large_avatar(
+                (!m.user.is_empty()).then(|| Who::new(Service::Slack, &m.user)),
+                from,
+            ),
             Run::Text(Span::raw(" ")),
             Run::Text(Span::styled(cut(from, FROM_CAP), Tone::Text.bold(theme))),
             Run::Text(Span::styled(format!("  {}", ago(&m.ts, look.now_ms)), dim)),
@@ -904,7 +921,11 @@ fn thread_lines(item: &Item, look: &Look, w: usize, seen: i64) -> Vec<Vec<Run>> 
             head.extend(texts(kit::chip("new", Tone::Accent, look.caps, theme)));
         }
         out.push(head);
-        for line in body(&m.text, w, usize::MAX, 3, Tone::Text, theme) {
+        let mut words = body(&m.text, w, usize::MAX, kit::SAID_INDENT, Tone::Text, theme);
+        if words.is_empty() {
+            words.push(Vec::new());
+        }
+        for line in words {
             let mut runs = vec![mark_again(&mark)];
             runs.extend(line);
             out.push(runs);
@@ -1352,6 +1373,45 @@ mod tests {
                 && web.contains("no tab yet"),
             "{web}"
         );
+    }
+
+    #[test]
+    fn a_message_has_a_large_avatar_its_name_and_words_five_columns_in() {
+        let thread = thread();
+        let (lines, images) = draw(200, Some(&thread), false, &[]);
+        let row = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap();
+        let col = |l: &str, s: &str| width(&l[..l.find(s).unwrap()]);
+        let upto = |l: &str, n: usize| l.chars().take(n).collect::<String>();
+        // In the list: the avatar after the bar, the sender 5 past it and
+        // the words under the sender, beside the avatar's second row.
+        let ada = row("Ada  ");
+        let face = images
+            .iter()
+            .find(|i| matches!(&i.shape, Shape::Avatar { label, .. } if label == "Ada"))
+            .unwrap();
+        assert_eq!((face.width, face.height), (4, 2));
+        // The board starts on the screen's row 1, so line n is row n + 1.
+        assert_eq!(face.y as usize, ada + 1, "on the sender's line");
+        let x = face.x as usize;
+        assert_eq!(col(&lines[ada], "Ada"), x + 5, "{}", lines[ada]);
+        assert!(
+            upto(&lines[ada], x + 2).ends_with("A "),
+            "the initial without the photo"
+        );
+        let words = &lines[ada + 1];
+        assert_eq!(col(words, "can"), x + 5, "{words}");
+        assert!(
+            upto(words, x + 5).trim_matches(['▌', ' ']).is_empty(),
+            "the avatar's second row blank"
+        );
+        // In the thread beside, each message the same way.
+        let ed = images
+            .iter()
+            .find(|i| matches!(&i.shape, Shape::Avatar { label, .. } if label == "Ed"))
+            .unwrap();
+        assert_eq!((ed.width, ed.height), (4, 2));
+        let said = &lines[ed.y as usize]; // the line under Ed's name
+        assert_eq!(col(said, "a newer one"), ed.x as usize + 5, "{said}");
     }
 
     #[test]

@@ -36,7 +36,7 @@ const SOURCE: &str = "M-v PR view";
 pub const PLACE: &str = "M-r on GitHub";
 
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { \
-    pullRequest(number: $number) { number title url state isDraft author { login } \
+    pullRequest(number: $number) { number title url state isDraft createdAt author { login } \
     baseRefName headRefName body additions deletions changedFiles commits { totalCount } \
     last: commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { \
       checkRunCountsByState { state count } statusContextCountsByState { state count } nodes { __typename \
@@ -106,6 +106,21 @@ fn avatar(login: &str) -> Piece {
     Piece::Avatar(Some(Who::new(Service::GitHub, login)), login.to_string())
 }
 
+/// What a GitHub login wrote, beside their Large avatar: their name and
+/// `then` (when, or where) at its first row, `body` under them.
+fn said(login: &str, then: String, body: &str) -> Part {
+    Part::Said {
+        who: Some(Who::new(Service::GitHub, login)),
+        name: login.into(),
+        head: vec![
+            Piece::Name(login.into(), Tone::Text),
+            Piece::Text(then, Tone::Dim),
+        ],
+        body: body.into(),
+        indent: 0,
+    }
+}
+
 /// A check's state, as the kit marks it.
 fn check_mark(check: &Value) -> Mark {
     let state = match check.get("__typename").and_then(Value::as_str) {
@@ -158,7 +173,15 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         ),
         Piece::Name(str_at(pr, "/baseRefName").into(), Tone::Text),
         Piece::Text(" from ".into(), Tone::Dim),
-        Piece::Name(str_at(pr, "/headRefName").into(), Tone::Text),
+        // The branch without its owner, to fit beside the avatar.
+        Piece::Name(
+            str_at(pr, "/headRefName")
+                .strip_prefix(&format!("{login}/"))
+                .filter(|_| !login.is_empty())
+                .unwrap_or(str_at(pr, "/headRefName"))
+                .into(),
+            Tone::Text,
+        ),
         Piece::Text(" · ".into(), Tone::Dim),
         Piece::Text(format!("+{}", count(pr, "/additions")), Tone::Done),
         Piece::Text(format!(" −{}", count(pr, "/deletions")), Tone::Failed),
@@ -174,6 +197,14 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
         Part::Rule,
         Part::Blank,
     ];
+    if !login.is_empty() {
+        let when = board::when(str_at(pr, "/createdAt"), now);
+        main.push(said(
+            login,
+            format!(" opened this {when}").trim_end().into(),
+            "",
+        ));
+    }
     let body = str_at(pr, "/body");
     main.push(Part::Text {
         markdown: if body.trim().is_empty() {
@@ -193,18 +224,11 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
             let who = str_at(c, "/author/login");
             main.extend([
                 Part::Blank,
-                Part::Row(vec![
-                    avatar(who),
-                    Piece::Name(format!(" {who}"), Tone::Text),
-                    Piece::Text(
-                        format!("  {}", board::when(str_at(c, "/createdAt"), now)),
-                        Tone::Dim,
-                    ),
-                ]),
-                Part::Text {
-                    markdown: str_at(c, "/body").into(),
-                    indent: 3,
-                },
+                said(
+                    who,
+                    format!("  {}", board::when(str_at(c, "/createdAt"), now)),
+                    str_at(c, "/body"),
+                ),
             ]);
         }
     }
@@ -351,15 +375,7 @@ pub fn board(pr: &Value, now: jiff::Timestamp) -> Board {
             };
             panel.extend([
                 Part::Blank,
-                Part::Row(vec![
-                    avatar(who),
-                    Piece::Name(format!(" {who}"), Tone::Text),
-                    Piece::Text(format!("  {place}"), Tone::Dim),
-                ]),
-                Part::Text {
-                    markdown: str_at(&first, "/body").into(),
-                    indent: 3,
-                },
+                said(who, format!("  {place}"), str_at(&first, "/body")),
             ]);
             let replies = count(t, "/comments/totalCount").saturating_sub(1);
             if replies > 0 {
@@ -608,19 +624,20 @@ mod tests {
         let screen = pager.screen().join("\n");
         for want in [
             "#41 Benchmark fixtures for Notes' redraw",
-            "priya wants to merge 4 commits into main from priya/notes-bench · +812 −14",
+            "priya wants to merge 4 commits into main from notes-bench · +812 −14",
+            "P    priya opened this",
             "Summary",
             "Adds two fixture sets.",
             "COMMENTS",
-            "S  sam  2h ago",
-            "Nice.",
+            "S    sam  2h ago",
+            "       Nice.",
             "✕ deploy   ◌ test (macos)",
             "A  ana  requested again",
             "L  lee  approved",
             "J  jo  requested",
             "C  core  requested",
-            "A  ana  tests/notes_bench.rs:38",
-            "The test reads only small.json.",
+            "A    ana  tests/notes_bench.rs:38",
+            "       The test reads only",
             "2 replies · priya: will add it",
             "FILES",
             "f0.rs",
@@ -643,7 +660,7 @@ mod tests {
         );
         assert!(!screen.contains("a.rs:1"), "a resolved thread is left out");
         assert_eq!(
-            screen.matches("A  ana").count(),
+            screen.matches("A  ana").count() + screen.matches("A    ana").count(),
             2,
             "a reviewer asked again is listed once, and once in the threads"
         );
