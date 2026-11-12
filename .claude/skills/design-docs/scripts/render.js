@@ -14,6 +14,7 @@
 //                                                         doesn't explain in docs/design (exit 2 when it couldn't look)
 //   render.js --self-test                                 draw the fixtures and check their size, that they aren't blank, and
 //                                                         that a grid board's meter sits on its text's row
+//   render.js --print-chrome-args                         print the switches Chrome draws every board with, a line each
 'use strict';
 const fs = require('node:fs');
 const os = require('node:os');
@@ -117,6 +118,11 @@ function boardText(html) {
   return (html.replace(/<style[\s\S]*?<\/style>/gi, ' ') + ' ' + shown.join(' ')).replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/\s+/g, ' ') + ' ' + html.replace(/#[0-9a-fA-F]{3,8}(?![\w-])/g, ' ');
 }
 
+// The switches every board is drawn with. A new profile without --use-mock-keychain and --password-store=basic asks macOS
+// for a keychain, which shows its Keychain Not Found box over whatever you are doing; Switchboard's own headless Chromes
+// pass both too (src/views/image/render.rs's SWITCHES).
+const SWITCHES = ['--headless', '--disable-gpu', '--no-first-run', '--use-mock-keychain', '--password-store=basic', '--disable-background-networking', '--disable-component-update', '--hide-scrollbars', '--force-device-scale-factor=1'];
+
 function draw(html, out, width, height) {
   if (!CHROME) throw new Error('no Chrome found: set CHROME to its path');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'design-docs-'));
@@ -126,7 +132,7 @@ function draw(html, out, width, height) {
     // Chrome can exit nonzero as it tears down after writing the picture (its teardown watchdog), so the picture is what
     // says whether it drew.
     fs.rmSync(out, { force: true });
-    const run = spawnSync(CHROME, ['--headless', '--disable-gpu', '--no-first-run', '--disable-background-networking', '--disable-component-update', '--hide-scrollbars', '--force-device-scale-factor=1', `--user-data-dir=${path.join(dir, 'profile')}`, '--virtual-time-budget=10000', `--window-size=${width},${height}`, `--screenshot=${path.resolve(out)}`, `file://${page}`], { encoding: 'utf8', timeout: 60000 });
+    const run = spawnSync(CHROME, [...SWITCHES, `--user-data-dir=${path.join(dir, 'profile')}`, '--virtual-time-budget=10000', `--window-size=${width},${height}`, `--screenshot=${path.resolve(out)}`, `file://${page}`], { encoding: 'utf8', timeout: 60000 });
     if (!fs.existsSync(out)) throw new Error(`Chrome drew nothing (exit ${run.status}): ${(run.error?.message || run.stderr || '').trim().split('\n').slice(-3).join(' ')}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -362,10 +368,11 @@ const [first, second, third, fourth] = process.argv.slice(2);
 if (require.main !== module) {
   // Required by another script: nothing to run.
 } else if (first === '--self-test') selfTest();
+else if (first === '--print-chrome-args') console.log(SWITCHES.join('\n'));
 else if (first === 'sync' && second && third) sync(second, third);
 else if (first === 'made-up' && second) madeUp(second);
 else if (first && second) draw(toHtml(fs.readFileSync(first, 'utf8')), second, Number(third) || 1280, Number(fourth) || 800);
 else {
-  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js --self-test');
+  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js --self-test | render.js --print-chrome-args');
   process.exit(64);
 }

@@ -55,3 +55,23 @@ fn the_renderer_keeps_a_grid_boards_text_on_its_meters_and_finds_names_not_made_
     );
     assert!(stdout.contains("ok slack.dc.html: 420×880"), "{stdout}");
 }
+
+#[test]
+fn the_renderers_chrome_asks_macos_for_no_keychain() {
+    let script =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(".claude/skills/design-docs/scripts/render.js");
+    let out = match Command::new("node")
+        .arg(&script)
+        .arg("--print-chrome-args")
+        .output()
+    {
+        Err(e) if e.kind() == ErrorKind::NotFound => return eprintln!("skipped: no node"),
+        result => result.unwrap(),
+    };
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let switches: Vec<&str> = stdout.lines().collect();
+    for wanted in ["--use-mock-keychain", "--password-store=basic"] {
+        assert!(switches.contains(&wanted), "{stdout}");
+    }
+}
