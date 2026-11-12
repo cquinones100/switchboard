@@ -403,6 +403,30 @@ impl Server {
         );
     }
 
+    /// The mode, on and working another note, switched to `note` (M-p's
+    /// "Autopilot: work “<note>”" in Notes, said yes to): saved as its
+    /// settings box saves another note picked there, everything else kept.
+    pub fn autopilot_switch_note(&mut self, client: ClientId, note: String) {
+        let mode = Mode::read(&paths::state_dir());
+        let notes = worktree_from_note::notes_dir();
+        self.open_mission(client, super::opening());
+        self.off_task(
+            client,
+            {
+                let path = notes.join(&note);
+                move || crate::notes::id::of_file(&path).unwrap_or_default()
+            },
+            move |server, client, id| {
+                let was = Fields::from_mode(&mode);
+                let mut fields = was.clone();
+                fields.skipped = skipped_of(&mode, &id);
+                fields.skipped_of = id;
+                fields.note = note;
+                server.autopilot_box_write(client, fields, was);
+            },
+        );
+    }
+
     /// Which note: those holding an unticked item, the rest behind "More
     /// notes…", so the list stays short; with none of them, the rest at
     /// once.

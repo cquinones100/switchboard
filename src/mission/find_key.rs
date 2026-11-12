@@ -128,7 +128,7 @@ impl Lookup {
                 self.bindings.yours.contains(&key)
             };
             // An app may take the key for itself first where it is in
-            // front (M-p in Notes).
+            // front.
             let mut detail = action.detail();
             if !app_rows.is_empty() {
                 detail = format!(
@@ -731,10 +731,10 @@ mod tests {
         assert_eq!(f.focus, Some(Cap::Show));
         f.key(Key::new(KeyCode::BackTab, Mods::NONE), &look);
         assert_eq!(f.focus, None, "Shift-Tab goes back");
-        // M-p, the palette's, is Notes' own where Notes is in front.
+        // M-p is the palette's, Notes in front too.
         f.key(key("M-p"), &look);
         assert!(
-            f.found().unwrap().detail.contains("Notes: "),
+            !f.found().unwrap().detail.contains("Notes: "),
             "{:?}",
             f.found()
         );

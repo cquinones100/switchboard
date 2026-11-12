@@ -197,6 +197,84 @@ pub fn autopilot_on(entries: &mut [Entry], note: &str) {
     }
 }
 
+/// What a command listed only while Notes is in front does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotesPick {
+    /// Autopilot working the note, by its path (`Server::work_note`).
+    WorkNote(String),
+    /// One of the app's own palette commands, by its words, run in the app
+    /// (`run` on its socket).
+    Run(String),
+}
+
+/// A command listed only while Notes is in front, ahead of the rest.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotesEntry {
+    pub item: PickItem,
+    pub preview: String,
+    pub pick: NotesPick,
+}
+
+/// The commands listed while Notes is in front, from what the app answered
+/// (`front`): "Autopilot: work “<note>”" with a note shown and the
+/// autopilot setting on, then the app's own commands, the checklist item's
+/// first, each "Notes: <words>" with its key in Notes, with the
+/// notes_palette setting on.
+pub fn notes_entries(
+    front: &crate::notes::socket::InFront,
+    autopilot: bool,
+    notes_palette: bool,
+) -> Vec<NotesEntry> {
+    let mut list = Vec::new();
+    let note = front
+        .note
+        .as_ref()
+        .filter(|n| autopilot && crate::notes::serve::in_notes(n));
+    if let Some(note) = note {
+        let words = format!(
+            "Autopilot: work “{}”",
+            crate::autopilot::mode::note_title(note)
+        );
+        list.push(NotesEntry {
+            preview: format!(
+                "{words}
+Keeps tabs working through this note's checklist, the next opened as each lands. Already working it, its menu; working another note, asks whether to switch, keeping its counts, spend limit and landing; off, asks the repository first.
+No key: Notes in front lists it"
+            ),
+            item: PickItem {
+                text: words,
+                tags: "#notes #autopilot".into(),
+                key: String::new(),
+                value: "notes:autopilot".into(),
+            },
+            pick: NotesPick::WorkNote(note.clone()),
+        });
+    }
+    if notes_palette {
+        list.extend(front.commands.iter().map(|c| {
+            let words = format!("Notes: {}", c.name);
+            let key = if c.key.is_empty() {
+                "No key in Notes".to_string()
+            } else {
+                format!("Key in Notes: {}", c.key)
+            };
+            NotesEntry {
+                preview: format!(
+                    "{words}\nNotes' own command, run in Notes as its key would.\n{key}"
+                ),
+                item: PickItem {
+                    text: words,
+                    tags: format!("#notes #{}", c.tag),
+                    key: c.key.clone(),
+                    value: format!("notes:{}", c.name),
+                },
+                pick: NotesPick::Run(c.name.clone()),
+            }
+        }));
+    }
+    list
+}
+
 /// The entries with the ones picked last first, newest first.
 pub fn recent_first(mut entries: Vec<Entry>, recent: &[String]) -> Vec<Entry> {
     let rank = |e: &Entry| {
@@ -334,6 +412,22 @@ pub fn remember(value: &str, query: &str, learn: bool) {
     recent.extend(read_recent().into_iter().filter(|r| r != value));
     recent.truncate(RECENT_MAX);
     let _ = util::write_atomic(recent_file(), format!("{}\n", recent.join("\n")));
+    learn_query(value, query, learn);
+}
+
+/// Keeps what was typed before a pick, when `learn` and something was
+/// typed, so the same words rank it first again; a command listed only
+/// while Notes is in front is kept so alone, its place among the recent
+/// picks left to the workspace's commands, which lead the list.
+pub fn learn_query(value: &str, query: &str, learn: bool) {
+    let dir = dir();
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+    }
     let typed = normalize(query);
     if learn && !typed.is_empty() {
         let mut queries = read_queries();
@@ -519,5 +613,42 @@ mod tests {
                 assert_eq!(a, b);
             }
         }
+    }
+
+    #[test]
+    fn notes_in_front_lists_autopilot_on_its_note_then_its_own_commands() {
+        use crate::notes::socket::{InFront, Listed};
+        let front = InFront {
+            note: Some("Work/Plan.md".into()),
+            commands: vec![Listed {
+                name: "Add an item".into(),
+                key: "ga".into(),
+                tag: "note".into(),
+            }],
+        };
+        let all = notes_entries(&front, true, true);
+        let words: Vec<&str> = all.iter().map(|n| n.item.text.as_str()).collect();
+        assert_eq!(words, ["Autopilot: work “Plan”", "Notes: Add an item"]);
+        assert_eq!(all[0].pick, NotesPick::WorkNote("Work/Plan.md".into()));
+        assert_eq!(all[1].pick, NotesPick::Run("Add an item".into()));
+        assert_eq!(
+            (all[1].item.key.as_str(), all[1].item.tags.as_str()),
+            ("ga", "#notes #note")
+        );
+        assert_eq!(notes_entries(&front, false, true).len(), 1, "autopilot off");
+        assert_eq!(
+            notes_entries(&front, true, false).len(),
+            1,
+            "notes_palette off"
+        );
+        let listless = InFront {
+            note: None,
+            ..front
+        };
+        assert_eq!(
+            notes_entries(&listless, true, false),
+            Vec::new(),
+            "no note shown"
+        );
     }
 }

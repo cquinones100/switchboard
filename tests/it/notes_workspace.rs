@@ -2,8 +2,9 @@
 //! test/new-tab.test.js and what notes-open.sh did): M-N opens Notes in a tab
 //! of its own, M-e brings it beside a pane and home again, leaving a pane in
 //! its tab that says where it went, Notes left alone in a tab goes home, a
-//! note's tab is opened through the palette's `press`, and each tab's note
-//! is shown through the app's socket.
+//! note's tab is opened through the palette's `press`, each tab's note
+//! is shown through the app's socket, and M-p with Notes in front lists
+//! autopilot working its note and the app's own commands.
 //!
 //! The app is a stand-in (`NOTES_OPEN_COMMAND`, as the tmux version's tests
 //! had), and so is its socket: a listener of the test's own at
@@ -22,6 +23,10 @@ use common::{TempDir, TestClient, TestServer};
 use serde_json::{Value, json};
 
 const ALT: &str = "\x1b";
+
+/// What the stand-in app answers `palette` with: Plan shown, and one
+/// command of its own.
+const PALETTE_REPLY: &str = "ok {\"note\":\"Plan.md\",\"commands\":[{\"name\":\"Add an item\",\"key\":\"ga\",\"tag\":\"note\"}]}\n";
 
 struct Rig {
     server: TestServer,
@@ -64,8 +69,16 @@ impl Rig {
                     .read_line(&mut line)
                     .is_ok()
                 {
-                    keep.lock().unwrap().push(line.trim_end().to_string());
-                    let _ = stream.write_all(b"ok\n");
+                    let request = line.trim_end().to_string();
+                    // The workspace's M-p asks for the note shown and the
+                    // app's own commands.
+                    let reply = if request == "palette" {
+                        PALETTE_REPLY
+                    } else {
+                        "ok\n"
+                    };
+                    keep.lock().unwrap().push(request);
+                    let _ = stream.write_all(reply.as_bytes());
                 }
             }
         });
@@ -429,4 +442,63 @@ fn a_new_notes_notification_takes_notes_home_from_beside_a_tab_before_opening_it
     assert_eq!(tabs(&list)[0]["options"]["@tab_note_last"], "Plan.md");
     rig.wait_heard("open Work/Later.md");
     rig.wait_heard("sidebar on");
+}
+
+#[test]
+fn m_p_with_notes_in_front_lists_autopilot_on_its_note_and_its_own_commands() {
+    let rig = Rig::new();
+    let (mut client, _, _) = notes_open(&rig);
+
+    // Elsewhere, the palette as ever, the app not asked.
+    client.type_text(&format!("{ALT}p"));
+    let screen = client.wait_text("Actions");
+    assert!(
+        !screen.iter().any(|l| l.contains("Notes: Add an item")),
+        "{screen:#?}"
+    );
+    assert!(!rig.heard().iter().any(|r| r == "palette"));
+    client.type_text("\x1b");
+
+    // With Notes in front, its note and its commands first; a command of
+    // its own picked is run in the app.
+    client.type_text(&format!("{ALT}2"));
+    rig.wait("Notes in front", |l| tabs(l)[1]["current"] == true);
+    client.type_text(&format!("{ALT}p"));
+    rig.wait_heard("palette");
+    let screen = client.wait_text("Notes: Add an item");
+    assert!(
+        screen.iter().any(|l| l.contains("Autopilot: work “Plan”")),
+        "{screen:#?}"
+    );
+    client.type_text("add an item");
+    client.wait_text("1/1");
+    client.type_text("\r");
+    rig.wait_heard("run Add an item");
+
+    // Autopilot working another note asks before switching, and no leaves
+    // the mode as it was.
+    let mode = rig.server.state.join("autopilot.json");
+    let other = r#"{"on":true,"note":"Other.md","paused":true}"#;
+    std::fs::write(&mode, other).unwrap();
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Autopilot: work “Plan”");
+    client.type_text("autopilot work plan");
+    client.wait_text("1/1");
+    client.type_text("\r");
+    client.wait_text("Autopilot is working “Other”. Switch it to “Plan”?");
+    client.type_text("n");
+    client.wait_for("the question gone", |s| {
+        !s.iter().any(|l| l.contains("Switch it to"))
+    });
+    let kept: Value = serde_json::from_str(&std::fs::read_to_string(&mode).unwrap()).unwrap();
+    assert_eq!(kept["note"], "Other.md");
+
+    // Working this note already, its menu.
+    std::fs::write(&mode, r#"{"on":true,"note":"Plan.md","paused":true}"#).unwrap();
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Autopilot: work “Plan”");
+    client.type_text("autopilot work plan");
+    client.wait_text("1/1");
+    client.type_text("\r");
+    client.wait_text("Working Plan");
 }

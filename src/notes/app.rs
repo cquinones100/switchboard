@@ -8,7 +8,8 @@
 //! ```text
 //!   Ctrl-F             find a note (in the list too)
 //!   Ctrl-B             show or put away the list (in the list too)
-//!   Ctrl-Shift-P       every command, in a palette (in the list too)
+//!   Ctrl-Shift-P       every command, in a palette (in the list too); in the
+//!                      workspace, its M-p, which lists them
 //!   Enter              tick a checklist item, fold a heading, follow a link
 //!   a click            the same, on a ☐, a heading's ▾ or a link
 //!   Ctrl-P             the Format menu, with everything below
@@ -23,9 +24,10 @@
 //! With UX 2.0 on, a note's unticked checklist items have keys of their
 //! own, each falling back to Vim's where it has nothing to do: Enter opens
 //! the item's plan (its `Plan: [[...]]` line), o goes to the tab working
-//! on it, `ga` types into the "Add an item" input at the bottom, and M-p,
-//! which the workspace hands Notes then (`@notes_work_key`), has autopilot
-//! work the note. A section for parked work opens folded to one line with
+//! on it, and `ga` types into the "Add an item" input at the bottom. M-p
+//! is the workspace's palette, which lists autopilot working the note and
+//! this app's own commands while Notes is in front (`palette` and `run`
+//! on the socket). A section for parked work opens folded to one line with
 //! its count of items, and the footer shows these keys.
 //!
 //! In Insert mode, Enter carries a list on, and Tab and Shift-Tab indent an
@@ -390,7 +392,10 @@ A web link: https://www.apple.com/macos/, a [link with text](https://example.com
 pub const NOTE_KEYS: &[(&str, &str)] = &[
     ("Enter", "tick, fold or follow what the cursor is on"),
     ("Ctrl-P", "the Format menu, on the word, line or selection"),
-    ("Ctrl-Shift-P", "every Notes command, in a palette"),
+    (
+        "Ctrl-Shift-P",
+        "every Notes command, in a palette: in the workspace, M-p's",
+    ),
     (
         "gw",
         "start work on the checklist item in a new tab: pick the repository and the branch to land on",
@@ -407,7 +412,6 @@ pub const NOTE_KEYS: &[(&str, &str)] = &[
         "ga",
         "with UX 2.0: Add an item, Enter adding it to the top list, M-Enter having a new tab plan it",
     ),
-    ("M-p", "with UX 2.0: autopilot working the note"),
     ("Ctrl-F", "find a note"),
     ("Ctrl-B", "show or put away the list of notes"),
     ("Ctrl-V", "paste the clipboard's image, while typing"),
@@ -1799,27 +1803,6 @@ impl App {
         true
     }
 
-    /// M-p, which the workspace hands Notes with UX 2.0 on: autopilot
-    /// working the open note, asked of the workspace.
-    fn work_note(&mut self) {
-        let Some(path) = self.current_path().map(Path::to_path_buf) else {
-            return;
-        };
-        if self.store.in_trash(&path) {
-            self.say("notes: restore the note to work it");
-            return;
-        }
-        // A draft in Add an item stays, to finish once the workspace's
-        // questions are answered or put away.
-        self.finish_editing();
-        self.save();
-        let Some(path) = self.current_path().map(Path::to_path_buf) else {
-            return;
-        };
-        let rel = self.store.relative(&path);
-        self.press(&[crate::notes::serve::WORK_NOTE, &rel]);
-    }
-
     /// Out of Insert or Visual mode with what was typed one step to undo,
     /// and the change for `.` to make again, for a key or click that
     /// leaves the note's editing.
@@ -2316,6 +2299,8 @@ impl App {
     pub fn request(&mut self, request: Request) -> String {
         match request {
             Request::Ping => "ok".into(),
+            Request::Palette => self.palette_request(),
+            Request::Run(name) => self.run_request(&name),
             Request::Shown => match self.current_path().map(Path::to_path_buf) {
                 Some(p) => format!("ok {}", self.store.relative(&p)),
                 None => "ok".into(),
@@ -2418,11 +2403,6 @@ impl App {
         }
         if self.prompt.is_some() {
             return self.prompt_key(key);
-        }
-        // M-p, which the workspace hands Notes with UX 2.0 on, in any mode,
-        // from the list and from Add an item too.
-        if self.opts.ux2 && key.mods == Mods::ALT && key.code == KeyCode::Char('p') {
-            return self.work_note();
         }
         if self.adding.is_some() {
             return self.adding_key(key);
@@ -2584,17 +2564,18 @@ impl App {
         });
     }
 
+    /// Ctrl-Shift-P: in the workspace, its palette (M-p), which lists this
+    /// one's commands while Notes is in front; alone, the app's own.
     fn palette(&mut self) {
+        if self.opts.server {
+            self.press(&["palette"]);
+            return;
+        }
         if !self.opts.palette {
             self.say("notes: the palette is off (Settings, Notes command palette)");
             return;
         }
-        let from_list = self.focus == Focus::List && self.list_shown;
-        let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
-        let format = self.format_from(typing);
-        self.leave_modes();
-        let commands =
-            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        let (commands, from) = self.palette_here();
         let items = palette::items(&commands, &palette::recent(&self.recent_file));
         let picker = Picker::new("Notes", items)
             .prompt("command> ")
@@ -2606,16 +2587,72 @@ impl App {
                 m.sort_unstable();
                 m
             }));
-        self.push(
-            Box::new(picker),
-            Then::Palette(
-                commands,
-                PaletteFrom {
-                    list: from_list,
-                    format,
-                },
-            ),
-        );
+        self.push(Box::new(picker), Then::Palette(commands, from));
+    }
+
+    /// The palette's commands where the app is, and where they were asked
+    /// from, out of Insert and Visual mode as a command needs it.
+    fn palette_here(&mut self) -> (Vec<palette::Command>, PaletteFrom) {
+        let from_list = self.focus == Focus::List && self.list_shown;
+        let typing = (self.editor.mode == Mode::Insert).then_some(self.editor.doc.col);
+        let format = self.format_from(typing);
+        self.leave_modes();
+        let commands =
+            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        let from = PaletteFrom {
+            list: from_list,
+            format,
+        };
+        (commands, from)
+    }
+
+    /// The workspace's M-p asking for the note shown and the commands
+    /// listed here (`palette` on the socket), leaving out the workspace's
+    /// own, which its palette lists already. The note is saved first, so
+    /// autopilot picked there reads it as it is on screen.
+    fn palette_request(&mut self) -> String {
+        self.save();
+        let from_list = self.focus == Focus::List && self.list_shown;
+        let note = self
+            .current_path()
+            .filter(|p| !self.store.in_trash(p))
+            .map(|p| self.store.relative(p));
+        let mut commands =
+            palette::commands(from_list, !from_list && self.open.is_some(), self.opts.ux2);
+        // The checklist item's commands lead, the rest in the app's order.
+        commands.sort_by_key(|c| !c.act.on_item());
+        let commands = commands
+            .into_iter()
+            .filter(|c| !matches!(c.act, PaletteAct::Press(_)))
+            .map(|c| socket::Listed {
+                name: c.name,
+                key: c.key,
+                tag: c.tag.to_string(),
+            })
+            .collect();
+        format!("ok {}", socket::InFront { note, commands }.reply())
+    }
+
+    /// One of the commands `palette` listed, picked in the workspace's M-p
+    /// (`run` on the socket), found by its words where the app is now.
+    fn run_request(&mut self, name: &str) -> String {
+        let (commands, from) = self.palette_here();
+        let Some(act) = commands.iter().find(|c| c.name == name).map(|c| c.act) else {
+            return format!("error no command {name} here");
+        };
+        // What takes the keys first goes, as Esc would put it away: the
+        // app's boxes (the finder, a question), a prompt being typed, and,
+        // for any command but Add an item, that input, as a click elsewhere
+        // leaves it, so the keys after it reach what the command went to.
+        while let Some(layer) = self.layers.pop() {
+            self.closed(layer.then, Outcome::Dismissed);
+        }
+        self.prompt = None;
+        if act != PaletteAct::AddItem {
+            self.adding = None;
+        }
+        self.run_palette(act, from);
+        "ok".into()
     }
 
     fn run_palette(&mut self, act: PaletteAct, from: PaletteFrom) {
@@ -2675,7 +2712,6 @@ impl App {
                 }
             }
             PaletteAct::AddItem => self.start_adding(),
-            PaletteAct::WorkNote => self.work_note(),
             PaletteAct::Rename
             | PaletteAct::Move
             | PaletteAct::Pin
@@ -3559,9 +3595,6 @@ pub fn run(store: Store) -> ExitCode {
         if opts.easy {
             mark_pane("@notes_cmd_keys", true);
         }
-        if opts.ux2 {
-            mark_pane("@notes_work_key", true);
-        }
     }
     {
         let tx = tx.clone();
@@ -3638,9 +3671,6 @@ pub fn run(store: Store) -> ExitCode {
         mark_pane("@allow_passthrough", false);
         if opts.easy {
             mark_pane("@notes_cmd_keys", false);
-        }
-        if opts.ux2 {
-            mark_pane("@notes_work_key", false);
         }
     }
     drop(term);

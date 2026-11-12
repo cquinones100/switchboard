@@ -438,6 +438,28 @@ fn a_note_opened_from_outside_puts_the_lists_cursor_on_it() {
         "its folder's view left for All Notes, which lists it"
     );
     assert_eq!(app.request(socket::Request::Shown), "ok Work/Plan.md");
+    // The workspace's M-p: the note shown and the commands listed here,
+    // the item's first and the workspace's own left out; one run by its
+    // words.
+    let reply = app.request(socket::Request::Palette);
+    let front = socket::InFront::read(reply.strip_prefix("ok ").unwrap()).unwrap();
+    assert_eq!(front.note.as_deref(), Some("Work/Plan.md"));
+    assert!(front.commands.iter().any(|c| c.name == "Find a note"));
+    assert!(
+        !front
+            .commands
+            .iter()
+            .any(|c| c.name.starts_with("Move Notes beside")),
+        "the workspace lists its own"
+    );
+    assert_eq!(
+        app.request(socket::Request::Run("Find a note".into())),
+        "ok"
+    );
+    assert!(
+        app.request(socket::Request::Run("No such thing".into()))
+            .starts_with("error")
+    );
     assert!(
         app.request(socket::Request::Open("../x.md".into()))
             .starts_with("error"),
@@ -1666,7 +1688,7 @@ fn a_parked_section_opens_folded_to_its_count_and_the_footer_shows_the_item_keys
     assert!(shown.iter().any(|l| l.contains("Add an item")));
     let footer = shown.last().unwrap();
     assert!(footer.contains("Enter its plan or tick"), "{footer}");
-    assert!(footer.contains("M-p work this note"), "{footer}");
+    assert!(footer.contains("M-p commands, autopilot"), "{footer}");
 }
 
 #[test]
@@ -1701,6 +1723,35 @@ fn ga_adds_an_item_to_the_end_of_the_top_list() {
             .iter()
             .any(|l| l.contains("skipped") || l.contains("new one"))
     );
+    // A command run from the workspace's M-p leaves the input, so the
+    // keys after it reach what it went to; Add an item itself keeps it.
+    keys(&mut app, "gadraft");
+    assert_eq!(
+        app.request(socket::Request::Run("Add an item".into())),
+        "ok"
+    );
+    assert_eq!(app.adding.as_deref(), Some("draft"));
+    assert_eq!(
+        app.request(socket::Request::Run("Go to the list".into())),
+        "ok"
+    );
+    assert_eq!(app.adding, None);
+    // So do the finder and a search being typed.
+    keys(&mut app, "<C-f>");
+    assert!(app.top_kind().is_some());
+    assert_eq!(
+        app.request(socket::Request::Run("Clear the search or tag".into())),
+        "ok"
+    );
+    assert!(app.top_kind().is_none());
+    app.focus = Focus::Note;
+    keys(&mut app, "/sear");
+    assert!(app.prompt.is_some());
+    assert_eq!(
+        app.request(socket::Request::Run("Clear the search or tag".into())),
+        "ok"
+    );
+    assert!(app.prompt.is_none());
 }
 
 #[test]

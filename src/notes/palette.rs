@@ -44,8 +44,6 @@ pub enum Act {
     ItemTab,
     /// UX 2.0: the "Add an item" input (ga).
     AddItem,
-    /// UX 2.0: autopilot working the note (M-p).
-    WorkNote,
     /// A Switchboard command for Notes, by its name in keys.json, which the
     /// workspace runs (`switchboard press <name>`).
     Press(&'static str),
@@ -57,6 +55,16 @@ pub enum Act {
     FoldAll,
     UnfoldAll,
     Format(menu::Act),
+}
+
+impl Act {
+    /// Whether it acts on the checklist item under the cursor.
+    pub fn on_item(self) -> bool {
+        matches!(
+            self,
+            Act::WorkOnItem | Act::OpenPlan | Act::ItemTab | Act::AddItem
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,12 +211,6 @@ pub fn commands(from_list: bool, in_note: bool, ux2: bool) -> Vec<Command> {
                 Act::ItemTab,
             ));
             list.push(command("Add an item", "ga", "note", Act::AddItem));
-            list.push(command(
-                "Have autopilot work this note",
-                "M-p",
-                "tabs",
-                Act::WorkNote,
-            ));
         }
         list.push(command("Fold every heading", "zM", "fold", Act::FoldAll));
         list.push(command(

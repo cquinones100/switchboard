@@ -14,8 +14,16 @@
 //! open <path in the notes directory>   the note shown          → ok | error <why>
 //! sidebar on | sidebar off             the list shown or put away → ok
 //! shown                                 the note shown           → ok <path> | ok
+//! palette                               the note shown and the commands
+//!                                       the app's palette lists there,
+//!                                       for the workspace's M-p  → ok <JSON>
+//! run <command's words>                 that palette command run → ok | error <why>
 //! ping                                                           → ok
 //! ```
+//!
+//! `palette`'s JSON is one line, `{"note": <path> | null, "commands":
+//! [{"name", "key", "tag"}]}`; `run` names a command by its words as
+//! `palette` gave them, looked up again where the app is when it comes.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -43,6 +51,8 @@ pub enum Request {
     Open(String),
     Sidebar(bool),
     Shown,
+    Palette,
+    Run(String),
     Ping,
 }
 
@@ -54,8 +64,67 @@ pub fn parse(line: &str) -> Option<Request> {
         ("sidebar", "on") => Some(Request::Sidebar(true)),
         ("sidebar", "off") => Some(Request::Sidebar(false)),
         ("shown", "") => Some(Request::Shown),
+        ("palette", "") => Some(Request::Palette),
+        ("run", name) if !name.is_empty() => Some(Request::Run(name.to_string())),
         ("ping", "") => Some(Request::Ping),
         _ => None,
+    }
+}
+
+/// What `palette` answers: the note shown, and the commands the app's
+/// palette lists where the app is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InFront {
+    pub note: Option<String>,
+    pub commands: Vec<Listed>,
+}
+
+/// One of the app's palette commands, as `palette` gives it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub key: String,
+    pub tag: String,
+}
+
+impl InFront {
+    /// The reply to `palette`, after its `ok `: one line of JSON.
+    pub fn reply(&self) -> String {
+        let commands: Vec<serde_json::Value> = self
+            .commands
+            .iter()
+            .map(|c| serde_json::json!({"name": c.name, "key": c.key, "tag": c.tag}))
+            .collect();
+        serde_json::json!({"note": self.note, "commands": commands}).to_string()
+    }
+
+    /// `palette`'s reply read back; `None` when it isn't one.
+    pub fn read(reply: &str) -> Option<InFront> {
+        let value: serde_json::Value = serde_json::from_str(reply).ok()?;
+        let text = |v: &serde_json::Value, key: &str| {
+            v.get(key)
+                .and_then(|s| s.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        let commands = value
+            .get("commands")?
+            .as_array()?
+            .iter()
+            .map(|c| Listed {
+                name: text(c, "name"),
+                key: text(c, "key"),
+                tag: text(c, "tag"),
+            })
+            .filter(|c| !c.name.is_empty() && !c.name.contains('\n'))
+            .collect();
+        Some(InFront {
+            note: value
+                .get("note")
+                .and_then(|n| n.as_str())
+                .map(str::to_string),
+            commands,
+        })
     }
 }
 
@@ -141,8 +210,32 @@ mod tests {
         );
         assert_eq!(parse("sidebar off"), Some(Request::Sidebar(false)));
         assert_eq!(parse("shown"), Some(Request::Shown));
+        assert_eq!(parse("palette"), Some(Request::Palette));
+        assert_eq!(
+            parse("run Find a note\n"),
+            Some(Request::Run("Find a note".into()))
+        );
+        assert_eq!(parse("run "), None);
         assert_eq!(parse("open "), None);
         assert_eq!(parse("rm -rf"), None);
+    }
+
+    #[test]
+    fn the_palette_reply_reads_back_as_it_was_written() {
+        let front = InFront {
+            note: Some("Work/Plan.md".into()),
+            commands: vec![Listed {
+                name: "Add an item".into(),
+                key: "ga".into(),
+                tag: "note".into(),
+            }],
+        };
+        assert_eq!(InFront::read(&front.reply()), Some(front));
+        assert_eq!(
+            InFront::read(r#"{"note":null,"commands":[]}"#),
+            Some(InFront::default())
+        );
+        assert_eq!(InFront::read("Plan.md"), None);
     }
 
     #[test]

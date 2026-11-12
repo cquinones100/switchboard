@@ -1266,24 +1266,38 @@ impl Server {
         });
     }
 
-    /// Notes' M-p with UX 2.0 on (`press work-note <note>`): autopilot
-    /// working that note, in the repository its items are worked in;
-    /// mission control on the mode while it is on, with its settings box on
-    /// the note.
+    /// M-p's "Autopilot: work “<note>”", listed while Notes shows the note
+    /// in front: autopilot working that note. Already working it, its menu
+    /// in mission control; working another, asked whether to switch to this
+    /// one, its counts, spend limit and landing kept; off, in the
+    /// repository its items are worked in, asked first.
     pub fn work_note(&mut self, client: ClientId, note: String) {
         if !settings::is_on("autopilot") {
             self.say(Some(client), "Autopilot is off in Settings (Autopilot)");
             return;
         }
-        if crate::autopilot::Mode::read(&paths::state_dir()).on {
-            // Its settings box on that note, saving which works it.
+        let mode = crate::autopilot::Mode::read(&paths::state_dir());
+        let named = |note: &str| format!("“{}”", crate::autopilot::mode::note_title(note));
+        if mode.on && mode.note == note {
             self.open_mission(client, crate::autopilot::opening());
-            self.autopilot_box(
+            self.mission_note(
                 client,
-                None,
-                Some(note),
-                crate::autopilot::settings_box::Part::Note,
+                format!("Autopilot is already working {}", named(&note)),
             );
+            self.autopilot_menu(client);
+            return;
+        }
+        if mode.on {
+            let question = Confirm::new(format!(
+                "Autopilot is working {}. Switch it to {}?",
+                named(&mode.note),
+                named(&note)
+            ));
+            self.ask(client, question, move |server, client, yes| {
+                if yes {
+                    server.autopilot_switch_note(client, note);
+                }
+            });
             return;
         }
         let title = note.strip_suffix(".md").unwrap_or(&note).to_string();

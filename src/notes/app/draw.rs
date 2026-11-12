@@ -844,7 +844,7 @@ impl App {
                     ("gw", "work on it"),
                     ("ga", "add"),
                     ("za", "fold"),
-                    ("M-p", "work this note"),
+                    ("M-p", "commands, autopilot"),
                 ],
                 &self.look.theme,
             );

@@ -155,9 +155,6 @@ impl Command {
 /// note and the item's line.
 pub const WORK_ON_ITEM: &str = "work-on-item";
 
-/// What Notes presses for M-p with UX 2.0 on: autopilot working the note.
-pub const WORK_NOTE: &str = "work-note";
-
 /// What Notes presses for M-Enter in "Add an item": a tab whose Claude adds
 /// the item to the note and writes its plan, with `/plan-item`.
 pub const PLAN_ITEM: &str = "plan-item";
@@ -217,7 +214,7 @@ fn exe() -> String {
 /// Sends a request to the running app, after those sent before it, on a
 /// thread of its own: an app that isn't running, or doesn't answer, holds
 /// up nothing.
-fn tell(request: String) {
+pub(crate) fn tell(request: String) {
     static QUEUE: OnceLock<Mutex<Sender<String>>> = OnceLock::new();
     let queue = QUEUE.get_or_init(|| {
         let (tx, rx) = channel::<String>();
@@ -787,8 +784,7 @@ impl Server {
     /// client used last on the caller's session (the app's palette asks
     /// this); `note-tab` takes the note as `arg`. `work-on-item <note>
     /// <line>`, Notes' `gw`, is no key's: it starts work on the item on
-    /// that line of the note (src/cmd/work.rs). Nor are UX 2.0's
-    /// `work-note <note>` (Notes' M-p: autopilot working the note) and
+    /// that line of the note (src/cmd/work.rs). Nor is UX 2.0's
     /// `plan-item <note> <text>` (M-Enter in "Add an item": a tab whose
     /// Claude runs `/plan-item`).
     pub fn cmd_press(&mut self, args: &[String], caller: Option<PaneId>) -> Reply {
@@ -809,22 +805,18 @@ impl Server {
             self.work_on_item(client, note, line);
             return Reply::ok("");
         }
-        if name == WORK_NOTE || name == PLAN_ITEM {
+        if name == PLAN_ITEM {
             let Some(note) = arg.filter(|n| in_notes(n)) else {
                 return Reply::fail(format!("press: {name} takes a note"));
             };
             let text = rest.get(1).map(|t| t.trim()).unwrap_or("").to_string();
-            if name == PLAN_ITEM && text.is_empty() {
+            if text.is_empty() {
                 return Reply::fail("press: plan-item takes a note and the item");
             }
             let Some(client) = self.press_client(caller) else {
                 return Reply::fail("press: no client is attached to press it in");
             };
-            if name == WORK_NOTE {
-                self.work_note(client, note);
-            } else {
-                self.plan_new_item(client, note, text);
-            }
+            self.plan_new_item(client, note, text);
             return Reply::ok("");
         }
         let Some(action) = Action::parse(name) else {

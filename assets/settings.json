@@ -543,7 +543,7 @@
     "key": "notes_palette",
     "category": "Notes",
     "label": "Notes command palette",
-    "description": "Ctrl-Shift-P in Notes lists every command Notes has, each with its key; off, Ctrl-Shift-P says the palette is off",
+    "description": "M-p with Notes in front lists every command Notes has, each with its key, ahead of the workspace's, as Ctrl-Shift-P does in Notes run alone; off, M-p leaves them out and Ctrl-Shift-P in Notes run alone says the palette is off",
     "default": true
   },
   {

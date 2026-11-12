@@ -58,7 +58,7 @@ runs the workspace on made-up data, in a home of its own under `/tmp` that links
 
 | Key | What it does |
 |---|---|
-| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line (with UX 2.0, the tab header) opens it too; with UX 2.0, in Notes it has autopilot work the note instead |
+| `M-p` | Find any command by what it does, Settings included; the ⌘ Commands button in the status line (with UX 2.0, the tab header) opens it too; with Notes in front, it lists autopilot working the note and Notes' own commands first |
 | `M-/` | Every key, in mission control's Keys view: the workspace's grouped by what they are about, then the sidebar's, mission control's, `M-d`'s and Notes'; `/` filters, Enter opens a key's menu, which presses a workspace key |
 | `M-a` | Go to the next tab that needs you: pinned, then waiting on you, then finished, then the notifications |
 | `M-A` | Go to the next idle tab, in the sidebar's Idle order |

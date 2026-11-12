@@ -686,14 +686,16 @@ fn ctrl_shift_p_reaches_a_program_that_asked_for_it_and_a_shell_gets_ctrl_p() {
         client.wait_text(&format!("^[[112;6u{said}"));
     }
 
-    // Notes asks for them, and opens its palette on Ctrl-Shift-P.
+    // Notes asks for them, and opens the workspace's palette on
+    // Ctrl-Shift-P, listing its own commands first.
     let notes = server.home.join("Notes");
     std::fs::create_dir_all(&notes).unwrap();
     std::fs::write(notes.join("Plan.md"), "# Plan\n\n- [ ] a thing\n").unwrap();
     server.ok(&["new-tab", "-n", "notes", "--", common::BIN, "notes"]);
     client.wait_text("Plan");
     client.type_text("\x1b[112;6u");
-    client.wait_text("command>");
+    client.wait_text("action>");
+    client.wait_text("Notes: Find a note");
 }
 
 /// Stand-ins for the desktop's clipboard tools, first on the PATH, so a

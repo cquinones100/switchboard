@@ -610,7 +610,51 @@ impl Server {
 
     /// M-p: every command, to type in and pick from; the pick runs as its
     /// key would, then is remembered, and its key's tip comes a moment later.
+    /// With Notes in front, the app is asked first, off the server's task,
+    /// for the note it shows and its own commands, listed ahead of the rest
+    /// (`palette::notes_entries`); with no answer, they are left out.
     pub fn open_palette(&mut self, client: ClientId) {
+        let notes_in_front =
+            self.notes_in_front(client) && tokio::runtime::Handle::try_current().is_ok();
+        if !notes_in_front {
+            self.open_palette_with(client, None);
+            return;
+        }
+        self.notes_off_task(
+            || {
+                let notes = crate::notes::socket::path();
+                crate::notes::socket::send(&notes, "palette")
+                    .ok()
+                    .and_then(|reply| crate::notes::socket::InFront::read(&reply))
+            },
+            move |server, front| {
+                if server.clients.contains_key(&client) {
+                    server.open_palette_with(client, front);
+                }
+            },
+        );
+    }
+
+    /// Whether the client's pane in front is the notes app's (one started
+    /// by hand found by the notes' lock), with neither the sidebar nor
+    /// mission control over it.
+    fn notes_in_front(&mut self, client: ClientId) -> bool {
+        let Some(session) = self.clients.get(&client).map(|c| c.session.clone()) else {
+            return false;
+        };
+        if self.sidebar.focused(&session) || self.mission_open(client) {
+            return false;
+        }
+        let here = self.current_pane(client);
+        here.is_some() && here == self.notes_pane()
+    }
+
+    /// The palette, with what Notes in front answered (`front`).
+    fn open_palette_with(
+        &mut self,
+        client: ClientId,
+        front: Option<crate::notes::socket::InFront>,
+    ) {
         let all = settings::read_settings();
         let on = |key: &str| {
             all.iter()
@@ -642,7 +686,15 @@ impl Server {
         } else {
             Vec::new()
         };
-        let items: Vec<PickItem> = entries.iter().map(Entry::item).collect();
+        let notes = front.map_or_else(Vec::new, |front| {
+            palette::notes_entries(&front, on("autopilot"), on("notes_palette"))
+        });
+        let firsts = notes.len();
+        let items: Vec<PickItem> = notes
+            .iter()
+            .map(|n| n.item.clone())
+            .chain(entries.iter().map(Entry::item))
+            .collect();
         let rows: Vec<(String, String)> = items
             .iter()
             .map(|i| (i.value.clone(), i.haystack()))
@@ -666,15 +718,28 @@ impl Server {
                 .clients
                 .get(&client)
                 .is_some_and(|c| crate::ui::kit::caps(&c.term));
-            picker = picker
-                .previews(entries.iter().map(Entry::preview).collect())
-                .kit(caps);
+            let previews = notes
+                .iter()
+                .map(|n| n.preview.clone())
+                .chain(entries.iter().map(Entry::preview))
+                .collect();
+            picker = picker.previews(previews).kit(caps);
         }
         self.pick(client, picker, move |server, client, picked| {
             let Some(picked) = picked else {
                 return;
             };
-            let Some(entry) = entries.get(picked.index) else {
+            if let Some(n) = notes.get(picked.index) {
+                palette::learn_query(&picked.value, &picked.query, learn);
+                match &n.pick {
+                    palette::NotesPick::WorkNote(note) => server.work_note(client, note.clone()),
+                    palette::NotesPick::Run(name) => {
+                        crate::notes::serve::tell(format!("run {name}"))
+                    }
+                }
+                return;
+            }
+            let Some(entry) = entries.get(picked.index - firsts) else {
                 return;
             };
             palette::remember(&picked.value, &picked.query, learn);

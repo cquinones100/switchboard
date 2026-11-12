@@ -2486,10 +2486,6 @@ impl Server {
         if fate == crate::extras::KeyFate::Taken {
             return;
         }
-        // M-p reaches Notes with UX 2.0 on, to work its note.
-        if super::passthrough::is_work_key(&key) && self.work_key(id, &key, raw) {
-            return;
-        }
         if fate == crate::extras::KeyFate::Bindings
             && let Some(action) = self.bindings.root.get(&key).cloned()
         {
