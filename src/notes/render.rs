@@ -829,22 +829,28 @@ pub fn looks<S: AsRef<str>>(lines: &[S], kinds: &[Kind], d: &Drawing<'_>) -> Vec
 
 // ── UX 2.0's chips ──────────────────────────────────────────────────────────
 
-/// What a chip under an unticked checklist item says, with UX 2.0 on: the
-/// item has a plan (an indented `Plan: [[...]]` line under it), or it waits
-/// on a choice ("needs a choice" in the item or that line). Read from the
-/// note's text alone, so drawing starts nothing.
+/// What a chip at the right of a checklist item says, with UX 2.0 and
+/// Settings' "Chips on checklist items" on, as board 7 draws them: an
+/// unticked item has a plan (an indented `Plan: [[...]]` line under it), or
+/// waits on a choice ("needs a choice" in the item or that line); a ticked
+/// one landed, its commit named on a line under it. Read from the note's
+/// text alone, so drawing starts nothing.
 ///
-/// Two need the workspace's state, which the app's background look hands
-/// it (`ItemTab`, kept in memory by app.rs): a tab working on the item,
-/// with its phase, or a tab waiting on you, with what it waits on.
+/// The tab's needs the workspace's state, which the app's background look
+/// hands it (`ItemTab`, kept in memory by app.rs): a tab working on the
+/// item, with its phase, or a tab waiting on you, with what it waits on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Chip {
-    /// A tab working on the item: its number and its phase, if any.
-    Working(usize, String),
-    /// A tab waiting on you: its number and what it waits on, if known.
-    Waits(usize, String),
+    /// A tab working on the item: its number, its phase, if any, and its
+    /// color, which its number is drawn in.
+    Working(usize, String, Option<Color>),
+    /// A tab waiting on you: its number, what it waits on, if known, and
+    /// its color.
+    Waits(usize, String, Option<Color>),
     Choice,
     Plan,
+    /// A ticked item's commit, its short hash.
+    Landed(String),
 }
 
 /// A tab on a note's item, as the app's background look last found it in
@@ -864,6 +870,8 @@ pub struct ItemTab {
     pub waits: bool,
     /// The loop's phase while working, what it waits on while waiting.
     pub detail: String,
+    /// The tab's color, which its number on the chip is drawn in.
+    pub color: Option<Color>,
 }
 
 impl Chip {
@@ -876,11 +884,50 @@ impl Chip {
             }
         };
         match self {
-            Chip::Working(n, phase) => with(format!("⠹ tab {n}"), phase),
-            Chip::Waits(n, wait) => with(format!("● tab {n} waits on you"), wait),
+            Chip::Working(n, phase, _) => with(format!("⠹ tab {n}"), phase),
+            Chip::Waits(n, wait, _) => with(format!("● tab {n} waits on you"), wait),
             Chip::Choice => "needs a choice".into(),
             Chip::Plan => "plan".into(),
+            Chip::Landed(hash) => format!("landed {hash}"),
         }
+    }
+
+    /// The chip as drawn, a space either side of its text, in runs of
+    /// text and style: a tab's number in the tab's color (as words on the
+    /// light theme), the rest in `style`; lit under the mouse.
+    pub fn runs(&self, lit: bool, light: bool) -> Vec<(String, Style)> {
+        let style = if lit {
+            Style::new().fg(Color::Indexed(16)).bg(Color::Indexed(81))
+        } else {
+            self.style(light)
+        };
+        let (number, color) = match self {
+            Chip::Working(n, _, color) | Chip::Waits(n, _, color) => {
+                (Some(format!("tab {n}")), *color)
+            }
+            _ => (None, None),
+        };
+        let text = format!(" {} ", self.text());
+        match (number, color.filter(|_| !lit)) {
+            (Some(number), Some(color)) => {
+                let at = text.find(&number).unwrap_or(0);
+                let end = at + number.len();
+                let tinted = style
+                    .fg(crate::tabs::color::as_words(color, light))
+                    .add_modifier(Modifier::BOLD);
+                vec![
+                    (text[..at].to_string(), style),
+                    (number, tinted),
+                    (text[end..].to_string(), style),
+                ]
+            }
+            _ => vec![(text, style)],
+        }
+    }
+
+    /// Its width on the screen as `runs` draws it.
+    pub fn width(&self) -> usize {
+        width(&self.text()) + 2
     }
 
     /// A run of background color: the choice and a waiting tab yellow, a
@@ -900,6 +947,7 @@ impl Chip {
             Chip::Plan => Style::new()
                 .fg(Color::Indexed(if light { 242 } else { 245 }))
                 .bg(Color::Indexed(if light { 253 } else { 237 })),
+            Chip::Landed(_) => landed_style(light),
         }
     }
 }
@@ -982,9 +1030,9 @@ pub fn chips<S: AsRef<str>>(
         };
         if let Some(tab) = tabs.get(item_text(lines[i].as_ref(), *k)) {
             out[i].push(if tab.waits {
-                Chip::Waits(tab.index, tab.detail.clone())
+                Chip::Waits(tab.index, tab.detail.clone(), tab.color)
             } else {
-                Chip::Working(tab.index, tab.detail.clone())
+                Chip::Working(tab.index, tab.detail.clone(), tab.color)
             });
         }
         let mut plan = false;
@@ -1486,6 +1534,7 @@ mod tests {
                     index: 3,
                     waits: false,
                     detail: "review round 1".into(),
+                    color: Some(Color::Rgb(0x9a, 0xd0, 0xf5)),
                 },
             ),
             (
@@ -1497,21 +1546,37 @@ mod tests {
                     index: 2,
                     waits: true,
                     detail: "git push".into(),
+                    color: None,
                 },
             ),
         ]);
         let got = chips(&lines, &ks, &tabs);
         assert_eq!(
             got[1],
-            [Chip::Working(3, "review round 1".into()), Chip::Plan]
+            [
+                Chip::Working(
+                    3,
+                    "review round 1".into(),
+                    Some(Color::Rgb(0x9a, 0xd0, 0xf5))
+                ),
+                Chip::Plan
+            ]
         );
-        assert_eq!(got[3], [Chip::Waits(2, "git push".into())]);
+        assert_eq!(got[3], [Chip::Waits(2, "git push".into(), None)]);
         assert!(got[4].is_empty());
         assert_eq!(got[1][0].text(), "⠹ tab 3 · review round 1");
         assert_eq!(got[3][0].text(), "● tab 2 waits on you · git push");
-        assert_eq!(Chip::Working(1, String::new()).text(), "⠹ tab 1");
+        assert_eq!(Chip::Working(1, String::new(), None).text(), "⠹ tab 1");
         assert_eq!(got[1][0].style(false).fg, Some(Color::Indexed(4)));
         assert_eq!(got[3][0].style(false).fg, Some(Color::Indexed(3)));
+        // The tab's number in its color, the rest in the state's.
+        let runs = got[1][0].runs(false, false);
+        let texts: Vec<&str> = runs.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, [" ⠹ ", "tab 3", " · review round 1 "]);
+        assert_eq!(runs[1].1.fg, Some(Color::Rgb(0x9a, 0xd0, 0xf5)));
+        assert_eq!(runs[2].1.fg, Some(Color::Indexed(4)));
+        assert_eq!(got[3][0].runs(false, false).len(), 1, "no color known");
+        assert_eq!(got[1][0].width(), width(&got[1][0].text()) + 2);
         let landed = landed(&lines, &ks);
         assert_eq!(landed[5].as_deref(), Some("2505ca4"));
         assert_eq!(landed[7], None, "words of hex letters or digits alone");

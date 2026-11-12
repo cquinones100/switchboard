@@ -147,9 +147,11 @@ pub struct Options {
     pub clipboard: bool,
     /// The workspace's server is told of notes moving (a pane of it).
     pub server: bool,
-    /// UX 2.0 (ux2): chips under a checklist item saying what is happening
-    /// with it.
+    /// UX 2.0 (ux2): board 7's item keys and footer.
     pub ux2: bool,
+    /// With UX 2.0, chips at the right of a checklist item saying what is
+    /// happening with it (notes_item_chips).
+    pub item_chips: bool,
     /// The terminal draws the kit's half-circle ends itself (Ghostty).
     pub caps: bool,
 }
@@ -175,6 +177,7 @@ impl Default for Options {
             clipboard: false,
             server: false,
             ux2: false,
+            item_chips: true,
             caps: false,
         }
     }
@@ -208,6 +211,7 @@ impl Options {
             ux2: all
                 .iter()
                 .any(|s| s.key == "ux2" && s.value == serde_json::Value::Bool(true)),
+            item_chips: on("notes_item_chips"),
             caps: crate::ui::kit::caps(&format!(
                 "{} {}",
                 std::env::var("TERM").unwrap_or_default(),
@@ -283,13 +287,15 @@ pub(crate) enum Shown {
         first: bool,
         indent: u16,
         bg: Option<render::Hl>,
+        /// UX 2.0's chips at the right of the line.
+        chips: Vec<render::Chip>,
     },
     /// UX 2.0's chips on a line of their own under a checklist item, at
-    /// the column its text starts.
+    /// its right edge, when the item's line is shown whole and leaves no
+    /// room beside it.
     Chips {
         row: usize,
         chips: Vec<render::Chip>,
-        indent: u16,
     },
     Fold {
         row: usize,
@@ -322,6 +328,10 @@ struct Geo {
     text: Rect,
     toolbar: Vec<(usize, Rect)>,
     shown: Vec<Shown>,
+    /// UX 2.0's chips at the right of the checklist items, where each was
+    /// drawn: its row of the note, its place among the row's chips, and
+    /// what it is.
+    chips: Vec<(Rect, (usize, usize), render::Chip)>,
     /// UX 2.0's "Add an item" input's row, when it is drawn.
     input: Option<u16>,
 }
@@ -522,6 +532,9 @@ pub struct App {
     pub claude: Option<PathBuf>,
     geo: Geo,
     hover_button: Option<usize>,
+    /// Where the mouse last moved to, for the item's chip under it to be
+    /// lit wherever the chips are drawn next.
+    mouse_at: Option<(u16, u16)>,
     /// Where a press in the note landed, to tell a click from a drag.
     press: Option<((usize, usize), bool)>,
     parser: Parser,
@@ -602,6 +615,7 @@ impl App {
             claude: crate::diff::tell::claude_command(),
             geo: Geo::default(),
             hover_button: None,
+            mouse_at: None,
             press: None,
             parser: Parser::new(),
             last_input: Instant::now(),
@@ -1624,6 +1638,35 @@ impl App {
         true
     }
 
+    /// Whether a click on an item's chip does something: its tab's goes to
+    /// the tab, its plan's opens the plan.
+    fn clickable(chip: &render::Chip) -> bool {
+        matches!(
+            chip,
+            render::Chip::Working(..) | render::Chip::Waits(..) | render::Chip::Plan
+        )
+    }
+
+    /// A click on the chip of the item on `row`: the cursor on the item,
+    /// then its tab, as `o` goes there, or its plan, as Enter opens it.
+    fn click_chip(&mut self, row: usize, chip: &render::Chip) {
+        if self.focus == Focus::List {
+            self.focus = Focus::Note;
+        }
+        self.finish_editing();
+        self.editor.doc.row = row;
+        self.editor.doc.col = 0;
+        self.editor.clamp();
+        match chip {
+            render::Chip::Plan => {
+                self.open_plan();
+            }
+            _ => {
+                self.go_to_item_tab();
+            }
+        }
+    }
+
     /// `o` on an unticked item a tab works on or waits in: that tab, in the
     /// workspace, unless the tab is linked to another note. Whether there
     /// was one.
@@ -1676,7 +1719,8 @@ impl App {
     }
 
     /// Out of Insert or Visual mode with what was typed one step to undo,
-    /// for a key or click that leaves the note's editing.
+    /// and the change for `.` to make again, for a key or click that
+    /// leaves the note's editing.
     fn finish_editing(&mut self) {
         self.leave_modes();
         if let Some(before) = self.editor.end() {
@@ -1685,6 +1729,7 @@ impl App {
                 .follow(&before.lines(), &self.editor.doc.text.lines());
             self.changed();
         }
+        self.finish_recording();
     }
 
     /// `ga`, or a click on it: the "Add an item" input, typed into.
@@ -2622,21 +2667,27 @@ impl App {
             self.changed();
         }
         self.effects();
-        if self.editor.idle()
-            && !self.leader
-            && self.layers.is_empty()
-            && !self.replaying
-            && let Some((keys, before)) = self.recording.take()
-        {
-            // What `.` does again: the last change, not an undo or a redo.
-            let undoing = keys.first().is_some_and(|k| {
-                matches!(k.code, KeyCode::Char('u' | '.')) && k.mods.is_empty()
-                    || (k.mods.ctrl && k.code == KeyCode::Char('r'))
-                    || easy::cmd_key(k).is_some()
-            });
-            if before != self.editor.doc.text && !undoing {
-                self.last_change = keys;
-            }
+        if self.editor.idle() && !self.leader && self.layers.is_empty() {
+            self.finish_recording();
+        }
+    }
+
+    /// The keys of a change just ended kept for `.` to make again: the last
+    /// change, not an undo or a redo.
+    fn finish_recording(&mut self) {
+        if self.replaying {
+            return;
+        }
+        let Some((keys, before)) = self.recording.take() else {
+            return;
+        };
+        let undoing = keys.first().is_some_and(|k| {
+            matches!(k.code, KeyCode::Char('u' | '.')) && k.mods.is_empty()
+                || (k.mods.ctrl && k.code == KeyCode::Char('r'))
+                || easy::cmd_key(k).is_some()
+        });
+        if before != self.editor.doc.text && !undoing {
+            self.last_change = keys;
         }
     }
 
@@ -3001,10 +3052,17 @@ impl App {
             .iter()
             .find(|(_, r)| inside(*r))
             .map(|(i, _)| *i);
+        let chip = self
+            .geo
+            .chips
+            .iter()
+            .find(|(r, _, c)| inside(*r) && Self::clickable(c))
+            .map(|(_, at, c)| (*at, c.clone()));
         match (m.kind, m.button) {
             (MouseKind::Move, _) => {
                 if self.opts.hover {
                     self.hover_button = button;
+                    self.mouse_at = Some((x, y));
                 }
             }
             (MouseKind::Press, MouseButton::WheelDown | MouseButton::WheelUp) => {
@@ -3022,6 +3080,9 @@ impl App {
             (MouseKind::Press, MouseButton::Left) => {
                 if let Some(b) = button {
                     return self.button(b);
+                }
+                if let Some(((row, _), chip)) = chip {
+                    return self.click_chip(row, &chip);
                 }
                 if self.geo.input == Some(y) {
                     self.focus = Focus::Note;
@@ -3267,6 +3328,11 @@ fn item_tabs_of(
             .to_string();
         let index = tab["index"].as_u64().unwrap_or(0) as usize;
         let id = tab["id"].as_str().unwrap_or("").to_string();
+        let color = tab["color"]
+            .as_str()
+            .filter(|hex| hex.len() == 6)
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .map(|n| ratatui::style::Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8));
         let found = render::ItemTab {
             id,
             note: opt("@tab_note").unwrap_or_default(),
@@ -3279,6 +3345,7 @@ fn item_tabs_of(
             index,
             waits,
             detail,
+            color,
         };
         // Under its note's ID, else the note it is linked to (which may be
         // another note than the one its branch claims an item of), so
@@ -3328,7 +3395,9 @@ pub fn run(store: Store) -> ExitCode {
             libc::signal(signal, on_signal as *const () as libc::sighandler_t);
         }
     }
-    let term = match Term::enter(opts.hover && (opts.toolbar || opts.easy)) {
+    let term = match Term::enter(
+        opts.hover && (opts.toolbar || opts.easy || (opts.ux2 && opts.item_chips)),
+    ) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("switchboard notes: can't take the terminal: {e}");

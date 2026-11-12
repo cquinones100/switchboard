@@ -533,6 +533,13 @@
     "default": true
   },
   {
+    "key": "notes_item_chips",
+    "category": "Notes",
+    "label": "Chips on checklist items",
+    "description": "With UX 2.0 on, each checklist item shows at its right the tab working on it (its number in the tab's color, a click going there), \"landed <hash>\" once ticked with its commit named under it, \"plan\" where it links its plan (a click opening it) and \"needs a choice\" while one waits, its text cut with … before them except on the cursor's line; off, items are their text alone",
+    "default": true
+  },
+  {
     "key": "picture_full_size",
     "category": "Notes",
     "label": "Enter shows a picture full size",

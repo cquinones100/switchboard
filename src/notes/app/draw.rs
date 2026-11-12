@@ -24,6 +24,33 @@ use crate::ui::draw::{put_line, width};
 /// `scrolloff`, in rows since a line may wrap to many).
 const SCROLLOFF: usize = 8;
 
+/// The columns an item's text keeps before its chips: fewer, and the chips
+/// go on a row of their own under it.
+const MIN_TEXT: usize = 12;
+
+/// A line's cells cut to `cols`, its last one an … when any are left off.
+fn cut(cells: Vec<Cell>, cols: usize) -> Vec<Cell> {
+    let mut out = Vec::new();
+    let mut used = 0;
+    let style = cells.first().map(|c| c.style).unwrap_or_default();
+    for cell in cells {
+        if used + cell.width + 1 > cols {
+            break;
+        }
+        used += cell.width;
+        out.push(cell);
+    }
+    let style = out.last().map_or(style, |c| c.style);
+    out.push(Cell {
+        text: "…".into(),
+        style,
+        col: None,
+        len: 0,
+        width: 1,
+    });
+    out
+}
+
 /// A line's cells broken into the pieces a window `cols` wide shows, at a
 /// blank where one fits (`linebreak`), each after the first indented as the
 /// line is (`breakindent`).
@@ -277,25 +304,62 @@ impl App {
             .unwrap_or_default();
         let cells = render::cells(line, &ctx.looks[row], raw, &extra, self.opts.light);
         let bg = ctx.looks[row].row_bg;
-        let mut out: Vec<Shown> = wrap(cells, ctx.text_w as usize)
-            .into_iter()
-            .enumerate()
-            .map(|(i, (cells, indent))| Shown::Text {
+        let chips = ctx.chips.get(row).cloned().unwrap_or_default();
+        // Room for the chips at the right of the line, a column apart, and
+        // for some of its text before them.
+        let chips_w = chips.iter().map(|c| c.width() + 1).sum::<usize>();
+        let text_w = ctx.text_w as usize;
+        let beside = !chips.is_empty() && chips_w + MIN_TEXT <= text_w;
+        let line_w: usize = cells.iter().map(|c| c.width).sum();
+        // The chosen line shows its text whole; any other is cut with …
+        // before its chips.
+        let cut_short = beside && row != ctx.cursor_row && line_w + chips_w > text_w;
+        let mut out: Vec<Shown> = if cut_short {
+            vec![Shown::Text {
                 row,
-                cells,
-                first: i == 0,
-                indent,
+                cells: cut(cells, text_w - chips_w),
+                first: true,
+                indent: 0,
                 bg,
-            })
-            .collect();
-        if let Some(chips) = ctx.chips.get(row).filter(|c| !c.is_empty())
-            && let render::Kind::Check { indent, .. } = ctx.kinds[row]
-        {
-            out.push(Shown::Chips {
-                row,
                 chips: chips.clone(),
-                indent: width(&line[..indent]) as u16 + 2,
+            }]
+        } else {
+            wrap(cells, text_w)
+                .into_iter()
+                .enumerate()
+                .map(|(i, (cells, indent))| Shown::Text {
+                    row,
+                    cells,
+                    first: i == 0,
+                    indent,
+                    bg,
+                    chips: Vec::new(),
+                })
+                .collect()
+        };
+        if !chips.is_empty() && !cut_short {
+            // Beside the line's last piece when there is room, else on a
+            // row of their own under it.
+            let last = out.iter_mut().rev().find_map(|s| match s {
+                Shown::Text {
+                    cells,
+                    indent,
+                    chips,
+                    ..
+                } => Some((cells, indent, chips)),
+                _ => None,
             });
+            match last {
+                Some((cells, indent, room))
+                    if *indent as usize
+                        + cells.iter().map(|c| c.width).sum::<usize>()
+                        + chips_w
+                        <= text_w =>
+                {
+                    *room = chips
+                }
+                _ => out.push(Shown::Chips { row, chips }),
+            }
         }
         if line.contains("![")
             && let Some(note) = self.current_path().map(|p| p.to_path_buf())
@@ -325,6 +389,7 @@ impl App {
         let note = self.geo.note;
         self.geo.toolbar.clear();
         self.geo.shown.clear();
+        self.geo.chips.clear();
         if self.open.is_none() || note.width < 4 || note.height < 2 {
             self.geo.text = Rect::default();
             return None;
@@ -403,13 +468,16 @@ impl App {
                 selected.insert(r, (s, e.max(s)));
             }
         }
-        let (chips, landed) = if self.opts.ux2 {
-            (
-                render::chips(&lines, &kinds, &self.note_tabs()),
-                render::landed(&lines, &kinds),
-            )
+        let chips = if self.opts.ux2 && self.opts.item_chips {
+            let mut chips = render::chips(&lines, &kinds, &self.note_tabs());
+            for (row, hash) in render::landed(&lines, &kinds).into_iter().enumerate() {
+                if let Some(hash) = hash {
+                    chips[row].push(render::Chip::Landed(hash));
+                }
+            }
+            chips
         } else {
-            (Vec::new(), Vec::new())
+            Vec::new()
         };
         let mut ctx = Ctx {
             raw: self.focus == Focus::Note
@@ -421,7 +489,6 @@ impl App {
             kinds,
             looks,
             chips,
-            landed,
             folded,
             selected,
         };
@@ -555,17 +622,8 @@ impl App {
                         cursor = Some((text.x, y));
                     }
                 }
-                Shown::Chips { chips, indent, .. } => {
-                    let mut x = text.x + indent;
-                    for chip in chips {
-                        let shown = format!(" {} ", chip.text());
-                        let w = width(&shown) as u16;
-                        if x + w > text.right() {
-                            break;
-                        }
-                        buf.set_string(x, y, &shown, chip.style(self.opts.light));
-                        x += w + 1;
-                    }
+                Shown::Chips { row, chips } => {
+                    self.draw_chips(buf, text, y, *row, chips);
                 }
                 Shown::Picture { pic, r, .. } => {
                     let x0 = text.x + pic.indent;
@@ -582,9 +640,10 @@ impl App {
                 Shown::Text {
                     row,
                     cells,
-                    first,
+                    first: _,
                     indent,
                     bg,
+                    chips,
                 } => {
                     if let Some(bg) = bg {
                         buf.set_style(
@@ -610,19 +669,7 @@ impl App {
                         buf.set_stringn(x, y, &cell.text, cell.width, style);
                         x += cell.width as u16;
                     }
-                    // A ticked item's commit, right-aligned on its line.
-                    if *first && let Some(Some(hash)) = ctx.landed.get(*row) {
-                        let chip = format!(" landed {hash} ");
-                        let w = width(&chip) as u16;
-                        if x + 1 + w <= text.right() {
-                            buf.set_string(
-                                text.right() - w,
-                                y,
-                                &chip,
-                                render::landed_style(self.opts.light),
-                            );
-                        }
-                    }
+                    self.draw_chips(buf, text, y, *row, chips);
                     // Past the end of the line, where Insert mode types.
                     let last_piece = shown
                         .get(k + 1)
@@ -639,6 +686,39 @@ impl App {
         }
         self.geo.shown = shown;
         cursor
+    }
+
+    /// An item's chips at the right edge of `text` on row `y`, a column
+    /// apart, kept in `geo.chips` for the mouse.
+    fn draw_chips(
+        &mut self,
+        buf: &mut Buffer,
+        text: Rect,
+        y: u16,
+        row: usize,
+        chips: &[render::Chip],
+    ) {
+        let total = chips.iter().map(|c| c.width() + 1).sum::<usize>() as u16;
+        let mut x = text.right().saturating_sub(total).max(text.x) + 1;
+        for (k, chip) in chips.iter().enumerate() {
+            let w = chip.width() as u16;
+            if x + w > text.right() {
+                break;
+            }
+            let lit = App::clickable(chip)
+                && self
+                    .mouse_at
+                    .is_some_and(|(mx, my)| my == y && mx >= x && mx < x + w);
+            let mut at = x;
+            for (run, style) in chip.runs(lit, self.opts.light) {
+                buf.set_string(at, y, &run, style);
+                at += width(&run) as u16;
+            }
+            self.geo
+                .chips
+                .push((Rect::new(x, y, w, 1), (row, k), chip.clone()));
+            x += w + 1;
+        }
     }
 
     /// The row and byte a cell of the note's text stands for: `None` for
@@ -829,10 +909,9 @@ struct Ctx {
     lines: Vec<String>,
     kinds: Vec<render::Kind>,
     looks: Vec<render::Look>,
-    /// Each line's UX 2.0 chips, empty with it off.
+    /// Each checklist item's UX 2.0 chips, its "landed <hash>" among them,
+    /// empty with them off.
     chips: Vec<Vec<render::Chip>>,
-    /// Each ticked item's UX 2.0 "landed <hash>" chip, empty with it off.
-    landed: Vec<Option<String>>,
     folded: std::collections::HashMap<usize, Option<usize>>,
     selected: std::collections::HashMap<usize, (usize, usize)>,
 }

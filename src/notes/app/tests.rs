@@ -10,6 +10,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 
 use super::*;
 use crate::mux::input::{Mods, MouseButton, MouseKind};
@@ -1429,7 +1430,8 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
             note_id: String::new(),
             index: 3,
             waits: false,
-            detail: "review round 1".into()
+            detail: "review round 1".into(),
+            color: None,
         }
     );
     assert_eq!(
@@ -1440,7 +1442,8 @@ fn the_server_tabs_on_items_are_matched_by_title_autopilot_item_or_wtn_item() {
             note_id: String::new(),
             index: 2,
             waits: true,
-            detail: "git push".into()
+            detail: "git push".into(),
+            color: None,
         }
     );
     assert_eq!(got["from git"].index, 4);
@@ -1502,12 +1505,17 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
     // Lines enough that the second picture is cut by the bottom of the
     // note, over UX 2.0's "Add an item" row.
     let mut text = String::from("# Plan\n\n");
-    for n in 0..15 {
+    for n in 0..17 {
         text.push_str(&format!("line {n}\n"));
     }
-    text.push_str("- [ ] Pick a name, needs a choice ![name](a.png)\n");
+    // Long enough to be cut before its chip while the cursor is elsewhere,
+    // its picture still under it.
+    text.push_str(&format!(
+        "- [ ] Pick a name, needs a choice {}![name](a.png)\n",
+        "word ".repeat(30)
+    ));
     text.push_str("- [ ] Draw the logo, needs a choice\n  ![logo](b.png)\n");
-    for n in 15..50 {
+    for n in 17..50 {
         text.push_str(&format!("line {n}\n"));
     }
     write(&path, &text);
@@ -1537,18 +1545,18 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
         (rows, pieces)
     };
     // Each piece a picture from its first row, ten cells wide, under its
-    // item's chip row ("needs a choice"), or under the line naming it
-    // that is under the chips, as far up as the note shows (the toolbar
-    // on the top row).
+    // item, its chips at its right, or under the line naming it that is
+    // under the item, as far up as the note shows (the toolbar on the top
+    // row).
     let check = |rows: &[String], pieces: &[place::Piece]| {
         let screen = rows.join("\n");
         for p in pieces {
             assert_eq!((p.row, p.col, p.area.width), (0, 0, 10), "{p:?}\n{screen}");
             let y = p.area.y as usize;
-            let above: &[&str] = if rows[y - 1].contains("needs a choice") {
-                &["needs a choice", "Pick a name"]
+            let above: &[&str] = if rows[y - 1].contains("Pick a name") {
+                &["Pick a name"]
             } else {
-                &["logo", "needs a choice", "Draw the logo"]
+                &["logo", "Draw the logo"]
             };
             for (n, want) in above.iter().enumerate() {
                 let Some(at) = y.checked_sub(n + 1).filter(|at| *at >= 1) else {
@@ -1566,7 +1574,7 @@ fn a_picture_under_an_item_with_chips_scrolls_with_them_in_one_piece() {
     assert_eq!(heights, vec![3, 2], "{pieces:?}\n{}", rows.join("\n"));
     assert_eq!(pieces[1].area.bottom(), app.geo.text.bottom());
     // The cursor down a line at a time, the note scrolling up under it: the
-    // pictures and their chips go up together, whole, and each leaves
+    // pictures and their items go up together, whole, and each leaves
     // the screen with its line.
     let mut whole = 0;
     for row in 20..50 {
@@ -1700,6 +1708,7 @@ fn o_goes_to_an_items_tab_only_when_the_tab_is_this_notes() {
         index: 7,
         waits: false,
         detail: String::new(),
+        color: None,
     };
     app.item_tabs = HashMap::from([(note_item_key("Other.md", "Fix tests"), tab("Other.md"))]);
     keys(&mut app, "3Go");
@@ -1747,6 +1756,152 @@ fn a_tabs_chip_shows_only_on_the_note_its_item_is_in() {
         app.note_tabs().is_empty(),
         "another note's item of the same words"
     );
+}
+
+// Board 7's chips at the right of each item.
+fn chips_note(app: &mut App) -> std::path::PathBuf {
+    let plan = app.store.create("", Some("Plan - Logo"));
+    write(&plan, "# Plan - Logo\n\nDraw it.\n");
+    let path = app.store.create("", Some("Design"));
+    let long = "word ".repeat(30);
+    write(
+        &path,
+        &format!(
+            "# Design\n\n- [ ] Draw the logo {long}end\n  Plan: [[Plan - Logo]]\n- [ ] Short one\n\n- [x] Pick a name\n  Done: 2505ca4f, already on main\n"
+        ),
+    );
+    app.item_tabs = HashMap::from([(
+        note_item_key("Design.md", &format!("Draw the logo {long}end")),
+        render::ItemTab {
+            id: "@7".into(),
+            note: "Design.md".into(),
+            note_id: String::new(),
+            index: 7,
+            waits: false,
+            detail: "review round 1".into(),
+            color: Some(Color::Rgb(0x9a, 0xd0, 0xf5)),
+        },
+    )]);
+    app.open_note(&path, false, false);
+    path
+}
+
+#[test]
+fn an_items_chips_sit_at_its_right_its_text_cut_before_them_but_on_the_cursors_line() {
+    let (_dir, mut app) = started_ux2("item chips");
+    chips_note(&mut app);
+    app.editor.doc.row = 5;
+    let shown = screen(&mut app);
+    let item = shown.iter().find(|l| l.contains("Draw the logo")).unwrap();
+    assert!(
+        item.ends_with("⠹ tab 7 · review round 1   plan"),
+        "the tab and the plan at the right edge: {item:?}"
+    );
+    assert!(
+        item.contains("word…  ⠹"),
+        "its text cut before them: {item:?}"
+    );
+    assert!(
+        !shown.iter().any(|l| l.trim_start().starts_with("word")),
+        "on one row"
+    );
+    let ticked = shown.iter().find(|l| l.contains("Pick a name")).unwrap();
+    assert!(ticked.ends_with("landed 2505ca4"), "{ticked:?}");
+    let short = shown.iter().find(|l| l.contains("Short one")).unwrap();
+    assert!(
+        short.trim_end().ends_with("Short one"),
+        "no chips: {short:?}"
+    );
+    // The tab's number in its color.
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    let (x, y) = find(&shown, "tab 7");
+    assert_eq!(buf[(x, y)].fg, Color::Rgb(0x9a, 0xd0, 0xf5));
+
+    // On the cursor's line, the text whole, wrapped, its chips after it.
+    app.editor.doc.row = 2;
+    let shown = screen(&mut app);
+    let at = shown
+        .iter()
+        .position(|l| l.contains("Draw the logo"))
+        .unwrap();
+    assert!(!shown[at].contains('…'), "{:?}", shown[at]);
+    let end = shown[at..].iter().position(|l| l.contains("end")).unwrap() + at;
+    assert!(end > at, "wrapped");
+    assert!(
+        shown[end..=end + 1].iter().any(|l| l.ends_with("plan")),
+        "the chips after it: {shown:#?}"
+    );
+
+    // Off, the items are their text alone.
+    app.opts.item_chips = false;
+    app.editor.doc.row = 5;
+    let shown = screen(&mut app);
+    assert!(
+        !shown
+            .iter()
+            .any(|l| l.contains("tab 7") || l.contains("landed"))
+    );
+    assert!(!shown.iter().any(|l| l.contains("word…")), "wrapped whole");
+}
+
+#[test]
+fn the_chip_under_the_mouse_is_lit_wherever_the_chips_are_drawn() {
+    let (_dir, mut app) = started_ux2("chip hover");
+    chips_note(&mut app);
+    app.editor.doc.row = 5;
+    let shown = screen(&mut app);
+    let (x, y) = find(&shown, "plan");
+    app.mouse(Mouse {
+        kind: MouseKind::Move,
+        button: MouseButton::None,
+        col: x,
+        row: y,
+        mods: Mods::NONE,
+    });
+    let lit = |app: &mut App| {
+        let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+        app.draw(&mut buf);
+        buf[(x, y)].bg == Color::Indexed(81)
+    };
+    assert!(lit(&mut app), "the plan chip under the mouse");
+    // The cursor onto the item: its chips go after its text, wrapped whole,
+    // away from the mouse, and none of them is lit.
+    app.editor.doc.row = 2;
+    let mut buf = Buffer::empty(Rect::new(0, 0, app.cols, app.rows));
+    app.draw(&mut buf);
+    assert!(!buf.content.iter().any(|c| c.bg == Color::Indexed(81)));
+}
+
+#[test]
+fn a_click_on_an_items_plan_chip_opens_its_plan_and_on_its_tab_chip_goes_to_the_tab() {
+    let (_dir, mut app) = started_ux2("chip clicks");
+    chips_note(&mut app);
+    // Typed into another item, still in Insert mode.
+    keys(&mut app, "5GA again");
+    let shown = screen(&mut app);
+    let (x, y) = find(&shown, "tab 7");
+    click(&mut app, x, y);
+    assert_eq!(app.editor.doc.row, 2, "the cursor on its item");
+    assert_eq!(
+        app.message.as_ref().map(|m| m.0.as_str()),
+        Some("notes: that needs Switchboard's workspace"),
+        "as o goes to the tab, outside the workspace"
+    );
+    keys(&mut app, "u");
+    assert_eq!(
+        lines(&app)[4],
+        "- [ ] Short one",
+        "what was typed one step to undo"
+    );
+    // And the change for . to make again.
+    keys(&mut app, "5G.");
+    assert_eq!(lines(&app)[4], "- [ ] Short one again");
+    app.editor.doc.row = 5;
+    let shown = screen(&mut app);
+    let (x, y) = find(&shown, "plan");
+    click(&mut app, x, y);
+    assert_eq!(name(&app), "Plan - Logo.md", "the plan opened, as Enter");
 }
 
 #[test]
