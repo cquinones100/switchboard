@@ -1,0 +1,8 @@
+{
+  "title": "Fixtures",
+  "boards": {
+    "grid.dc.html": { "title": "1. Grid", "page": "design" },
+    "slack.dc.html": { "title": "2. Slack", "page": "design" },
+    "proposal.dc.html": { "title": "d1. A proposal on the review page", "page": "review" }
+  }
+}

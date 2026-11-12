@@ -52,12 +52,32 @@ same_patch() {
     [ "$(git log -1 --format=%B "$local_sha" 2>/dev/null)" = "$(git log -1 --format=%B "$reviewed" 2>/dev/null)" ] &&
     [ "$("$sb" codex-review --patch-id "$remote_sha" "$local_sha" 2>/dev/null)" = "$reviewed_patch" ]
 }
+# A push whose every commit changes docs/design/ alone (the design's pages and
+# their sources, published as the GitHub Pages site) needs no review: every
+# path any commit main on the remote lacks touches, both sides of a rename and
+# a merge against each parent, lies under docs/design/ from the repository's
+# top, with no `..` in it. Anything else in the push, the design-docs skill's
+# renderer included, keeps the check. CLAUDE.md's "Pushing" says what runs
+# before such a push instead (leak-check, through the skill's `render.js push`).
+design_only() {
+  [ "$remote_sha" != "$zero" ] && git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null || return 1
+  local paths path
+  paths=$(git -c core.quotePath=true log --format= --name-only --no-renames -m "$remote_sha..$local_sha" 2>/dev/null) || return 1
+  [ -n "$paths" ] || return 1
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in docs/design/*) ;; *) return 1 ;; esac
+    case "/$path/" in */../*) return 1 ;; esac
+  done <<<"$paths"
+}
 zero=0000000000000000000000000000000000000000
 status=0
 while read -r _ local_sha remote_ref remote_sha; do
   [ "$remote_ref" = refs/heads/main ] || continue
   [ "$local_sha" = "$zero" ] && continue
-  if [ "$local_sha" != "$reviewed" ] && same_patch; then
+  if design_only; then
+    continue
+  elif [ "$local_sha" != "$reviewed" ] && same_patch; then
     continue
   elif [ "$local_sha" != "$reviewed" ]; then
     echo "pre-push: ${local_sha:0:7} hasn't been through /review-loop, which this repository runs before every push to main." >&2

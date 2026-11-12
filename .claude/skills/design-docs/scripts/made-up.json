@@ -1,5 +1,5 @@
 {
-  "names": ["Alex", "Ana", "Ben", "Lee", "Priya", "Sam", "You"],
+  "names": ["Alex", "Ana", "Ben", "Lee", "Priya", "Sam", "Switchboard", "You"],
   "handles": ["you"],
   "ticketPrefixes": ["OPS", "SWB", "WEB"],
   "channels": ["#alerts-sync", "#alerts-web", "#deploys", "#design", "#landing", "#oncall", "#web-app", "#claude", "#close", "#copy", "#find", "#git", "#github", "#help", "#linear", "#links", "#navigate", "#new", "#notes", "#overview", "#panes", "#pin", "#pr", "#reminder", "#reopen", "#restart", "#sidebar", "#slack", "#switchboard", "#tabs", "#tickets", "#views", "#worktree"],

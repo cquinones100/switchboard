@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Writes the UX 2.0 canvas's boards (a claude.ai Design artifact's `project/<Name>.dc.html` files) as static web pages for
-// docs/design, which GitHub Pages serves, without the Design type's runtime (`support.js`, claude.ai's own, never copied here). A board is an `<x-dc>` template whose
+// Writes the UX 2.0 boards' sources (docs/design/src's `<Name>.dc.html` files and their canvas.json, first copied from a claude.ai
+// Design artifact, the canvas, which is now an archive) as static web pages for docs/design, which GitHub Pages serves, without the
+// Design type's runtime (`support.js`, claude.ai's own, never copied here), and pushes a change to docs/design alone to main. A board is an `<x-dc>` template whose
 // `<sc-for list="{{...}}" as="...">` loops and `{{holes}}` are filled from its script's `renderVals()`; this file evaluates that
 // script in a `node:vm` context of its own (no require, process or file access, since the board is data read from the
 // artifact) and expands the template into plain HTML under a Content-Security-Policy that runs no script and loads nothing but
@@ -9,9 +10,11 @@
 // the Index), since one expander covers the three shapes.
 //
 //   render.js <board.dc.html> <out.png> [width height]   draw one board (1280×800 unless given)
-//   render.js sync <project dir> <docs/design dir>        check the boards' text, write every board's page and the README
+//   render.js sync <sources dir> <docs/design dir>        check the boards' text, write every board's page and the README
 //   render.js made-up <range>                             run `switchboard leak-check <range>` and print what made-up.json
 //                                                         doesn't explain in docs/design (exit 2 when it couldn't look)
+//   render.js push                                        push the commits main lacks to main when they change docs/design
+//                                                         alone and leak-check finds nothing made-up.json doesn't explain
 //   render.js --self-test                                 draw the fixtures and check their size, that they aren't blank, and
 //                                                         that a grid board's meter sits on its text's row
 //   render.js --print-chrome-args                         print the switches Chrome draws every board with, a line each
@@ -25,6 +28,8 @@ const { spawnSync } = require('node:child_process');
 
 const CHROME = process.env.CHROME || ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium'].find((p) => fs.existsSync(p));
 const SITE = 'https://cquinones100.github.io/switchboard/design/';
+// Where the sources are on GitHub, which the README links to, since the site leaves them out (docs/_config.yml).
+const SOURCES = 'https://github.com/cquinones100/switchboard/tree/main/docs/design/src';
 const CSP = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:";
 
 const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -281,7 +286,6 @@ const slugOf = (file) => file.replace(/\.dc\.html$/, '').replace(/([a-z0-9])([A-
 
 function sync(projectDir, docsDir) {
   const canvas = JSON.parse(fs.readFileSync(path.join(projectDir, 'canvas.json'), 'utf8'));
-  const version = process.env.CANVAS_VERSION || 'unknown';
   const boards = Object.entries(canvas.boards).filter(([, b]) => b.page === 'design').map(([file, b]) => {
     const number = (b.title.match(/^(\w+)\. /) || [])[1] || '';
     return { file, number, title: b.title.replace(/^\w+\. /, ''), page: `${number ? number + '-' : ''}${slugOf(file)}.html` };
@@ -301,13 +305,19 @@ function sync(projectDir, docsDir) {
   const pages = Object.fromEntries(shown.map((b) => [b.file, toHtml(sources[b.file], values[b.file], { title: `${b.number ? b.number + '. ' : ''}${b.title}`, links, nav: { groups, current: b.page } })]));
   // The README is public too, made of the canvas's title, the boards' titles and the Index's groups, so it is checked with
   // the pages, before anything is written.
-  const next = readme(canvas, boards, values, version);
+  const next = readme(canvas, boards, values);
+  // The sources sit in the repository beside the pages, so every file of their folder is checked whole too, canvas.json and
+  // a board no page draws (one on another page, left out of canvas.json, or in a folder of its own) included, its script and its data too, with only
+  // its colors taken out, as the page's are.
+  const withoutColors = (text) => text.replace(/#[0-9a-fA-F]{3,8}(?![\w-])/g, ' ');
+  const sourceFiles = fs.readdirSync(projectDir, { recursive: true, withFileTypes: true }).filter((entry) => !entry.isDirectory()).map((entry) => path.relative(projectDir, path.join(entry.parentPath, entry.name)));
   const found = [
+    ...sourceFiles.flatMap((file) => leaks(withoutColors(fs.readFileSync(path.join(projectDir, file), 'utf8')), words).map((text) => `src/${file}: ${text}`)),
     ...shown.flatMap((b) => leaks(boardText(pages[b.file]), words).map((text) => `${b.file}: ${text}`)),
-    ...leaks(next.split(SITE).join(''), words).map((text) => `README.md: ${text}`),
+    ...leaks(next.split(SITE).join('').split(SOURCES).join(''), words).map((text) => `README.md: ${text}`),
   ];
   if (found.length) {
-    console.error('Not made-up data, to change on the canvas (or add to made-up.json when it is made up):\n' + found.join('\n'));
+    console.error('Not made-up data, to change in the board (or add to made-up.json when it is made up):\n' + found.join('\n'));
     process.exit(2);
   }
 
@@ -329,9 +339,9 @@ function sync(projectDir, docsDir) {
     console.log('removed ' + old);
     changed++;
   }
-  // The version and date move only when a board or the README's text changed, so a sync with nothing new changes nothing.
+  // The date moves only when a board or the README's text changed, so a sync with nothing new changes nothing.
   const readmePath = path.join(docsDir, 'README.md');
-  const withoutTaken = (text) => text.replace(/Taken from the canvas's version .*? on \d{4}-\d{2}-\d{2}/, '');
+  const withoutTaken = (text) => text.replace(/Drawn from .*? on \d{4}-\d{2}-\d{2}/, '');
   const unchanged = !changed && fs.existsSync(readmePath) && withoutTaken(fs.readFileSync(readmePath, 'utf8')) === withoutTaken(next);
   if (!unchanged) fs.writeFileSync(readmePath, next);
 }
@@ -354,11 +364,11 @@ function grouped(boards, values) {
 
 // The README: the site's address, then the boards grouped as the sidebar groups them, each its number and title linking to its
 // page there.
-function readme(canvas, boards, values, version) {
+function readme(canvas, boards, values) {
   const entry = (b) => `- [${b.number ? b.number + '. ' : ''}${b.title.replace(/[\\[\]]/g, '\\$&')}](${SITE}${b.page})\n`;
   const sections = grouped(boards, values).map((group) => `## ${group.label}\n\n${group.about ? group.about.charAt(0).toUpperCase() + group.about.slice(1) + '.\n\n' : ''}${group.boards.map(entry).join('')}`);
   const today = new Date().toISOString().slice(0, 10);
-  return `# The design of UX 2.0\n\nThe boards of the UX 2.0 design canvas, "${canvas.title}", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at ${SITE}, starting from the kit's first board, every page beside a sidebar of them all. Taken from the canvas's version ${version} on ${today} by the \`design-docs\` project skill (\`.claude/skills/design-docs/\`), which writes every page again; don't edit these files by hand.\n\n${sections.join('\n')}`;
+  return `# The design of UX 2.0\n\nThe boards of the UX 2.0 design, "${canvas.title}", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at ${SITE}, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [\`src/\`](${SOURCES}) on ${today} by the \`design-docs\` project skill (\`.claude/skills/design-docs/\`), which writes every page again: a board is changed in its source, never in its page.\n\n${sections.join('\n')}`;
 }
 
 // ─── leak-check's findings in the pages ────────────────────────────────────────
@@ -369,6 +379,12 @@ function readme(canvas, boards, values, version) {
 // printed for the person to answer, and the exit is 1 when there is one. It runs leak-check itself, so a leak-check that
 // couldn't look (its exit 2, or no exit at all) is passed on as it is, never read as a range with nothing in it.
 function madeUp(range) {
+  const kept = notMadeUp(range);
+  if (kept.length) console.log(kept.join('\n'));
+  process.exit(kept.length ? 1 : 0);
+}
+
+function notMadeUp(range) {
   const run = spawnSync('switchboard', ['leak-check', range], { encoding: 'utf8' });
   if (run.status !== 0 && run.status !== 1) {
     process.stderr.write(run.stderr || `leak-check couldn't run: ${run.error?.message || 'it exited ' + run.status}\n`);
@@ -382,8 +398,41 @@ function madeUp(range) {
     if (kind === 'ticket ID') return !MADE_UP.ticketPrefixes.includes(text.split('-')[0]);
     return !MADE_UP.prNumbers.includes(Number(text.slice(1))) && !MADE_UP.colors.includes(text.slice(1));
   });
-  if (kept.length) console.log(kept.join('\n'));
-  process.exit(kept.length ? 1 : 0);
+  return kept;
+}
+
+// ─── The push ──────────────────────────────────────────────────────────────────
+// A change to docs/design alone goes to main without the review loop or a question (CLAUDE.md's "Pushing"): this checks
+// that every path any commit main lacks touches (both sides of a rename, a merge against each parent) lies under docs/design/,
+// runs leak-check on them, as `made-up` does, and only then pushes, which .githooks/pre-push lets through by the same rule.
+// It refuses, saying why, when main has moved (fetch and rebase first), when a commit reaches past docs/design (that is a
+// change to land through the review loop), or when leak-check finds anything made-up.json doesn't explain (that is asked
+// about); a leak-check that couldn't look exits 2. This repository's .claude/settings.json allows it as this exact command.
+const isDesignPath = (file) => file.startsWith('docs/design/') && !file.split('/').includes('..');
+
+function push() {
+  const git = (...args) => spawnSync('git', args, { encoding: 'utf8' });
+  const refuse = (why, code = 1) => {
+    console.error(`render.js push: ${why}`);
+    process.exit(code);
+  };
+  const top = git('rev-parse', '--show-toplevel');
+  if (top.status !== 0) refuse('not in a git repository', 2);
+  process.chdir(top.stdout.trim());
+  const fetched = git('fetch', '--quiet', 'origin', 'main');
+  if (fetched.status !== 0) refuse(`couldn't fetch origin's main: ${fetched.stderr.trim()}`, 2);
+  if (git('merge-base', '--is-ancestor', 'origin/main', 'HEAD').status !== 0) refuse("main on origin has commits this branch lacks: rebase onto origin/main, then push again");
+  const range = 'origin/main..HEAD';
+  const files = git('log', '--format=', '--name-only', '--no-renames', '-m', '-z', range);
+  if (files.status !== 0) refuse(`couldn't list what ${range} changes: ${files.stderr.trim()}`, 2);
+  const changed = [...new Set(files.stdout.split('\0').map((f) => f.trim()).filter(Boolean))];
+  if (git('rev-list', '--count', range).stdout.trim() === '0') refuse('nothing to push: main on origin already has HEAD', 0);
+  const outside = changed.filter((file) => !isDesignPath(file));
+  if (!changed.length || outside.length) refuse(`${range} changes more than docs/design/, so it lands through the review loop and the push question:\n${outside.join('\n') || '(no file at all)'}`);
+  const found = notMadeUp(range);
+  if (found.length) refuse(`leak-check found what made-up.json doesn't explain; ask about each before pushing:\n${found.join('\n')}`);
+  const pushed = spawnSync('git', ['push', 'origin', 'HEAD:main'], { stdio: 'inherit' });
+  process.exit(pushed.status ?? 1);
 }
 
 function selfTest() {
@@ -404,6 +453,23 @@ function selfTest() {
   const leaked = leaks('Ana mentioned you · WEB-12 · #web-app · Zed mentioned you · ACME-4 · /Users/someone', []);
   const expected = ['Zed', 'ACME-4', '/Users/someone'];
   check(expected.every((t) => leaked.includes(t)) && leaked.length === expected.length, `made-up check: ${JSON.stringify(leaked)}`);
+  // A sync of the fixtures' sources: a page for each board on the design page, the first as index.html, and the README.
+  const synced = fs.mkdtempSync(path.join(os.tmpdir(), 'design-docs-sync-'));
+  try {
+    const run = spawnSync(process.execPath, [__filename, 'sync', fixtures, synced], { encoding: 'utf8' });
+    const written = fs.readdirSync(synced).sort();
+    check(run.status === 0 && JSON.stringify(written) === JSON.stringify(['2-slack.html', 'README.md', 'index.html']) && fs.readFileSync(path.join(synced, 'README.md'), 'utf8').includes(`(${SITE}2-slack.html)`), `sync: pages from the sources: ${JSON.stringify(written)} ${run.stderr.trim()}`);
+    // A source no page draws is published with the others, so it is checked too.
+    const stray = fs.mkdtempSync(path.join(os.tmpdir(), 'design-docs-stray-'));
+    for (const file of fs.readdirSync(fixtures)) fs.copyFileSync(path.join(fixtures, file), path.join(stray, file));
+    fs.mkdirSync(path.join(stray, 'archive'));
+    fs.writeFileSync(path.join(stray, 'archive', 'Stray.dc.html'), '<p>see https://private.example.dev</p>');
+    const refused = spawnSync(process.execPath, [__filename, 'sync', stray, path.join(stray, 'out')], { encoding: 'utf8' });
+    fs.rmSync(stray, { recursive: true, force: true });
+    check(refused.status === 2 && refused.stderr.includes('src/archive/Stray.dc.html: private.example.dev'), `sync: a source no page draws is checked too: ${refused.stderr.trim()}`);
+  } finally {
+    fs.rmSync(synced, { recursive: true, force: true });
+  }
   if (!CHROME) {
     console.log('skipped drawing: no Chrome found');
     process.exit(failed ? 1 : 77);
@@ -437,8 +503,9 @@ if (require.main !== module) {
 else if (first === '--print-chrome-args') console.log(SWITCHES.join('\n'));
 else if (first === 'sync' && second && third) sync(second, third);
 else if (first === 'made-up' && second) madeUp(second);
+else if (first === 'push' && !second) push();
 else if (first && second) draw(toHtml(fs.readFileSync(first, 'utf8')), second, Number(third) || 1280, Number(fourth) || 800);
 else {
-  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js --self-test | render.js --print-chrome-args');
+  console.error('usage: render.js <board.dc.html> <out.png> [width height] | render.js sync <project dir> <docs dir> | render.js made-up <range> | render.js push | render.js --self-test | render.js --print-chrome-args');
   process.exit(64);
 }

@@ -1,6 +1,6 @@
 # The design of UX 2.0
 
-The boards of the UX 2.0 design canvas, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Taken from the canvas's version 1794518443-8f76 on 2026-11-12 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again; don't edit these files by hand.
+The boards of the UX 2.0 design, "Switchboard UX", as web pages: each one a screen of the workspace (160 × 45 cells) or of Slack on a phone, with made-up data. GitHub Pages serves them at https://cquinones100.github.io/switchboard/design/, starting from the kit's first board, every page beside a sidebar of them all. Drawn from the boards' sources in [`src/`](https://github.com/cquinones100/switchboard/tree/main/docs/design/src) on 2026-11-12 by the `design-docs` project skill (`.claude/skills/design-docs/`), which writes every page again: a board is changed in its source, never in its page.
 
 ## The kit and the index
 
@@ -26,6 +26,8 @@ A tab and what it shows in Claude's place.
 - [56. A build running without blocking: the sidebar's build row, and its steps a click opens](https://cquinones100.github.io/switchboard/design/56-build-row.html)
 - [57. Back and forward: ← and → first on the sidebar's top line, the mouse over ← naming the tab it goes to](https://cquinones100.github.io/switchboard/design/57-back-forward.html)
 - [58. A right-click on ← or →: the whole trail in a menu, any step one choice away](https://cquinones100.github.io/switchboard/design/58-back-forward-trail.html)
+- [59. The mission control button: ⊞ after ← → on the sidebar's top line, the count that needs you beside it, the mouse over it naming it](https://cquinones100.github.io/switchboard/design/59-mc-button.html)
+- [60. A right-click on ⊞: mission control's views by group, any one a choice away](https://cquinones100.github.io/switchboard/design/60-mc-button-views.html)
 
 ## Mission control · work
 

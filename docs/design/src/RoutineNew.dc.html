@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New routine</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+.scr{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13px;line-height:17px;white-space:pre}
+.scr span{vertical-align:top}
+.ln{height:17px;overflow:hidden}
+.kitty{position:absolute;left:0;top:0;width:0;height:0}
+</style>
+</helmet>
+<div class="scr" style="width:1280px;height:800px;box-sizing:border-box;padding:16px;background:#0b0c12;overflow:hidden">
+<div style="position:relative;display:inline-block;background:#15161e">
+<sc-for list="{{rows}}" as="row" hint-placeholder-count="45"><div class="ln"><sc-for list="{{row.runs}}" as="r" hint-placeholder-count="6"><span style="{{r.style}}">{{r.text}}</span></sc-for></div></sc-for>
+<div class="kitty"><sc-for list="{{imgs}}" as="im" hint-placeholder-count="0"><div style="{{im.pos}}"><div style="{{im.style}}">{{im.text}}</div></div></sc-for></div>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() {
+const W = 160, H = 45;
+const FG = { t: '#c9cdd9', d: '#8d93a8', a: '#5fd7ff', y: '#f2c56b', g: '#7fd18b', b: '#82aaff', r: '#ff8a94', m: '#c49bff', o: '#e0896b', k: '#11131a', L: '#3a3f52', f: '#565b6e', n1: '#8bd5ca', n2: '#f5bde6', n3: '#b7bdf8', n4: '#a6da95', n5: '#f5a97f', n6: '#91d7e3', n7: '#ee99a0', n8: '#c6a0f6', n9: '#e8d5a4' };
+const BG = { 0: '#15161e', 1: '#11121a', 2: '#1b1e29', 3: '#20243a', 4: '#262b40', 5: '#2a2e3d', A: '#5fd7ff', Y: '#3a3220', G: '#1d3a2a', B: '#20304f', R: '#3a1d24', M: '#2a2440', H1: '#8bd5ca', H2: '#f5bde6', H3: '#b7bdf8', H4: '#a6da95', H5: '#f5a97f', H6: '#91d7e3', H7: '#ee99a0', H8: '#c6a0f6', H9: '#e8d5a4', E: '#1f2232' };
+const g = [];
+for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push({ c: ' ', fg: 't', bg: '0', f: '' }); g.push(row); }
+const put = (x, y, s, fg, f, bg) => { let i = 0; for (const ch of s) { const xx = x + i; if (y >= 0 && y < H && xx >= 0 && xx < W) { const c = g[y][xx]; g[y][xx] = { c: ch, fg: fg || 't', bg: bg || c.bg, f: f || '' }; } i++; } return i; };
+const T = (x, y, ...p) => { for (const q of p) x += typeof q === 'string' ? put(x, y, q) : put(x, y, q[0], q[1], q[2], q[3]); return x; };
+const R = (xr, y, s, fg, f, bg) => put(xr - [...s].length + 1, y, s, fg, f, bg);
+const fill = (x, y, w, h, bg) => { for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) if (j >= 0 && j < H && i >= 0 && i < W) g[j][i] = { c: ' ', fg: 't', bg: bg, f: '' }; };
+const hl = (x, y, w, fg, ch) => put(x, y, (ch || '─').repeat(w), fg || 'L');
+const vl = (x, y, h, fg) => { for (let j = y; j < y + h; j++) put(x, j, '│', fg || 'L'); };
+const clip = (s, n) => [...s].length > n ? [...s].slice(0, n - 1).join('').trimEnd() + '…' : s;
+// Key hints, one style everywhere: the key in the accent, what it does dim, two spaces between.
+const keys = (x, y, list) => { for (const [k, what] of list) { x += put(x, y, k, 'a'); x += put(x, y, ' ' + what + '  ', 'd'); } return x; };
+// A tab header's view keys (M-c Claude ...), the one shown lit.
+const view = (x, y, k, label, on) => { let n = put(x, y, ' ' + k + ' ', on ? 'k' : 'a', 'b', on ? 'A' : '3'); n += put(x + n, y, ' ' + label + ' ', on ? 't' : 'd', on ? 'b' : '', on ? '4' : '0'); return n + 1; };
+const views = (x, y, on) => { for (const [k, l] of [['M-c', 'Claude'], ['M-d', 'Diff'], ['M-v', 'PR'], ['M-i', 'Ticket'], ['M-e', 'Note']]) x += view(x, y, k, l, l === on); };
+
+// KITTY GRAPHICS: what Ghostty draws as images over the cells, in cell units (fractions allowed, so pixels).
+// K(x, y, w, h, css, text) places one; css is any extra CSS (background, border-radius, opacity...).
+const imgs = [];
+// Placed in cells on an outer box in the terminal's font (ch is a cell only in that font); its look, and any font of its own, on an inner one.
+const K = (x, y, w, h, css, text) => imgs.push({ pos: 'position:absolute;left:calc(' + x + 'ch);top:' + (y * 17) + 'px;width:calc(' + w + 'ch);height:' + (h * 17) + 'px', style: 'width:100%;height:100%;box-sizing:border-box;' + (css || ''), text: text || '' });
+// ─── THE KIT: the atoms every board draws with ──────────────────────────────
+// Tones: t text, d secondary, f faint; a accent (what you can act on, what is chosen);
+// y needs you, b working, m landing or queued, g done, r failed. Bold is for names only.
+// Surfaces: 0 base, 1 sunken (a screen, a sidebar), 2 panel, E raised (a box), 4 chosen.
+// Tints for chips and cells: Y B M G R by tone, 5 neutral.
+const TINT = { y: 'Y', b: 'B', m: 'M', g: 'G', r: 'R', d: '5', t: '5', a: '3' };
+// MARK: one glyph per state, the same everywhere.
+const MARK = { needs: ['●', 'y'], working: ['⠹', 'b'], landing: ['▲', 'm'], queued: ['▲', 'm'], idle: ['○', 'd'], failed: ['✕', 'r'], passed: ['✓', 'g'], pending: ['◌', 'y'], reminder: ['◷', 'y'], mention: ['@', 'b'], note: ['✎', 'm'], comment: ['◇', 'b'] };
+const mark = (x, y, state, bg) => put(x, y, MARK[state][0], MARK[state][1], '', bg);
+// LABEL: a section's name in capitals, bold, in its tone (d unless it names a state); its count at xr.
+const label = (x, y, text, tone, count, xr) => { put(x, y, text.toUpperCase(), tone || 'd', 'b'); if (count !== undefined && xr) R(xr, y, String(count), tone || 'd'); };
+// RULE: a solid line between regions; a dashed one only under a table's column heads; a vertical one between panes.
+const rule = (x, y, w) => hl(x, y, w, 'L');
+const headRule = (x, y, w) => hl(x, y, w, 'L', '┄');
+const ruleV = (x, y, h) => vl(x, y, h, 'L');
+// ROW: one or two lines of a list; the chosen one gets the chosen surface and an accent bar at its left.
+const row = (x, y, w, lines, chosen) => { if (!chosen) return '0'; fill(x, y, w, lines, '4'); for (let j = 0; j < lines; j++) put(x, y + j, '▌', 'a', '', '4'); return '4'; };
+// CARD: a rounded box; its mark and name on the top edge at the left, its state at the right; the chosen one's edge in the accent.
+const card = (x, y, w, h, o) => {
+  // Its edge takes its group's tone when it has one (o.edge), the accent when chosen.
+  const c = o.chosen ? 'a' : (o.edge || 'L');
+  put(x, y, '╭', c); hl(x + 1, y, w - 2, c); put(x + w - 1, y, '╮', c);
+  vl(x, y + 1, h - 2, c); vl(x + w - 1, y + 1, h - 2, c);
+  put(x, y + h - 1, '╰', c); hl(x + 1, y + h - 1, w - 2, c); put(x + w - 1, y + h - 1, '╯', c);
+  let n = x + 2; if (o.state) { n += put(n, y, ' '); n += mark(n, y, o.state); }
+  n += put(n, y, ' ' + o.title + ' ', o.titleTone || 't', 'b');
+  if (o.right) R(x + w - 3, y, ' ' + o.right + ' ', o.rightTone || 'd');
+};
+// BOX: what a menu, question or the palette is drawn in: raised, its title on the edge, × to close, a shadow under it.
+// Call backdrop(boxes) once, last, to dim what is behind every box.
+const BOXES = [];
+const box = (x, y, w, h, title, tone) => {
+  BOXES.push([x, y, w, h]);
+  fill(x, y, w, h, 'E');
+  const c = tone || 'a';
+  put(x, y, '╭', c); hl(x + 1, y, w - 2, c); put(x + w - 1, y, '╮', c);
+  vl(x, y + 1, h - 2, c); vl(x + w - 1, y + 1, h - 2, c);
+  put(x, y + h - 1, '╰', c); hl(x + 1, y + h - 1, w - 2, c); put(x + w - 1, y + h - 1, '╯', c);
+  put(x + 2, y, ' ' + title + ' ', 't', 'b', 'E'); put(x + w - 4, y, ' × ', 'd', '', 'E');
+  K(x, y, w, h, 'border-radius:7px;box-shadow:0 14px 34px 8px rgba(0,0,0,.6),0 3px 8px rgba(0,0,0,.45)');
+};
+const backdrop = () => { for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { if (BOXES.some(([bx, by, bw, bh]) => x >= bx && x < bx + bw && y >= by && y < by + bh)) continue; const c = g[y][x]; c.fg = 'f'; if (c.bg === '4' || c.bg === 'A') c.bg = '2'; } };
+// OPTION: one choice in a box; the chosen one lit, a yellow › before it; its key at the right.
+const option = (x, y, w, text, key, chosen) => { const bg = chosen ? '4' : 'E'; if (chosen) fill(x + 1, y, w - 2, 1, '4'); put(x + 2, y, chosen ? '›' : ' ', 'y', 'b', bg); put(x + 4, y, text, 't', chosen ? 'b' : '', bg); if (key) R(x + w - 3, y, key, chosen ? 'a' : 'd', '', bg); };
+// KEYCAP: a key you can press or click, with what it does; lit while what it opens is in front.
+const keycap = (x, y, k, what, lit) => { const kb = lit ? 'A' : '3'; let n = put(x, y, '\uE0B6', kb); n += put(x + n, y, k, lit ? 'k' : 'a', 'b', kb); if (lit) { n += put(x + n, y, ' ', 'k', '', kb); n += put(x + n, y, ' ' + what, 't', 'b', '4'); n += put(x + n, y, '\uE0B4', '4'); } else { n += put(x + n, y, '\uE0B4', kb); n += put(x + n, y, ' ' + what + ' ', 'd'); } return n + 1; };
+// CHIP: a short fact about a thing, tinted by its tone.
+const chip = (x, y, text, tone) => { const t = TINT[tone || 'd']; let n = put(x, y, '\uE0B6', t); n += put(x + n, y, text, tone || 'd', '', t); n += put(x + n, y, '\uE0B4', t); return n + 1; };
+// CELL: a step in a pipeline: a chip of fixed width, its text centered, a dim note under it.
+const cell = (x, y, w, text, tone, sub) => { const t = TINT[tone]; put(x, y, '\uE0B6', t); fill(x + 1, y, w - 2, 1, t); put(x + w - 1, y, '\uE0B4', t); const n = [...text].length; put(x + Math.floor((w - n) / 2), y, text, tone === 'd' ? 'd' : tone, tone === 'b' || tone === 'r' ? 'b' : '', t); if (sub) { const m = [...sub].length; put(x + Math.floor((w - m) / 2), y + 1, sub, 'd'); } };
+// EVENT: something at a time, on a calendar: a block in its tone with a bar at its left, as tall as it lasts on a day's timeline, one row in a month's day; past ones dim and struck through, the chosen one lit.
+const event = (x, y, w, h, tone, title, detail, over, chosen) => { const bg = chosen ? '4' : over ? '2' : TINT[tone]; fill(x, y, w, h, bg); for (let j = 0; j < h; j++) put(x, y + j, '▌', chosen ? 'a' : tone, '', bg); put(x + 2, y, [...title].slice(0, w - 2).join(''), over ? 'd' : 't', over ? 's' : 'b', bg); if (detail && h > 1) put(x + 2, y + 1, detail, 'd', '', bg); return bg; };
+// PANE: what is chosen, beside a list or a board: its name bold, a dim line of facts, a rule; returns the next row.
+const pane = (x, y, w, title, facts) => { put(x, y, title, 't', 'b'); if (facts) T(x, y + 1, ...(typeof facts === 'string' ? [[facts, 'd']] : facts)); rule(x - 1, y + 2, w); return y + 4; };
+// IMAGES (kitty graphics): a person's photo, a picture with its caption, a meter.
+const PHOTO = { Ana: '#c98a6b', Ben: '#6b8ac9', Priya: '#9a6bc9', Sam: '#6bc99a', Lee: '#c9b06b', Maya: '#c96b8a', Alex: '#6bb5c9', you: '#5f9fd7', You: '#5f9fd7' };
+// AVATAR: one person, one color by name whatever the source (Slack, Linear, GitHub): the photo cropped to a circle.
+// Large (big) is 4 × 2 beside what the person wrote or did, the text 5 in; Small is 2 × 1 where people are listed inline.
+const avatar = (x, y, who, big) => K(x, y + (big ? 0.075 : 0.05), big ? 4 : 2, big ? 1.85 : 0.9, 'border-radius:50%;background:radial-gradient(circle at 50% 38%,rgba(255,255,255,.35) 0 22%,transparent 23%),radial-gradient(ellipse at 50% 100%,rgba(255,255,255,.3) 0 45%,transparent 46%),' + (PHOTO[who] || '#7a7f94'));
+const picture = (x, y, w, h, caption) => { K(x, y, w, h, 'box-sizing:border-box;border:1px solid #3a3f52;border-radius:6px;background:#11121a'); if (caption) put(x, Math.ceil(y + h), caption, 'd'); };
+// A meter may carry a tick: a target or a pace to compare the value with.
+const meter = (x, y, w, frac, color, tick) => { K(x, y + 0.35, w, 0.3, 'border-radius:3px;background:#3a3f52'); K(x, y + 0.35, w * Math.max(0, Math.min(1, frac)), 0.3, 'border-radius:3px;background:' + color); if (tick !== undefined) K(x + w * tick - 0.1, y + 0.1, 0.2, 0.8, 'border-radius:1px;background:#c9cdd9'); };
+// SERIES: a quantity over time at pixel resolution, as bars: a chart several rows tall, or a sparkline one row tall inside a row.
+// values: numbers, or arrays of [number, color] stacked; max: the top of the scale; over: values past it drawn in the failed tone.
+const series = (x, y, w, h, values, color, max, over) => { const bw = w / values.length; values.forEach((v, i) => { let base = y + h; for (const [n, c] of (Array.isArray(v) ? v : [[v, color]])) { const bh = Math.min(h, n / max * h); if (bh <= 0) continue; base -= bh; K(x + i * bw + bw * 0.12, base, bw * 0.76, bh, 'border-radius:1.5px;background:' + (over !== undefined && n > over ? '#ff8a94' : c)); } }); };
+// INPUT: a line you type into: › in the accent, what is typed (or a faint placeholder) and a cursor, its keys at the right.
+const input = (x, y, w, text, placeholder, hints) => { put(x, y, '\uE0B6', '2'); fill(x + 1, y, w - 2, 1, '2'); put(x + w - 1, y, '\uE0B4', '2'); put(x + 1, y, '›', 'a', 'b', '2'); if (text) { const n = put(x + 3, y, text, 't', '', '2'); put(x + 3 + n, y, '▏', 'a', '', '2'); } else { put(x + 3, y, '▏', 'a', '', '2'); put(x + 4, y, placeholder || '', 'f', '', '2'); } if (hints) { const len = hints.reduce((m, [k, wd]) => m + [...k].length + [...wd].length + 3, 0); keys(x + w - len, y, hints); } };
+// ─────────────────────────────────────────────────────────────────────────────
+
+// THE SIDEBAR, the same on every board: sel is the number of the tab under the cursor, or 0.
+const sidebar = (sel, opts) => {
+  opts = opts || {};
+  fill(0, 0, 34, 45, '1');
+  T(1, 0, ['9 tabs', 'd']); R(32, 0, '/ filter', 'd');
+  T(1, 2, ['NOTIFICATIONS', 'a', 'b']); R(32, 2, '5', 'a');
+  const note = (y, glyph, gc, text, when) => { T(2, y, [glyph, gc], ' ', text); R(32, y, when, 'd'); };
+  note(3, '✓', 'g', 'Landed 8e1f2a7', '1m');
+  note(4, '◷', 'y', 'Design review → 3:00', '12m');
+  note(5, '✓', 'g', 'PR 212 merged', '40m');
+  note(6, '@', 'b', 'Ana mentioned you', '1h');
+  note(7, '✎', 'm', 'Standup note written', '9h');
+  const tab = (y, glyph, gc, num, name, sub) => { const s = num === sel; if (s) { fill(0, y, 34, 2, '4'); put(0, y, '▌', 'a'); put(0, y + 1, '▌', 'a'); } T(2, y, [glyph, gc], ' ', [String(num), 'n' + num], ' ', [name, 't', s ? 'b' : '']); put(6, y + 1, sub, 'd'); };
+  T(1, 9, ['NEEDS YOU', 'y', 'b']); R(32, 9, '3', 'y');
+  tab(10, '●', 'y', 2, 'stable note IDs', 'Bash: git push origin main');
+  tab(12, '●', 'y', 6, 'review PR 41', 'asks: which fixture?');
+  tab(14, '●', 'y', 4, 'full titles', 'tests failed: 2 of 401');
+  T(1, 17, ['WORKING', 'b', 'b']); R(32, 17, '3', 'b');
+  tab(18, '⠹', 'b', 1, 'planning', 'Monitor: fork parity');
+  tab(20, '⠹', 'b', 3, 'M-d uncommitted', 'Edit diffview.lua');
+  tab(22, '⠼', 'b', 7, 'Rust port notes', 'Read upgrade.rs');
+  T(1, 25, ['LANDING', 'm', 'b']); R(32, 25, '1', 'm');
+  tab(26, '▲', 'm', 5, 'benchmark harness', '2nd in the landing queue');
+  T(1, 29, ['IDLE', 'd', 'b']); R(32, 29, '2', 'd');
+  tab(30, '○', 'd', 8, 'handoff', 'idle 58m');
+  tab(32, '○', 'd', 9, 'oncall watch', 'idle 14m');
+  keys(1, 44, [['M-t', 'new'], ['M-j', 'jump'], ['M-a', 'next']]);
+  vl(34, 0, 45);
+};
+
+// MISSION CONTROL'S BAR: its views grouped by feature. Row 0: the groups, the one in front lit;
+// row 1: that group's views, the one in front lit; row 2: a rule. The content starts at row 3.
+const GROUPS = [['Work', ['Tabs', 'Landing', 'Autopilot', 'Routines', 'Map', 'Reopen']], ['Code', ['PRs', 'Tickets', 'CI']], ['Day', ['Calendar', 'Reminders', 'Slack', 'Inbox', 'Notifications']], ['System', ['Usage', 'Resources', 'Settings', 'Keys']]];
+const mcBar = (group, current, right) => {
+  fill(35, 0, 125, 1, '3');
+  let x = T(36, 0, ['Mission control', 't', 'b', '3']) + 3;
+  for (const [name] of GROUPS) { const on = name === group; if (on) { put(x, 0, '\uE0B6', 'A'); put(x + 1, 0, name, 'k', 'b', 'A'); put(x + 1 + [...name].length, 0, '\uE0B4', 'A'); x += [...name].length + 3; } else x += put(x, 0, ' ' + name + ' ', 'd', '', '3') + 1; }
+  R(158, 0, right || '', 'd', '', '3');
+  x = 36;
+  for (const v of GROUPS.find((q) => q[0] === group)[1]) { const on = v === current; if (on) { put(x - 1, 1, '\uE0B6', '4'); put(x, 1, v, 'a', 'b', '4'); put(x + [...v].length, 1, '\uE0B4', '4'); } else put(x, 1, v, 'd'); x += [...v].length + 3; }
+  let rx = 158; const hint = [['{ }', 'groups'], ['[ ]', 'views'], ['Esc', 'back']];
+  rx -= hint.reduce((n, [k, w]) => n + k.length + w.length + 3, 0) - 2; keys(rx + 1, 1, hint);
+  hl(35, 2, 125);
+};
+
+// ─── THE BOARD ───
+sidebar(9);
+// MISSION CONTROL'S ROUTINES: a prompt of yours on a schedule. When one comes due it goes to the tab its last run used,
+// or resumes that run's session in a new tab when the tab is closed, or opens a new tab in its directory the first time.
+mcBar('Work', 'Routines', '5 routines · next at 2:30');
+
+// A routine: its mark, its name bold, its schedule in words, when it runs next at the right;
+// under it where it runs and how its last run went, as chips.
+MARK.routine = ['↻', 'a']; MARK.paused = ['‖', 'd'];
+const routine = (y, state, name, when, next, where, last, sel) => {
+  const bg = row(35, y, 62, 2, sel);
+  mark(37, y, state, bg);
+  T(39, y, [name, state === 'paused' ? 'd' : 't', 'b', bg]);
+  put(62, y, when, 'd', '', bg);
+  R(95, y, next, state === 'paused' ? 'f' : 't', '', bg);
+  let x = 39;
+  x += chip(x, y + 1, where[0], where[1]);
+  if (last) chip(x, y + 1, last[0], last[1]);
+};
+label(36, 4, 'Recurring', 'd', 4, 95);
+routine(5, 'routine', 'Oncall watch', 'every 30m · 9–6 weekdays', '2:30', ['tab 9 · open', 'a'], ['✓ 2:00 · nothing new', 'g'], true);
+routine(8, 'routine', 'Morning triage', 'weekdays at 8:45', 'Mon 8:45', ['tab closed · resumes its session', 'd'], ['✓ 8:45 · 4 things', 'g']);
+routine(11, 'routine', 'Dependency check', 'Mondays at 10:00', 'Mon 10:00', ['a new tab each run', 'd'], ['✕ Mon · 2 audits failed', 'r']);
+routine(14, 'paused', 'Retro prep', 'Fridays at 2:00', 'paused', ['tab 8 · open', 'a'], ['paused since Oct 30', 'd']);
+label(36, 17, 'Once', 'd', 1, 95);
+routine(18, 'routine', 'PR 2031\'s deploy', 'Wed Nov 11 at 9:00', 'in 5 days', ['a new tab', 'd']);
+T(38, 21, ['▸ 3 that ran once, folded', 'f']);
+
+// THIS WEEK: a row per routine, a column per day; what ran as its mark, what is still to come as its time.
+rule(35, 23, 62);
+label(36, 24, 'This week'); put(48, 24, 'Nov 2 – 8', 'f');
+const DX = 58, DW = 6;
+['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((d, i) => put(DX + i * DW, 25, d, i === 4 ? 'r' : 'd', i === 4 ? 'b' : ''));
+headRule(36, 26, 60);
+const week = (y, name, cells) => { put(37, y, name, 't'); cells.forEach((c, i) => { if (c) put(DX + i * DW, y, c[0], c[1], c[1] === 'r' || c[1] === 'g' ? '' : ''); }); };
+week(27, 'Oncall watch', [['18✓', 'g'], ['18✓', 'g'], ['17✓', 'g'], ['18✓', 'g'], ['11✓', 'g'], null, null]);
+week(28, 'Morning triage', [['✓', 'g'], ['–', 'd'], ['◌', 'y'], ['✓', 'g'], ['✓', 'g'], null, null]);
+week(29, 'Dependency', [['✕', 'r'], null, null, null, null, null, null]);
+week(30, 'Retro prep', [null, null, null, null, ['‖', 'd'], null, null]);
+week(31, 'PR 2031 deploy', [null, null, null, null, null, null, null]);
+T(37, 33, ['◌ Wed: missed at 8:45 while asleep, ran at 9:12 on waking', 'd']);
+T(37, 34, ['– Tue: missed at 8:45, asleep past 9:45, so skipped', 'd']);
+ruleV(97, 3, 40);
+
+// THE CHOSEN ROUTINE
+let py = pane(99, 3, 61, 'Oncall watch', [['every 30 minutes, 9:00 to 6:00 on weekdays', 't'], ['  · ~/code/oncall-tools', 'd']]);
+let kx = 99; kx += keycap(kx, py, 'r', 'Run now', true); kx += keycap(kx, py, 'e', 'Edit'); kx += keycap(kx, py, 'p', 'Pause'); keycap(kx, py, 'x', 'Delete');
+label(99, py + 2, 'Prompt'); R(158, py + 2, 'added to Claude\'s system prompt', 'd');
+fill(99, py + 3, 60, 4, '2');
+['Watch #alerts-web and #alerts-sync. Tell me only about what is', 'still firing after 30 minutes with nobody on it, and say who', 'last spoke in its thread. Never post or react in a channel.'].forEach((l, i) => put(101, py + 3 + i, l, 't', '', '2'));
+put(101, py + 6, 'e edits it · the next run takes the new words', 'f', '', '2');
+label(99, py + 8, 'Where it runs');
+T(99, py + 9, ['●', 'a'], ' ', ['9', 'n9', 'b'], [' oncall watch', 't', 'b'], ['  open · idle 14m · the run before is its last turn', 'd']);
+T(101, py + 10, ['Idle: the prompt goes in as its next turn. Working: it waits for the', 'd']);
+T(101, py + 11, ['turn to end, up to 30m, then skips. Closed: its session resumes in', 'd']);
+T(101, py + 12, ['a new tab. Never ran: a new tab in its directory.', 'd']);
+T(101, py + 13, ['Asleep when due: it runs on waking, up to 1h late.', 'd']);
+label(99, py + 14, 'Runs', 'd', '11 today', 158);
+const run = (y, at, st, words, facts) => { R(104, y, at, 'd'); mark(106, y, st); put(108, y, clip(words, 30), st === 'pending' ? 'y' : 't'); R(158, y, facts, 'd'); };
+run(py + 15, '2:00', 'passed', 'Nothing new', 'tab 9 · 41s · $0.04');
+run(py + 16, '1:30', 'passed', 'Sync alert, 12m, Sam on it', 'tab 9 · 1m 08s · $0.06');
+run(py + 17, '1:00', 'pending', 'Waited 4m for its turn to end', 'tab 9 · 52s · $0.05');
+run(py + 18, '12:30', 'passed', 'Nothing firing', 'tab 9 · 33s · $0.03');
+run(py + 19, '12:00', 'passed', 'Nothing firing', 'tab 9 · 30s · $0.03');
+T(101, py + 20, ['▸ 6 earlier today · its spend today ', 'f'], ['$0.39', 'd']);
+label(99, py + 22, 'Next');
+T(99, py + 23, ['2:30', 't', 'b'], ['  then 3:00, 3:30 … 5:30 · Monday 9:00', 'd']);
+
+keys(36, 44, [['j/k', 'move'], ['Enter', 'actions'], ['m', 'view actions'], ['/', 'filter']]);
+
+// THE NEW-ROUTINE BOX, from n: every field on one box, Tab moving between them; the schedule read back as it is typed.
+const BX = 46, BW = 100, FX = 64, FW = 80;
+box(BX, 4, BW, 36, 'New routine');
+const field = (y, name) => put(49, y, name, 'd', '', 'E');
+field(6, 'Name');
+input(FX, 6, FW, 'Morning triage', '', null);
+field(8, 'Directory');
+input(FX, 8, FW, '~/code/we', '', [['→', 'accept']]);
+put(FX + 13, 8, 'b-app', 'f', '', '2');
+put(FX + 2, 9, 'where its tab opens; the dim rest is a suggestion, → takes it; Tab moves on', 'f', '', 'E');
+field(11, 'When');
+let wx = FX; wx += keycap(wx, 11, '1', 'Once'); keycap(wx, 11, '2', 'Repeats', true);
+input(FX, 12, FW, 'weekdays at 8:45', '', null);
+T(FX + 2, 13, ['✓', 'g', '', 'E'], [' Monday to Friday at 8:45 AM', 't', '', 'E'], ['  · as it reads what you typed', 'f', '', 'E']);
+T(FX + 2, 14, ['also: every 30m 9–6 weekdays · mondays 10:00 · the 1st at 9:00 · nov 20 3pm', 'f', '', 'E']);
+field(16, 'Next runs');
+let nx = FX; for (const d of ['Mon Nov 9 8:45', 'Tue Nov 10 8:45', 'Wed Nov 11 8:45']) nx += chip(nx, 16, d, 'a') + 1;
+put(nx, 16, '…', 'd', '', 'E');
+field(18, 'Runs in');
+option(FX - 2, 18, FW + 4, 'The same tab each run: its last run\'s, or its session resumed', '', true);
+option(FX - 2, 19, FW + 4, 'A new tab each run', '');
+field(21, 'If it\'s busy');
+option(FX - 2, 21, FW + 4, 'Wait for the tab\'s turn to end, up to 30 minutes, then skip', '', true);
+option(FX - 2, 22, FW + 4, 'Skip this run', '');
+field(24, 'If it\'s missed');
+option(FX - 2, 24, FW + 4, 'Run when the computer wakes, up to an hour late, then skip', '', true);
+option(FX - 2, 25, FW + 4, 'Skip it', '');
+field(27, 'Prompt');
+fill(FX, 27, FW, 5, '2');
+['Read my Linear inbox and Slack mentions since yesterday, and list what', 'needs me today, most urgent first, each with its link. Don\'t reply,', 'comment or change anything.', ''].forEach((l, i) => put(FX + 2, 27 + i, l, 't', '', '2'));
+put(FX + 2, 30, '▏', 'a', '', '2');
+R(FX + FW - 3, 31, 'M-e opens it in $EDITOR', 'f', '', '2');
+T(FX + 2, 32, ['Added to Claude\'s system prompt; a run begins with "Run Morning triage".', 'f', '', 'E']);
+field(34, 'Model');
+let mx = FX; mx += keycap(mx, 34, 'm', 'Sonnet', true); put(mx, 34, 'the default for a new tab; m picks another', 'f', '', 'E');
+rule(BX + 1, 35, BW - 2);
+let sx = BX + 3; sx += keycap(sx, 36, 'M-↵', 'Save', true); sx += keycap(sx, 36, 'M-r', 'Save and run now'); keycap(sx, 36, 'esc', 'Cancel');
+keys(BX + 3, 38, [['Tab ⇧Tab', 'field'], ['↵', 'next field, a new line in Prompt'], ['↑↓', 'option'], ['M-↵', 'save from any field']]);
+backdrop();
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Lines and blocks are drawn to fill the cell, as Ghostty draws them, not taken from the font.
+const LINE = { '\uE0B6': ['cap', 'l'], '\uE0B4': ['cap', 'r'], '─': ['h', 1], '━': ['h', 2], '┄': ['hd'], '│': ['v'], '┆': ['vd'], '╭': ['arc', 'rb'], '┌': ['c', 'rb'], '╮': ['arc', 'lb'], '┐': ['c', 'lb'], '╰': ['arc', 'rt'], '└': ['c', 'rt'], '╯': ['arc', 'lt'], '┘': ['c', 'lt'], '█': ['f'], '▌': ['lh'], '▁': ['lo'], '▐': ['rh'], '┼': ['x'], '├': ['j', 'r'], '┤': ['j', 'l'], '┬': ['j', 'b'], '┴': ['j', 't'] };
+const draw = (ch, col) => { const k = LINE[ch]; const lg = 'linear-gradient(' + col + ',' + col + ')'; if (k[0] === 'cap') return ['radial-gradient(100% 50% at ' + (k[1] === 'l' ? '100%' : '0%') + ' 50%, ' + col + ' 98%, transparent 100%)', '100% 100%', 'center']; if (k[0] === 'arc') { /* Ghostty draws ╭ ╮ ╰ ╯ as quarter-circle arcs from the middle of one edge to the middle of the next */ const cx = k[1][0] === 'r' ? '100%' : '0%', cy = k[1][1] === 'b' ? '100%' : '0%'; return ['radial-gradient(calc(50% + 0.5px) calc(50% + 0.5px) at ' + cx + ' ' + cy + ', transparent calc(100% - 1.2px), ' + col + ' calc(100% - 1.2px), ' + col + ' 100%, transparent 100%)', '100% 100%', 'center']; } if (k[0] === 'h') return [lg, '100% ' + k[1] + 'px', 'center']; if (k[0] === 'hd') return ['repeating-linear-gradient(90deg,' + col + ' 0 3px,transparent 3px 5px)', '100% 1px', 'center']; if (k[0] === 'v') return [lg, '1px 100%', 'center']; if (k[0] === 'vd') return ['repeating-linear-gradient(' + col + ' 0 4px,transparent 4px 7px)', '1px 100%', 'center']; if (k[0] === 'f') return [lg, '100% 100%', 'center']; if (k[0] === 'lh') return [lg, '50% 100%', 'left center']; if (k[0] === 'lo') return [lg, '100% 3px', 'center bottom']; if (k[0] === 'rh') return [lg, '50% 100%', 'right center']; if (k[0] === 'x') return [lg + ',' + lg, '100% 1px,1px 100%', 'center,center']; if (k[0] === 'j') { const d = k[1]; if (d === 'r' || d === 'l') return [lg + ',' + lg, '1px 100%,calc(50% + 0.5px) 1px', 'center,' + (d === 'r' ? 'right' : 'left') + ' center']; return [lg + ',' + lg, '100% 1px,1px calc(50% + 0.5px)', 'center,center ' + (d === 'b' ? 'bottom' : 'top')]; } const hx = k[1][0] === 'r' ? 'right' : 'left', vy = k[1][1] === 'b' ? 'bottom' : 'top'; return [lg + ',' + lg, 'calc(50% + 0.5px) 1px,1px calc(50% + 0.5px)', hx + ' center,center ' + vy]; };
+const lineRun = (q) => { const d = draw(q.ch, FG[q.fg] || BG[q.fg]); return { text: '', style: 'display:inline-block;vertical-align:top;width:' + q.n + 'ch;height:17px;background-color:' + BG[q.bg] + ';background-image:' + d[0] + ';background-size:' + d[1] + ';background-position:' + d[2] + ';background-repeat:no-repeat' }; };
+const SAFE = /[\x20-\x7e]/;
+const rows = g.map((row) => { const runs = []; let cur = null; for (const c of row) { const ln = LINE[c.c]; const odd = !ln && !SAFE.test(c.c); const key2 = (ln ? 'L' + c.c : '') + c.fg + '|' + c.bg + '|' + c.f; const joins = !ln || ln[0] === 'h' || ln[0] === 'hd' || ln[0] === 'f'; if (!odd && cur && !cur.odd && cur.key === key2 && joins) { cur.text += c.c; cur.n++; } else { cur = { key: key2, odd: odd, ln: ln, ch: c.c, n: 1, text: c.c, fg: c.fg, bg: c.bg, f: c.f }; runs.push(cur); } } return { runs: runs.map((q) => q.ln ? lineRun(q) : ({ text: q.text, style: 'color:' + FG[q.fg] + ';background:' + BG[q.bg] + (q.f.indexOf('b') >= 0 ? ';font-weight:700' : '') + (q.f.indexOf('s') >= 0 ? ';text-decoration:line-through' : '') + (q.f.indexOf('u') >= 0 ? ';text-decoration:underline' : '') + (q.odd ? ';display:inline-block;width:1ch;height:17px;text-align:center;overflow:hidden' : '') })) }; });
+return { rows: rows, imgs: imgs };
+}
+}
+</script>
+</body>
+</html>
