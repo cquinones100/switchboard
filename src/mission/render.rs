@@ -2684,6 +2684,21 @@ fn when(item: &Item, now_secs: i64) -> String {
     }
 }
 
+/// When a notification came, for its row's end: the clock time alone
+/// under a day's heading (the history), else the date and the time; a
+/// meeting still to come says when it starts.
+fn notice_when(item: &Item, now: &jiff::Zoned) -> String {
+    let Some(ms) = item.time else {
+        return String::new();
+    };
+    let to_come = ms.div_euclid(1000) > now.timestamp().as_second();
+    if super::history::notice_of(item).is_some() && !to_come {
+        crate::ui::when::clock(ms, now)
+    } else {
+        crate::ui::when::notice(ms, now)
+    }
+}
+
 /// A list: an error or how to set it up, whole; else its rows (a table's
 /// with its columns' names over them and its totals under them), scrolled to
 /// keep the chosen row in sight.
@@ -2886,6 +2901,21 @@ fn list(
         .map(width)
         .max()
         .unwrap_or(0);
+    // The Notifications view says when each came, its column as wide as
+    // the longest it shows; every other view, how long ago, in five.
+    let now = jiff::Timestamp::from_second(snap.now_secs)
+        .unwrap_or_default()
+        .to_zoned(snap.tz.clone());
+    let when_w = if view.id == ViewId::Notifications {
+        shown
+            .iter()
+            .map(|(_, i)| width(&notice_when(i, &now)))
+            .max()
+            .unwrap_or(0)
+            .max(5)
+    } else {
+        5
+    };
     for (index, item) in shown {
         let chosen = index == cursor && m.cursor >= 0;
         let fill = if chosen {
@@ -2996,9 +3026,13 @@ fn list(
         row.put(item.title.clone(), name)
             .put("  ", Style::new())
             .put(detail, fg(theme.dim));
-        let at = when(item, snap.now_secs);
-        let mut spans = row.fitted(cols.saturating_sub(6), Style::new());
-        spans.push(Span::styled(format!("{at:>5} "), fg(theme.faint)));
+        let at = if view.id == ViewId::Notifications {
+            notice_when(item, &now)
+        } else {
+            when(item, snap.now_secs)
+        };
+        let mut spans = row.fitted(cols.saturating_sub(when_w + 1), Style::new());
+        spans.push(Span::styled(format!("{at:>when_w$} "), fg(theme.faint)));
         lines.push(Line { spans, fill });
     }
     if footer {
@@ -5580,7 +5614,7 @@ fn notice_board(
     });
     lines.push(Row::default().line(cols, None));
     // The column heads.
-    const WHEN: usize = 6;
+    const WHEN: usize = 9;
     const SIDEBAR: usize = 10;
     let rest = cols.saturating_sub(1 + WHEN + 3 + SIDEBAR);
     let led_w = (rest * 2 / 5).min(36);
@@ -5591,8 +5625,8 @@ fn notice_board(
         spans: kit::fit(
             vec![
                 pad(2),
-                head(&format!("{:>4}", "When")),
-                pad(WHEN - 3),
+                head(&format!("{:>w$}", "When", w = WHEN - 2)),
+                pad(3),
                 head(&text::pad("What", what_w)),
                 pad(2),
                 head(&text::pad("What it led to", led_w)),
@@ -5659,9 +5693,14 @@ fn notice_board(
         } else {
             let (sidebar, led_to) = super::history::notice_of(item).unwrap_or_default();
             let shown = sidebar == crate::sidebar::history::Sidebar::Shown.word();
+            let now = jiff::Timestamp::from_second(m.snap.now_secs)
+                .unwrap_or_default()
+                .to_zoned(m.snap.tz.clone());
+            // The clock time alone, a meeting to come's start too, so it
+            // fits the column.
             let at = item
                 .time
-                .map(|t| crate::util::local_at_ms(t).strftime("%-H:%M").to_string())
+                .map(|t| crate::ui::when::clock(t, &now))
                 .unwrap_or_default();
             let (source, _) = super::choices::notice_of(item);
             let mark = match crate::sidebar::history::kind_of(&source) {
@@ -5681,7 +5720,7 @@ fn notice_board(
             };
             let state = if shown { Tone::Accent } else { Tone::Faint };
             vec![
-                Span::styled(format!("{at:>5} "), Tone::Faint.style(theme)),
+                Span::styled(format!("{at:>w$} ", w = WHEN - 1), Tone::Faint.style(theme)),
                 kit::mark(mark, m.snap.frame, theme),
                 Span::raw(" "),
                 Span::styled(text::pad(&text::cut(&item.title, what_w), what_w), title),
@@ -8625,6 +8664,37 @@ mod tests {
             .unwrap();
         assert_eq!((spend.frac(), spend.y as usize), (Some(0.25), at));
         assert_eq!(meters.len(), 5);
+    }
+
+    #[test]
+    fn notifications_say_when_they_came_at_their_rows_end() {
+        // 2027-01-15 08:00 UTC, a Friday.
+        let now = rules().now_ms;
+        let at = |ms: i64, id: &str, title: &str| {
+            let mut i = Item::new(format!("prs\t{id}"), title);
+            i.time = Some(ms);
+            i
+        };
+        let items = vec![
+            at(now - 18 * 60_000, "a", "Checks passed"),
+            at(now - 4 * 86_400_000, "b", "Review asked"),
+            at(now + 7 * 3_600_000, "c", "Standup"),
+        ];
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Notifications, "Notifications", items)],
+        );
+        m.view = 1;
+        let text = texts(&screen(&m, 80, 12).0);
+        let row = |title: &str| {
+            text.iter()
+                .find(|l| l.contains(title))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert!(row("Checks passed").ends_with(" 7:42 AM"), "{text:?}");
+        assert!(row("Review asked").ends_with(" Mon 8:00 AM"), "{text:?}");
+        assert!(row("Standup").ends_with(" Starts 3:00 PM"), "{text:?}");
     }
 
     #[test]

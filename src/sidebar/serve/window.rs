@@ -88,6 +88,17 @@ impl Server {
             .collect()
     }
 
+    /// The window's notifications as it draws them, each with a time.
+    fn notice_items(&self, entries: &[(Owner, Item)]) -> Vec<Item> {
+        entries
+            .iter()
+            .map(|(owner, item)| match owner {
+                Owner::Notice { source, .. } => self.notice_dated(source, item),
+                _ => item.clone(),
+            })
+            .collect()
+    }
+
     /// The chosen notification's place in a session's window.
     pub(crate) fn notice_cursor(&self, session: &str, entries: &[(Owner, Item)]) -> usize {
         self.sidebar
@@ -321,8 +332,9 @@ impl Server {
             back: false,
             hover: None,
             theme: &super::theme(),
+            now: &crate::util::local_now(),
         };
-        let items: Vec<Item> = entries.iter().map(|(_, i)| i.clone()).collect();
+        let items = self.notice_items(&entries);
         let (_, spots) = notices::list_lines(&items, &look, cols as usize, rows as usize);
         let spot = spots.get(row as usize).copied().flatten();
         match (m.kind, m.button) {
@@ -367,8 +379,9 @@ impl Server {
             back: self.sidebar.windows.back.contains(session),
             hover: self.sidebar.windows.hover.get(&client).copied(),
             theme: &super::theme(),
+            now: &crate::util::local_now(),
         };
-        let items: Vec<Item> = entries.into_iter().map(|(_, i)| i).collect();
+        let items = self.notice_items(&entries);
         let (lines, _) =
             notices::list_lines(&items, &look, area.width as usize, area.height as usize);
         super::super::render::draw(buf, area, &lines);

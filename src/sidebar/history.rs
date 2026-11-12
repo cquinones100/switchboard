@@ -159,6 +159,17 @@ impl History {
         all
     }
 
+    /// When a source's notification came, as its latest occurrence was
+    /// kept: its own time, else when it was first seen.
+    pub fn came(&self, source: &str, id: &str) -> Option<i64> {
+        self.days
+            .values()
+            .flatten()
+            .filter(|e| e.source == source && e.id == id && !e.replaced)
+            .map(|e| e.at)
+            .max()
+    }
+
     /// A source's list as it is now: a notification new to it (by its id)
     /// becomes an entry, on the day of its time (else `now`); one kept as
     /// gone by itself, dismissed or read and back is shown again; one dismissed or read that
@@ -528,6 +539,16 @@ mod tests {
         let mut fresh = History::default();
         fresh.take_loaded(h.days.clone());
         assert_eq!(fresh.days["2026-11-11"].len(), 2);
+    }
+
+    #[test]
+    fn one_with_no_time_came_when_it_was_first_seen() {
+        let mut h = History::default();
+        let tip = item("t1", "Try the Work map");
+        h.record("habits", std::slice::from_ref(&tip), NOW, &UTC);
+        h.record("habits", &[tip], NOW + 60_000, &UTC);
+        assert_eq!(h.came("habits", "t1"), Some(NOW));
+        assert_eq!(h.came("habits", "t2"), None);
     }
 
     #[test]

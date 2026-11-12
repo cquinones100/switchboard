@@ -709,6 +709,21 @@ impl Server {
         lists
     }
 
+    /// A notification as the Notifications view and window draw it: with a
+    /// time, its own, else when the history says it came; none while the
+    /// history is off, since what it read before isn't kept up to date.
+    pub(crate) fn notice_dated(
+        &self,
+        source: &str,
+        item: &crate::items::Item,
+    ) -> crate::items::Item {
+        let mut item = item.clone();
+        if item.time.is_none() && Self::notice_history_on() {
+            item.time = self.sidebar.history.came(source, &item.id);
+        }
+        item
+    }
+
     /// The notifications in the sidebar's shape: a row for each kind, with
     /// how many there are (`notices::summary`), named by its first, so the
     /// tabs keep the room however many come in; the Notifications window

@@ -185,6 +185,8 @@ pub struct Look<'a> {
     pub back: bool,
     pub hover: Option<Spot>,
     pub theme: &'a Theme,
+    /// Now, in the time zone each notification's time is read in.
+    pub now: &'a jiff::Zoned,
 }
 
 /// What the server keeps of each session's window.
@@ -292,18 +294,26 @@ pub fn list_lines(
         if chosen {
             cursor_at = body_lines.len();
         }
-        body_lines.push(line(
-            vec![
-                Span::styled(if chosen { "▌" } else { " " }, fg(YELLOW)),
-                Span::raw(" "),
-                Span::styled(
-                    item.title.clone(),
-                    fg(theme.bright).add_modifier(Modifier::BOLD),
-                ),
-            ],
-            cols,
-            fill,
-        ));
+        // When it came, dim at the first line's right end, the title cut
+        // short of it.
+        let at = item
+            .time
+            .map(|ms| crate::ui::when::notice(ms, look.now))
+            .unwrap_or_default();
+        let stamp_w = if at.is_empty() { 0 } else { width(&at) + 2 };
+        let title_w = cols.saturating_sub(3 + stamp_w);
+        let title = text::cut(&item.title, title_w);
+        let gap = title_w.saturating_sub(width(&title));
+        let mut first = vec![
+            Span::styled(if chosen { "▌" } else { " " }, fg(YELLOW)),
+            Span::raw(" "),
+            Span::styled(title, fg(theme.bright).add_modifier(Modifier::BOLD)),
+        ];
+        if !at.is_empty() {
+            first.push(Span::raw(" ".repeat(gap + 2)));
+            first.push(Span::styled(at, fg(theme.dim)));
+        }
+        body_lines.push(line(first, cols, fill));
         owners.push(Some(Spot::Item(i)));
         for l in body(item, cols.saturating_sub(4)) {
             body_lines.push(line(
@@ -379,13 +389,53 @@ mod tests {
             .collect()
     }
 
+    /// 2026-11-11 09:42 UTC, a Wednesday.
+    static NOW: std::sync::LazyLock<jiff::Zoned> = std::sync::LazyLock::new(|| {
+        jiff::civil::date(2026, 11, 11)
+            .at(9, 42, 0, 0)
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .unwrap()
+    });
+
     fn look(cursor: usize) -> Look<'static> {
         Look {
             cursor,
             back: false,
             hover: None,
             theme: &Theme::DARK,
+            now: &NOW,
         }
+    }
+
+    #[test]
+    fn each_notification_says_when_it_came_at_its_first_lines_end() {
+        let at = |days: i64, hour: i8| {
+            jiff::civil::date(2026, 11, 11)
+                .at(hour, 10, 0, 0)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp()
+                .as_millisecond()
+                - days * 86_400_000
+        };
+        let mut today = Item::new("a", "3 new on Slack").detail("Ada · #general");
+        today.time = Some(at(0, 9));
+        let mut older = Item::new("b", "PR checks failed");
+        older.time = Some(at(4, 14));
+        let mut meeting = Item::new("c", "Standup");
+        meeting.time = Some(at(0, 15));
+        let untimed = Item::new("d", "A suggestion");
+        let (lines, _) = list_lines(&[today, older, meeting, untimed], &look(0), 40, 16);
+        let text = texts(&lines);
+        assert_eq!(
+            text[2],
+            format!("▌ 3 new on Slack{}9:10 AM", " ".repeat(16))
+        );
+        assert_eq!(text[3], "   Ada · #general");
+        assert!(text[5].ends_with("  Sat 2:10 PM"), "{}", text[5]);
+        assert!(text[7].ends_with("  Starts 3:10 PM"), "{}", text[7]);
+        assert_eq!(text[9], "  A suggestion");
+        assert!(text.iter().all(|l| width(l) <= 40));
     }
 
     #[test]

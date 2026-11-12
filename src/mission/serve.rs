@@ -1252,12 +1252,13 @@ impl Server {
         } else if on("sidebar_notifications") {
             // One by one, in the order of their kinds, as the sidebar and
             // the Notifications window have them.
-            let items: Vec<Item> = self
+            let me = &*self;
+            let items: Vec<Item> = me
                 .notice_lists()
                 .into_iter()
                 .flat_map(|(source, items)| {
                     items.iter().map(move |i| {
-                        let mut item = i.clone();
+                        let mut item = me.notice_dated(source, i);
                         item.id = format!("{source}\t{}", i.id);
                         item
                     })

@@ -29,6 +29,8 @@
 //! - `picker`: a filterable list, what fzf was, with nucleo-matcher.
 //! - `palette`: M-p, every command with a description (palette.sh).
 //! - `keylist`: the list of keys.
+//! - `when`: when something came, as a date and a clock time for a row's
+//!   end (the Notifications view and window).
 //! - `headless`: a client with no terminal, for `switchboard headless`,
 //!   reading the whole screen through an emulator of its own.
 //! - `serve`: the server's side: opening them, input, timers, commands.
@@ -64,6 +66,7 @@ pub mod picker;
 pub mod picture;
 mod serve;
 pub mod tip;
+pub mod when;
 
 pub use confirm::Confirm;
 pub use menu::{Menu, MenuOption};
