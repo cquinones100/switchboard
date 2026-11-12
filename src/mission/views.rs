@@ -1719,6 +1719,8 @@ mod tests {
             autoland: false,
             closed: None,
             in_note: true,
+            started: None,
+            ended: None,
         };
         let view = View {
             id: ViewId::Autopilot,

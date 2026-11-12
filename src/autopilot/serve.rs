@@ -74,6 +74,10 @@ pub const NUDGED: &str = "@autopilot_nudged";
 /// Pushed, asked about or not, the commit it pushed, which queue-and-clean
 /// sets as soon as its push succeeds, so hands-free sends no turn back after.
 pub const PUSHED: &str = "@autopilot_pushed";
+/// When it landed, in seconds: the server sets it as it first sees
+/// `@autopilot_pushed` or `@autopilot_autoland` set on one of its tabs
+/// (`landed_at`), and never again, so the board's timer stops there.
+pub const LANDED_AT: &str = "@autopilot_landed_at";
 /// Landed and made yours by a prompt typed in it since: the mode lets go
 /// of it, while its item stays under the view's Landed.
 pub const YOURS: &str = "@autopilot_yours";
@@ -83,6 +87,21 @@ pub const YOURS: &str = "@autopilot_yours";
 pub const REFUSED: &str = "@autopilot_refused";
 /// What its notification says of a refused item, after the item.
 const REFUSED_SAID: &str = "wtn refused it";
+/// A tab of the mode marked with when it landed as `name`, just set to
+/// `value`, is its push (`PUSHED` or `AUTOLAND`), the first time only.
+pub fn landed_at(
+    opts: &mut std::collections::BTreeMap<String, String>,
+    name: &str,
+    value: &str,
+    now_secs: i64,
+) {
+    let a_push = (name == PUSHED || name == AUTOLAND) && !value.trim().is_empty();
+    let of_the_mode = opts.get(OPENED).is_some_and(|v| !v.is_empty() && v != "0");
+    if a_push && of_the_mode && !opts.contains_key(LANDED_AT) {
+        opts.insert(LANDED_AT.into(), now_secs.to_string());
+    }
+}
+
 /// The marks of what the mode has a tab do, taken off once it is yours.
 const WORKING: [&str; 3] = [LAND, HANDS_FREE, NUDGED];
 
@@ -852,6 +871,7 @@ impl Server {
                 (l.get("tab").and_then(serde_json::Value::as_str) == Some(id.as_str()))
                     .then(|| l.clone())
             });
+            let (started, ended) = super::view::times_of_tab(&tab.opts);
             rows.push(super::view::Row {
                 tab: model.id,
                 index: model.index,
@@ -869,6 +889,8 @@ impl Server {
                 autoland: model.autopilot_autoland,
                 closed: None,
                 in_note: !other_note,
+                started,
+                ended,
             });
         }
         let now = util::now_ms();
@@ -880,6 +902,7 @@ impl Server {
                 l.id.split_once('@')
                     .and_then(|(t, _)| t.parse().ok())
                     .map_or(TabId(0), TabId);
+            let (started, ended) = super::view::times_of_closed(l);
             rows.push(super::view::Row {
                 tab,
                 index: 0,
@@ -893,6 +916,8 @@ impl Server {
                 autoland: false,
                 closed: Some(l.clone()),
                 in_note: true,
+                started,
+                ended,
             });
         }
         let summary = Summary {
@@ -1325,7 +1350,16 @@ impl Server {
                 .clone()
                 .unwrap_or_else(|| self.autopilot.mode.note_id.clone()),
             hash: self.autopilot_hash_of(m.tab),
-            at: util::now_ms(),
+            // When its landing pushed, so closing the tab keeps the board's
+            // timer where it stopped; now for a tab marked before there was
+            // such a mark.
+            at: self
+                .tabs
+                .get(&m.tab)
+                .and_then(|t| t.opts.get(LANDED_AT))
+                .and_then(|v| v.trim().parse::<i64>().ok())
+                .filter(|s| *s != 0)
+                .map_or_else(util::now_ms, |s| s * 1000),
         };
         let written = Mode::update(&paths::state_dir(), |mode| {
             if mode.landed.iter().any(|l| l.id == landed.id) {

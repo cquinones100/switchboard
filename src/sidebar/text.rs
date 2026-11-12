@@ -420,6 +420,29 @@ pub fn ago(seconds: Option<i64>, now_secs: i64) -> String {
     }
 }
 
+/// How long a stretch of seconds is, in its two largest units with no
+/// space between them, a zero second unit left out: `<1m`, `12m`, `1h12m`,
+/// `2h`, `2d3h`.
+pub fn span(seconds: i64) -> String {
+    let s = seconds.max(0);
+    let two = |big: i64, big_unit: &str, small: i64, small_unit: &str| {
+        if small == 0 {
+            format!("{big}{big_unit}")
+        } else {
+            format!("{big}{big_unit}{small}{small_unit}")
+        }
+    };
+    if s < 60 {
+        "<1m".into()
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s < 86_400 {
+        two(s / 3600, "h", s % 3600 / 60, "m")
+    } else {
+        two(s / 86_400, "d", s % 86_400 / 3600, "h")
+    }
+}
+
 /// How long until a time in seconds, for a reminder: `in 45m`, `in 2h 10m`,
 /// `in 3d`.
 pub fn until(at_secs: i64, now_ms: i64) -> String {
@@ -692,6 +715,13 @@ mod tests {
         assert_eq!(ago(Some(now - 300), now), "5m");
         assert_eq!(ago(Some(now - 7200), now), "2h");
         assert_eq!(ago(Some(now - 3 * 86_400), now), "3d");
+        assert_eq!(span(-5), "<1m");
+        assert_eq!(span(59), "<1m");
+        assert_eq!(span(12 * 60 + 30), "12m");
+        assert_eq!(span(72 * 60), "1h12m");
+        assert_eq!(span(2 * 3600 + 20), "2h");
+        assert_eq!(span(2 * 86_400 + 3 * 3600 + 59), "2d3h");
+        assert_eq!(span(86_400), "1d");
         let now_ms = now * 1000;
         assert_eq!(until(now + 45 * 60, now_ms), "in 45m");
         assert_eq!(until(now + 130 * 60, now_ms), "in 2h 10m");

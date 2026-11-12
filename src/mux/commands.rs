@@ -854,6 +854,12 @@ impl Server {
                 if unset {
                     tab.opts.remove(name);
                 } else {
+                    crate::autopilot::landed_at(
+                        &mut tab.opts,
+                        name,
+                        &value,
+                        crate::util::now_secs(),
+                    );
                     tab.opts.insert(name.clone(), value);
                 }
                 self.dirty_tab(t);

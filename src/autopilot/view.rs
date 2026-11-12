@@ -24,14 +24,17 @@
 //! asked for, and closing while the tab is open. The next items are the
 //! queue the mode last read for its line (`Pilot::next`), off the server's
 //! task, never read here; the plan each item links was read with them, and
-//! goes on its card for the side panel to show under its stages.
+//! goes on its card for the side panel to show under its stages. Each row
+//! carries when its tab opened and when it landed (`times_of_tab`,
+//! `times_of_closed`), for the card's timer, which stops at the landing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
 use super::line::Summary;
 use super::mode::Landed;
+use super::serve::{LANDED_AT, LEFT, OPENED};
 use crate::cmd::worktree_from_note::PlanNote;
 use crate::items::{Item, State, Target};
 use crate::mux::TabId;
@@ -88,6 +91,32 @@ pub struct Row {
     /// Its item is in the note the mode works now, whose plans were read:
     /// not so for a tab still open from a note worked before.
     pub in_note: bool,
+    /// When it opened, in seconds (`@autopilot`, or a closed landing's id).
+    pub started: Option<i64>,
+    /// When it landed, in seconds (`@autopilot_landed_at`, else
+    /// `@autopilot_left`, or a closed landing's `at`): none while it works.
+    pub ended: Option<i64>,
+}
+
+/// An option's time in seconds, none when unset or zero.
+fn secs(v: Option<&String>) -> Option<i64> {
+    v.and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|s| *s != 0.0)
+        .map(|s| s as i64)
+}
+
+/// An open tab's `started` and `ended`, from its options.
+pub fn times_of_tab(opts: &BTreeMap<String, String>) -> (Option<i64>, Option<i64>) {
+    let ended = secs(opts.get(LANDED_AT)).or_else(|| secs(opts.get(LEFT)));
+    (secs(opts.get(OPENED)), ended)
+}
+
+/// A closed landing's `started` and `ended`: its id, `<tab>@<opened>`, and
+/// when it landed.
+pub fn times_of_closed(l: &Landed) -> (Option<i64>, Option<i64>) {
+    let opened = l.id.split_once('@').map(|(_, at)| at.to_string());
+    let ended = (l.at != 0).then(|| l.at.div_euclid(1000));
+    (secs(opened.as_ref()), ended)
 }
 
 /// A stage cell: its look (`done`, `running`, `waiting`, `queued`,
@@ -410,6 +439,8 @@ pub fn items(
                 "failed": failed,
                 "closed": r.closed.is_some(),
                 "left": r.left,
+                "started": r.started,
+                "ended": r.ended,
             },
             "mode": pilot,
         }))));
@@ -453,6 +484,8 @@ mod tests {
             autoland: false,
             closed: None,
             in_note: true,
+            started: None,
+            ended: None,
         }
     }
 
@@ -789,6 +822,43 @@ mod tests {
         assert_eq!(
             items[0].detail,
             "1 of 2 working · 1 of 4 open · asks before landing · planned items only · $4.20 of $20 today · nothing more to start · paused while you're away · Nothing left in the note"
+        );
+    }
+
+    #[test]
+    fn a_row_is_timed_from_its_opening_to_its_landing() {
+        let opts = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        assert_eq!(
+            times_of_tab(&opts(&[(OPENED, "1700000000")])),
+            (Some(1_700_000_000), None)
+        );
+        assert_eq!(
+            times_of_tab(&opts(&[
+                (OPENED, "1700000000"),
+                (LEFT, "1700009000"),
+                (LANDED_AT, "1700007000"),
+            ])),
+            (Some(1_700_000_000), Some(1_700_007_000))
+        );
+        assert_eq!(
+            times_of_tab(&opts(&[(OPENED, "1700000000"), (LEFT, "1700009000")])),
+            (Some(1_700_000_000), Some(1_700_009_000))
+        );
+        let closed = Landed {
+            id: "9@1700000000".into(),
+            item: "Copy the reply".into(),
+            note: "n-1".into(),
+            hash: "abc1234".into(),
+            at: 1_700_004_320_500,
+        };
+        assert_eq!(
+            times_of_closed(&closed),
+            (Some(1_700_000_000), Some(1_700_004_320))
         );
     }
 }

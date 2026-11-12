@@ -890,3 +890,31 @@ fn its_tab_starts_claude_with_the_landings_one_push_allowed_and_no_other_tab_doe
     let args = claude_args(&server.home);
     assert!(args.starts_with("Work on this checklist item"), "{args}");
 }
+
+#[test]
+fn a_push_marks_when_its_tab_landed_once() {
+    let server = TestServer::start();
+    let mut client = server.attach(100, 30);
+    client.wait_text("$");
+    server.ok(&["new-tab"]);
+    let tabs = server.list()["sessions"][0]["tabs"].clone();
+    let mine = tabs[1]["id"].as_str().unwrap().to_string();
+    let other = tabs[0]["id"].as_str().unwrap().to_string();
+    let landed_at = |tab: &str| server.ok(&["show", "-t", tab, "@autopilot_landed_at"]);
+    server.ok(&["set", "-t", &mine, "@autopilot", "1700000000"]);
+    assert_eq!(landed_at(&mine), "", "not before its push");
+
+    server.ok(&["set", "-t", &mine, "@autopilot_pushed", "abc1234"]);
+    let first = landed_at(&mine);
+    assert!(
+        first.trim().parse::<i64>().unwrap() > 1_700_000_000,
+        "{first}"
+    );
+    std::thread::sleep(Duration::from_millis(1100));
+    server.ok(&["set", "-t", &mine, "@autopilot_autoland", "abc1234"]);
+    assert_eq!(landed_at(&mine), first, "set once");
+
+    // A tab the mode didn't open gets none.
+    server.ok(&["set", "-t", &other, "@autopilot_pushed", "abc1234"]);
+    assert_eq!(landed_at(&other), "");
+}

@@ -4453,6 +4453,23 @@ fn pilot_tone(item: &Item) -> Tone {
 /// stages and its plan under them, and the diagrams the plan draws as
 /// pictures come back, for the frame to place.
 #[allow(clippy::too_many_arguments)]
+/// How long a card's item has worked, while it works ("worked 42m"), or
+/// how long it took once landed ("took 1h12m"), and the time alone for a
+/// narrow card; none before it opened.
+fn pilot_timer(pilot: &serde_json::Value, now_secs: i64) -> Option<(String, String)> {
+    let started = pilot["started"].as_i64()?;
+    Some(match pilot["ended"].as_i64() {
+        Some(ended) => {
+            let time = text::span(ended - started);
+            (format!("took {time}"), time)
+        }
+        None => {
+            let time = text::span(now_secs - started);
+            (format!("worked {time}"), time)
+        }
+    })
+}
+
 fn pilot_board(
     view: &View,
     cols: usize,
@@ -4654,15 +4671,31 @@ fn pilot_board(
                     vec![Span::styled(text::cut(&where_, inner), fg(theme.dim))],
                 ]
             };
+            // The timer's words where the card keeps its label beside them,
+            // else its time alone.
+            let timer = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs));
+            let room = w.saturating_sub(5 + text::width(&label) + 2 + usize::from(failed) * 2);
+            let mut right = timer
+                .map(|(words, time)| {
+                    if text::width(&words) <= room {
+                        words
+                    } else {
+                        time
+                    }
+                })
+                .map(|t| vec![Span::styled(t, fg(theme.dim))])
+                .unwrap_or_default();
+            if failed {
+                if !right.is_empty() {
+                    right.push(Span::raw(" "));
+                }
+                right.push(kit::mark(Mark::Failed, 0, theme));
+            }
             let card = kit::card(
                 w,
                 TALL - 1,
                 vec![Span::styled(label, bold(ACCENT))],
-                if failed {
-                    vec![kit::mark(Mark::Failed, 0, theme)]
-                } else {
-                    Vec::new()
-                },
+                right,
                 &inside,
                 edge,
             );
@@ -8368,6 +8401,8 @@ mod tests {
             autoland: false,
             closed: None,
             in_note: true,
+            started: None,
+            ended: None,
         }
     }
 
@@ -8403,6 +8438,50 @@ mod tests {
         );
         assert!(hits.iter().any(|h| h.spot == Spot::Index(last as isize)));
         assert!(meters.iter().all(|meter| (meter.y as usize) < 23));
+    }
+
+    #[test]
+    fn with_ux2_autopilot_times_each_card_until_it_lands() {
+        let now = 1_700_100_000;
+        let mut working = pilot_row(3, "Give notes stable IDs", TabState::Working);
+        working.started = Some(now - 42 * 60);
+        let mut landed = pilot_row(4, "Port the PR board", TabState::Idle);
+        landed.left = true;
+        landed.started = Some(now - 86_000);
+        landed.ended = Some(now - 86_000 + 72 * 60);
+        let list = crate::autopilot::view::items(
+            &pilot_summary(),
+            "",
+            &[working, landed],
+            &[],
+            &[],
+            &std::collections::HashMap::new(),
+        );
+        let mut m = mission(
+            Vec::new(),
+            vec![list_view(ViewId::Autopilot, "Autopilot", list)],
+        );
+        m.snap.rules.ux2 = true;
+        m.snap.now_secs = now;
+        m.view = 1;
+        let (lines, _, _, _) = drawn(&m, 300, 24);
+        let text = texts(&lines).join("\n");
+        assert!(
+            text.contains("tab 3 ─") && text.contains("worked 42m"),
+            "{text}"
+        );
+        assert!(
+            text.contains("tab 4 ─") && text.contains("took 1h12m"),
+            "{text}"
+        );
+        // A narrow card keeps its tab's number and shows the time alone.
+        let (lines, _, _, _) = drawn(&m, 160, 24);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("tab 3 ─") && text.contains(" 42m "), "{text}");
+        assert!(
+            text.contains("tab 4 ─") && text.contains(" 1h12m "),
+            "{text}"
+        );
     }
 
     #[test]
