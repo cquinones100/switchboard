@@ -64,7 +64,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
-use super::editor::{Editor, Effect, Mode};
+use super::editor::{self, Editor, Effect, Mode};
 use super::format::{self, Selection};
 use super::id;
 use super::images::{self, Images};
@@ -2785,7 +2785,10 @@ impl App {
         let Some((keys, before)) = self.recording.take() else {
             return;
         };
-        let undoing = keys.first().is_some_and(|k| {
+        let past_count = keys
+            .iter()
+            .find(|k| !(matches!(k.code, KeyCode::Char('0'..='9')) && k.mods.is_empty()));
+        let undoing = past_count.is_some_and(|k| {
             matches!(k.code, KeyCode::Char('u' | '.')) && k.mods.is_empty()
                 || (k.mods.ctrl && k.code == KeyCode::Char('r'))
                 || easy::cmd_key(k).is_some()
@@ -2821,6 +2824,14 @@ impl App {
         }
         let ctrl = key.mods.ctrl && !key.mods.alt;
         let idle = !self.editor.pending();
+        if mode == Mode::Normal && key.code == KeyCode::Char('.') && key.mods.is_empty() {
+            if idle {
+                return self.repeat(None);
+            }
+            if let Some(count) = self.editor.take_count() {
+                return self.repeat(Some(count));
+            }
+        }
         match mode {
             Mode::Normal if idle => match key.code {
                 // UX 2.0: an item's plan, its tab, and the note worked.
@@ -2846,7 +2857,6 @@ impl App {
                     self.leader = true;
                     return;
                 }
-                KeyCode::Char('.') if key.mods.is_empty() => return self.repeat(),
                 KeyCode::Char(c @ ('i' | 'a' | 'I'))
                     if key.mods.is_empty() || (c == 'I' && key.mods == Mods::SHIFT) =>
                 {
@@ -3010,8 +3020,15 @@ impl App {
         }
     }
 
-    /// `.`: the last change made again.
-    fn repeat(&mut self) {
+    /// `.`: the last change made again; with a count, with that count in
+    /// place of the change's own, kept for the next `.` as Vim does, when
+    /// the change takes one (`editor::recount`).
+    fn repeat(&mut self, count: Option<usize>) {
+        if let Some(n) = count
+            && let Some(keys) = editor::recount(&self.last_change, n)
+        {
+            self.last_change = keys;
+        }
         let keys = self.last_change.clone();
         if keys.is_empty() {
             return;

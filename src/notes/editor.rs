@@ -224,6 +224,59 @@ fn class(c: char, big: bool) -> u8 {
     }
 }
 
+/// The count the keys start with, and how many keys it takes: typed digits
+/// not starting with `0`, as `parse` reads one.
+fn leading_count(keys: &[Key]) -> (usize, usize) {
+    let mut n = 0usize;
+    let mut len = 0;
+    while let Some(d) = keys.get(len).and_then(typed).and_then(|c| c.to_digit(10)) {
+        if d == 0 && len == 0 {
+            break;
+        }
+        n = n.saturating_mul(10).saturating_add(d as usize);
+        len += 1;
+    }
+    (n, len)
+}
+
+/// The keys of a change with its count replaced, for a count typed before
+/// `.`: the count in front taken off, and an operator's own count too (Vim
+/// keeps `2d3w` as one count, which the new one replaces whole), the new
+/// count put in front. Nothing for a change whose first key means something
+/// else after a count, which `.` then makes again as recorded: a key that
+/// isn't a character (Enter's action, a Shift-arrow selection), a register
+/// named, a selection started, the leader, or an insert the notes app places
+/// after a list's marker, which it does only with nothing pending.
+pub fn recount(keys: &[Key], count: usize) -> Option<Vec<Key>> {
+    let mut rest = &keys[leading_count(keys).1..];
+    let first = rest.first()?;
+    let takes_a_count = match typed(first) {
+        Some(' ' | 'i' | 'a' | 'I' | '"' | 'v' | 'V') => false,
+        Some(_) => true,
+        None => ctrl(first, 'a') || ctrl(first, 'x'),
+    };
+    if !takes_a_count {
+        return None;
+    }
+    let operator = match typed(first) {
+        Some('d' | 'c' | 'y' | '>' | '<') => 1,
+        Some('g') if matches!(rest.get(1).and_then(typed), Some('~' | 'u' | 'U')) => 2,
+        _ => 0,
+    };
+    let mut out: Vec<Key> = count
+        .to_string()
+        .chars()
+        .map(|d| Key::new(KeyCode::Char(d), crate::mux::input::Mods::NONE))
+        .collect();
+    if operator > 0 {
+        out.extend_from_slice(&rest[..operator]);
+        rest = &rest[operator..];
+        rest = &rest[leading_count(rest).1..];
+    }
+    out.extend_from_slice(rest);
+    Some(out)
+}
+
 /// A key as the character it types, with no Ctrl or Alt.
 fn typed(key: &Key) -> Option<char> {
     match key.code {
@@ -1392,6 +1445,18 @@ impl Editor {
         self.clamp();
     }
 
+    /// The count typed so far, when the keys pending are only that (as
+    /// `parse` reads one: digits not starting with `0`), taken off them;
+    /// else nothing, the keys left as they are.
+    pub fn take_count(&mut self) -> Option<usize> {
+        let (n, len) = leading_count(&self.keys);
+        if len == 0 || len != self.keys.len() {
+            return None;
+        }
+        self.keys.clear();
+        Some(n)
+    }
+
     /// Enters Insert mode at a byte of the cursor's line; what is typed
     /// until it is left is one step to undo.
     pub fn insert_at(&mut self, col: usize) {
@@ -2527,6 +2592,49 @@ mod tests {
 
     fn lines(e: &Editor) -> Vec<String> {
         e.doc.text.lines()
+    }
+
+    #[test]
+    fn a_new_count_replaces_the_changes_count_whole() {
+        let keys = |s: &str| -> Vec<Key> {
+            s.chars()
+                .map(|c| match c {
+                    '⎋' => Key::new(KeyCode::Esc, Mods::NONE),
+                    '→' => Key::new(KeyCode::Right, Mods::SHIFT),
+                    '↵' => Key::new(KeyCode::Enter, Mods::NONE),
+                    c => Key::new(KeyCode::Char(c), Mods::NONE),
+                })
+                .collect()
+        };
+        for (before, after) in [
+            ("2dw", "4dw"),
+            ("d3w", "4dw"),
+            ("2d3w", "4dw"),
+            ("x", "4x"),
+            ("A!⎋", "4A!⎋"),
+            ("g~2w", "4g~w"),
+            ("d0", "4d0"),
+        ] {
+            assert_eq!(recount(&keys(before), 4), Some(keys(after)), "{before}");
+        }
+        let ctrl_a = [Key::new(KeyCode::Char('a'), Mods::CTRL)];
+        let mut four_ctrl_a = keys("4");
+        four_ctrl_a.extend(ctrl_a);
+        assert_eq!(recount(&ctrl_a, 4), Some(four_ctrl_a));
+        for kept in ["→x⎋", "↵", " b", "I!⎋", "a!⎋", "i!⎋", "\"+p", "vex", ""] {
+            assert_eq!(recount(&keys(kept), 4), None, "{kept}");
+        }
+    }
+
+    #[test]
+    fn take_count_takes_only_a_count() {
+        let mut e = editor(&["one"]);
+        press(&mut e, "12");
+        assert_eq!(e.take_count(), Some(12));
+        assert!(!e.pending());
+        press(&mut e, "2d");
+        assert_eq!(e.take_count(), None);
+        assert!(e.pending(), "the operator left waiting");
     }
 
     #[test]

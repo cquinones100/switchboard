@@ -932,6 +932,39 @@ fn the_leader_keys_style_the_word_or_the_selection_and_dot_repeats() {
 }
 
 #[test]
+fn a_count_before_dot_replaces_the_changes_count() {
+    let (_dir, mut app) = started("dot-count");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "one two three four five six"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "dw2.");
+    assert_eq!(app.editor.doc.line(2), "four five six");
+    keys(&mut app, ".");
+    assert_eq!(
+        app.editor.doc.line(2),
+        "six",
+        "the count kept for the next ."
+    );
+    keys(&mut app, "u");
+    assert_eq!(app.editor.doc.line(2), "four five six", "one step each");
+    keys(&mut app, "u");
+    assert_eq!(app.editor.doc.line(2), "two three four five six");
+}
+
+#[test]
+fn a_count_before_dot_keeps_an_insert_after_the_lists_marker() {
+    let (_dir, mut app) = started("dot-count-insert");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "- [ ] one", "- [ ] two"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "I!<Esc>j2.");
+    assert_eq!(app.editor.doc.line(2), "- [ ] !one");
+    assert_eq!(app.editor.doc.line(3), "- [ ] !two");
+}
+
+#[test]
 fn dot_adds_again_after_ctrl_a() {
     let (_dir, mut app) = started("increment");
     app.editor
