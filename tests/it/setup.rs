@@ -301,12 +301,124 @@ fn a_statusline_script_of_your_own_stays_outside_switchboard_s_panes_and_the_tmu
         "the permissions are still added: {merged}"
     );
 
+    // A link into your dotfiles' claude/ is yours too.
+    fs::create_dir_all(h.path("dotfiles/claude")).unwrap();
+    fs::write(
+        h.path("dotfiles/claude/statusline-command.sh"),
+        "#!/bin/bash\necho mine\n",
+    )
+    .unwrap();
+    fs::remove_file(&script).unwrap();
+    std::os::unix::fs::symlink(h.path("dotfiles/claude/statusline-command.sh"), &script).unwrap();
+    ok(&h.run(&["setup", "claude"]));
+    let kept: Value = serde_json::from_str(&read(&file)).unwrap();
+    assert_eq!(
+        kept["statusLine"]["command"],
+        wrapped.as_str(),
+        "yours stays"
+    );
+
     // The tmux version's, a link into its clone: Switchboard's takes its place.
     fs::remove_file(&script).unwrap();
     std::os::unix::fs::symlink("/gone/switchboard/claude/statusline-command.sh", &script).unwrap();
     ok(&h.run(&["setup", "claude"]));
     let merged: Value = serde_json::from_str(&read(&file)).unwrap();
     assert_eq!(merged["statusLine"]["command"], "switchboard statusline");
+
+    // The link gone (the leftovers part removes it): the command the tmux
+    // version's settings had runs nothing, and gives way; another is yours.
+    fs::remove_file(&script).unwrap();
+    for (before, after) in [
+        (
+            "bash ~/.claude/statusline-command.sh",
+            "switchboard statusline".to_string(),
+        ),
+        (
+            command,
+            format!("{}{command}", switchboard::setup::claude_settings::IN_PANES),
+        ),
+    ] {
+        let settings = json!({ "statusLine": { "type": "command", "command": before } });
+        fs::write(&file, settings.to_string()).unwrap();
+        ok(&h.run(&["setup", "claude"]));
+        let merged: Value = serde_json::from_str(&read(&file)).unwrap();
+        assert_eq!(merged["statusLine"]["command"], after.as_str(), "{before}");
+    }
+}
+
+#[test]
+fn as_a_plugin_the_guided_setup_leaves_your_claude_settings_alone_and_asks_nothing() {
+    let h = Home::new("setup-yours");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    // A settings file of your own, with a statusline Claude Code's
+    // /statusline made, and none of Switchboard's part.
+    let file = h.path(".claude/settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let settings = json!({
+        "model": "opus",
+        "statusLine": { "type": "command", "command": "bash \"$HOME/.claude/statusline-command.sh\"" },
+    });
+    fs::write(&file, settings.to_string()).unwrap();
+    fs::write(
+        h.path(".claude/statusline-command.sh"),
+        "#!/bin/bash\necho mine\n",
+    )
+    .unwrap();
+    let before = snapshot(&h.path(".claude"));
+
+    // Enter, which would say yes to any question: none is asked, and
+    // nothing of yours changes, run after run.
+    for _ in 0..2 {
+        let said = ok(&h.run_with(&["setup"], "\n\n\n"));
+        assert!(!said.contains("[Y/n]"), "{said}");
+        assert!(
+            said.contains("– Switchboard's statusline and permissions, for the Sessions and Usage views and the loops running unattended, left out of your ~/.claude/settings.json: switchboard setup claude adds them"),
+            "{said}"
+        );
+        assert!(said.ends_with("Ready.\n"), "{said}");
+        assert_eq!(
+            snapshot(&h.path(".claude")),
+            before,
+            "nothing of yours: {said}"
+        );
+    }
+    let check = ok(&h.run(&["setup", "--check"]));
+    assert!(!check.contains("would offer: plugin, claude"), "{check}");
+    assert_eq!(snapshot(&h.path(".claude")), before);
+}
+
+#[test]
+fn as_a_plugin_a_settings_link_leading_nowhere_is_said_and_left_alone() {
+    let h = Home::new("setup-linked");
+    std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
+    let is_link = |p: &Path| fs::symlink_metadata(p).unwrap().file_type().is_symlink();
+    // The tmux version's link into its clone, which a pull past the rewrite
+    // removed: Claude Code reads none of your settings, so it is left to do,
+    // with how; the link itself is changed only when you ask.
+    let file = h.path(".claude/settings.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(h.path("switchboard/claude/settings.json"), &file).unwrap();
+    let said = h.run_with(&["setup"], "\n\n\n");
+    assert!(!said.status.success());
+    let said = stdout(&said);
+    assert!(!said.contains("[Y/n]"), "{said}");
+    assert!(
+        said.contains("✗ ~/.claude/settings.json links to ~/switchboard/claude/settings.json, which isn't there, so Claude Code reads none of your settings: switchboard setup claude makes it a file of your own"),
+        "{said}"
+    );
+    assert!(is_link(&file));
+
+    // A link of yours into your dotfiles, without Switchboard's part, is
+    // left as it is, and nothing said of it.
+    let dotfiles = h.path("dotfiles/claude/settings.json");
+    fs::create_dir_all(dotfiles.parent().unwrap()).unwrap();
+    fs::write(&dotfiles, "{\"model\":\"opus\"}\n").unwrap();
+    fs::remove_file(&file).unwrap();
+    std::os::unix::fs::symlink(&dotfiles, &file).unwrap();
+    let said = ok(&h.run_with(&["setup"], "\n\n\n"));
+    assert!(!said.contains("✗"), "{said}");
+    assert!(is_link(&file));
+    assert_eq!(read(&dotfiles), "{\"model\":\"opus\"}\n");
 }
 
 #[test]
@@ -908,7 +1020,7 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 #[test]
-fn the_guided_setup_writes_the_plugin_asks_first_and_changes_nothing_the_second_time() {
+fn the_guided_setup_writes_the_plugin_and_changes_nothing_the_second_time() {
     let h = Home::new("setup-guided");
     std::os::unix::fs::symlink(BIN, h.path("bin/switchboard")).unwrap();
     let plugin = h.path(".local/share/switchboard/plugin");
@@ -916,20 +1028,20 @@ fn the_guided_setup_writes_the_plugin_asks_first_and_changes_nothing_the_second_
     // --check says what the setup would do, and writes nothing.
     let check = ok(&h.run(&["setup", "--check"]));
     assert!(
-        // A Mac's terminal may be offered after them.
-        check.contains("switchboard setup would offer: plugin, claude"),
+        // A Mac's terminal may be offered after it.
+        check.contains("switchboard setup would offer: plugin"),
         "{check}"
     );
+    assert!(!check.contains("would offer: plugin, claude"), "{check}");
     assert!(!h.path(".claude").exists(), "nothing written: {check}");
     assert!(!plugin.exists(), "nothing written: {check}");
 
-    // A closed input says no to what is asked; the plugin, Switchboard's
-    // own, is written without asking.
+    // The plugin, Switchboard's own, is written without asking, and your
+    // Claude Code settings are left alone, said to be yours to add to.
     let closed = ok(&h.run(&["setup"]));
-    assert!(closed.contains("[Y/n]"), "{closed}");
     assert!(closed.contains("✓ Switchboard's plugin"), "{closed}");
     assert!(
-        closed.contains("– Claude Code's statusline and permissions"),
+        closed.contains("– Switchboard's statusline and permissions"),
         "{closed}"
     );
     assert!(
@@ -948,15 +1060,12 @@ fn the_guided_setup_writes_the_plugin_asks_first_and_changes_nothing_the_second_
         "{hooks}"
     );
 
-    // Yes, by Enter.
-    let said = ok(&h.run_with(&["setup"], "\n"));
+    // Added when you ask for them.
+    let said = ok(&h.run(&["setup", "claude"]));
     assert!(
-        said.contains(
-            "✓ made ~/.claude/settings.json with Switchboard's statusline and permissions"
-        ),
+        said.contains("add Switchboard's statusline and permissions to ~/.claude/settings.json"),
         "{said}"
     );
-    assert!(said.ends_with("Ready.\n"), "{said}");
     let settings: Value = serde_json::from_str(&read(&h.path(".claude/settings.json"))).unwrap();
     assert_eq!(settings["statusLine"]["command"], "switchboard statusline");
     assert!(
