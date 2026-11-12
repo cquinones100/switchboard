@@ -580,12 +580,13 @@ Mission control's own keys only move about; everything that acts on what is chos
 | `}` `{` | with UX 2.0, the first view of the next or previous group |
 | `Tab` `S-Tab` | move the focus through what can be clicked, as on a webpage: each view's name, the filter, then each card or row, wrapping round; Enter or Space presses it. With Settings' "Tab moves focus" (`tab_focus`) off, they switch views |
 | `v` | go to a view by typing part of its name, lit in the bar as you type; Enter goes there |
+| `=` | with UX 2.0, the "Views at once" box: pick up to four views to show together (see [Several views at once](#several-views-at-once)) |
 | `/` | filter: the cards by name, number, PR or directory, a view's rows by their words (not on the PR and ticket boards); Enter keeps the filter, Esc clears it |
 | `Enter` | the menu of what can be done with the chosen card or row |
 | `Space` | in Settings, changes the chosen setting |
 | `r` | asks a plugin's view again |
 | `?` | these keys |
-| `Esc` | clears a filter, else closes mission control |
+| `Esc` | clears a filter, else, with several views at once, goes back to the one with the focus, else closes mission control |
 | `q` `C-c` `M-Space` | close it |
 | `M-w` | close it, whatever is open over it |
 
@@ -613,6 +614,12 @@ On a tab, the menu offers:
 ### Answering a tab
 
 "Answer it here, or send it a message" opens a box with the question or permission prompt the tab's Claude shows, read off its screen, and its options numbered. A number answers with that option, `s` submits a question that takes several answers, and `t` types an answer of your own where the question takes one. When the tab shows no prompt, what you type is sent to it as a message with Enter. After an answer the screen is read again, and the box comes back for the next question of several.
+
+### Several views at once
+
+With UX 2.0, `=` opens the "Views at once" box: every view under its group, Work and Code in one column and Day and System in the next, each ticked with its place number once picked, and beside them the layouts, `1` 2 × 2, `2` one beside two stacked (1 + 2) and `3` side by side, the one in use drawn small with each picked view in its cell. `Space` picks or unpicks the chosen view (up to four; a fifth is refused with "Up to four at once"), `J` and `K` move it a place later or earlier, `1` `2` `3` choose the layout, a click on a cell of the drawing gives that view the first place, `Enter` shows them and `Esc` goes back to one view. The first time, it has Slack, the Inbox, Usage and the Calendar picked, 2 × 2, those of them that are on; afterwards it starts from what you picked last, which is kept in `mission-grid.json` in the state directory, so a restart keeps it.
+
+The views then share the screen under the bar, a rule between them, each under its name and its count at the right ("4 new" for Slack's messages not yet seen, the Inbox's unread, "$8.41 today" for Usage, "3 left" for the Calendar's events not yet over). The first picked has the focus, its name in the accent: it takes the keys and the clicks as the view in front does alone (j and k move in it, Enter opens the chosen row's menu, `/` filters it). `Tab` and `S-Tab` move the focus to the next or previous view, and a click on another view gives it the focus. Usage shows a row a tab that spent today, a meter of its share of the day in its color with the share and the dollars, then the 5-hour limit's meter; the Calendar shows the rest of the day as a list, each event's time, its title and a chip ("in 15m", "now", "moved"), then when the last one ends. The bar's first row lights every group a shown view is in, and its second names the shown views, the one with the focus underlined, with how many at its right. `Esc` goes back to the view with the focus alone, and a second closes mission control; `=` again opens the box on what is shown. A layout whose cells would be under 34 columns or 9 rows gives way to 2 × 2, and a screen too small for that shows the view with the focus alone, Tab going to the next.
 
 ### The views
 

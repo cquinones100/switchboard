@@ -7,7 +7,7 @@
 //!
 //! Its own keys only move about: h j k l, g G, numbers, `[` `]` between
 //! views, Tab and Shift-Tab moving focus (with tab_focus), `v` to go to a
-//! view by name, `/` to filter, `?` for its keys, Esc and q to close, M-w
+//! view by name, `=` to show several views at once (`grid`), `/` to filter, `?` for its keys, Esc and q to close, M-w
 //! closing it whatever is open over it, `r` for a plugin's view, and a
 //! few views' own (the Calendar's `o` join and `y` `n` `m` reply, its `h`
 //! `l` a day back or forward, the Inbox's `o` go to the tab, `x` dismiss,
@@ -39,6 +39,8 @@
 //! - `history`: the Notifications view as a history by day.
 //! - `inbox_board`: with UX 2.0, the Inbox as a board: the notifications
 //!   by day with who acted's photos, the chosen one in its ticket beside.
+//! - `grid`: several views at once, `=` picking them (`views_box`).
+//! - `views_box`: the "Views at once" box `=` opens.
 //! - `choices`: what the menu Enter opens offers, as data.
 //! - `answer`: answering a tab's prompt, as the Slack relay does.
 //! - `ask`: a line to type in a box.
@@ -65,6 +67,7 @@ pub mod calendar;
 pub mod choices;
 pub mod diagrams;
 pub mod find_key;
+pub mod grid;
 pub mod history;
 pub mod inbox_board;
 pub mod keymap;
@@ -80,6 +83,7 @@ pub mod slack_board;
 pub mod summary;
 pub mod usage_board;
 pub mod views;
+pub mod views_box;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -150,6 +154,9 @@ pub enum Spot {
     /// A day of the Reminders view's month, or a month ahead by its first
     /// day, which a click chooses.
     Day(jiff::civil::Date),
+    /// A view shown at once with others but without the focus, by its
+    /// place in the grid, which a click gives the focus.
+    Cell(usize),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -398,6 +405,14 @@ pub struct Mission {
     /// With UX 2.0 on a screen with room for one column of cards, whether
     /// the shelf's Landing and Idle show their tabs or only their labels.
     pub shelf_open: bool,
+    /// Several views at once (`=`), the one with the focus being `view`.
+    pub grid: Option<grid::Grid>,
+    /// Each shown view's cell as last drawn, by its place in the grid: its
+    /// columns and rows, which the keys lay out by.
+    pub cells: Vec<(usize, (u16, u16))>,
+    /// Whether Slack was shown as the view was last put together, alone or
+    /// among several, so that it is seen once it no longer shows.
+    pub slack_was_shown: bool,
 }
 
 impl Mission {
@@ -441,6 +456,178 @@ impl Mission {
             reminders_lists: false,
             card_screen: None,
             shelf_open: false,
+            grid: None,
+            cells: Vec::new(),
+            slack_was_shown: false,
+        }
+    }
+
+    /// The columns and rows the view in front is laid out in: the screen,
+    /// or with several views at once the focused one's cell.
+    pub fn laid(&self) -> (u16, u16) {
+        self.grid
+            .as_ref()
+            .and_then(|g| self.cells.iter().find(|(cell, _)| *cell == g.focus))
+            .map_or(self.size, |(_, size)| *size)
+    }
+
+    /// The rows a view shown at once has for its items, as `grid::drawn`
+    /// lays it out: its cell under the label, less the lines of its error.
+    fn cell_body(&self, view: &View) -> usize {
+        let (cols, rows) = self.laid();
+        let error = view.data.error.as_deref().map_or(0, |e| {
+            crate::sidebar::text::wrap(e, (cols as usize).saturating_sub(4)).len()
+        });
+        (rows as usize).saturating_sub(1 + error)
+    }
+
+    /// Whether the focused view's cell leaves an item out (`grid::hidden`).
+    fn cell_hides(&self, view: &View, item: &Item) -> bool {
+        grid::hidden(
+            view,
+            item,
+            self.cell_body(view),
+            self.calendar_day.is_none(),
+        )
+    }
+
+    /// Whether the cursor passes over an item of the view in front: in a
+    /// grouped view a heading or a row `views::passed_over` names, and with
+    /// several views at once a row its cell doesn't show (`grid::hidden`).
+    /// The Work map's headings, which Enter folds, are rows to rest on.
+    pub fn passes_over(&self, item: &crate::items::Item) -> bool {
+        let Some(view) = self.current() else {
+            return false;
+        };
+        (views::grouped(&view.id) && views::passed_over(item, self.week_only_hidden()))
+            || (self.grid.is_some() && self.cell_hides(view, item))
+    }
+
+    /// A view's slug, by its place (0 the tabs).
+    pub fn slug_at(&self, at: usize) -> Option<String> {
+        match at.checked_sub(1) {
+            None => Some(grid::TABS.to_string()),
+            Some(i) => self.snap.views.get(i).map(View::key),
+        }
+    }
+
+    /// A view's place by its slug.
+    pub fn place_of(&self, slug: &str) -> Option<usize> {
+        if slug == grid::TABS {
+            return Some(0);
+        }
+        self.snap
+            .views
+            .iter()
+            .position(|v| v.key() == slug)
+            .map(|i| i + 1)
+    }
+
+    /// The views shown at once that are there now: each one's place in
+    /// the grid and in mission control.
+    pub fn grid_shown(&self) -> Vec<(usize, usize)> {
+        let Some(g) = &self.grid else {
+            return Vec::new();
+        };
+        g.choice
+            .views
+            .iter()
+            .enumerate()
+            .filter_map(|(cell, slug)| self.place_of(slug).map(|at| (cell, at)))
+            .collect()
+    }
+
+    /// Whether several views show at once with the view keyed `key` among
+    /// them.
+    pub fn grid_has(&self, key: &str) -> bool {
+        self.grid
+            .as_ref()
+            .is_some_and(|g| g.choice.views.iter().any(|v| v == key))
+    }
+
+    /// Gives the view in the grid's place `cell` the focus: the cursor of
+    /// the one that had it kept for it, and its own taken up.
+    pub fn focus_cell(&mut self, cell: usize) {
+        let cursor = self.cursor;
+        let chosen = self.chosen_id();
+        let Some(g) = self.grid.as_mut() else {
+            return;
+        };
+        if cell >= g.choice.views.len() || cell == g.focus {
+            return;
+        }
+        g.cursors[g.focus] = cursor;
+        g.chosen[g.focus] = chosen;
+        g.focus = cell;
+        let slug = g.focused().to_string();
+        let (kept, id) = (g.cursors[cell], g.chosen[cell].clone());
+        if let Some(at) = self.place_of(&slug) {
+            self.view = at;
+            // The item or tab it was left on, where it is now, else the
+            // same row.
+            self.cursor = id.and_then(|id| self.place_of_id(&id)).unwrap_or(kept);
+            self.scope = None;
+            self.filter = None;
+            self.focus = None;
+        }
+    }
+
+    /// What the cursor is on, kept by its id: the chosen item, or on the
+    /// cards the chosen tab (`tab:<id>`).
+    fn chosen_id(&self) -> Option<String> {
+        if self.view == 0 {
+            let at = usize::try_from(self.cursor).ok()?;
+            return self.order().get(at).map(|t| format!("tab:{}", t.0));
+        }
+        self.chosen_item().map(|i| i.id.clone())
+    }
+
+    /// Where an id `chosen_id` gave is in the view in front now.
+    fn place_of_id(&self, id: &str) -> Option<isize> {
+        let at = match self.current() {
+            None => self
+                .order()
+                .iter()
+                .position(|t| format!("tab:{}", t.0) == id),
+            Some(view) => view.data.items.iter().position(|i| i.id == id),
+        };
+        at.map(|i| i as isize)
+    }
+
+    /// Tab and Shift-Tab in a grid: the next or last view shown, round.
+    pub fn next_cell(&mut self, by: isize) {
+        let shown = self.grid_shown();
+        let Some(focus) = self.grid.as_ref().map(|g| g.focus) else {
+            return;
+        };
+        let Some(at) = shown.iter().position(|(cell, _)| *cell == focus) else {
+            return;
+        };
+        let to = shown[(at as isize + by).rem_euclid(shown.len() as isize) as usize].0;
+        self.focus_cell(to);
+    }
+
+    /// Keeps the view in front the one with the grid's focus once the
+    /// views are put together again: a view gone gives the focus to the
+    /// first still there, and the grid goes with fewer than two.
+    pub fn settle_grid(&mut self) {
+        let shown = self.grid_shown();
+        let Some(g) = self.grid.as_mut() else {
+            return;
+        };
+        // Several views at once are UX 2.0's.
+        if shown.len() < 2 || !self.snap.rules.ux2 {
+            self.grid = None;
+            return;
+        }
+        match shown.iter().find(|(cell, _)| *cell == g.focus) {
+            Some(&(_, at)) => self.view = at,
+            None => {
+                let (cell, at) = shown[0];
+                g.focus = cell;
+                self.view = at;
+                self.cursor = g.cursors[cell];
+            }
         }
     }
 
@@ -527,7 +714,7 @@ impl Mission {
     /// out, as today's board leaves them (the week's board and the plain
     /// list show them).
     pub fn week_only_hidden(&self) -> bool {
-        !self.usage_week && self.snap.rules.ux2 && self.size.0 as usize >= usage_board::BOARD_AT
+        !self.usage_week && self.snap.rules.ux2 && self.laid().0 as usize >= usage_board::BOARD_AT
     }
 
     pub fn current(&self) -> Option<&View> {
@@ -544,7 +731,7 @@ impl Mission {
 
     /// The tabs in the order the cards show them.
     pub fn order(&self) -> Vec<TabId> {
-        let g = render::tabs_grid(self, self.size.0 as usize);
+        let g = render::tabs_grid(self, self.laid().0 as usize);
         g.order.iter().map(|&i| self.snap.tabs[i].id).collect()
     }
 
@@ -562,7 +749,13 @@ impl Mission {
     /// The chosen item of a view after the tabs.
     pub fn chosen_item(&self) -> Option<&Item> {
         let at = usize::try_from(self.cursor).ok()?;
-        self.current()?.data.items.get(at)
+        let view = self.current()?;
+        // A row its cell leaves out (the Calendar's day all over) is
+        // none to act on.
+        view.data
+            .items
+            .get(at)
+            .filter(|i| self.grid.is_none() || !self.cell_hides(view, i))
     }
 }
 
@@ -588,8 +781,11 @@ impl Overlay for Mission {
             ratatui::layout::Rect::new(whole.x + left, whole.y, whole.width - left, whole.height);
         self.size = (area.width, area.height);
         self.forget_side_elsewhere();
-        let (lines, hits, images, pictures) =
-            render::drawn(self, area.width as usize, area.height as usize);
+        let (lines, hits, images, pictures) = if self.grid.is_some() {
+            grid::drawn(self, area.width as usize, area.height as usize)
+        } else {
+            render::drawn(self, area.width as usize, area.height as usize)
+        };
         self.hits = hits;
         self.pictures = pictures
             .into_iter()

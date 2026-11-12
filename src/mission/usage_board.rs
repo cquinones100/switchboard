@@ -111,7 +111,7 @@ fn under_mouse(spans: Vec<Span<'static>>, lit: bool, theme: &Theme) -> Vec<Span<
 }
 
 /// A tab's color, from its `rrggbb`.
-fn color_of(tab: &TabSpend, theme: &Theme) -> Color {
+pub(crate) fn color_of(tab: &TabSpend, theme: &Theme) -> Color {
     tab.color
         .as_deref()
         .filter(|hex| hex.len() == 6)

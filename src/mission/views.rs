@@ -96,6 +96,33 @@ impl View {
         !self.data.columns.is_empty()
     }
 
+    /// What it is called whatever its title says (a scope or a day added to
+    /// it), for keeping a choice of views: "work-map", "slack", a plugin's
+    /// "plugin:<name>".
+    pub fn key(&self) -> String {
+        let name = match &self.id {
+            ViewId::Plugin(name) => return format!("plugin:{name}"),
+            ViewId::Notifications => "notifications",
+            ViewId::WorkMap => "work-map",
+            ViewId::Calendar => "calendar",
+            ViewId::Reminders => "reminders",
+            ViewId::Slack => "slack",
+            ViewId::Closed => "closed",
+            ViewId::Prs => "prs",
+            ViewId::Ci => "ci",
+            ViewId::Landing => "landing",
+            ViewId::Autopilot => "autopilot",
+            ViewId::Tickets => "tickets",
+            ViewId::Inbox => "inbox",
+            ViewId::Sessions => "sessions",
+            ViewId::Resources => "resources",
+            ViewId::Usage => "usage",
+            ViewId::Keys => "keys",
+            ViewId::Settings => "settings",
+        };
+        name.to_string()
+    }
+
     /// Its name as M-p's "Mission control: <view>" names it: lowercased,
     /// dashes for spaces.
     pub fn slug(&self) -> String {
@@ -1166,6 +1193,42 @@ pub fn work_map_empty() -> String {
     "No work found: open a tab in a git repository, and its worktrees show here.".into()
 }
 
+/// What a view's label says of it when several views show at once
+/// (`grid`): Slack's messages not yet seen ("4 new"), the Inbox's
+/// notifications, today's spend ("$8.41 today"), the Calendar's events not
+/// yet over ("3 left"), the tabs' count, else its items'. `None` is the
+/// tabs, `tabs` of them.
+pub fn count_words(view: Option<&View>, tabs: usize) -> String {
+    let Some(view) = view else {
+        return format!("{tabs} tab{}", if tabs == 1 { "" } else { "s" });
+    };
+    let items = &view.data.items;
+    match view.id {
+        ViewId::Slack => {
+            let new = items
+                .iter()
+                .filter(|i| i.data.get("old").and_then(Value::as_bool) == Some(false))
+                .count();
+            format!("{new} new")
+        }
+        ViewId::Inbox => format!("{} unread", items.len()),
+        ViewId::Usage => {
+            let spent = crate::usage::charts::model_of(items).map_or(0.0, |m| m.today.total);
+            format!("${spent:.2} today")
+        }
+        ViewId::Calendar => {
+            let left = items
+                .iter()
+                .filter(|i| {
+                    i.state != crate::items::State::Idle && i.group.as_deref() != Some("All day")
+                })
+                .count();
+            format!("{left} left")
+        }
+        _ => items.iter().filter(|i| !is_header(i)).count().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1212,6 +1275,56 @@ mod tests {
             ci_sections(&[pr(1, Some("passing"))])[0].title == "Passing",
             "no empty heads"
         );
+    }
+
+    #[test]
+    fn a_view_s_label_counts_what_it_is_about() {
+        let view = |id: ViewId, items: Vec<Item>| View {
+            id,
+            title: String::new(),
+            data: ViewData {
+                items,
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let message = |n: u32, old: bool| Item::new(n.to_string(), "m").data(json!({ "old": old }));
+        let slack = view(
+            ViewId::Slack,
+            vec![
+                message(1, false),
+                message(2, false),
+                message(3, true),
+                message(4, false),
+                message(5, false),
+            ],
+        );
+        assert_eq!(count_words(Some(&slack), 0), "4 new");
+        let model = crate::usage::charts::Model {
+            today: crate::usage::charts::SpanSpend {
+                total: 8.414,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let usage = view(
+            ViewId::Usage,
+            vec![Item::new("spent", "Spent today").data(json!({ "model": model }))],
+        );
+        assert_eq!(count_words(Some(&usage), 0), "$8.41 today");
+        let event = |n: u32, state: crate::items::State| Item::new(n.to_string(), "e").state(state);
+        let calendar = view(
+            ViewId::Calendar,
+            vec![
+                event(1, crate::items::State::Idle),
+                event(2, crate::items::State::Active),
+                event(3, crate::items::State::Attention),
+                event(4, crate::items::State::Active),
+                event(5, crate::items::State::Active).group("All day"),
+            ],
+        );
+        assert_eq!(count_words(Some(&calendar), 0), "3 left");
+        assert_eq!(count_words(None, 5), "5 tabs");
     }
 
     #[test]

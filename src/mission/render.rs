@@ -1819,6 +1819,25 @@ fn board(
     }
 }
 
+/// A UX 2.0 board card's five lines and the blank one under it.
+const BOARD_CARD_TALL: usize = 6;
+/// The PR and ticket boards' week row: its rule, label and blank line, and
+/// a card.
+const WEEK_ROWS: usize = 3 + BOARD_CARD_TALL - 1;
+
+/// Whether the PR and ticket boards (UX 2.0's) show their last column, the
+/// week's merged or closed row, under a body `body` rows tall: only with
+/// room for a card above it.
+pub fn week_row_fits(body: usize) -> bool {
+    cards_fit(body.saturating_sub(WEEK_ROWS))
+}
+
+/// Whether the PR and ticket boards (UX 2.0's) have room for a row of cards
+/// under their column headings in a body `body` rows tall.
+pub fn cards_fit(body: usize) -> bool {
+    body >= 2 + BOARD_CARD_TALL
+}
+
 /// UX 2.0's PR and ticket boards, one family as boards 10 and 19 draw them:
 /// a column per place an item stands, its name a label in the state's tone
 /// with its count, each item a rounded card (its number or ID in the accent
@@ -1841,10 +1860,7 @@ fn board_cards(
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
 ) -> Vec<Picture> {
-    // A card's five lines and the blank one under it.
-    const TALL: usize = 6;
-    // The row's rule, label and blank line, and a card.
-    const WEEK_ROWS: usize = 3 + TALL - 1;
+    const TALL: usize = BOARD_CARD_TALL;
     let tickets = view.id == ViewId::Tickets;
     let (columns, week) = columns.split_at(columns.len().saturating_sub(1));
     let in_group = |group: &str| -> Vec<(usize, &Item)> {
@@ -1898,7 +1914,7 @@ fn board_cards(
     let about = about.lines;
     // The week's row when it has anything and the columns keep room for a
     // card.
-    let week_h = if !week_items.is_empty() && body >= 2 + TALL + WEEK_ROWS {
+    let week_h = if !week_items.is_empty() && week_row_fits(body) {
         WEEK_ROWS
     } else {
         0
@@ -2408,7 +2424,7 @@ pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
         && is_a_board
         && view.data.setup.is_none()
         && view.loaded
-        && m.size.0 as usize >= side_at;
+        && m.laid().0 as usize >= side_at;
     if !board_with_the_pane {
         return None;
     }
@@ -3683,7 +3699,7 @@ pub fn keys_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
         && v.id == ViewId::Keys
         && cols >= super::keys_board::BOARD_AT
         && v.data.items.iter().any(|i| !views::is_header(i))
-        && super::keys_board::fits(&v.data.items, m.size.1 as usize)
+        && super::keys_board::fits(&v.data.items, m.laid().1 as usize)
 }
 
 /// How wide the main area must be for UX 2.0's Autopilot board (its six
@@ -3705,7 +3721,7 @@ pub fn slack_board_shown(m: &Mission, v: &View) -> bool {
 /// Whether the Settings view is drawn as its board: with UX 2.0 on and the
 /// screen wide enough.
 pub fn settings_board_shown(m: &Mission) -> bool {
-    m.snap.rules.ux2 && m.size.0 as usize >= super::settings_board::BOARD_AT
+    m.snap.rules.ux2 && m.laid().0 as usize >= super::settings_board::BOARD_AT
 }
 
 /// An image atom (src/ui/images.rs) a board places once its lines are
@@ -4616,6 +4632,16 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             .map(|(k, w)| (k.to_string(), w.to_string()))
             .collect()
     };
+    // Several views at once: Tab goes between them, Esc back to one.
+    if m.grid.is_some() && !m.filter.as_ref().is_some_and(|f| f.typing) && m.jump.is_none() {
+        return pairs(&[
+            ("tab", "next view"),
+            ("jk", "move"),
+            ("↵", "menu"),
+            ("=", "views at once"),
+            ("esc", "one view"),
+        ]);
+    }
     if m.jump.is_some() {
         return pairs(&[
             ("", "type a view's name"),
@@ -4686,7 +4712,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("e", "open the file"),
         ]),
         ViewId::Settings => with(&[("jk", "move"), ("↵", "change"), ("/", "search")]),
-        ViewId::Keys if keys_board_shown(m, view, m.size.0 as usize) => {
+        ViewId::Keys if keys_board_shown(m, view, m.laid().0 as usize) => {
             let mut out = pairs(&[
                 ("hl", "group"),
                 ("jk", "key"),
@@ -4720,7 +4746,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             if threads {
                 keys.push(("p", "play"));
             }
-            if threads && !super::slack_board::beside(m.size.0 as usize) {
+            if threads && !super::slack_board::beside(m.laid().0 as usize) {
                 keys.push(("i", "thread"));
             }
             keys.push(("/", "filter"));
@@ -4733,7 +4759,9 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("o", "join"),
             ("y n m", "reply"),
         ]),
-        ViewId::Usage if m.snap.rules.ux2 && m.size.0 as usize >= super::usage_board::BOARD_AT => {
+        ViewId::Usage
+            if m.snap.rules.ux2 && m.laid().0 as usize >= super::usage_board::BOARD_AT =>
+        {
             with(&[
                 ("jk", "tab or service"),
                 ("↵", "go to the tab"),
@@ -4741,7 +4769,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
                 ("/", "filter"),
             ])
         }
-        ViewId::Autopilot if m.snap.rules.ux2 && m.size.0 as usize >= PILOT_BOARD_AT => with(&[
+        ViewId::Autopilot if m.snap.rules.ux2 && m.laid().0 as usize >= PILOT_BOARD_AT => with(&[
             ("hl", "column"),
             ("jk", "move"),
             ("↵", "actions"),
@@ -4762,7 +4790,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
             ("/", "filter"),
         ]),
         ViewId::Inbox if super::inbox_board::shown(m, view) => {
-            let ticket = if super::inbox_board::beside(m.size.0 as usize) {
+            let ticket = if super::inbox_board::beside(m.laid().0 as usize) {
                 &[][..]
             } else if m.inbox_pane {
                 &[("i", "back to the list")][..]
@@ -5151,7 +5179,9 @@ struct Bar {
 /// counts; that group's views, the one in front lit and underlined, then
 /// the filter, and the keys that move through them at the right. While a
 /// view's name is typed, the group it is in shows, the view lit as it is
-/// matched.
+/// matched. With several views at once (`grid`), the first row lights
+/// every group a shown view is in and the second names the shown views,
+/// the one with the focus lit and underlined, with how many at its right.
 fn grouped_bar(
     m: &Mission,
     groups: &[(views::Group, Vec<usize>)],
@@ -5171,12 +5201,18 @@ fn grouped_bar(
         .iter()
         .find(|(_, held)| held.contains(&shown_view))
         .or(groups.first());
+    let in_grid: Vec<usize> = m.grid_shown().into_iter().map(|(_, at)| at).collect();
+    let gridded = !in_grid.is_empty();
     let mut head = Row::default();
     head.put(" ", Style::new())
         .put("MISSION CONTROL", bold(ACCENT))
         .put("  ", Style::new());
     for (g, held) in groups {
-        let lit = shown.is_some_and(|(s, _)| s == g);
+        let lit = if gridded {
+            held.iter().any(|v| in_grid.contains(v))
+        } else {
+            shown.is_some_and(|(s, _)| s == g)
+        };
         // Under the mouse, lit while a click would change the view: the
         // group in front's too, away from its first view.
         let ring = m.focus == Some(Focus::Group(*g))
@@ -5197,7 +5233,12 @@ fn grouped_bar(
     lines.push(with_close(head, m, cols, hits));
     let mut row = Row::default();
     row.put(" ", Style::new());
-    for &i in shown.map(|(_, held)| held.as_slice()).unwrap_or(&[]) {
+    let names: &[usize] = if gridded {
+        &in_grid
+    } else {
+        shown.map(|(_, held)| held.as_slice()).unwrap_or(&[])
+    };
+    for &i in names {
         let title = match i.checked_sub(1).and_then(|v| snap.views.get(v)) {
             Some(v) => views::bar_title(v),
             None => "Tabs",
@@ -5235,7 +5276,14 @@ fn grouped_bar(
         });
     }
     row.spans.extend(bar.filter);
-    let keys = kit::hints(&[("{ }", "groups"), ("[ ]", "views")], theme);
+    let keys = if gridded {
+        vec![Span::styled(
+            format!("{} views at once", in_grid.len()),
+            Tone::Dim.style(theme),
+        )]
+    } else {
+        kit::hints(&[("{ }", "groups"), ("[ ]", "views")], theme)
+    };
     // At the right, a column in from the edge, two clear of what is before.
     let gap = cols.saturating_sub(row.width() + spans_width(&keys) + 1);
     if gap >= 2 {
@@ -5266,11 +5314,20 @@ pub fn drawn(
     cols: usize,
     rows: usize,
 ) -> (Vec<Line>, Vec<HitBox>, Vec<Image>, Vec<Picture>) {
-    let snap = &m.snap;
-    let theme = &snap.theme;
     let mut hits = Vec::new();
     let mut meters = Vec::new();
-    let mut pictures = Vec::new();
+    let mut lines = bar(m, cols, &mut hits);
+    let view = m.view.checked_sub(1).and_then(|i| m.snap.views.get(i));
+    let pictures = body(m, view, cols, rows, &mut lines, &mut hits, &mut meters);
+    let (lines, hits, meters) = finish(m, view, cols, rows, lines, hits, meters);
+    (lines, hits, meters, pictures)
+}
+
+/// The bar: with UX 2.0 its two rows and a rule (`grouped_bar`), else
+/// one row naming every view.
+pub(super) fn bar(m: &Mission, cols: usize, hits: &mut Vec<HitBox>) -> Vec<Line> {
+    let snap = &m.snap;
+    let theme = &snap.theme;
     let jumped = m.jump.as_ref().and_then(|j| j.matched);
     // The filter, a view's name being typed, or, with Tab moving focus, a
     // stop of its own even while empty on a view that filters.
@@ -5319,7 +5376,7 @@ pub fn drawn(
             filter,
             filter_hit: filter_stop || (m.filter.is_some() && snap.tab_focus),
         };
-        grouped_bar(m, &groups, bar, cols, &mut lines, &mut hits);
+        grouped_bar(m, &groups, bar, cols, &mut lines, hits);
     } else {
         let mut names: Vec<(String, usize)> = vec![("Tabs".into(), snap.tabs.len())];
         names.extend(
@@ -5421,8 +5478,26 @@ pub fn drawn(
             });
         }
         head.spans.extend(filter);
-        lines.push(with_close(head, m, cols, &mut hits));
+        lines.push(with_close(head, m, cols, hits));
     }
+    lines
+}
+
+/// What is under the bar for view `view` (`None` the tabs) on a screen
+/// `cols` by `rows`, after the `lines` already there, and the pictures
+/// placed over it.
+pub(super) fn body(
+    m: &Mission,
+    view: Option<&View>,
+    cols: usize,
+    rows: usize,
+    lines: &mut Vec<Line>,
+    hits: &mut Vec<HitBox>,
+    meters: &mut Vec<Image>,
+) -> Vec<Picture> {
+    let snap = &m.snap;
+    let theme = &snap.theme;
+    let mut pictures = Vec::new();
     // While a note is worked continuously, its line leads the tabs, where
     // the cursor's -1 is (src/autopilot).
     if let (None, Some(pilot)) = (view, &snap.pilot) {
@@ -5445,7 +5520,7 @@ pub fn drawn(
     match view {
         None => {
             let top = lines.len();
-            cards(m, cols, body, top, &mut lines, &mut hits);
+            cards(m, cols, body, top, lines, hits);
         }
         Some(v) => {
             let pilot_board_shown = snap.rules.ux2
@@ -5469,16 +5544,16 @@ pub fn drawn(
                 && v.loaded
                 && !v.data.items.is_empty();
             if pilot_board_shown {
-                pictures = pilot_board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+                pictures = pilot_board(v, cols, rows, m, lines, hits, meters);
             } else if settings_shown {
-                super::settings_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters);
+                super::settings_board::board(v, m, cols, rows, lines, hits, meters);
             } else if resources_shown {
-                super::resources_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+                super::resources_board::board(v, cols, rows, m, lines, hits, meters);
             } else if ci_shown {
-                ci_rows(v, cols, rows, m, &mut lines, &mut hits);
+                ci_rows(v, cols, rows, m, lines, hits);
             } else if let Some(columns) = v.columns() {
                 if v.data.setup.is_some() || !v.loaded {
-                    list(v, cols, rows, m, 0, &mut lines, &mut hits);
+                    list(v, cols, rows, m, 0, lines, hits);
                 } else {
                     if let Some(e) = &v.data.error {
                         for w in text::wrap(e, cols.saturating_sub(4)) {
@@ -5493,22 +5568,20 @@ pub fn drawn(
                     let top = lines.len();
                     let room = rows.saturating_sub(1 + top);
                     if snap.rules.ux2 && matches!(v.id, ViewId::Prs | ViewId::Tickets) {
-                        pictures = board_cards(
-                            v, columns, cols, room, m, theme, top, &mut lines, &mut hits,
-                        );
+                        pictures = board_cards(v, columns, cols, room, m, theme, top, lines, hits);
                     } else {
-                        board(v, columns, cols, room, m, theme, top, &mut lines, &mut hits);
+                        board(v, columns, cols, room, m, theme, top, lines, hits);
                     }
                 }
             } else if snap.rules.ux2
                 && v.id == ViewId::Usage
                 && cols >= super::usage_board::BOARD_AT
-                && super::usage_board::board(v, m, cols, rows, &mut lines, &mut hits, &mut meters)
+                && super::usage_board::board(v, m, cols, rows, lines, hits, meters)
             {
             } else if super::inbox_board::shown(m, v) {
-                super::inbox_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+                super::inbox_board::board(v, cols, rows, m, lines, hits, meters);
             } else if keys_board_shown(m, v, cols) {
-                super::keys_board::board(v, cols, rows, m, &mut lines, &mut hits, &mut meters);
+                super::keys_board::board(v, cols, rows, m, lines, hits, meters);
             } else if slack_board_shown(m, v) {
                 let look = super::slack_board::Look {
                     cols,
@@ -5544,7 +5617,7 @@ pub fn drawn(
                 hits.extend(at);
                 meters.extend(images);
             } else if v.id == ViewId::Reminders && super::reminders::is_month(m) {
-                super::reminders::month(v, m, cols, rows, &mut lines, &mut hits);
+                super::reminders::month(v, m, cols, rows, lines, hits);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let lit = match (m.hover, m.focus) {
                     (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => Some(k),
@@ -5572,10 +5645,26 @@ pub fn drawn(
                 hits.extend(at);
                 meters.extend(avatars);
             } else {
-                list(v, cols, rows, m, 0, &mut lines, &mut hits);
+                list(v, cols, rows, m, 0, lines, hits);
             }
         }
     }
+    pictures
+}
+
+/// The lines cut or padded to the screen's rows, and the footer: the keys,
+/// or what the last action did.
+pub(super) fn finish(
+    m: &Mission,
+    view: Option<&View>,
+    cols: usize,
+    rows: usize,
+    mut lines: Vec<Line>,
+    mut hits: Vec<HitBox>,
+    mut meters: Vec<Image>,
+) -> (Vec<Line>, Vec<HitBox>, Vec<Image>) {
+    let snap = &m.snap;
+    let theme = &snap.theme;
     lines.truncate(rows.saturating_sub(1));
     while lines.len() < rows.saturating_sub(1) {
         lines.push(Row::default().line(cols, None));
@@ -5590,17 +5679,18 @@ pub fn drawn(
             row.put(" ", Style::new());
             let beside = hits.iter().any(|h| matches!(h.spot, Spot::Side(_)));
             let pairs = hints(m, view, beside);
-            if snap.rules.ux2
-                && view.is_some_and(|v| {
-                    matches!(
-                        v.id,
-                        ViewId::Ci | ViewId::WorkMap | ViewId::Resources | ViewId::Reminders
-                    ) || super::inbox_board::shown(m, v)
-                        || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
-                        || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
-                        || keys_board_shown(m, v, cols)
-                        || slack_board_shown(m, v)
-                })
+            if m.grid.is_some()
+                || snap.rules.ux2
+                    && view.is_some_and(|v| {
+                        matches!(
+                            v.id,
+                            ViewId::Ci | ViewId::WorkMap | ViewId::Resources | ViewId::Reminders
+                        ) || super::inbox_board::shown(m, v)
+                            || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
+                            || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
+                            || keys_board_shown(m, v, cols)
+                            || slack_board_shown(m, v)
+                    })
             {
                 let y = rows.saturating_sub(1) as u16;
                 row.spans
@@ -5615,7 +5705,7 @@ pub fn drawn(
     hits.retain(|h| (h.y as usize) < rows.saturating_sub(1));
     hits.extend(keys_hit);
     meters.retain(|image| (image.y + image.height) as usize <= rows.saturating_sub(1));
-    (lines, hits, meters, pictures)
+    (lines, hits, meters)
 }
 
 #[cfg(test)]

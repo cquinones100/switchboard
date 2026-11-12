@@ -153,6 +153,10 @@ pub(super) const KEYS: &[(&str, &str)] = &[
         "move focus through the groups' and views' names, the filter, the items and easy mode's ×; ↵ presses it (with tab_focus off: next, last view)",
     ),
     ("v", "go to a view by typing its name (↵ go, esc cancel)"),
+    (
+        "=",
+        "with UX 2.0, pick up to four views to show at once (tab moves between them, esc back to one)",
+    ),
     ("r", "refresh a plugin's view"),
     (
         "m",
@@ -284,6 +288,28 @@ impl Server {
         let Some(mut m) = self.take_mission(client) else {
             return;
         };
+        // With several views shown, a view among them by name takes the
+        // focus before anything is put together again, so the one going to
+        // the back keeps the row it is on (`focus_cell`).
+        let shown_by_name = match &how {
+            _ if m.grid.is_none() => None,
+            Opening::Tabs => Some(0),
+            Opening::Settings => m.place_of("settings"),
+            Opening::View(slug) => m
+                .snap
+                .views
+                .iter()
+                .position(|v| v.slug() == *slug)
+                .map(|i| i + 1),
+            Opening::Picker(_) => None,
+        }
+        .filter(|at| m.grid_shown().iter().any(|(_, shown)| shown == at));
+        if let Some(at) = shown_by_name {
+            show_view(&mut m, at);
+            self.put_mission(client, m);
+            self.mission_prepare(client);
+            return;
+        }
         m.scope = None;
         m.picker = false;
         m.cursor = 0;
@@ -306,12 +332,23 @@ impl Server {
         let find = |m: &Mission, f: &dyn Fn(&View) -> bool| {
             m.snap.views.iter().position(f).map_or(0, |i| i + 1)
         };
-        m.view = match &how {
+        let to = match &how {
             Opening::Tabs => 0,
             Opening::Settings => find(&m, &|v| v.id == ViewId::Settings),
             Opening::View(slug) => find(&m, &|v| v.slug() == *slug),
             Opening::Picker(_) => find(&m, &|v| v.id == ViewId::WorkMap),
         };
+        // With several views at once, one shown takes the focus and
+        // another shows alone.
+        match how {
+            Opening::Picker(_) => {
+                m.grid = None;
+                m.view = to;
+                m.cursor = 0;
+            }
+            _ if m.grid.is_some() => show_view(&mut m, to),
+            _ => m.view = to,
+        }
         self.put_mission(client, m);
         self.mission_prepare(client);
     }
@@ -328,7 +365,7 @@ impl Server {
         let leaving_slack = c
             .overlays
             .find::<Mission>()
-            .is_some_and(|m| m.came.as_deref() == Some("Slack"));
+            .is_some_and(|m| m.came.as_deref() == Some("Slack") || m.grid_has("slack"));
         let above: Vec<&'static str> = kinds[at + 1..].to_vec();
         for kind in above.into_iter().rev() {
             self.close_overlays(client, kind);
@@ -847,7 +884,10 @@ impl Server {
             .unwrap_or_default();
         let all_tabs = self.sidebar_all_tabs();
         let mut tabs = all_tabs.clone();
-        if !text.is_empty() {
+        // With several views at once the filter is the focused view's alone.
+        let focused_id = m.current().map(|v| v.id.clone());
+        let gridded = m.grid.is_some();
+        if !text.is_empty() && (!gridded || m.view == 0) {
             tabs.retain(|t| {
                 [
                     t.name.to_lowercase(),
@@ -865,15 +905,18 @@ impl Server {
         // The Landing view stays while the client has it in front, or is
         // opening on it, so it doesn't vanish under you once the last
         // landing ends.
-        let keep_landing = m.keep_landing || m.current().is_some_and(|v| v.id == ViewId::Landing);
-        let keep_autopilot =
-            m.keep_autopilot || m.current().is_some_and(|v| v.id == ViewId::Autopilot);
+        let keep_landing = m.keep_landing
+            || m.current().is_some_and(|v| v.id == ViewId::Landing)
+            || m.grid_has("landing");
+        let keep_autopilot = m.keep_autopilot
+            || m.current().is_some_and(|v| v.id == ViewId::Autopilot)
+            || m.grid_has("autopilot");
         let look = NoticeLook {
             kind: m.notice_kind,
             unfolded: m.unfolded.clone(),
             // A text filter looks through every day, folded or not.
             screenful: if text.is_empty() {
-                (m.size.1 as usize).saturating_sub(8).max(6)
+                (m.laid().1 as usize).saturating_sub(8).max(6)
             } else {
                 usize::MAX
             },
@@ -914,7 +957,10 @@ impl Server {
         };
         let views: Vec<View> = all
             .iter()
-            .map(|v| views::shown(v, &text, m.scope, &folds))
+            .map(|v| {
+                let filtered = !gridded || focused_id.as_ref() == Some(&v.id);
+                views::shown(v, if filtered { &text } else { "" }, m.scope, &folds)
+            })
             .map(|mut v| {
                 // M-j's and M-o's pickers list rows to pick, with no
                 // repository's heading for Enter to land on.
@@ -1044,6 +1090,9 @@ impl Server {
         }
         m.keep_landing = m.current().is_some_and(|v| v.id == ViewId::Landing);
         m.keep_autopilot = m.current().is_some_and(|v| v.id == ViewId::Autopilot);
+        // A view shown at once stays as the one in front does.
+        m.keep_landing |= m.grid_has("landing");
+        m.keep_autopilot |= m.grid_has("autopilot");
         if let Some(id) = pilot_chosen
             && let Some(at) = m
                 .current()
@@ -1052,6 +1101,7 @@ impl Server {
         {
             m.cursor = at as isize;
         }
+        m.settle_grid();
         fit_cursor(&mut m);
         if reminder_chosen {
             follow_reminder(&mut m);
@@ -1074,18 +1124,29 @@ impl Server {
             .as_ref()
             .map_or("Tabs".to_string(), |(_, t)| t.clone());
         let came = m.came.replace(title.clone());
+        let cards_shown = m.view == 0 || m.grid_shown().iter().any(|(_, at)| *at == 0);
         let spins =
             m.snap.tabs.iter().any(|t| {
                 crate::ui::kit::spins(model::badge_state(t, &m.snap.rules), m.snap.rules.ux2)
-            }) && m.view == 0;
+            }) && cards_shown;
+        let grid_ids: Vec<ViewId> = m
+            .grid_shown()
+            .iter()
+            .filter_map(|(_, at)| at.checked_sub(1).and_then(|i| m.snap.views.get(i)))
+            .map(|v| v.id.clone())
+            .collect();
         let picker = m.picker;
+        // Slack is left once it shows neither in front nor beside it, the
+        // focus moving between views shown at once leaving nothing.
+        let slack_now = title == "Slack" || m.grid_has("slack");
+        let slack_left = std::mem::replace(&mut m.slack_was_shown, slack_now) && !slack_now;
         self.put_mission(client, m);
+        if slack_left {
+            self.slack_left();
+        }
         if came.as_deref() != Some(&title) {
             if !picker {
                 self.count_view(&title);
-            }
-            if came.as_deref() == Some("Slack") {
-                self.slack_left();
             }
             if let Some((id, _)) = &now_view {
                 self.mission_came_to(id);
@@ -1099,16 +1160,25 @@ impl Server {
         if settings::is_on("view_closed") {
             self.want_view(ViewKind::Closed);
         }
-        match now_view.map(|(id, _)| id) {
-            Some(ViewId::Resources) => self.want_view(ViewKind::Resources),
-            Some(ViewId::Sessions) => self.want_view(ViewKind::Sessions),
-            Some(ViewId::Usage) => self.want_view(ViewKind::Usage),
-            Some(ViewId::Keys) => self.want_key_counts(),
-            Some(ViewId::WorkMap) => {
-                self.mission_worktrees(false);
-                self.mission_revived(false);
+        // A view shown beside the one in front is kept up to date as it is.
+        let mut shown_ids = grid_ids;
+        if let Some((id, _)) = now_view
+            && !shown_ids.contains(&id)
+        {
+            shown_ids.push(id);
+        }
+        for id in shown_ids {
+            match id {
+                ViewId::Resources => self.want_view(ViewKind::Resources),
+                ViewId::Sessions => self.want_view(ViewKind::Sessions),
+                ViewId::Usage => self.want_view(ViewKind::Usage),
+                ViewId::Keys => self.want_key_counts(),
+                ViewId::WorkMap => {
+                    self.mission_worktrees(false);
+                    self.mission_revived(false);
+                }
+                _ => {}
             }
-            _ => {}
         }
         if spins {
             self.mission_spin_later();
@@ -1486,7 +1556,7 @@ impl Server {
                     let busy = kinds.contains(&"busy");
                     let cards = c.overlays.top() == Some("mission")
                         && c.overlays.find::<Mission>().is_some_and(|m| {
-                            m.view == 0
+                            (m.view == 0 || m.grid_has(super::grid::TABS))
                                 && m.snap.tabs.iter().any(|t| {
                                     crate::ui::kit::spins(
                                         model::badge_state(t, &m.snap.rules),
@@ -1773,7 +1843,10 @@ impl Server {
         m.hover = None;
         // A key pressed with the Calendar view in front, whole and on
         // today, is the calendar looked at: what it shows is seen.
+        // Its cell among several views leaves events out, so isn't the
+        // whole day looked at.
         let looked = m.current().is_some_and(|v| v.id == ViewId::Calendar)
+            && m.grid.is_none()
             && m.calendar_day.is_none()
             && m.filter.as_ref().is_none_or(|f| f.text.is_empty())
             && settings::is_on("calendar_changes")
@@ -1801,6 +1874,16 @@ impl Server {
 
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
         let k = key.normalized();
+        // In a grid Tab goes to the next view, the filter being typed kept.
+        let tabbing = matches!(k.code, KeyCode::Tab | KeyCode::BackTab);
+        if m.grid.is_some()
+            && tabbing
+            && let Some(f) = m.filter.as_mut().filter(|f| f.typing)
+        {
+            f.typing = false;
+            m.next_cell(if k.code == KeyCode::Tab { 1 } else { -1 });
+            return;
+        }
         if m.filter.as_ref().is_some_and(|f| f.typing) {
             self.filter_key(client, m, k);
             return;
@@ -1838,9 +1921,7 @@ impl Server {
                 return;
             }
             Some(Focus::View(v)) if press => {
-                m.view = v;
-                m.cursor = 0;
-                m.scope = None;
+                show_view(m, v);
                 return;
             }
             Some(Focus::Kind(key)) if press && notice_board(m) => {
@@ -1928,6 +2009,21 @@ impl Server {
         let none = plain(&k);
         if self.work_map_key(client, m, k) {
             return;
+        }
+        if k.code == KeyCode::Char('=') && none && m.snap.rules.ux2 {
+            self.views_at_once(client, m);
+            return;
+        }
+        if m.grid.is_some() {
+            match k.code {
+                KeyCode::Tab => return m.next_cell(1),
+                KeyCode::BackTab => return m.next_cell(-1),
+                KeyCode::Esc if m.filter.is_none() => {
+                    m.grid = None;
+                    return;
+                }
+                _ => {}
+            }
         }
         match k.code {
             KeyCode::Char('h') | KeyCode::Left if none => {
@@ -2099,7 +2195,10 @@ impl Server {
                         .hits
                         .iter()
                         .any(|h| h.spot == Spot::Key(Key::new(KeyCode::Char(c), Mods::NONE)));
-                    if fits && shown_whole && !on_screen && drawn {
+                    // Its cards at their full width, which the checks above
+                    // are made for, not a cell among several views narrower.
+                    let card_whole = m.laid().0 as usize >= super::render::CARD_W;
+                    if fits && shown_whole && !on_screen && drawn && card_whole {
                         self.answer_tab(client, tab, &c.to_string());
                     } else {
                         self.mission_do(client, Do::GoTo(tab), "");
@@ -2133,7 +2232,7 @@ impl Server {
             return false;
         };
         let none = plain(&k);
-        let narrow = !inbox_board::beside(m.size.0 as usize);
+        let narrow = !inbox_board::beside(m.laid().0 as usize);
         let ticket = inbox_board::ticket_of(&item).to_string();
         match k.code {
             KeyCode::Enter => self.inbox_enter(client, item),
@@ -2188,7 +2287,7 @@ impl Server {
         let item = m.chosen_item().cloned();
         let clicked = m.slack_clicked.take();
         match k.code {
-            KeyCode::Char('i') if !super::slack_board::beside(m.size.0 as usize) => {
+            KeyCode::Char('i') if !super::slack_board::beside(m.laid().0 as usize) => {
                 m.slack_thread_open = !m.slack_thread_open;
                 m.side = None;
                 true
@@ -2385,7 +2484,8 @@ impl Server {
     /// Closes mission control from inside a key's handling, where its state
     /// is out of its overlay: Slack's view left is seen.
     fn mission_close_from(&mut self, client: ClientId, m: &Mission) {
-        if m.came.as_deref() == Some("Slack") {
+        // Shown among several views, it was looked at too.
+        if m.came.as_deref() == Some("Slack") || m.grid_has("slack") {
             self.slack_left();
         }
         self.mission_close(client);
@@ -2960,6 +3060,95 @@ impl Server {
                 server.mission_redraw();
             })),
         );
+    }
+
+    /// `=`: the "Views at once" box, from the views shown now, else the
+    /// choice kept last time (board 11's four the first time); its Enter
+    /// shows them at once, kept for next time, and its Esc, or fewer than
+    /// two picked, goes back to one view.
+    fn views_at_once(&mut self, client: ClientId, m: &mut Mission) {
+        let choice = match &m.grid {
+            Some(g) => g.choice.clone(),
+            None => super::grid::load(&paths::state_dir()).unwrap_or_default(),
+        };
+        let entries: Vec<super::views_box::Entry> = views::groups(&m.snap.views)
+            .into_iter()
+            .flat_map(|(group, held)| held.into_iter().map(move |at| (group, at)))
+            .filter_map(|(group, at)| {
+                let title = match at.checked_sub(1) {
+                    None => "Tabs".to_string(),
+                    Some(i) => views::bar_title(m.snap.views.get(i)?).to_string(),
+                };
+                Some(super::views_box::Entry {
+                    group,
+                    slug: m.slug_at(at)?,
+                    title,
+                })
+            })
+            .collect();
+        let (b, picked) = super::views_box::ViewsBox::new(entries, &choice, m.snap.caps);
+        self.open(
+            client,
+            Box::new(b),
+            Some(Box::new(move |server: &mut Server, client, outcome| {
+                let choice = picked.lock().ok().and_then(|mut p| p.take());
+                server.show_views_at_once(client, outcome, choice);
+            })),
+        );
+    }
+
+    /// What the "Views at once" box ended with: the views picked shown at
+    /// once and kept for next time; one view picked shown alone; Esc, or
+    /// none, back to the view with the focus alone.
+    fn show_views_at_once(
+        &mut self,
+        client: ClientId,
+        outcome: Outcome,
+        choice: Option<super::grid::Choice>,
+    ) {
+        let Some(mut m) = self.take_mission(client) else {
+            return;
+        };
+        let mut came = Vec::new();
+        // What Enter took is kept for the next `=`, whatever it shows.
+        if let (Outcome::Yes, Some(choice)) = (&outcome, &choice)
+            && let Err(e) = super::grid::save(&paths::state_dir(), choice)
+        {
+            eprintln!("mission control: couldn't keep the views at once: {e}");
+        }
+        match (outcome, choice) {
+            (Outcome::Yes, Some(choice)) if choice.views.len() >= 2 => {
+                came = choice
+                    .views
+                    .iter()
+                    .filter_map(|slug| m.place_of(slug))
+                    .filter_map(|at| at.checked_sub(1).and_then(|i| m.snap.views.get(i)))
+                    .map(|v| v.id.clone())
+                    .collect();
+                m.grid = Some(super::grid::Grid::new(choice));
+                m.focus = None;
+                m.filter = None;
+                if let Some(at) = m.grid_shown().first().map(|(_, at)| *at) {
+                    m.view = at;
+                    m.cursor = 0;
+                }
+            }
+            (Outcome::Yes, Some(choice)) if choice.views.len() == 1 => {
+                m.grid = None;
+                if let Some(at) = m.place_of(&choice.views[0]) {
+                    show_view(&mut m, at);
+                }
+            }
+            _ => m.grid = None,
+        }
+        m.taken_at = None;
+        self.put_mission(client, m);
+        // Each view shown asks its source again, as coming to it does.
+        for id in &came {
+            self.mission_came_to(id);
+        }
+        self.mission_prepare(client);
+        self.mission_redraw();
     }
 
     pub(crate) fn mission_do(&mut self, client: ClientId, act: Do, label: &str) {
@@ -4562,6 +4751,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 Spot::View(v) => *v != m.view,
                 Spot::Index(i) => *i != m.cursor || m.chosen_check().is_some(),
                 Spot::Check(i, n) => *i != m.cursor || m.chosen_check() != Some(*n),
+                Spot::Cell(_) => false,
                 _ => true,
             });
             if lit == m.hover {
@@ -4637,10 +4827,12 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::Group(_) => Then::Redraw,
+                Spot::Cell(cell) => {
+                    m.focus_cell(cell);
+                    Then::Prepare
+                }
                 Spot::View(v) if v != m.view => {
-                    m.view = v;
-                    m.cursor = 0;
-                    m.scope = None;
+                    show_view(m, v);
                     Then::Prepare
                 }
                 Spot::View(_) => Then::Redraw,
@@ -4713,7 +4905,7 @@ fn keys_board_key(m: &mut Mission, k: Key) -> bool {
     let Some(view) = m.current() else {
         return false;
     };
-    if !super::render::keys_board_shown(m, view, m.size.0 as usize) || !plain(&k) {
+    if !super::render::keys_board_shown(m, view, m.laid().0 as usize) || !plain(&k) {
         return false;
     }
     let items = &view.data.items;
@@ -5101,7 +5293,7 @@ fn shelf_label_chosen(m: &Mission) -> bool {
     if m.view != 0 || !m.snap.rules.ux2 || m.shelf_open {
         return false;
     }
-    if super::render::across(m.size.0 as usize) > 1 {
+    if super::render::across(m.laid().0 as usize) > 1 {
         return false;
     }
     chosen_tab(m).is_some_and(|tab| {
@@ -5116,12 +5308,15 @@ fn shelf_label_chosen(m: &Mission) -> bool {
 }
 
 fn settle(m: &mut Mission) {
-    let Some(view) = m.current().filter(|v| views::grouped(&v.id)) else {
+    let Some(view) = m
+        .current()
+        .filter(|v| views::grouped(&v.id) || m.grid.is_some())
+    else {
         return;
     };
     let items = &view.data.items;
     let at = m.cursor.max(0) as usize;
-    let over = |i: &Item| views::passed_over(i, m.week_only_hidden());
+    let over = |i: &Item| m.passes_over(i);
     // The next row to rest on, else the one before (End on a last row
     // passed over).
     if items.get(at).is_some_and(over)
@@ -5160,13 +5355,12 @@ fn row_step(m: &Mission, by: isize) -> isize {
         let mut to = m.cursor + by;
         // In Settings and Keys a heading is passed over, staying put
         // when only headings are left that way.
-        if let Some(view) = m.current().filter(|v| views::grouped(&v.id)) {
+        if let Some(view) = m
+            .current()
+            .filter(|v| views::grouped(&v.id) || m.grid.is_some())
+        {
             let items = &view.data.items;
-            while to >= 0
-                && items
-                    .get(to as usize)
-                    .is_some_and(|i| views::passed_over(i, m.week_only_hidden()))
-            {
+            while to >= 0 && items.get(to as usize).is_some_and(|i| m.passes_over(i)) {
                 to += by;
             }
             if to < 0 || to as usize >= items.len() {
@@ -5175,7 +5369,7 @@ fn row_step(m: &Mission, by: isize) -> isize {
         }
         return to;
     }
-    let g = super::render::tabs_grid(m, m.size.0 as usize);
+    let g = super::render::tabs_grid(m, m.laid().0 as usize);
     // The line of the note worked continuously, above the first row: j goes
     // down to the first card, and k from the first row up to it.
     if m.cursor < 0 {
@@ -5217,7 +5411,7 @@ fn side_step(m: &Mission, by: isize) -> isize {
     }
     let pilot_board = view.id == ViewId::Autopilot
         && m.snap.rules.ux2
-        && m.size.0 as usize >= super::render::PILOT_BOARD_AT;
+        && m.laid().0 as usize >= super::render::PILOT_BOARD_AT;
     if pilot_board {
         return pilot_side_step(m, &view.data.items, by);
     }
@@ -5265,10 +5459,20 @@ fn side_step(m: &Mission, by: isize) -> isize {
             return m.cursor;
         }
     }
+    // A column its cell leaves out (a board's week row in a short cell) is
+    // passed over as an empty one.
+    let shown = |c: usize| {
+        (starts[c]..starts[c] + counts[c]).any(|i| {
+            view.data
+                .items
+                .get(i)
+                .is_some_and(|item| !m.passes_over(item))
+        })
+    };
     let mut i = at as isize + by;
     while i >= 0 && (i as usize) < columns.len() {
         let c = i as usize;
-        if counts[c] > 0 {
+        if counts[c] > 0 && shown(c) {
             return (starts[c] + row.min(counts[c] - 1)) as isize;
         }
         i += by;
@@ -5366,6 +5570,15 @@ fn open_group(m: &mut Mission, g: views::Group) {
 /// A view brought to the front: focus on a view's name follows, and on
 /// the filter goes to the items of a board, which has none.
 fn show_view(m: &mut Mission, to: usize) {
+    if m.grid.is_some() {
+        match m.grid_shown().iter().find(|(_, at)| *at == to) {
+            Some(&(cell, _)) => {
+                m.focus_cell(cell);
+                return;
+            }
+            None => m.grid = None,
+        }
+    }
     m.view = to;
     if let Some(Focus::View(_)) = m.focus {
         m.focus = Some(Focus::View(m.view));
@@ -5421,8 +5634,8 @@ fn move_focus(m: &mut Mission, by: isize) {
             let item = v.data.items.get(i as usize);
             (views::grouped(&v.id)
                 && item.is_some_and(|it| views::is_header(it) && !views::is_summary(it)))
-                || (v.id == ViewId::Usage
-                    && item.is_some_and(|i| views::passed_over(i, m.week_only_hidden())))
+                || ((v.id == ViewId::Usage || m.grid.is_some())
+                    && item.is_some_and(|i| m.passes_over(i)))
         })
     };
     stops.extend(
@@ -5531,12 +5744,7 @@ fn jump_key(m: &mut Mission, k: Key) {
         KeyCode::Char('c') if k.mods == Mods::CTRL => m.jump = None,
         KeyCode::Enter => {
             if let Some(v) = j.matched {
-                m.view = v;
-                m.cursor = 0;
-                m.scope = None;
-                if let Some(Focus::View(_)) = m.focus {
-                    m.focus = Some(Focus::View(v));
-                }
+                show_view(m, v);
             }
             m.jump = None;
             return;
@@ -6021,6 +6229,37 @@ mod tests {
     }
 
     #[test]
+    fn v_in_a_grid_focuses_a_view_shown_and_leaves_it_for_another() {
+        let views = vec![
+            view(ViewId::Closed, "Closed"),
+            view(ViewId::Landing, "Merge queues"),
+            view(ViewId::Inbox, "Inbox"),
+        ];
+        let mut m = mission(1, views);
+        let choice = super::super::grid::Choice {
+            views: vec!["tabs".into(), "landing".into()],
+            layout: super::super::grid::Layout::Side,
+        };
+        m.snap.rules.ux2 = true;
+        m.grid = Some(super::super::grid::Grid::new(choice));
+        m.settle_grid();
+        assert_eq!(m.view, 0);
+        let jump = |m: &mut Mission, text: &str| {
+            m.jump = Some(Jump::default());
+            for c in text.chars() {
+                jump_key(m, Key::new(KeyCode::Char(c), Mods::NONE));
+            }
+            jump_key(m, Key::new(KeyCode::Enter, Mods::NONE));
+        };
+        jump(&mut m, "merge");
+        m.settle_grid();
+        assert_eq!((m.view, m.grid.as_ref().map(|g| g.focus)), (2, Some(1)));
+        jump(&mut m, "inbox");
+        m.settle_grid();
+        assert_eq!((m.view, m.grid.is_none()), (3, true));
+    }
+
+    #[test]
     fn j_and_k_move_a_row_of_cards_keeping_the_column() {
         // Five idle tabs in one stage, three across: rows of 3 and 2.
         let mut m = mission(5, Vec::new());
@@ -6127,6 +6366,35 @@ mod tests {
         assert_eq!(side_step(&m, -1), 1);
         m.cursor = 1;
         assert_eq!(side_step(&m, -1), 0, "from its first card to the columns");
+    }
+
+    #[test]
+    fn in_a_short_cell_l_passes_over_the_week_row_it_leaves_out() {
+        let item = |n: u32, column: &str| Item::new(n.to_string(), format!("#{n}")).group(column);
+        let columns = crate::sources::prboard::columns(true);
+        let week = columns[columns.len() - 1];
+        let board = View {
+            id: ViewId::Prs,
+            title: "PRs".into(),
+            data: ViewData {
+                items: vec![item(1, columns[0]), item(2, week)],
+                ..ViewData::default()
+            },
+            loaded: true,
+        };
+        let mut m = mission(0, vec![board, view(ViewId::Inbox, "Inbox")]);
+        m.snap.rules.ux2 = true;
+        let choice = super::super::grid::Choice {
+            views: vec!["prs".into(), "inbox".into()],
+            layout: super::super::grid::Layout::Side,
+        };
+        m.grid = Some(super::super::grid::Grid::new(choice));
+        m.settle_grid();
+        m.cells = vec![(0, (60, 12))];
+        m.cursor = 0;
+        assert_eq!(side_step(&m, 1), 0, "nothing shown to its right");
+        m.cells = vec![(0, (60, 30))];
+        assert_eq!(side_step(&m, 1), 1, "the week row, once it fits");
     }
 
     #[test]

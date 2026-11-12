@@ -1387,3 +1387,61 @@ fn with_ux2_the_reminders_view_moves_its_day_and_month_clears_and_goes() {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
 }
+
+#[test]
+fn equals_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
+    let server = TestServer::start();
+    settings(&server, json!({ "ux2": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    wait_list(&server, "two tabs", |l| tabs(l).len() == 2);
+    // UX 2.0 taken up: each tab has its header.
+    client.wait_text("M-c Claude");
+    open(&mut client);
+    // The box: none of board 11's four is on here, so nothing is picked.
+    client.type_text("=");
+    client.wait_text("Views at once");
+    client.wait_text("☐ Tabs");
+    // The tabs, then the next view, picked and shown.
+    client.type_text(" j \r");
+    let screen = client.wait_text("2 views at once");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains(" TABS") && l.contains("2 tabs") && l.contains('│')),
+        "{}",
+        screen.join("\n")
+    );
+    client.wait_text("tab next view");
+    // Kept for next time, after a restart too.
+    let kept = server.state.join("mission-grid.json");
+    let choice: Value = serde_json::from_str(&std::fs::read_to_string(&kept).unwrap()).unwrap();
+    assert_eq!(choice["views"][0], "tabs", "{choice}");
+    assert_eq!(choice["views"].as_array().unwrap().len(), 2, "{choice}");
+    // Tab gives the focus to the other view and back.
+    client.type_text("\t");
+    client.type_text("\t");
+    // A second = shows the last choice.
+    client.type_text("=");
+    let screen = client.wait_text("Views at once");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("☑ Tabs") && l.contains('1')),
+        "{}",
+        screen.join("\n")
+    );
+    client.type_text("\r");
+    client.wait_text("2 views at once");
+    // Esc goes back to one view, a second closes mission control.
+    client.type_text("\x1b");
+    client.wait_for("one view again", |s| {
+        s.iter().any(|l| l.contains("MISSION CONTROL"))
+            && !s.iter().any(|l| l.contains("views at once"))
+    });
+    client.type_text("\x1b");
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
+}
