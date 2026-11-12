@@ -238,6 +238,45 @@ fn ctrl(key: &Key, c: char) -> bool {
         && matches!(key.code, KeyCode::Char(k) if k.eq_ignore_ascii_case(&c))
 }
 
+/// The byte range of the number Ctrl-A and Ctrl-X change: the run of digits
+/// the cursor is on, else the first after it on the line, with a `-` right
+/// before it as its sign when nothing but a blank or the line's start comes
+/// before that, as Vim's `nrformats=blank` reads it, so a date's `-11` stays
+/// a positive 11.
+fn number_at(line: &str, col: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut start = (col.min(bytes.len())..bytes.len()).find(|&i| bytes[i].is_ascii_digit())?;
+    while start > 0 && bytes[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+    let end = (start..bytes.len())
+        .find(|&i| !bytes[i].is_ascii_digit())
+        .unwrap_or(bytes.len());
+    let signed = start > 0
+        && bytes[start - 1] == b'-'
+        && (start == 1 || bytes[start - 2].is_ascii_whitespace());
+    Some((if signed { start - 1 } else { start }, end))
+}
+
+/// A number's text with `by` added, keeping the digits' width when it had
+/// leading zeros (`007` to `008`), as Vim does; None past what fits.
+fn add_to_number(text: &str, by: i64) -> Option<String> {
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(d) => (true, d),
+        None => (false, text),
+    };
+    let value: i64 = digits.parse().ok()?;
+    let value = if negative { -value } else { value };
+    let result = value.checked_add(by)?;
+    let width = if digits.len() > 1 && digits.starts_with('0') {
+        digits.len()
+    } else {
+        0
+    };
+    let sign = if result < 0 { "-" } else { "" };
+    Some(format!("{sign}{:0width$}", result.unsigned_abs()))
+}
+
 fn first_non_blank(line: &str) -> usize {
     line.char_indices()
         .find(|(_, c)| !c.is_whitespace())
@@ -1861,6 +1900,9 @@ impl Editor {
             let r = self.doc.row.saturating_sub(by);
             let fnb = first_non_blank(&self.doc.line(r));
             self.set(r, fnb);
+        } else if ctrl(&key, 'a') || ctrl(&key, 'x') {
+            let by = i64::try_from(count).unwrap_or(i64::MAX);
+            self.add_to_number(if ctrl(&key, 'a') { by } else { -by });
         } else if ctrl(&key, 'e') {
             self.top = (self.top + count).min(last);
             if self.doc.row < self.top {
@@ -1883,6 +1925,23 @@ impl Editor {
                 self.set(p.0, p.1);
             }
         }
+    }
+
+    /// Ctrl-A and Ctrl-X: the number under or after the cursor changed by
+    /// `by`, the cursor left on its last digit, as Vim leaves it; a line
+    /// with no number is left alone.
+    fn add_to_number(&mut self, by: i64) {
+        let row = self.doc.row;
+        let line = self.line();
+        let Some((start, end)) = number_at(&line, self.doc.col) else {
+            return;
+        };
+        let Some(result) = add_to_number(&line[start..end], by) else {
+            return;
+        };
+        let (_, col) = self.replace((row, start), (row, end), &result);
+        self.want = None;
+        self.set(row, col.saturating_sub(1));
     }
 
     /// Easy mode's Shift with an arrow: a selection starts, as `keymodel`'s
@@ -2511,6 +2570,50 @@ mod tests {
             e.col(),
             2,
             "j keeps the column it wants across a shorter line"
+        );
+    }
+
+    #[test]
+    fn ctrl_a_and_ctrl_x_change_the_number_at_or_after_the_cursor() {
+        let mut e = editor(&["item 9 of 10", "no number", "-1 and 007", "on 2026-11-12"]);
+        press(&mut e, "<C-a>");
+        assert_eq!(
+            e.doc.line(0),
+            "item 10 of 10",
+            "the first number after the cursor"
+        );
+        assert_eq!(e.col(), 6, "the cursor on its last digit");
+        press(&mut e, "w");
+        press(&mut e, "w");
+        press(&mut e, "5<C-x>");
+        assert_eq!(e.doc.line(0), "item 10 of 5", "a count subtracts that many");
+        press(&mut e, "u");
+        assert_eq!(e.doc.line(0), "item 10 of 10", "one step to undo");
+        press(&mut e, "j<C-a>");
+        assert_eq!(
+            e.doc.line(1),
+            "no number",
+            "a line with no number is left alone"
+        );
+        press(&mut e, "j0<C-a>");
+        assert_eq!(
+            e.doc.line(2),
+            "0 and 007",
+            "a sign at the line's start, and 0 has none"
+        );
+        press(&mut e, "<C-x>");
+        assert_eq!(e.doc.line(2), "-1 and 007");
+        press(&mut e, "w<C-a>");
+        assert_eq!(e.doc.line(2), "-1 and 008", "leading zeros keep the width");
+        press(&mut e, "j0f-<C-a>");
+        assert_eq!(e.doc.line(3), "on 2026-12-12", "a date's dash is no sign");
+
+        let mut e = editor(&["heading", "item 9", "abcdefgh"]);
+        press(&mut e, "j<C-a>j");
+        assert_eq!(
+            (e.row(), e.col()),
+            (2, 6),
+            "the next line down keeps the number's column"
         );
     }
 

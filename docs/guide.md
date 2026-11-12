@@ -1140,7 +1140,7 @@ The note is edited with Vim's keys, with the settings a note had before: Space i
 | Motions, each with a count | `h` `j` `k` `l` and the arrows, `w` `W` `b` `B` `e` `E` `ge` `gE`, `0` `^` `$` `g_`, Home, End, `gg` `G`, `f` `F` `t` `T` `;` `,`, `{` `}`, `%`, `H` `M` `L`, `+` `-` `_`, `gj` `gk`, Enter where there is nothing to tick, fold or follow, Shift-Left and Shift-Right by words |
 | Operators, with a count, a motion or a text object | `d` `c` `y` `>` `<` `g~` `gu` `gU`, doubled for whole lines (`dd`, `cc`, `yy`, `>>`, `<<`, `g~~`, `guu`, `gUU`) |
 | Text objects, after `i` or `a` | `w` `W`, `"` `'` `` ` ``, `(` `)` `b`, `[` `]`, `{` `}` `B`, `<` `>`, `p` |
-| Changes | `x` `X` `s` `S` `C` `D` `Y` `p` `P` `J` `gJ` `r` `~`; `.` repeats the last change |
+| Changes | `x` `X` `s` `S` `C` `D` `Y` `p` `P` `J` `gJ` `r` `~`; `Ctrl-A` and `Ctrl-X` add to and subtract from the number under or after the cursor, with a count; `.` repeats the last change |
 | Undo | `u`, Ctrl-R; each note keeps its history, and its folds, while the app runs, going to another note and back included, a change made to its file meanwhile one more step to undo |
 | Search | `/` `?` `n` `N` `*` `#` |
 | Scrolling | Ctrl-D Ctrl-U, PageDown PageUp, Ctrl-E Ctrl-Y, `zz` `zt` `zb` |

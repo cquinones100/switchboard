@@ -932,6 +932,19 @@ fn the_leader_keys_style_the_word_or_the_selection_and_dot_repeats() {
 }
 
 #[test]
+fn dot_adds_again_after_ctrl_a() {
+    let (_dir, mut app) = started("increment");
+    app.editor
+        .change(|doc| doc.text = Text::from_lines(&["# T", "", "3 cups"]));
+    app.editor.doc.row = 2;
+    app.editor.doc.col = 0;
+    keys(&mut app, "2<C-a>");
+    assert_eq!(app.editor.doc.line(2), "5 cups");
+    keys(&mut app, ".");
+    assert_eq!(app.editor.doc.line(2), "7 cups", ". adds the same again");
+}
+
+#[test]
 fn the_toolbar_has_a_button_for_its_items_and_a_click_styles_the_word() {
     let (_dir, mut app) = started("toolbar");
     app.editor
