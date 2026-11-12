@@ -588,8 +588,10 @@ Mission control's own keys only move about; everything that acts on what is chos
 | `Esc` | clears a filter, else, with several views at once, goes back to the one with the focus, else closes mission control |
 | `q` `C-c` `M-Space` | close it |
 | `M-w` | close it, whatever is open over it |
+| `M-1`–`M-9` | close it and go to that tab, as keys.json binds them; a number with no tab only closes it |
+| `M-p` | the palette over it: a mission control view or Settings picked there shows in it, anything else closes it and runs in the pane it was opened over; Esc goes back to the view |
 
-A click on a view's name goes to that view, on a group's name (with UX 2.0) to its first view, a click on the filter starts typing in it, and a click on a card or row chooses it, a second click doing what Enter does. The wheel moves through the cards or rows. With Settings' "Highlight on hover" (`hover_highlight`) on, what a click would press is lit under the mouse.
+A click on a view's name goes to that view, on a group's name (with UX 2.0) to its first view, a click on the filter starts typing in it, and a click on a card or row chooses it, a second click doing what Enter does. The wheel moves through the cards or rows. With Settings' "Highlight on hover" (`hover_highlight`) on, what a click would press is lit under the mouse. With UX 2.0, where the sidebar shows beside it, a click on the sidebar closes mission control and does what it does there (a tab's row goes to that tab, a right click peeks at it), while the wheel and the mouse moving over the sidebar scroll and light it with mission control left open.
 
 ### Menus
 

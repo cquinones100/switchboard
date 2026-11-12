@@ -640,6 +640,11 @@ impl Server {
             };
             palette::remember(&picked.value, &picked.query, learn);
             server.count_pick(entry);
+            // Over mission control, a pick that isn't one of its views runs
+            // in the pane it was opened over, once it has closed.
+            if server.mission_open(client) && !entry.action.in_mission() {
+                server.mission_close(client);
+            }
             server.act(client, entry.action.clone());
             if let Some(key) = entry.keys.first() {
                 server.key_tip_later(client, key);

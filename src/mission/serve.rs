@@ -165,6 +165,14 @@ pub(super) const KEYS: &[(&str, &str)] = &[
     ("esc q", "close"),
     ("M-w", "close, whatever is open over it"),
     (
+        "M-1-9",
+        "close and go to that tab; with UX 2.0, a click on a tab in the sidebar too",
+    ),
+    (
+        "M-p",
+        "the palette over it: a view picked shows here, anything else runs in the pane once closed",
+    ),
+    (
         "?",
         "these keys; in the Keys view, find a key by pressing it",
     ),
@@ -1876,6 +1884,34 @@ impl Server {
 
     fn mission_key_in(&mut self, client: ClientId, m: &mut Mission, key: Key) {
         let k = key.normalized();
+        // The workspace's own keys for going to a tab and the palette, as
+        // keys.json binds them: a tab by its number closes mission control
+        // and goes there; the palette opens over it. Before a filter or a
+        // view's name being typed, which take no Alt keys.
+        match self
+            .bindings
+            .root
+            .get(&k)
+            .or_else(|| self.bindings.root.get(&key))
+        {
+            Some(crate::mux::keys::Action::SelectTab(n)) => {
+                let n = *n;
+                self.mission_close_from(client, m);
+                self.act(client, crate::mux::keys::Action::SelectTab(n));
+                return;
+            }
+            Some(crate::mux::keys::Action::Palette) => {
+                // A view's name or a filter being typed ends, the filter's
+                // words kept, so the keys after a pick act on what it shows.
+                m.jump = None;
+                if let Some(f) = m.filter.as_mut() {
+                    f.typing = false;
+                }
+                self.open_palette(client);
+                return;
+            }
+            _ => {}
+        }
         // In a grid Tab goes to the next view, the filter being typed kept.
         let tabbing = matches!(k.code, KeyCode::Tab | KeyCode::BackTab);
         if m.grid.is_some()
@@ -2612,9 +2648,22 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
-        // Its parts were drawn from the sidebar's edge (UX 2.0); over the
-        // sidebar, a click lands on nothing.
+        // Its parts were drawn from the sidebar's edge (UX 2.0). Over the
+        // sidebar a click closes it and does what it does there (a tab gone
+        // to, a right click's peek over the workspace); the wheel and the
+        // mouse moving stay the sidebar's, mission control left open.
         let Some(col) = mouse.col.checked_sub(m.left) else {
+            if mouse.kind == MouseKind::Press && !mouse.button.is_wheel() {
+                self.mission_close(client);
+            }
+            self.sidebar_mouse(client, mouse);
+            return;
+        };
+        // Moving off the sidebar puts out what it lit.
+        if mouse.kind == MouseKind::Move {
+            self.sidebar_mouse(client, mouse);
+        }
+        let Some(m) = self.mission_mut(client) else {
             return;
         };
         let mouse = Mouse { col, ..mouse };

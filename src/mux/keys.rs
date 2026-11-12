@@ -683,6 +683,26 @@ impl Action {
         Some((words, tags))
     }
 
+    /// Whether it opens or changes a mission control view, so a palette
+    /// opened over mission control runs it there rather than closing it
+    /// first.
+    pub fn in_mission(&self) -> bool {
+        use crate::extras::Command as Extra;
+        match self {
+            // Off, the Keys view's key goes on to the pane instead.
+            Action::Extra(Extra::Keys) => crate::settings::is_on("view_keys"),
+            _ => matches!(
+                self,
+                Action::MissionControl
+                    | Action::Settings
+                    | Action::FindTab
+                    | Action::ReviveWorktree
+                    | Action::Extra(Extra::Mission(_))
+                    | Action::Autopilot(_)
+            ),
+        }
+    }
+
     /// The commands no key is bound to by default, which the palette lists
     /// with none (tmux.conf's `palette` key table).
     pub fn palette_only() -> Vec<Action> {

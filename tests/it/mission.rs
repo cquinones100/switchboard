@@ -1445,3 +1445,126 @@ fn equals_picks_views_to_show_at_once_and_esc_goes_back_to_one() {
         !s.iter().any(|l| l.contains("MISSION CONTROL"))
     });
 }
+
+/// A server with three tabs, the first in front, and a client on it.
+fn three_tabs(extra: Value) -> (TestServer, TestClient) {
+    let (server, mut client) = two_tabs(extra);
+    server.ok(&["new-tab", "-n", "third"]);
+    client.wait_text("3:third");
+    client.type_text(&format!("{ALT}1"));
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    (server, client)
+}
+
+fn closed(s: &[String]) -> bool {
+    !s.iter().any(|l| l.contains("MISSION CONTROL"))
+}
+
+#[test]
+fn m_number_closes_it_and_goes_to_that_tab_as_keys_json_binds_it() {
+    let (server, mut client) = three_tabs(json!({}));
+    open(&mut client);
+    client.type_text(&format!("{ALT}3"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+    // While a filter is typed too.
+    open(&mut client);
+    client.type_text("/");
+    client.type_text(&format!("{ALT}1"));
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.type_text(&format!("{ALT}3"));
+    wait_list(&server, "the third tab in front", |l| {
+        tabs(l)[2]["current"] == true
+    });
+    // A number with no tab closes it and stays where it was.
+    open(&mut client);
+    client.type_text(&format!("{ALT}9"));
+    client.wait_for("mission control closed", closed);
+    assert_eq!(tabs(&server.list())[2]["current"], true, "nowhere gone");
+    // M-3 bound to something else does that instead.
+    let config = server.home.join(".config/switchboard");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("keys.json"), r#"{"root": {"M-3": "new-tab"}}"#).unwrap();
+    std::thread::sleep(Duration::from_millis(2500) * common::patience());
+    client.type_text(&format!("{ALT}1"));
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    open(&mut client);
+    client.type_text(&format!("{ALT}3"));
+    let screen = client.screen();
+    assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+    assert_eq!(tabs(&server.list())[0]["current"], true, "no tab selected");
+}
+
+#[test]
+fn m_p_opens_the_palette_over_it_and_a_pick_runs_there_or_in_the_pane() {
+    let (server, mut client) = two_tabs(json!({}));
+    open(&mut client);
+    // Esc leaves the view as it was.
+    client.type_text(&format!("{ALT}p"));
+    let screen = client.wait_text("action>");
+    assert!(!closed(&screen), "beneath it:\n{}", screen.join("\n"));
+    client.type_text("\x1b");
+    let screen = client.wait_for("the palette gone", |s| {
+        !s.iter().any(|l| l.contains("action>"))
+    });
+    assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+    // One of its views shows in it.
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("action>");
+    client.type_text("mission control: landing");
+    client.wait_text("› Mission control: Landing");
+    client.type_text("\r");
+    client.wait_text("Nothing is landing now.");
+    // Anything else runs in the pane it was opened over, once closed.
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("action>");
+    client.type_text("split pane above");
+    client.wait_text("› Split pane above");
+    client.type_text("\r");
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab split", |l| {
+        tabs(l)[1]["panes"].as_array().unwrap().len() == 2
+    });
+}
+
+#[test]
+fn with_ux2_a_click_on_a_tab_in_the_sidebar_closes_it_and_goes_there() {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "sidebar": true}));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    server.ok(&["new-tab", "-n", "second"]);
+    server.ok(&["new-tab", "-n", "third"]);
+    let list = wait_list(&server, "three tabs and the sidebar", |l| {
+        tabs(l).len() == 3 && l["sessions"][0]["sidebar"]["columns"].as_u64().unwrap_or(0) > 0
+    });
+    let cols = list["sessions"][0]["sidebar"]["columns"].as_u64().unwrap() as usize;
+    // UX 2.0 taken up: the tab bar gone from the bottom.
+    client.wait_for("the tab bar gone", |s| {
+        !s.iter().any(|l| l.contains("2:second"))
+    });
+    let screen = open(&mut client);
+    let row = screen
+        .iter()
+        .position(|l| l.chars().take(cols).collect::<String>().contains("second"))
+        .unwrap_or_else(|| panic!("the second tab's row:\n{}", screen.join("\n")));
+    // The wheel over the sidebar leaves mission control open.
+    client.send(format!("\x1b[<65;3;{}M", row + 1).as_bytes());
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(!closed(&screen), "still open:\n{}", screen.join("\n"));
+    client.send(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
+    client.wait_for("mission control closed", closed);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l)[1]["current"] == true
+    });
+}
