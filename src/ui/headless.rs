@@ -6,8 +6,15 @@
 //!
 //! - `Screen`: the emulator (alacritty_terminal, as the panes have) fed with
 //!   what the server sent, read back as lines of text, as text with its
-//!   colors (ANSI), or as cells for a picture. The integration tests' client
-//!   (tests/common) reads through it too.
+//!   colors (ANSI), or as cells for a picture. It keeps kitty's graphics
+//!   commands as Ghostty does (each image by id, placed by its placeholder
+//!   cells or directly at the cursor), so the picture (`html`, drawn by
+//!   Chrome) shows the server's images where the text forms leave them
+//!   out. The integration tests' client (tests/common) reads through it
+//!   too.
+//! - `Client`: attached as Ghostty by default (`TERM`), with a window of
+//!   the pixels the picture draws, so the server draws for it what it keeps
+//!   for Ghostty: its images, truecolor, the half circles.
 //! - `serve`: what `switchboard headless` leaves running: the client,
 //!   attached at the size asked, and a socket of its own in the state
 //!   directory, `headless-<id>.sock`, where `headless-keys` and
@@ -17,6 +24,7 @@
 //! program asked for, since the server reads the client's keys itself), so
 //! `M-m` reaches the server as it would from your keyboard.
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -50,13 +58,148 @@ impl Dimensions for Size {
 }
 
 /// One cell as drawn: its character, its colors resolved to red, green and
-/// blue, and whether it is bold.
+/// blue, whether it is bold, whether its character takes two cells, and
+/// the marks combined with it (an image placeholder's row and column).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub c: char,
     pub fg: (u8, u8, u8),
     pub bg: (u8, u8, u8),
     pub bold: bool,
+    pub wide: bool,
+    pub marks: Vec<char>,
+}
+
+/// An image a kitty graphics command sent: its PNG, base64'd as it came,
+/// and the cells it fills when placed with placeholders.
+#[derive(Clone, Debug)]
+struct Image {
+    data: String,
+    cols: u16,
+    rows: u16,
+}
+
+/// An image placed directly at a cell, offset by pixels (the box's shadow,
+/// under the text).
+#[derive(Clone, Debug)]
+struct Placement {
+    id: u32,
+    line: usize,
+    col: usize,
+    dx: u32,
+    dy: u32,
+}
+
+/// The images a terminal holds, as Ghostty keeps them from kitty's
+/// graphics commands: by id, with the direct placements.
+#[derive(Default)]
+struct Images {
+    by_id: HashMap<u32, Image>,
+    placed: Vec<Placement>,
+    /// A command split in chunks (`m=1`), its first keys and the data so far.
+    loading: Option<(HashMap<String, String>, String)>,
+    /// What came after the last whole command, kept until its end comes.
+    pending: Vec<u8>,
+}
+
+/// A graphics command's keys (`a=T,i=3`) and payload, from its body.
+fn command_parts(body: &[u8]) -> (HashMap<String, String>, String) {
+    let body = String::from_utf8_lossy(body);
+    let (keys, data) = body.split_once(';').unwrap_or((&body, ""));
+    let keys = keys
+        .split(',')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    // Only base64 goes on into the page.
+    let data = data
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+        .collect();
+    (keys, data)
+}
+
+impl Images {
+    /// Takes one whole command, `ESC _ G` to `ESC \` left off, with the
+    /// cursor where it came.
+    fn take(&mut self, body: &[u8], cursor: (usize, usize)) {
+        let (keys, data) = command_parts(body);
+        let (keys, data) = match self.loading.take() {
+            Some((first, mut so_far)) => {
+                so_far.push_str(&data);
+                if keys.get("m").map(String::as_str) == Some("1") {
+                    self.loading = Some((first, so_far));
+                    return;
+                }
+                (first, so_far)
+            }
+            None if keys.get("m").map(String::as_str) == Some("1") => {
+                self.loading = Some((keys, data));
+                return;
+            }
+            None => (keys, data),
+        };
+        let num = |k: &str| keys.get(k).and_then(|v| v.parse::<u32>().ok());
+        let id = num("i").unwrap_or(0);
+        match keys.get("a").map(String::as_str) {
+            Some("d") => match keys.get("d").map(String::as_str) {
+                Some("I" | "i") => {
+                    self.by_id.remove(&id);
+                    self.placed.retain(|p| p.id != id);
+                }
+                Some("a" | "A") | None => {
+                    self.by_id.clear();
+                    self.placed.clear();
+                }
+                _ => {}
+            },
+            Some("T") => {
+                self.placed.retain(|p| p.id != id);
+                self.by_id.insert(
+                    id,
+                    Image {
+                        data,
+                        cols: num("c").unwrap_or(0) as u16,
+                        rows: num("r").unwrap_or(0) as u16,
+                    },
+                );
+                if num("U") != Some(1) {
+                    self.placed.push(Placement {
+                        id,
+                        line: cursor.0,
+                        col: cursor.1,
+                        dx: num("X").unwrap_or(0),
+                        dy: num("Y").unwrap_or(0),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The first `ESC _ G` in `bytes` at or after `from`.
+fn find(bytes: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    bytes
+        .get(from..)?
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|i| i + from)
+}
+
+/// The image id a placeholder's color carries.
+fn id_of_color(c: (u8, u8, u8)) -> u32 {
+    (c.0 as u32) << 16 | (c.1 as u32) << 8 | c.2 as u32
+}
+
+/// The row or column a placeholder's mark means.
+fn mark_index(mark: Option<&char>) -> u16 {
+    mark.and_then(|m| {
+        crate::ui::images::MARKS
+            .iter()
+            .position(|&x| x == *m as u32)
+    })
+    .unwrap_or(0) as u16
 }
 
 /// A cell's text color, background and boldness, as the ANSI form sets
@@ -71,6 +214,7 @@ pub const DEFAULT_BG: (u8, u8, u8) = (0x16, 0x16, 0x1d);
 pub struct Screen {
     term: Term<VoidListener>,
     parser: Processor,
+    images: Images,
 }
 
 impl Screen {
@@ -82,11 +226,47 @@ impl Screen {
                 VoidListener,
             ),
             parser: Processor::new(),
+            images: Images::default(),
         }
     }
 
+    /// Takes what the server sent: kitty's graphics commands are kept as
+    /// Ghostty keeps them (`Images`), each with the cursor where it came,
+    /// and the rest goes to the emulator.
     pub fn feed(&mut self, bytes: &[u8]) {
-        self.parser.advance(&mut self.term, bytes);
+        let mut all = std::mem::take(&mut self.images.pending);
+        all.extend_from_slice(bytes);
+        let mut at = 0;
+        while let Some(start) = find(&all, b"\x1b_G", at) {
+            self.parser.advance(&mut self.term, &all[at..start]);
+            let Some(end) = find(&all, b"\x1b\\", start + 3) else {
+                // Its end is still to come; a command no end comes for in
+                // 64 MB is dropped.
+                if all.len() - start < 64 << 20 {
+                    self.images.pending = all[start..].to_vec();
+                }
+                return;
+            };
+            let cursor = self.term.grid().cursor.point;
+            self.images.take(
+                &all[start + 3..end],
+                (cursor.line.0.max(0) as usize, cursor.column.0),
+            );
+            at = end + 2;
+        }
+        // An ESC, or `ESC _`, at the very end may open a command.
+        let keep = if all.ends_with(b"\x1b_") {
+            2
+        } else if all.ends_with(b"\x1b") {
+            1
+        } else {
+            0
+        };
+        let cut = all.len() - keep;
+        if at < cut {
+            self.parser.advance(&mut self.term, &all[at..cut]);
+        }
+        self.images.pending = all[cut.max(at)..].to_vec();
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -168,6 +348,8 @@ impl Screen {
                             fg,
                             bg,
                             bold: cell.flags.contains(Flags::BOLD),
+                            wide: cell.flags.contains(Flags::WIDE_CHAR),
+                            marks: cell.zerowidth().map(<[char]>::to_vec).unwrap_or_default(),
                         }
                     })
                     .collect()
@@ -207,43 +389,209 @@ impl Screen {
         out
     }
 
-    /// The screen as an HTML page of its cells, each line a row of spans in
-    /// a monospace font, for Chrome to draw as a picture
-    /// (`switchboard headless-screen --png`).
+    /// The screen as an HTML page for Chrome to draw as a picture
+    /// (`switchboard headless-screen --png`), as Ghostty draws it: the
+    /// cells' backgrounds, then the images (a direct placement under the
+    /// text, a placeholder's cell of its image), then the text, a run of
+    /// cells of one style as one span in a font sized to the cell less its
+    /// line gap, a character beyond ASCII centered in its cell or cells,
+    /// and the half circles and block elements Ghostty draws itself drawn
+    /// as shapes, since no font is sure to fit them to the cell.
     pub fn html(&self, cell_width: u32, cell_height: u32) -> String {
-        let mut body = String::new();
-        for row in self.cells() {
-            body.push_str("<div class=r>");
-            for cell in row {
-                let c = match cell.c {
-                    '<' => "&lt;".to_string(),
-                    '>' => "&gt;".to_string(),
-                    '&' => "&amp;".to_string(),
-                    ' ' | '\0' => "&nbsp;".to_string(),
-                    c => c.to_string(),
+        let (cw, ch) = (cell_width, cell_height);
+        let hex = |c: (u8, u8, u8)| format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2);
+        let (mut back, mut under, mut pics, mut text) =
+            (String::new(), String::new(), String::new(), String::new());
+        let mut shown = std::collections::BTreeSet::new();
+        let mut width = 0;
+        for (y, row) in self.cells().iter().enumerate() {
+            let top = y as u32 * ch;
+            let mut x = 0u32;
+            let placed: Vec<(u32, &Cell)> = row
+                .iter()
+                .map(|c| {
+                    let at = x;
+                    x += if c.wide { 2 } else { 1 };
+                    (at, c)
+                })
+                .collect();
+            width = width.max(x);
+            let mut i = 0;
+            while i < placed.len() {
+                let (start, bg) = (placed[i].0, placed[i].1.bg);
+                let j = (i..placed.len())
+                    .find(|&j| placed[j].1.bg != bg)
+                    .unwrap_or(placed.len());
+                let end = placed.get(j).map_or(x, |p| p.0);
+                if bg != DEFAULT_BG {
+                    back.push_str(&format!(
+                        "<p style=\"left:{}px;top:{top}px;width:{}px;height:{ch}px;background:{}\"></p>",
+                        start * cw,
+                        (end - start) * cw,
+                        hex(bg)
+                    ));
+                }
+                i = j;
+            }
+            let mut i = 0;
+            while i < placed.len() {
+                let (at, cell) = placed[i];
+                let left = at * cw;
+                if cell.c == crate::ui::images::PLACEHOLDER {
+                    let id = id_of_color(cell.fg);
+                    if self.images.by_id.contains_key(&id) {
+                        shown.insert(id);
+                        let (r, c) = (
+                            mark_index(cell.marks.first()),
+                            mark_index(cell.marks.get(1)),
+                        );
+                        pics.push_str(&format!(
+                            "<p class=g{id} style=\"left:{left}px;top:{top}px;background-position:-{}px -{}px\"></p>",
+                            c as u32 * cw,
+                            r as u32 * ch
+                        ));
+                    }
+                    i += 1;
+                    continue;
+                }
+                if let Some(shape) = shape(cell.c, cw as f32, ch as f32) {
+                    text.push_str(&format!(
+                        "<p style=\"left:{left}px;top:{top}px;{shape};background:{}\"></p>",
+                        hex(cell.fg)
+                    ));
+                    i += 1;
+                    continue;
+                }
+                let style = |cell: &Cell| {
+                    format!(
+                        "left:{left}px;top:{top}px;color:{}{}",
+                        hex(cell.fg),
+                        if cell.bold { ";font-weight:bold" } else { "" }
+                    )
                 };
-                body.push_str(&format!(
-                    "<span style=\"color:#{:02x}{:02x}{:02x};background:#{:02x}{:02x}{:02x}{}\">{c}</span>",
-                    cell.fg.0,
-                    cell.fg.1,
-                    cell.fg.2,
-                    cell.bg.0,
-                    cell.bg.1,
-                    cell.bg.2,
-                    if cell.bold { ";font-weight:bold" } else { "" }
+                // ASCII and the box-drawing characters, which every monospace
+                // font has at its advance.
+                let in_run = |c: &Cell| {
+                    c.c == ' '
+                        || c.c == '\0'
+                        || c.c.is_ascii_graphic()
+                        || ('\u{2500}'..='\u{257F}').contains(&c.c)
+                };
+                if in_run(cell) {
+                    let mut j = i;
+                    let mut run = String::new();
+                    while j < placed.len()
+                        && in_run(placed[j].1)
+                        && placed[j].1.fg == cell.fg
+                        && placed[j].1.bold == cell.bold
+                    {
+                        run.push(placed[j].1.c);
+                        j += 1;
+                    }
+                    if !run.trim_matches([' ', '\0']).is_empty() {
+                        text.push_str(&format!(
+                            "<p class=t style=\"{}\">{}</p>",
+                            style(cell),
+                            escape(run.trim_end_matches([' ', '\0']))
+                        ));
+                    }
+                    i = j;
+                    continue;
+                }
+                text.push_str(&format!(
+                    "<p class=c style=\"{};width:{}px\">{}</p>",
+                    style(cell),
+                    if cell.wide { 2 * cw } else { cw },
+                    escape(&cell.c.to_string())
+                ));
+                i += 1;
+            }
+        }
+        for p in &self.images.placed {
+            if let Some(image) = self.images.by_id.get(&p.id) {
+                under.push_str(&format!(
+                    "<img class=u src=\"data:image/png;base64,{}\" style=\"left:{}px;top:{}px\">",
+                    image.data,
+                    p.col as f32 * cw as f32 + p.dx as f32 / SCALE as f32,
+                    p.line as f32 * ch as f32 + p.dy as f32 / SCALE as f32,
                 ));
             }
-            body.push_str("</div>");
         }
+        let rows = self.size().1 as u32;
+        let (page_w, page_h) = (width * cw, rows * ch);
+        let mut css = String::new();
+        for id in shown {
+            let image = &self.images.by_id[&id];
+            css.push_str(&format!(
+                ".g{id}{{width:{cw}px;height:{ch}px;background-image:url(data:image/png;base64,{});background-size:{}px {}px}}",
+                image.data,
+                image.cols as u32 * cw,
+                image.rows as u32 * ch
+            ));
+        }
+        let font = cell_height as f32 * FONT_OF_CELL;
         format!(
-            "<!doctype html><meta charset=utf-8><style>html,body{{margin:0;background:#{:02x}{:02x}{:02x}}}\
-             .r{{height:{cell_height}px;line-height:{cell_height}px;white-space:pre;font:{}px Menlo,'DejaVu Sans Mono',monospace}}\
-             .r span{{display:inline-block;width:{cell_width}px;height:{cell_height}px;overflow:visible;text-align:center}}</style><body>{body}</body>",
-            DEFAULT_BG.0,
-            DEFAULT_BG.1,
-            DEFAULT_BG.2,
-            cell_height * 3 / 4,
+            "<!doctype html><meta charset=utf-8><style>html,body{{margin:0;background:{}}}\
+             body{{position:relative;width:{page_w}px;height:{page_h}px;overflow:hidden}}\
+             p{{position:absolute;margin:0}}\
+             .t,.c{{height:{ch}px;white-space:pre;font:{font:.2}px/{ch}px 'JetBrains Mono',Menlo,'DejaVu Sans Mono',monospace}}\
+             .t{{letter-spacing:{:.3}px}}.c{{text-align:center;overflow:visible}}{css}\
+             .u{{position:absolute;transform:scale({});transform-origin:0 0}}</style>\
+             <body>{back}{under}{pics}{text}</body>",
+            hex(DEFAULT_BG),
+            cell_width as f32 - font * MONO_ADVANCE,
+            1.0 / SCALE as f32,
         )
+    }
+}
+
+/// The font's size as a share of the cell's height: the cell less
+/// Ghostty's line gap, which with a monospace font's advance of 0.6 em
+/// makes a letter as wide as the cell.
+const FONT_OF_CELL: f32 = 5.0 / 6.0;
+
+/// A monospace font's advance, in ems (JetBrains Mono's, Menlo's and
+/// DejaVu Sans Mono's), which the letter spacing makes up to the cell.
+const MONO_ADVANCE: f32 = 0.6021;
+
+/// How many pixels the PNG draws for each CSS pixel, so text and the
+/// server's images are as sharp as on a Retina screen; the server rasters
+/// its images at the cell's size times this.
+pub const SCALE: u32 = 2;
+
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('\0', " ")
+}
+
+/// The CSS that draws `c` as a shape in a cell of `w` by `h`, for the half
+/// circles and block elements Ghostty draws itself.
+fn shape(c: char, w: f32, h: f32) -> Option<String> {
+    let block = |x: f32, y: f32, bw: f32, bh: f32| {
+        Some(format!(
+            "margin-left:{x:.2}px;margin-top:{y:.2}px;width:{bw:.2}px;height:{bh:.2}px"
+        ))
+    };
+    let half = h / 2.0;
+    match c as u32 {
+        0xE0B6 => Some(format!(
+            "width:{w}px;height:{h}px;border-radius:{w}px 0 0 {w}px/{half}px 0 0 {half}px"
+        )),
+        0xE0B4 => Some(format!(
+            "width:{w}px;height:{h}px;border-radius:0 {w}px {w}px 0/0 {half}px {half}px 0"
+        )),
+        0x2580 => block(0.0, 0.0, w, half),
+        n @ 0x2581..=0x2588 => {
+            let bh = h * (n - 0x2580) as f32 / 8.0;
+            block(0.0, h - bh, w, bh)
+        }
+        n @ 0x2589..=0x258F => block(0.0, 0.0, w * (0x2590 - n) as f32 / 8.0, h),
+        0x2590 => block(w / 2.0, 0.0, w / 2.0, h),
+        0x2594 => block(0.0, 0.0, w, h / 8.0),
+        0x2595 => block(w * 7.0 / 8.0, 0.0, w / 8.0, h),
+        _ => None,
     }
 }
 
@@ -297,6 +645,22 @@ fn indexed(i: u8) -> (u8, u8, u8) {
     }
 }
 
+/// The terminal a headless client attaches as by default: Ghostty, so the
+/// server draws for it what it keeps for Ghostty (its images, truecolor, the
+/// half circles).
+pub const TERM: &str = "xterm-ghostty";
+
+/// What a client attaching as `term` says it is (`TERM`, `TERM_PROGRAM`
+/// and `COLORTERM`): Ghostty as Ghostty says it, anything else by its
+/// name alone.
+pub fn attached_as(term: &str) -> String {
+    if term.contains("ghostty") {
+        format!("{term} ghostty truecolor")
+    } else {
+        term.to_string()
+    }
+}
+
 /// The bytes typing `words` sends: each a key's name (`M-m`, `Enter`, `]`,
 /// `C-c`) sent as a terminal sends that key, else typed as text.
 pub fn key_bytes(words: &[String]) -> Vec<u8> {
@@ -340,16 +704,25 @@ pub struct Client {
 
 impl Client {
     /// Attaches to the server on `server` at `cols` by `rows`, in
-    /// `session` or the one the server picks.
-    pub fn attach(server: &Path, cols: u16, rows: u16, session: Option<String>) -> Result<Client> {
+    /// `session` or the one the server picks, as the terminal `term`
+    /// (`attached_as`), its window as many pixels as the PNG draws, so the
+    /// server sizes its images as for a real window.
+    pub fn attach(
+        server: &Path,
+        cols: u16,
+        rows: u16,
+        session: Option<String>,
+        term: &str,
+    ) -> Result<Client> {
         let mut stream = UnixStream::connect(server).context("no server answers there")?;
+        let pixels = |n: u16, cell: u32| (n as u32 * cell * SCALE).min(u16::MAX as u32) as u16;
         stream.write_all(&proto::encode_client(&ClientMsg::Attach {
             session,
             cols,
             rows,
-            term: "xterm-256color".into(),
-            xpixel: 0,
-            ypixel: 0,
+            term: attached_as(term),
+            xpixel: pixels(cols, CELL.0),
+            ypixel: pixels(rows, CELL.1),
             cwd: None,
         }))?;
         let shared = Arc::new(Mutex::new(Shared {
@@ -448,7 +821,8 @@ impl Client {
 }
 
 /// The screen drawn as a PNG in `file` by headless Chrome: each cell
-/// `CELL` CSS pixels, in its colors (`Screen::html`).
+/// `CELL` CSS pixels, `SCALE` pixels to each, as Ghostty draws it
+/// (`Screen::html`).
 pub fn png(screen: &Screen, file: &Path) -> Result<()> {
     let chrome = crate::views::image::render::any_chrome().ok_or_else(|| {
         anyhow!("drawing a PNG needs Google Chrome or Chromium, and neither is installed")
@@ -478,6 +852,7 @@ pub fn png(screen: &Screen, file: &Path) -> Result<()> {
             "--use-mock-keychain",
             "--password-store=basic",
         ])
+        .arg(format!("--force-device-scale-factor={SCALE}"))
         .arg(format!(
             "--user-data-dir={}",
             work.join("profile").display()
@@ -512,9 +887,10 @@ pub fn serve(
     cols: u16,
     rows: u16,
     session: Option<String>,
+    term: &str,
     ready: impl FnOnce(),
 ) -> Result<()> {
-    let mut client = Client::attach(server, cols, rows, session)?;
+    let mut client = Client::attach(server, cols, rows, session, term)?;
     let _ = std::fs::remove_file(listen);
     let listener = UnixListener::bind(listen)
         .with_context(|| format!("couldn't listen on {}", listen.display()))?;
@@ -637,6 +1013,91 @@ mod tests {
         let ansi = s.ansi();
         assert!(ansi.contains("38;2;255;0;0"), "{ansi:?}");
         assert!(s.html(8, 16).contains("color:#ff0000"));
+    }
+
+    /// An image `id` sent for placeholders over `cols` by `rows`, then its
+    /// top-left placeholder cell at the screen's third column.
+    fn placed(id: u32, cols: u16, rows: u16) -> Vec<u8> {
+        let mut out =
+            format!("\x1b_Ga=T,U=1,f=100,t=d,q=2,i={id},c={cols},r={rows},m=1;iVBO\x1b\\")
+                .into_bytes();
+        out.extend_from_slice(b"\x1b_Gm=0;Rw==\x1b\\");
+        let (r, g, b) = ((id >> 16) as u8, (id >> 8) as u8, id as u8);
+        out.extend(
+            format!(
+                "ab\x1b[38;2;{r};{g};{b}m{}\x1b[0m",
+                crate::ui::images::placeholder(0, 0)
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    #[test]
+    fn an_image_placed_by_placeholders_is_drawn_at_its_cell_until_deleted() {
+        let mut s = Screen::new(20, 3);
+        let id = 0x80_0001;
+        // Split across reads, as a socket may split it.
+        let bytes = placed(id, 4, 2);
+        let (first, second) = bytes.split_at(9);
+        s.feed(first);
+        s.feed(second);
+        assert_eq!(s.lines()[0].chars().take(2).collect::<String>(), "ab");
+        let html = s.html(8, 16);
+        assert!(
+            html.contains(&format!(
+                ".g{id}{{width:8px;height:16px;background-image:url(data:image/png;base64,iVBORw==);background-size:32px 32px}}"
+            )),
+            "{html}"
+        );
+        assert!(
+            html.contains(&format!("<p class=g{id} style=\"left:16px;top:0px")),
+            "{html}"
+        );
+        assert!(s.text()[0].starts_with("ab"), "text leaves images out");
+
+        s.feed(format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\").as_bytes());
+        assert!(!s.html(8, 16).contains("base64"));
+    }
+
+    #[test]
+    fn an_image_placed_directly_sits_at_the_cursor_with_its_offset() {
+        let mut s = Screen::new(20, 4);
+        s.feed(b"\x1b7\x1b[3;5H\x1b_Ga=T,f=100,t=d,q=2,i=9,X=4,Y=6,z=-1,C=1;iVBORw==\x1b\\\x1b8");
+        let html = s.html(8, 16);
+        let left = 4.0 * 8.0 + 4.0 / SCALE as f32;
+        let top = 2.0 * 16.0 + 6.0 / SCALE as f32;
+        assert!(
+            html.contains(&format!(
+                "<img class=u src=\"data:image/png;base64,iVBORw==\" style=\"left:{left}px;top:{top}px\">"
+            )),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn a_run_of_one_style_is_one_span_and_shapes_are_drawn() {
+        let mut s = Screen::new(30, 2);
+        s.feed("hello world \x1b[1mbold\x1b[0m \u{E0B6}x\u{2584}".as_bytes());
+        let html = s.html(8, 16);
+        assert!(html.contains(">hello world</p>"), "{html}");
+        assert!(html.contains("font-weight:bold\">bold</p>"), "{html}");
+        assert!(
+            html.contains("border-radius:8px 0 0 8px/8px 0 0 8px"),
+            "{html}"
+        );
+        assert!(
+            html.contains("margin-top:8.00px;width:8.00px;height:8.00px"),
+            "the lower half block: {html}"
+        );
+    }
+
+    #[test]
+    fn ghostty_says_it_draws_truecolor_and_others_only_their_name() {
+        assert_eq!(attached_as(TERM), "xterm-ghostty ghostty truecolor");
+        assert_eq!(attached_as("xterm-256color"), "xterm-256color");
+        assert!(crate::status::theme::draws_truecolor(&attached_as(TERM)));
+        assert!(crate::ui::images::speaks_kitty(&attached_as(TERM)));
     }
 
     #[test]

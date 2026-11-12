@@ -18,6 +18,9 @@ use anyhow::{Context, Result};
 
 use crate::ui::headless::{self, Client};
 
+const CAP_LEFT: char = '\u{E0B6}';
+const CAP_RIGHT: char = '\u{E0B4}';
+
 /// A board of the tour.
 pub struct Step {
     pub name: &'static str,
@@ -67,11 +70,17 @@ const MOST: usize = 12;
 
 /// Mission control's groups (its first line) and the views of the group in
 /// front (its second), read off the screen right of the sidebar, each a
-/// name set apart from the next by three spaces or more.
+/// name set apart from the next by three spaces or more, the chosen one's
+/// half circles (drawn for Ghostty) read as spaces.
 pub fn mission_names(lines: &[String]) -> (Vec<String>, Vec<String>) {
     let names = |line: Option<&String>| -> Vec<String> {
-        let line = line.map(String::as_str).unwrap_or("");
-        let line = line.split_once('│').map_or(line, |(_, right)| right);
+        let line = line
+            .map(String::as_str)
+            .unwrap_or("")
+            .replace([CAP_LEFT, CAP_RIGHT], " ");
+        let line = line
+            .split_once('│')
+            .map_or(line.as_str(), |(_, right)| right);
         line.split("   ")
             .map(str::trim)
             .filter(|w| !w.is_empty())
@@ -109,7 +118,7 @@ fn words(keys: &[&str]) -> Vec<String> {
 /// names saved.
 pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String>> {
     fs::create_dir_all(dir).with_context(|| format!("couldn't make {}", dir.display()))?;
-    let mut client = Client::attach(server, cols, rows, None)?;
+    let mut client = Client::attach(server, cols, rows, None, headless::TERM)?;
     let mut saved = Vec::new();
     let mut drew_png = false;
     for step in STEPS {
@@ -161,6 +170,17 @@ mod tests {
         .map(|l| l.to_string())
         .collect();
         let (groups, views) = mission_names(&lines);
+        assert_eq!(groups, ["Work", "Code", "Day", "System"]);
+        assert_eq!(views, ["PRs", "Tickets", "CI"]);
+
+        let chosen: Vec<String> = [
+            " 5 tabs     / filter │ MISSION CONTROL   \u{E0B6}Work\u{E0B4}   Code   Day   System",
+            "                     │ PRs   \u{E0B6}Tickets\u{E0B4}   CI     { } groups",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+        let (groups, views) = mission_names(&chosen);
         assert_eq!(groups, ["Work", "Code", "Day", "System"]);
         assert_eq!(views, ["PRs", "Tickets", "CI"]);
     }

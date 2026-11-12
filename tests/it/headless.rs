@@ -92,3 +92,61 @@ fn a_headless_client_ends_with_its_server() {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
+
+#[test]
+fn a_headless_client_attaches_as_ghostty_and_keeps_the_servers_images() {
+    use switchboard::ui::headless::{self, Client};
+    let server = TestServer::start();
+    let truecolor_cells = |client: &Client| {
+        client.read(|s| {
+            let (cols, rows) = s.size();
+            (0..rows)
+                .flat_map(|y| (0..cols).map(move |x| (y, x)))
+                .filter(|&(y, x)| s.fg_rgb(y, x).is_some())
+                .count()
+        })
+    };
+    // Mission control, then the palette's box over it, whose shadow is
+    // an image.
+    let open_palette = |term: &str| {
+        let mut client = Client::attach(&server.socket(), 120, 32, None, term).unwrap();
+        client.keys(&["M-Space".to_string()]).unwrap();
+        assert!(
+            client.wait_text(
+                "MISSION CONTROL",
+                std::time::Duration::from_secs(10) * common::patience()
+            ),
+            "{}",
+            client.read(|s| s.text().join("\n"))
+        );
+        client
+            .keys(&["Escape".to_string(), "M-p".to_string()])
+            .unwrap();
+        let deadline = common::deadline(std::time::Duration::from_secs(5));
+        while std::time::Instant::now() < deadline
+            && !client.read(|s| s.html(9, 18).contains("<img"))
+        {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        client
+    };
+
+    let mut ghostty = open_palette(headless::TERM);
+    let html = ghostty.read(|s| s.html(headless::CELL.0, headless::CELL.1));
+    assert!(
+        html.contains("<img class=u src=\"data:image/png;base64,"),
+        "the box's shadow, an image: {html}"
+    );
+    let ghostty_colors = truecolor_cells(&ghostty);
+    ghostty.detach();
+
+    let mut plain = open_palette("xterm-256color");
+    let html = plain.read(|s| s.html(headless::CELL.0, headless::CELL.1));
+    assert!(!html.contains("base64"), "no images: {html}");
+    assert!(
+        ghostty_colors > truecolor_cells(&plain) * 2,
+        "the canvas's colors for Ghostty: {ghostty_colors} against {}",
+        truecolor_cells(&plain)
+    );
+    plain.detach();
+}

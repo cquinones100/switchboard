@@ -38,13 +38,14 @@ fn usage() {
     println!("here; --detached starts it with no client and prints how to drive it; --print");
     println!("prints the environment to eval in another terminal; --reset lays the data out");
     println!("again; --clean ends it and removes its home; --tour walks its boards with a");
-    println!("headless client and saves a picture of each in <dir>.");
+    println!("headless client attached as Ghostty and saves a picture of each in <dir>, at");
+    println!("200x56 unless --size says otherwise, wide enough for the boards beside the sidebar.");
 }
 
 pub fn main(args: Vec<String>) -> ExitCode {
     let mut mode = Mode::Attach;
     let mut reset = false;
-    let mut size = (160u16, 45u16);
+    let mut size = (200u16, 56u16);
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {

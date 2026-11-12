@@ -224,4 +224,36 @@ fn the_tour_saves_a_board_for_each_step() {
     }
     let code_prs = std::fs::read_to_string(tour.join("code-prs.txt")).unwrap();
     assert!(code_prs.contains("Rate-limit the login"), "{code_prs}");
+
+    // The Usage view has a day of spend by tab, and the request audit.
+    let usage = std::fs::read_to_string(tour.join("system-usage.txt")).unwrap();
+    for tab in [
+        "Rate-limit the login",
+        "Dark mode toggle",
+        "API quickstart guide",
+    ] {
+        assert!(usage.contains(tab), "{tab}: {usage}");
+    }
+    let state = d.home.join(".local/state/switchboard");
+    let today = switchboard::util::ymd(&switchboard::util::local_now());
+    for file in [
+        format!("usage/spent-{today}.tsv"),
+        format!("requests/{today}.tsv"),
+    ] {
+        let text = std::fs::read_to_string(state.join(&file)).unwrap_or_default();
+        assert!(!text.is_empty(), "{file}");
+    }
+
+    // The calendar's events have who is invited and an agenda.
+    let calendar: Value =
+        serde_json::from_str(&std::fs::read_to_string(state.join("calendar.json")).unwrap())
+            .unwrap();
+    let events = calendar["events"].as_array().unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|e| e["attendees"].as_array().is_some_and(|a| !a.is_empty())
+                && e["description"].as_str().is_some_and(|t| !t.is_empty())),
+        "{calendar}"
+    );
 }

@@ -680,8 +680,11 @@ pub fn slack(request: &Request) -> Option<Reply> {
     })
 }
 
-/// The day's calendar, as `/today` saves it (`day::calendar::save_today`):
-/// a meeting about to start, one later, one done.
+/// The day's calendar, in the shape `/today` saves (`day::calendar::save_today`)
+/// with the feed's detail besides:
+/// a meeting about to start, one later, one done, each with who is invited
+/// and how they answered, and an agenda; the design review names the dark
+/// mode tab's ticket, so the Calendar view's From your work has it.
 pub fn calendar(now: jiff::Zoned) -> Value {
     let at = |minutes: i64| {
         (now.clone() + jiff::SignedDuration::from_mins(minutes))
@@ -692,11 +695,33 @@ pub fn calendar(now: jiff::Zoned) -> Value {
         "date": now.strftime("%Y-%m-%d").to_string(),
         "events": [
             { "title": "Standup", "start": at(-120), "end": at(-105), "allDay": false, "you": "going",
-              "join": "https://meet.example.com/standup", "link": "https://calendar.example.com/event/standup" },
+              "join": "https://meet.example.com/standup", "link": "https://calendar.example.com/event/standup",
+              "organizer": "Maya",
+              "attendees": [
+                  { "name": "Maya", "reply": "going", "address": "maya@example.com" },
+                  { "name": "Priya", "reply": "going", "address": "priya@example.com" },
+                  { "name": "Theo", "reply": "going", "address": "theo@example.com" },
+                  { "name": "Sam", "reply": "maybe", "address": "sam@example.com" },
+              ],
+              "description": "Yesterday, today, anything in the way.\nKeep it to fifteen minutes." },
             { "title": "Design review: settings", "start": at(4), "end": at(34), "allDay": false, "you": "going",
-              "join": "https://meet.example.com/design-review", "link": "https://calendar.example.com/event/design" },
+              "join": "https://meet.example.com/design-review", "link": "https://calendar.example.com/event/design",
+              "organizer": "Priya",
+              "refs": [{ "id": "ABC-15" }],
+              "attendees": [
+                  { "name": "Priya", "reply": "going", "address": "priya@example.com" },
+                  { "name": "Theo", "reply": "going", "address": "theo@example.com" },
+                  { "name": "Maya", "reply": "maybe", "address": "maya@example.com" },
+                  { "name": "Sam", "reply": "not answered", "address": "sam@example.com" },
+              ],
+              "description": "The settings page with the dark mode toggle (ABC-15).\n1. Where the toggle sits in Appearance\n2. Following the system until it is changed\n3. The snapshot test's new colors" },
             { "title": "1:1 with Maya", "start": at(150), "end": at(180), "allDay": false, "you": "maybe",
-              "join": "https://meet.example.com/maya", "link": "https://calendar.example.com/event/maya" },
+              "join": "https://meet.example.com/maya", "link": "https://calendar.example.com/event/maya",
+              "organizer": "Maya",
+              "attendees": [
+                  { "name": "Maya", "reply": "going", "address": "maya@example.com" },
+              ],
+              "description": "The reset emails customers are asking about (ABC-20), then the quarter's plan." },
         ]
     })
 }

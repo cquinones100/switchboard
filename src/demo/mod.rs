@@ -32,7 +32,10 @@
 //!   Switchboard's hooks as Claude Code does, so the sidebar shows tabs
 //!   working, waiting on you and done. It reaches no model.
 //! - `tour`: the steps `switchboard demo --tour` walks with a headless
-//!   client, saving a picture of each.
+//!   client attached as Ghostty, saving a picture of each with the
+//!   server's images in it.
+//! - `usage`: a made-up week of spend by tab, the rate limits and the
+//!   request audit, for the Usage view.
 //!
 //! The connectors' kept answers (`calendar.json`, `slack.json`,
 //! `slack-threads.json`) are written
@@ -46,6 +49,7 @@ pub mod fixtures;
 pub mod services;
 pub mod stand_in;
 pub mod tour;
+pub mod usage;
 
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
@@ -256,7 +260,9 @@ pub fn lay_out(home: &Path, bin: &Path) -> Result<()> {
         make_repo(home, repo).with_context(|| format!("making the repository {}", repo.name))?;
     }
     notes(home)?;
-    day(home, jiff::Zoned::now(), util::now_ms())?;
+    let now = util::now_ms();
+    day(home, jiff::Zoned::now(), now)?;
+    usage::lay_out(&home.join(".local/state/switchboard"), home, now)?;
     util::write_atomic(own_state(home).join("laid-out"), "")?;
     Ok(())
 }
@@ -421,8 +427,17 @@ fn day(home: &Path, meetings: jiff::Zoned, since: i64) -> Result<()> {
     let state = home.join(".local/state/switchboard");
     let _ = fs::remove_file(state.join("slack.json"));
     let _ = fs::remove_file(crate::day::slack_thread::file(&state));
+    // Written whole rather than through /today's save, which keeps only
+    // what /today gives (the attendees, agenda and tickets are the feed's),
+    // so the Calendar view has the feed's detail to show.
     let calendar = fixtures::calendar(meetings);
     crate::day::calendar::save_today(&state, &calendar.to_string()).map_err(|e| anyhow!(e))?;
+    let mut whole = calendar;
+    whole["updated"] = json!(util::now_ms());
+    util::write_atomic(
+        crate::day::calendar::saved_file(&state),
+        util::json_compact(&whole),
+    )?;
     crate::day::slack::save(
         &state,
         &home.join(".local/state/slack-relay"),
@@ -715,6 +730,9 @@ fn refresh_day(home: &Path) {
         .map_or(now, |d| d.as_millis() as i64);
     if let Err(e) = day(home, meetings_at(laid_out), slack_anchor(laid_out, now)) {
         eprintln!("switchboard demo-services: the day's data: {e:#}");
+    }
+    if let Err(e) = usage::limits(&home.join(".local/state/switchboard"), laid_out, now) {
+        eprintln!("switchboard demo-services: the rate limits: {e:#}");
     }
 }
 

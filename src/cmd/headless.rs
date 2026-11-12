@@ -5,8 +5,11 @@
 //! `capture-pane` can't, since they reach one pane. New here; the client is
 //! src/ui/headless.rs.
 //!
-//!   switchboard headless [--size <cols>x<rows>] [--session <name>] [--yes]
-//!       attaches a client, prints its id and leaves it running
+//!   switchboard headless [--size <cols>x<rows>] [--session <name>]
+//!                        [--term <name>] [--yes]
+//!       attaches a client, prints its id and leaves it running; it says it
+//!       is Ghostty (xterm-ghostty) unless --term names another terminal,
+//!       so the server draws its images and truecolor for it
 //!   switchboard headless --stop <id>
 //!   switchboard headless-keys <id> <key>...     keys by name: M-m ] j Enter
 //!   switchboard headless-screen <id> [--ansi | --png <file>]
@@ -69,6 +72,7 @@ fn start(args: &[String]) -> Result<ExitCode> {
         None => (160, 45),
     };
     let session = value(args, "--session").map(str::to_string);
+    let term = value(args, "--term").unwrap_or(headless::TERM).to_string();
     let server = socket::socket_path();
     if let Some(id) = value(args, "--serve") {
         let id: u32 = id
@@ -80,6 +84,7 @@ fn start(args: &[String]) -> Result<ExitCode> {
             size.0,
             size.1,
             session,
+            &term,
             || {},
         )?;
         return Ok(ExitCode::SUCCESS);
@@ -104,6 +109,8 @@ fn start(args: &[String]) -> Result<ExitCode> {
         &id.to_string(),
         "--size",
         &format!("{}x{}", size.0, size.1),
+        "--term",
+        &term,
     ]);
     if let Some(s) = &session {
         c.args(["--session", s]);
