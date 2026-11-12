@@ -134,7 +134,7 @@ Switchboard was a tmux setup until the rewrite: tmux.conf and its shell scripts,
 | a note's stable ID (`notes/lua/notes/id.lua`, `lib/note-id.js`) | `src/notes/id.rs`, which the app, `wtn` and autopilot share |
 | the sidebar daemon (`bin/tmux-sidebar`, `lib/sidebar/`) | `src/sidebar/`, `src/mission/`, `src/sources/`, `src/day/`, `src/usage/` |
 | `bin/slack-relay`, `lib/slack-relay/` | `src/relay/` |
-| `gh` | GitHub's API over reqwest; the token from `GH_TOKEN` or `GITHUB_TOKEN`, `gh auth token` when gh is there, else a stored secret |
+| `gh` | GitHub's API over reqwest, with gh's token (`gh auth token`) and no other |
 | `security`, `pbcopy`, `osascript`, `ioreg`, `open` | `src/platform/` |
 | tmux-resurrect, tmux-continuum | `src/mux/persist.rs` |
 | `setup.sh`, `.githooks`' setup runs, the dotfile links | `switchboard setup` (the plugin, or hooks and skills in `~/.claude`; the statusline, the terminal, the leftovers, the optional report), a new build's first run, and release downloads |

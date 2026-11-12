@@ -97,9 +97,11 @@ impl Fake {
     }
 }
 
-/// A temporary HOME, a PATH holding only git (so no gh answers with a real
-/// token), no credentials in the environment and no desktop keyring to ask;
-/// the settings file in it. Holds `ENV` while it lives.
+/// A temporary HOME, a PATH holding only git and a stand-in gh (so no real
+/// gh answers with a real token; as gh does, it says the `GH_TOKEN` a test
+/// sets, and is signed out otherwise), no credentials in the environment and
+/// no desktop keyring to ask; the settings file in it. Holds `ENV` while it
+/// lives.
 struct Env {
     _lock: MutexGuard<'static, ()>,
     home: PathBuf,
@@ -128,6 +130,7 @@ impl Env {
         if let Some(git) = GIT.get_or_init(|| util::which("git")) {
             std::os::unix::fs::symlink(git, home.join("bin/git")).unwrap();
         }
+        stand_in::Gh::new().install(&home.join("bin"));
         set("HOME", &home);
         set("PATH", home.join("bin"));
         set("SWITCHBOARD_SETTINGS", home.join("settings.json"));
@@ -326,7 +329,7 @@ fn github_failures_say_what_kind() {
 
     let err = rest("/y").unwrap_err();
     assert_eq!(kind(&err), ErrorKind::Unauthorized);
-    assert!(err.to_string().contains("GH_TOKEN"), "{err}");
+    assert!(err.to_string().contains("gh auth login"), "{err}");
     assert!(err.to_string().contains("Bad credentials"), "{err}");
 
     let err = rest("/z").unwrap_err();
@@ -370,22 +373,19 @@ fn turned_off_nothing_is_asked() {
 }
 
 #[test]
-fn without_a_token_it_says_how_to_store_one() {
+fn without_a_token_it_says_how_to_get_one() {
     let env = Env::new("no-token");
     let err = util::block_on(github::token()).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::NoCredentials);
-    assert!(
-        err.to_string()
-            .contains("switchboard platform secret-set github-token"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("gh auth login"), "{err}");
     let err = util::block_on(linear::api_key()).unwrap_err();
     assert_eq!(kind(&err), ErrorKind::NoCredentials);
     assert!(err.to_string().contains("linear-api-key"), "{err}");
 
-    // The stored secret: on a Mac the Keychain's, through security (a
-    // stand-in here, never your Keychain); elsewhere, with no keyring, the
-    // file only you can read.
+    // Linear's key from the stored secret: on a Mac the Keychain's, through
+    // security (a stand-in here, never your Keychain); elsewhere, with no
+    // keyring, the file only you can read. A GitHub token stored there too
+    // is never read: GitHub's is gh's alone.
     if switchboard::platform::NAME == "macOS" {
         let keychain = env.home.join("keychain");
         stand_in::security(&env.home.join("bin"), &keychain);
@@ -405,11 +405,17 @@ fn without_a_token_it_says_how_to_store_one() {
     .unwrap();
     // A look that found nothing stands a minute; forgetting looks again now.
     github::forget_token();
-    assert_eq!(util::block_on(github::token()).unwrap(), "from-file");
+    let err = util::block_on(github::token()).unwrap_err();
+    assert_eq!(kind(&err), ErrorKind::NoCredentials);
     assert_eq!(util::block_on(linear::api_key()).unwrap(), "lin_api_file");
-    // The variables come first.
+
+    // Nor are the variables read but by gh: with no gh, GH_TOKEN is no token.
+    std::fs::remove_file(env.home.join("bin/gh")).unwrap();
     set("GH_TOKEN", "from-env");
-    assert_eq!(util::block_on(github::token()).unwrap(), "from-env");
+    set("GITHUB_TOKEN", "from-env");
+    github::forget_token();
+    let err = util::block_on(github::token()).unwrap_err();
+    assert_eq!(kind(&err), ErrorKind::NoCredentials);
     stand_in::assert_none_refused(&env.home.join("bin"));
 }
 

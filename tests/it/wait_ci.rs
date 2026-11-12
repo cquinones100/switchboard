@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use common::http::{self, Reply};
-use common::{BIN, TempDir};
+use common::{BIN, TempDir, stand_in};
 use serde_json::{Value, json};
 
 const CHECK_RUNS: &str = "/repos/o/r/commits/abc123/check-runs?per_page=100";
@@ -66,6 +66,7 @@ fn wait_ci(fake: &Fake, args: &[&str]) -> Output {
         .arg("wait-ci")
         .args(args)
         .env("HOME", home.path())
+        .env("PATH", stand_in::path_with_gh(&home.path().join("bin")))
         .env("GH_TOKEN", "test-token")
         .env("SWITCHBOARD_GITHUB_API", &fake.url)
         .env("WAIT_CI_POLL_SECS", "0.05")
@@ -194,6 +195,7 @@ fn github_turned_off_in_settings_is_asked_still_and_a_refusal_ends_it_at_once() 
             .args(["wait-ci", "--repo", repo, "--sha", "abc123"])
             .args(["--timeout", "5"])
             .env("HOME", home.path())
+            .env("PATH", stand_in::path_with_gh(&home.path().join("bin")))
             .env("GH_TOKEN", "test-token")
             .env("SWITCHBOARD_GITHUB_API", &fake.url)
             .env("SWITCHBOARD_SETTINGS", &settings)

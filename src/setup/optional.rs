@@ -40,7 +40,7 @@ pub fn all() -> Vec<Optional> {
         all.push(line(
             util::block_on(github::token()).is_ok(),
             "GitHub (M-v, M-d's base, the PRs and CI views, PR numbers in tab names)",
-            "GitHub, for M-v, M-d's base, the PRs and CI views and PR numbers in tab names: gh auth login, or GH_TOKEN in your environment",
+            "GitHub, for M-v, M-d's base, the PRs and CI views and PR numbers in tab names: install GitHub's CLI (gh) and run gh auth login",
         ));
     }
     if settings::is_on("linear") {

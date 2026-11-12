@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use common::http::{self, Reply};
-use common::{BIN, TempDir};
+use common::{BIN, TempDir, stand_in};
 use serde_json::{Value, json};
 
 /// A temporary home with a repository world in it.
@@ -40,6 +40,9 @@ impl World {
                 home.join("state").display().to_string(),
             ),
             ("NOTES_DIR", home.join("Notes").display().to_string()),
+            // A stand-in gh first, so no real one is asked for a token: it
+            // says the GH_TOKEN a test sets, as gh does.
+            ("PATH", stand_in::path_with_gh(&home.join("stand-ins"))),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))

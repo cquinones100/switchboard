@@ -708,7 +708,7 @@ Mission control's Calendar view is today, laid out as Google Calendar's Day view
 switchboard platform secret-set google-calendar-ical
 ```
 
-paste it and press `Ctrl-D`. It is stored as the GitHub token is (see "When a view isn't set up").
+paste it and press `Ctrl-D`. It is stored as the Linear key is (see "GitHub and Linear access").
 
 Without the address, the view shows the day the `/today` skill last saved, which reads your calendar through Claude's Google Calendar connector (connected with `/mcp` in Claude Code); run `/today` once in any Claude tab to start. A day saved before today, or over 45 minutes ago, is marked out of date, and while no tab named Calendar runs Claude and none loops `/today`, mission control opens one in the background, in your home directory, running `/loop 30m /today`, at most every ten minutes. If the feed can't be read for 15 minutes (no network, Google down, the address revoked), the view falls back to `/today`'s day in the same way, and goes back to the feed once it reads again. Settings' "Calendar" (`view_calendar`).
 
@@ -943,19 +943,18 @@ While a link opens, a box says where it is going ("Opening github.com in Chrome 
 
 ### GitHub and Linear access
 
-Switchboard talks to GitHub and Linear over their own APIs, so nothing else has to be installed. Each finds its credential where you already keep one, the first that answers:
+Switchboard talks to GitHub and Linear over their own APIs. Each finds its credential where you already keep one:
 
-- **GitHub**: `GH_TOKEN`, `GITHUB_TOKEN`, the token of the `gh` command when it is installed and signed in, else the stored secret `github-token`.
+- **GitHub**: the token of GitHub's CLI, `gh auth token`, and nowhere else, so install [gh](https://cli.github.com) and sign in with `gh auth login`. Every GitHub request Switchboard makes, the update check's too, signs in as the account gh is signed in to, and shares its rate limit of 5,000 requests an hour; gh decides which token that is, its own `GH_TOKEN` included. The update check, which reads a public repository's releases, still looks without a token when gh has none, GitHub refuses gh's or says your account's limit is spent, or the `github` setting is off, from the 60 requests an hour GitHub allows every program behind the same address.
 - **Linear**: `LINEAR_API_KEY`, the stored secret `linear-api-key`, else `linearApiKey` in `~/.config/switchboard/linear.json`. Make a key in Linear under Settings, Security & access, Personal API keys.
 
 A credential from `gh`, a secret or the file is kept for ten minutes and forgotten as soon as the service refuses it, so a new one is used on the next request. GitHub's is looked for once at a time, and a look that finds nothing (a `gh` signed out, or too slow on a busy computer) is made again only after a minute, the token found before still used meanwhile. To store a secret, run the command and paste it, then press `Ctrl-d`:
 
 ```
-switchboard platform secret-set github-token
 switchboard platform secret-set linear-api-key
 ```
 
-It reads the secret from its input, never from an argument, which other programs could see. On macOS it goes in the Keychain, as a generic password whose service is `github-token` or `linear-api-key` (one you added there yourself under that service is read too). On Linux it goes in the desktop's keyring through the Secret Service (GNOME Keyring, KWallet), as an item whose `service` attribute is that name; on a computer with no keyring, such as a server or WSL, it goes in `~/.config/switchboard/secrets.json`, which only you can read. `switchboard platform secret <name>` prints one back.
+It reads the secret from its input, never from an argument, which other programs could see. On macOS it goes in the Keychain, as a generic password whose service is `linear-api-key` (one you added there yourself under that service is read too). On Linux it goes in the desktop's keyring through the Secret Service (GNOME Keyring, KWallet), as an item whose `service` attribute is that name; on a computer with no keyring, such as a server or WSL, it goes in `~/.config/switchboard/secrets.json`, which only you can read. `switchboard platform secret <name>` prints one back.
 
 `~/.config/switchboard/linear.json` also holds what Switchboard and its skills need to know about your Linear, each listed in Settings under "Linear (linear.json)":
 
@@ -1381,7 +1380,7 @@ Run again on the same work, a command reopens it: the worktree is reused if it i
 
 A new branch never starts from your main clone as it is on disk, which may be behind origin, on another branch, or carrying commits you haven't pushed, which would then land with the new work. `wt` names the branch as Linear does: a local branch of that name is the ticket's own work, reused as it is; one only origin has, from someone who started the ticket before or another computer, is fetched and checked out tracking it; otherwise the branch starts from origin's default branch as it is now, fetched first, with no upstream until its first push, as `wtn`'s does (below). A fetch of the default branch that fails stops `wt` rather than start from the clone; a repository with no origin starts from the clone's checked-out commit.
 
-`wt`, `wtpr`, `worktree-done`, `wt-jump`, `codex-review`, `wait-ci` and `wait-deploy` are programs you run, so they ask GitHub and Linear whatever the `github` and `linear` settings say, as the tmux version's scripts did; the settings turn off what the workspace does by itself (its lookups, views and keys). `wt` and `worktree-done` read Linear with the key the rest of Switchboard uses: `LINEAR_API_KEY`, else the stored secret `linear-api-key`, else `linearApiKey` in `~/.config/switchboard/linear.json`. Make a personal API key in Linear (Settings, Security & access) and store it with `switchboard platform secret-set linear-api-key`, which reads it from stdin and keeps it in the Keychain on a Mac, or the desktop's keyring on Linux (with no keyring, in `~/.config/switchboard/secrets.json`, which only you can read). The same `linear.json` holds `linearTeam` and `linearLabels`, the team and labels `/shape` files new tickets with. `wtpr` reads GitHub with your token: `GH_TOKEN` or `GITHUB_TOKEN`, `gh auth token` when gh is signed in, else the stored secret `github-token`.
+`wt`, `wtpr`, `worktree-done`, `wt-jump`, `codex-review`, `wait-ci` and `wait-deploy` are programs you run, so they ask GitHub and Linear whatever the `github` and `linear` settings say, as the tmux version's scripts did; the settings turn off what the workspace does by itself (its lookups, views and keys). `wt` and `worktree-done` read Linear with the key the rest of Switchboard uses: `LINEAR_API_KEY`, else the stored secret `linear-api-key`, else `linearApiKey` in `~/.config/switchboard/linear.json`. Make a personal API key in Linear (Settings, Security & access) and store it with `switchboard platform secret-set linear-api-key`, which reads it from stdin and keeps it in the Keychain on a Mac, or the desktop's keyring on Linux (with no keyring, in `~/.config/switchboard/secrets.json`, which only you can read). The same `linear.json` holds `linearTeam` and `linearLabels`, the team and labels `/shape` files new tickets with. `wtpr` reads GitHub with gh's token, `gh auth token`, as the rest of Switchboard does.
 
 ### Starting work from the workspace
 

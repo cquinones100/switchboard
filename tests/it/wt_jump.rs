@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use common::{BIN, TestServer};
+use common::{BIN, TestServer, stand_in};
 use serde_json::Value;
 
 fn git(dir: &Path, args: &[&str]) {
@@ -36,6 +36,11 @@ fn jump(server: &TestServer, pane: &str, args: &[&str]) -> (i32, String, String)
         .arg("wt-jump")
         .args(args)
         .env("HOME", &server.home)
+        // The server's stand-ins first, its signed-out gh among them, so no
+        // real gh is asked for a token.
+        .env("PATH", stand_in::path_with_gh(&server.home.join("bin")))
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .env("SWITCHBOARD_STATE_DIR", &server.state)
         .env("SWITCHBOARD", server.socket())
         .env("SWITCHBOARD_PANE", pane)
@@ -135,6 +140,9 @@ fn tabs_are_found_by_ticket_and_pr_and_listed() {
     let out = Command::new(BIN)
         .args(["wt-jump", "ENG-12"])
         .env("HOME", &server.home)
+        .env("PATH", stand_in::path_with_gh(&server.home.join("bin")))
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
         .env("SWITCHBOARD_STATE_DIR", &server.state)
         .env_remove("SWITCHBOARD")
         .env_remove("SWITCHBOARD_PANE")

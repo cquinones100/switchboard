@@ -181,6 +181,7 @@ fn exports(env: &[(String, String)]) -> String {
     // session bus (Linux's keyring and notifications), its runtime folder,
     // the display, a proxy.
     unset.extend([
+        "GH_TOKEN",
         "GITHUB_TOKEN",
         "SSH_AUTH_SOCK",
         "SSH_AGENT_PID",

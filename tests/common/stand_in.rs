@@ -691,6 +691,13 @@ check() {
 }
 check "$@"
 export GH_CALL
+# As gh does, `gh auth token` says the token in its own variables, GH_TOKEN
+# before GITHUB_TOKEN, ahead of any it signed in with.
+if [ "$GH_CALL" = 'auth token' ]; then
+  for token in "${GH_TOKEN-}" "${GITHUB_TOKEN-}"; do
+    [ -z "$token" ] || { printf '%s\n' "$token"; exit 0; }
+  done
+fi
 # The test's answer.
 @ANSWER@
 "#;
@@ -749,6 +756,18 @@ impl Gh {
     pub fn install(&self, bin: &Path) -> PathBuf {
         install_in(bin, "gh", &GH.replace("@ANSWER@", &self.answer))
     }
+}
+
+/// A PATH with a stand-in gh in `bin` first (a signed-out one, unless the
+/// test put its own there), for a command run outside a `TestServer`, so no
+/// real gh is asked for a token: `gh auth token` says the `GH_TOKEN` the
+/// test gives the command, as gh does, and nothing without one.
+pub fn path_with_gh(bin: &Path) -> String {
+    if !bin.join("gh").exists() {
+        Gh::new().install(bin);
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    format!("{}:{path}", bin.display())
 }
 
 // ── Switchboard's own binary, as a release ──────────────────────────────────

@@ -5,12 +5,14 @@
 //! and its SHA-256 beside it in `<archive>.sha256`, as
 //! `.github/workflows/release.yml` publishes them.
 //!
-//! The releases are read from GitHub's REST API with no token (a public
-//! repository's releases need none, and an hourly look is far inside the 60
-//! requests an hour GitHub allows without one), or with `GH_TOKEN` or
-//! `GITHUB_TOKEN` when one is set, so nothing is started to find one. Drafts
-//! and pre-releases are left out, so a release is offered only once it is
-//! published as one.
+//! The releases are read from GitHub's REST API as every GitHub call is
+//! (`github::get_public`): with gh's token when gh is signed in, since the
+//! 60 requests an hour GitHub allows without one are shared by every program
+//! behind the same address and often spent by the others, and without one
+//! when there is none or it won't do (refused, or its account's limit
+//! spent), which a public repository's releases don't need.
+//! Drafts and pre-releases are left out, so a release is offered only once it
+//! is published as one.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -253,34 +255,12 @@ fn audit(source: &str) -> Audit<'_> {
     }
 }
 
-/// The headers every request to GitHub's API carries, with the token when
-/// the environment holds one.
-fn headers(token: &Option<String>) -> Vec<(&'static str, String)> {
-    let mut headers = vec![
-        ("Accept", "application/vnd.github+json".to_string()),
-        ("X-GitHub-Api-Version", "2022-11-28".to_string()),
-    ];
-    if let Some(token) = token {
-        headers.push(("Authorization", format!("Bearer {token}")));
-    }
-    headers
-}
-
-fn env_token() -> Option<String> {
-    ["GH_TOKEN", "GITHUB_TOKEN"]
-        .iter()
-        .find_map(|v| std::env::var(v).ok().filter(|t| !t.trim().is_empty()))
-}
-
 /// The published releases, the newest thirty GitHub lists. `source` says
 /// what asked, for the request audit. The API's address is GitHub's own,
 /// moved by `SWITCHBOARD_GITHUB_API` as every GitHub call is.
 pub async fn list(source: &str) -> Result<Vec<Release>> {
-    let url = format!("{}/repos/{REPO}/releases?per_page=30", github::api_url());
-    let token = env_token();
-    let owned = headers(&token);
-    let headers: Vec<(&str, &str)> = owned.iter().map(|(n, v)| (*n, v.as_str())).collect();
-    let response = net::get_json(&url, &headers, audit(source)).await?;
+    let path = format!("repos/{REPO}/releases?per_page=30");
+    let response = github::get_public(&path, source).await?;
     if !response.ok() {
         let said = response.body["message"].as_str().unwrap_or("").to_string();
         let kind = match response.status {
