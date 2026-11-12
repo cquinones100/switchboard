@@ -1,19 +1,24 @@
 # Every push and pull request, in jobs that run side by side so a run takes
 # as long as its slowest: the formatting checked; clippy with its warnings as
 # errors (with the net feature and without it, the build that type-checks
-# macOS's paths from Linux) and the tests, each a job of its own on x86_64
-# Linux and on an Apple silicon Mac; and a build for Intel Macs
-# cross-compiled on the same Mac by its own toolchain, left out on a
-# landing's own `ci/land-*` branch (main and pull requests still build it, and
-# the release builds it itself), since a landing waits on clippy and the
-# tests alone and the account's macOS jobs are few. The Rust is the one
-# rust-toolchain.toml pins, installed by rustup as that file says. Each job
-# keeps its own cache of cargo's registry and the dependencies' builds
-# (Swatinem/rust-cache), keyed on the toolchain, Cargo.lock, the manifests'
-# profiles and the environment, and saved again whenever that key changes.
-# The tests run on 8 threads whatever the runner's cores, since most of them
-# wait on a deadline rather than compute, and `common::patience()` stretches
-# the deadlines with the load that adds.
+# macOS's paths from Linux) on x86_64 Linux and on an Apple silicon Mac; the
+# tests, run by cargo-nextest, in one job on Linux and on the Mac built once
+# into an archive whose tests two jobs then run half each, since running
+# them took longer than building them and a landing waits on the slowest
+# job; and a build for Intel Macs cross-compiled on the same Mac by its own
+# toolchain, left out on a landing's own `ci/land-*` branch (main and pull
+# requests still build it, and the release builds it itself), since a
+# landing waits on clippy and the tests alone and the account's macOS jobs
+# are few. nextest is CI's alone: on the computer the tests are `cargo
+# test`, and the Linux job checks that nextest lists as many tests as it.
+# The Rust is the one rust-toolchain.toml pins, installed by rustup as that
+# file says. Each job keeps its own cache of cargo's registry and the
+# dependencies' builds (Swatinem/rust-cache), keyed on the toolchain,
+# Cargo.lock, the manifests' profiles and the environment, and saved again
+# whenever that key changes. The tests run on 8 threads whatever the
+# runner's cores, since most of them wait on a deadline rather than
+# compute, and `common::patience()` stretches the deadlines with the load
+# that adds.
 
 name: CI
 
@@ -66,19 +71,9 @@ jobs:
       - name: Clippy without the net feature
         run: cargo clippy --locked --all-targets --no-default-features -- -D warnings
 
-  test:
-    name: Tests (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            os: ubuntu-latest
-          - name: macOS arm64
-            os: macos-latest
-    runs-on: ${{ matrix.os }}
-    env:
-      RUST_TEST_THREADS: "8"
+  test-linux:
+    name: Tests (Linux x86_64)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain
@@ -86,11 +81,70 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: test
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      - name: Check that nextest runs every test cargo test would
+        # nextest runs no doctests and only what the test harness lists, so a
+        # test it would leave out fails here rather than going unrun.
+        run: |
+          by_nextest=$(cargo nextest list --locked --run-ignored all --message-format oneline | wc -l)
+          by_cargo=$(cargo test --locked -- --list --format terse 2>/dev/null | grep -c ': test$')
+          echo "nextest lists $by_nextest tests, cargo test $by_cargo"
+          test "$by_nextest" -eq "$by_cargo"
       - name: Tests
-        # The test binaries (tests/it, the three that change their
-        # environment, and the unit tests) each run whatever one before it
-        # failed, so a run names every failure rather than the first binary's.
-        run: cargo test --locked --no-fail-fast
+        # Every test in a process of its own, each running whatever one before
+        # it failed, so a run names every failure rather than the first.
+        run: cargo nextest run --locked --no-fail-fast --test-threads 8
+
+  build-macos:
+    name: Build the tests (macOS arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: test
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      - name: Build the test binaries into an archive
+        run: cargo nextest archive --locked --archive-file tests.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-tests
+          path: tests.tar.zst
+          retention-days: 1
+
+  test-macos:
+    name: Tests (macOS arm64, ${{ matrix.partition }} of 2)
+    needs: build-macos
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-tests
+      - name: Tests
+        # The archive is unpacked into the checkout's own target/, the path
+        # it was built at, since the tests find the binary by the path cargo
+        # compiled into them (CARGO_BIN_EXE_switchboard).
+        run: >
+          cargo nextest run --archive-file tests.tar.zst
+          --workspace-remap . --extract-to . --extract-overwrite
+          --partition count:${{ matrix.partition }}/2
+          --no-fail-fast --test-threads 8
 
   intel-mac:
     name: Build (macOS x86_64)
