@@ -904,15 +904,25 @@ impl Server {
         let was = m.current().map(|v| v.id.clone());
         // The Autopilot view orders its items by how far along they are, and
         // CI by whether their checks fail, run or pass, Resources by each
-        // tab's CPU or memory, and Usage its tabs by their spend, so a
-        // stage, a check or a reading changing moves them: the cursor
-        // follows the chosen one.
+        // tab's CPU or memory, Usage its tabs by their spend, and Reminders
+        // by their time, so a stage, a check, a reading or a reminder changed
+        // moves them: the cursor follows the chosen one.
         let follows = |id: &ViewId| {
             matches!(
                 id,
-                ViewId::Autopilot | ViewId::Ci | ViewId::Resources | ViewId::Usage
+                ViewId::Autopilot
+                    | ViewId::Ci
+                    | ViewId::Resources
+                    | ViewId::Usage
+                    | ViewId::Reminders
             )
         };
+        // The Reminders view's chosen reminder, moved to another day, takes
+        // the chosen day with it.
+        let reminder_chosen = on_reminders(&m)
+            && m.current()
+                .and_then(|v| super::reminders::chosen(&m, v))
+                .is_some_and(|i| i as isize == m.cursor);
         let followed = m.current().map(|v| v.id.clone()).filter(follows);
         let pilot_chosen = followed
             .as_ref()
@@ -1009,10 +1019,15 @@ impl Server {
             m.cursor = at as isize;
         }
         fit_cursor(&mut m);
-        // A Calendar keycap's focus goes with the event it was given on.
-        let keycap_kept = on_calendar(&m)
+        if reminder_chosen {
+            follow_reminder(&mut m);
+        }
+        // A Calendar keycap's focus goes with the event it was given on; a
+        // Reminders keycap's stays, acting on the chosen day's reminder.
+        let keycap_kept = (on_calendar(&m)
             && m.keycap_for.is_some()
-            && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref();
+            && m.chosen_item().map(|i| &i.id) == m.keycap_for.as_ref())
+            || on_reminders(&m);
         if matches!(m.focus, Some(Focus::Key(_))) && !keycap_kept {
             m.focus = on_calendar(&m).then_some(Focus::Item);
         }
@@ -1162,6 +1177,16 @@ impl Server {
             let d = self.day.calendar.clone();
             let loaded = views::loaded(&d);
             out.push(view(ViewId::Calendar, "Calendar", d, loaded));
+        }
+        if on("reminders") {
+            let rules = crate::sidebar::model::Rules::now();
+            let data = ViewData {
+                items: super::reminders::items(&self.sidebar_all_tabs(), &rules),
+                empty: Some(super::reminders::EMPTY.into()),
+                at: Some(1),
+                ..ViewData::default()
+            };
+            out.push(view(ViewId::Reminders, "Reminders", data, true));
         }
         if on("view_slack") {
             let d = self.day.slack.clone();
@@ -1787,6 +1812,7 @@ impl Server {
             {
                 k = key
             }
+            Some(Focus::Key(key)) if press && on_reminders(m) => k = key,
             Some(Focus::Close) if press => {
                 self.mission_close_from(client, m);
                 return;
@@ -1802,6 +1828,9 @@ impl Server {
             && m.current().is_some_and(|v| v.id == ViewId::Settings)
         {
             k = Key::new(KeyCode::Enter, Mods::NONE);
+        }
+        if self.reminders_key(client, m, k) {
+            return;
         }
         match ci_key(m, k) {
             Some(CiKey::Moved) => return,
@@ -2405,6 +2434,28 @@ impl Server {
     /// Enter on what is chosen: a tab's menu; on an item, its own menu, or
     /// what it does by itself (a heading opening, a setting changing, a
     /// plugin's item opening).
+    /// A tab's menu, as Enter on its card opens it: going there, answering,
+    /// its reminder, its place in the landing queue.
+    fn tab_menu(&mut self, client: ClientId, tab: &crate::sidebar::model::TabModel) {
+        let all = self.sidebar_all_tabs();
+        let waiter = self.sources.landing_waiter(tab.id).cloned();
+        let list = choices::tab_choices(
+            tab,
+            &all,
+            waiter.as_ref(),
+            settings::is_on("reminders"),
+            settings::is_on("tab_title"),
+        );
+        self.mission_menu(
+            client,
+            format!("{} {}", tab.index, tab.name),
+            None,
+            list,
+            None,
+            None,
+        );
+    }
+
     fn mission_enter(&mut self, client: ClientId, m: &mut Mission) {
         let Some(view) = m.current().cloned() else {
             if m.cursor < 0 && m.snap.pilot.is_some() {
@@ -2420,28 +2471,20 @@ impl Server {
             else {
                 return;
             };
-            let all = self.sidebar_all_tabs();
-            let waiter = self.sources.landing_waiter(tab.id).cloned();
-            let list = choices::tab_choices(
-                &tab,
-                &all,
-                waiter.as_ref(),
-                settings::is_on("reminders"),
-                settings::is_on("tab_title"),
-            );
-            self.mission_menu(
-                client,
-                format!("{} {}", tab.index, tab.name),
-                None,
-                list,
-                None,
-                None,
-            );
+            self.tab_menu(client, &tab);
             return;
         };
         let Some(item) = m.chosen_item().cloned() else {
             return;
         };
+        // A reminder's menu is its tab's, as its card's is.
+        if m.current().is_some_and(|v| v.id == ViewId::Reminders)
+            && let Target::Tab(id) = item.target
+            && let Some(tab) = self.sidebar_all_tabs().into_iter().find(|t| t.id == id)
+        {
+            self.tab_menu(client, &tab);
+            return;
+        }
         if views::is_fold_line(&item)
             && let Some(repo) = views::repo_key(&item)
         {
@@ -3505,27 +3548,214 @@ impl Server {
 
     // ── Reminders ───────────────────────────────────────────────────────────
 
-    /// "Remind me about this tab": when (remind.sh's times, or one typed),
-    /// then what for; with a reminder set, clearing it comes first. The
+    /// The Reminders view's keys with its month drawn: h and l a day, j
+    /// and k a week, H and L a month, t today; Enter the chosen day's
+    /// reminder's menu, g its tab, e its box, x clearing it, and on a day
+    /// with none, e a reminder for a tab on that day; i the pane's lists
+    /// under a narrow month. True when it took the key.
+    fn reminders_key(&mut self, client: ClientId, m: &mut Mission, k: Key) -> bool {
+        if !on_reminders(m) || !plain(&k) {
+            return false;
+        }
+        let Some(view) = m.current().cloned() else {
+            return false;
+        };
+        use super::reminders::{chosen_day, step};
+        let day = chosen_day(m);
+        let to = match k.code {
+            KeyCode::Char('h') | KeyCode::Left => Some(step(day, -1, 0)),
+            KeyCode::Char('l') | KeyCode::Right => Some(step(day, 1, 0)),
+            KeyCode::Char('j') | KeyCode::Down => Some(step(day, 7, 0)),
+            KeyCode::Char('k') | KeyCode::Up => Some(step(day, -7, 0)),
+            KeyCode::Char('H') => Some(step(day, 0, -1)),
+            KeyCode::Char('L') => Some(step(day, 0, 1)),
+            KeyCode::Char('t') => Some(super::reminders::today(m)),
+            _ => None,
+        };
+        if let Some(to) = to {
+            choose_day(m, to);
+            if m.focus.is_some() {
+                m.focus = Some(Focus::Item);
+            }
+            return true;
+        }
+        let chosen = super::reminders::chosen(m, &view);
+        let tab = chosen.and_then(|i| match view.data.items[i].target {
+            Target::Tab(t) => Some(t),
+            _ => None,
+        });
+        // What acts on the reminder the pane shows takes the cursor to it, so
+        // the view keeps it chosen once it changes.
+        if let Some(i) = chosen {
+            m.cursor = i as isize;
+        }
+        match (k.code, tab) {
+            (KeyCode::Char('i'), _) => m.reminders_lists = !m.reminders_lists,
+            (KeyCode::Enter, Some(_)) => {
+                m.cursor = chosen.unwrap_or(0) as isize;
+                self.mission_enter(client, m);
+            }
+            (KeyCode::Char('g'), Some(t)) => self.mission_go(client, t),
+            (KeyCode::Char('e'), Some(t)) => self.remind_tab(client, t),
+            (KeyCode::Char('x'), Some(t)) => {
+                // Mission control is out of its overlay while its key is
+                // handled, so what was done goes in its footer here.
+                self.clear_reminder(client, t);
+                m.note = Some(format!(
+                    "Reminder cleared for {}.",
+                    self.remind_name(t).unwrap_or_default()
+                ));
+            }
+            (KeyCode::Char('e'), None) => self.remind_on_day(client, day),
+            (KeyCode::Enter | KeyCode::Char('g' | 'x'), None) => {
+                let words = format!(
+                    "No reminder on {} {} {}. e sets one.",
+                    remind::short_day(day.weekday()),
+                    remind::short_month(day.month()),
+                    day.day()
+                );
+                self.say(Some(client), &words);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// `e` on a day of the Reminders view with none: a tab to remind
+    /// about, then its reminder's box with that day at 9:00 typed in
+    /// (today with nothing typed, and a day gone by refused).
+    fn remind_on_day(&mut self, client: ClientId, day: jiff::civil::Date) {
+        let tabs = self.sidebar_all_tabs();
+        if tabs.is_empty() {
+            return;
+        }
+        let today = util::local_now().date();
+        if day < today {
+            self.say(Some(client), "That day has gone by.");
+            return;
+        }
+        let rows = tabs
+            .iter()
+            .map(|t| PickItem {
+                text: format!("{} {}", t.index, t.name),
+                value: t.id.0.to_string(),
+                ..PickItem::default()
+            })
+            .collect();
+        // Today keeps the times offered; another day starts at 9:00 there.
+        let typed = if day == today {
+            String::new()
+        } else {
+            // With its year, so a day a year or more on stays that day.
+            format!("{}-{:02}-{:02} 9am", day.year(), day.month(), day.day())
+        };
+        let picker = Picker::new(
+            format!(
+                "Remind me about a tab on {} {} {}",
+                remind::short_day(day.weekday()),
+                remind::short_month(day.month()),
+                day.day()
+            ),
+            rows,
+        );
+        self.pick(client, picker, move |server, client, picked| {
+            let Some(picked) = picked else {
+                return;
+            };
+            if let Some(tab) = picked.value.parse().ok().map(TabId) {
+                server.remind_tab_with(client, tab, &typed);
+            }
+        });
+    }
+
+    /// A tab's reminder cleared, and said through the footer.
+    pub(crate) fn clear_reminder(&mut self, client: ClientId, tab: TabId) {
+        let name = self.remind_name(tab).unwrap_or_default();
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            for option in ["@remind_at", "@remind_note", "@remind_said"] {
+                t.opts.remove(option);
+            }
+        }
+        self.dirty_tab(tab);
+        self.mission_redraw();
+        self.mission_note(client, format!("Reminder cleared for {name}."));
+    }
+
+    /// A tab's reminder set, and said through the footer.
+    pub(crate) fn set_reminder(&mut self, client: ClientId, tab: TabId, at: i64, note: &str) {
+        let name = self.remind_name(tab).unwrap_or_default();
+        if let Some(t) = self.tabs.get_mut(&tab) {
+            t.opts.insert("@remind_at".into(), at.to_string());
+            if note.is_empty() {
+                t.opts.remove("@remind_note");
+            } else {
+                t.opts.insert("@remind_note".into(), note.to_string());
+            }
+            t.opts.remove("@remind_said");
+        }
+        self.dirty_tab(tab);
+        self.mission_redraw();
+        self.mission_note(
+            client,
+            format!("Reminder set for {name}, {}.", remind::said(at)),
+        );
+    }
+
+    /// A tab's number and name, as its reminder's words name it.
+    fn remind_name(&self, tab: TabId) -> Option<String> {
+        let index = self
+            .session_of_tab(tab)
+            .and_then(|s| s.tabs.iter().position(|t| *t == tab))?;
+        Some(format!("{} {}", index + 1, self.tab_label(tab)))
+    }
+
+    /// "Remind me about this tab": with UX 2.0, the reminder's box (board
+    /// 34, `remind_box`); else when (remind.sh's times, or one typed),
+    /// then what for, with a reminder set, clearing it coming first. The
     /// times are a list to pick from or type in, as remind.sh's fzf was: a
     /// choice's number and Enter takes it, and what is typed wins over the
     /// row it resembles when it names a time (`2m` over "In 20 minutes").
     pub fn remind_tab(&mut self, client: ClientId, tab: TabId) {
+        self.remind_tab_with(client, tab, "");
+    }
+
+    /// `remind_tab`, with `typed` in the box's When to start with.
+    pub(crate) fn remind_tab_with(&mut self, client: ClientId, tab: TabId, typed: &str) {
         if !settings::is_on("reminders") {
             self.say(Some(client), "Reminders are off in Settings.");
             return;
         }
-        let Some(index) = self
-            .session_of_tab(tab)
-            .and_then(|s| s.tabs.iter().position(|t| *t == tab))
-        else {
+        let Some(name) = self.remind_name(tab) else {
             return;
         };
-        let name = format!("{} {}", index + 1, self.tab_label(tab));
-        let set = self
-            .tabs
-            .get(&tab)
-            .is_some_and(|t| t.opts.get("@remind_at").is_some_and(|v| !v.is_empty()));
+        let opt = |key: &str| {
+            self.tabs
+                .get(&tab)
+                .and_then(|t| t.opts.get(key))
+                .filter(|v| !v.is_empty())
+                .cloned()
+        };
+        let set_at = opt("@remind_at").and_then(|v| v.parse::<i64>().ok());
+        if settings::is_on("ux2") {
+            let set = set_at.map(|at| (at, opt("@remind_note").unwrap_or_default()));
+            let boxed = super::remind_box::RemindBox::new(&name, set).typed(typed);
+            self.open(
+                client,
+                Box::new(boxed),
+                Some(Box::new(move |server: &mut Server, client, outcome| {
+                    let Outcome::Picked(p) = outcome else {
+                        return;
+                    };
+                    match (p.index, p.value.parse::<i64>()) {
+                        (1, _) => server.clear_reminder(client, tab),
+                        (_, Ok(at)) => server.set_reminder(client, tab, at, &p.query),
+                        _ => {}
+                    }
+                })),
+            );
+            return;
+        }
+        let set = set_at.is_some();
         let mut labels: Vec<String> = Vec::new();
         if set {
             labels.push("Clear the reminder".into());
@@ -3563,27 +3793,17 @@ impl Server {
                     .unwrap_or_else(|| typed.to_string()),
             };
             if label == "Clear the reminder" {
-                if let Some(t) = server.tabs.get_mut(&tab) {
-                    for option in ["@remind_at", "@remind_note", "@remind_said"] {
-                        t.opts.remove(option);
-                    }
-                }
-                server.dirty_tab(tab);
-                server.mission_redraw();
-                server.mission_note(client, format!("Reminder cleared for {name}."));
+                server.clear_reminder(client, tab);
                 return;
             }
-            server.remind_when(client, tab, name, &label);
+            server.remind_when(client, tab, &label);
         });
     }
 
     /// A reminder's time read; then what it is for asked, and it set.
-    fn remind_when(&mut self, client: ClientId, tab: TabId, name: String, text: &str) {
+    fn remind_when(&mut self, client: ClientId, tab: TabId, text: &str) {
         let Some(at) = remind::when(text, &util::local_now()) else {
-            self.mission_note(
-                client,
-                format!("\"{text}\" isn't a time I know. Try 45m, 2h, 1d, 3pm or 15:30."),
-            );
+            self.mission_note(client, format!("\"{text}\" {}", remind::NOT_A_TIME));
             return;
         };
         let ask = Ask::new(
@@ -3598,21 +3818,7 @@ impl Server {
                 let Outcome::Picked(p) = outcome else {
                     return;
                 };
-                if let Some(t) = server.tabs.get_mut(&tab) {
-                    t.opts.insert("@remind_at".into(), at.to_string());
-                    if p.value.is_empty() {
-                        t.opts.remove("@remind_note");
-                    } else {
-                        t.opts.insert("@remind_note".into(), p.value.clone());
-                    }
-                    t.opts.remove("@remind_said");
-                }
-                server.dirty_tab(tab);
-                server.mission_redraw();
-                server.mission_note(
-                    client,
-                    format!("Reminder set for {name}, {}.", remind::said(at)),
-                );
+                server.set_reminder(client, tab, at, &p.value);
             })),
         );
     }
@@ -4293,10 +4499,13 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             // A key on the footer is pressed as typed, the focus kept for it.
             if let Spot::Key(key) = spot {
                 m.hover = None;
-                // A Calendar keycap acts on its event, and the Inbox ticket's
-                // tab line on its notification: a filter being typed is kept,
-                // done typing, rather than given the key.
-                if (on_calendar(m) || m.current().is_some_and(|v| inbox_board::shown(m, v)))
+                // A Calendar keycap acts on its event, a Reminders keycap on
+                // its reminder, and the Inbox ticket's tab line on its
+                // notification: a filter being typed is kept, done typing,
+                // rather than given the key.
+                if (on_calendar(m)
+                    || on_reminders(m)
+                    || m.current().is_some_and(|v| inbox_board::shown(m, v)))
                     && let Some(f) = m.filter.as_mut()
                 {
                     f.typing = false;
@@ -4325,7 +4534,12 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                     Then::Prepare
                 }
                 Spot::View(_) => Then::Redraw,
-                Spot::Index(i) if i == m.cursor && m.chosen_check().is_none() => Then::Enter,
+                Spot::Index(i) if i == m.cursor && m.chosen_check().is_none() => {
+                    // The Reminders view's chosen day goes to the reminder
+                    // clicked, which Enter then acts on.
+                    follow_reminder(m);
+                    Then::Enter
+                }
                 Spot::Check(i, n) if i == m.cursor && m.chosen_check() == Some(n) => Then::Enter,
                 Spot::Check(i, n) => {
                     m.cursor = i;
@@ -4346,6 +4560,11 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
                 Spot::Index(i) => {
                     m.cursor = i;
                     choose_check(m, None);
+                    follow_reminder(m);
+                    Then::Prepare
+                }
+                Spot::Day(day) => {
+                    choose_day(m, day);
                     Then::Prepare
                 }
                 Spot::Side(_) => Then::Nothing,
@@ -4462,6 +4681,44 @@ fn calendar_step(
     let date = to.to_string();
     crate::day::calendar::other_day_view(feed, &date, now)?;
     Ok(Some(date))
+}
+
+/// Whether the Reminders view is in front, drawn as its month.
+fn on_reminders(m: &Mission) -> bool {
+    m.current().is_some_and(|v| v.id == ViewId::Reminders) && super::reminders::is_month(m)
+}
+
+/// The Reminders view's chosen day moved to `day` (today's kept as
+/// none, so the view follows the clock past midnight), and its first
+/// reminder chosen.
+fn choose_day(m: &mut Mission, day: jiff::civil::Date) {
+    m.reminders_day = (day != super::reminders::today(m)).then_some(day);
+    let Some(view) = m.current() else {
+        return;
+    };
+    let tz = &m.snap.tz;
+    if let Some(i) = view
+        .data
+        .items
+        .iter()
+        .position(|i| super::reminders::day_of(i, tz) == day)
+    {
+        m.cursor = i as isize;
+    }
+}
+
+/// A reminder chosen by a click, Tab or a move takes the chosen day to its
+/// own, so what acts on the chosen day's reminder acts on it.
+fn follow_reminder(m: &mut Mission) {
+    if !on_reminders(m) {
+        return;
+    }
+    if let Some(day) = m
+        .chosen_item()
+        .map(|i| super::reminders::day_of(i, &m.snap.tz))
+    {
+        m.reminders_day = (day != super::reminders::today(m)).then_some(day);
+    }
 }
 
 /// Whether the Calendar view is in front.
@@ -4669,10 +4926,12 @@ fn only_moves(m: &Mission, key: Key) -> bool {
         return false;
     }
     // The Calendar's chosen event brings its photos and notes, and h and
-    // l move a day, and the Slack board's chosen message its thread, so
-    // each takes its snapshot again.
-    if m.current()
-        .is_some_and(|v| v.id == ViewId::Calendar || super::render::slack_board_shown(m, v))
+    // l move a day, the Slack board's chosen message its thread, and the
+    // Reminders view's keys move its day and act on its reminders, so each
+    // takes its snapshot again.
+    if on_reminders(m)
+        || m.current()
+            .is_some_and(|v| v.id == ViewId::Calendar || super::render::slack_board_shown(m, v))
     {
         return false;
     }
@@ -4726,6 +4985,7 @@ fn move_to(m: &mut Mission, to: isize, count: isize) {
     if m.focus.is_some() {
         m.focus = Some(Focus::Item);
     }
+    follow_reminder(m);
 }
 
 /// j and k: in the tabs a row of cards, keeping the column as far as the
@@ -5018,7 +5278,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         .hits
         .iter()
         .filter_map(|h| match h.spot {
-            Spot::Key(k) if m.current().is_some_and(|v| v.id == ViewId::Calendar) => Some(k),
+            Spot::Key(k) if on_calendar(m) || on_reminders(m) => Some(k),
             _ => None,
         })
         .filter(|k| {
@@ -5066,6 +5326,7 @@ fn move_focus(m: &mut Mission, by: isize) {
         Stop::Item(i) => {
             m.focus = Some(Focus::Item);
             m.cursor = i;
+            follow_reminder(m);
         }
         Stop::Close => m.focus = Some(Focus::Close),
         Stop::Key(k) => {

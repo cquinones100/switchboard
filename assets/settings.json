@@ -76,7 +76,7 @@
     "key": "reminders",
     "category": "Sidebar",
     "label": "Reminders",
-    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due; off, reminders are neither set nor shown",
+    "description": "M-p's Remind me about this tab: the tab waits under Reminders with the time left, then moves to Needs you with a banner when it comes due, and mission control's Reminders view shows every tab's reminder, on a month with UX 2.0; off, reminders are neither set nor shown, and the view is gone",
     "default": true
   },
   {

@@ -35,6 +35,8 @@ fn settings(server: &TestServer, extra: Value) {
         "view_resources": false,
         "usage": false,
         "view_keys": false,
+        // The Reminders view too, which a test of reminders turns on.
+        "reminders": false,
         "standup_note": false,
         "meeting_notes": false,
         "new_notes": false,
@@ -490,7 +492,7 @@ fn tab_in_a_picker_goes_round_its_rows_and_stops_on_easy_modes_close_button() {
 
 #[test]
 fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
-    let (server, mut client) = two_tabs(json!({}));
+    let (server, mut client) = two_tabs(json!({"reminders": true}));
     open(&mut client);
     client.type_text("\r");
     pick(&mut client, "Remind me about it later");
@@ -512,7 +514,7 @@ fn a_reminder_set_from_a_tabs_menu_puts_it_under_reminders() {
 
 #[test]
 fn a_time_typed_into_the_reminder_list_wins_over_the_row_it_resembles() {
-    let (server, mut client) = two_tabs(json!({}));
+    let (server, mut client) = two_tabs(json!({"reminders": true}));
     open(&mut client);
     client.type_text("\r");
     pick(&mut client, "Remind me about it later");
@@ -1173,4 +1175,156 @@ fn with_ux2_the_inbox_shows_each_in_its_ticket_and_o_x_and_enter_act_on_it() {
         ),
         "a dismissed one stays unread in Linear"
     );
+}
+
+/// A server with UX 2.0 on and two tabs, the second in front, and a
+/// client on it.
+fn two_tabs_ux2() -> (TestServer, TestClient) {
+    let server = TestServer::start();
+    settings(&server, json!({"ux2": true, "reminders": true}));
+    let mut client = server.attach(160, 40);
+    client.wait_text("$");
+    // UX 2.0 taken up: each tab has a header.
+    client.wait_text("M-c Claude");
+    server.ok(&["new-tab", "-n", "second"]);
+    wait_list(&server, "the second tab in front", |l| {
+        tabs(l).len() == 2 && tabs(l)[1]["current"] == true
+    });
+    client.wait_text("second");
+    (server, client)
+}
+
+/// The first tab's id, for `set -t`.
+fn first_tab_id(server: &TestServer) -> String {
+    tabs(&server.list())[0]["id"].as_str().unwrap().to_string()
+}
+
+fn remind_at(list: &Value, tab: usize) -> Option<i64> {
+    tabs(list)[tab]["options"]["@remind_at"]
+        .as_str()
+        .and_then(|v| v.parse().ok())
+}
+
+/// The box saying what was done (`Server::say`, mission control being
+/// closed) put away.
+fn said(client: &mut TestClient, words: &str) {
+    client.wait_text(words);
+    client.type_text("\x1b");
+    client.wait_for("the message gone", |s| !s.iter().any(|l| l.contains(words)));
+}
+
+/// M-p's "Remind me about this tab", which with UX 2.0 opens the box.
+fn remind_box(client: &mut TestClient, title: &str) {
+    client.type_text(&format!("{ALT}p"));
+    client.wait_text("Actions");
+    client.type_text("remind me about this");
+    client.wait_text("Remind me about this tab later");
+    client.type_text("\r");
+    client.wait_text(title);
+}
+
+#[test]
+fn with_ux2_the_reminder_box_sets_a_time_offered_a_date_typed_and_clears_it() {
+    let (server, mut client) = two_tabs_ux2();
+    remind_box(&mut client, "Remind me about 2 second");
+    client.wait_text("In 3 hours");
+    // ↓ ↓ to "In 3 hours", Tab to What for, a note, Enter.
+    client.send(b"\x1b[B");
+    client.send(b"\x1b[B");
+    client.type_text("\t");
+    client.type_text("the handoff\r");
+    let list = wait_list(&server, "the reminder set", |l| remind_at(l, 1).is_some());
+    let now = jiff::Timestamp::now().as_second();
+    let at = remind_at(&list, 1).unwrap();
+    assert!(
+        (at - now - 3 * 3600).abs() < 60,
+        "{at} is three hours from {now}"
+    );
+    assert_eq!(tabs(&list)[1]["options"]["@remind_note"], "the handoff");
+    said(&mut client, "Reminder set for 2 second");
+
+    remind_box(&mut client, "Change the reminder for 2 second");
+    client.wait_text("Set now:");
+    client.type_text("nov 20 3pm");
+    client.wait_text("✓ ");
+    client.type_text("\r");
+    let local = jiff::Zoned::now();
+    let expected = mission_when("nov 20 3pm", &local);
+    let list = wait_list(&server, "the date set", |l| {
+        remind_at(l, 1) == Some(expected)
+    });
+    assert_eq!(tabs(&list)[1]["options"]["@remind_note"], "the handoff");
+    said(&mut client, "Reminder set for 2 second");
+
+    remind_box(&mut client, "Change the reminder for 2 second");
+    client.type_text(&format!("{ALT}x"));
+    let list = wait_list(&server, "the reminder cleared", |l| {
+        remind_at(l, 1).is_none()
+    });
+    assert!(tabs(&list)[1]["options"]["@remind_note"].is_null());
+}
+
+/// When `text` names, as the server reads it.
+fn mission_when(text: &str, now: &jiff::Zoned) -> i64 {
+    switchboard::mission::remind::when(text, now).unwrap()
+}
+
+#[test]
+fn with_ux2_the_reminders_view_moves_its_day_and_month_clears_and_goes() {
+    let (server, mut client) = two_tabs_ux2();
+    let id = first_tab_id(&server);
+    let soon = (jiff::Timestamp::now().as_second() + 120).to_string();
+    server.ok(&["set", "-t", &id, "@remind_at", &soon]);
+    server.ok(&["set", "-t", &id, "@remind_note", "look at the build"]);
+    open(&mut client);
+    client.type_text("vreminders\r");
+    client.wait_text("1 reminder");
+    client.wait_text("look at the build");
+    let today = jiff::Zoned::now().date();
+    let title = |d: jiff::civil::Date| {
+        format!(
+            "{:?}, {} {}",
+            d.weekday(),
+            switchboard::mission::remind::MONTHS[(d.month() - 1) as usize],
+            d.day()
+        )
+    };
+    let month = |d: jiff::civil::Date| {
+        format!(
+            "{} {}",
+            switchboard::mission::remind::MONTHS[(d.month() - 1) as usize].to_uppercase(),
+            d.year()
+        )
+    };
+    use switchboard::mission::reminders::step;
+    client.type_text("l");
+    client.wait_text(&title(step(today, 1, 0)));
+    client.type_text("j");
+    client.wait_text(&title(step(today, 8, 0)));
+    client.type_text("k");
+    client.type_text("h");
+    client.wait_text(&title(today));
+    client.type_text("L");
+    client.wait_text(&month(step(today, 0, 1)));
+    client.type_text("H");
+    client.wait_text(&month(today));
+    client.type_text("L");
+    client.type_text("t");
+    client.wait_text(&title(today));
+    client.wait_text("look at the build");
+    client.type_text("x");
+    wait_list(&server, "the reminder cleared", |l| {
+        remind_at(l, 0).is_none()
+    });
+    client.wait_text("Reminder cleared for 1");
+
+    server.ok(&["set", "-t", &id, "@remind_at", &soon]);
+    client.wait_text("1 reminder");
+    client.type_text("g");
+    wait_list(&server, "the first tab in front", |l| {
+        tabs(l)[0]["current"] == true
+    });
+    client.wait_for("mission control closed", |s| {
+        !s.iter().any(|l| l.contains("MISSION CONTROL"))
+    });
 }

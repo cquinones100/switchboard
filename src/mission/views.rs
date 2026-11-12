@@ -3,7 +3,8 @@
 //! the one shape every source gives (`crate::items`), from what the server
 //! already keeps, so building them reads no network and starts no process.
 //! In the daemon's order, each only while its setting is on: the
-//! Notifications (the sidebar's, whole), the Work map, the Calendar, Slack,
+//! Notifications (the sidebar's, whole), the Work map, the Calendar,
+//! Reminders (while `reminders` is on), Slack,
 //! Closed, the PR board, CI, Landing (while something lands), Autopilot
 //! (with UX 2.0, while it is on, src/autopilot/view.rs), the ticket
 //! board, the Inbox, Sessions, Resources, Usage, Keys (`keymap`), Settings,
@@ -47,6 +48,8 @@ pub enum ViewId {
     Notifications,
     WorkMap,
     Calendar,
+    /// Every tab's reminder on a month (src/mission/reminders.rs).
+    Reminders,
     Slack,
     Closed,
     Prs,
@@ -134,9 +137,10 @@ fn place(id: &ViewId) -> (Group, u8) {
         ViewId::Tickets => (Group::Code, 1),
         ViewId::Ci => (Group::Code, 2),
         ViewId::Calendar => (Group::Day, 0),
-        ViewId::Slack => (Group::Day, 1),
-        ViewId::Inbox => (Group::Day, 2),
-        ViewId::Notifications => (Group::Day, 3),
+        ViewId::Reminders => (Group::Day, 1),
+        ViewId::Slack => (Group::Day, 2),
+        ViewId::Inbox => (Group::Day, 3),
+        ViewId::Notifications => (Group::Day, 4),
         ViewId::Usage => (Group::System, 0),
         ViewId::Resources => (Group::System, 1),
         ViewId::Settings => (Group::System, 2),

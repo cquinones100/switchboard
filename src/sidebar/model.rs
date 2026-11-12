@@ -800,7 +800,7 @@ pub fn state_words(tab: &TabModel, r: &Rules) -> String {
     joined(parts)
 }
 
-fn state_only(tab: &TabModel, r: &Rules) -> String {
+pub fn state_only(tab: &TabModel, r: &Rules) -> String {
     // The Notes tab while Notes is beside another: where it went.
     if tab.notes_away {
         return match &tab.notes_owner {

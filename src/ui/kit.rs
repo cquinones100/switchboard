@@ -241,7 +241,8 @@ pub fn mark(m: Mark, frame: usize, theme: &Theme) -> Span<'static> {
     Span::styled(glyph, tone.bold(theme))
 }
 
-fn spans_width(spans: &[Span<'_>]) -> usize {
+/// How many columns spans take.
+pub fn spans_width(spans: &[Span<'_>]) -> usize {
     spans.iter().map(|s| width(&s.content)).sum()
 }
 

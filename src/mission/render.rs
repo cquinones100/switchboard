@@ -3746,6 +3746,7 @@ fn hints(m: &Mission, view: Option<&View>, beside: bool) -> Vec<(String, String)
         ]);
     };
     match view.id {
+        ViewId::Reminders if super::reminders::is_month(m) => with(super::reminders::hints()),
         ViewId::Settings if settings_board_shown(m) => with(&[
             ("hl", "category"),
             ("jk", "option"),
@@ -4374,7 +4375,11 @@ pub fn drawn(
             reverse(fg(theme.dim), filter_lit),
         ));
     }
-    let counts = tally(&snap.tabs, &snap.rules, theme);
+    // With the Reminders view in front, the bar's right counts them.
+    let counts = match view.filter(|v| v.id == ViewId::Reminders && snap.rules.ux2) {
+        Some(v) => vec![Span::styled(super::reminders::bar_words(v), fg(theme.dim))],
+        None => tally(&snap.tabs, &snap.rules, theme),
+    };
     let mut lines = Vec::new();
     if let Some(groups) = m.groups() {
         let bar = Bar {
@@ -4607,6 +4612,8 @@ pub fn drawn(
                 lines.extend(board);
                 hits.extend(at);
                 meters.extend(images);
+            } else if v.id == ViewId::Reminders && super::reminders::is_month(m) {
+                super::reminders::month(v, m, cols, rows, &mut lines, &mut hits);
             } else if v.id == ViewId::Calendar && super::calendar::is_day(v) {
                 let lit = match (m.hover, m.focus) {
                     (Some(Spot::Key(k)), _) | (_, Some(Focus::Key(k))) => Some(k),
@@ -4654,8 +4661,10 @@ pub fn drawn(
             let pairs = hints(m, view, beside);
             if snap.rules.ux2
                 && view.is_some_and(|v| {
-                    matches!(v.id, ViewId::Ci | ViewId::WorkMap | ViewId::Resources)
-                        || super::inbox_board::shown(m, v)
+                    matches!(
+                        v.id,
+                        ViewId::Ci | ViewId::WorkMap | ViewId::Resources | ViewId::Reminders
+                    ) || super::inbox_board::shown(m, v)
                         || (v.id == ViewId::Usage && cols >= super::usage_board::BOARD_AT)
                         || (v.id == ViewId::Settings && cols >= super::settings_board::BOARD_AT)
                         || keys_board_shown(m, v, cols)
@@ -5161,6 +5170,81 @@ mod tests {
             ),
             "Closed ABC-2204 after #4321, see acme.slack.com and ABC-7."
         );
+    }
+
+    #[test]
+    fn the_reminders_view_draws_a_month_with_its_pane_and_the_months_ahead() {
+        let now = rules().now_secs();
+        let mut api = tab(1, "api");
+        api.remind_at = Some(now + 3 * 86_400);
+        api.remind_note = Some("pick the handoff back up".into());
+        let mut web = tab(2, "web");
+        web.remind_at = Some(now - 600);
+        let mut far = tab(3, "far");
+        far.remind_at = Some(now + 60 * 86_400);
+        let tabs = vec![api, web, far];
+        let items = crate::mission::reminders::items(&tabs, &rules());
+        let view = list_view(ViewId::Reminders, "Reminders", items);
+        let draw_at = |cols: usize, rows: usize| {
+            let mut m = mission(tabs.clone(), vec![view.clone()]);
+            m.snap.rules.ux2 = true;
+            m.snap.all_tabs = tabs.clone();
+            m.view = 1;
+            m.size = (cols as u16, rows as u16);
+            // Monday the 18th, api's day; today is Friday the 15th.
+            m.reminders_day = Some(jiff::civil::date(2027, 1, 18));
+            let (lines, hits, _, _) = drawn(&m, cols, rows);
+            (lines, hits)
+        };
+        let draw = |cols: usize| draw_at(cols, 44);
+        let (lines, hits) = draw(240);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("JANUARY 2027"), "{text}");
+        assert!(text.contains("3 reminders · 1 came due"), "{text}");
+        assert!(text.contains("1 api"), "{text}");
+        assert!(text.contains("Monday, January 18"), "{text}");
+        assert!(text.contains("in 3 days"), "{text}");
+        assert!(text.contains("pick the handoff back up"), "{text}");
+        for cap in ["Go there", "Change", "Clear"] {
+            assert!(text.contains(cap), "{cap}: {text}");
+        }
+        assert!(
+            text.contains("THIS MONTH") && text.contains("LATER"),
+            "{text}"
+        );
+        assert!(text.contains("due"), "{text}");
+        assert!(text.contains("THE MONTHS AHEAD"), "{text}");
+        assert!(text.contains("Jan 2") && text.contains("Mar 1"), "{text}");
+        assert!(
+            text.contains("› │"),
+            "the › at the month's right edge: {text}"
+        );
+        let today_red = lines
+            .iter()
+            .flat_map(|l| &l.spans)
+            .any(|s| s.content == "15" && s.style.fg == Some(Color::Indexed(196)));
+        assert!(today_red, "today's number is red");
+        assert!(hits.iter().any(|h| matches!(h.spot, Spot::Day(_))));
+        assert!(hits.iter().any(|h| matches!(h.spot, Spot::Index(0))));
+
+        let (lines, _) = draw(120);
+        let text = texts(&lines).join("\n");
+        assert!(text.contains("this month and later"), "{text}");
+        assert!(!text.contains("LATER"), "the lists wait behind i: {text}");
+        assert!(
+            text.contains("▌1") && !text.contains("▌1 api"),
+            "a narrow day leaves the name out: {text}"
+        );
+        assert!(text.contains("Monday, January 18"), "{text}");
+
+        // A short screen keeps the chosen reminder's keys, showing its week.
+        let (lines, _) = draw_at(120, 24);
+        let text = texts(&lines).join("\n");
+        assert!(
+            text.contains("Go there") && text.contains("Clear"),
+            "{text}"
+        );
+        assert!(text.contains("▌1"), "the chosen day's week: {text}");
     }
 
     fn list_view(id: ViewId, title: &str, items: Vec<Item>) -> View {

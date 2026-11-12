@@ -44,6 +44,9 @@
 //! - `ask`: a line to type in a box.
 //! - `busy`: the box an option shows while it works.
 //! - `remind`: a tab's reminder (remind.sh).
+//! - `reminders`: the Reminders view, every tab's reminder on a month.
+//! - `remind_box`: with UX 2.0, the reminder's box (board 34): when, what
+//!   for, and the reminder set now.
 //! - `resources_board`: with UX 2.0, the Resources view as a board: the
 //!   whole computer, each tab's figures and sparklines, the chosen one's
 //!   process tree.
@@ -67,6 +70,8 @@ pub mod inbox_board;
 pub mod keymap;
 pub mod keys_board;
 pub mod remind;
+pub mod remind_box;
+pub mod reminders;
 pub mod render;
 pub mod resources_board;
 mod serve;
@@ -141,6 +146,9 @@ pub enum Spot {
     /// A picture or video in the Slack board's thread, by its place among
     /// the thread's files, which a click shows as `p` does.
     Picture(usize),
+    /// A day of the Reminders view's month, or a month ahead by its first
+    /// day, which a click chooses.
+    Day(jiff::civil::Date),
 }
 
 /// Where a click on the screen lands: row `y`, columns `x0` to `x1`
@@ -370,6 +378,12 @@ pub struct Mission {
     /// The Slack file `p` last showed, by the message's item ID and the
     /// file's ID, for the next `p` to step past.
     pub slack_shown: Option<(String, String)>,
+    /// The Reminders view's chosen day, the keys moving it and the month
+    /// following; `None` is today.
+    pub reminders_day: Option<jiff::civil::Date>,
+    /// With the pane under the month, its This month and Later lists shown
+    /// (`i`).
+    pub reminders_lists: bool,
 }
 
 impl Mission {
@@ -409,6 +423,8 @@ impl Mission {
             slack_thread_open: false,
             slack_clicked: None,
             slack_shown: None,
+            reminders_day: None,
+            reminders_lists: false,
         }
     }
 
