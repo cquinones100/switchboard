@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 use super::line::Summary;
 use super::mode::Landed;
 use super::serve::{LANDED_AT, LEFT, OPENED};
-use crate::cmd::worktree_from_note::PlanNote;
+use crate::cmd::worktree_from_note::{PlanNote, WAITS_ON_SHOWN};
 use crate::items::{Item, State, Target};
 use crate::mux::TabId;
 use crate::sidebar::model::TabState;
@@ -306,7 +306,7 @@ fn with_plan(mut data: Value, plans: &HashMap<String, PlanNote>, item: &str) -> 
 }
 
 /// The view's items: the heading, the next items under a heading the
-/// cursor passes over, a row per tab under one too, in its column's order
+/// cursor passes over, those held by an open item after them, a row per tab under one too, in its column's order
 /// and, within a column, the least far along first, then the skipped ones
 /// under a heading, the board's last column. Every item on the board has
 /// its column as its `group`, and the plan its item links (`with_plan`);
@@ -316,6 +316,7 @@ pub fn items(
     said: &str,
     rows: &[Row],
     next: &[String],
+    held: &[(String, String)],
     skipped: &[String],
     plans: &HashMap<String, PlanNote>,
 ) -> Vec<Item> {
@@ -363,10 +364,10 @@ pub fn items(
             .detail(facts.join(" · "))
             .data(json!({ "header": true, "count": rows.len(), "summary": true, "spend": spend })),
     ];
-    if !next.is_empty() {
+    if !next.is_empty() || !held.is_empty() {
         out.push(
             Item::new("header:autopilot:next", "Next, in the order it opens them")
-                .data(json!({ "header": true, "count": next.len() })),
+                .data(json!({ "header": true, "count": next.len() + held.len() })),
         );
         for (at, text) in next.iter().enumerate() {
             out.push(
@@ -374,6 +375,21 @@ pub fn items(
                     .group(COLUMNS[0])
                     .data(with_plan(
                         json!({ "next": text, "place": at + 1, "mode": pilot }),
+                        plans,
+                        text,
+                    )),
+            );
+        }
+        // After the free ones, dim on the board: those held by the open item
+        // each waits on, which the queue takes once it is ticked.
+        for (text, other) in held {
+            let waits = format!("waits on {}", crate::ui::draw::cut(other, WAITS_ON_SHOWN));
+            out.push(
+                Item::new(format!("held:{text}"), text.clone())
+                    .detail(waits)
+                    .group(COLUMNS[0])
+                    .data(with_plan(
+                        json!({ "next": text, "waitsOn": other, "mode": pilot }),
                         plans,
                         text,
                     )),
@@ -562,6 +578,7 @@ mod tests {
             "",
             &[row(TabState::Working), other],
             &["Next".into()],
+            &[],
             &["Old".into()],
             &plans,
         );
@@ -611,6 +628,7 @@ mod tests {
             "",
             &[row(TabState::Waiting)],
             &["Next".into()],
+            &[],
             &["Old".into()],
             &HashMap::new(),
         );
@@ -702,9 +720,13 @@ mod tests {
                 asks_to_push,
             ],
             &["Later".into()],
+            &[("Builds on it".into(), "The base".into())],
             &[],
             &HashMap::new(),
         );
+        let held = items.iter().find(|i| i.title == "Builds on it").unwrap();
+        assert_eq!(held.detail, "waits on The base");
+        assert_eq!(held.data["waitsOn"], "The base");
         let placed: Vec<(&str, &str)> = items
             .iter()
             .filter_map(|i| Some((i.group.as_deref()?, i.title.as_str())))
@@ -713,6 +735,7 @@ mod tests {
             placed,
             [
                 ("Next up", "1. Later"),
+                ("Next up", "Builds on it"),
                 ("Working", "item 6"),
                 ("Working", "item 5"),
                 ("Waiting on you", "item 4"),
@@ -773,7 +796,15 @@ mod tests {
             drained: false,
             failing: String::new(),
         };
-        let items = items(&summary, "", &[open, closed], &[], &[], &HashMap::new());
+        let items = items(
+            &summary,
+            "",
+            &[open, closed],
+            &[],
+            &[],
+            &[],
+            &HashMap::new(),
+        );
         let landed: Vec<&Item> = items
             .iter()
             .filter(|i| i.group.as_deref() == Some("Landed"))
@@ -814,6 +845,7 @@ mod tests {
         let items = items(
             &s,
             "Nothing left in the note",
+            &[],
             &[],
             &[],
             &[],

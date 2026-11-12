@@ -59,7 +59,7 @@ use std::path::{Path, PathBuf};
 use super::line::Summary;
 use super::mode::{Mode, note_title};
 use super::place::{Kind, Mine, kind_of};
-use crate::cmd::worktree_from_note::{Item, PlanNote, plan_notes, queue};
+use crate::cmd::worktree_from_note::{Item, PlanNote, plan_notes, queue_and_held};
 use crate::mux::TabId;
 use crate::notes::id;
 use crate::util;
@@ -107,6 +107,9 @@ pub struct Next {
     /// The items it will open, in that order, for its view (the first is
     /// `text`), at most `QUEUE_SHOWN`.
     pub queue: Vec<String>,
+    /// The items it would open but for the open item each waits on, by
+    /// their first lines and that item's, for its view.
+    pub held: Vec<(String, String)>,
     /// The plan each of the note's items links, by the item's first line,
     /// read with them for the board's side panel.
     pub plans: HashMap<String, PlanNote>,
@@ -170,7 +173,16 @@ impl Job {
 
     /// Every item the queue gives, in the order it opens them.
     pub fn items(&self, notes: &Path, state: &Path) -> Result<Vec<Item>, String> {
-        queue(
+        self.items_and_held(notes, state).map(|(items, _)| items)
+    }
+
+    /// `items`, and those it would give but for the open item each waits on.
+    pub fn items_and_held(
+        &self,
+        notes: &Path,
+        state: &Path,
+    ) -> Result<(Vec<Item>, Vec<Item>), String> {
+        queue_and_held(
             notes,
             &self.repo,
             &self.note,
@@ -780,6 +792,7 @@ impl Pilot {
             at: now_ms,
             key,
             queue: Vec::new(),
+            held: Vec::new(),
             plans: HashMap::new(),
             spent: 0.0,
         };
@@ -840,6 +853,34 @@ mod tests {
     use super::*;
     use crate::autopilot::place::tests::mine;
     use crate::sidebar::model::TabState;
+
+    #[test]
+    fn with_the_first_item_held_find_opens_the_second() {
+        let dir = std::env::temp_dir().join(format!("sb-pilot-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("Work.md"),
+            "# Work\n\n- [ ] Builds on it\n  After: The base\n- [ ] Free\n\n## Later\n- [ ] The base\n",
+        )
+        .unwrap();
+        let job = Job {
+            note: "Work.md".into(),
+            repo: dir.clone(),
+            ready_only: false,
+            with_choices: false,
+            skip: HashSet::new(),
+            spend_limit: 0.0,
+            key: String::new(),
+            mtime: 0,
+        };
+        let found = job.find(&dir, &dir, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+        match found {
+            Found::Item(Some(item)) => assert_eq!(item.text, "Free"),
+            other => panic!("expected the free item, found {other:?}"),
+        }
+    }
 
     /// A stand-in for the server: its tabs, the note's items and what was
     /// said, each look answered as wtn-open.zsh's stand-in did in
@@ -935,6 +976,8 @@ mod tests {
                     line: self.taken,
                     text: format!("item {}", self.taken),
                     needs_choice: false,
+                    after: Vec::new(),
+                    waits_on: None,
                 }))
             } else {
                 Found::Item(None)

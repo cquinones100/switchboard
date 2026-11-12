@@ -405,32 +405,67 @@ fn item_block(lines: &[&str], at: usize) -> String {
 // ── What the palette's popup and the autopilot list ─────────────────────────
 
 /// One unticked top-level item of a note: its line number (1-based), its
-/// first line, and whether its line or those under it say its plan still
-/// needs a choice.
+/// first line, whether its line or those under it say its plan still needs
+/// a choice, the items its `After: <first line>` lines say it builds on,
+/// and the first of those still open in the note (`waits_on`), which holds
+/// it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     pub line: usize,
     pub text: String,
     pub needs_choice: bool,
+    pub after: Vec<String>,
+    pub waits_on: Option<String>,
 }
+
+/// How much of the item an item waits on its row and the view show.
+pub const WAITS_ON_SHOWN: usize = 40;
 
 impl Item {
     /// As wtn-open.zsh printed it: `<line>\t<text>`, with ` (needs a
-    /// choice)` after.
+    /// choice)` after, and ` (waits on <item>)` while it is held.
     pub fn row(&self) -> String {
         format!(
-            "{}\t{}{}",
+            "{}\t{}{}{}",
             self.line,
             self.text,
             if self.needs_choice {
                 " (needs a choice)"
             } else {
                 ""
-            }
+            },
+            self.waits_on
+                .as_ref()
+                .map(|w| format!(" (waits on {})", crate::ui::draw::cut(w, WAITS_ON_SHOWN)))
+                .unwrap_or_default()
         )
     }
 }
 
+/// The open item an item's `After:` lines name, if any: matched by its
+/// first line exactly, or, when no item of the note has that first line,
+/// open or ticked, by being a part of exactly one open item's first line,
+/// ignoring case. `open` is the note's unticked top-level items' first
+/// lines, parked ones too, the item's own left out; `ticked` its ticked
+/// ones, so a line naming a ticked item exactly holds nothing.
+fn waits_on(after: &[String], open: &[&str], ticked: &[&str]) -> Option<String> {
+    after.iter().find_map(|a| {
+        if let Some(exact) = open.iter().find(|o| **o == a) {
+            return Some(exact.to_string());
+        }
+        if ticked.contains(&a.as_str()) {
+            return None;
+        }
+        let lower = a.to_lowercase();
+        let mut parts = open.iter().filter(|o| o.to_lowercase().contains(&lower));
+        match (parts.next(), parts.next()) {
+            (Some(only), None) => Some(only.to_string()),
+            _ => None,
+        }
+    })
+}
+
+static AFTER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s+After:\s*(\S.*?)\s*$").unwrap());
 static NEEDS_CHOICE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"needs (a )?choices?").unwrap());
 static HEADING: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#+)\s").unwrap());
@@ -446,11 +481,39 @@ pub fn parked_heading(line: &str) -> bool {
     PARKED.is_match(&line.to_lowercase())
 }
 
+/// The open item the item on a note's line (1-based) waits on, by its
+/// `After:` lines, as `items` reads them, whether the item is parked or not.
+pub fn held_by(text: &str, line: usize) -> Option<String> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let first = lines
+        .get(line.checked_sub(1)?)?
+        .strip_prefix("- [ ] ")?
+        .trim();
+    let after: Vec<String> = item_block(&lines, line - 1)
+        .lines()
+        .skip(1)
+        .filter_map(|l| AFTER.captures(l).map(|m| m[1].to_string()))
+        .collect();
+    let open: Vec<&str> = lines
+        .iter()
+        .filter_map(|l| l.strip_prefix("- [ ] "))
+        .map(str::trim)
+        .filter(|o| *o != first)
+        .collect();
+    let ticked: Vec<&str> = lines
+        .iter()
+        .filter(|l| TICKED.is_match(l))
+        .map(|l| l[6..].trim())
+        .collect();
+    waits_on(&after, &open, &ticked)
+}
+
 /// A note's unticked top-level items, in its order, leaving out any under a
 /// section named for parked work (`## Defered`, `## Later`), a heading
-/// under such a section still in it.
+/// under such a section still in it. An item is held (`waits_on`) while
+/// one of its `After:` lines names an item still unticked, parked or not.
 pub fn items(text: &str) -> Vec<Item> {
-    let mut out = Vec::new();
+    let mut out: Vec<Item> = Vec::new();
     let mut current: Option<Item> = None;
     let mut parked = 0usize;
     for (i, line) in text.split('\n').enumerate() {
@@ -471,6 +534,8 @@ pub fn items(text: &str) -> Vec<Item> {
                 line: number,
                 text: line[6..].trim().to_string(),
                 needs_choice: NEEDS_CHOICE.is_match(line),
+                after: Vec::new(),
+                waits_on: None,
             });
             continue;
         }
@@ -478,13 +543,21 @@ pub fn items(text: &str) -> Vec<Item> {
             out.extend(current.take());
             continue;
         }
-        if let Some(item) = current.as_mut()
-            && NEEDS_CHOICE.is_match(line)
-        {
+        let Some(item) = current.as_mut() else {
+            continue;
+        };
+        // An After: line names another item, whose words say nothing of this
+        // one's plan.
+        if let Some(m) = AFTER.captures(line) {
+            item.after.push(m[1].to_string());
+        } else if NEEDS_CHOICE.is_match(line) {
             item.needs_choice = true;
         }
     }
     out.extend(current);
+    for item in &mut out {
+        item.waits_on = held_by(text, item.line);
+    }
     out
 }
 
@@ -622,8 +695,20 @@ fn open_choice(plan: &str) -> bool {
     open
 }
 
+/// An item's block without its `After:` lines, which name other items, so
+/// their words say nothing of this one's plan.
+fn without_after(block: &str) -> String {
+    block
+        .split('\n')
+        .filter(|l| !AFTER.is_match(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// How settled an item's plan is, from the item whole.
 pub fn plan_of(notes: &Path, item: &str) -> Plan {
+    let item = without_after(item);
+    let item = item.as_str();
     let Some(name) = PLAN_LINK.captures(item).map(|m| m[1].to_string()) else {
         return Plan::None;
     };
@@ -644,7 +729,7 @@ pub fn plan_of(notes: &Path, item: &str) -> Plan {
 /// takes the recommended option), after the settled ones and before those
 /// with no plan; never taken is nor one under a parked section, nor one a
 /// worktree has or wtn started in the last half hour (its claims file),
-/// nor an empty one, nor one whose first line is in `skip` (the items
+/// nor one held by an open item its `After:` line names, nor an empty one, nor one whose first line is in `skip` (the items
 /// skipped, and those opened a moment ago, before wtn has made their
 /// branch). `ready_only` takes only the planned kinds. `note` is the
 /// note's path within the notes directory; `repo` the note's repository;
@@ -658,11 +743,27 @@ pub fn queue(
     with_choices: bool,
     claims: &Path,
 ) -> Result<Vec<Item>, String> {
+    queue_and_held(notes, repo, note, skip, ready_only, with_choices, claims)
+        .map(|(queue, _)| queue)
+}
+
+/// `queue`'s items, and apart from them those it would take but for the
+/// open item each waits on (`Item::waits_on`), in the note's order.
+pub fn queue_and_held(
+    notes: &Path,
+    repo: &Path,
+    note: &str,
+    skip: &HashSet<String>,
+    ready_only: bool,
+    with_choices: bool,
+    claims: &Path,
+) -> Result<(Vec<Item>, Vec<Item>), String> {
     let file = notes.join(note);
     let text = fs::read_to_string(&file).map_err(|_| format!("No note at {}", file.display()))?;
     let mut settled = Vec::new();
     let mut choices = Vec::new();
     let mut unplanned = Vec::new();
+    let mut held = Vec::new();
     let lately = claimed_lately(
         &fs::read_to_string(claims).unwrap_or_default(),
         id::in_text(&text).as_deref(),
@@ -677,18 +778,23 @@ pub fn queue(
         {
             continue;
         }
-        match plan_of(notes, &item_text(&text, item.line)) {
-            Plan::Choice if with_choices => choices.push(item),
-            Plan::Choice => {}
-            Plan::Settled if item.needs_choice => choices.push(item),
-            Plan::Settled => settled.push(item),
-            Plan::None if !ready_only => unplanned.push(item),
-            Plan::None => {}
+        let bucket = match plan_of(notes, &item_text(&text, item.line)) {
+            Plan::Choice if with_choices => &mut choices,
+            Plan::Choice => continue,
+            Plan::Settled if item.needs_choice => &mut choices,
+            Plan::Settled => &mut settled,
+            Plan::None if !ready_only => &mut unplanned,
+            Plan::None => continue,
+        };
+        if item.waits_on.is_some() {
+            held.push(item);
+        } else {
+            bucket.push(item);
         }
     }
     settled.extend(choices);
     settled.extend(unplanned);
-    Ok(settled)
+    Ok((settled, held))
 }
 
 /// The notes, newest first, by their path within the notes directory
@@ -912,6 +1018,16 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
             "{name} has more than one item reading \"{first}\": reword one first"
         ));
     }
+    // An item whose After: line names one still open waits for it: asked
+    // about, a closed input being no. Autopilot's queue leaves held items
+    // out, so its tabs never come here with one.
+    if let Some(other) = held_by(&text, number)
+        && !open_anyway(&format!(
+            "{first} waits on {other}, still open. Open it anyway? [Y/n]"
+        ))
+    {
+        return Err(format!("{first} waits on {other}, still open"));
+    }
     let block = item_block(&lines, at);
     let slug: String = worktree::slugify(&first)
         .chars()
@@ -938,7 +1054,9 @@ fn run(given: &Given, note: &str, item: &str) -> Result<ExitCode, String> {
     } else {
         title
     };
-    let plan_name = PLAN_LINK.captures(&block).map(|m| m[1].to_string());
+    let plan_name = PLAN_LINK
+        .captures(&without_after(&block))
+        .map(|m| m[1].to_string());
     let plan = plan_name.as_deref().and_then(|n| plan_file(&dir, n));
 
     eprintln!("Note:     {title}");
@@ -1133,6 +1251,22 @@ fn tab_option(option: &str) -> Option<String> {
         crate::mux::socket::ask_quiet(vec!["show".into(), option.into()], pane, None)?;
     let value = String::from_utf8_lossy(&out).trim().to_string();
     (code == 0 && !value.is_empty()).then_some(value)
+}
+
+/// A yes/no question on the terminal, Enter being yes; no terminal, or one
+/// closed, is no.
+fn open_anyway(question: &str) -> bool {
+    use std::io::{BufRead, Write};
+    let Ok(tty) = fs::File::open("/dev/tty") else {
+        return false;
+    };
+    eprint!("{question} ");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    match std::io::BufReader::new(tty).read_line(&mut line) {
+        Ok(0) | Err(_) => false,
+        Ok(_) => matches!(line.trim().to_lowercase().as_str(), "" | "y" | "yes"),
+    }
 }
 
 /// Whether the tab this runs in is one of autopilot's, hands-free
@@ -1520,6 +1654,150 @@ mod tests {
                 "16\tFourth thing"
             ]
         );
+    }
+
+    #[test]
+    fn an_items_after_lines_hold_it_while_the_item_they_name_is_open() {
+        let note = [
+            "# Work",
+            "",
+            "- [ ] FEAT: Make the tab header",
+            "- [ ] FEAT: Right-click an item",
+            "  After: FEAT: Make the tab header",
+            "  After: BUG: Gone already",
+            "  Plan: [[Plan - Right click]]",
+            "- [ ] FEAT: By a part of a title",
+            "  After: the tab HEADER",
+            "- [ ] FEAT: Names nothing open",
+            "  After: BUG: Gone already",
+            "- [ ] FEAT: A part two titles hold",
+            "  After: FEAT:",
+            "- [ ] On the parked one",
+            "  After: Parked base",
+            "- [x] BUG: Gone already",
+            "",
+            "## Later",
+            "- [ ] Parked base",
+            "",
+        ]
+        .join("\n");
+        let all = items(&note);
+        let by = |t: &str| all.iter().find(|i| i.text == t).unwrap().clone();
+        let right = by("FEAT: Right-click an item");
+        assert_eq!(
+            right.after,
+            vec!["FEAT: Make the tab header", "BUG: Gone already"],
+            "both After: lines read"
+        );
+        assert_eq!(
+            right.waits_on.as_deref(),
+            Some("FEAT: Make the tab header"),
+            "held by its exact first line"
+        );
+        assert_eq!(
+            by("FEAT: By a part of a title").waits_on.as_deref(),
+            Some("FEAT: Make the tab header"),
+            "a part of exactly one open item's title, ignoring case"
+        );
+        assert_eq!(
+            by("FEAT: Names nothing open").waits_on,
+            None,
+            "a ticked item holds nothing"
+        );
+        assert_eq!(
+            by("FEAT: A part two titles hold").waits_on,
+            None,
+            "a part several titles hold names none"
+        );
+        assert_eq!(
+            by("On the parked one").waits_on.as_deref(),
+            Some("Parked base"),
+            "a parked item is still open"
+        );
+        assert_eq!(
+            right.row(),
+            "4\tFEAT: Right-click an item (waits on FEAT: Make the tab header)"
+        );
+        assert_eq!(
+            by("FEAT: Make the tab header").waits_on,
+            None,
+            "an item never holds itself"
+        );
+        let done = items(
+            "- [ ] FEAT: Base follow-up\n- [ ] Builds on it\n  After: FEAT: Base\n- [x] FEAT: Base\n",
+        );
+        assert_eq!(
+            done[1].waits_on, None,
+            "a ticked item named exactly holds nothing, though an open title holds its words"
+        );
+        let named = items(
+            "- [ ] Base (needs a choice)\n- [ ] Builds on it\n  After: Base (needs a choice)\n",
+        );
+        assert!(
+            !named[1].needs_choice,
+            "the words of the item an After: line names say nothing of this one's plan"
+        );
+        let parked = format!("{note}- [ ] Parked on it\n  After: FEAT: Make the tab header\n");
+        let at = parked
+            .split('\n')
+            .position(|l| l == "- [ ] Parked on it")
+            .unwrap()
+            + 1;
+        assert_eq!(
+            held_by(&parked, at).as_deref(),
+            Some("FEAT: Make the tab header"),
+            "a parked item, which wtn takes by its line, held the same way"
+        );
+        assert_eq!(
+            held_by(&parked, 3),
+            None,
+            "the item it waits on holds nothing"
+        );
+    }
+
+    #[test]
+    fn the_queue_leaves_a_held_item_out_until_what_it_waits_on_is_ticked() {
+        let dir = std::env::temp_dir().join(format!("sb-held-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let note = |base: &str| {
+            [
+                "# Work",
+                "",
+                base,
+                "- [ ] Builds on it",
+                "  After: The base",
+                "- [ ] Free",
+                "",
+            ]
+            .join("\n")
+        };
+        let read = || {
+            queue_and_held(
+                &dir,
+                &dir,
+                "Work.md",
+                &HashSet::new(),
+                false,
+                false,
+                &dir.join("claims.tsv"),
+            )
+            .unwrap()
+        };
+        let texts = |items: Vec<Item>| items.into_iter().map(|i| i.text).collect::<Vec<_>>();
+        fs::write(dir.join("Work.md"), note("- [ ] The base")).unwrap();
+        let (taken, held) = read();
+        assert_eq!(texts(taken), vec!["The base", "Free"]);
+        assert_eq!(texts(held), vec!["Builds on it"]);
+        fs::write(dir.join("Work.md"), note("- [x] The base")).unwrap();
+        let (taken, held) = read();
+        assert_eq!(
+            texts(taken),
+            vec!["Builds on it", "Free"],
+            "taken once what it waits on is ticked"
+        );
+        assert!(held.is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

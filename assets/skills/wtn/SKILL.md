@@ -21,7 +21,7 @@ Arguments, all optional: the note (its title or path), the item (a few of its wo
 
 2. **The item.** Read the note. Its items are its unticked top-level checklist lines (`- [ ] …` at the start of a line), each with the lines indented under it, leaving out any under a section named for parked work (`## Defered`, `## Later`).
    - **Named in the arguments**, by line number or by words only one item's first line holds: use it. Words that match several: ask which, as below, with those alone.
-   - **Not named**: ask with `AskUserQuestion`, the items in the note's order, four to a question with **More…** as an option moving to the next four, each option the item's first line, shortened, and its description `needs a choice` when its `Plan:` line or plan note still marks a choice as needed.
+   - **Not named**: ask with `AskUserQuestion`, the items in the note's order, four to a question with **More…** as an option moving to the next four, each option the item's first line, shortened, and its description `needs a choice` when its `Plan:` line or plan note still marks a choice as needed, and `waits on <item>` when an `After: <first line>` line under it names an item still unticked in the note (by its first line, or a part of exactly one open item's), which `wtn` asks about before opening it.
 
    Note the item's line number: everything after this goes by it. Whatever else the arguments hold, the branch to land on aside, is the text to add.
 

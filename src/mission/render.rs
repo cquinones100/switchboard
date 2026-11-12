@@ -4645,9 +4645,12 @@ fn pilot_board(
             let edge = kit::card_edge(chosen(index), lit(index).then_some(theme.text), theme);
             let pilot = item.data.get("pilot");
             let skipped = item.data.get("skipped").is_some();
+            let held = item.data.get("waitsOn").is_some();
             let (label, where_, frac) = match pilot {
                 // A skipped item has no place in line and no stages.
                 None if skipped => (String::new(), "skipped by you".to_string(), 0.0),
+                // Nor has one held by the open item it waits on.
+                None if held => (String::new(), item.detail.clone(), 0.0),
                 Some(p) if p["closed"] == true => (
                     "closed".to_string(),
                     item.detail.clone(),
@@ -4681,7 +4684,7 @@ fn pilot_board(
             let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
             let name_style = if chosen(index) {
                 bold(theme.bright)
-            } else if skipped {
+            } else if skipped || held {
                 fg(theme.dim)
             } else {
                 fg(theme.text)
@@ -4811,6 +4814,10 @@ fn pilot_about(item: &Item, side_w: usize, theme: &Theme, images: Option<&Images
         .map(|l| vec![Span::styled(l, bold(theme.bright))])
         .collect();
     let detail = match item.data["place"].as_u64() {
+        None if item.data.get("waitsOn").is_some() => format!(
+            "Waits on {}, still open: opens once it is ticked",
+            item.data["waitsOn"].as_str().unwrap_or_default()
+        ),
         Some(1) => "Opens next".to_string(),
         Some(n) => format!("Opens {} in line", ordinal(n)),
         None => item.detail.clone(),
@@ -8456,6 +8463,7 @@ mod tests {
             &rows,
             &[],
             &[],
+            &[],
             &std::collections::HashMap::new(),
         );
         let last = list
@@ -8492,6 +8500,7 @@ mod tests {
             &pilot_summary(),
             "",
             &[working, landed],
+            &[],
             &[],
             &[],
             &std::collections::HashMap::new(),
@@ -8538,6 +8547,7 @@ mod tests {
             "",
             &rows,
             &["Third".into(), "Fourth".into()],
+            &[],
             &["Old idea".into()],
             &std::collections::HashMap::from([
                 (
@@ -9318,6 +9328,7 @@ mod tests {
             &pilot_summary(),
             "",
             &rows,
+            &[],
             &[],
             &[],
             &std::collections::HashMap::from([(

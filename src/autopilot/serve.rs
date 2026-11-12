@@ -1447,6 +1447,7 @@ impl Server {
             &mode.said,
             &rows,
             &self.autopilot.pilot.next.queue,
+            &self.autopilot.pilot.next.held,
             &skipped,
             &self.autopilot.pilot.next.plans,
         ))
@@ -2016,12 +2017,16 @@ impl Server {
         let tx = self.tx.clone();
         let state = paths::state_dir();
         tokio::task::spawn_blocking(move || {
-            let queue: Vec<String> = job
-                .items(&notes, &state)
-                .unwrap_or_default()
+            let (queue, held) = job.items_and_held(&notes, &state).unwrap_or_default();
+            let queue: Vec<String> = queue
                 .into_iter()
                 .take(super::pilot::QUEUE_SHOWN)
                 .map(|i| i.text)
+                .collect();
+            let held: Vec<(String, String)> = held
+                .into_iter()
+                .take(super::pilot::QUEUE_SHOWN)
+                .filter_map(|i| Some((i.text, i.waits_on?)))
                 .collect();
             let text = queue.first().cloned().unwrap_or_default();
             let plans = job.plans(&notes);
@@ -2034,6 +2039,7 @@ impl Server {
                 key: job.key,
                 text,
                 queue,
+                held,
                 plans,
                 spent,
             }));
@@ -2064,15 +2070,18 @@ impl Server {
                 key,
                 text,
                 queue,
+                held,
                 plans,
                 spent,
             } => {
                 let changed = self.autopilot.pilot.next.text != text
                     || self.autopilot.pilot.next.queue != queue
+                    || self.autopilot.pilot.next.held != held
                     || self.autopilot.pilot.next.plans != plans
                     || self.autopilot.pilot.next.spent != spent;
                 self.autopilot.pilot.next_read(key, text, util::now_ms());
                 self.autopilot.pilot.next.queue = queue;
+                self.autopilot.pilot.next.held = held;
                 self.autopilot.pilot.next.plans = plans;
                 self.autopilot.pilot.next.spent = spent;
                 if changed {

@@ -963,15 +963,25 @@ impl Server {
                 }
                 // The item's text alone shown and matched, as wtn-open.zsh's
                 // `--with-nth=2`; its line is what picking it gives.
-                rows.extend(items.iter().map(|i| PickItem {
-                    text: i.text.clone(),
-                    tags: if i.needs_choice {
-                        "(needs a choice)".into()
-                    } else {
-                        String::new()
-                    },
-                    key: String::new(),
-                    value: i.line.to_string(),
+                rows.extend(items.iter().map(|i| {
+                    PickItem {
+                        text: i.text.clone(),
+                        tags: [
+                            i.needs_choice.then(|| "(needs a choice)".to_string()),
+                            i.waits_on.as_ref().map(|w| {
+                                format!(
+                                    "(waits on {})",
+                                    crate::ui::draw::cut(w, worktree_from_note::WAITS_ON_SHOWN)
+                                )
+                            }),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                        key: String::new(),
+                        value: i.line.to_string(),
+                    }
                 }));
                 let short = Path::new(&title)
                     .file_name()

@@ -67,7 +67,7 @@ Add one item to the tab's note: the item as a checklist line in the note, and a 
    - No file paths, line numbers, dates or screenshots, no `[` or `]` (a `[[…]]` there would be read as the item's plan link), and no period at the end.
    - The cause, the evidence and the pointers go under it and in the plan's `## Today`, and the request's longer wording nowhere else: the plan's `Item:` quotes the first line as written.
 
-   Under it, indented two spaces, in this order: `- Cause: …` for a bug once found, `- Seen in …` for evidence, then `Plan: [[Plan - <name>]]`, followed by ` (needs a choice: <the options' letters>)` while the plan has an open decision. Edit the note file directly, as `assets/switchboard.md` says for notes; when moving items, move each whole, with its indented lines.
+   Under it, indented two spaces, in this order: `- Cause: …` for a bug once found, `- Seen in …` for evidence, `After: <first line>` for each open item of the note it builds on (a change that needs the other's code first), that item's first line as the note has it without its `- [ ] `, which holds the item in `/wtn` and autopilot until that one is ticked, said in the reply, then `Plan: [[Plan - <name>]]`, followed by ` (needs a choice: <the options' letters>)` while the plan has an open decision. Edit the note file directly, as `assets/switchboard.md` says for notes; when moving items, move each whole, with its indented lines.
 
 7. **A choice made later.** When the user answers a plan's decision ("A", "b"), tick that option, rename the heading `## Decision needed` to `## Decision` (autopilot skips a plan while it has a "Decision needed" heading), rewrite the steps that depended on it and their heading, and change the item's `(needs a choice: …)` to `(chose <X>)`.
 
