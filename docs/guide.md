@@ -1051,7 +1051,7 @@ Its Close, Ask again and Copy buttons do the same, the wheel scrolls it (the lin
 
 ### The file list
 
-Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the diff without leaving it. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub; a file marked ● has no link from its new side, the file on disk, whose lines GitHub doesn't have yet, and `yl` says so. In a side of the diff, `v` or `V` starts selecting lines from the cursor, lit as the cursor moves; `yp` and `yl` then copy the lines selected (`path:12-20`, `#L12-L20`) and end the selection, as does `Esc` or `v` again. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it, the list past the file chosen, which a key brings back in sight.
+Settings' "Diff file list wide" (`diff_list_wide`) opens the list wide enough for its longest path, at most half the screen; `E` narrows it, and widens it again. From the list, `J` and `K` scroll the chosen file without leaving the list, stopping at its start and end, where the diff itself reads the files as one scroll with UX 2.0. `yp` copies the cursor's `path:line` (on the side it is in, the new one from the list), and `yl` a GitHub link to that line at that side's commit, when `origin` is on GitHub; a file marked ● has no link from its new side, the file on disk, whose lines GitHub doesn't have yet, and `yl` says so. In a side of the diff, `v` or `V` starts selecting lines from the cursor, lit as the cursor moves; `yp` and `yl` then copy the lines selected (`path:12-20`, `#L12-L20`) and end the selection, as does `Esc` or `v` again. A click on a file shows it, a click in the diff puts the cursor there (opening a fold it lands on), and the wheel scrolls the list or the diff under it, the list past the file chosen, which a key brings back in sight.
 
 With Settings' "Easy mode" (`easy_keys`, under Help) on, the diff has a row of buttons at the bottom, each pressing its keys in the list: ◀ Chapter, Chapter ▶, ◀ Page, Page ▶, Widen, Copy link, Refresh, Ask (with Ask Claude about the diff on) and Close, followed, with "Key help line" (`key_help_line`) on, by a line naming the keys. With "Highlight on hover" (`hover_highlight`) on, the button under the mouse lights. Both take effect when the diff next opens.
 
@@ -1068,7 +1068,7 @@ The keys depend on where the cursor is: in the file list, or in the diff on its 
 | `Enter` | Into the diff | Open the fold under the cursor |
 | `l`, `o`, `→` | Into the diff | `→`: from the old side to the new |
 | `←` | | From the new side to the old, from the old to the list |
-| `J` `K` | Scroll the diff five lines down or up | |
+| `J` `K` | Scroll the chosen file five lines down or up, stopping at its start and end | |
 | `v` `V` | | Select lines from the cursor, for `yp` and `yl`; again to stop |
 | `Esc` | Close the diff | End a selection, else back to the list |
 

@@ -435,7 +435,7 @@ pub const KEYS: &[(&str, &[KeyRow])] = &[
                 "]p [p",
                 "next chapter as a page of its own, the one before (from the first, the whole diff)",
             ),
-            key_row("J K", "scroll the diff down, up from the file list"),
+            key_row("J K", "scroll the chosen file down, up from the file list"),
             key_row("E", "widen the file list, or narrow it again"),
             key_row(
                 "c",
@@ -1996,8 +1996,8 @@ impl App {
                     None => Some(self.cur),
                 };
             }
-            KeyCode::Char('J') if list => self.scroll_diff(SCROLL * count, true),
-            KeyCode::Char('K') if list => self.scroll_diff(SCROLL * count, false),
+            KeyCode::Char('J') if list => self.scroll_chosen(SCROLL * count, true),
+            KeyCode::Char('K') if list => self.scroll_chosen(SCROLL * count, false),
             KeyCode::Char('j') | KeyCode::Down if list => self.move_list(count as isize),
             KeyCode::Char('k') | KeyCode::Up if list => self.move_list(-(count as isize)),
             KeyCode::Char('d') if ctrl && list => self.move_list((page / 2) as isize),
@@ -2233,6 +2233,35 @@ impl App {
             rows += self.stream_len(k);
         }
         rows
+    }
+
+    /// The list's `J` and `K`: the diff scrolled `by` lines within the
+    /// list's chosen file, stopping with its first line at the top or its
+    /// last at the bottom, so the files reading as one scroll never takes
+    /// it on into another file.
+    fn scroll_chosen(&mut self, by: usize, down: bool) {
+        if !self.one_scroll() || self.order.is_empty() {
+            self.scroll_diff(by, down);
+            return;
+        }
+        let h = self.body_height().max(1);
+        self.fix_view();
+        let n = self.lines_of(self.at).len();
+        let last = n.saturating_sub(h);
+        let from = if self.view == self.at {
+            self.top.min(last)
+        } else {
+            0
+        };
+        self.view = self.at;
+        self.top = if down {
+            (from + by).min(last)
+        } else {
+            from.saturating_sub(by)
+        };
+        let hi = (self.top + h - 1).min(n.saturating_sub(1));
+        self.cur = self.cur.clamp(self.top.min(hi), hi);
+        self.moved = true;
     }
 
     /// The diff scrolled `by` lines, the cursor kept in view.
@@ -3914,6 +3943,76 @@ mod tests {
         ]}"#;
         let (_, paths) = story::key_of(committed);
         story::parse(answer, &paths, order::generated, &hunks).unwrap()
+    }
+
+    /// With UX 2.0, a change adding a file of `lines` lines at each of
+    /// `paths`, the list on the second.
+    fn added_files(paths: &[&str], lines: usize) -> App {
+        let (tx, _rx) = channel();
+        let mut app = App::new(
+            Options {
+                ux2: true,
+                ..opts()
+            },
+            120,
+            24,
+            tx,
+        );
+        let mut diff = String::new();
+        let mut entries = Vec::new();
+        for p in paths {
+            let text: String = (1..=lines).map(|i| format!("{p} line {i}\n")).collect();
+            diff.push_str(&format!(
+                "diff --git a/{p} b/{p}\n--- /dev/null\n+++ b/{p}\n@@ -0,0 +1,{lines} @@\n"
+            ));
+            for line in text.lines() {
+                diff.push_str(&format!("+{line}\n"));
+            }
+            app.give_text("R", p, Some(text));
+            entries.push(entry(p, 'A', lines, 0));
+        }
+        app.loaded(Change {
+            top: PathBuf::from("/repo"),
+            base: "origin/main".into(),
+            left: "L".into(),
+            right: "R".into(),
+            entries,
+            diff,
+            staged: None,
+            raw_commits: String::new(),
+            uncommitted: None,
+        });
+        app.show_at(1);
+        app
+    }
+
+    #[test]
+    fn with_ux2_the_lists_shift_j_and_k_scroll_the_chosen_file_and_stop_at_its_ends() {
+        let mut app = added_files(&["a.js", "b.js", "c.js"], 40);
+        let h = app.body_height();
+        assert!(h < 40, "{h}");
+        let n = app.lines_of(1).len();
+        // J held stops with the second file's last line at the bottom.
+        for _ in 0..10 {
+            press(&mut app, "J");
+        }
+        assert_eq!((app.at, app.view, app.top), (1, 1, n - h));
+        assert!(screen(&mut app).iter().any(|l| l.contains("b.js line 40")));
+        // K held stops with its first line at the top.
+        for _ in 0..10 {
+            press(&mut app, "K");
+        }
+        assert_eq!((app.at, app.view, app.top), (1, 1, 0));
+        // The diff's own j still goes on into the third file.
+        press(&mut app, "l");
+        for _ in 0..n {
+            press(&mut app, "j");
+        }
+        assert_eq!(app.at, 2);
+        // A file shorter than the diff's area doesn't move.
+        let mut short = added_files(&["a.js", "b.js", "c.js"], 3);
+        press(&mut short, "J");
+        assert_eq!((short.at, short.view, short.top), (1, 1, 0));
     }
 
     #[test]
