@@ -333,7 +333,7 @@
     "key": "menu_mouse",
     "category": "Mission control",
     "label": "Click in menus",
-    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; a right click on an item in mission control or the Notifications window opens its menu, and where no item is the view's; and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone",
+    "description": "A click takes an option of mission control's menus, Yes or No of a question or a numbered answer, and a click outside the box closes it; a right click on an item in mission control, the Notifications window or the sidebar opens its menu, and where no item is the view's (the sidebar's own in the sidebar); and a click picks an option of M-m's, the update box's and M-w's menus; off, they take keys alone",
     "default": true
   },
   {

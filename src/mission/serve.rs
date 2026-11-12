@@ -2540,12 +2540,15 @@ impl Server {
     /// options of the question it waits on, answering, its reminder, its
     /// place in the landing queue. `screen` is whether the card shows its
     /// screen in its place, on the Tabs view with UX 2.0, which the menu
-    /// offers to show or hide.
-    fn tab_menu(
+    /// offers to show or hide. `peek_first` puts peeking at it first, chosen
+    /// as the menu opens, for the sidebar's right click, which peeked before
+    /// it opened a menu.
+    pub(crate) fn tab_menu(
         &mut self,
         client: ClientId,
         tab: &crate::sidebar::model::TabModel,
         screen: Option<bool>,
+        peek_first: bool,
     ) {
         let all = self.sidebar_all_tabs();
         let waiter = self.sources.landing_waiter(tab.id).cloned();
@@ -2593,6 +2596,10 @@ impl Server {
         }
         let at = 1.min(list.len());
         list.splice(at..at, after_go);
+        if peek_first && let Some(i) = list.iter().position(|c| matches!(c.act, Do::Peek(_))) {
+            let peek = list.remove(i);
+            list.insert(0, peek);
+        }
         // Answers only with the request whole above them: the menu shows its
         // options first and its text in the rows left (src/ui/menu.rs).
         let room = rows.saturating_sub(6).max(1);
@@ -2692,7 +2699,7 @@ impl Server {
                 .rules
                 .ux2
                 .then(|| m.card_screen == Some((tab.id, m.cursor)));
-            self.tab_menu(client, &tab, screen);
+            self.tab_menu(client, &tab, screen, false);
             return;
         };
         let Some(item) = m.chosen_item().cloned() else {
@@ -2703,7 +2710,7 @@ impl Server {
             && let Target::Tab(id) = item.target
             && let Some(tab) = self.sidebar_all_tabs().into_iter().find(|t| t.id == id)
         {
-            self.tab_menu(client, &tab, None);
+            self.tab_menu(client, &tab, None, false);
             return;
         }
         // A folded line is an item too: its menu shows what it folds.
@@ -3987,7 +3994,7 @@ impl Server {
     }
 
     /// Goes to a tab: mission control closes, the tab comes to the front and
-    /// its pane takes the focus, in its own session.
+    /// its pane takes the focus, in its own session, listed in its sidebar.
     pub fn mission_go(&mut self, client: ClientId, tab: TabId) {
         self.mission_close(client);
         let Some(t) = self.tabs.get(&tab) else {
@@ -3995,6 +4002,9 @@ impl Server {
         };
         let pane = t.active;
         let session = self.session_of_tab(tab).map(|s| s.name.clone());
+        if let Some(s) = &session {
+            self.sidebar_unfold_to(s, tab);
+        }
         self.focus_pane(pane);
         if let Some(s) = session
             && self.clients.get(&client).is_some_and(|c| c.session != s)

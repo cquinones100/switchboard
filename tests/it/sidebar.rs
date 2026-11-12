@@ -1352,7 +1352,7 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
 
 // A right press on a notification in the Notifications window opens its
 // menu, on the window's empty part the window's menu; a right click on a
-// tab in the sidebar still peeks at it.
+// tab in the sidebar opens its menu, peeking first.
 #[test]
 fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
     let notes = common::TempDir::new("sbrw");
@@ -1411,9 +1411,11 @@ fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
             .any(|l| l.contains("Dismiss every notification shown"))
     });
 
-    // The tab's row in the sidebar: a peek at it.
+    // The tab's row in the sidebar: its menu, peeking first, Enter peeking.
     let row = row_of(&mut client, "  1 ");
     right(&mut client, 6, row);
+    client.wait_text("Peek at its screen");
+    client.type_text("\r");
     client.wait_text("r capture again");
     // A right press outside the peek closes it, as a left one does.
     right(&mut client, 0, 0);
@@ -1515,4 +1517,111 @@ fn a_search_matching_nothing_keeps_the_sidebar_focused() {
     client.wait_for("Backspace in the search", |s| {
         left(&s[1], 34).contains("/zzz") && !left(&s[1], 34).contains("/zzzq")
     });
+}
+
+// A right press in the sidebar opens a menu by it: a notification's own, as
+// the Notifications window opens it, and the sidebar's own elsewhere, whose
+// "Dismiss every notification shown" empties the notifications; with
+// Settings' "Click in menus" off, a right press on a tab peeks as before.
+#[test]
+fn a_right_press_in_the_sidebar_opens_a_menu_by_it() {
+    let notes = common::TempDir::new("sbrm");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    let right = |client: &mut TestClient, col: usize, row: usize| {
+        client.send(
+            format!(
+                "\x1b[<2;{};{}M\x1b[<2;{};{}m",
+                col + 1,
+                row + 1,
+                col + 1,
+                row + 1
+            )
+            .as_bytes(),
+        );
+    };
+
+    let notice = row_of(&mut client, "New note: Plan");
+    right(&mut client, 6, notice);
+    client.wait_text("Open it in Notes");
+    client.type_text("\x1b");
+    client.wait_for("the notification's menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open it in Notes"))
+    });
+
+    // A group's heading: folding it first, then unfolding it.
+    let folded = |l: &Value| l["sessions"][0]["sidebar"]["folded"].clone();
+    let heading = row_of(&mut client, "OTHER 1");
+    right(&mut client, 4, heading);
+    client.wait_text("Fold Other");
+    client.type_text("\r");
+    wait_list(&server, "Other folded", |l| folded(l) == json!(["other"]));
+    let heading = row_of(&mut client, "OTHER 1");
+    right(&mut client, 4, heading);
+    client.wait_text("Unfold Other");
+    client.type_text("\r");
+    wait_list(&server, "Other unfolded", |l| folded(l) == json!([]));
+    client.type_text("q");
+    wait_list(&server, "out of the sidebar", |l| !focused(l));
+
+    // A blank row under the tabs: the sidebar's own menu, by the press.
+    let tab = row_of(&mut client, "  1 ");
+    let screen = client.screen();
+    let blank = (tab + 1..screen.len())
+        .find(|&r| left(&screen[r], 24).trim().is_empty())
+        .unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    right(&mut client, 6, blank);
+    let screen = client.wait_text("Dismiss every notification shown");
+    let at = screen
+        .iter()
+        .position(|l| l.contains("New tab"))
+        .unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    assert!(
+        at.abs_diff(blank) < 8,
+        "the menu by the press on row {blank}:\n{}",
+        screen.join("\n")
+    );
+    client.type_text("G\r");
+    client.wait_for("the notifications dismissed", |s| {
+        !s.iter().any(|l| left(l, 34).contains("New note: Plan"))
+    });
+    client.wait_text("Dismissed 1 notifications.");
+    client.type_text("\x1b");
+    client.wait_for("the message closed", |s| {
+        !s.iter().any(|l| l.contains("Dismissed 1 notifications."))
+    });
+
+    // With "Click in menus" off, a right press on a tab peeks, once the
+    // server's tick has read the settings again (the menu until then).
+    settings(&server, json!({"menu_mouse": false}));
+    let tab = row_of(&mut client, "  1 ");
+    let deadline = common::deadline(Duration::from_secs(10));
+    loop {
+        right(&mut client, 6, tab);
+        let screen = client.wait_for("a peek or the tab's menu", |s| {
+            s.iter()
+                .any(|l| l.contains("r capture again") || l.contains("Peek at its screen"))
+        });
+        if screen.iter().any(|l| l.contains("r capture again")) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "still a menu with menu_mouse off:\n{}",
+            screen.join("\n")
+        );
+        client.type_text("\x1b");
+        client.wait_for("the menu closed", |s| {
+            !s.iter().any(|l| l.contains("Peek at its screen"))
+        });
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }

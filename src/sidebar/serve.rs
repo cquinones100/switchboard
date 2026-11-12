@@ -41,6 +41,7 @@ use crate::{paths, settings, util};
 const FLICK: Duration = Duration::from_millis(150);
 
 mod history;
+mod menu;
 mod window;
 
 /// How often the spinner turns.
@@ -891,8 +892,8 @@ impl Server {
     }
 
     /// Unfolds the group a tab is under, so a tab gone to (M-a, M-1, a
-    /// / search's match) is listed.
-    fn sidebar_unfold_to(&mut self, session: &str, tab: TabId) {
+    /// / search's match, one chosen in a menu) is listed.
+    pub(crate) fn sidebar_unfold_to(&mut self, session: &str, tab: TabId) {
         // The group it shows under while you browse, and the one it is in
         // now, which it goes back to when the held layout is let go.
         let held = self.sidebar_group_of(session, tab);
@@ -2080,7 +2081,8 @@ impl Server {
     // ── The mouse ───────────────────────────────────────────────────────────
 
     /// A mouse event, before the panes see it: on the sidebar, a click goes
-    /// to a tab (a right click peeks at it) or, on the ▲ or ▼ more row,
+    /// to a tab (a right click opens a menu by it, serve/menu.rs) or, on the
+    /// ▲ or ▼ more row,
     /// scrolls half a screen, as the wheel does, and
     /// the mouse lights the row it is over (hover_highlight); a press
     /// anywhere else takes the focus out of the sidebar. Drags and releases
@@ -2219,9 +2221,7 @@ impl Server {
                 None => {}
             },
             (MouseKind::Press, MouseButton::Right) => {
-                if let Some(Owner::Tab(t)) = owner {
-                    self.sidebar_peek(client, t);
-                }
+                self.sidebar_right_press(client, &session, owner);
             }
             _ => {}
         }
