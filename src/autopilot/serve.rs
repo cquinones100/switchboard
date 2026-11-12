@@ -800,7 +800,7 @@ impl Server {
         let mode = &self.autopilot.mode;
         (settings::is_on("autopilot") && mode.on && !super::has_view()).then(|| Summary {
             failing: self.sources.main_failing(),
-            ..self.autopilot.pilot.summary(mode, self.away_now())
+            ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         })
     }
 
@@ -897,7 +897,7 @@ impl Server {
         }
         let summary = Summary {
             failing: self.sources.main_failing(),
-            ..self.autopilot.pilot.summary(mode, self.away_now())
+            ..self.autopilot.pilot.summary(mode, self.autopilot_away())
         };
         let skipped: Vec<String> = mode.skipped_here().map(str::to_string).collect();
         Some(super::view::items(
@@ -911,6 +911,13 @@ impl Server {
     }
 
     // ── The check ───────────────────────────────────────────────────────────
+
+    /// Whether autopilot holds off opening tabs: with no client attached,
+    /// which a tab needs to open in, and while you're away
+    /// (`Server::away_now`) only with the autopilot_while_away setting off.
+    fn autopilot_away(&self) -> bool {
+        self.clients.is_empty() || (self.away_now() && !settings::is_on("autopilot_while_away"))
+    }
 
     /// Every tick: the mode read again, its tabs marked, and the next item
     /// read or opened when it is time.
@@ -938,7 +945,7 @@ impl Server {
         let here = (on && mode.on && !mode.note_id.is_empty() && mtime.is_some())
             .then(|| self.autopilot_id_at(&notes.join(&mode.note)))
             .flatten();
-        let away = self.away_now();
+        let away = self.autopilot_away();
         let counts = self.autopilot.pilot.counts;
         let close = settings::cached("autopilot_close")
             .and_then(|v| v.as_str().and_then(super::pilot::close_after));
@@ -1546,7 +1553,7 @@ impl Server {
     /// meanwhile: in the session used last, in the background, marked as
     /// the mode's.
     fn autopilot_open(&mut self, mode: &Mode, item: Item) {
-        if !settings::is_on("autopilot") || !mode.on || mode.paused || self.away_now() {
+        if !settings::is_on("autopilot") || !mode.on || mode.paused || self.autopilot_away() {
             return;
         }
         let Some(client) = self.latest_client() else {

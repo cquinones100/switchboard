@@ -133,6 +133,13 @@
     "default": true
   },
   {
+    "key": "autopilot_while_away",
+    "category": "Sessions",
+    "label": "Keep opening tabs while I'm away",
+    "description": "Autopilot keeps opening tabs for the note's next items while you're away (the screen locked, or no input for 10 minutes), up to its slots, most tabs open and spend limit, so it works through the note overnight with a terminal attached. Off, it opens nothing while you're away and finishes only the tabs already open",
+    "default": true
+  },
+  {
     "key": "autopilot_push_rule",
     "category": "Sessions",
     "label": "Autopilot's push allowed in auto mode",
