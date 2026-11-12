@@ -35,6 +35,7 @@ use regex::Regex;
 use super::views::{self, View, ViewId};
 use super::{Focus, HitBox, Mission, Spot};
 use crate::items::{Item, State};
+use crate::mux::input::{Key, KeyCode, Mods};
 use crate::sidebar::model::{self, Rules, TabModel, TabState};
 use crate::sidebar::render::Line;
 use crate::sidebar::text::{self, Badge, SPINNER, width};
@@ -1806,15 +1807,16 @@ pub fn cards_fit(body: usize) -> bool {
     body >= 2 + BOARD_CARD_TALL
 }
 
-/// UX 2.0's PR and ticket boards, one family as boards 10 and 19 draw them:
-/// a column per place an item stands, its name a label in the state's tone
-/// with its count, each item a rounded card (its number or ID in the accent
-/// on the top edge, its checks' mark or its priority at the edge's right
-/// end, its title on two lines, then a dim line about it); the chosen
-/// card's edge in the accent. The views' last group (the PRs merged and the
-/// tickets canceled in the last week) is a row of the same cards, faint,
-/// under the columns, each saying when. On a screen `SIDE_AT` wide, the
-/// chosen item's description sits beside them, through Markdown, and the
+/// UX 2.0's PR and ticket boards, drawn with the kit's board (board 0c) as
+/// boards 10 and 19 draw them: a column per place an item stands, its head
+/// in the state's tone with its count, each item a card (its number or ID
+/// in the accent on the top edge, its checks' mark or its priority at the
+/// edge's right end, its title on up to two lines, then a dim line about
+/// it); the chosen card's edge in the accent. The views' last group (the
+/// PRs merged and the tickets canceled in the last week) is a row of the
+/// same cards, faint, under the columns, each saying when. The chosen
+/// item's description, through Markdown, sits beside them on a screen
+/// `SIDE_AT` wide and under them on a narrower one with the room, and the
 /// diagrams it draws as pictures come back, for the frame to place.
 #[allow(clippy::too_many_arguments)]
 fn board_cards(
@@ -1828,7 +1830,6 @@ fn board_cards(
     lines: &mut Vec<Line>,
     hits: &mut Vec<HitBox>,
 ) -> Vec<Picture> {
-    const TALL: usize = BOARD_CARD_TALL;
     let tickets = view.id == ViewId::Tickets;
     let (columns, week) = columns.split_at(columns.len().saturating_sub(1));
     let in_group = |group: &str| -> Vec<(usize, &Item)> {
@@ -1844,67 +1845,7 @@ fn board_cards(
     let chosen_item = usize::try_from(m.cursor)
         .ok()
         .and_then(|c| view.data.items.get(c));
-    let images = ready_diagrams(m).filter(|_| side_w > 0);
-    let about = chosen_item.filter(|_| side_w > 0).map(|item| {
-        if tickets {
-            ticket_about(item, side_w, theme, images.as_ref())
-        } else {
-            pr_about(item, side_w, theme, images.as_ref())
-        }
-    });
-    let cols = cols - side_w;
-    if let Some(about) = &about {
-        side_hits(
-            about.last_top(body),
-            cols + 2,
-            side_w - 2,
-            top_row,
-            body,
-            hits,
-        );
-    }
-    let about = about
-        .map(|a| {
-            let top = m.side_top().min(a.last_top(body));
-            a.window(top, body)
-        })
-        .unwrap_or_default();
-    // Each picture where the pane's lines put it on the screen.
-    let pictures = about
-        .pictures
-        .iter()
-        .map(|p| Picture {
-            x: p.x + (cols + 2) as u16,
-            y: p.y + top_row as u16,
-            ..p.clone()
-        })
-        .collect();
-    let about = about.lines;
-    // The week's row when it has anything and the columns keep room for a
-    // card.
-    let week_h = if !week_items.is_empty() && week_row_fits(body) {
-        WEEK_ROWS
-    } else {
-        0
-    };
-    let board_h = body - week_h;
-    // As many columns as fit 12 wide; with more, the ones around the chosen
-    // item's, so h and l bring the rest into sight, an arrow on the first
-    // and last heading saying more are off to that side.
-    let fit_n = (cols / 12).clamp(1, columns.len().max(1));
-    let chosen_col = chosen_item.and_then(|item| {
-        columns
-            .iter()
-            .position(|c| item.group.as_deref() == Some(*c))
-    });
-    let start = chosen_col
-        .map_or(0, |c| c.saturating_sub(fit_n - 1))
-        .min(columns.len().saturating_sub(fit_n));
-    let more_left = start > 0;
-    let more_right = start + fit_n < columns.len();
-    let columns = &columns[start..(start + fit_n).min(columns.len())];
-    let col_w = (cols / columns.len().max(1)).max(12);
-    let w = col_w - 1;
+    let board_w = cols - side_w;
     let face = |item: &Item| {
         if tickets {
             ticket_face(item, m, theme)
@@ -1912,152 +1853,254 @@ fn board_cards(
             pr_face(item, m, theme)
         }
     };
-    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
-    for (ci, column) in columns.iter().enumerate() {
-        let items = in_group(column);
-        let right = if ci + 1 == columns.len() && more_right {
-            2
-        } else {
-            0
-        };
-        let mut heading = kit::label(
-            column,
-            column_tone(column),
-            Some(items.len()),
-            w.saturating_sub(right),
-            theme,
-        );
-        if ci == 0 && more_left {
-            heading[0] = Span::styled("‹", fg(theme.dim));
+    let card_of = |index: usize, item: &Item, past: bool| {
+        let chosen = index as isize == m.cursor;
+        let hovered = !chosen && m.hover == Some(Spot::Index(index as isize));
+        let mut face = face(item);
+        if past {
+            face.meta = vec![Span::styled(
+                week_words(item, tickets, m.snap.now_secs),
+                fg(theme.faint),
+            )];
         }
-        if right > 0 {
-            heading.push(Span::styled(" ›", fg(theme.dim)));
-        }
-        let mut out = vec![
-            fit(heading, col_w, Style::new()),
-            vec![Span::raw(" ".repeat(col_w))],
-        ];
-        let room = board_h.saturating_sub(2) / TALL;
-        let chosen_at = items.iter().position(|(i, _)| *i as isize == m.cursor);
-        let first = match chosen_at {
-            Some(c) if c >= room => c + 1 - room,
-            _ => 0,
-        };
-        for (shown, (index, item)) in items.iter().enumerate().skip(first).take(room) {
-            let chosen = *index as isize == m.cursor;
-            let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
-            let card = board_card(
-                &face(item),
-                w,
-                column_tone(column),
-                chosen,
-                lit,
-                false,
-                theme,
-            );
-            out.extend(card.into_iter().map(|mut line| {
-                line.push(Span::raw(" "));
-                line
-            }));
-            out.push(vec![Span::raw(" ".repeat(col_w))]);
-            let y = top_row + 2 + (shown - first) * TALL;
-            for dy in 0..TALL - 1 {
-                hits.push(HitBox {
-                    y: (y + dy) as u16,
-                    x0: (ci * col_w) as u16,
-                    x1: (ci * col_w + w).saturating_sub(1) as u16,
-                    spot: Spot::Index(*index as isize),
-                });
-            }
-        }
-        if items.is_empty() {
-            out.push(fit(
-                vec![Span::styled(" none", fg(theme.faint))],
-                col_w,
-                Style::new(),
-            ));
-        }
-        drawn.push(out);
-    }
-    let mut rows: Vec<Vec<Span<'static>>> = (0..board_h)
-        .map(|i| {
-            let mut spans = Vec::new();
-            for c in &drawn {
-                spans.extend(
-                    c.get(i)
-                        .cloned()
-                        .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
-                );
-            }
-            fit(spans, cols, Style::new())
+        face_card(face, chosen, hovered, past, theme)
+    };
+    // The week's row when it has anything and the columns keep room for a
+    // card.
+    let week_h = if !week_items.is_empty() && week_row_fits(body) {
+        WEEK_ROWS
+    } else {
+        0
+    };
+    let held: Vec<Vec<(usize, &Item)>> = columns.iter().map(|c| in_group(c)).collect();
+    let board_columns: Vec<kit::BoardColumn> = columns
+        .iter()
+        .zip(&held)
+        .map(|(column, items)| kit::BoardColumn {
+            name: column.to_string(),
+            tone: column_tone(column),
+            cards: items
+                .iter()
+                .map(|(i, item)| card_of(*i, item, false))
+                .collect(),
         })
         .collect();
+    let drawn = kit::board(&board_columns, board_w, body - week_h, more_lit(m), theme);
+    board_hits(&drawn, top_row, hits, |c, i| held[c][i].0);
+    let mut rows = drawn.lines;
+    let under = side_w == 0 && chosen_item.is_some();
+    if !under {
+        rows.resize(body - week_h, Vec::new());
+    }
     if week_h > 0 {
         let title = if tickets {
             "Closed this week"
         } else {
             "Merged this week"
         };
-        rows.push(vec![kit::head_rule(cols, theme)]);
+        rows.push(vec![kit::head_rule(board_w, theme)]);
         rows.push(kit::label(
             title,
             Tone::Dim,
             Some(week_items.len()),
-            cols.saturating_sub(1),
+            board_w.saturating_sub(1),
             theme,
         ));
         rows.push(Vec::new());
-        // As many cards as fit, from the one that keeps the chosen in sight.
-        let across = (cols / col_w).max(1);
+        // As many cards as fit, as wide as the columns', from the one that
+        // keeps the chosen in sight.
+        let k = ((board_w + 1) / (kit::BOARD_COLUMN_MIN + 1)).clamp(1, columns.len().max(1));
+        let w = (board_w.saturating_sub(k - 1) / k).max(1);
+        let across = ((board_w + 1) / (w + 1)).max(1);
         let chosen_at = week_items.iter().position(|(i, _)| *i as isize == m.cursor);
         let first = chosen_at.map_or(0, |c| (c + 1).saturating_sub(across));
         let shown: Vec<&(usize, &Item)> = week_items.iter().skip(first).take(across).collect();
         let cards: Vec<Vec<Vec<Span<'static>>>> = shown
             .iter()
-            .map(|(index, item)| {
-                let chosen = *index as isize == m.cursor;
-                let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
-                let mut face = face(item);
-                face.meta = vec![Span::styled(
-                    week_words(item, tickets, m.snap.now_secs),
-                    fg(theme.faint),
-                )];
-                board_card(&face, w, Tone::Faint, chosen, lit, true, theme)
-            })
+            .map(|(index, item)| kit::board_card(&card_of(*index, item, true), w, theme))
             .collect();
-        let y = top_row + board_h + 3;
-        for (c, (index, _)) in shown.iter().enumerate() {
-            for dy in 0..TALL - 1 {
+        let tall = cards.iter().map(Vec::len).max().unwrap_or(0);
+        let y = top_row + rows.len();
+        for (c, ((index, _), card)) in shown.iter().zip(&cards).enumerate() {
+            for dy in 0..card.len() {
                 hits.push(HitBox {
                     y: (y + dy) as u16,
-                    x0: (c * col_w) as u16,
-                    x1: (c * col_w + w).saturating_sub(1) as u16,
+                    x0: (c * (w + 1)) as u16,
+                    x1: (c * (w + 1) + w).saturating_sub(1) as u16,
                     spot: Spot::Index(*index as isize),
                 });
             }
         }
-        for line in 0..TALL - 1 {
+        for line in 0..tall {
             let mut spans = Vec::new();
             for card in &cards {
-                spans.extend(card.get(line).cloned().unwrap_or_default());
+                spans.extend(fit(
+                    card.get(line).cloned().unwrap_or_default(),
+                    w,
+                    Style::new(),
+                ));
                 spans.push(Span::raw(" "));
             }
-            rows.push(fit(spans, cols, Style::new()));
+            rows.push(fit(spans, board_w, Style::new()));
         }
     }
-    for (i, row) in rows.into_iter().enumerate() {
-        let mut spans = fit(row, cols, Style::new());
-        if side_w > 0 {
-            spans.push(Span::styled("│ ", fg(theme.faint)));
-            spans.extend(fit(
-                about.get(i).cloned().unwrap_or_default(),
-                side_w - 2,
-                Style::new(),
-            ));
+    let images = ready_diagrams(m);
+    let about_w = if under { board_w } else { side_w };
+    let about = chosen_item.filter(|_| about_w > 0).map(|item| {
+        if tickets {
+            ticket_about(item, about_w, theme, images.as_ref())
+        } else {
+            pr_about(item, about_w, theme, images.as_ref())
         }
-        lines.push(Line { spans, fill: None });
-    }
+    });
+    let pictures = if under {
+        pane_under(about, &mut rows, body, board_w, m, top_row, hits, theme)
+    } else {
+        pane_beside(
+            about, &mut rows, body, board_w, side_w, m, top_row, hits, theme,
+        )
+    };
+    lines.extend(rows.into_iter().map(|spans| Line { spans, fill: None }));
     pictures
+}
+
+/// How many rows the pane under a board needs at the least to be shown.
+const UNDER_MIN: usize = 6;
+
+/// The chosen item's pane beside a board's `rows`, `side_w` wide after a
+/// rule, on each of the `body` rows: the part of it its height has room
+/// for, from where it was scrolled to; the diagrams it places come back.
+#[allow(clippy::too_many_arguments)]
+fn pane_beside(
+    about: Option<About>,
+    rows: &mut Vec<Vec<Span<'static>>>,
+    body: usize,
+    board_w: usize,
+    side_w: usize,
+    m: &Mission,
+    top_row: usize,
+    hits: &mut Vec<HitBox>,
+    theme: &Theme,
+) -> Vec<Picture> {
+    rows.resize(body, Vec::new());
+    let Some(about) = about.filter(|_| side_w > 0) else {
+        return Vec::new();
+    };
+    side_hits(
+        about.last_top(body),
+        board_w + 2,
+        side_w - 2,
+        top_row,
+        body,
+        hits,
+    );
+    let top = m.side_top().min(about.last_top(body));
+    let about = about.window(top, body);
+    for (i, row) in rows.iter_mut().enumerate() {
+        let mut spans = fit(std::mem::take(row), board_w, Style::new());
+        spans.push(Span::styled("│ ", fg(theme.faint)));
+        spans.extend(fit(
+            about.lines.get(i).cloned().unwrap_or_default(),
+            side_w - 2,
+            Style::new(),
+        ));
+        *row = spans;
+    }
+    about
+        .pictures
+        .iter()
+        .map(|p| Picture {
+            x: p.x + (board_w + 2) as u16,
+            y: p.y + top_row as u16,
+            ..p.clone()
+        })
+        .collect()
+}
+
+/// The chosen item's pane under a board's `rows` (board 45, below
+/// `SIDE_AT`): a rule, then as much of it as the rest of the `body` rows
+/// hold, when that is `UNDER_MIN` or more; the diagrams it places come
+/// back.
+#[allow(clippy::too_many_arguments)]
+fn pane_under(
+    about: Option<About>,
+    rows: &mut Vec<Vec<Span<'static>>>,
+    body: usize,
+    cols: usize,
+    m: &Mission,
+    top_row: usize,
+    hits: &mut Vec<HitBox>,
+    theme: &Theme,
+) -> Vec<Picture> {
+    rows.truncate(body);
+    let room = body.saturating_sub(rows.len() + 1);
+    let Some(about) = about.filter(|_| room >= UNDER_MIN) else {
+        rows.resize(body, Vec::new());
+        return Vec::new();
+    };
+    rows.push(vec![kit::rule(cols, theme)]);
+    let at = top_row + rows.len();
+    side_hits(about.last_top(room), 0, cols, at, room, hits);
+    let top = m.side_top().min(about.last_top(room));
+    let about = about.window(top, room);
+    for i in 0..room {
+        rows.push(fit(
+            about.lines.get(i).cloned().unwrap_or_default(),
+            cols,
+            Style::new(),
+        ));
+    }
+    about
+        .pictures
+        .iter()
+        .map(|p| Picture {
+            y: p.y + at as u16,
+            ..p.clone()
+        })
+        .collect()
+}
+
+/// Whether a board's "‹ more" and "more ›" markers are lit: under the
+/// mouse or Tab's focus.
+fn more_lit(m: &Mission) -> [bool; 2] {
+    [KeyCode::Left, KeyCode::Right].map(|code| {
+        let k = Key::new(code, Mods::NONE);
+        m.hover == Some(Spot::Key(k)) || m.focus == Some(Focus::Key(k))
+    })
+}
+
+/// A drawn board's hit boxes from `top_row`: each card it shows, by the
+/// item `index` gives for its column and place, and its "more" markers,
+/// which press ← and →, moving a column.
+fn board_hits(
+    drawn: &kit::Board,
+    top_row: usize,
+    hits: &mut Vec<HitBox>,
+    index: impl Fn(usize, usize) -> usize,
+) {
+    for p in &drawn.placed {
+        for dy in 0..p.h {
+            hits.push(HitBox {
+                y: (top_row + p.y + dy) as u16,
+                x0: p.x as u16,
+                x1: (p.x + p.w).saturating_sub(1) as u16,
+                spot: Spot::Index(index(p.column, p.card) as isize),
+            });
+        }
+    }
+    for (more, code) in [
+        (drawn.more_left, KeyCode::Left),
+        (drawn.more_right, KeyCode::Right),
+    ] {
+        if let Some((x, w)) = more {
+            hits.push(HitBox {
+                y: top_row as u16,
+                x0: x as u16,
+                x1: (x + w).saturating_sub(1) as u16,
+                spot: Spot::Key(Key::new(code, Mods::NONE)),
+            });
+        }
+    }
 }
 
 /// A board column's tone: where a PR or ticket stands, as the kit marks it.
@@ -2083,62 +2126,34 @@ struct Face {
     done: bool,
 }
 
-/// A card of a board, `w` wide, drawn open with its column's tone down its
-/// left: the face's label in the accent (faint for
-/// a done ticket or the week's row), its title on two lines, its meta.
-fn board_card(
-    face: &Face,
-    w: usize,
-    tone: Tone,
-    chosen: bool,
-    lit: bool,
-    faint: bool,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    let inner = w.saturating_sub(4);
-    let label = if faint || face.done {
+/// A board's card of an item's face: its label in the accent (faint for a
+/// done ticket or the week's row), its title, its meta as its fact line.
+fn face_card(face: Face, chosen: bool, hovered: bool, past: bool, theme: &Theme) -> kit::BoardCard {
+    let name = if past || face.done {
         fg(theme.faint)
     } else {
         bold(ACCENT)
     };
-    let title = if faint {
-        fg(theme.dim)
-    } else if face.done {
-        fg(theme.faint).add_modifier(Modifier::CROSSED_OUT)
-    } else if chosen {
-        bold(theme.bright)
-    } else {
-        fg(theme.text)
-    };
-    let [a, b] = two_lines(&face.title, inner);
-    kit::open_card(
-        w,
-        TALL_CARD,
-        vec![Span::styled(face.label.clone(), label)],
-        face.right.clone(),
-        &[
-            vec![Span::styled(a, title)],
-            vec![Span::styled(b, title)],
-            face.meta.clone(),
-        ],
-        tone,
+    kit::BoardCard {
+        mark: None,
+        name: Span::styled(face.label, name),
+        state: face.right,
+        title: face.title,
+        title_look: if past {
+            kit::Title::Past
+        } else if face.done {
+            kit::Title::Struck
+        } else {
+            kit::Title::Live
+        },
+        facts: [face.meta]
+            .into_iter()
+            .filter(|line| spans_width(line) > 0)
+            .collect(),
+        meter: None,
         chosen,
-        lit.then_some(theme.text),
-        theme,
-    )
-}
-
-/// A card's five lines: its top rule, two of title, one about it, and one
-/// of its bar under them.
-const TALL_CARD: usize = 5;
-
-/// A title on two lines of `cols`, by words, the second ending in … when
-/// the rest doesn't fit.
-fn two_lines(title: &str, cols: usize) -> [String; 2] {
-    let wrapped = text::wrap(title, cols);
-    let first = wrapped.first().cloned().unwrap_or_default();
-    let rest = wrapped.get(1..).map(|r| r.join(" ")).unwrap_or_default();
-    [text::cut(&first, cols), text::cut(&rest, cols)]
+        hovered,
+    }
 }
 
 /// The tab working on an item, as a card says it: `tab 3` and its mark.
@@ -2390,14 +2405,14 @@ impl About {
 
 /// The description the board draws beside its columns now, and the place
 /// its Markdown is read for (`Markdown::parse`): the chosen PR's or
-/// ticket's, or the plan of the Autopilot board's chosen item, on a screen
-/// wide enough for the pane.
+/// ticket's, or the plan of the Autopilot board's chosen item, whose pane
+/// sits beside the board or under it.
 pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
     let view = m.current()?;
-    let (field, place, side_at) = match view.id {
-        ViewId::Prs => ("body", crate::views::pr::PLACE, SIDE_AT),
-        ViewId::Tickets => ("description", crate::views::ticket::PLACE, SIDE_AT),
-        ViewId::Autopilot => ("plan", PLAN_PLACE, PILOT_SIDE_AT),
+    let (field, place, board_at) = match view.id {
+        ViewId::Prs => ("body", crate::views::pr::PLACE, 0),
+        ViewId::Tickets => ("description", crate::views::ticket::PLACE, 0),
+        ViewId::Autopilot => ("plan", PLAN_PLACE, PILOT_BOARD_AT),
         _ => return None,
     };
     let is_a_board = view.columns().is_some() || view.id == ViewId::Autopilot;
@@ -2405,7 +2420,7 @@ pub fn description_beside(m: &Mission) -> Option<(&str, &'static str)> {
         && is_a_board
         && view.data.setup.is_none()
         && view.loaded
-        && m.laid().0 as usize >= side_at;
+        && m.laid().0 as usize >= board_at;
     if !board_with_the_pane {
         return None;
     }
@@ -4264,10 +4279,11 @@ pub fn keys_board_shown(m: &Mission, v: &View, cols: usize) -> bool {
 }
 
 /// How wide the main area must be for UX 2.0's Autopilot board (its six
-/// columns 18 wide), narrower showing the plain list; and how wide for the
-/// chosen card's side panel, and how many columns that takes.
+/// columns 17 wide), narrower showing the plain list; and how wide for the
+/// chosen card's pane beside it, under it on a narrower screen, and how
+/// many columns that takes.
 pub const PILOT_BOARD_AT: usize = 108;
-const PILOT_SIDE_AT: usize = 152;
+const PILOT_SIDE_AT: usize = 200;
 const PILOT_SIDE_W: usize = 44;
 /// Where a diagram of a plan that can't be drawn beside the board is shown
 /// properly (`Markdown::parse`).
@@ -4387,35 +4403,26 @@ fn pilot_tone(item: &Item) -> Tone {
     }
 }
 
-/// UX 2.0's Autopilot view as a board (src/autopilot/view.rs): its heading
-/// (`AUTO`, the note bold, its facts dim, the button that opens its menu,
-/// and today's spend against its limit as a meter at the right), a column per place an item stands, each
-/// item a rounded card of its tab's number (or its place in line), a red ✕
-/// once a stage failed, its first line, where it is dim, and a meter of
-/// its stages done; the chosen card's edge in the accent color. A skipped
-/// item's card, in the last column, is its first line dim over two lines
-/// and "skipped by you", with no meter. On a screen
-/// `PILOT_SIDE_AT` wide the chosen item sits beside it in full, with its
-/// stages and its plan under them, and the diagrams the plan draws as
-/// pictures come back, for the frame to place.
-#[allow(clippy::too_many_arguments)]
 /// How long a card's item has worked, while it works ("worked 42m"), or
-/// how long it took once landed ("took 1h12m"), and the time alone for a
-/// narrow card; none before it opened.
-fn pilot_timer(pilot: &serde_json::Value, now_secs: i64) -> Option<(String, String)> {
+/// how long it took once landed ("took 1h12m"); none before it opened.
+fn pilot_timer(pilot: &serde_json::Value, now_secs: i64) -> Option<String> {
     let started = pilot["started"].as_i64()?;
     Some(match pilot["ended"].as_i64() {
-        Some(ended) => {
-            let time = text::span(ended - started);
-            (format!("took {time}"), time)
-        }
-        None => {
-            let time = text::span(now_secs - started);
-            (format!("worked {time}"), time)
-        }
+        Some(ended) => format!("took {}", text::span(ended - started)),
+        None => format!("worked {}", text::span(now_secs - started)),
     })
 }
 
+/// UX 2.0's Autopilot view as a board (src/autopilot/view.rs): its heading
+/// (`AUTO`, the note bold, its facts dim, the button that opens its menu,
+/// and today's spend against its limit as a meter at the right), then the
+/// kit's board (board 0c), a column per place an item stands, each item a
+/// card (`pilot_card`), its meter of stages done placed as an image. On a
+/// screen `PILOT_SIDE_AT` wide the chosen item sits beside it in full, with
+/// its stages and its plan under them, and under the board on a narrower
+/// one with the room, its five columns taking the width; the diagrams the
+/// plan draws as pictures come back, for the frame to place.
+#[allow(clippy::too_many_arguments)]
 fn pilot_board(
     view: &View,
     cols: usize,
@@ -4425,7 +4432,6 @@ fn pilot_board(
     hits: &mut Vec<HitBox>,
     meters: &mut Vec<Image>,
 ) -> Vec<Picture> {
-    const TALL: usize = 6;
     const SPEND_W: usize = 12;
     let theme = &m.snap.theme;
     let items = &view.data.items;
@@ -4497,212 +4503,160 @@ fn pilot_board(
         lines.push(Row::default().line(cols, None));
     }
     let body = rows.saturating_sub(1 + lines.len());
+    let top = lines.len();
     let side_w = beside_w(cols, PILOT_SIDE_AT, PILOT_SIDE_W);
-    let about = usize::try_from(m.cursor)
-        .ok()
-        .and_then(|c| items.get(c))
-        .filter(|_| side_w > 0)
-        .map(|item| pilot_about(item, side_w, theme, ready_diagrams(m).as_ref()));
     let board_w = cols - side_w;
-    if let Some(about) = &about {
-        let last = about.last_top(body);
-        side_hits(last, board_w + 2, side_w - 2, lines.len(), body, hits);
-    }
-    let about = about
-        .map(|a| {
-            let top = m.side_top().min(a.last_top(body));
-            a.window(top, body)
-        })
-        .unwrap_or_default();
-    // Each picture where the pane's lines put it on the screen.
-    let pictures = about
-        .pictures
+    let held: Vec<Vec<usize>> = crate::autopilot::view::COLUMNS
         .iter()
-        .map(|p| Picture {
-            x: p.x + (board_w + 2) as u16,
-            y: p.y + lines.len() as u16,
-            ..p.clone()
+        .map(|column| {
+            (0..items.len())
+                .filter(|&i| items[i].group.as_deref() == Some(*column))
+                .collect()
         })
         .collect();
-    let about = about.lines;
-    let columns = crate::autopilot::view::COLUMNS;
-    let col_w = board_w / columns.len();
-    let w = col_w - 1;
-    let inner = w.saturating_sub(4);
-    let top = lines.len();
-    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
-    for (ci, column) in columns.iter().enumerate() {
-        let in_column: Vec<usize> = (0..items.len())
-            .filter(|&i| items[i].group.as_deref() == Some(*column))
-            .collect();
-        let mut out = vec![
-            fit(
-                vec![
-                    Span::styled(format!(" {column}"), bold(theme.text)),
-                    Span::styled(format!(" {}", in_column.len()), fg(theme.dim)),
-                ],
-                col_w,
-                Style::new(),
-            ),
-            vec![Span::raw(" ".repeat(col_w))],
-        ];
-        let fits = body.saturating_sub(2) / TALL;
-        let chosen_at = in_column.iter().position(|&i| chosen(i));
-        let first = match chosen_at {
-            Some(c) if c >= fits => c + 1 - fits,
-            _ => 0,
-        };
-        for (shown, &index) in in_column.iter().enumerate().skip(first).take(fits) {
-            let item = &items[index];
-            let edge = kit::card_edge(chosen(index), lit(index).then_some(theme.text), theme);
-            let pilot = item.data.get("pilot");
-            let skipped = item.data.get("skipped").is_some();
-            let held = item.data.get("waitsOn").is_some();
-            let (label, where_, frac) = match pilot {
-                // A skipped item has no place in line and no stages.
-                None if skipped => (String::new(), "skipped by you".to_string(), 0.0),
-                // Nor has one held by the open item it waits on.
-                None if held => (String::new(), item.detail.clone(), 0.0),
-                Some(p) if p["closed"] == true => (
-                    "closed".to_string(),
-                    item.detail.clone(),
-                    p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0,
-                ),
-                Some(p) => (
-                    format!("tab {}", p["index"]),
-                    item.detail
-                        .split_once(" · ")
-                        .map_or(item.detail.as_str(), |(_, w)| w)
-                        .to_string(),
-                    p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0,
-                ),
-                None => {
-                    let place = item.data["place"].as_u64().unwrap_or(1);
-                    (
-                        format!("{place}."),
-                        if place == 1 {
-                            "opens next".to_string()
-                        } else {
-                            format!("{} in line", ordinal(place))
-                        },
-                        0.0,
-                    )
-                }
-            };
-            let name = pilot
-                .and_then(|p| p["item"].as_str())
-                .or_else(|| item.data["next"].as_str())
-                .unwrap_or(&item.title);
-            let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
-            let name_style = if chosen(index) {
-                bold(theme.bright)
-            } else if skipped || held {
-                fg(theme.dim)
-            } else {
-                fg(theme.text)
-            };
-            // A skipped card has no meter, so its item takes two lines, and
-            // where it is the one the meter has.
-            let inside = if skipped {
-                let wrapped = text::wrap(name, inner);
-                let rest = wrapped.get(1..).unwrap_or_default().join(" ");
-                vec![
-                    vec![Span::styled(
-                        wrapped.first().cloned().unwrap_or_default(),
-                        name_style,
-                    )],
-                    vec![Span::styled(text::cut(&rest, inner), name_style)],
-                    vec![Span::styled(text::cut(&where_, inner), fg(theme.faint))],
-                ]
-            } else {
-                vec![
-                    vec![Span::styled(text::cut(name, inner), name_style)],
-                    vec![Span::styled(text::cut(&where_, inner), fg(theme.dim))],
-                ]
-            };
-            // The timer's words where the card keeps its label beside them,
-            // else its time alone.
-            let timer = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs));
-            let room = w.saturating_sub(5 + text::width(&label) + 2 + usize::from(failed) * 2);
-            let mut right = timer
-                .map(|(words, time)| {
-                    if text::width(&words) <= room {
-                        words
-                    } else {
-                        time
-                    }
-                })
-                .map(|t| vec![Span::styled(t, fg(theme.dim))])
-                .unwrap_or_default();
-            if failed {
-                if !right.is_empty() {
-                    right.push(Span::raw(" "));
-                }
-                right.push(kit::mark(Mark::Failed, 0, theme));
-            }
-            let card = kit::card(
-                w,
-                TALL - 1,
-                vec![Span::styled(label, bold(ACCENT))],
-                right,
-                &inside,
-                edge,
-            );
-            out.extend(card.into_iter().map(|mut line| {
-                line.push(Span::raw(" "));
-                line
-            }));
-            out.push(vec![Span::raw(" ".repeat(col_w))]);
-            let y = top + 2 + (shown - first) * TALL;
-            if !skipped && y + 3 < top + body {
-                meters.push(Image::meter(
-                    format!("autopilot/{}", item.id),
-                    ci * col_w + 2,
-                    y + 3,
-                    inner,
-                    frac,
-                    pilot_tone(item).fg(theme),
-                ));
-            }
-            for dy in 0..TALL - 1 {
-                hits.push(HitBox {
-                    y: (y + dy) as u16,
-                    x0: (ci * col_w) as u16,
-                    x1: (ci * col_w + w).saturating_sub(1) as u16,
-                    spot: Spot::Index(index as isize),
-                });
-            }
-        }
-        if in_column.is_empty() {
-            out.push(fit(
-                vec![Span::styled(" none", fg(theme.faint))],
-                col_w,
-                Style::new(),
+    let board_columns: Vec<kit::BoardColumn> = crate::autopilot::view::COLUMNS
+        .iter()
+        .zip(&held)
+        .map(|(column, indices)| kit::BoardColumn {
+            name: column.to_string(),
+            tone: pilot_column_tone(column),
+            cards: indices
+                .iter()
+                .map(|&i| pilot_card(&items[i], chosen(i), lit(i), m))
+                .collect(),
+        })
+        .collect();
+    let drawn = kit::board(&board_columns, board_w, body, more_lit(m), theme);
+    board_hits(&drawn, top, hits, |c, i| held[c][i]);
+    for p in &drawn.placed {
+        let card = &board_columns[p.column].cards[p.card];
+        let item = &items[held[p.column][p.card]];
+        if let (Some(row), Some((frac, tone))) = (card.meter_row(p.w), card.meter) {
+            meters.push(Image::meter(
+                format!("autopilot/{}", item.id),
+                p.x + 2,
+                top + p.y + row,
+                p.w.saturating_sub(4),
+                frac,
+                tone.fg(theme),
             ));
         }
-        drawn.push(out);
     }
-    for i in 0..body {
-        let mut spans = Vec::new();
-        for c in &drawn {
-            spans.extend(
-                c.get(i)
-                    .cloned()
-                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(col_w))]),
-            );
-        }
-        let mut spans = fit(spans, board_w, Style::new());
-        if side_w > 0 {
-            spans.push(Span::styled("│ ", fg(theme.faint)));
-            spans.extend(fit(
-                about.get(i).cloned().unwrap_or_default(),
-                side_w - 2,
-                Style::new(),
-            ));
-        }
-        lines.push(Line { spans, fill: None });
-    }
+    let mut rows = drawn.lines;
+    let about = usize::try_from(m.cursor).ok().and_then(|c| items.get(c));
+    let under = side_w == 0 && about.is_some_and(|item| !views::is_summary(item));
+    let about_w = if under { board_w } else { side_w };
+    let about = about
+        .filter(|_| about_w > 0)
+        .map(|item| pilot_about(item, about_w, theme, ready_diagrams(m).as_ref()));
+    let pictures = if under {
+        pane_under(about, &mut rows, body, board_w, m, top, hits, theme)
+    } else {
+        pane_beside(about, &mut rows, body, board_w, side_w, m, top, hits, theme)
+    };
+    lines.extend(rows.into_iter().map(|spans| Line { spans, fill: None }));
     pictures
+}
+
+/// An Autopilot column's tone, as the kit marks where an item stands.
+fn pilot_column_tone(column: &str) -> Tone {
+    match column {
+        "Working" => Tone::Working,
+        "Waiting on you" => Tone::Needs,
+        "Landing" => Tone::Landing,
+        "Landed" => Tone::Done,
+        "Skipped" => Tone::Faint,
+        _ => Tone::Dim,
+    }
+}
+
+/// An Autopilot item's card: on its top edge its state's mark and its
+/// tab's number (or its place in line, or "closed"), a red ✕ at the right
+/// once a stage failed; its first line, where it is and how long it has
+/// worked as its facts, and a meter of its stages done. A skipped item's
+/// card says "skipped by you", and one held by the open item it waits on
+/// says so, both dim with no meter.
+fn pilot_card(item: &Item, chosen: bool, hovered: bool, m: &Mission) -> kit::BoardCard {
+    let theme = &m.snap.theme;
+    let pilot = item.data.get("pilot");
+    let skipped = item.data.get("skipped").is_some();
+    let held = item.data.get("waitsOn").is_some();
+    let failed = pilot.and_then(|p| p["failed"].as_bool()) == Some(true);
+    let stages = |p: &serde_json::Value| p["done"].as_f64().unwrap_or(0.0) as f32 / 8.0;
+    let (name, where_, meter) = match pilot {
+        // A skipped item has no place in line and no stages.
+        None if skipped => (String::new(), "skipped by you".to_string(), None),
+        // Nor has one held by the open item it waits on.
+        None if held => (String::new(), item.detail.clone(), None),
+        Some(p) if p["closed"] == true => {
+            ("closed".to_string(), item.detail.clone(), Some(stages(p)))
+        }
+        Some(p) => (
+            format!("tab {}", p["index"]),
+            item.detail
+                .split_once(" · ")
+                .map_or(item.detail.as_str(), |(_, w)| w)
+                .to_string(),
+            Some(stages(p)),
+        ),
+        None => {
+            let place = item.data["place"].as_u64().unwrap_or(1);
+            (
+                ordinal(place),
+                if place == 1 {
+                    "opens next".to_string()
+                } else {
+                    format!("{} in line", ordinal(place))
+                },
+                None,
+            )
+        }
+    };
+    let mark = if failed {
+        None
+    } else {
+        match item.group.as_deref() {
+            Some("Next up") => Some(Mark::Pending),
+            Some("Working") => Some(Mark::Working),
+            Some("Waiting on you") => Some(Mark::Needs),
+            Some("Landing") => Some(Mark::Landing),
+            Some("Landed") => Some(Mark::Passed),
+            _ => None,
+        }
+    };
+    let title = pilot
+        .and_then(|p| p["item"].as_str())
+        .or_else(|| item.data["next"].as_str())
+        .unwrap_or(&item.title)
+        .to_string();
+    let mut facts = vec![vec![Span::styled(
+        where_,
+        fg(if skipped { theme.faint } else { theme.dim }),
+    )]];
+    if let Some(words) = pilot.and_then(|p| pilot_timer(p, m.snap.now_secs)) {
+        facts.push(vec![Span::styled(words, fg(theme.dim))]);
+    }
+    kit::BoardCard {
+        mark: mark.map(|k| kit::mark(k, m.snap.frame, theme)),
+        name: Span::styled(name, Tone::Text.bold(theme)),
+        state: if failed {
+            vec![kit::mark(Mark::Failed, 0, theme)]
+        } else {
+            Vec::new()
+        },
+        title,
+        title_look: if skipped || held {
+            kit::Title::Past
+        } else {
+            kit::Title::Live
+        },
+        facts,
+        meter: meter
+            .filter(|_| !skipped)
+            .map(|frac| (frac, pilot_tone(item))),
+        chosen,
+        hovered,
+    }
 }
 
 /// The chosen item beside the board: its first line in full, bold and
@@ -7743,50 +7697,49 @@ mod tests {
         let (lines, hits) = screen(&m, 150, 30);
         let text = texts(&lines);
         assert!(
-            text[3].contains("IN REVIEW") && text[3].contains("APPROVED"),
-            "{}",
+            text[3].contains("IN REVIEW 2") && text[3].contains("APPROVED 1"),
+            "each count right after its name: {}",
             text[3]
         );
         assert!(
-            text[5].contains("─ #1 ─") && text[5].contains(" ✓ ─") && text[5].contains(" ◌ ─"),
+            text[3].contains("DRAFT 0") && text[6].contains("nothing here"),
+            "an empty column keeps its head and a dashed slot: {}",
+            text[6]
+        );
+        assert!(
+            text[5].contains("╭ #1 ─") && text[5].contains(" ✓ ─╮") && text[5].contains(" ◌ ─╮"),
             "{}",
             text[5]
         );
         assert!(
-            text[6].contains("▎ PR 1 lays the") && !text[6].contains("#1"),
+            text[6].contains("│ PR 1 lays the") && !text[6].contains("#1"),
             "the title's first line: {}",
             text[6]
         );
         assert!(
-            text[7].contains("▎ settings view"),
+            text[7].contains("│ settings view out"),
             "its second: {}",
             text[7]
         );
-        assert!(text[8].contains("▎ w · queue 1"), "{}", text[8]);
-        // Open: its bar goes on under the meta, with no bottom edge or
-        // corner of a box anywhere.
-        assert!(text[9].trim_start().starts_with('▎'), "{}", text[9]);
+        assert!(text[8].contains("│ w · queue 1"), "{}", text[8]);
+        assert!(text[9].contains("╰──"), "no footer: {}", text[9]);
         assert!(
-            !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
-            "{text:#?}"
-        );
-        let bar = lines[6].spans.iter().find(|s| s.content == "▎").unwrap();
-        assert_eq!(
-            bar.style.fg,
-            Some(Tone::Working.fg(&Theme::DARK)),
-            "its column's tone"
-        );
-        assert!(
-            text[11].contains("#2") && text[11].contains(" ✕ "),
-            "{}",
+            text[11].contains("╭ #2 ─") && text[11].contains(" ✕ ─╮"),
+            "a row between cards: {}",
             text[11]
         );
-        let bar = lines[12].spans.iter().find(|s| s.content == "▎").unwrap();
+        let edge = lines[11].spans.iter().find(|s| s.content == "╭").unwrap();
         assert_eq!(
-            bar.style.fg,
+            edge.style.fg,
             Some(Tone::Accent.fg(&Theme::DARK)),
-            "the chosen card's bar"
+            "the chosen card's edge"
         );
+        let title = lines[12]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("PR 2"))
+            .unwrap();
+        assert!(title.style.add_modifier.contains(Modifier::BOLD));
         assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 12));
     }
 
@@ -7858,9 +7811,10 @@ mod tests {
             "cut: {text:?}"
         );
 
-        // On a screen too narrow for the pane there is nothing to ask for.
+        // On a narrower screen the pane goes under the board, so its
+        // diagrams are still asked for.
         m.size = (120, 20);
-        assert!(description_beside(&m).is_none());
+        assert!(description_beside(&m).is_some());
     }
 
     #[test]
@@ -7902,8 +7856,8 @@ mod tests {
         );
         let text = texts(&lines);
         assert!(text[0].contains("CHANGES ASKED"), "{}", text[0]);
-        assert!(text[5].contains("▎ tab 3 · "), "{}", text[5]);
-        assert!(text[5].contains("▎ ben"), "the reviewers: {}", text[5]);
+        assert!(text[4].contains("│ tab 3 · "), "{}", text[4]);
+        assert!(text[4].contains("│ ben"), "the reviewers: {}", text[4]);
         assert!(text[0].contains("│ #2 PR 2"), "{}", text[0]);
         assert!(
             text[1].contains("ana · 3 commits · +214 −88 · ✓ checks"),
@@ -7934,7 +7888,14 @@ mod tests {
             board_cards(view, columns, 120, 20, &m, &Theme::DARK, 0, &mut l, &mut h);
             (texts(&l), h)
         };
+        // Narrower, the pane is under the board, after a rule.
         assert!(!narrow[0].contains("#2 PR 2"), "{}", narrow[0]);
+        let under = narrow
+            .iter()
+            .position(|l| l.starts_with("#2 PR 2"))
+            .unwrap_or_else(|| panic!("{narrow:#?}"));
+        assert!(narrow[under - 1].starts_with("───"), "{narrow:#?}");
+        assert!(narrow[..under].iter().any(|l| l.contains("╭ #2")));
         // On a wide screen the pane keeps its share of it: 50 of 160 is 75
         // of 240, its rule at the board's right.
         let mut l = Vec::new();
@@ -7954,7 +7915,8 @@ mod tests {
         assert_eq!(beside_w(120, SIDE_AT, SIDE_W), 0);
         assert_eq!(beside_w(160, SIDE_AT, SIDE_W), 50);
         assert_eq!(beside_w(240, SIDE_AT, SIDE_W), 75);
-        assert_eq!(beside_w(160, PILOT_SIDE_AT, PILOT_SIDE_W), 44);
+        assert_eq!(beside_w(160, PILOT_SIDE_AT, PILOT_SIDE_W), 0, "under it");
+        assert_eq!(beside_w(200, PILOT_SIDE_AT, PILOT_SIDE_W), 55);
         assert_eq!(beside_w(240, PILOT_SIDE_AT, PILOT_SIDE_W), 66);
     }
 
@@ -7997,27 +7959,32 @@ mod tests {
     }
 
     #[test]
-    fn with_ux2_the_pr_and_ticket_boards_draw_open_cards_at_any_width() {
-        let pr = Item::new("1", "#1 PR 1 lays the settings view out")
+    fn with_ux2_the_pr_and_ticket_boards_draw_the_kit_s_cards_at_any_width() {
+        let pr = Item::new("1", "#1 Fix the menu")
             .group("In review")
-            .data(serde_json::json!({ "pr": { "number": 1 }, "checks": "success" }));
-        let ticket = Item::new("AB-1", "AB-1 Fix the RSVP menu")
+            .data(serde_json::json!({ "pr": { "number": 1 }, "checks": "success", "meta": "w" }));
+        let ticket = Item::new("AB-1", "AB-1 Fix the menu")
             .group("Todo")
             .data(serde_json::json!({
-                "ticket": "AB-1", "priority": 1, "title": "Fix the RSVP menu", "state": "Todo",
+                "ticket": "AB-1", "priority": 1, "title": "Fix the menu", "state": "Todo",
+                "project": "Web app",
             }));
-        for (id, title, item, columns) in [
+        for (id, title, item, columns, head, edge) in [
             (
                 ViewId::Prs,
                 "PRs",
                 pr,
                 crate::sources::prboard::columns(true),
+                "IN REVIEW 1",
+                "╭ #1 ─",
             ),
             (
                 ViewId::Tickets,
                 "Tickets",
                 ticket,
                 crate::sources::tickets::columns(true),
+                "TODO 1",
+                "╭ AB-1 ─",
             ),
         ] {
             let mut m = mission(Vec::new(), vec![list_view(id, title, vec![item])]);
@@ -8038,20 +8005,39 @@ mod tests {
                     &mut hits,
                 );
                 let text = texts(&lines);
+                // The same anatomy at every width: the head, a blank row,
+                // the card's top edge, its title on one line, its fact
+                // line, its bottom edge, and no open card's bar.
+                assert!(text[0].contains(head), "{title} at {cols}: {text:#?}");
                 assert!(
-                    !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
+                    text[2].starts_with(edge) || text[2].contains(&format!(" {edge}")),
                     "{title} at {cols}: {text:#?}"
                 );
-                let bar = lines
+                let x = text[2].find(edge).unwrap();
+                let at = text[2][..x].chars().count();
+                let rest = |row: usize| text[row].chars().skip(at).collect::<String>();
+                assert!(
+                    rest(3).starts_with("│ Fix the menu"),
+                    "{title} at {cols}: {text:#?}"
+                );
+                assert!(rest(4).starts_with("│ "), "{title} at {cols}: {text:#?}");
+                assert!(!rest(4).starts_with("│  "), "{title} at {cols}: {text:#?}");
+                assert!(rest(5).starts_with("╰─"), "{title} at {cols}: {text:#?}");
+                assert!(!text.iter().any(|l| l.contains('▎')), "{title} at {cols}");
+                let edge = lines[2]
+                    .spans
                     .iter()
-                    .flat_map(|l| l.spans.iter())
-                    .find(|s| s.content == "▎")
+                    .find(|s| s.content == "╭")
                     .unwrap_or_else(|| panic!("{title} at {cols}: {text:#?}"));
                 assert_eq!(
-                    bar.style.fg,
+                    edge.style.fg,
                     Some(Tone::Accent.fg(&Theme::DARK)),
-                    "{title} at {cols}: the chosen card's bar"
+                    "{title} at {cols}: the chosen card's edge"
                 );
+                // Under 140 columns the chosen card's pane is under the
+                // board, beside it from there.
+                let beside = text[0].contains(" │ ");
+                assert_eq!(beside, cols >= SIDE_AT, "{title} at {cols}: {text:#?}");
             }
         }
     }
@@ -8112,16 +8098,17 @@ mod tests {
             text[0]
         );
         assert!(
-            text[2].contains("─ AB-1 ─") && text[2].contains(" !!! ─"),
+            text[2].contains("╭ AB-1 ─") && text[2].contains(" !!! ─╮"),
             "{}",
             text[2]
         );
-        assert!(text[2].contains(" !! ─"), "high: {}", text[2]);
-        assert!(text[3].contains("▎ Fix the RSVP menu"), "{}", text[3]);
-        assert!(text[5].contains("▎ Web app · 2 pts"), "{}", text[5]);
-        assert!(text[5].contains("▎ tab 4 · "), "{}", text[5]);
+        assert!(text[2].contains(" !! ─╮"), "high: {}", text[2]);
+        assert!(text[3].contains("│ Fix the RSVP menu"), "{}", text[3]);
+        assert!(text[5].contains("│ Web app · 2 pts"), "{}", text[5]);
+        assert!(text[5].contains("│ tab 4 · "), "{}", text[5]);
+        assert!(text[3].contains("nothing here"), "{}", text[3]);
         assert!(
-            text[5].contains("▎ 3d ago"),
+            text[5].contains("│ 3d ago"),
             "a done one says when: {}",
             text[5]
         );
@@ -8156,9 +8143,9 @@ mod tests {
             .position(|l| l.contains("CLOSED THIS WEEK"))
             .unwrap();
         assert!(text[label - 1].contains("┄"), "{}", text[label - 1]);
-        assert!(text[label + 2].contains("─ AB-4"), "{}", text[label + 2]);
+        assert!(text[label + 2].contains("╭ AB-4"), "{}", text[label + 2]);
         assert!(
-            text[label + 5].contains("▎ 3d ago · duplicate"),
+            text[label + 5].contains("│ 3d ago · duplicate"),
             "{}",
             text[label + 5]
         );
@@ -8202,26 +8189,30 @@ mod tests {
             .unwrap();
         assert!(text[label].trim_end().ends_with('2'), "{}", text[label]);
         assert!(
-            text[label + 2].contains("─ #2") && text[label + 2].contains("─ #3"),
+            text[label + 2].contains("╭ #2") && text[label + 2].contains("╭ #3"),
             "{}",
             text[label + 2]
         );
         assert!(
-            text[label + 5].contains("▎ 1d ago · ana"),
+            text[label + 4].contains("│ 1d ago · ana"),
             "{}",
-            text[label + 5]
+            text[label + 4]
         );
-        let bar = lines[label + 3]
+        let edge = lines[label + 2]
             .spans
             .iter()
-            .filter(|s| s.content == "▎")
+            .filter(|s| s.content == "╭")
             .nth(1)
             .unwrap();
         assert_eq!(
-            bar.style.fg,
+            edge.style.fg,
             Some(Tone::Accent.fg(&Theme::DARK)),
             "the chosen one in the row"
         );
+        // On a screen under 140 columns the chosen one's pane is under the
+        // row, after a rule.
+        assert!(text[label + 6].starts_with("───"), "{text:#?}");
+        assert!(text[label + 7].starts_with("#3 PR 3"), "{text:#?}");
     }
 
     #[test]
@@ -8251,29 +8242,58 @@ mod tests {
             );
             (texts(&l), h)
         };
-        // The first PR chosen: the columns from the first, more to the right.
+        // 55 columns hold three of the five 16 wide. The first PR chosen:
+        // the columns from the first, the two others counted at the right.
         m.cursor = 0;
-        let (text, _) = draw(&m);
+        let (text, hits) = draw(&m);
+        assert!(text[0].ends_with("2 more ›"), "{}", text[0]);
+        assert!(!text[0].contains("‹"), "{}", text[0]);
         assert!(
-            text[0].contains(&columns[0].to_uppercase()) && text[0].ends_with("›"),
+            text[1].starts_with(&columns[0].to_uppercase()) && !text[1].contains("MERGE"),
             "{}",
-            text[0]
+            text[1]
         );
-        assert!(!text[0].contains("MERGE"), "{}", text[0]);
-        // The last column's PR chosen: its column in sight, its card drawn
-        // and clickable inside the board, more to the left.
+        let right = Key::new(KeyCode::Right, Mods::NONE);
+        assert!(
+            hits.iter()
+                .any(|h| h.spot == Spot::Key(right) && h.y == 0 && usize::from(h.x1) == 54),
+            "the marker is a click: {hits:?}"
+        );
+        // The last column's PR chosen: its column in sight with its
+        // neighbors, its card drawn and clickable inside the board, the
+        // rest counted at the left.
         m.cursor = 1;
         let (text, hits) = draw(&m);
-        assert!(
-            text[0].contains("MERGE") && text[0].contains("‹"),
-            "{}",
-            text[0]
-        );
-        assert!(text.iter().any(|l| l.contains("#2")), "{text:?}");
+        assert!(text[0].starts_with("‹ 2 more"), "{}", text[0]);
+        assert!(!text[0].contains("›"), "{}", text[0]);
+        assert!(text[1].contains("IN MERGE QUEUE 1"), "{}", text[1]);
+        assert!(text.iter().any(|l| l.contains("╭ #2")), "{text:?}");
         assert!(
             hits.iter()
                 .any(|h| h.spot == Spot::Index(1) && usize::from(h.x1) < 55),
             "{hits:?}"
+        );
+        let left = Key::new(KeyCode::Left, Mods::NONE);
+        assert!(hits.iter().any(|h| h.spot == Spot::Key(left) && h.y == 0));
+        // Lit under the mouse.
+        m.hover = Some(Spot::Key(left));
+        let (mut l, mut h) = (Vec::new(), Vec::new());
+        board_cards(
+            &m.snap.views[0],
+            columns,
+            55,
+            20,
+            &m,
+            &Theme::DARK,
+            0,
+            &mut l,
+            &mut h,
+        );
+        assert!(
+            l[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
         );
     }
 
@@ -8584,12 +8604,12 @@ mod tests {
         );
         m.snap.rules.ux2 = true;
         m.view = 1;
-        m.size = (160, 30);
+        m.size = (200, 30);
         // A card whose item links no plan says so, and so does one whose
         // plan note isn't there; the heading says nothing of a plan.
         let beside = |m: &mut Mission, cursor: usize| {
             m.cursor = cursor as isize;
-            texts(&drawn(m, 160, 30).0).join("\n")
+            texts(&drawn(m, 200, 30).0).join("\n")
         };
         let pane = beside(&mut m, no_plan);
         assert!(pane.contains("No plan"), "{pane}");
@@ -8599,7 +8619,7 @@ mod tests {
         let pane = beside(&mut m, 0);
         assert!(!pane.contains("No plan"), "{pane}");
         m.cursor = chosen as isize;
-        let (lines, _, meters, _) = drawn(&m, 160, 30);
+        let (lines, _, meters, _) = drawn(&m, 200, 30);
         let text = texts(&lines);
         // The chosen card's plan under its stages: the plan note's name,
         // then its Markdown, which is the text its diagrams are asked for.
@@ -8614,9 +8634,9 @@ mod tests {
         assert!(line_of("Notes are found by name.") < line_of("Give each a line of its own."));
         let (plan, _) = description_beside(&m).expect("the plan beside the board");
         assert!(plan.starts_with("## Today"), "{plan}");
-        m.size = (140, 30);
-        assert!(description_beside(&m).is_none(), "too narrow for the pane");
-        m.size = (160, 30);
+        m.size = (100, 30);
+        assert!(description_beside(&m).is_none(), "too narrow for the board");
+        m.size = (200, 30);
         let at = text
             .iter()
             .position(|l| l.contains("AUTO Switchboard"))
@@ -8629,10 +8649,10 @@ mod tests {
         );
         let heads = &text[at + 2];
         for column in crate::autopilot::view::COLUMNS {
-            assert!(heads.contains(column), "{heads}");
+            assert!(heads.contains(&column.to_uppercase()), "{heads}");
         }
         assert!(
-            heads.contains("Next up 2") && heads.contains("Landed 0"),
+            heads.contains("NEXT UP 2") && heads.contains("LANDED 0"),
             "{heads}"
         );
         let board = text.join("\n");
@@ -8651,9 +8671,9 @@ mod tests {
         );
         // The skipped item a card in the last column, with no band under
         // the board.
-        assert!(heads.contains("Skipped 1"), "{heads}");
+        assert!(heads.contains("SKIPPED 1"), "{heads}");
         let col = |l: &str, s: &str| l[..l.find(s).unwrap()].chars().count();
-        let skipped_at = col(heads, "Skipped 1");
+        let skipped_at = col(heads, "SKIPPED 1");
         let card = text.iter().position(|l| l.contains("Old idea")).unwrap();
         assert!(col(&text[card], "Old idea") >= skipped_at, "{}", text[card]);
         assert!(
@@ -8663,23 +8683,41 @@ mod tests {
             "{board}"
         );
         assert_eq!(
-            text.iter().filter(|l| l.contains("Skipped")).count(),
+            text.iter().filter(|l| l.contains("SKIPPED")).count(),
             1,
             "{board}"
         );
-        // A meter for each card, the landing one 6 of 8 stages done, and
-        // one for the spend: a quarter of the limit.
+        // A meter for each card with stages, the landing one 6 of 8 done,
+        // as its last line, and one for the spend: a quarter of the limit.
         let held = meters
             .iter()
             .find(|meter| meter.name == "autopilot/pilot:@3")
             .unwrap();
         assert_eq!(held.frac(), Some(6.0 / 8.0));
+        let card = text.iter().position(|l| l.contains("▲ tab 3")).unwrap();
+        let bottom = (card..text.len())
+            .find(|&y| text[y].chars().nth(held.x as usize - 2) == Some('╰'))
+            .unwrap();
+        assert_eq!(held.y as usize, bottom - 1, "{text:#?}");
         let spend = meters
             .iter()
             .find(|meter| meter.name == "autopilot/spend")
             .unwrap();
         assert_eq!((spend.frac(), spend.y as usize), (Some(0.25), at));
-        assert_eq!(meters.len(), 5);
+        assert_eq!(meters.len(), 3);
+        // At 160 columns the chosen card's pane is under the board, the
+        // six columns taking the width.
+        let (lines, _, _, _) = drawn(&m, 160, 40);
+        let text = texts(&lines);
+        let heads = text.iter().position(|l| l.contains("NEXT UP 2")).unwrap();
+        assert!(!text[heads].contains('│'), "{}", text[heads]);
+        let rule = (heads..text.len())
+            .find(|&y| text[y].starts_with("────"))
+            .unwrap_or_else(|| panic!("{text:#?}"));
+        assert!(
+            text[rule + 1].contains("Give notes stable IDs"),
+            "{text:#?}"
+        );
     }
 
     #[test]

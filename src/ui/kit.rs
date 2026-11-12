@@ -5,7 +5,10 @@
 //! Tones (`Tone`) and surfaces (`Surface`) are the colors, one mark per
 //! state (`mark`), and the atoms: a section's `label`, the `rule`s, a
 //! list's `row`, a `chip`, a stage's `cell`, a `keycap`, a `card` (a box),
-//! an `open_card` (a view's card: a top rule and its tone's bar), a box's
+//! an `open_card` (the Tabs view's card: a top rule and its tone's bar), a
+//! `board_card` (a board's card, as tall as what it holds) and the `board`
+//! they make (board 0c, "The kit's board": columns of cards, the PRs,
+//! Tickets and Autopilot boards' one look), a box's
 //! `option`, the `pane` beside a list, an `input`, a calendar's `event`,
 //! a two-row bar's `bar_name`, the key `hints` of every footer and bar
 //! (the key in the accent, what it does dim, two spaces between), and a
@@ -24,8 +27,8 @@
 //! draws them itself (Ghostty, `caps`), and in a space of their fill
 //! elsewhere, which the terminal would take from a font that may not have
 //! them; either way the object keeps its width, so nothing moves. Boxes
-//! have arc corners; a view's cards are open, a rule along the top and a
-//! bar down the left; rules, bars, chosen rows, tables and the calendar's
+//! and a board's cards have arc corners; the Tabs view's cards are open, a
+//! rule along the top and a bar down the left; rules, bars, chosen rows, tables and the calendar's
 //! events stay square.
 //!
 //! Every atom gives one row (`Vec<Span>`) or several (`Vec<Vec<Span>>`), so
@@ -744,7 +747,7 @@ pub fn card(
     out
 }
 
-/// A card drawn open, as the canvas draws one (boards 3, 10 and 11), `cols`
+/// A card drawn open, as the canvas draws the Tabs view's (board 3), `cols`
 /// wide and `rows` tall: its title and `right` on a rule along its top in
 /// the faint color, laid out by `columns`, a bar (`▎`) of its tone down the
 /// left of every row under it, and no other edge. The caller's lines sit
@@ -839,6 +842,284 @@ pub fn open_card(
                 .collect()
         })
         .collect()
+}
+
+/// How a board's card shows its title: live, a past one's (dim, under the
+/// board), or a done one's (faint and struck through).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Title {
+    Live,
+    Past,
+    Struck,
+}
+
+/// One card of a board (board 0c, "The kit's board"): on its top edge a
+/// mark and a name at the left (already styled) and a short state at the
+/// right; in it the title on two lines at most, its fact lines, and where
+/// it has stages, a meter of how far they are, in its tone, last.
+#[derive(Clone, Debug)]
+pub struct BoardCard {
+    pub mark: Option<Span<'static>>,
+    pub name: Span<'static>,
+    pub state: Vec<Span<'static>>,
+    pub title: String,
+    pub title_look: Title,
+    pub facts: Vec<Vec<Span<'static>>>,
+    pub meter: Option<(f32, Tone)>,
+    pub chosen: bool,
+    pub hovered: bool,
+}
+
+impl BoardCard {
+    /// How many rows it takes `cols` wide: its edges, its title's lines,
+    /// its facts and its meter.
+    pub fn height(&self, cols: usize) -> usize {
+        2 + title_lines(&self.title, cols.saturating_sub(4)).len()
+            + self.facts.len()
+            + usize::from(self.meter.is_some())
+    }
+
+    /// The row of its meter, from its top edge, when it has one.
+    pub fn meter_row(&self, cols: usize) -> Option<usize> {
+        self.meter.map(|_| self.height(cols) - 2)
+    }
+}
+
+/// A title wrapped to two lines at most of `cols`, by words, the second
+/// ending in … when the rest doesn't fit; one line when it fits on one.
+pub fn title_lines(title: &str, cols: usize) -> Vec<String> {
+    let wrapped = crate::sidebar::text::wrap(title, cols);
+    let first = cut(wrapped.first().map_or("", String::as_str), cols);
+    match wrapped.get(1..).filter(|rest| !rest.is_empty()) {
+        Some(rest) => vec![first, cut(&rest.join(" "), cols)],
+        None => vec![first],
+    }
+}
+
+/// A board's card, `cols` wide and as tall as what it holds
+/// (`BoardCard::height`): the kit's `card`, its edge in the border's color,
+/// the accent when chosen and dim under the mouse; its title bold when
+/// chosen.
+pub fn board_card(card: &BoardCard, cols: usize, theme: &Theme) -> Vec<Vec<Span<'static>>> {
+    let inner = cols.saturating_sub(4);
+    let edge = if card.chosen {
+        Tone::Accent.fg(theme)
+    } else if card.hovered {
+        theme.dim
+    } else {
+        border(theme)
+    };
+    let mut top = Vec::new();
+    if let Some(mark) = &card.mark {
+        top.push(mark.clone());
+        top.push(Span::raw(" "));
+    }
+    top.push(card.name.clone());
+    let title_style = match card.title_look {
+        Title::Live if card.chosen => Style::new().fg(theme.bright).add_modifier(Modifier::BOLD),
+        Title::Live => Tone::Text.style(theme),
+        Title::Past => Tone::Dim.style(theme),
+        Title::Struck => Tone::Faint.style(theme).add_modifier(Modifier::CROSSED_OUT),
+    };
+    let mut inside: Vec<Vec<Span<'static>>> = title_lines(&card.title, inner)
+        .into_iter()
+        .map(|line| vec![Span::styled(line, title_style)])
+        .collect();
+    inside.extend(card.facts.iter().cloned());
+    if let Some((frac, tone)) = card.meter {
+        let used = (frac.clamp(0.0, 1.0) * 100.0).round() as u8;
+        inside.push(meter(used, inner, tone, theme));
+    }
+    self::card(
+        cols,
+        card.height(cols),
+        top,
+        card.state.clone(),
+        &inside,
+        edge,
+    )
+}
+
+/// A board's column: its name, the tone of where its cards stand, and
+/// its cards.
+#[derive(Clone, Debug)]
+pub struct BoardColumn {
+    pub name: String,
+    pub tone: Tone,
+    pub cards: Vec<BoardCard>,
+}
+
+/// Where a card of a board was drawn, from the board's top-left corner:
+/// its column and place in it, and its box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub column: usize,
+    pub card: usize,
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+/// A board drawn: its lines, the cards it shows, and on a screen too
+/// narrow for every column, the "more" markers on its top row that lead to
+/// a card (each its column and width), which the caller makes a click and
+/// a Tab stop.
+#[derive(Clone, Debug, Default)]
+pub struct Board {
+    pub lines: Vec<Vec<Span<'static>>>,
+    pub placed: Vec<Placed>,
+    pub more_left: Option<(usize, usize)>,
+    pub more_right: Option<(usize, usize)>,
+}
+
+/// The narrowest a board's column is drawn.
+pub const BOARD_COLUMN_MIN: usize = 16;
+
+/// The kit's board (board 0c), `cols` wide and at most `rows` tall: the
+/// columns share the width a column apart, never under
+/// `BOARD_COLUMN_MIN`; each column's head its name in capitals, bold, in
+/// its tone, its count right after it; a blank row, then its cards a row
+/// apart, from the one that keeps the chosen card in sight, only whole
+/// ones; an empty column a dashed slot reading "nothing here". When the
+/// columns can't all keep their width, the chosen card's column and its
+/// neighbors, with "‹ 1 more" and "2 more ›" on a row over them, each lit
+/// when `lit` says so (under the mouse or Tab's focus); a marker whose
+/// hidden columns hold no card, or any marker while none of the board's
+/// cards is chosen, is only a count, since `h` and `l` pass over empty
+/// columns and move from a chosen card.
+pub fn board(
+    columns: &[BoardColumn],
+    cols: usize,
+    rows: usize,
+    lit: [bool; 2],
+    theme: &Theme,
+) -> Board {
+    let n = columns.len().max(1);
+    let fits = ((cols + 1) / (BOARD_COLUMN_MIN + 1)).clamp(1, n);
+    let chosen_at = columns
+        .iter()
+        .position(|c| c.cards.iter().any(|card| card.chosen));
+    let chosen_col = chosen_at.unwrap_or(0);
+    let start = chosen_col
+        .saturating_sub((fits - 1) / 2)
+        .min(n.saturating_sub(fits));
+    let shown = &columns[start.min(columns.len())..(start + fits).min(columns.len())];
+    let mut out = Board::default();
+    let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
+    if fits < columns.len() {
+        let style = |on: bool| {
+            if on {
+                Tone::Accent.style(theme).add_modifier(Modifier::REVERSED)
+            } else {
+                Tone::Dim.style(theme)
+            }
+        };
+        let after = columns.len() - start - shown.len();
+        // A marker moves the board only from a chosen card toward another,
+        // since h and l pass over empty columns and move from a card: one
+        // with none past it, or with no card of the board chosen, is a
+        // count alone.
+        let holds = |hidden: &[BoardColumn]| {
+            chosen_at.is_some() && hidden.iter().any(|c| !c.cards.is_empty())
+        };
+        let mut row = Vec::new();
+        if start > 0 {
+            let words = format!("‹ {start} more");
+            let moves = holds(&columns[..start]);
+            if moves {
+                out.more_left = Some((0, width(&words)));
+            }
+            row.push(Span::styled(words, style(moves && lit[0])));
+        }
+        if after > 0 {
+            let words = format!("{after} more ›");
+            let w = width(&words);
+            let x = cols.saturating_sub(w);
+            let moves = holds(&columns[start + shown.len()..]);
+            if moves {
+                out.more_right = Some((x, w));
+            }
+            let used = spans_width(&row);
+            row.push(Span::raw(" ".repeat(x.saturating_sub(used))));
+            row.push(Span::styled(words, style(moves && lit[1])));
+        }
+        lines.push(fit(row, cols, Style::new()));
+    }
+    let top = lines.len();
+    let k = shown.len().max(1);
+    let col_w = (cols.saturating_sub(k - 1) / k).max(1);
+    let card_rows = rows.saturating_sub(top + 2);
+    let mut drawn: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+    for (ci, column) in shown.iter().enumerate() {
+        let x = ci * (col_w + 1);
+        let mut col = vec![
+            vec![
+                Span::styled(column.name.to_uppercase(), column.tone.bold(theme)),
+                Span::raw(" "),
+                Span::styled(column.cards.len().to_string(), column.tone.style(theme)),
+            ],
+            Vec::new(),
+        ];
+        if column.cards.is_empty() && card_rows >= 3 {
+            let e = Style::new().fg(border(theme));
+            let inner = col_w.saturating_sub(2);
+            col.push(vec![Span::styled(format!("╭{}╮", "┄".repeat(inner)), e)]);
+            col.push(vec![
+                Span::styled("┆", e),
+                Span::styled(centered("nothing here", inner), Tone::Faint.style(theme)),
+                Span::styled("┆", e),
+            ]);
+            col.push(vec![Span::styled(format!("╰{}╯", "┄".repeat(inner)), e)]);
+        }
+        let heights: Vec<usize> = column.cards.iter().map(|c| c.height(col_w)).collect();
+        // From the first card that keeps the chosen one whole in sight.
+        let span = |from: usize, to: usize| heights[from..=to].iter().sum::<usize>() + (to - from);
+        let mut first = 0;
+        if let Some(c) = column.cards.iter().position(|c| c.chosen) {
+            while first < c && span(first, c) > card_rows {
+                first += 1;
+            }
+        }
+        let mut y = 0;
+        for (i, card) in column.cards.iter().enumerate().skip(first) {
+            let h = heights[i];
+            if y + h > card_rows {
+                break;
+            }
+            out.placed.push(Placed {
+                column: start + ci,
+                card: i,
+                x,
+                y: top + 2 + y,
+                w: col_w,
+                h,
+            });
+            if y > 0 {
+                col.push(Vec::new());
+            }
+            col.extend(board_card(card, col_w, theme));
+            y += h + 1;
+        }
+        drawn.push(col);
+    }
+    let tallest = drawn.iter().map(Vec::len).max().unwrap_or(0);
+    for i in 0..tallest.min(rows.saturating_sub(top)) {
+        let mut row = Vec::new();
+        for (ci, col) in drawn.iter().enumerate() {
+            if ci > 0 {
+                row.push(Span::raw(" "));
+            }
+            row.extend(fit(
+                col.get(i).cloned().unwrap_or_default(),
+                col_w,
+                Style::new(),
+            ));
+        }
+        lines.push(fit(row, cols, Style::new()));
+    }
+    out.lines = lines;
+    out
 }
 
 /// A line in a box: the chosen one with a yellow `›` and its text bright
@@ -1325,6 +1606,176 @@ mod tests {
             &T,
         );
         assert_eq!(text(&narrow[0]), "─ #12345 ─ ✓ ─");
+    }
+
+    fn board_card_of(title: &str, chosen: bool) -> BoardCard {
+        BoardCard {
+            mark: None,
+            name: Span::raw("#1"),
+            state: vec![Span::raw("✓")],
+            title: title.to_string(),
+            title_look: Title::Live,
+            facts: vec![vec![Span::raw("w")]],
+            meter: None,
+            chosen,
+            hovered: false,
+        }
+    }
+
+    fn column(name: &str, cards: Vec<BoardCard>) -> BoardColumn {
+        BoardColumn {
+            name: name.to_string(),
+            tone: Tone::Working,
+            cards,
+        }
+    }
+
+    #[test]
+    fn a_board_card_is_as_tall_as_what_it_holds() {
+        let long = board_card(&board_card_of("lays the settings view out", false), 18, &T);
+        let short = board_card(&board_card_of("Fix it", false), 18, &T);
+        assert_eq!(long.len(), 5);
+        assert_eq!(short.len(), 4, "a row shorter for a one-line title");
+        assert_eq!(text(&short[0]), "╭ #1 ──────── ✓ ─╮");
+        assert_eq!(text(&short[1]), "│ Fix it         │");
+        assert_eq!(text(&short[2]), "│ w              │");
+        assert!(text(&short[3]).starts_with('╰'), "no footer");
+        assert_eq!(short[0][0].style.fg, Some(border(&T)));
+        let chosen = board_card(&board_card_of("Fix it", true), 18, &T);
+        assert_eq!(chosen[0][0].style.fg, Some(Tone::Accent.fg(&T)));
+        let title = chosen[1]
+            .iter()
+            .find(|s| s.content.contains("Fix"))
+            .unwrap();
+        assert!(title.style.add_modifier.contains(Modifier::BOLD));
+        let mut hovered = board_card_of("Fix it", false);
+        hovered.hovered = true;
+        assert_eq!(board_card(&hovered, 18, &T)[0][0].style.fg, Some(T.dim));
+        // A meter is its last line, in its tone.
+        let mut stages = board_card_of("Fix it", false);
+        stages.meter = Some((0.5, Tone::Working));
+        let drawn = board_card(&stages, 18, &T);
+        assert_eq!(stages.meter_row(18), Some(3));
+        assert!(text(&drawn[3]).contains('▰'), "{:?}", text(&drawn[3]));
+        assert!(text(&drawn[4]).starts_with('╰'));
+    }
+
+    #[test]
+    fn a_board_shares_its_width_a_column_apart_and_counts_each_column() {
+        let columns = vec![
+            column("Next", vec![board_card_of("Fix it", false)]),
+            column(
+                "In review",
+                vec![board_card_of("Fix it", true), board_card_of("Again", false)],
+            ),
+            column("Done", Vec::new()),
+        ];
+        let b = board(&columns, 62, 20, [false; 2], &T);
+        let rows: Vec<String> = b.lines.iter().map(|l| text(l)).collect();
+        assert!(rows[0].starts_with("NEXT 1"), "{rows:#?}");
+        // Three columns of 20 a column apart: 0, 21 and 42.
+        assert_eq!(rows[0].find("IN REVIEW 2"), Some(21), "{rows:#?}");
+        assert_eq!(rows[0].find("DONE 0"), Some(42), "{rows:#?}");
+        assert_eq!(rows[1], " ".repeat(62));
+        assert_eq!(rows[2].find("╭ #1"), Some(0));
+        assert_eq!(rows[2].chars().nth(21), Some('╭'));
+        assert!(rows[3].contains("nothing here"), "{rows:#?}");
+        assert!(rows[2].contains('┄'), "the empty column's dashed slot");
+        // The second card a row under the first.
+        assert_eq!(rows[7].chars().nth(21), Some('╭'), "{rows:#?}");
+        assert_eq!(
+            b.placed,
+            vec![
+                Placed {
+                    column: 0,
+                    card: 0,
+                    x: 0,
+                    y: 2,
+                    w: 20,
+                    h: 4
+                },
+                Placed {
+                    column: 1,
+                    card: 0,
+                    x: 21,
+                    y: 2,
+                    w: 20,
+                    h: 4
+                },
+                Placed {
+                    column: 1,
+                    card: 1,
+                    x: 21,
+                    y: 7,
+                    w: 20,
+                    h: 4
+                },
+            ]
+        );
+        assert!(b.more_left.is_none() && b.more_right.is_none());
+        // Short: the cards that keep the chosen one whole in sight.
+        let mut later = columns.clone();
+        later[1].cards[0].chosen = false;
+        later[1].cards[1].chosen = true;
+        let b = board(&later, 62, 7, [false; 2], &T);
+        assert_eq!(
+            b.placed[1],
+            Placed {
+                column: 1,
+                card: 1,
+                x: 21,
+                y: 2,
+                w: 20,
+                h: 4
+            }
+        );
+    }
+
+    #[test]
+    fn a_narrow_board_shows_the_chosen_column_and_its_neighbors() {
+        let columns: Vec<BoardColumn> = ["A", "B", "C", "D", "E"]
+            .iter()
+            .enumerate()
+            .map(|(i, n)| column(n, vec![board_card_of("Fix it", i == 2)]))
+            .collect();
+        // Under three times 16 and the gaps: two columns.
+        let b = board(&columns, 40, 20, [false, true], &T);
+        let rows: Vec<String> = b.lines.iter().map(|l| text(l)).collect();
+        assert!(rows[0].starts_with("‹ 2 more"), "{rows:#?}");
+        assert!(rows[0].ends_with("1 more ›"), "{rows:#?}");
+        assert!(
+            rows[1].starts_with("C 1") && rows[1].contains("D 1"),
+            "{rows:#?}"
+        );
+        assert_eq!(b.more_left, Some((0, 8)));
+        assert_eq!(b.more_right, Some((32, 8)));
+        assert!(
+            b.lines[0]
+                .last()
+                .unwrap()
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert!(b.placed.iter().any(|p| p.column == 2 && p.y == 3));
+        // Hidden columns with no card: counted, but nothing to move to.
+        let mut empty = columns.clone();
+        empty[3].cards.clear();
+        empty[4].cards.clear();
+        let b = board(&empty, 40, 20, [false; 2], &T);
+        assert!(text(&b.lines[0]).ends_with("1 more ›"));
+        assert!(b.more_right.is_none() && b.more_left.is_some());
+        // None of its cards chosen (the cursor in a row under the board):
+        // counts alone.
+        let mut none = columns.clone();
+        none[2].cards[0].chosen = false;
+        let b = board(&none, 40, 20, [false; 2], &T);
+        assert!(text(&b.lines[0]).ends_with("more ›"));
+        assert!(b.more_left.is_none() && b.more_right.is_none());
+        // Wide enough for all: no markers.
+        let b = board(&columns, 5 * 17 - 1, 20, [false; 2], &T);
+        assert!(b.more_left.is_none() && b.more_right.is_none());
+        assert!(text(&b.lines[0]).starts_with("A 1"));
     }
 
     #[test]

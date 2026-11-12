@@ -194,7 +194,7 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
     // M-p's command opened mission control on the Autopilot board, its
     // heading saying what the line said.
-    let screen = client.wait_text("Waiting on you");
+    let screen = client.wait_text("WAITING ON YOU");
     assert!(
         screen
             .iter()
@@ -203,7 +203,7 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
     );
     client.type_text("\x1b");
     client.wait_for("mission control closed", |s| {
-        !s.iter().any(|l| l.contains("Waiting on you"))
+        !s.iter().any(|l| l.contains("WAITING ON YOU"))
     });
     // The Tabs view leads with the cards alone, the Autopilot view among
     // the views while the mode is on.
@@ -219,10 +219,10 @@ fn with_ux2_it_has_its_own_view_in_place_of_the_line_leading_the_tabs() {
 fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose_m_opens_the_menu()
 {
     let (_notes, _note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
-    client.wait_text("Waiting on you");
+    client.wait_text("WAITING ON YOU");
     client.type_text("\x1b");
     client.wait_for("mission control closed", |s| {
-        !s.iter().any(|l| l.contains("Waiting on you"))
+        !s.iter().any(|l| l.contains("WAITING ON YOU"))
     });
     let closed = |client: &mut TestClient| {
         client.type_text("\x1b");
@@ -273,7 +273,7 @@ fn with_ux2_its_command_its_view_menu_and_its_button_open_its_settings_box_whose
 #[test]
 fn with_ux2_the_boards_side_panel_shows_the_chosen_items_plan_under_its_stages() {
     let (notes, note, server, mut client, _repo) = set_up(json!({ "ux2": true }));
-    client.wait_text("Waiting on you");
+    client.wait_text("WAITING ON YOU");
     // The first item's plan, in the plans folder beside the note, linked
     // under it; the second item links none.
     std::fs::create_dir_all(notes.path().join("Plans")).unwrap();
@@ -493,7 +493,7 @@ fn hook(server: &TestServer, pane: &str, event: &str) {
 #[test]
 fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed() {
     let (_notes, _note, server, mut client, repo) = set_up(json!({ "ux2": true }));
-    client.wait_text("Waiting on you");
+    client.wait_text("WAITING ON YOU");
     let first = |server: &TestServer| {
         opened(server)
             .into_iter()
@@ -559,7 +559,7 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
         .unwrap();
     let landed = format!("landed {}", String::from_utf8_lossy(&head.stdout).trim());
     server.ok(&["kill-tab", "-t", &tab_id]);
-    let screen = client.wait_text("╭ closed");
+    let screen = client.wait_text("✓ closed ─");
     assert!(
         screen.iter().any(|l| l.contains("First thing"))
             && screen.iter().any(|l| l.contains(&landed)),
@@ -574,7 +574,7 @@ fn a_landed_item_stays_under_landed_once_its_tab_is_yours_and_once_it_is_closed(
 fn a_landed_tab_closed_unseen_stays_out_of_the_sidebar_with_its_notifications_off() {
     let (_notes, _note, server, mut client, repo) =
         set_up(json!({ "ux2": true, "autopilot_close": "now" }));
-    client.wait_text("Waiting on you");
+    client.wait_text("WAITING ON YOU");
     let first = |server: &TestServer| {
         opened(server)
             .into_iter()

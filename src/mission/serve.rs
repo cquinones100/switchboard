@@ -6392,6 +6392,24 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_tab_stops_on_a_narrow_board_s_more_markers() {
+        let mut m = mission(1, vec![view(ViewId::Prs, "PRs")]);
+        m.snap.rules.ux2 = true;
+        m.view = 1;
+        m.cursor = 0;
+        m.focus = Some(Focus::Item);
+        let right = Key::new(KeyCode::Right, Mods::NONE);
+        m.hits = vec![crate::mission::HitBox {
+            y: 3,
+            x0: 40,
+            x1: 47,
+            spot: Spot::Key(right),
+        }];
+        move_focus(&mut m, 1);
+        assert_eq!(m.focus, Some(Focus::Key(right)), "after the chosen card");
+    }
+
+    #[test]
     fn shift_tab_passes_over_the_usage_rows_the_cursor_does() {
         let still = |id: &str| Item::new(id, id).data(serde_json::json!({ "still": true }));
         let usage = View {
