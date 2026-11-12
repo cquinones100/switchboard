@@ -118,6 +118,9 @@ pub enum Place {
     /// A share of the screen in its middle, as a `display-popup -w 60% -h
     /// 60%` was: the palette, a picker. The lines fill it.
     Share { cols_pct: u16, rows_pct: u16 },
+    /// Its top-left corner at a cell, moved in as far as it must to fit:
+    /// the restart's steps beside the sidebar's build row.
+    At { x: u16, y: u16 },
 }
 
 /// One line inside a box: its spans, a background for the whole line (the
@@ -317,6 +320,10 @@ pub fn draw_box(buf: &mut Buffer, spec: &BoxSpec<'_>, look: &Look) -> Drawn {
     let outer_h = outer_h.min(rows);
     let (left, top) = match spec.place {
         Place::TopRight => (cols.saturating_sub(outer_w), 0),
+        Place::At { x, y } => (
+            x.min(cols.saturating_sub(outer_w)),
+            y.min(rows.saturating_sub(outer_h)),
+        ),
         _ => (
             cols.saturating_sub(outer_w) / 2,
             rows.saturating_sub(outer_h) / 2,

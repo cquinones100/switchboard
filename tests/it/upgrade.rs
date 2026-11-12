@@ -266,6 +266,13 @@ fn wait_restarted(server: &TestServer, client: &mut common::TestClient) {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    // Put away, so the next restart's wait doesn't take this one's message
+    // for its own: a press says nothing in a box while the status line or
+    // the sidebar shows the build.
+    client.send(b"\x1b");
+    client.wait_for("the restart's message put away", |s| {
+        !s.iter().any(|l| l.contains("Switchboard restarted on"))
+    });
 }
 
 /// A stand-in for cargo that "builds" `$1` into the target directory it is
@@ -740,4 +747,163 @@ fn m_p_brings_the_main_clone_up_to_date_and_builds_it() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(target.join("args").exists(), "the main clone was built");
+}
+
+/// A stand-in cargo that builds slowly, a crate every few tenths of a
+/// second, as `CARGO` does otherwise.
+const SLOW_CARGO: &str = r#"#!/bin/sh
+echo "$*" > "$CARGO_TARGET_DIR/args"
+for n in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  echo "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"crate$n\",\"kind\":[\"lib\"]},\"executable\":null}"
+  sleep "$(cat pace 2>/dev/null || echo 0.4)"
+done
+if [ -e broken ]; then
+  echo "error[E0308]: mismatched types" >&2
+  echo "  --> src/x.rs:1:1" >&2
+  exit 101
+fi
+rm -f "$CARGO_TARGET_DIR/switchboard"
+cp "$(cat new)" "$CARGO_TARGET_DIR/switchboard"
+echo "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"switchboard\",\"kind\":[\"bin\"]},\"executable\":\"$CARGO_TARGET_DIR/switchboard\"}"
+"#;
+
+/// The screen's row holding `text`, and the column it starts at, 1-based
+/// for a mouse report.
+fn spot(screen: &[String], text: &str) -> Option<(usize, usize)> {
+    screen
+        .iter()
+        .enumerate()
+        .find_map(|(y, l)| l.find(text).map(|x| (l[..x].chars().count() + 1, y + 1)))
+}
+
+#[test]
+fn with_ux2_the_restart_builds_in_the_sidebars_row_without_blocking() {
+    let dir = common::TempDir::new("sbc");
+    let checkout = dir.path().join("checkout");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("Cargo.toml"), "").unwrap();
+    let (server, _bin) = TestServer::start_from_copy_with_env(&[(
+        "SWITCHBOARD_CHECKOUT",
+        checkout.to_str().unwrap(),
+    )]);
+    common::write_settings(
+        &server.home,
+        serde_json::json!({ "ux2": true, "tips": false }),
+    );
+    let trusted = server.home.join(".config/switchboard/trusted-dirs");
+    std::fs::create_dir_all(trusted.parent().unwrap()).unwrap();
+    std::fs::write(&trusted, format!("{}\n", checkout.display())).unwrap();
+    let target = checkout.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    common::stand_in::install(
+        &server.home.join("bin/cargo"),
+        &SLOW_CARGO.replace("$CARGO_TARGET_DIR", target.to_str().unwrap()),
+    );
+    let mut client = server.attach(120, 30);
+    client.wait_text("$");
+
+    // A failing build: the row says so in red until it is clicked, and
+    // its steps then show cargo's error.
+    std::fs::write(checkout.join("broken"), "").unwrap();
+    server.ok(&["press", "upgrade"]);
+    let screen = client.wait_text("Building");
+    assert!(
+        !screen.iter().any(|l| l.contains("Building Switchboard in")),
+        "no box opens on the press: {screen:?}"
+    );
+    // Keys typed while it builds reach the pane.
+    client.type_text("echo typed-while-building\r");
+    client.wait_for("the typed line's output", |s| {
+        s.iter()
+            .filter(|l| l.contains("typed-while-building"))
+            .count()
+            >= 2
+    });
+    let screen = wait_long(&server, &mut client, "Build failed · click for why");
+    assert!(!screen.iter().any(|l| l.contains("The build failed")));
+    let (x, y) = spot(&screen, "Build failed").unwrap();
+    client.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    let screen = client.wait_text("error[E0308]: mismatched types");
+    assert!(
+        screen
+            .iter()
+            .any(|l| l.contains("Keys still reach the tab")),
+        "{screen:?}"
+    );
+    client.send(b"\x1b[<0;60;20M\x1b[<0;60;20m");
+    client.wait_for("the steps closed and the row gone", |s| {
+        !s.iter()
+            .any(|l| l.contains("mismatched types") || l.contains("Build failed"))
+    });
+    std::fs::remove_file(checkout.join("broken")).unwrap();
+    let counts = server.state.join("restart-build.json");
+    assert!(!counts.exists(), "a failed build counts nothing");
+
+    // A build that works: a click on its row, or a second press, opens
+    // its steps, keys still reach the pane with them up, and after the
+    // restart the row and the notifications say so.
+    let wrapper = dir.path().join("wrapper");
+    common::stand_in::install(
+        &wrapper,
+        &format!("#!/bin/sh\nexec {} \"$@\"\n", common::BIN),
+    );
+    // Slow enough that the steps are still up after the typing.
+    std::fs::write(checkout.join("pace"), "1.5").unwrap();
+    std::fs::write(checkout.join("new"), wrapper.to_str().unwrap()).unwrap();
+    server.ok(&["press", "upgrade"]);
+    let screen = client.wait_text("Building");
+    let (x, y) = spot(&screen, "Building").unwrap();
+    client.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    client.wait_text("Keys still reach the tab");
+    client.type_text("echo with-steps-up\r");
+    // The box covers the pane's top lines, so the pane itself is read.
+    let deadline = common::deadline(Duration::from_secs(10));
+    while server
+        .ok(&["capture-pane"])
+        .matches("with-steps-up")
+        .count()
+        < 2
+    {
+        assert!(Instant::now() < deadline, "the keys didn't reach the pane");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        client
+            .screen()
+            .iter()
+            .any(|l| l.contains("Keys still reach the tab"))
+    );
+    client.send(b"\x1b[<0;60;20M\x1b[<0;60;20m");
+    client.wait_for("the steps closed", |s| {
+        !s.iter().any(|l| l.contains("Keys still reach the tab"))
+    });
+    server.ok(&["press", "upgrade"]);
+    client.wait_text("Keys still reach the tab");
+    wait_restarted(&server, &mut client);
+    client.wait_text("✓ Restarted on");
+    let screen = client.screen();
+    assert!(
+        screen.iter().filter(|l| l.contains("Restarted on")).count() >= 2,
+        "the row and the notification: {screen:?}"
+    );
+    let counts: Value = serde_json::from_str(&std::fs::read_to_string(&counts).unwrap()).unwrap();
+    assert_eq!(counts[checkout.to_str().unwrap()], 13);
+}
+
+/// Waits for `text` on the screen as long as a slow stand-in build may
+/// take on a busy computer.
+fn wait_long(server: &TestServer, client: &mut common::TestClient, text: &str) -> Vec<String> {
+    let deadline = common::deadline(Duration::from_secs(30));
+    loop {
+        let screen = client.screen();
+        if screen.iter().any(|l| l.contains(text)) {
+            return screen;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{text:?} didn't show: {screen:?}\nthe server's log:\n{}",
+            server.log()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

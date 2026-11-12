@@ -84,6 +84,8 @@ pub struct Left {
     pub health: Vec<String>,
     /// The computer held awake while tabs work, or by hand (src/awake).
     pub awake: bool,
+    /// M-p's restart as it goes, in words (src/mux/build_row.rs).
+    pub build: Option<String>,
 }
 
 /// What a click on the status line can land on.
@@ -134,7 +136,7 @@ pub fn session_style(left: &Left, p: &Palette) -> Style {
 /// Draws what follows the counts from column `x`: a space on the status
 /// line's own background, the ⌘ Commands button in `@button_style` and a
 /// space after it, the health light in red when something is wrong, then a
-/// ☕ while the computer is held awake.
+/// ☕ while the computer is held awake, then M-p's restart as it goes.
 /// Gives the column after it and where the button went.
 pub fn draw_left(
     buf: &mut Buffer,
@@ -170,6 +172,9 @@ pub fn draw_left(
     if left.awake {
         x = put(buf, x, area, " ☕ ", base);
     }
+    if let Some(build) = &left.build {
+        x = put(buf, x, area, &format!(" {build} "), base.fg(theme::YELLOW));
+    }
     (x, button)
 }
 
@@ -191,6 +196,7 @@ mod tests {
             button: true,
             health: vec!["relay down".into(), "Slack not connected".into()],
             awake: false,
+            build: None,
         };
         let (x, button) = draw_left(&mut buf, 3, Rect::new(0, 0, 60, 1), &left, &Palette::DARK);
         let line = row(&buf);
@@ -220,6 +226,17 @@ mod tests {
         let (x, _) = draw_left(&mut buf, 0, Rect::new(0, 0, 40, 1), &left, &Palette::DARK);
         let line = row(&buf);
         assert!(line.starts_with("  ● relay down  ☕"), "{line:?}");
+        let left = Left {
+            build: Some("⠹ Building 212/~415 · 41s".into()),
+            ..left
+        };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 1));
+        let (_, _) = draw_left(&mut buf, 0, Rect::new(0, 0, 60, 1), &left, &Palette::DARK);
+        assert!(
+            row(&buf).contains("☕   ⠹ Building 212/~415 · 41s "),
+            "the restart's words follow the cup: {:?}",
+            row(&buf)
+        );
         // The space, the health light's 14 columns, and the cup's two
         // between spaces.
         assert_eq!(x, 1 + 14 + 4);

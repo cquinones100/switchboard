@@ -3190,7 +3190,7 @@ impl Server {
                     continue;
                 };
                 let active = *pid == tab.active && !side_focused;
-                let focused = active && c.overlays.is_empty();
+                let focused = active && c.overlays.lets_through();
                 // The Notifications window's pane is drawn over with its
                 // list (src/sidebar/notices.rs).
                 let at = if self.is_notices_pane(*pid) {

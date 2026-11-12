@@ -245,6 +245,9 @@ pub enum Step {
     /// It is done, and the key or click that closed it goes on to what is
     /// under it, as if it hadn't been up (a tip's any key).
     Pass,
+    /// The key goes on to the tab and it stays up: a box that takes no
+    /// keys (the restart's steps, src/mux/build_row.rs).
+    Through,
 }
 
 /// Told how an overlay ended, with the server, so it can act on it.
@@ -308,6 +311,12 @@ pub trait Overlay: AsAny + Send {
     fn cursor(&self) -> Option<(u16, u16)> {
         None
     }
+
+    /// Whether it lets input through to the tab (`Step::Through`), so the
+    /// pane keeps its focus and its cursor while it is up.
+    fn lets_through(&self) -> bool {
+        false
+    }
 }
 
 /// One overlay on a client's stack, and who is told how it ends.
@@ -333,6 +342,12 @@ impl Stack {
     /// Whether no overlay is up (the status line's message doesn't count).
     pub fn is_empty(&self) -> bool {
         self.layers.is_empty()
+    }
+
+    /// Whether every overlay up lets input through to the tab (none up
+    /// included), so its pane is drawn focused, its cursor shown.
+    pub fn lets_through(&self) -> bool {
+        self.layers.iter().all(|l| l.overlay.lets_through())
     }
 
     pub fn len(&self) -> usize {
@@ -435,7 +450,9 @@ impl Stack {
                 shadow = (frame.images.len() > before).then_some(before);
             }
         }
-        frame.cursor = self.layers.last().and_then(|l| l.overlay.cursor());
+        if !self.lets_through() {
+            frame.cursor = self.layers.last().and_then(|l| l.overlay.cursor());
+        }
     }
 }
 

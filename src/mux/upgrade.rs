@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot;
 
+use super::build_row::{Build, Shown, Steps};
 use super::pane::{HandedPane, Pane, PaneAdopt};
 use super::persist::Saved;
 use super::proto::{self, ServerMsg};
@@ -306,6 +307,16 @@ pub struct Upgrade {
     handing: bool,
     /// M-p's restart is building first (src/mux/latest.rs).
     building: bool,
+    /// What the build row shows (src/mux/build_row.rs): the build under
+    /// way, how it failed, or the restart just made.
+    pub shown: Option<Shown>,
+    /// Cargo's error lines, told as the build failed, kept for its row.
+    failed: Vec<String>,
+    /// The build's own spinner frame, turned by its timer (`Tick`) while
+    /// it builds, for the status line and the steps box, which nothing
+    /// else redraws.
+    pub frame: usize,
+    ticking: bool,
 }
 
 struct Pending {
@@ -325,12 +336,19 @@ struct Pending {
 #[derive(Debug)]
 pub enum UpgradeEvent {
     Checked(Result<(), String>),
-    /// M-p's main clone brought up to date, its build begun.
-    Building(ClientId, PathBuf),
+    /// What M-p's build said as it went.
+    Progress(super::latest::Report),
+    /// The restart's line may have had its time.
+    RestartedDue,
+    /// The build's spinner turns and its time moves on.
+    Tick,
     /// M-p's build for the terminal that asked: the binary to restart on,
     /// `None` when there is nothing new, or why the build failed.
     Built(ClientId, Result<super::latest::Brought, String>),
 }
+
+/// How often the build's spinner turns while it builds.
+const BUILD_TICK: Duration = Duration::from_millis(250);
 
 /// Whether a command's arguments ask for an upgrade (and not its usage).
 pub fn asks_upgrade(args: &[String]) -> bool {
@@ -382,6 +400,11 @@ impl Server {
     /// is a new one.
     pub fn latest_asked(&mut self, client: ClientId) {
         if self.upgrade.pending.is_some() || self.upgrade.handing || self.upgrade.building {
+            // A second press shows the build's steps, where they can show.
+            if matches!(self.upgrade.shown, Some(Shown::Building(_))) {
+                self.build_steps_open(client);
+                return;
+            }
             self.say(
                 Some(client),
                 "Switchboard is building or restarting already.",
@@ -397,12 +420,25 @@ impl Server {
         };
         let build_first = settings::is_on(super::latest::SETTING);
         if build_first && let Some(checkout) = super::latest::checkout() {
-            let text = if checkout.main_clone {
-                format!("Updating {}…", paths::tilde(&checkout.dir))
+            // The build row appearing is the answer; where it can't show,
+            // a box says it is under way, as before the row.
+            self.upgrade.shown = Some(Shown::Building(Build::new(
+                checkout.main_clone,
+                Instant::now(),
+            )));
+            self.build_changed();
+            if self.build_row_shows(client) {
+                if settings::is_on("ux2") {
+                    self.tip("build-row", Some(client));
+                }
             } else {
-                format!("Building Switchboard in {}…", paths::tilde(&checkout.dir))
-            };
-            self.say(Some(client), &text);
+                let text = if checkout.main_clone {
+                    format!("Updating {}…", paths::tilde(&checkout.dir))
+                } else {
+                    format!("Building Switchboard in {}…", paths::tilde(&checkout.dir))
+                };
+                self.say(Some(client), &text);
+            }
         }
         if tokio::runtime::Handle::try_current().is_err() {
             return;
@@ -410,46 +446,181 @@ impl Server {
         self.upgrade.building = true;
         let tx = self.tx.clone();
         tokio::task::spawn_blocking(move || {
-            let building = |dir: &std::path::Path| {
-                let _ = tx.send(Event::Upgrade(UpgradeEvent::Building(
-                    client,
-                    dir.to_path_buf(),
-                )));
+            let report = |report: super::latest::Report| {
+                let _ = tx.send(Event::Upgrade(UpgradeEvent::Progress(report)));
             };
             let result =
-                super::latest::bring_up_to_date(&paths::home(), &binary, build_first, &building);
+                super::latest::bring_up_to_date(&paths::home(), &binary, build_first, &report);
             let _ = tx.send(Event::Upgrade(UpgradeEvent::Built(client, result)));
         });
+    }
+
+    /// Whether the build row shows on a client's screen: in the sidebar
+    /// with UX 2.0, on the status line without it.
+    fn build_row_shows(&self, client: ClientId) -> bool {
+        if !settings::is_on("ux2") {
+            return crate::status::lines() > 0;
+        }
+        self.clients
+            .get(&client)
+            .is_some_and(|c| self.sidebar_shown(&c.session))
+    }
+
+    /// Whether a click on the build row shows its steps: in the sidebar
+    /// with UX 2.0, which a failure's row waits on; the status line's
+    /// words take no click, so a failure there is said in a box.
+    fn build_row_clicks(&self, client: ClientId) -> bool {
+        settings::is_on("ux2") && self.build_row_shows(client)
+    }
+
+    /// The build row in words, for the status line, turning with the
+    /// build's own timer.
+    pub fn build_words(&self) -> Option<String> {
+        self.build_row().map(|r| r.words(self.upgrade.frame))
+    }
+
+    /// The build row as of now, for the sidebar and the status line.
+    pub fn build_row(&self) -> Option<super::build_row::Row> {
+        self.upgrade.shown.as_ref()?.row(Instant::now())
+    }
+
+    /// What the build row shows changed: every client drawn again, the
+    /// steps boxes up showing it too.
+    fn build_changed(&mut self) {
+        let working = self.build_row().is_some_and(|r| r.spins());
+        if working && !self.upgrade.ticking && tokio::runtime::Handle::try_current().is_ok() {
+            self.upgrade.ticking = true;
+            self.send_later(BUILD_TICK, Event::Upgrade(UpgradeEvent::Tick));
+        }
+        let shown = self.upgrade.shown.clone();
+        for c in self.clients.values_mut() {
+            c.dirty = true;
+            if let (Some(steps), Some(shown)) = (c.overlays.find_mut::<Steps>(), &shown) {
+                steps.shown = shown.clone();
+            }
+        }
+    }
+
+    /// The build's steps in a box beside the sidebar's build row (a click
+    /// on it, or a second press of the restart). A failure's row goes once
+    /// its steps have shown why.
+    pub fn build_steps_open(&mut self, client: ClientId) {
+        let Some(shown) = self.upgrade.shown.clone() else {
+            return;
+        };
+        if matches!(shown, Shown::Restarted { .. }) {
+            return;
+        }
+        if matches!(shown, Shown::Failed { .. }) {
+            self.upgrade.shown = None;
+            self.build_changed();
+        }
+        let at = self
+            .sidebar
+            .drawn
+            .get(&client)
+            .map(|d| (d.area.right() + 1, d.area.y + 1))
+            .unwrap_or((1, 1));
+        self.close_overlays(client, "build-steps");
+        self.open(client, Box::new(Steps::new(shown, at)), None);
+    }
+
+    /// Closes every client's steps box, as the build ends.
+    fn build_steps_close(&mut self) {
+        let ids: Vec<ClientId> = self.clients.keys().copied().collect();
+        for id in ids {
+            if self.clients[&id].overlays.find::<Steps>().is_some() {
+                self.close_overlays(id, "build-steps");
+            }
+        }
+    }
+
+    /// After a restart, the new server's row says it for `RESTARTED_FOR`,
+    /// and the notifications keep a line of it.
+    fn restarted(&mut self) {
+        let hash = env!("SWITCHBOARD_COMMIT").to_string();
+        self.upgrade.shown = Some(Shown::Restarted {
+            hash: hash.clone(),
+            until: Instant::now() + super::build_row::RESTARTED_FOR,
+        });
+        let at = crate::util::now_ms();
+        let item = crate::items::Item::new(format!("{hash}-{at}"), format!("Restarted on {hash}"))
+            .detail("every pane kept")
+            .time(at);
+        self.set_notices("restarted", vec![item]);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.send_later(
+                super::build_row::RESTARTED_FOR + Duration::from_millis(50),
+                Event::Upgrade(UpgradeEvent::RestartedDue),
+            );
+        }
     }
 
     pub fn upgrade_event(&mut self, event: UpgradeEvent) {
         let checked = match event {
             UpgradeEvent::Checked(checked) => checked,
-            UpgradeEvent::Building(client, dir) => {
-                self.say(
-                    Some(client),
-                    &format!("Building Switchboard in {}…", paths::tilde(&dir)),
-                );
+            UpgradeEvent::Progress(report) => {
+                if let Some(Shown::Building(build)) = self.upgrade.shown.as_mut() {
+                    match report {
+                        super::latest::Report::Failed(lines) => self.upgrade.failed = lines,
+                        report => build.take(report, Instant::now()),
+                    }
+                    self.build_changed();
+                }
+                return;
+            }
+            UpgradeEvent::Tick => {
+                self.upgrade.ticking = false;
+                self.upgrade.frame = self.upgrade.frame.wrapping_add(1);
+                self.build_changed();
+                return;
+            }
+            UpgradeEvent::RestartedDue => {
+                if let Some(Shown::Restarted { until, .. }) = self.upgrade.shown
+                    && Instant::now() >= until
+                {
+                    self.upgrade.shown = None;
+                }
+                self.build_changed();
                 return;
             }
             UpgradeEvent::Built(client, result) => {
                 self.upgrade.building = false;
+                self.build_steps_close();
+                let build = match self.upgrade.shown.take() {
+                    Some(Shown::Building(build)) => Some(build),
+                    _ => None,
+                };
+                let lines = std::mem::take(&mut self.upgrade.failed);
                 match result {
                     Ok(super::latest::Brought { on: Some(on), note }) => {
                         self.upgrade_asked(None, Some(client), Some(on));
                         if let Some(pending) = self.upgrade.pending.as_mut() {
                             pending.note = note;
+                            // Restarting, until the new build takes over.
+                            self.upgrade.shown = build.map(|mut b| {
+                                b.restarting = true;
+                                Shown::Building(b)
+                            });
                         }
                     }
                     Ok(super::latest::Brought { on: None, note }) => self.say(
                         Some(client),
                         format!("Already on the latest build. {note}").trim_end(),
                     ),
-                    Err(why) => self.say(
-                        Some(client),
-                        &format!("The build failed: {why}. Switchboard goes on as it was."),
-                    ),
+                    Err(why) => match build.filter(|_| self.build_row_clicks(client)) {
+                        // The row says it failed until it is clicked, and
+                        // its steps say why.
+                        Some(build) => {
+                            self.upgrade.shown = Some(Shown::Failed { build, why, lines })
+                        }
+                        None => self.say(
+                            Some(client),
+                            &format!("The build failed: {why}. Switchboard goes on as it was."),
+                        ),
+                    },
                 }
+                self.build_changed();
                 return;
             }
         };
@@ -472,6 +643,12 @@ impl Server {
     }
 
     fn upgrade_refused(&mut self, pending: Pending, why: &str) {
+        // The row goes with the restart M-p's build asked for; one asked
+        // while that build still runs leaves it as it is.
+        if !self.upgrade.building && matches!(self.upgrade.shown, Some(Shown::Building(_))) {
+            self.upgrade.shown = None;
+            self.build_changed();
+        }
         let text =
             format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
         eprintln!("switchboard server: {text}");
@@ -731,6 +908,10 @@ fn resume(
 
 /// Says why a handover didn't happen, to whoever asked.
 async fn fail(server: &mut Server, asker: Option<OwnedFd>, client: Option<ClientId>, why: String) {
+    if matches!(server.upgrade.shown, Some(Shown::Building(_))) {
+        server.upgrade.shown = None;
+        server.build_changed();
+    }
     let text = format!("Switchboard can't restart on the new build: {why}. It goes on as it was.");
     eprintln!("switchboard server: {text}");
     match asker {
@@ -852,6 +1033,7 @@ pub fn adopt(server: &mut Server, handover: Handover) {
         text.push_str(&format!(" {}", handover.note));
     }
     eprintln!("switchboard server: {text}");
+    server.restarted();
     let client = handover.client.map(ClientId);
     match handover.asker.filter(|fd| pty::is_open(*fd)) {
         Some(fd) => {

@@ -857,6 +857,7 @@ impl Server {
             .filter(|p| p.sidebar > 0)
             .map(|p| render::Section::of(&p.title, &p.items, p.error.as_deref(), p.sidebar))
             .collect();
+        let build = self.build_row();
         let view = View {
             focused,
             cursor: side.and_then(|x| x.cursor.as_ref()),
@@ -869,6 +870,7 @@ impl Server {
             awake: self.awake.holding(),
             repo: repo_name.as_deref(),
             folded,
+            build: build.as_ref(),
         };
         let out = render::sidebar_lines(
             &tabs,
@@ -1927,6 +1929,7 @@ impl Server {
                 Some(Owner::ScrollUp) => self.sidebar_scroll_click(client, &session, false),
                 Some(Owner::ScrollDown) => self.sidebar_scroll_click(client, &session, true),
                 // The filter's chip clears it; Other repos folds or unfolds.
+                Some(Owner::BuildRow) => self.build_steps_open(client),
                 Some(Owner::RepoChip) => {
                     self.sidebar_set_repo(&session, None);
                     self.say(Some(client), "Sidebar: every repository");
@@ -2055,6 +2058,8 @@ impl Server {
             // The landed tabs closed unseen are only to be read: Enter
             // dismisses them.
             "landed" => self.autopilot_dismiss_closed(None),
+            // A restart is only to be read: Enter dismisses it.
+            "restarted" => self.set_notices("restarted", Vec::new()),
             // The newest landing made without asking: its tab, while it is
             // open, which dismisses it.
             "autolanded" => {

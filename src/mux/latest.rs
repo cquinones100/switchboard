@@ -15,7 +15,9 @@
 //! binary was built in when that was the main clone's, else cargo's own),
 //! as `swb build` and the README's install do, and the result put in place of the binary the
 //! server runs when that isn't the build's own file (a copy installed in
-//! `~/.local/bin`). Cargo runs the checkout's own code, so it builds only
+//! `~/.local/bin`). What it does as it goes is told to the server as
+//! `Report`s, cargo's messages read as they come, for the build row
+//! (src/mux/build_row.rs). Cargo runs the checkout's own code, so it builds only
 //! a checkout `src/trust.rs` finds yours or listed in `trusted-dirs`, as
 //! `switchboard try` does, never someone else's PR. A release build has no checkout here, so it builds
 //! nothing and restarts on the binary on disk as it is (`switchboard update`
@@ -62,7 +64,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::paths;
 
@@ -301,8 +303,15 @@ fn update(dir: &Path, fetch: bool) -> Result<Option<String>, String> {
 }
 
 /// Builds `checkout` as the module's comment says and gives the binary it
-/// made, or why it couldn't, in words.
-pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> {
+/// made, or why it couldn't, in words. Cargo's messages are read as they
+/// come, each crate it has built (fresh ones too) told to `report` at most
+/// twice a second (`Counter`), and how many there were kept for the next
+/// build's meter (`restart-build.json`).
+pub fn build(
+    checkout: &Path,
+    target: Option<&Path>,
+    report: &dyn Fn(Report),
+) -> Result<PathBuf, String> {
     may_build(checkout)?;
     let cargo = cargo();
     let mut cmd = Command::new(&cargo);
@@ -324,29 +333,142 @@ pub fn build(checkout: &Path, target: Option<&Path>) -> Result<PathBuf, String> 
         "--message-format=json-render-diagnostics",
     ])
     .current_dir(checkout)
-    .stdin(Stdio::null());
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
     if let Some(target) = target {
         cmd.env("CARGO_TARGET_DIR", target);
     }
-    let out = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("cargo couldn't be run ({e})"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if !out.status.success() {
+    // Read beside stdout, so cargo never waits on a full pipe.
+    let stderr = child.stderr.take().map(|mut err| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut err, &mut text);
+            text
+        })
+    });
+    let mut counter = Counter::default();
+    if let Some(out) = child.stdout.take() {
+        for line in std::io::BufRead::lines(std::io::BufReader::new(out)) {
+            let Ok(line) = line else { break };
+            if let Some(n) = counter.line(&line, Instant::now()) {
+                report(Report::Built(n));
+            }
+        }
+    }
+    let status = child
+        .wait()
+        .map_err(|e| format!("cargo couldn't be run ({e})"))?;
+    let stderr = stderr.and_then(|t| t.join().ok()).unwrap_or_default();
+    if !status.success() {
+        report(Report::Failed(error_lines(&stderr)));
         return Err(failure(&stderr));
     }
-    built(&stdout).ok_or_else(|| "cargo didn't say where it put the binary".to_string())
+    report(Report::Built(counter.count));
+    keep_count(checkout, counter.count);
+    counter
+        .binary
+        .ok_or_else(|| "cargo didn't say where it put the binary".to_string())
 }
 
-/// The `switchboard` binary among the artifacts cargo's JSON messages name.
-fn built(messages: &str) -> Option<PathBuf> {
-    messages
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "switchboard")
-        .filter_map(|m| m["executable"].as_str().map(PathBuf::from))
-        .next_back()
+/// What M-p's build tells the server as it goes (src/mux/build_row.rs
+/// shows it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Report {
+    /// The main clone brought up to date: how many commits that brought,
+    /// `None` when origin wasn't fetched, and how long it took.
+    Fetched {
+        commits: Option<usize>,
+        took: Duration,
+    },
+    /// The build begun in `dir`, at `head` ("main at 1a2b3c4"), with how
+    /// many crates the last build of it counted, `None` the first time.
+    Building {
+        dir: PathBuf,
+        head: String,
+        of: Option<usize>,
+    },
+    /// The crates built so far.
+    Built(usize),
+    /// The build going in place of the binary at this path.
+    Installing(PathBuf),
+    /// Cargo failed: its error's lines.
+    Failed(Vec<String>),
+}
+
+/// Counts cargo's `compiler-artifact` messages as they come and notes the
+/// binary's, saying how many are done at most twice a second.
+#[derive(Debug, Default)]
+struct Counter {
+    count: usize,
+    binary: Option<PathBuf>,
+    said: Option<Instant>,
+}
+
+/// How often the count is told while cargo builds.
+const REPORT_EVERY: Duration = Duration::from_millis(500);
+
+impl Counter {
+    /// Takes one of cargo's lines, and gives the count when it is due.
+    fn line(&mut self, line: &str, now: Instant) -> Option<usize> {
+        let Ok(m) = serde_json::from_str::<serde_json::Value>(line) else {
+            return None;
+        };
+        if m["reason"] != "compiler-artifact" {
+            return None;
+        }
+        self.count += 1;
+        if m["target"]["name"] == "switchboard"
+            && let Some(exe) = m["executable"].as_str()
+        {
+            self.binary = Some(PathBuf::from(exe));
+        }
+        if self
+            .said
+            .is_some_and(|at| now.duration_since(at) < REPORT_EVERY)
+        {
+            return None;
+        }
+        self.said = Some(now);
+        Some(self.count)
+    }
+}
+
+/// The file that keeps how many crates each checkout's last build counted.
+fn counts_file() -> PathBuf {
+    paths::state_dir().join("restart-build.json")
+}
+
+/// How many crates `checkout`'s last build counted.
+pub fn last_count(checkout: &Path) -> Option<usize> {
+    let text = crate::util::read_text(counts_file())?;
+    let all: serde_json::Value = serde_json::from_str(&text).ok()?;
+    all.get(checkout.to_string_lossy().as_ref())?
+        .as_u64()
+        .map(|n| n as usize)
+}
+
+/// Keeps how many crates `checkout`'s build counted, for the next one's
+/// meter.
+fn keep_count(checkout: &Path, count: usize) {
+    let file = counts_file();
+    let mut all = crate::util::read_text(&file)
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    all[checkout.to_string_lossy().as_ref()] = serde_json::json!(count);
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = crate::util::write_atomic(&file, all.to_string()) {
+        eprintln!(
+            "switchboard server: {} couldn't be written ({e})",
+            paths::tilde(&file)
+        );
+    }
 }
 
 /// What a failed build says, in a line: cargo's first error, else its last
@@ -360,6 +482,24 @@ fn failure(stderr: &str) -> String {
         .map(|l| l.trim_start_matches("error: ").to_string())
         .unwrap_or_else(|| "cargo failed".to_string())
 }
+
+/// A failed build's error, as cargo printed it: from its first `error`
+/// line, at most `ERROR_LINES` lines, for the build's steps to show.
+fn error_lines(stderr: &str) -> Vec<String> {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let from = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("error"))
+        .unwrap_or_else(|| lines.len().saturating_sub(ERROR_LINES));
+    lines[from..]
+        .iter()
+        .map(|l| l.trim_end().to_string())
+        .filter(|l| !l.is_empty())
+        .take(ERROR_LINES)
+        .collect()
+}
+
+const ERROR_LINES: usize = 8;
 
 /// Puts `built` in place of the server's `binary` when the server doesn't
 /// run the build's own file (or a link to it) and the two differ.
@@ -474,19 +614,56 @@ pub struct Brought {
 }
 
 /// Brings the main clone up to date when `checkout` is one, telling
-/// `building` once it is about to build, then builds it.
+/// `report` what that brought and once it is about to build, then builds
+/// it.
 fn make(
     checkout: &Checkout,
-    building: &dyn Fn(&Path),
+    report: &dyn Fn(Report),
     note: &mut String,
 ) -> Result<PathBuf, String> {
+    let dir = &checkout.dir;
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
     if checkout.main_clone {
-        may_build(&checkout.dir)?;
+        may_build(dir)?;
         let fetch = crate::integrations::ensure_on("github", "GitHub").is_ok();
-        *note = update(&checkout.dir, fetch)?.unwrap_or_default();
+        let started = Instant::now();
+        let before = git(&["rev-parse", "HEAD"]);
+        let not_fetched = update(dir, fetch)?;
+        let commits = before
+            .filter(|_| not_fetched.is_none())
+            .and_then(|b| git(&["rev-list", "--count", &format!("{b}..HEAD")]))
+            .and_then(|n| n.parse().ok());
+        *note = not_fetched.unwrap_or_default();
+        report(Report::Fetched {
+            commits,
+            took: started.elapsed(),
+        });
     }
-    building(&checkout.dir);
-    build(&checkout.dir, checkout.target.as_deref())
+    let head = match (
+        git(&["symbolic-ref", "--short", "HEAD"]),
+        git(&["rev-parse", "--short", "HEAD"]),
+    ) {
+        (Some(branch), Some(hash)) => format!("{branch} at {hash}"),
+        (None, Some(hash)) => format!("at {hash}"),
+        _ => String::new(),
+    };
+    report(Report::Building {
+        dir: dir.clone(),
+        head,
+        of: last_count(dir),
+    });
+    build(dir, checkout.target.as_deref(), report)
 }
 
 /// Builds and installs as the module's comment says (unless `build` is
@@ -500,7 +677,7 @@ pub fn bring_up_to_date(
     home: &Path,
     binary: &Path,
     build_first: bool,
-    building: &dyn Fn(&Path),
+    report: &dyn Fn(Report),
 ) -> Result<Brought, String> {
     let to_build = checkout().filter(|_| build_first);
     let mut note = String::new();
@@ -528,7 +705,8 @@ pub fn bring_up_to_date(
             }
         }
         let on = restart_on(home, binary);
-        let built = make(&to_build, building, &mut note)?;
+        let built = make(&to_build, report, &mut note)?;
+        report(Report::Installing(on.clone()));
         put(home, &built, &on)?;
         *last_built = Stamp::of(&on);
         return brought(Some(on), note);
@@ -540,7 +718,8 @@ pub fn bring_up_to_date(
         return brought(Some(binary.to_path_buf()), note);
     }
     if let Some(to_build) = to_build {
-        let built = make(&to_build, building, &mut note)?;
+        let built = make(&to_build, report, &mut note)?;
+        report(Report::Installing(binary.to_path_buf()));
         install(&built, binary)?;
         *last_built = Stamp::of(binary);
     }
@@ -552,20 +731,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn finds_the_switchboard_binary_among_cargos_messages() {
+    fn counts_cargos_artifacts_as_they_come_and_says_so_twice_a_second() {
         let messages = [
             r#"{"reason":"compiler-artifact","target":{"name":"serde","kind":["lib"]},"executable":null}"#,
             "not json",
+            r#"{"reason":"build-script-executed","package_id":"x"}"#,
+            r#"{"reason":"compiler-artifact","target":{"name":"libc","kind":["lib"]},"executable":null}"#,
             r#"{"reason":"compiler-artifact","target":{"name":"switchboard","kind":["lib"]},"executable":null}"#,
             r#"{"reason":"compiler-artifact","target":{"name":"switchboard","kind":["bin"]},"executable":"/t/release/switchboard"}"#,
             r#"{"reason":"build-finished","success":true}"#,
-        ]
-        .join("\n");
+        ];
+        let start = Instant::now();
+        let ms = |n: u64| start + Duration::from_millis(n);
+        let at = [0, 10, 20, 100, 600, 700, 800];
+        let mut counter = Counter::default();
+        let said: Vec<Option<usize>> = messages
+            .iter()
+            .zip(at)
+            .map(|(m, t)| counter.line(m, ms(t)))
+            .collect();
         assert_eq!(
-            built(&messages),
+            said,
+            [Some(1), None, None, None, Some(3), None, None],
+            "the first at once, then none within half a second"
+        );
+        assert_eq!(counter.count, 4);
+        assert_eq!(
+            counter.binary,
             Some(PathBuf::from("/t/release/switchboard"))
         );
-        assert_eq!(built(r#"{"reason":"build-finished"}"#), None);
+    }
+
+    #[test]
+    fn a_failures_lines_start_at_cargos_first_error() {
+        let stderr = "   Compiling switchboard v0.2.0\nerror[E0308]: mismatched types\n  --> src/x.rs:1:1\n\nerror: could not compile\n";
+        assert_eq!(
+            error_lines(stderr),
+            [
+                "error[E0308]: mismatched types",
+                "  --> src/x.rs:1:1",
+                "error: could not compile"
+            ]
+        );
+        assert_eq!(error_lines("odd\n"), ["odd"]);
     }
 
     #[test]

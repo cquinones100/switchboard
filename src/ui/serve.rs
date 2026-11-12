@@ -202,6 +202,7 @@ impl Server {
                     return None;
                 }
                 Step::Pass => self.finish_top(id, Outcome::Dismissed),
+                Step::Through => return Some(parsed),
             }
         }
     }

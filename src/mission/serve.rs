@@ -3081,6 +3081,7 @@ impl Server {
             "landed" => self.autopilot_dismiss_closed(Some(&item.id)),
             "autolanded" => self.autopilot_dismiss_autolanded(Some(&item.id)),
             "habits" => {}
+            "restarted" => self.set_notices("restarted", Vec::new()),
             _ => self.day_dismiss(source, item),
         }
     }

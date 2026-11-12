@@ -41,11 +41,17 @@ const YELLOW: Color = Color::Indexed(220);
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Owner {
     Tab(TabId),
-    Notice { source: String, id: String },
+    Notice {
+        source: String,
+        id: String,
+    },
     ScrollUp,
     ScrollDown,
     RepoChip,
     OtherRepos,
+    /// M-p's restart as it goes (src/mux/build_row.rs), whose steps a
+    /// click opens.
+    BuildRow,
 }
 
 impl Owner {
@@ -138,6 +144,9 @@ pub struct View<'a> {
     /// Other repos folded to one line: its tabs' marks, their count and
     /// their repositories.
     pub folded: bool,
+    /// M-p's restart as it goes, on the line under the count with UX 2.0
+    /// (board 56's build row).
+    pub build: Option<&'a crate::mux::build_row::Row>,
 }
 
 /// One line: its spans, exactly the sidebar's width, and a background for
@@ -439,8 +448,21 @@ pub fn sidebar_lines(
             }
             head.push(row.fit(cols, None));
         }
-        None => head.push(Line::blank(cols)),
+        // With UX 2.0, M-p's restart as it goes, lit under the mouse
+        // since a click shows its steps.
+        None => match view.build.filter(|_| r.ux2) {
+            Some(build) => {
+                spins |= build.spins();
+                let lit = view.hover == Some(&Owner::BuildRow);
+                head.push(Line {
+                    spans: build.spans(cols, view.frame, theme),
+                    fill: lit.then_some(theme.panel),
+                });
+            }
+            None => head.push(Line::blank(cols)),
+        },
     }
+    let build_row = r.ux2 && view.filter.is_none() && view.build.is_some();
 
     for group in model::grouped(tabs, frozen, r) {
         headings.push(lines.len());
@@ -959,7 +981,9 @@ pub fn sidebar_lines(
     if view.repo.is_some() {
         head_owners[0] = Some(Owner::RepoChip);
     }
-    if top > 0 && view.filter.is_none() {
+    if build_row {
+        head_owners[1] = Some(Owner::BuildRow);
+    } else if top > 0 && view.filter.is_none() {
         // A tab cut at the top counts as above.
         head[1] = more("▲", &Owner::ScrollUp, tabs_in(0, top).len());
         head_owners[1] = Some(Owner::ScrollUp);
@@ -1084,6 +1108,7 @@ mod tests {
             awake: false,
             repo: None,
             folded: false,
+            build: None,
         }
     }
 
@@ -1282,6 +1307,63 @@ mod tests {
             &Theme::DARK,
         );
         assert!(texts(&turned).join("\n").contains(" ⠙  6 review"));
+    }
+
+    #[test]
+    fn with_ux2_the_build_row_is_the_line_under_the_count_and_a_click_stop() {
+        let t = tab(1, "work", TabState::Idle);
+        let r = Rules {
+            ux2: true,
+            ..rules()
+        };
+        let row = crate::mux::build_row::Row::Working {
+            what: "Building",
+            meter: Some((212, 415)),
+            secs: Some(41),
+            note: "",
+        };
+        let v = View {
+            build: Some(&row),
+            hover: Some(&Owner::BuildRow),
+            ..view(1)
+        };
+        let out = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            &[],
+            "s",
+            30,
+            10,
+            &v,
+            &r,
+            &Theme::DARK,
+        );
+        let text = texts(&out);
+        assert!(text[1].starts_with(" ⠋ Building ▰▰▰▰▰"), "{:?}", text[1]);
+        assert!(text[1].ends_with("41s"), "{:?}", text[1]);
+        assert_eq!(out.owners[1], Some(Owner::BuildRow));
+        assert_eq!(
+            out.lines[1].fill,
+            Some(Theme::DARK.panel),
+            "lit under the mouse"
+        );
+        assert!(out.spins, "its spinner turns");
+        // Without UX 2.0 it is the status line's, not the sidebar's.
+        let old = sidebar_lines(
+            std::slice::from_ref(&t),
+            None,
+            &[],
+            &[],
+            "s",
+            30,
+            10,
+            &v,
+            &rules(),
+            &Theme::DARK,
+        );
+        assert!(!texts(&old)[1].contains("Building"));
+        assert_ne!(old.owners[1], Some(Owner::BuildRow));
     }
 
     #[test]

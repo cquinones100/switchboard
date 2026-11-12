@@ -109,6 +109,12 @@ pub fn text_of(name: &str, key: Option<&str>) -> Option<Vec<String>> {
             "It runs again on its own. Mission".into(),
             "control (M-Space) shows when, under Loops.".into(),
         ],
+        "build-row" => vec![
+            "The build shows at the top of the sidebar;".into(),
+            "a click shows its steps.".into(),
+            String::new(),
+            "Keys still reach the tab while it builds.".into(),
+        ],
         "awake" => vec![
             "☕ The computer stays awake while tabs".into(),
             "work, and sleeps once they're idle.".into(),

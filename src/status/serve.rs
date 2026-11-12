@@ -116,6 +116,7 @@ impl Server {
             button: settings::is_on("palette_button"),
             health: self.status.health.clone(),
             awake: self.awake.holding(),
+            build: self.build_words(),
         }
     }
 

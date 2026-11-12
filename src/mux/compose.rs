@@ -903,6 +903,7 @@ mod tests {
             button: true,
             health: Vec::new(),
             awake: false,
+            build: None,
         };
         let hits = draw_status(
             &mut frame.buf,
