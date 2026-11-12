@@ -219,7 +219,7 @@ fn with_ux2_mission_control_s_cards_show_a_picture_s_cells_blank_and_draw_no_pie
     let erased = format!("\x1b[{};{}H\x1b[4X", line + 1, col + 1);
     client.wait_sent("the picture erased", erased.as_bytes());
     let screen = client.wait_for("the card drawn whole", |s| {
-        s.iter().filter(|l| l.contains("│ Q7")).count() == 2
+        s.iter().filter(|l| l.contains("▎ Q7")).count() == 2
     });
     assert!(
         common::sixels(&client.raw[before..]).is_empty(),

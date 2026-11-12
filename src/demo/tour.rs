@@ -110,6 +110,26 @@ fn save(client: &Client, dir: &Path, name: &str) -> Result<bool> {
         .is_ok())
 }
 
+/// Presses `key` and waits, at most 10 seconds, until `read` gives
+/// something other than it did before, so what is read next is what the key
+/// drew, not the screen before it; fails when it never does.
+fn press_until<T: PartialEq>(
+    client: &mut Client,
+    key: &str,
+    read: impl Fn(&headless::Screen) -> T,
+) -> Result<()> {
+    let before = client.read(&read);
+    client.keys(&words(&[key]))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while client.read(&read) == before {
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!("the screen didn't change after {key}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn words(keys: &[&str]) -> Vec<String> {
     keys.iter().map(|k| k.to_string()).collect()
 }
@@ -131,15 +151,19 @@ pub fn run(server: &Path, dir: &Path, cols: u16, rows: u16) -> Result<Vec<String
         client.keys(&words(step.leave))?;
     }
     client.keys(&words(&["M-Space"]))?;
+    if !client.wait_text("MISSION CONTROL", Duration::from_secs(10)) {
+        anyhow::bail!("mission control didn't open");
+    }
     let (groups, _) = client.read(|s| mission_names(&s.lines()));
     for (g, group) in groups.iter().take(MOST).enumerate() {
         if g > 0 {
-            client.keys(&words(&["}"]))?;
+            // The next group's views in place of this one's.
+            press_until(&mut client, "}", |s| mission_names(&s.lines()))?;
         }
         let (_, views) = client.read(|s| mission_names(&s.lines()));
         for (v, view) in views.iter().take(MOST).enumerate() {
             if v > 0 {
-                client.keys(&words(&["]"]))?;
+                press_until(&mut client, "]", |s| s.text())?;
             }
             let name = format!("{}-{}", slug(group), slug(view));
             drew_png |= save(&client, dir, &name)?;

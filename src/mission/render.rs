@@ -1176,9 +1176,9 @@ fn last_inside(tab: &TabModel, look: &CardLook, r: &Rules, theme: &Theme) -> Ins
     }
 }
 
-/// A tab's card with UX 2.0: its mark, number and name on the top edge,
-/// its state and how long at the edge's right end, the edge in its group's
-/// tone (the accent when chosen), what it is about inside by what it is
+/// A tab's card with UX 2.0, drawn open: its mark, number and name on the
+/// top rule, its state and how long at the rule's right end, the bar down
+/// its left in its group's tone (the accent when chosen), what it is about inside by what it is
 /// doing (or, with `s` or no Claude in it, its screen's last lines), and
 /// its branch and checks at its foot.
 /// Gives its lines and its options' lines.
@@ -1192,15 +1192,11 @@ fn card_2(
     let snap = &m.snap;
     let (r, theme) = (&snap.rules, &snap.theme);
     let inner = look.w.saturating_sub(4);
-    let rows = look.h.saturating_sub(3);
+    // Its rows under the top rule, less the foot.
+    let rows = look.h.saturating_sub(2);
     let mark = Mark::of_badge(model::badge_state(tab, r));
-    let edge = if look.chosen {
-        Tone::Accent.fg(theme)
-    } else if look.hovered {
-        tab.color.map(Color::from).unwrap_or(theme.bright)
-    } else {
-        tone.fg(theme)
-    };
+    let hover =
+        (look.hovered && !look.chosen).then(|| tab.color.map(Color::from).unwrap_or(theme.bright));
     let words = state_for(tab, r);
     let right = vec![Span::styled(words, mark.look().1.style(theme))];
     let title = vec![
@@ -1240,7 +1236,17 @@ fn card_2(
         .map(|(at, _, n)| (at, n))
         .collect();
     (
-        kit::card(look.w, look.h, title, right, &lines, edge),
+        kit::open_card(
+            look.w,
+            look.h,
+            title,
+            right,
+            &lines,
+            tone,
+            look.chosen,
+            hover,
+            theme,
+        ),
         options,
     )
 }
@@ -1978,7 +1984,15 @@ fn board_cards(
         for (shown, (index, item)) in items.iter().enumerate().skip(first).take(room) {
             let chosen = *index as isize == m.cursor;
             let lit = !chosen && m.hover == Some(Spot::Index(*index as isize));
-            let card = board_card(&face(item), w, chosen, lit, false, theme);
+            let card = board_card(
+                &face(item),
+                w,
+                column_tone(column),
+                chosen,
+                lit,
+                false,
+                theme,
+            );
             out.extend(card.into_iter().map(|mut line| {
                 line.push(Span::raw(" "));
                 line
@@ -2046,7 +2060,7 @@ fn board_cards(
                     week_words(item, tickets, m.snap.now_secs),
                     fg(theme.faint),
                 )];
-                board_card(&face, w, chosen, lit, true, theme)
+                board_card(&face, w, Tone::Faint, chosen, lit, true, theme)
             })
             .collect();
         let y = top_row + board_h + 3;
@@ -2107,18 +2121,19 @@ struct Face {
     done: bool,
 }
 
-/// A card of a board, `w` wide: the face's label in the accent (faint for
+/// A card of a board, `w` wide, drawn open with its column's tone down its
+/// left: the face's label in the accent (faint for
 /// a done ticket or the week's row), its title on two lines, its meta.
 fn board_card(
     face: &Face,
     w: usize,
+    tone: Tone,
     chosen: bool,
     lit: bool,
     faint: bool,
     theme: &Theme,
 ) -> Vec<Vec<Span<'static>>> {
     let inner = w.saturating_sub(4);
-    let edge = kit::card_edge(chosen, lit.then_some(theme.text), theme);
     let label = if faint || face.done {
         fg(theme.faint)
     } else {
@@ -2134,7 +2149,7 @@ fn board_card(
         fg(theme.text)
     };
     let [a, b] = two_lines(&face.title, inner);
-    kit::card(
+    kit::open_card(
         w,
         TALL_CARD,
         vec![Span::styled(face.label.clone(), label)],
@@ -2144,11 +2159,15 @@ fn board_card(
             vec![Span::styled(b, title)],
             face.meta.clone(),
         ],
-        edge,
+        tone,
+        chosen,
+        lit.then_some(theme.text),
+        theme,
     )
 }
 
-/// A card's five lines: its edges, two of title and one about it.
+/// A card's five lines: its top rule, two of title, one about it, and one
+/// of its bar under them.
 const TALL_CARD: usize = 5;
 
 /// A title on two lines of `cols`, by words, the second ending in … when
@@ -6695,8 +6714,8 @@ mod tests {
                 .position(|l| l.contains(has))
                 .unwrap_or_else(|| panic!("{has}: {text:#?}"))
         };
-        // Each group a label with its count at the right edge, over cards
-        // whose edges wear its tone.
+        // Each group a label with its count at the right edge, no frame
+        // round it, over open cards whose bars wear its tone.
         let needs = row("NEEDS YOU");
         assert!(
             text[needs].ends_with('1') && width(&text[needs]) == 159,
@@ -6706,28 +6725,40 @@ mod tests {
         assert!(text[working].ends_with('2'), "{text:#?}");
         // A working card shows its review loop's round among its chips.
         row("round 2");
-        let edge = lines[needs + 1]
+        let bar = lines[needs + 2]
             .spans
             .iter()
-            .find(|s| s.content.contains('╭'))
+            .find(|s| s.content.contains('▎'))
             .unwrap();
-        assert_eq!(edge.style.fg, Some(Tone::Needs.fg(&Theme::DARK)));
+        assert_eq!(bar.style.fg, Some(Tone::Needs.fg(&Theme::DARK)));
+        assert!(text[needs + 1].starts_with("─ "), "{text:#?}");
+        assert!(
+            !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯', '│'])),
+            "{text:#?}"
+        );
+        // The chosen card's bar in the accent.
+        let chosen_bar = lines[working + 2]
+            .spans
+            .iter()
+            .find(|s| s.content.contains('▎'))
+            .unwrap();
+        assert_eq!(chosen_bar.style.fg, Some(Tone::Accent.fg(&Theme::DARK)));
         // The waiting card: how long on its edge, its question word for
         // word under its kind, its options numbered, and why it asked.
         assert!(text[needs + 1].contains("waiting 4m"), "{text:#?}");
-        assert!(text[row("QUESTION · LAYOUT")].starts_with('│'));
+        assert!(text[row("QUESTION · LAYOUT")].starts_with("▎ "));
         row("Which layout should the cards use?");
         let cards = row("Cards");
         assert!(
-            text[cards].contains("Cards") && text[cards].contains("1 │"),
+            text[cards].contains("Cards") && text[cards].trim_end().ends_with(" 1"),
             "{text:#?}"
         );
-        assert!(text[row("Rows")].contains("2 │"), "{text:#?}");
+        assert!(text[row("Rows")].trim_end().ends_with(" 2"), "{text:#?}");
         // An option's description under it, as the prompt shows it.
         assert_eq!(row("one line a tab, as the sidebar"), row("Rows") + 1);
         row("BEFORE IT ASKED");
         row("Two layouts fit the board.");
-        assert!(text[row("✕ 1 of 13")].contains('│'));
+        assert!(text[row("✕ 1 of 13")].contains('▎'));
         // The working card: this turn, then the call it is on and for how
         // long, then its chips, and its branch with no PR at its foot.
         assert!(text[working + 1].contains("working 2m"), "{text:#?}");
@@ -6854,7 +6885,7 @@ mod tests {
         );
         assert!(
             text.iter()
-                .any(|l| l.contains("Vivid") && l.contains("2 │"))
+                .any(|l| l.contains("Vivid") && l.trim_end().ends_with(" 2"))
         );
         assert!(
             !text
@@ -6940,20 +6971,23 @@ mod tests {
             let (lines, _) = screen(&m, cols, 80);
             let text = texts(&lines);
             let first = text.iter().position(|l| l.contains("work 1")).unwrap();
-            assert_eq!(
-                text[first].matches('╭').count(),
-                across,
+            // Each card open: its bar under its top rule, no corner of a box.
+            let bars: Vec<usize> = text[first + 1]
+                .char_indices()
+                .filter(|(_, c)| *c == '▎')
+                .map(|(i, _)| width(&text[first + 1][..i]))
+                .collect();
+            assert_eq!(bars.len(), across, "{cols}: {text:#?}");
+            assert!(
+                !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
                 "{cols}: {text:#?}"
             );
-            // Equal shares of the width: every card's top edge as long, give
-            // or take what rounding leaves.
-            let edges: Vec<usize> = text[first]
-                .split('╭')
-                .skip(1)
-                .map(|c| width(c.split('╮').next().unwrap()))
-                .collect();
-            let (least, most) = (edges.iter().min().unwrap(), edges.iter().max().unwrap());
-            assert!(most - least <= 1, "{cols}: {edges:?}");
+            // Equal shares of the width: every card as wide, give or take
+            // what rounding leaves.
+            let edges: Vec<usize> = bars.windows(2).map(|w| w[1] - w[0]).collect();
+            if let (Some(least), Some(most)) = (edges.iter().min(), edges.iter().max()) {
+                assert!(most - least <= 1, "{cols}: {edges:?}");
+            }
             let label = text.iter().position(|l| l.contains("WORKING")).unwrap();
             assert_eq!(width(&text[label]), cols - 1, "{cols}");
             assert!(text[label].ends_with('5'));
@@ -7580,29 +7614,45 @@ mod tests {
             text[3]
         );
         assert!(
-            text[5].contains("╭ #1 ─") && text[5].contains(" ✓ ─╮") && text[5].contains(" ◌ ─╮"),
+            text[5].contains("─ #1 ─") && text[5].contains(" ✓ ─") && text[5].contains(" ◌ ─"),
             "{}",
             text[5]
         );
         assert!(
-            text[6].contains("│ PR 1 lays the") && !text[6].contains("#1"),
+            text[6].contains("▎ PR 1 lays the") && !text[6].contains("#1"),
             "the title's first line: {}",
             text[6]
         );
         assert!(
-            text[7].contains("│ settings view"),
+            text[7].contains("▎ settings view"),
             "its second: {}",
             text[7]
         );
-        assert!(text[8].contains("│ w · queue 1"), "{}", text[8]);
-        assert!(text[9].contains("╰─"), "{}", text[9]);
+        assert!(text[8].contains("▎ w · queue 1"), "{}", text[8]);
+        // Open: its bar goes on under the meta, with no bottom edge or
+        // corner of a box anywhere.
+        assert!(text[9].trim_start().starts_with('▎'), "{}", text[9]);
+        assert!(
+            !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
+            "{text:#?}"
+        );
+        let bar = lines[6].spans.iter().find(|s| s.content == "▎").unwrap();
+        assert_eq!(
+            bar.style.fg,
+            Some(Tone::Working.fg(&Theme::DARK)),
+            "its column's tone"
+        );
         assert!(
             text[11].contains("#2") && text[11].contains(" ✕ "),
             "{}",
             text[11]
         );
-        let edge = lines[11].spans.iter().find(|s| s.content == "╭").unwrap();
-        assert_eq!(edge.style.fg, Some(ACCENT), "the chosen card's edge");
+        let bar = lines[12].spans.iter().find(|s| s.content == "▎").unwrap();
+        assert_eq!(
+            bar.style.fg,
+            Some(Tone::Accent.fg(&Theme::DARK)),
+            "the chosen card's bar"
+        );
         assert!(hits.iter().any(|h| h.spot == Spot::Index(1) && h.y == 12));
     }
 
@@ -7718,8 +7768,8 @@ mod tests {
         );
         let text = texts(&lines);
         assert!(text[0].contains("CHANGES ASKED"), "{}", text[0]);
-        assert!(text[5].contains("│ tab 3 · "), "{}", text[5]);
-        assert!(text[5].contains("│ ben"), "the reviewers: {}", text[5]);
+        assert!(text[5].contains("▎ tab 3 · "), "{}", text[5]);
+        assert!(text[5].contains("▎ ben"), "the reviewers: {}", text[5]);
         assert!(text[0].contains("│ #2 PR 2"), "{}", text[0]);
         assert!(
             text[1].contains("ana · 3 commits · +214 −88 · ✓ checks"),
@@ -7813,6 +7863,66 @@ mod tests {
     }
 
     #[test]
+    fn with_ux2_the_pr_and_ticket_boards_draw_open_cards_at_any_width() {
+        let pr = Item::new("1", "#1 PR 1 lays the settings view out")
+            .group("In review")
+            .data(serde_json::json!({ "pr": { "number": 1 }, "checks": "success" }));
+        let ticket = Item::new("AB-1", "AB-1 Fix the RSVP menu")
+            .group("Todo")
+            .data(serde_json::json!({
+                "ticket": "AB-1", "priority": 1, "title": "Fix the RSVP menu", "state": "Todo",
+            }));
+        for (id, title, item, columns) in [
+            (
+                ViewId::Prs,
+                "PRs",
+                pr,
+                crate::sources::prboard::columns(true),
+            ),
+            (
+                ViewId::Tickets,
+                "Tickets",
+                ticket,
+                crate::sources::tickets::columns(true),
+            ),
+        ] {
+            let mut m = mission(Vec::new(), vec![list_view(id, title, vec![item])]);
+            m.snap.rules.ux2 = true;
+            m.view = 1;
+            m.cursor = 0;
+            for cols in [120, 160, 240] {
+                let (mut lines, mut hits) = (Vec::new(), Vec::new());
+                board_cards(
+                    &m.snap.views[0],
+                    columns,
+                    cols,
+                    20,
+                    &m,
+                    &Theme::DARK,
+                    0,
+                    &mut lines,
+                    &mut hits,
+                );
+                let text = texts(&lines);
+                assert!(
+                    !text.iter().any(|l| l.contains(['╭', '╮', '╰', '╯'])),
+                    "{title} at {cols}: {text:#?}"
+                );
+                let bar = lines
+                    .iter()
+                    .flat_map(|l| l.spans.iter())
+                    .find(|s| s.content == "▎")
+                    .unwrap_or_else(|| panic!("{title} at {cols}: {text:#?}"));
+                assert_eq!(
+                    bar.style.fg,
+                    Some(Tone::Accent.fg(&Theme::DARK)),
+                    "{title} at {cols}: the chosen card's bar"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn with_ux2_the_ticket_board_draws_each_ticket_as_a_card_and_the_chosen_one_beside_it() {
         let ticket = |id: &str, column: &str, priority: u64, extra: serde_json::Value| {
             let mut data = serde_json::json!({
@@ -7868,16 +7978,16 @@ mod tests {
             text[0]
         );
         assert!(
-            text[2].contains("╭ AB-1 ─") && text[2].contains(" !!! ─╮"),
+            text[2].contains("─ AB-1 ─") && text[2].contains(" !!! ─"),
             "{}",
             text[2]
         );
-        assert!(text[2].contains(" !! ─╮"), "high: {}", text[2]);
-        assert!(text[3].contains("│ Fix the RSVP menu"), "{}", text[3]);
-        assert!(text[5].contains("│ Web app · 2 pts"), "{}", text[5]);
-        assert!(text[5].contains("│ tab 4 · "), "{}", text[5]);
+        assert!(text[2].contains(" !! ─"), "high: {}", text[2]);
+        assert!(text[3].contains("▎ Fix the RSVP menu"), "{}", text[3]);
+        assert!(text[5].contains("▎ Web app · 2 pts"), "{}", text[5]);
+        assert!(text[5].contains("▎ tab 4 · "), "{}", text[5]);
         assert!(
-            text[5].contains("│ 3d ago"),
+            text[5].contains("▎ 3d ago"),
             "a done one says when: {}",
             text[5]
         );
@@ -7912,9 +8022,9 @@ mod tests {
             .position(|l| l.contains("CLOSED THIS WEEK"))
             .unwrap();
         assert!(text[label - 1].contains("┄"), "{}", text[label - 1]);
-        assert!(text[label + 2].contains("╭ AB-4"), "{}", text[label + 2]);
+        assert!(text[label + 2].contains("─ AB-4"), "{}", text[label + 2]);
         assert!(
-            text[label + 5].contains("│ 3d ago · duplicate"),
+            text[label + 5].contains("▎ 3d ago · duplicate"),
             "{}",
             text[label + 5]
         );
@@ -7958,22 +8068,26 @@ mod tests {
             .unwrap();
         assert!(text[label].trim_end().ends_with('2'), "{}", text[label]);
         assert!(
-            text[label + 2].contains("╭ #2") && text[label + 2].contains("╭ #3"),
+            text[label + 2].contains("─ #2") && text[label + 2].contains("─ #3"),
             "{}",
             text[label + 2]
         );
         assert!(
-            text[label + 5].contains("│ 1d ago · ana"),
+            text[label + 5].contains("▎ 1d ago · ana"),
             "{}",
             text[label + 5]
         );
-        let edge = lines[label + 2]
+        let bar = lines[label + 3]
             .spans
             .iter()
-            .filter(|s| s.content == "╭")
+            .filter(|s| s.content == "▎")
             .nth(1)
             .unwrap();
-        assert_eq!(edge.style.fg, Some(ACCENT), "the chosen one in the row");
+        assert_eq!(
+            bar.style.fg,
+            Some(Tone::Accent.fg(&Theme::DARK)),
+            "the chosen one in the row"
+        );
     }
 
     #[test]
