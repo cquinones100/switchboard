@@ -15,7 +15,7 @@ use ratatui::text::Span;
 
 use super::claude::Turn;
 use super::text;
-use crate::mux::input::{Key, KeyCode, Mods, Mouse};
+use crate::mux::input::{Key, KeyCode, Mods, Mouse, MouseButton, MouseKind};
 use crate::ui::draw::{self, BoxLine, BoxSpec, Drawn, Gesture, Hit, Place};
 use crate::ui::{Look, Outcome, Overlay, Step};
 
@@ -245,6 +245,18 @@ impl Overlay for Peek {
             Gesture::Click if look.mouse => {
                 match self.drawn.as_ref().map(|d| d.hit(mouse.col, mouse.row)) {
                     Some(Hit::Outside | Hit::Close) => Step::Close(Outcome::Dismissed),
+                    _ => Step::Same,
+                }
+            }
+            // A right press outside closes it as a left one does; it stands
+            // out of no box (`stands_out`), so the stack doesn't hand it on.
+            Gesture::Other
+                if look.mouse
+                    && mouse.kind == MouseKind::Press
+                    && mouse.button == MouseButton::Right =>
+            {
+                match self.drawn.as_ref().map(|d| d.hit(mouse.col, mouse.row)) {
+                    Some(Hit::Outside) => Step::Close(Outcome::Dismissed),
                     _ => Step::Same,
                 }
             }

@@ -1349,3 +1349,75 @@ fn the_sidebar_filtered_to_one_repository_folds_the_others_under_other_repos() {
     assert_ne!(code, 0);
     assert!(err.contains("sidebar_repo_filter"), "{err}");
 }
+
+// A right press on a notification in the Notifications window opens its
+// menu, on the window's empty part the window's menu; a right click on a
+// tab in the sidebar still peeks at it.
+#[test]
+fn a_right_press_in_the_notifications_window_opens_a_menu_and_on_a_tab_peeks() {
+    let notes = common::TempDir::new("sbrw");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    settings(&server, json!({}));
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom", "at": 1 }]).to_string(),
+    )
+    .unwrap();
+    let mut client = server.attach(140, 36);
+    client.wait_text("● New note: Plan");
+    client.type_text(&format!("{ALT}s"));
+    wait_list(&server, "the sidebar focused", focused);
+    client.type_text("n");
+    wait_list(&server, "the Notifications window in front", |l| {
+        notices_tab(l).is_some_and(|i| tabs(l)[i]["current"] == true)
+    });
+    let screen = client.wait_text("Written from Fathom into Plan.md");
+    let row = screen
+        .iter()
+        .position(|l| l.contains("▌ Plan"))
+        .unwrap_or_else(|| panic!("{}", screen.join("\n")));
+    let col = switchboard::ui::draw::width(&screen[row][..screen[row].find("▌ Plan").unwrap()]) + 3;
+    let right = |client: &mut TestClient, col: usize, row: usize| {
+        client.send(
+            format!(
+                "\x1b[<2;{};{}M\x1b[<2;{};{}m",
+                col + 1,
+                row + 1,
+                col + 1,
+                row + 1
+            )
+            .as_bytes(),
+        );
+    };
+
+    right(&mut client, col, row);
+    client.wait_text("Open it in Notes");
+    client.type_text("\x1b");
+    client.wait_for("the menu closed", |s| {
+        !s.iter().any(|l| l.contains("Open it in Notes"))
+    });
+    right(&mut client, col, 25);
+    let screen = client.wait_text("Dismiss every notification shown");
+    assert!(
+        !screen.iter().any(|l| l.contains("Open it in Notes")),
+        "{}",
+        screen.join("\n")
+    );
+    client.type_text("\x1b");
+    client.wait_for("the window's menu closed", |s| {
+        !s.iter()
+            .any(|l| l.contains("Dismiss every notification shown"))
+    });
+
+    // The tab's row in the sidebar: a peek at it.
+    let row = row_of(&mut client, "  1 ");
+    right(&mut client, 6, row);
+    client.wait_text("r capture again");
+    // A right press outside the peek closes it, as a left one does.
+    right(&mut client, 0, 0);
+    client.wait_for("the peek closed", |s| {
+        !s.iter().any(|l| l.contains("r capture again"))
+    });
+}

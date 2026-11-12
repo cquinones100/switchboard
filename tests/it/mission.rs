@@ -1822,3 +1822,108 @@ fn with_boxes_near_click_off_a_clicks_menu_opens_in_the_middle() {
     let screen = client.wait_text("Go to tab 2");
     assert!(in_the_middle(&screen, "2 second"), "{}", screen.join("\n"));
 }
+
+/// A right press at a cell of the screen, counted from 0.
+fn right_press(client: &mut TestClient, col: usize, row: usize) {
+    client.send(
+        format!(
+            "\x1b[<2;{};{}M\x1b[<2;{};{}m",
+            col + 1,
+            row + 1,
+            col + 1,
+            row + 1
+        )
+        .as_bytes(),
+    );
+}
+
+/// The column, counted from 0, where `text` starts on a screen's line.
+fn column_of(line: &str, text: &str) -> usize {
+    let at = line.find(text).unwrap();
+    switchboard::ui::draw::width(&line[..at])
+}
+
+// A right press on an item opens its menu, on a view's empty part the
+// view's, and on the bar nothing; with a menu open, inside it nothing and
+// outside it closes the menu without opening another.
+#[test]
+fn a_right_press_opens_an_items_menu_or_the_views() {
+    let notes = common::TempDir::new("sbrc");
+    std::fs::write(notes.path().join("Plan.md"), "# Plan\n").unwrap();
+    let server = TestServer::start_with_env(&[("NOTES_DIR", notes.path().to_str().unwrap())]);
+    std::fs::create_dir_all(&server.state).unwrap();
+    std::fs::write(
+        server.state.join("new-notes.json"),
+        json!([{ "path": "Plan.md", "title": "Plan", "source": "Fathom",
+            "at": switchboard::util::now_ms() }])
+        .to_string(),
+    )
+    .unwrap();
+    settings(&server, json!({ "new_notes": true }));
+    let mut client = server.attach(140, 36);
+    client.wait_text("$");
+    open(&mut client);
+    client.type_text("]");
+    let screen = client.wait_text("Plan  shown");
+    let row = screen
+        .iter()
+        .rposition(|l| l.contains("Plan  shown"))
+        .unwrap();
+    let col = column_of(&screen[row], "Plan  shown") + 4;
+    let menu_up = |s: &[String]| s.iter().any(|l| l.contains("Open it in Notes"));
+    let view_menu_up = |s: &[String]| {
+        s.iter()
+            .any(|l| l.contains("Dismiss every notification shown"))
+    };
+
+    // On the notification: its menu, its options as Enter's.
+    right_press(&mut client, col, row);
+    let screen = client.wait_for("the notification's menu", menu_up);
+    assert!(!view_menu_up(&screen), "{}", screen.join("\n"));
+    // Inside the menu: nothing.
+    let inside = screen
+        .iter()
+        .position(|l| l.contains("Open it in Notes"))
+        .unwrap();
+    right_press(
+        &mut client,
+        column_of(&screen[inside], "Open it in Notes"),
+        inside,
+    );
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(menu_up(&screen), "still open:\n{}", screen.join("\n"));
+    // Outside it: closed, and nothing else opened.
+    right_press(&mut client, 139, 30);
+    client.wait_for("the menu closed", |s| !menu_up(s));
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(!view_menu_up(&screen), "{}", screen.join("\n"));
+    assert!(
+        !closed(&screen),
+        "mission control open:\n{}",
+        screen.join("\n")
+    );
+
+    // On the view's empty part: the view's menu.
+    right_press(&mut client, col, 30);
+    let screen = client.wait_for("the view's menu", view_menu_up);
+    assert!(!menu_up(&screen), "{}", screen.join("\n"));
+    client.type_text("\x1b");
+    client.wait_for("the view's menu closed", |s| !view_menu_up(s));
+
+    // On the bar: nothing.
+    let screen = client.screen();
+    let bar = screen
+        .iter()
+        .position(|l| l.contains("MISSION CONTROL"))
+        .unwrap();
+    right_press(&mut client, column_of(&screen[bar], "MISSION CONTROL"), bar);
+    std::thread::sleep(Duration::from_millis(300) * common::patience());
+    let screen = client.screen();
+    assert!(
+        !menu_up(&screen) && !view_menu_up(&screen) && !closed(&screen),
+        "{}",
+        screen.join("\n")
+    );
+}

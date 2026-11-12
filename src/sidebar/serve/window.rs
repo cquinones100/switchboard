@@ -428,6 +428,26 @@ impl Server {
                     None => {}
                 }
             }
+            // A notification's menu on it, the window's on its empty part;
+            // nothing on "‹ tabs" or the footer. It follows Settings' "Click
+            // in menus", since it opens one.
+            (MouseKind::Press, MouseButton::Right) if settings::is_on("menu_mouse") => {
+                if self.current_pane(client) != Some(pane) {
+                    self.focus_pane(pane);
+                }
+                let on_back_or_footer = matches!(
+                    spots.get(row as usize).copied().flatten(),
+                    Some(Spot::Back | Spot::ViewActions)
+                );
+                match spot {
+                    Some(Spot::Item(i)) => {
+                        self.notices_choose(&session, &entries, i as isize);
+                        self.notices_open(client, &entries, i);
+                    }
+                    None if !on_back_or_footer => self.notices_view_menu(client),
+                    _ => {}
+                }
+            }
             _ => {}
         }
         true

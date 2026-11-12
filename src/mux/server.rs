@@ -2387,11 +2387,15 @@ impl Server {
         said.or_else(|| slot.pane.cwd())
     }
 
-    /// Handles one input from a client; a left click's cell is kept on the
-    /// client while it is handled, so a box it opens opens beside it.
+    /// Handles one input from a client; a left or right click's cell is
+    /// kept on the client while it is handled, so a box it opens (a right
+    /// click's menu) opens beside it.
     pub(crate) fn dispatch(&mut self, id: ClientId, parsed: input::Parsed) {
         let pressed_at = match parsed.input {
-            Input::Mouse(m) if m.kind == MouseKind::Press && m.button == MouseButton::Left => {
+            Input::Mouse(m)
+                if m.kind == MouseKind::Press
+                    && matches!(m.button, MouseButton::Left | MouseButton::Right) =>
+            {
                 Some((m.col, m.row))
             }
             _ => None,

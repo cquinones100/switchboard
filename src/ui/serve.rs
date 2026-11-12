@@ -21,7 +21,7 @@ use super::{
     Confirm, Layer, Look, Menu, Message, Outcome, Overlay, PickItem, Picked, Picker, Step, Then,
     Tip, Ui, UiEvent, keylist, message, tip,
 };
-use crate::mux::input::{Input, Parsed};
+use crate::mux::input::{Input, Mouse, MouseButton, MouseKind, Parsed};
 use crate::mux::proto::ServerMsg;
 use crate::mux::server::{ClientId, Event, Reply, Server};
 use crate::mux::{PaneId, TabId};
@@ -194,6 +194,29 @@ impl Server {
             };
             let step = match &parsed.input {
                 Input::Key(k) => top.overlay.key(*k, &look),
+                // A right press on a box does nothing inside it and outside
+                // what a left press there does (closing it), so it never
+                // picks an option nor reaches what is under the box; with
+                // Settings' "Click in menus" off, nothing anywhere.
+                Input::Mouse(m)
+                    if m.kind == MouseKind::Press
+                        && m.button == MouseButton::Right
+                        && let Some(area) = top.overlay.stands_out() =>
+                {
+                    let inside = m.col >= area.x
+                        && m.col < area.right()
+                        && m.row >= area.y
+                        && m.row < area.bottom();
+                    if inside || !look.mouse {
+                        Step::Same
+                    } else {
+                        let left = Mouse {
+                            button: MouseButton::Left,
+                            ..*m
+                        };
+                        top.overlay.mouse(left, &look)
+                    }
+                }
                 Input::Mouse(m) => top.overlay.mouse(*m, &look),
                 Input::Paste(text) => top.overlay.paste(text, &look),
                 _ => Step::Same,

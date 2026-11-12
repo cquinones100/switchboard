@@ -2486,6 +2486,15 @@ impl Server {
         let Some(m) = self.mission_mut(client) else {
             return;
         };
+        // The right button opens menus, so it follows Settings' "Click in
+        // menus" as every click on a menu does.
+        let menus_take_clicks = look.mouse;
+        if mouse.kind == MouseKind::Press
+            && mouse.button == MouseButton::Right
+            && !menus_take_clicks
+        {
+            return;
+        }
         let mouse = Mouse { col, ..mouse };
         match mouse_in(m, mouse, look.hover) {
             Then::Nothing => {}
@@ -5267,6 +5276,7 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             };
             Then::Key(Key::new(KeyCode::Char(key), Mods::NONE))
         }
+        (MouseKind::Press, MouseButton::Right) => right_press(m, mouse, hit),
         (MouseKind::Press, MouseButton::Left) => {
             let Some(spot) = hit else {
                 return Then::Nothing;
@@ -5375,6 +5385,60 @@ fn mouse_in(m: &mut Mission, mouse: Mouse, hover: bool) -> Then {
             }
         }
         _ => Then::Nothing,
+    }
+}
+
+/// A right press on mission control: on an item (a card, a row, a failed
+/// check, a key of the Keys board) it is chosen and its menu opened, as
+/// Enter on it opens it, also where a left click would act at once; where
+/// nothing clickable is in a view's area (the pane beside included), the
+/// view's menu, as `m` opens it; on the bar, the footer and anything else
+/// that takes a click, nothing.
+fn right_press(m: &mut Mission, mouse: Mouse, hit: Option<Spot>) -> Then {
+    let (_, rows) = m.size;
+    let bar_ends = m
+        .hits
+        .iter()
+        .filter(|h| matches!(h.spot, Spot::Group(_) | Spot::View(_) | Spot::Close))
+        .map(|h| h.y)
+        .max();
+    let on_bar = bar_ends.is_some_and(|y| mouse.row <= y);
+    let on_footer = mouse.row + 1 >= rows;
+    let chosen = match hit {
+        Some(Spot::Index(i) | Spot::Menu(i) | Spot::Choose(i)) => {
+            m.cursor = i;
+            choose_check(m, None);
+            follow_reminder(m);
+            true
+        }
+        Some(Spot::Check(i, n)) => {
+            m.cursor = i;
+            choose_check(m, Some(n));
+            true
+        }
+        Some(Spot::Side(_)) | None if !on_bar && !on_footer => false,
+        // A view shown at once with others but without the focus: given
+        // it, as a left click gives it, and its menu opened, since its
+        // rows take no click until it has the focus.
+        Some(Spot::Cell(cell)) => {
+            m.focus_cell(cell);
+            false
+        }
+        _ => return Then::Nothing,
+    };
+    // As a left click does: the focus ring and the light put away, and a
+    // filter being typed done typing and a view's name being typed after
+    // `v` put away, so Enter or `m` reaches the view.
+    m.focus = None;
+    m.hover = None;
+    m.jump = None;
+    if let Some(f) = m.filter.as_mut() {
+        f.typing = false;
+    }
+    if chosen {
+        Then::Enter
+    } else {
+        Then::Press(Key::new(KeyCode::Char('m'), Mods::NONE))
     }
 }
 
