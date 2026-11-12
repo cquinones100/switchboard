@@ -36,7 +36,8 @@
 //! first brings in what changed in the file from outside since it was read
 //! (`check`, sync.rs), and a watch on the notes directory brings changes in
 //! as they happen; nothing writes a note but `save`, and `open_note` giving
-//! a note its ID. Nothing in a note is sent anywhere but by a squash, after
+//! a note its ID. The open note renamed or moved outside the app is followed
+//! by its ID (`follow_id`), so it is saved at its new path, never the old. Nothing in a note is sent anywhere but by a squash, after
 //! a yes.
 //!
 //! A note's stable ID, its last line (id.rs), is kept out of the text the
@@ -236,6 +237,16 @@ struct Open {
     /// Its stable ID, written as its last line on every save; `None` for a
     /// note in Recently Deleted that had none.
     id: Option<String>,
+    /// Its file as last read or written (`file_key`), which a rename keeps
+    /// and a copy doesn't, so a note is followed by its ID only to the
+    /// file it was moved to, never to a copy of it holding the same ID.
+    file: Option<(u64, u64)>,
+}
+
+/// A file's device and inode.
+fn file_key(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| (m.dev(), m.ino()))
 }
 
 /// What comes of a box when it closes.
@@ -437,10 +448,15 @@ pub fn key_groups(easy: bool) -> Vec<(&'static str, Vec<(String, String)>)> {
 }
 
 /// An item M-Enter handed to a new tab's `/plan-item`: the note it is for,
-/// its words, and how many checklist lines named it then.
+/// its words, and how many checklist lines named it then. The note is
+/// known by its stable ID, as autopilot knows one, so it is found however
+/// it was renamed or moved, and a copy, given an ID of its own as it
+/// opens, never takes it; by its path only when it has no ID (a note in
+/// Recently Deleted).
 #[derive(Debug)]
 struct Planning {
     note: PathBuf,
+    note_id: Option<String>,
     text: String,
     items: usize,
 }
@@ -805,6 +821,7 @@ impl App {
             title: store::title_of(&text),
             gone: false,
             id: note_id,
+            file: file_key(path),
         });
         if let Some(&(row, col, top)) = self.cursors.get(path) {
             self.editor.doc.row = row;
@@ -876,13 +893,23 @@ impl App {
     /// there is one: in place when nothing is unsaved, merged line by line
     /// with unsaved typing when something is. An item ticked there moves
     /// under the ones left to do, as ticking it here does. False when the
-    /// note's file has gone (deleted or moved outside the app), so it isn't
-    /// written back under its old name; said once.
+    /// note's file has gone and no note holds its ID (deleted, or moved to
+    /// Recently Deleted, outside the app), so it isn't written back; said
+    /// once. A note renamed or moved outside the app is followed by its ID
+    /// first (`follow_id`), and what changed brought in from its new file.
     pub fn check(&mut self) -> bool {
         let Some(open) = &self.open else {
             return false;
         };
-        let path = open.path.clone();
+        let mut path = open.path.clone();
+        if !path.is_file()
+            && let Some(to) = self.follow_id(&path)
+        {
+            path = to;
+        }
+        let Some(open) = &self.open else {
+            return false;
+        };
         let Some(disk) = util::read_text(&path) else {
             if !open.gone {
                 let name = path
@@ -890,7 +917,7 @@ impl App {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 self.say(format!(
-                    "notes: {name} was moved or deleted outside Notes, so it isn't saved there any more"
+                    "notes: {name} was deleted outside Notes, so it isn't saved any more"
                 ));
                 if let Some(o) = &mut self.open {
                     o.gone = true;
@@ -900,16 +927,22 @@ impl App {
         };
         // The item M-Enter handed on is in its note, a checklist line naming
         // it that wasn't there before: nothing to give back.
-        if self.planning.iter().any(|p| p.note == path) {
+        if self.planning.iter().any(|p| self.handed_from_open(p)) {
             let lines: Vec<String> = disk.lines().map(str::to_string).collect();
-            self.planning
-                .retain(|p| p.note != path || items_naming(&lines, &p.text) <= p.items);
+            let planning = std::mem::take(&mut self.planning);
+            self.planning = planning
+                .into_iter()
+                .filter(|p| !self.handed_from_open(p) || items_naming(&lines, &p.text) <= p.items)
+                .collect();
         }
         let modified = self.modified();
         let Some(o) = &mut self.open else {
             return false;
         };
         o.gone = false;
+        // Read on every look, as another editor may have saved it into a
+        // new file with nothing changed.
+        o.file = file_key(&path);
         let Some(base) = o.base.clone() else {
             return true;
         };
@@ -982,6 +1015,63 @@ impl App {
         true
     }
 
+    /// Whether an item M-Enter handed on is for the open note: by its ID,
+    /// else by its path.
+    fn handed_from_open(&self, p: &Planning) -> bool {
+        let Some(open) = &self.open else {
+            return false;
+        };
+        match &p.note_id {
+            Some(note_id) => open.id.as_ref() == Some(note_id),
+            None => p.note == open.path,
+        }
+    }
+
+    /// The open note's file gone from `from`: the note holding its ID, where
+    /// a rename or a move outside the app put it, taken as the open note,
+    /// its cursor, history and marks with it, and its pin, the last note
+    /// open and its tabs following (`Store::moved_outside`). Gives its path;
+    /// `None` when no note outside Recently Deleted holds the ID in the file
+    /// the note was last read from or written to, moved: a copy of its file,
+    /// which holds the ID until it is opened, is never taken for it, so
+    /// typing isn't saved into the copy of a note deleted outside. Reads
+    /// only the notes' last bytes, and only while the open note's file is
+    /// gone.
+    fn follow_id(&mut self, from: &Path) -> Option<PathBuf> {
+        let open = self.open.as_ref()?;
+        let note_id = open.id.clone()?;
+        let file = open.file?;
+        let to = id::holding(&note_id, self.store.root())
+            .into_iter()
+            .find(|p| file_key(p) == Some(file))?;
+        if to == from {
+            return None;
+        }
+        let (from_rel, to_rel) = (self.store.relative(from), self.store.relative(&to));
+        let was = self.open.as_ref()?.title.clone();
+        let now = store::title_of(&util::read_text(&to).unwrap_or_default());
+        let retitled = (now != was).then(|| Retitled {
+            path: to_rel.clone(),
+            from: was,
+            to: now.clone(),
+        });
+        self.moved(from, &to);
+        if let Some(o) = &mut self.open {
+            o.title = now;
+        }
+        self.store
+            .moved_outside(&from_rel, &to_rel, retitled.as_ref());
+        // The images pasted since the last save, named only in the editor.
+        if let (Some(old), Some(new)) = (from.parent(), to.parent())
+            && old != new
+        {
+            store::copy_attachments(&self.editor.doc.text.file_text(), &[old], new);
+        }
+        self.rebuild();
+        self.reveal(&to);
+        Some(to)
+    }
+
     /// Saves the open note, and renames its file if its title changed. A
     /// change made to its file from outside is brought in first, so it
     /// isn't written over.
@@ -1044,6 +1134,7 @@ impl App {
             }
             if let Some(o) = &mut self.open {
                 o.base = Some(text);
+                o.file = file_key(&path);
                 o.saved = written;
             }
         }
@@ -1106,11 +1197,17 @@ impl App {
         self.editor.clamp();
     }
 
-    /// A note moved or renamed: the open note follows, and so do the marks.
+    /// A note moved or renamed: the open note follows, and so do the marks
+    /// and the items M-Enter handed on from it.
     fn moved(&mut self, from: &Path, to: &Path) {
         for p in &mut self.list.marked {
             if p == from {
                 *p = to.to_path_buf();
+            }
+        }
+        for p in &mut self.planning {
+            if p.note == from {
+                p.note = to.to_path_buf();
             }
         }
         if let Some(o) = &mut self.open
@@ -1142,6 +1239,11 @@ impl App {
         }
         rekey(&mut self.cursors, &follow);
         rekey(&mut self.kept, &follow);
+        for p in &mut self.planning {
+            if let Some(n) = follow(&p.note) {
+                p.note = n;
+            }
+        }
     }
 
     /// A note going (deleted, squashed): saved, and the note window shows
@@ -1741,16 +1843,17 @@ impl App {
         // A click on the input while it is typed into keeps what is typed;
         // an item M-Enter handed on that never reached the note comes back.
         if self.adding.is_none() {
-            let here = self.current_path().map(Path::to_path_buf);
             // One whose item reached the note while another was open is done.
             let lines = self.editor.doc.text.lines();
-            self.planning.retain(|p| {
-                Some(&p.note) != here.as_ref() || items_naming(&lines, &p.text) <= p.items
-            });
+            let planning = std::mem::take(&mut self.planning);
+            self.planning = planning
+                .into_iter()
+                .filter(|p| !self.handed_from_open(p) || items_naming(&lines, &p.text) <= p.items)
+                .collect();
             let given_back = self
                 .planning
                 .iter()
-                .rposition(|p| Some(&p.note) == here.as_ref())
+                .rposition(|p| self.handed_from_open(p))
                 .map(|i| self.planning.remove(i));
             self.adding = Some(given_back.map(|p| p.text).unwrap_or_default());
         }
@@ -1795,6 +1898,7 @@ impl App {
                 self.planning.push(Planning {
                     items: items_naming(&lines, &text),
                     note: path,
+                    note_id: self.open.as_ref().and_then(|o| o.id.clone()),
                     text,
                 });
             } else {

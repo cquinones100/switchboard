@@ -586,6 +586,18 @@ impl Store {
         to.to_path_buf()
     }
 
+    /// A note renamed or moved outside the app, found again by its ID: its
+    /// pin, the last note open and the tabs linked to it follow, as they do
+    /// for a move made here, and with `title`, the tabs named after it take
+    /// its new title. The images it names are copied along to a new
+    /// folder, as a move here copies them.
+    pub fn moved_outside(&self, from: &str, to: &str, title: Option<&Retitled>) {
+        carry_attachments(&self.absolute(from), &self.absolute(to));
+        self.repin(from, to);
+        self.set_last(Some(to));
+        self.relink(&|rel| (rel == from).then(|| to.to_string()), title);
+    }
+
     /// A note whose title changed gets a file named for the new one. Gives
     /// its path, which is the old one when the name already fits.
     pub fn rename_to_title(&self, path: &Path) -> PathBuf {

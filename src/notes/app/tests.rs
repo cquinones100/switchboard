@@ -333,7 +333,7 @@ fn a_note_changed_outside_while_open_shows_the_change_and_a_save_keeps_both() {
     assert!(
         app.message
             .as_ref()
-            .is_some_and(|(m, _)| m.contains("moved or deleted outside Notes"))
+            .is_some_and(|(m, _)| m.contains("deleted outside Notes"))
     );
 }
 
@@ -1956,6 +1956,7 @@ fn an_item_handed_to_plan_item_comes_back_until_it_reaches_the_note() {
     let handed = || {
         vec![Planning {
             note: path.clone(),
+            note_id: None,
             text: "kept".into(),
             items: 0,
         }]
@@ -1966,6 +1967,7 @@ fn an_item_handed_to_plan_item_comes_back_until_it_reaches_the_note() {
     // One handed on in another note too, which leaves this one's.
     app.planning.push(Planning {
         note: other.clone(),
+        note_id: None,
         text: "elsewhere".into(),
         items: 0,
     });
@@ -2054,4 +2056,306 @@ fn following_a_link_says_where_it_is_going() {
         app.link_opened(&said, Ok(true));
         assert!(app.message.is_none(), "gone once the browser shows it");
     }
+}
+
+#[test]
+fn a_note_renamed_outside_is_followed_by_its_id() {
+    let (dir, mut store) = temp("renamed-outside");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let given = crate::notes::id::of_file(&path).expect("given an ID as it opened");
+    // Renamed, and its title changed with it, from outside.
+    let moved = dir.path.join("Roadmap.md");
+    fs::rename(&path, &moved).unwrap();
+    write(
+        &moved,
+        &format!(
+            "# Roadmap\n\n- [ ] one\n\n{}\n",
+            crate::notes::id::line(&given)
+        ),
+    );
+    app.handle(Msg::Watched);
+    app.watch_due = Some(Instant::now());
+    app.tick();
+    assert_eq!(name(&app), "Roadmap.md");
+    assert_eq!(lines(&app).join("\n"), "# Roadmap\n\n- [ ] one");
+    assert!(app.message.is_none(), "nothing said about a deleted note");
+    assert_eq!(app.store.last(), Some(moved.clone()), "the last note open");
+    let shown = screen(&mut app).join("\n");
+    assert_eq!(shown.matches("Roadmap").count(), 2, "listed once: {shown}");
+    assert!(!shown.contains("Plan"), "{shown}");
+    // Typing saves to the new file, never the old one.
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    app.save();
+    assert!(!path.exists());
+    assert!(
+        fs::read_to_string(&moved)
+            .unwrap()
+            .contains("- [ ] one, typed")
+    );
+}
+
+#[test]
+fn typing_not_yet_saved_merges_into_a_note_renamed_outside() {
+    let (dir, mut store) = temp("renamed-typing");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n- [ ] two\n- [ ] three\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let given = crate::notes::id::of_file(&path).unwrap();
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    let folder = dir.path.join("Work");
+    fs::create_dir_all(&folder).unwrap();
+    let moved = folder.join("Plan.md");
+    fs::rename(&path, &moved).unwrap();
+    write(
+        &moved,
+        &format!(
+            "# Plan\n\n- [ ] one\n- [ ] two\n- [ ] three (ABC-2)\n\n{}\n",
+            crate::notes::id::line(&given)
+        ),
+    );
+    app.save();
+    assert!(!path.exists(), "nothing written at the old path");
+    assert_eq!(
+        fs::read_to_string(&moved).unwrap(),
+        format!(
+            "# Plan\n\n- [ ] one, typed\n- [ ] two\n- [ ] three (ABC-2)\n\n{}\n",
+            crate::notes::id::line(&given)
+        )
+    );
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+}
+
+#[test]
+fn a_note_moved_to_recently_deleted_outside_stays_unsaved_on_screen() {
+    let (dir, mut store) = temp("trashed-outside");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let trashed = dir.path.join(".trash").join("Plan.md");
+    fs::create_dir_all(trashed.parent().unwrap()).unwrap();
+    fs::rename(&path, &trashed).unwrap();
+    let in_trash = fs::read_to_string(&trashed).unwrap();
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    app.save();
+    assert_eq!(app.current_path(), Some(path.as_path()));
+    assert_eq!(fs::read_to_string(&trashed).unwrap(), in_trash);
+    assert!(!path.exists());
+    assert_eq!(lines(&app)[2], "- [ ] one, typed");
+    assert!(
+        app.message
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("was deleted outside Notes"))
+    );
+}
+
+#[test]
+fn a_note_renamed_outside_beside_a_copy_holding_its_id_is_followed_not_the_copy() {
+    let (dir, mut store) = temp("renamed-copied");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let copy = dir.path.join("Backup.md");
+    fs::copy(&path, &copy).unwrap();
+    let copy_was = fs::read_to_string(&copy).unwrap();
+    let moved = dir.path.join("Roadmap.md");
+    fs::rename(&path, &moved).unwrap();
+    app.check();
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    app.save();
+    assert_eq!(fs::read_to_string(&copy).unwrap(), copy_was);
+    let saved = app.current_path().unwrap().to_path_buf();
+    assert_ne!(saved, copy);
+    assert!(
+        fs::read_to_string(&saved)
+            .unwrap()
+            .contains("- [ ] one, typed")
+    );
+}
+
+#[test]
+fn a_note_deleted_outside_beside_a_copy_holding_its_id_stays_unsaved() {
+    let (dir, mut store) = temp("deleted-copied");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let copy = dir.path.join("Backup.md");
+    fs::copy(&path, &copy).unwrap();
+    let copy_was = fs::read_to_string(&copy).unwrap();
+    fs::remove_file(&path).unwrap();
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    app.save();
+    assert_eq!(app.current_path(), Some(path.as_path()));
+    assert_eq!(fs::read_to_string(&copy).unwrap(), copy_was);
+    assert!(!path.exists());
+    assert_eq!(lines(&app)[2], "- [ ] one, typed");
+}
+
+#[test]
+fn an_item_handed_to_plan_item_follows_its_note_renamed_outside() {
+    let (dir, mut app) = started_ux2("plan renamed");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    app.open_note(&path, false, false);
+    app.planning = vec![Planning {
+        note: path.clone(),
+        note_id: None,
+        text: "kept".into(),
+        items: 0,
+    }];
+    let moved = dir.path.join("Look.md");
+    fs::rename(&path, &moved).unwrap();
+    app.check();
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some("kept"));
+}
+
+#[test]
+fn an_item_handed_to_plan_item_finds_its_note_renamed_outside_while_closed() {
+    let (dir, mut app) = started_ux2("plan renamed closed");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    let other = app.store.create("", Some("Other"));
+    write(&other, "# Other\n");
+    app.open_note(&path, false, false);
+    app.planning = vec![Planning {
+        note: path.clone(),
+        note_id: app.open.as_ref().unwrap().id.clone(),
+        text: "kept".into(),
+        items: 0,
+    }];
+    app.open_note(&other, false, false);
+    let moved = dir.path.join("Look.md");
+    fs::rename(&path, &moved).unwrap();
+    app.open_note(&moved, false, false);
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some("kept"));
+}
+
+#[test]
+fn a_note_deleted_outside_beside_a_copy_holding_its_id_is_not_followed() {
+    let (dir, mut store) = temp("trashed-copied");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let copy = dir.path.join("Backup.md");
+    fs::copy(&path, &copy).unwrap();
+    let copy_was = fs::read_to_string(&copy).unwrap();
+    let trashed = dir.path.join(".trash").join("Plan.md");
+    fs::create_dir_all(trashed.parent().unwrap()).unwrap();
+    fs::rename(&path, &trashed).unwrap();
+    app.editor
+        .change(|doc| doc.text.set_line(2, "- [ ] one, typed"));
+    app.save();
+    assert_eq!(app.current_path(), Some(path.as_path()));
+    assert_eq!(fs::read_to_string(&copy).unwrap(), copy_was);
+    assert!(!path.exists());
+}
+
+#[test]
+fn a_note_saved_into_a_new_file_unchanged_and_then_renamed_is_followed() {
+    let (dir, mut store) = temp("replaced-renamed");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    // Another editor's save: a new file put in its place, the same text.
+    let text = fs::read_to_string(&path).unwrap();
+    let beside = dir.path.join(".Plan.md.tmp");
+    write(&beside, &text);
+    fs::rename(&beside, &path).unwrap();
+    app.check();
+    let moved = dir.path.join("Roadmap.md");
+    fs::rename(&path, &moved).unwrap();
+    app.check();
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+}
+
+#[test]
+fn an_item_handed_to_plan_item_finds_its_note_saved_elsewhere_then_renamed() {
+    let (dir, mut app) = started_ux2("plan saved renamed");
+    let path = app.store.create("", Some("Design"));
+    write(&path, "# Design\n\n- [ ] one\n");
+    let other = app.store.create("", Some("Other"));
+    write(&other, "# Other\n");
+    app.open_note(&path, false, false);
+    app.planning = vec![Planning {
+        note: path.clone(),
+        note_id: app.open.as_ref().unwrap().id.clone(),
+        text: "kept".into(),
+        items: 0,
+    }];
+    app.open_note(&other, false, false);
+    // Another editor's save, into a new file, while it is closed.
+    let text = fs::read_to_string(&path).unwrap();
+    let beside = dir.path.join(".Design.md.tmp");
+    write(&beside, &text);
+    fs::rename(&beside, &path).unwrap();
+    app.check();
+    let moved = dir.path.join("Look.md");
+    fs::rename(&path, &moved).unwrap();
+    app.open_note(&moved, false, false);
+    keys(&mut app, "ga");
+    assert_eq!(app.adding.as_deref(), Some("kept"));
+}
+
+#[test]
+fn a_note_moved_to_another_folder_outside_takes_its_images_along() {
+    let (dir, mut store) = temp("moved-images");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n![shot](.attachments/shot.png)\n");
+    fs::create_dir_all(dir.path.join(".attachments")).unwrap();
+    write(&dir.path.join(".attachments/shot.png"), "png");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    let folder = dir.path.join("Work");
+    fs::create_dir_all(&folder).unwrap();
+    let moved = folder.join("Plan.md");
+    fs::rename(&path, &moved).unwrap();
+    app.check();
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+    assert!(folder.join(".attachments/shot.png").exists());
+}
+
+#[test]
+fn an_image_pasted_but_not_saved_goes_along_with_a_note_moved_outside() {
+    let (dir, mut store) = temp("moved-unsaved-image");
+    let path = store.create("", Some("Plan"));
+    write(&path, "# Plan\n\n- [ ] one\n");
+    let (mut app, _) = app_in(store, options());
+    app.start();
+    app.open_note(&path, false, false);
+    fs::create_dir_all(dir.path.join(".attachments")).unwrap();
+    write(&dir.path.join(".attachments/new.png"), "png");
+    app.editor
+        .change(|doc| doc.text.set_line(2, "![new](.attachments/new.png)"));
+    let folder = dir.path.join("Work");
+    fs::create_dir_all(&folder).unwrap();
+    let moved = folder.join("Plan.md");
+    fs::rename(&path, &moved).unwrap();
+    app.save();
+    assert_eq!(app.current_path(), Some(moved.as_path()));
+    assert!(folder.join(".attachments/new.png").exists());
 }
