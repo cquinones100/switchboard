@@ -43,6 +43,7 @@ mod ux2;
 mod views;
 mod wait_ci;
 mod wait_deploy;
+mod walkthrough;
 mod watch_note;
 mod work_keys;
 mod worktrees;

@@ -1328,7 +1328,7 @@ The ones marked "you" run only when you type them; Claude may also pick up the o
 | `/shape` | Shapes a Linear ticket with you: reads the code, checks for tickets that already cover the work, drafts the ticket and writes it once you approve | you |
 | `/slack-updates` | Gathers what is new for you on Slack since the last look and saves it for mission control's Slack view, meant to run as `/loop 5m /slack-updates` | you or Claude |
 | `/today` | Today's calendar as a table, with times, length, where to join and your reply, and saves it for mission control's Calendar view | you or Claude |
-| `/walkthrough` | Records a captioned video of a feature in a real browser, reached the way a person would reach it, and hands back an MP4 | you |
+| `/walkthrough` | Records a captioned video of a feature in a real browser, or in Switchboard's demo with each key pressed shown, reached the way a person would reach it, and hands back an MP4 | you or Claude |
 | `/wt` | Hands this tab over to `wt` for a ticket: the session ends, and the ticket's worktree opens in the same pane with a new Claude working on it | you |
 | `/wtn` | The same for one checklist item of a note, through `wtn` | you |
 
@@ -1652,7 +1652,7 @@ switchboard wait-deploy --repo owner/name --sha <commit> --workflow Deploy --bra
 
 `--environment` watches GitHub deployments to that environment (what Vercel, Netlify, Render and most deploy actions report), and `--ref` only those of one branch; `--workflow` watches a deploy workflow's runs on `--branch`. A deploy counts when its commit is the one given or a later one, since a merge queue often deploys a commit that includes it. It looks every 30 seconds, for `--timeout` minutes, 45 by default.
 
-Both record with `/walkthrough`'s recorder. `/walkthrough` records a feature as a video to keep or share: from the site's home page through its own navigation, each step captioned, each click shown with a cursor, and the page's address above it. You look it over and keep it, record it again or drop it; a video you keep goes in `~/Movies/Walkthroughs/`. The recorder is a Node program using Playwright, kept with the skill, so it needs Node, the system's Chrome and `ffmpeg`, and its packages installed in the skill's scripts folder in Switchboard's plugin, which the skill does itself when they are missing:
+Both record with `/walkthrough`'s recorder. `/walkthrough` records a feature as a video to keep or share: from the site's home page through its own navigation, each step captioned, each click shown with a cursor, and the page's address above it. For a change to Switchboard itself, or given `terminal`, it records Switchboard's demo instead: a demo of its own, under a folder of its own in `/tmp`, run on the worktree's build and walked with a headless client (`switchboard headless`), each step captioned and each key pressed shown as a keycap over the screen; it opens no window and touches neither your workspace nor a demo you run. You look it over and keep it, record it again or drop it; a video you keep goes in `~/Movies/Walkthroughs/`. Claude may start it when you ask for a video, a demo or a walkthrough, since it sends nothing anywhere and asks before keeping one. The recorders are Node programs using Playwright, kept with the skill, so it needs Node, the system's Chrome and `ffmpeg`, and its packages installed in the skill's scripts folder in Switchboard's plugin, which the skill does itself when they are missing:
 
 ```
 npm ci --prefix ~/.local/share/switchboard/plugin/skills/walkthrough/scripts

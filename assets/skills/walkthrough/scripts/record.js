@@ -56,6 +56,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { chromium } = require("playwright");
 const { expect: playwrightExpect } = require("playwright/test");
+const video = require("./video.js");
 
 const args = process.argv.slice(2);
 const arg = (name) => (args.includes(`--${name}`) ? args[args.indexOf(`--${name}`) + 1] : undefined);
@@ -90,24 +91,6 @@ const signIn = async () => {
   await page.goto(url);
   await new Promise((resolve) => context.on("close", resolve));
   console.log(JSON.stringify({ profile }));
-};
-
-// The video's name: --name, else the Switchboard tab this runs in, as the tab
-// bar names it (@tab_label, asked of the server with `switchboard show`, as it
-// was of tmux), made a file name the Slack relay finds in a message
-// (files.js's MEDIA_PATH takes ASCII letters, digits, . _ - and no spaces):
-// anything else dropped, each run of spaces a dash, and cut to 80
-// characters; "walkthrough" outside Switchboard or for a tab with no name.
-const fileName = (text) => text.replace(/[^A-Za-z0-9 ._-]/g, "").trim().replace(/\s+/g, "-").replace(/-{2,}/g, "-").slice(0, 80).replace(/^[.-]+|[.-]+$/g, "");
-const videoName = () => {
-  if (arg("name") && fileName(arg("name"))) return fileName(arg("name"));
-  if (!process.env.SWITCHBOARD_PANE) return "walkthrough";
-  try {
-    const label = execFileSync("switchboard", ["show", "-t", process.env.SWITCHBOARD_PANE, "@tab_label"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    return fileName(label) || "walkthrough";
-  } catch {
-    return "walkthrough";
-  }
 };
 
 // Runs in every page before its own scripts, so it is there after every
@@ -243,100 +226,28 @@ const overlay = () => {
 };
 
 // The address bar over the page and the caption under it, each taking space
-// of its own rather than covering the page: drawn as images by Chrome, one
-// for each address and each caption, and laid round the recording by ffmpeg
-// (a strip padded above and below), each shown from when it began to when the
-// next did. `timeline` is { urls, captions }, each [{ at: seconds, text }].
-// Returns the MP4, or nothing when it couldn't be made.
-const BAR = 52;
-const CAPTION = 76;
+// of its own rather than covering the page (video.js). `timeline` is
+// { urls, captions }, each [{ at: seconds, text }]. Returns the MP4, or
+// nothing when it couldn't be made.
 const frame = async (timeline, webm, mp4, log) => {
   const dir = fs.mkdtempSync(path.join(out, "frame-"));
-  let browser;
   try {
-    browser = await chromium.launch({ channel: "chrome", headless: true });
-    const page = await browser.newPage({ viewport: { width: size.width, height: CAPTION } });
-    const draw = async (kind, text, file) => {
-      await page.setViewportSize({ width: size.width, height: kind === "bar" ? BAR : CAPTION });
-      await page.setContent(`<!doctype html><style>
-        body { margin: 0; font: 15px -apple-system, system-ui, sans-serif; }
-        .bar { height: ${BAR}px; box-sizing: border-box; padding: 0 14px; background: #dee1e6; display: flex; align-items: center; gap: 14px; color: #5f6368; }
-        .nav { font-size: 18px; letter-spacing: 10px; }
-        .pill { flex: 1; height: 34px; border-radius: 17px; background: #fff; display: flex; align-items: center; gap: 8px; padding: 0 14px; overflow: hidden; white-space: nowrap; }
-        .address { overflow: hidden; text-overflow: ellipsis; } .host { color: #202124; } .rest { color: #5f6368; }
-        .caption { height: ${CAPTION}px; box-sizing: border-box; padding: 0 24px; background: #14141e; color: #fff; display: flex; align-items: center; font: 600 21px -apple-system, system-ui, sans-serif; }
-        .caption span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-      </style>
-      <div class="bar" id="bar"><span class="nav">←→↻</span><div class="pill"><svg id="lock" width="12" height="14" viewBox="0 0 12 14"><rect x="1" y="6" width="10" height="7" rx="1.5" fill="#5f6368"/><path d="M3.5 6V4a2.5 2.5 0 0 1 5 0v2" stroke="#5f6368" stroke-width="1.6" fill="none"/></svg><span class="address"><span class="host" id="host"></span><span class="rest" id="rest"></span></span></div></div>
-      <div class="caption" id="caption"><span id="text"></span></div>`);
-      // The text set as text, never as markup: a page's address or a caption
-      // is data. A caption too long for two lines is drawn smaller, down to
-      // 15px; one that still doesn't fit is cut short, and said so (false).
-      const fits = await page.evaluate(([which, value]) => {
-        document.getElementById(which === "bar" ? "caption" : "bar").remove();
-        if (which === "bar") {
-          let parsed = null;
-          try {
-            parsed = new URL(value);
-          } catch {}
-          // The lock only for https, as a browser shows it.
-          if (parsed?.protocol !== "https:") document.getElementById("lock").remove();
-          document.getElementById("host").textContent = parsed ? parsed.host : value;
-          document.getElementById("rest").textContent = parsed ? parsed.pathname + parsed.search + parsed.hash : "";
-        } else {
-          const span = document.getElementById("text");
-          span.textContent = value;
-          for (let px = 21; px >= 15; px -= 1) {
-            span.style.fontSize = `${px}px`;
-            if (span.scrollHeight <= span.clientHeight + 1) return true;
-          }
-          return false;
-        }
-        return true;
-      }, [kind, text]);
-      await page.screenshot({ path: file });
-      return fits;
-    };
-    // Each change shown from when it came to when the next did.
-    const spans = (list) => list.map((item, i) => ({ ...item, until: list[i + 1]?.at ?? 1e6 })).filter((item) => item.until > item.at);
-    const layers = [];
-    for (const [i, item] of spans(timeline.urls).entries()) {
-      const file = path.join(dir, `bar-${i}.png`);
-      await draw("bar", item.text, file);
-      layers.push({ file, y: 0, ...item });
-    }
-    for (const [i, item] of spans(timeline.captions).entries()) {
-      if (!item.text) continue;
-      const file = path.join(dir, `caption-${i}.png`);
-      if (!(await draw("caption", item.text, file))) log.push(`caption cut short, too long for two lines: ${item.text}`);
-      layers.push({ file, y: BAR + size.height, ...item });
-    }
-    const filters = [`[0:v]pad=${size.width}:${size.height + BAR + CAPTION}:0:${BAR}:color=0x14141e[v0]`];
-    layers.forEach((layer, i) => filters.push(`[v${i}][${i + 1}:v]overlay=0:${layer.y}:enable='between(t,${layer.at.toFixed(3)},${layer.until.toFixed(3)})'[v${i + 1}]`));
-    execFileSync("ffmpeg", [
-      "-y", "-loglevel", "error", "-i", webm,
-      ...layers.flatMap((layer) => ["-i", layer.file]),
-      "-filter_complex", filters.join(";"), "-map", `[v${layers.length}]`,
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4,
-    ]);
-    return mp4;
+    const items = [
+      ...video.spans(timeline.urls).map((item) => ({ kind: "bar", ...item })),
+      ...video.spans(timeline.captions).filter((item) => item.text).map((item) => ({ kind: "caption", ...item })),
+    ];
+    const { layers, cut } = await video.strips(dir, items, { width: size.width, scale: 1 });
+    cut.forEach((text) => log.push(`caption cut short, too long for two lines: ${text}`));
+    return video.compose({ input: ["-i", webm], width: size.width, height: size.height, top: video.BAR, bottom: video.CAPTION, layers, mp4 });
   } catch (error) {
     return null;
   } finally {
-    await browser?.close().catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
 
 const record = async () => {
-  // The system ffmpeg lays the address bar and captions round the video and
-  // makes the MP4, so a recording without it would show neither: asked for
-  // before anything is recorded.
-  try {
-    execFileSync("ffmpeg", ["-version"], { stdio: "ignore" });
-  } catch {
-    throw new Error("ffmpeg is needed to make the video, with its address bar and captions: install it (brew install ffmpeg) and run again");
-  }
+  video.needFfmpeg();
   fs.mkdirSync(out, { recursive: true });
   const raw = fs.mkdtempSync(path.join(out, "raw-"));
   const log = [];
@@ -498,37 +409,29 @@ const record = async () => {
   const recording = page.video();
   await context.close();
 
-  const name = videoName();
+  const name = video.videoName(arg("name"));
   const webm = path.join(out, `${name}.webm`);
   fs.renameSync(await recording.path(), webm);
   fs.rmSync(raw, { recursive: true, force: true });
   // QuickTime and Slack play mp4, not webm. The address bar and captions are
   // laid round it (frame); when that can't be done, the plain recording, said
   // so in the log.
-  let video = webm;
+  let recorded = webm;
   const mp4 = path.join(out, `${name}.mp4`);
   if (await frame(timeline, webm, mp4, log)) {
     fs.rmSync(webm);
-    video = mp4;
+    recorded = mp4;
   } else {
     log.push("no address bar or captions: they couldn't be laid round the video");
     try {
       execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", webm, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4]);
       fs.rmSync(webm);
-      video = mp4;
+      recorded = mp4;
     } catch {}
   }
-  // A frame every two seconds, five across, for the first minute: the video
-  // looked over at once.
-  let contact = null;
-  try {
-    const sheet = path.join(out, "contact.png");
-    execFileSync("ffmpeg", ["-y", "-loglevel", "error", "-i", video, "-vf", "fps=1/2,scale=320:-1,tile=5x6:padding=6:color=white", "-frames:v", "1", sheet]);
-    contact = sheet;
-  } catch {}
-  const logFile = path.join(out, "log.txt");
-  fs.writeFileSync(logFile, `${log.join("\n")}\n`);
-  console.log(JSON.stringify({ ...result, video, contact, screenshot, log: logFile, timeline }, null, 2));
+  const contact = video.contactSheet(recorded, out);
+  const logFile = video.writeLog(out, log);
+  console.log(JSON.stringify({ ...result, video: recorded, contact, screenshot, log: logFile, timeline }, null, 2));
 };
 
 (login ? signIn() : record()).catch((error) => {
